@@ -44,6 +44,11 @@ const ConfigSchema = z.object({
   TWILIO_FROM_NUMBER: z.string().default(''),
   // Phase 6+
   PROFILE_ENC_KEY: z.string().default(''),
+  /** local = detached child process; cloudrun = Cloud Run Job execution. */
+  BROWSER_DRIVER: z.enum(['local', 'cloudrun']).default('local'),
+  BROWSER_JOB_NAME: z.string().default('assistant-browser'),
+  /** Trace-archive bucket (30-day lifecycle); empty = store traces in the workspace. */
+  TRACES_BUCKET: z.string().default(''),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

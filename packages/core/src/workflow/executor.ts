@@ -1,8 +1,9 @@
 import type { Db, TaskRow } from '@assistant/db';
-import { approvals, tasks } from '@assistant/db';
+import { approvals, tasks, toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { eq, inArray } from 'drizzle-orm';
 import type { ZodType } from 'zod';
+import { isBrowserJobPending } from '../browse.js';
 import {
   buildSystemPrompt,
   getAgent,
@@ -206,6 +207,33 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
     window = await seedContext(db, task);
   }
 
+  // ── Resume: settle a finished (or timed-out) browser job ──────────────────
+  // The job's callback replaced the sentinel result on the tool_calls row
+  // before waking us; if we woke for another reason (approval resolution)
+  // while the job is still in flight, leave pendingJob set — the post-approval
+  // check below puts the task back to sleep until the job's timeout.
+  if (state.pendingJob) {
+    const pending = state.pendingJob;
+    const [row] = await db.select().from(toolCalls).where(eq(toolCalls.id, pending.dbToolCallId));
+    const timedOut = Date.now() >= new Date(pending.timeoutAt).getTime();
+    if (row && !isBrowserJobPending(row.result)) {
+      window.push(toolResultMessage(pending.toolCallId, pending.toolName, row.result));
+      state.completedToolCallIds.push(pending.dbToolCallId);
+      state.pendingJob = null;
+    } else if (timedOut || !row) {
+      const settled = {
+        ok: false,
+        error: 'the browser job never reported back (timed out) — treat this attempt as failed',
+      };
+      if (row) {
+        await db.update(toolCalls).set({ result: settled }).where(eq(toolCalls.id, row.id));
+      }
+      window.push(toolResultMessage(pending.toolCallId, pending.toolName, settled));
+      state.completedToolCallIds.push(pending.dbToolCallId);
+      state.pendingJob = null;
+    }
+  }
+
   // ── Resume: settle pending approvals first ────────────────────────────────
   if (state.pendingApprovals.length > 0) {
     const rows = await db
@@ -228,14 +256,31 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
       }
       if (approval.status === 'approved') {
         const outcome = await dispatcher.executeApproved(pending.dbToolCallId, ctx);
-        window.push(
-          toolResultMessage(
-            pending.toolCallId,
-            pending.toolName,
-            outcome.ok ? outcome.result : { error: outcome.error },
-          ),
-        );
-        state.completedToolCallIds.push(pending.dbToolCallId);
+        if (outcome.ok && isBrowserJobPending(outcome.result)) {
+          // The approved call launched a browser job — park for its callback.
+          window.push(
+            toolResultMessage(pending.toolCallId, pending.toolName, {
+              status: 'browser_job_running',
+              note: 'the job is running; its results will arrive in the next turn',
+            }),
+          );
+          state.pendingJob = {
+            dbToolCallId: pending.dbToolCallId,
+            toolCallId: pending.toolCallId,
+            toolName: pending.toolName,
+            callbackToken: outcome.result.callbackToken,
+            timeoutAt: outcome.result.timeoutAt,
+          };
+        } else {
+          window.push(
+            toolResultMessage(
+              pending.toolCallId,
+              pending.toolName,
+              outcome.ok ? outcome.result : { error: outcome.error },
+            ),
+          );
+          state.completedToolCallIds.push(pending.dbToolCallId);
+        }
       } else {
         window.push(
           toolResultMessage(pending.toolCallId, pending.toolName, {
@@ -255,6 +300,13 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
       return { outcome: 'parked', detail: 'still waiting on approvals' };
     }
     state.pendingApprovals = [];
+  }
+
+  // A browser job is (still) in flight — sleep until its callback or timeout.
+  if (state.pendingJob) {
+    state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
+    await sleepTask(db, task.id, state, new Date(state.pendingJob.timeoutAt));
+    return { outcome: 'sleeping', detail: 'browser job running' };
   }
 
   // ── Plan (decide, don't execute) ──────────────────────────────────────────
@@ -377,8 +429,24 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
         });
 
         if (outcome.kind === 'executed') {
-          window.push(toolResultMessage(tc.toolCallId, tc.toolName, outcome.result));
-          state.completedToolCallIds.push(outcome.toolCallId);
+          if (isBrowserJobPending(outcome.result)) {
+            window.push(
+              toolResultMessage(tc.toolCallId, tc.toolName, {
+                status: 'browser_job_running',
+                note: 'the job is running; its results will arrive in the next turn',
+              }),
+            );
+            state.pendingJob = {
+              dbToolCallId: outcome.toolCallId,
+              toolCallId: tc.toolCallId,
+              toolName: tc.toolName,
+              callbackToken: outcome.result.callbackToken,
+              timeoutAt: outcome.result.timeoutAt,
+            };
+          } else {
+            window.push(toolResultMessage(tc.toolCallId, tc.toolName, outcome.result));
+            state.completedToolCallIds.push(outcome.toolCallId);
+          }
         } else if (outcome.kind === 'awaiting_approval') {
           window.push(
             toolResultMessage(tc.toolCallId, tc.toolName, {
@@ -414,6 +482,11 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
             .catch((err) => console.error('approval notification failed', err));
         }
         return { outcome: 'parked', detail: `${pendingApprovals.length} approval(s) pending` };
+      }
+
+      if (state.pendingJob) {
+        await sleepTask(db, task.id, state, new Date(state.pendingJob.timeoutAt));
+        return { outcome: 'sleeping', detail: 'browser job running' };
       }
 
       await checkpointTask(db, task.id, state);

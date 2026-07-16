@@ -1,3 +1,4 @@
+export * from './browser/index.js';
 export * from './builtin/index.js';
 export * from './dispatcher.js';
 export * from './google/calendar.js';

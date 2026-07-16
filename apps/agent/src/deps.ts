@@ -3,14 +3,18 @@ import {
   loadConfig,
   loadVoiceContext,
   ModelRouter,
+  planBrowse,
   repoRoot,
   rewriteInVoice,
 } from '@assistant/core';
 import { createDb, type Db } from '@assistant/db';
 import {
+  CloudRunJobLauncher,
   GcsWorkspaceStore,
   GoogleClient,
+  LocalProcessLauncher,
   LocalWorkspaceStore,
+  registerBrowserTools,
   registerBuiltinTools,
   registerCalendarTools,
   registerGmailTools,
@@ -44,13 +48,41 @@ export function buildDeps(): AgentDeps {
     refreshToken: config.BOT_GOOGLE_REFRESH_TOKEN,
   });
 
+  const workspacePrefix = 'workspace/b-bot';
+  const workspaceRoot = path.join(repoRoot, '.workspace');
   const workspace =
     config.FILES_DRIVER === 'gcs'
-      ? new GcsWorkspaceStore(config.WORKSPACE_BUCKET, 'workspace/b-bot')
-      : new LocalWorkspaceStore(path.join(repoRoot, '.workspace'));
+      ? new GcsWorkspaceStore(config.WORKSPACE_BUCKET, workspacePrefix)
+      : new LocalWorkspaceStore(workspaceRoot);
   const registry = registerBuiltinTools(new ToolRegistry(), {
     embed: (texts) => router.embed(texts),
     workspace,
+  });
+
+  const browserLauncher =
+    config.BROWSER_DRIVER === 'cloudrun'
+      ? new CloudRunJobLauncher({
+          project: config.GCP_PROJECT,
+          location: config.GCP_LOCATION,
+          jobName: config.BROWSER_JOB_NAME,
+          storage: {
+            driver: 'gcs',
+            bucket: config.WORKSPACE_BUCKET,
+            prefix: workspacePrefix,
+            ...(config.TRACES_BUCKET
+              ? { tracesBucket: config.TRACES_BUCKET, tracesPrefix: 'b-bot' }
+              : {}),
+          },
+        })
+      : new LocalProcessLauncher({
+          repoRoot,
+          workspaceRoot,
+          profileEncKey: config.PROFILE_ENC_KEY,
+        });
+  registerBrowserTools(registry, {
+    plan: (input) => planBrowse(router, input),
+    launcher: browserLauncher,
+    callbackUrl: `${config.PUBLIC_URL}/webhooks/browser/callback`,
   });
 
   if (googleClient.configured()) {

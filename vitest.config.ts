@@ -2,6 +2,12 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    projects: ['packages/core', 'packages/db', 'packages/tools', 'apps/agent'],
+    projects: [
+      'packages/core',
+      'packages/db',
+      'packages/tools',
+      'apps/agent',
+      'workers/browser-job',
+    ],
   },
 });

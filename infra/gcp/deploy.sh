@@ -37,6 +37,11 @@ if [ -z "$AUTH_SECRET" ]; then
   AUTH_SECRET="$(openssl rand -base64 32)"
   printf 'PROD_AUTH_SECRET=%s\n' "$AUTH_SECRET" >> .env
 fi
+PROFILE_ENC_KEY="$(envval PROD_PROFILE_ENC_KEY)"
+if [ -z "$PROFILE_ENC_KEY" ]; then
+  PROFILE_ENC_KEY="$(openssl rand -hex 32)"
+  printf 'PROD_PROFILE_ENC_KEY=%s\n' "$PROFILE_ENC_KEY" >> .env
+fi
 
 gcloud config set project "$PROJECT" --quiet
 
@@ -63,6 +68,17 @@ gcloud storage buckets describe "gs://${BUCKET}" >/dev/null 2>&1 ||
   gcloud storage buckets create "gs://${BUCKET}" --location="$REGION" \
     --uniform-bucket-level-access --quiet
 
+echo "── traces bucket (30-day lifecycle)"
+TRACES_BUCKET="${PROJECT}-traces"
+if ! gcloud storage buckets describe "gs://${TRACES_BUCKET}" >/dev/null 2>&1; then
+  gcloud storage buckets create "gs://${TRACES_BUCKET}" --location="$REGION" \
+    --uniform-bucket-level-access --quiet
+  printf '{"rule":[{"action":{"type":"Delete"},"condition":{"age":30}}]}' > /tmp/traces-lifecycle.json
+  gcloud storage buckets update "gs://${TRACES_BUCKET}" --lifecycle-file=/tmp/traces-lifecycle.json --quiet
+fi
+gcloud storage buckets add-iam-policy-binding "gs://${TRACES_BUCKET}" \
+  --member="serviceAccount:${RUNTIME_SA}" --role="roles/storage.objectAdmin" --quiet >/dev/null
+
 echo "── secrets"
 make_secret() {
   local name="$1" value="$2"
@@ -83,6 +99,7 @@ make_secret bot-google-refresh-token "$BOT_GOOGLE_REFRESH_TOKEN"
 make_secret internal-api-secret "$INTERNAL_API_SECRET"
 make_secret auth-secret "$AUTH_SECRET"
 make_secret twilio-auth-token "$TWILIO_AUTH_TOKEN"
+make_secret profile-enc-key "$PROFILE_ENC_KEY"
 
 echo "── building images (Cloud Build)"
 gcloud builds submit --config=infra/gcp/cloudbuild.yaml \
@@ -99,7 +116,7 @@ gcloud run deploy assistant-agent \
   --image "${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/agent:latest" \
   --region "$REGION" --allow-unauthenticated \
   --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3 --concurrency 20 --timeout 900 \
-  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=gcs,WORKSPACE_BUCKET=${PROJECT}-workspace,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},GMAIL_PUBSUB_TOPIC=projects/${PROJECT}/topics/${TOPIC},OTEL_EXPORTER=none${TWILIO_ENV}" \
+  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=gcs,WORKSPACE_BUCKET=${PROJECT}-workspace,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},GMAIL_PUBSUB_TOPIC=projects/${PROJECT}/topics/${TOPIC},BROWSER_DRIVER=cloudrun,BROWSER_JOB_NAME=assistant-browser,TRACES_BUCKET=${TRACES_BUCKET},OTEL_EXPORTER=none${TWILIO_ENV}" \
   --set-secrets "$AGENT_SECRETS" \
   --quiet
 
@@ -111,6 +128,21 @@ gcloud run services update assistant-agent --region "$REGION" \
   --update-env-vars "AGENT_URL=${AGENT_URL},PUBLIC_URL=${AGENT_URL}" --quiet
 
 grant_bucket
+
+echo "── browser job (Cloud Run Job — no DB creds)"
+BROWSER_IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/browser:latest"
+if gcloud run jobs describe assistant-browser --region "$REGION" >/dev/null 2>&1; then
+  gcloud run jobs update assistant-browser --region "$REGION" \
+    --image "$BROWSER_IMAGE" --memory 2Gi --cpu 2 --task-timeout 900 --max-retries 0 \
+    --set-secrets "PROFILE_ENC_KEY=profile-enc-key:latest" --quiet
+else
+  gcloud run jobs create assistant-browser --region "$REGION" \
+    --image "$BROWSER_IMAGE" --memory 2Gi --cpu 2 --task-timeout 900 --max-retries 0 \
+    --set-secrets "PROFILE_ENC_KEY=profile-enc-key:latest" --quiet
+fi
+# the agent service launches executions via the Jobs API
+gcloud run jobs add-iam-policy-binding assistant-browser --region "$REGION" \
+  --member="serviceAccount:${RUNTIME_SA}" --role="roles/run.invoker" --quiet >/dev/null
 
 echo "── cloud tasks queue"
 gcloud tasks queues describe "$QUEUE" --location="$REGION" >/dev/null 2>&1 ||

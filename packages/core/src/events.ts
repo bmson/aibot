@@ -60,12 +60,28 @@ export const PendingApprovalSchema = z.object({
 });
 export type PendingApproval = z.infer<typeof PendingApprovalSchema>;
 
+/**
+ * A launched-and-awaited browser job: the task sleeps while the Playwright
+ * job runs; the job's one-shot-token callback (or the timeout backstop)
+ * wakes it, and the executor stitches the result from the tool_calls row.
+ */
+export const PendingJobSchema = z.object({
+  dbToolCallId: z.string(),
+  toolCallId: z.string(),
+  toolName: z.string(),
+  callbackToken: z.string(),
+  timeoutAt: z.string(),
+});
+export type PendingJob = z.infer<typeof PendingJobSchema>;
+
 export const TaskStateSchema = z.object({
   phase: z.string().default('start'),
   step: z.number().int().default(0),
   completedToolCallIds: z.array(z.string()).default([]),
   /** One model step can propose several approval-gated calls — all park together. */
   pendingApprovals: z.array(PendingApprovalSchema).default([]),
+  /** An in-flight browser job this task is waiting on. */
+  pendingJob: PendingJobSchema.nullish(),
   plannerState: z.record(z.string(), z.unknown()).default({}),
   scratchpad: z.string().default(''),
   contextWindow: z.array(z.record(z.string(), z.unknown())).default([]),

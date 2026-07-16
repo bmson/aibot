@@ -1,4 +1,4 @@
-import { loadConfig } from '@assistant/core';
+import { loadConfig, recordBrowserJobResult } from '@assistant/core';
 import { validateTwilioSignature } from '@assistant/tools';
 import { Hono } from 'hono';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
@@ -33,6 +33,27 @@ webhooks.post('/gmail/pubsub', async (c) => {
   // Ack fast (2xx) regardless of sync outcome; failures retry via the poller.
   const deps = buildDeps();
   syncMailbox(deps).catch((err) => console.error('pubsub-triggered sync failed', err));
+  return c.json({ ok: true });
+});
+
+/**
+ * Browser-job result callback. Auth is the per-launch one-shot token minted by
+ * browser.execute and checkpointed in the task state — the job carries no
+ * shared secrets, so a leaked job env can wake exactly one task, once.
+ */
+webhooks.post('/browser/callback', async (c) => {
+  const body = await c.req
+    .json<{ taskId?: string; token?: string; result?: Record<string, unknown> }>()
+    .catch(() => null);
+  if (!body?.taskId || !body?.token) return c.json({ error: 'bad request' }, 400);
+
+  const deps = buildDeps();
+  const outcome = await recordBrowserJobResult(deps.db, {
+    taskId: body.taskId,
+    token: body.token,
+    result: body.result ?? { ok: false, error: 'job reported no result' },
+  });
+  if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
   return c.json({ ok: true });
 });
 
