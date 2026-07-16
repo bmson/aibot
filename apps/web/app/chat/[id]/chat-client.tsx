@@ -4,6 +4,7 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { useMemo, useState, useTransition } from 'react';
 import { changeConversationModel } from '../actions';
+import { MessageMarkdown } from './markdown';
 
 interface ChatClientProps {
   conversationId: string;
@@ -112,9 +113,19 @@ export function ChatClient({
                 >
                   {message.parts.map((part, index) =>
                     part.type === 'text' ? (
-                      <p key={`${message.id}-${index.toString()}`} className="whitespace-pre-wrap">
-                        {part.text}
-                      </p>
+                      message.role === 'assistant' ? (
+                        <MessageMarkdown
+                          key={`${message.id}-${index.toString()}`}
+                          text={part.text}
+                        />
+                      ) : (
+                        <p
+                          key={`${message.id}-${index.toString()}`}
+                          className="whitespace-pre-wrap"
+                        >
+                          {part.text}
+                        </p>
+                      )
                     ) : null,
                   )}
                 </div>

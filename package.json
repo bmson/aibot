@@ -16,15 +16,20 @@
     "db:generate": "pnpm --filter @assistant/db generate",
     "db:migrate": "pnpm --filter @assistant/db migrate",
     "seed": "pnpm --filter @assistant/db seed",
-    "auth:bot": "tsx scripts/auth-bot.ts"
+    "auth:bot": "tsx scripts/auth-bot.ts",
+    "voice:ingest": "tsx scripts/ingest-voice.ts"
   },
   "devDependencies": {
+    "@assistant/core": "workspace:^",
+    "@assistant/db": "workspace:^",
     "@biomejs/biome": "^2.5.4",
     "@types/node": "^26.1.1",
     "dotenv": "^16.6.1",
+    "drizzle-orm": "^0.45.2",
     "tsx": "^4.23.1",
     "turbo": "^2.10.5",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "zod": "^4.4.3"
   }
 }

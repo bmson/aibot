@@ -1,17 +1,16 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import path from 'node:path';
 import { conversations, goals, memories, messages, tasks } from '@assistant/db';
 import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolFlags } from '../types.js';
+import type { WorkspaceStore } from '../workspace-store.js';
 
 export interface BuiltinDeps {
   /** Embedding closure (injected by the app — avoids a core↔tools cycle). */
   embed: (texts: string[]) => Promise<number[][]>;
-  /** Local workspace root for FILES_DRIVER=local (GCS driver arrives with deploy). */
-  workspaceDir: string;
+  /** Workspace file store: local FS in dev, GCS in prod. */
+  workspace: WorkspaceStore;
 }
 
 const PRIVATE_HOST_PATTERN =
@@ -23,15 +22,6 @@ function register<S extends z.ZodType, Out>(
   flags: ToolFlags = {},
 ) {
   registry.register(tool as unknown as AssistantTool, flags);
-}
-
-/** Resolve a workspace-relative path, refusing traversal outside the root. */
-function safeWorkspacePath(root: string, rel: string): string {
-  const resolved = path.resolve(root, rel);
-  if (!resolved.startsWith(path.resolve(root) + path.sep) && resolved !== path.resolve(root)) {
-    throw new Error('path escapes the workspace');
-  }
-  return resolved;
 }
 
 export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps): ToolRegistry {
@@ -160,10 +150,8 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     risk: 'autonomous',
     acceptsUntrustedInput: true,
     execute: async (args) => {
-      const target = safeWorkspacePath(deps.workspaceDir, args.path);
-      await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, args.content, 'utf8');
-      return { written: args.path, bytes: Buffer.byteLength(args.content) };
+      const { bytes } = await deps.workspace.write(args.path, args.content);
+      return { written: args.path, bytes };
     },
   });
 
@@ -174,8 +162,7 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     risk: 'autonomous',
     acceptsUntrustedInput: true,
     execute: async (args) => {
-      const target = safeWorkspacePath(deps.workspaceDir, args.path);
-      const content = await readFile(target, 'utf8');
+      const content = await deps.workspace.read(args.path);
       return { path: args.path, content: content.slice(0, 100_000) };
     },
   });
@@ -187,11 +174,8 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     risk: 'autonomous',
     acceptsUntrustedInput: true,
     execute: async (args) => {
-      const target = safeWorkspacePath(deps.workspaceDir, args.path || '.');
-      const entries = await readdir(target, { withFileTypes: true }).catch(() => []);
-      return {
-        entries: entries.map((e) => ({ name: e.name, dir: e.isDirectory() })),
-      };
+      const entries = await deps.workspace.list(args.path || '.');
+      return { entries };
     },
   });
 

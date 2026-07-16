@@ -30,7 +30,8 @@ internal.post('/tasks/execute', async (c) => {
 internal.post('/sweep', async (c) => {
   const deps = buildDeps();
   const woken = await expireStaleApprovals(deps.db);
-  const { getAgent, getQueueNotifier, runDueSchedules } = await import('@assistant/core');
+  const { backfillMessageEmbeddings, getAgent, getQueueNotifier, purgeExpired, runDueSchedules } =
+    await import('@assistant/core');
   const agent = await getAgent(deps.db);
   const fired = await runDueSchedules(deps.db, agent.timezone);
   // Backstop: re-notify everything due (sleep wake-ups, retries, lost notifications).
@@ -38,10 +39,17 @@ internal.post('/sweep', async (c) => {
   const due = await findDueTasks(deps.db, 50);
   const notifier = getQueueNotifier();
   for (const task of due) notifier.notify(task.id);
+  const embedded = await backfillMessageEmbeddings(deps.db, deps.router).catch((err) => {
+    console.error('embedding backfill failed', err);
+    return 0;
+  });
+  const purged = await purgeExpired(deps.db);
   return c.json({
     expiredApprovalsWoke: woken.length,
     schedulesFired: fired.length,
     dueTasksNotified: due.length,
+    messagesEmbedded: embedded,
+    purged,
   });
 });
 

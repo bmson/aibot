@@ -8,7 +8,9 @@ import {
 } from '@assistant/core';
 import { createDb, type Db } from '@assistant/db';
 import {
+  GcsWorkspaceStore,
   GoogleClient,
+  LocalWorkspaceStore,
   registerBuiltinTools,
   registerCalendarTools,
   registerGmailTools,
@@ -42,9 +44,13 @@ export function buildDeps(): AgentDeps {
     refreshToken: config.BOT_GOOGLE_REFRESH_TOKEN,
   });
 
+  const workspace =
+    config.FILES_DRIVER === 'gcs'
+      ? new GcsWorkspaceStore(config.WORKSPACE_BUCKET, 'workspace/b-bot')
+      : new LocalWorkspaceStore(path.join(repoRoot, '.workspace'));
   const registry = registerBuiltinTools(new ToolRegistry(), {
     embed: (texts) => router.embed(texts),
-    workspaceDir: path.join(repoRoot, '.workspace'),
+    workspace,
   });
 
   if (googleClient.configured()) {

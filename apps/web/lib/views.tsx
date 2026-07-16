@@ -13,6 +13,15 @@ export interface PendingApprovalView {
   expiresLabel: string;
   provenance: string;
   taskId: string;
+  /** Set when the voice-rewrite pipeline failed its fact-preservation check. */
+  voiceFlag: string | null;
+}
+
+/** The voice-rewrite tool sets `voiceFlag` on its args when fact-preservation fails. */
+function extractVoiceFlag(payload: unknown): string | null {
+  if (payload === null || typeof payload !== 'object') return null;
+  const flag = (payload as { voiceFlag?: unknown }).voiceFlag;
+  return typeof flag === 'string' && flag.trim() !== '' ? flag : null;
 }
 
 export function toPendingApprovalView(
@@ -29,6 +38,7 @@ export function toPendingApprovalView(
     expiresLabel: `expires ${relativeTime(approval.expiresAt, now)} (${formatDateTime(approval.expiresAt)})`,
     provenance: `task ${task.type}, trust ${task.trust}`,
     taskId: approval.taskId,
+    voiceFlag: extractVoiceFlag(approval.payload),
   };
 }
 

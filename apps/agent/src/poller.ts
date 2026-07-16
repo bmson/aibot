@@ -1,12 +1,12 @@
 import {
+  backfillMessageEmbeddings,
   executeTask,
   expireStaleApprovals,
   findDueTasks,
   getAgent,
+  purgeExpired,
   runDueSchedules,
 } from '@assistant/core';
-import { memories } from '@assistant/db';
-import { and, isNotNull, lte, sql } from 'drizzle-orm';
 import type { AgentDeps } from './deps.js';
 import { syncMailbox } from './email-sync.js';
 import { executorDeps } from './executor-deps.js';
@@ -36,9 +36,10 @@ export function startPoller(deps: AgentDeps): () => void {
         const fired = await runDueSchedules(deps.db, agent.timezone);
         for (const f of fired)
           console.log(`schedule fired: ${f.schedule} → ${f.taskId.slice(0, 8)}`);
-        await deps.db
-          .delete(memories)
-          .where(and(isNotNull(memories.expiresAt), lte(memories.expiresAt, sql`now()`)));
+        await purgeExpired(deps.db);
+        await backfillMessageEmbeddings(deps.db, deps.router).catch((err) =>
+          console.error('embedding backfill failed', err),
+        );
       }
       if (tick % EMAIL_SYNC_EVERY_TICKS === 0 && deps.googleClient.configured()) {
         await syncMailbox(deps).catch((err) => console.error('email-sync error', err));

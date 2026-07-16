@@ -23,6 +23,14 @@ export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
       <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-500">
         {approval.requestedLabel} · {approval.expiresLabel}
       </p>
+      {approval.voiceFlag ? (
+        <div className="mt-2 rounded-md border border-amber-500 bg-amber-100 px-2.5 py-1.5 dark:border-amber-600 dark:bg-amber-900/50">
+          <p className="text-xs font-semibold text-amber-900 dark:text-amber-200">
+            <span aria-hidden="true">⚠ </span>Voice rewrite failed fact-check — original draft shown
+          </p>
+          <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-300">{approval.voiceFlag}</p>
+        </div>
+      ) : null}
       <details className="mt-2">
         <summary className="cursor-pointer text-xs text-zinc-600 select-none dark:text-zinc-400">
           Payload

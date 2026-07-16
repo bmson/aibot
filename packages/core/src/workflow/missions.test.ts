@@ -102,13 +102,14 @@ describe('missions (integration, scripted model)', () => {
     const [session] = await db.select().from(tasks).where(eq(tasks.id, wake.sessionTaskId));
     expect(session?.parentTaskId).toBe(mission.id);
     expect(session?.status).toBe('pending');
-    const payload = (session?.trigger as { payload?: { instruction?: string } }).payload;
+    const trigger = (session?.trigger ?? {}) as { payload?: { instruction?: string } };
+    const payload = trigger.payload;
     expect(payload?.instruction).toContain('Watch rates');
     expect(payload?.instruction).toContain('mission.update');
 
     const [after] = await db.select().from(tasks).where(eq(tasks.id, mission.id));
     expect(after?.status).toBe('sleeping');
-    expect(after?.runAfter && after.runAfter.getTime()).toBeGreaterThan(Date.now());
+    expect(after?.runAfter?.getTime()).toBeGreaterThan(Date.now());
     expect(taskState(after as NonNullable<typeof after>).step).toBe(1);
   });
 
@@ -198,7 +199,7 @@ describe('schedules (integration)', () => {
       .select()
       .from(schedules)
       .where(eq(schedules.id, (schedule as NonNullable<typeof schedule>).id));
-    expect(after?.nextRunAt && after.nextRunAt.getTime()).toBeGreaterThan(Date.now());
+    expect(after?.nextRunAt?.getTime()).toBeGreaterThan(Date.now());
     expect(after?.lastRunAt).toBeTruthy();
   });
 });

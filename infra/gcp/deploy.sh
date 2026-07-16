@@ -48,9 +48,20 @@ gcloud services enable run.googleapis.com cloudtasks.googleapis.com \
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
 RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
+grant_bucket() {
+  gcloud storage buckets add-iam-policy-binding "gs://${PROJECT}-workspace" \
+    --member="serviceAccount:${RUNTIME_SA}" --role="roles/storage.objectAdmin" --quiet >/dev/null
+}
+
 echo "── artifact registry"
 gcloud artifacts repositories describe "$REPO" --location="$REGION" >/dev/null 2>&1 ||
   gcloud artifacts repositories create "$REPO" --location="$REGION" --repository-format=docker --quiet
+
+echo "── workspace bucket"
+BUCKET="${PROJECT}-workspace"
+gcloud storage buckets describe "gs://${BUCKET}" >/dev/null 2>&1 ||
+  gcloud storage buckets create "gs://${BUCKET}" --location="$REGION" \
+    --uniform-bucket-level-access --quiet
 
 echo "── secrets"
 make_secret() {
@@ -88,7 +99,7 @@ gcloud run deploy assistant-agent \
   --image "${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/agent:latest" \
   --region "$REGION" --allow-unauthenticated \
   --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3 --concurrency 20 --timeout 900 \
-  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=local,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},GMAIL_PUBSUB_TOPIC=projects/${PROJECT}/topics/${TOPIC},OTEL_EXPORTER=none${TWILIO_ENV}" \
+  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=gcs,WORKSPACE_BUCKET=${PROJECT}-workspace,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},GMAIL_PUBSUB_TOPIC=projects/${PROJECT}/topics/${TOPIC},OTEL_EXPORTER=none${TWILIO_ENV}" \
   --set-secrets "$AGENT_SECRETS" \
   --quiet
 
@@ -98,6 +109,8 @@ echo "   agent: $AGENT_URL"
 # second pass: the service needs to know its own URL (Cloud Tasks callbacks, Pub/Sub aud)
 gcloud run services update assistant-agent --region "$REGION" \
   --update-env-vars "AGENT_URL=${AGENT_URL},PUBLIC_URL=${AGENT_URL}" --quiet
+
+grant_bucket
 
 echo "── cloud tasks queue"
 gcloud tasks queues describe "$QUEUE" --location="$REGION" >/dev/null 2>&1 ||

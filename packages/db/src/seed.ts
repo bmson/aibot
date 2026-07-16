@@ -226,6 +226,16 @@ const scheduleSeed = [
         'Weekly memory maintenance: recall memories on the main recurring topics, identify duplicates or outdated experiences, and save consolidated, corrected knowledge memories where useful. Summarize what you changed via owner.notify in 2-3 lines.',
     },
   },
+  {
+    name: 'memory-extraction',
+    cron: '0 22 * * *',
+    taskTemplate: {
+      type: 'scheduled',
+      budgetUsdLimit: '0.10',
+      instruction:
+        "Nightly memory extraction: use conversations.search and memory.recall to review today's conversations and completed work. Save any lasting facts, preferences, or people as 'knowledge' memories and notable outcomes as 'experience' memories (memory.save) — but recall first and skip anything already stored. If nothing new was learned today, finish silently without saving or notifying.",
+    },
+  },
 ] as const;
 
 for (const s of scheduleSeed) {

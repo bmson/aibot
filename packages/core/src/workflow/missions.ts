@@ -95,7 +95,7 @@ export async function wakeMission(
   mission: TaskRow,
   agent: AgentRow,
 ): Promise<MissionWake> {
-  const { db, router } = deps;
+  const { db } = deps;
   const state = taskState(mission);
 
   if (mission.deadline && mission.deadline.getTime() <= Date.now()) {

@@ -37,7 +37,7 @@ function fakeDeps(): AgentDeps {
   } as AgentDeps;
 }
 
-function sign(url: string, params: Record<string, string>): string {
+function _sign(url: string, params: Record<string, string>): string {
   const data =
     url +
     Object.keys(params)
