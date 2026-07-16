@@ -140,9 +140,9 @@ else
     --image "$BROWSER_IMAGE" --memory 2Gi --cpu 2 --task-timeout 900 --max-retries 0 \
     --set-secrets "PROFILE_ENC_KEY=profile-enc-key:latest" --quiet
 fi
-# the agent service launches executions via the Jobs API
+# the agent service launches executions with per-run env overrides
 gcloud run jobs add-iam-policy-binding assistant-browser --region "$REGION" \
-  --member="serviceAccount:${RUNTIME_SA}" --role="roles/run.invoker" --quiet >/dev/null
+  --member="serviceAccount:${RUNTIME_SA}" --role="roles/run.jobsExecutorWithOverrides" --quiet >/dev/null
 
 echo "── cloud tasks queue"
 gcloud tasks queues describe "$QUEUE" --location="$REGION" >/dev/null 2>&1 ||

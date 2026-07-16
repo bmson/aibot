@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import { type Db, tasks, toolCalls } from '@assistant/db';
+import { type Db, files, tasks, toolCalls } from '@assistant/db';
 import { eq, sql } from 'drizzle-orm';
 import { TaskStateSchema } from '../events.js';
 import { wakeTask } from './machine.js';
@@ -45,6 +45,28 @@ export async function recordBrowserJobResult(
     .update(toolCalls)
     .set({ result: input.result, finishedAt: sql`now()` })
     .where(eq(toolCalls.id, pending.dbToolCallId));
+
+  // Inventory the job's Workspace artifacts (screenshots + trace) in `files`.
+  const screenshots = Array.isArray(input.result.screenshots)
+    ? (input.result.screenshots as unknown[]).filter((s): s is string => typeof s === 'string')
+    : [];
+  const artifacts = [
+    ...screenshots.map((p) => ({ path: p, mime: 'image/png' })),
+    ...(typeof input.result.tracePath === 'string'
+      ? [{ path: input.result.tracePath, mime: 'application/zip' }]
+      : []),
+  ];
+  if (artifacts.length > 0) {
+    await db.insert(files).values(
+      artifacts.map((a) => ({
+        agentId: task.agentId,
+        taskId: task.id,
+        workspacePath: a.path,
+        mime: a.mime,
+      })),
+    );
+  }
+
   await wakeTask(db, task.id);
   return { ok: true, taskId: task.id };
 }

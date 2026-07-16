@@ -6,7 +6,7 @@ import {
   recordBrowserJobResult,
   resolveApproval,
 } from '@assistant/core';
-import { approvals, createDb, type Db, tasks, toolCalls } from '@assistant/db';
+import { approvals, createDb, type Db, files, tasks, toolCalls } from '@assistant/db';
 import {
   type BrowserJobLaunchInput,
   registerBrowserTools,
@@ -130,6 +130,7 @@ afterAll(async () => {
       .where(inArray(toolCalls.taskId, createdTaskIds));
     await db.delete(approvals).where(inArray(approvals.taskId, createdTaskIds));
     await db.delete(toolCalls).where(inArray(toolCalls.taskId, createdTaskIds));
+    await db.delete(files).where(inArray(files.taskId, createdTaskIds));
     await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
@@ -181,6 +182,10 @@ describe('browser job end-to-end (integration, scripted model)', () => {
 
     [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(row?.status).toBe('pending');
+
+    // The trace artifact was inventoried in files
+    const inventoried = await db.select().from(files).where(eq(files.taskId, task.id));
+    expect(inventoried.map((f) => f.workspacePath)).toContain('traces/test.zip');
 
     // A second callback with the same token must not double-wake later runs
     const replay = await recordBrowserJobResult(db, {
