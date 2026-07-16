@@ -1,0 +1,66 @@
+// Server-side mappers turning DB rows into plain serializable view props for
+// client components (approval cards) and shared status-chip styling.
+import type { ApprovalRow, TaskRow } from '@assistant/db';
+import { formatDateTime, prettyJson, relativeTime } from '@/lib/format';
+
+/** Plain-serializable props for the pending-approval client card. */
+export interface PendingApprovalView {
+  id: string;
+  shortCode: string;
+  summary: string;
+  payloadJson: string;
+  requestedLabel: string;
+  expiresLabel: string;
+  provenance: string;
+  taskId: string;
+}
+
+export function toPendingApprovalView(
+  approval: ApprovalRow,
+  task: Pick<TaskRow, 'type' | 'trust'>,
+  now: Date = new Date(),
+): PendingApprovalView {
+  return {
+    id: approval.id,
+    shortCode: approval.shortCode,
+    summary: approval.summary,
+    payloadJson: prettyJson(approval.payload),
+    requestedLabel: `requested ${relativeTime(approval.requestedAt, now)} (${formatDateTime(approval.requestedAt)})`,
+    expiresLabel: `expires ${relativeTime(approval.expiresAt, now)} (${formatDateTime(approval.expiresAt)})`,
+    provenance: `task ${task.type}, trust ${task.trust}`,
+    taskId: approval.taskId,
+  };
+}
+
+/** Tailwind classes for task/approval status chips, dark-mode friendly. */
+export const statusChipClasses: Record<string, string> = {
+  pending: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+  running: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
+  waiting_approval: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
+  waiting_event: 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300',
+  sleeping: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300',
+  done: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300',
+  failed: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
+  needs_attention: 'bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300',
+  cancelled: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
+  // approval statuses
+  approved: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300',
+  denied: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
+  expired: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
+  // goal statuses ('done' shared with tasks above)
+  active: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
+  paused: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
+  abandoned: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
+};
+
+export function StatusChip({ status }: { status: string }) {
+  const classes =
+    statusChipClasses[status] ?? 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300';
+  return (
+    <span
+      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${classes}`}
+    >
+      {status.replaceAll('_', ' ')}
+    </span>
+  );
+}

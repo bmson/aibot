@@ -1,0 +1,28 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: assistant
+      POSTGRES_PASSWORD: assistant
+      POSTGRES_DB: assistant
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U assistant"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  gcs:
+    image: fsouza/fake-gcs-server:latest
+    command: ["-scheme", "http", "-port", "4443", "-public-host", "localhost:4443"]
+    ports:
+      - "4443:4443"
+    volumes:
+      - gcs-data:/data
+
+volumes:
+  db-data:
+  gcs-data:

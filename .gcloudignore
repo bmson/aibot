@@ -1,0 +1,15 @@
+.git/
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+.turbo/
+**/.turbo/
+dist/
+**/dist/
+coverage/
+.env
+.env.*
+.workspace/
+seed-data/
+*.log

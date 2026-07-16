@@ -1,0 +1,26 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { loadConfig, resetConfigForTest } from './config.js';
+
+describe('config', () => {
+  afterEach(() => resetConfigForTest());
+
+  it('applies defaults', () => {
+    resetConfigForTest();
+    const config = loadConfig({});
+    expect(config.QUEUE_DRIVER).toBe('local');
+    expect(config.AGENT_PORT).toBe(8787);
+    expect(config.DATABASE_URL).toContain('postgres://');
+  });
+
+  it('parses overrides and coerces numbers', () => {
+    resetConfigForTest();
+    const config = loadConfig({ QUEUE_DRIVER: 'cloudtasks', AGENT_PORT: '9000' });
+    expect(config.QUEUE_DRIVER).toBe('cloudtasks');
+    expect(config.AGENT_PORT).toBe(9000);
+  });
+
+  it('rejects invalid driver values', () => {
+    resetConfigForTest();
+    expect(() => loadConfig({ QUEUE_DRIVER: 'rabbitmq' })).toThrow();
+  });
+});
