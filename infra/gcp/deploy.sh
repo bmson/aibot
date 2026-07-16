@@ -9,6 +9,8 @@ REGION="us-west1"
 REPO="assistant"
 QUEUE="agent-steps"
 TOPIC="gmail-events"
+# Custom domain for the web dashboard (Cloud Run domain mapping; DNS: bot CNAME ghs.googlehosted.com.)
+WEB_DOMAIN="bot.bmson.com"
 
 # ── read .env ────────────────────────────────────────────────────────────────
 envval() { { grep -E "^$1=" .env || true; } | head -1 | cut -d= -f2-; }
@@ -188,8 +190,14 @@ gcloud run deploy assistant-web \
   --quiet
 
 WEB_URL="$(gcloud run services describe assistant-web --region "$REGION" --format='value(status.url)')"
+AUTH_URL="${WEB_URL}"
+if [ -n "$WEB_DOMAIN" ]; then
+  AUTH_URL="https://${WEB_DOMAIN}"
+  gcloud beta run domain-mappings describe --domain "$WEB_DOMAIN" --region "$REGION" >/dev/null 2>&1 ||
+    gcloud beta run domain-mappings create --service assistant-web --domain "$WEB_DOMAIN" --region "$REGION" --quiet
+fi
 gcloud run services update assistant-web --region "$REGION" \
-  --update-env-vars "AGENT_URL=${AGENT_URL},PUBLIC_URL=${AGENT_URL},AUTH_URL=${WEB_URL}" --quiet
+  --update-env-vars "AGENT_URL=${AGENT_URL},PUBLIC_URL=${AGENT_URL},AUTH_URL=${AUTH_URL}" --quiet
 
 echo ""
 echo "══════════════════════════════════════════════════════"
@@ -198,7 +206,9 @@ echo " web:   ${WEB_URL}"
 echo ""
 echo " REMAINING MANUAL STEPS:"
 echo " 1. Add OAuth redirect URI in the Google console:"
-echo "    ${WEB_URL}/api/auth/callback/google"
+echo "    ${AUTH_URL}/api/auth/callback/google"
+echo " 1b. DNS for the custom domain (wherever bmson.com DNS is managed):"
+echo "    bot  CNAME  ghs.googlehosted.com."
 echo " 2. Kick the Gmail watch:"
 echo "    curl -X POST ${AGENT_URL}/internal/gmail/watch -H 'Authorization: Bearer <PROD_INTERNAL_API_SECRET from .env>'"
 echo " 3. Point the Twilio number's webhook at:"
