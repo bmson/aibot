@@ -45,6 +45,11 @@ if [ -z "$PROFILE_ENC_KEY" ]; then
   printf 'PROD_PROFILE_ENC_KEY=%s\n' "$PROFILE_ENC_KEY" >> .env
 fi
 
+# ── database schema (idempotent: drizzle journal skips applied migrations; seed upserts) ──
+echo "── migrating prod database"
+DATABASE_URL="$PROD_DATABASE_URL" pnpm --filter @assistant/db migrate
+DATABASE_URL="$PROD_DATABASE_URL" pnpm --filter @assistant/db seed
+
 gcloud config set project "$PROJECT" --quiet
 
 echo "── enabling APIs"

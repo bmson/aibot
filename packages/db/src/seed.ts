@@ -216,27 +216,24 @@ const scheduleSeed = [
         "Prepare the owner's morning brief. Check: (1) today's events on your calendar and the owner's free/busy, (2) recent email in your inbox needing attention (gmail.search newer_than:1d), (3) goals list — anything slipping, (4) your own progress notes. Then send ONE concise brief via owner.notify: schedule, needs-attention items, and what you plan to do today. No fluff.",
     },
   },
-  {
-    name: 'memory-consolidation',
-    cron: '0 9 * * 0',
-    taskTemplate: {
-      type: 'scheduled',
-      budgetUsdLimit: '0.10',
-      instruction:
-        'Weekly memory maintenance: recall memories on the main recurring topics, identify duplicates or outdated experiences, and save consolidated, corrected knowledge memories where useful. Summarize what you changed via owner.notify in 2-3 lines.',
-    },
-  },
+  // Phase 8: extraction and consolidation are code jobs, not model-prompted
+  // tasks — the executor dispatches on taskTemplate.job. Extraction reviews
+  // the day's conversations; consolidation dedupes/resolves per entity and
+  // recompiles the owner card. Consolidation runs after extraction.
   {
     name: 'memory-extraction',
     cron: '0 22 * * *',
-    taskTemplate: {
-      type: 'scheduled',
-      budgetUsdLimit: '0.10',
-      instruction:
-        "Nightly memory extraction: use conversations.search and memory.recall to review today's conversations and completed work. Save any lasting facts, preferences, or people as 'knowledge' memories and notable outcomes as 'experience' memories (memory.save) — but recall first and skip anything already stored. If nothing new was learned today, finish silently without saving or notifying.",
-    },
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'memory.extract' },
+  },
+  {
+    name: 'memory-consolidation',
+    cron: '30 22 * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'memory.consolidate' },
   },
 ] as const;
+
+/** Schedules whose definition the seed owns — updated in place on re-seed (prod picks up changes on deploy). */
+const SEED_OWNED_SCHEDULES = new Set(['memory-extraction', 'memory-consolidation']);
 
 for (const s of scheduleSeed) {
   const existing = await db.select().from(schedules).where(eq(schedules.name, s.name));
@@ -248,6 +245,17 @@ for (const s of scheduleSeed) {
       taskTemplate: { ...s.taskTemplate },
       enabled: true,
     });
+  } else if (SEED_OWNED_SCHEDULES.has(s.name)) {
+    await db
+      .update(schedules)
+      .set({
+        cron: s.cron,
+        taskTemplate: { ...s.taskTemplate },
+        // next_run_at recomputes on the next sweep against the new cron
+        nextRunAt: null,
+        updatedAt: sql`now()`,
+      })
+      .where(eq(schedules.name, s.name));
   }
 }
 

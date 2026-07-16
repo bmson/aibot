@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto';
-import { conversations, goals, memories, messages, tasks } from '@assistant/db';
+import {
+  conversations,
+  goals,
+  isTombstoned,
+  memories,
+  messages,
+  resolveSubjectContact,
+  tasks,
+} from '@assistant/db';
 import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ToolRegistry } from '../registry.js';
@@ -31,11 +39,19 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     {
       name: 'memory.save',
       description:
-        'Save a durable memory. category "knowledge" for lasting facts/preferences/people; "experience" for what happened during work (expires eventually).',
+        'Save a durable memory. category "knowledge" for lasting facts/preferences/people; "experience" for what happened during work (expires eventually). Attribute facts about a person via subject ("owner" for the owner, else their name).',
       inputSchema: z.object({
         content: z.string().min(3).max(2000),
         category: z.enum(['knowledge', 'experience']),
         kind: z.enum(['fact', 'preference', 'person', 'project', 'episode']),
+        subject: z
+          .string()
+          .max(120)
+          .default('')
+          .describe('Who the fact is about: "owner", a person\'s name, or empty if about no one.'),
+        domain: z
+          .enum(['identity', 'work', 'home', 'relationships', 'preferences', 'health', 'other'])
+          .optional(),
         importance: z.number().int().min(1).max(5).default(3),
         confidence: z.number().min(0).max(1).default(0.7),
       }),
@@ -43,8 +59,18 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       acceptsUntrustedInput: false,
       execute: async (args, ctx) => {
         const contentHash = createHash('sha256').update(args.content).digest('hex');
+        if (await isTombstoned(ctx.db, contentHash)) {
+          return {
+            saved: false,
+            tombstoned: true,
+            note: 'the owner explicitly forgot this fact — do not re-save it',
+          };
+        }
         const [embedding] = await deps.embed([args.content]);
         const quarantined = ctx.trust !== 'owner' && ctx.trust !== 'assistant';
+        const subject = args.subject
+          ? await resolveSubjectContact(ctx.db, { subject: args.subject })
+          : null;
         const expiresAt =
           args.category === 'experience' ? new Date(Date.now() + 90 * 24 * 3600 * 1000) : undefined;
         const [row] = await ctx.db
@@ -60,6 +86,8 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
             confidence: String(args.confidence),
             originTrust: ctx.trust,
             quarantined,
+            subjectContactId: subject?.contactId,
+            domain: args.domain,
             sourceTaskId: ctx.taskId,
             expiresAt,
           })

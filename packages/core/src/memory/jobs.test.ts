@@ -1,0 +1,94 @@
+import { createDb, type Db, tasks } from '@assistant/db';
+import { eq, inArray } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { getAgent } from '../chat.js';
+import type { InboundEvent } from '../events.js';
+import type { ModelRouter } from '../model-router/router.js';
+import type { DispatcherPort } from '../workflow/executor.js';
+import { executeTask } from '../workflow/executor.js';
+import { enqueueTask } from '../workflow/machine.js';
+import { codeJobName } from './jobs.js';
+
+const DATABASE_URL =
+  process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
+
+let db: Db;
+let dbUp = false;
+let agentId: string;
+const createdTaskIds: string[] = [];
+
+/** Extraction with no extractable conversations returns empty — the fake never gets called for facts. */
+const fakeRouter = {
+  async object() {
+    return { ok: true, modelId: 'fake', degraded: false, object: { facts: [] } };
+  },
+  async embed(texts: string[]) {
+    return texts.map(() => new Array(1536).fill(0.01));
+  },
+} as unknown as ModelRouter;
+
+/** Code jobs must never reach the tool dispatcher. */
+const explodingDispatcher: DispatcherPort = {
+  toolDefs: () => {
+    throw new Error('code job must not build a tool set');
+  },
+  dispatch: async () => {
+    throw new Error('code job must not dispatch tools');
+  },
+  executeApproved: async () => {
+    throw new Error('code job must not execute approvals');
+  },
+};
+
+beforeAll(async () => {
+  db = createDb(DATABASE_URL);
+  try {
+    agentId = (await getAgent(db)).id;
+    dbUp = true;
+  } catch {
+    console.warn('jobs.test: database unreachable — skipping');
+  }
+});
+
+afterAll(async () => {
+  if (dbUp && createdTaskIds.length) {
+    await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
+  }
+  await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
+});
+
+describe('codeJobName', () => {
+  const taskWith = (payload: Record<string, unknown>) =>
+    ({ trigger: { source: 'schedule', payload } }) as never;
+  it('recognizes registered jobs and rejects everything else', () => {
+    expect(codeJobName(taskWith({ job: 'memory.extract' }))).toBe('memory.extract');
+    expect(codeJobName(taskWith({ job: 'memory.consolidate' }))).toBe('memory.consolidate');
+    expect(codeJobName(taskWith({ job: 'rm -rf /' }))).toBeNull();
+    expect(codeJobName(taskWith({ instruction: 'do things' }))).toBeNull();
+    expect(codeJobName({ trigger: null } as never)).toBeNull();
+  });
+});
+
+describe('code job execution (integration)', () => {
+  it('a scheduled task with a job payload runs the job, not the model loop', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const event: InboundEvent = {
+      source: 'schedule',
+      agentId,
+      trust: 'assistant',
+      payload: { schedule: 'memory-extraction', job: 'memory.extract' },
+    };
+    const { task } = await enqueueTask(db, { event, type: 'scheduled' });
+    createdTaskIds.push(task.id);
+
+    const result = await executeTask(
+      { db, router: fakeRouter, dispatcher: explodingDispatcher },
+      task.id,
+    );
+    expect(result.outcome).toBe('done');
+
+    const [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(row?.status).toBe('done');
+    expect(row?.progress).toMatch(/^extraction:/);
+  });
+});

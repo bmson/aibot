@@ -343,6 +343,19 @@ export const memories = pgTable(
     /** Untrusted-origin saves are quarantined until owner review. */
     originTrust: text('origin_trust').notNull().default('owner'),
     quarantined: boolean('quarantined').notNull().default(false),
+    /** Who this fact is ABOUT (the owner contact row, or an auto-created person). */
+    subjectContactId: uuid('subject_contact_id').references(() => contacts.id),
+    /** Lifecycle-tree domain (PersonaTree): identity → life domains → facts. */
+    domain: text('domain'),
+    /** Temporal validity ("worked at X 2019–2023"): null = open-ended. */
+    validFrom: timestamp('valid_from', { withTimezone: true }),
+    validUntil: timestamp('valid_until', { withTimezone: true }),
+    /** Set by consolidation when a newer/better fact supersedes this one. */
+    supersededById: uuid('superseded_by_id').references((): AnyPgColumn => memories.id),
+    /** Owner clicked confirm/correct on the Profile page — consolidation never expires these lightly. */
+    ownerConfirmed: boolean('owner_confirmed').notNull().default(false),
+    /** Import provenance (e.g. 'takeout-mail-2021') — purge-by-source uses this. */
+    source: text('source'),
     sourceTaskId: uuid('source_task_id').references(() => tasks.id),
     goalId: uuid('goal_id').references(() => goals.id),
     lastAccessedAt: timestamp('last_accessed_at', { withTimezone: true }),
@@ -359,9 +372,42 @@ export const memories = pgTable(
       'memories_origin_trust_check',
       sql`${t.originTrust} IN ('owner','known','unknown','assistant')`,
     ),
+    check(
+      'memories_domain_check',
+      sql`${t.domain} IS NULL OR ${t.domain} IN ('identity','work','home','relationships','preferences','health','other')`,
+    ),
     index('memories_embedding_idx').using('hnsw', t.embedding.op('vector_cosine_ops')),
     index('memories_agent_category_idx').on(t.agentId, t.category, t.createdAt),
+    index('memories_subject_idx').on(t.subjectContactId),
+    index('memories_source_idx').on(t.source),
   ],
+);
+
+/**
+ * Forgotten facts stay forgotten: a tombstoned content hash can never be
+ * re-saved by extraction, import, or memory.save. Only the hash is kept —
+ * the content itself is gone.
+ */
+export const memoryTombstones = pgTable('memory_tombstones', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  contentHash: text('content_hash').notNull().unique(),
+  reason: text('reason').notNull().default('owner_forget'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Compiled owner profile card (single row, id = 1) — rebuilt by consolidation
+ * and injected into planner/executor system prompts. Computed once, not
+ * re-derived per task.
+ */
+export const ownerCard = pgTable(
+  'owner_card',
+  {
+    id: smallint('id').primaryKey().default(1),
+    content: text('content').notNull().default(''),
+    compiledAt: timestamp('compiled_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [check('owner_card_singleton_check', sql`${t.id} = 1`)],
 );
 
 export const contacts = pgTable(
@@ -576,6 +622,8 @@ export type ToolCallRow = typeof toolCalls.$inferSelect;
 export type ApprovalRow = typeof approvals.$inferSelect;
 export type ApprovalPolicyRow = typeof approvalPolicies.$inferSelect;
 export type MemoryRow = typeof memories.$inferSelect;
+export type MemoryTombstoneRow = typeof memoryTombstones.$inferSelect;
+export type OwnerCardRow = typeof ownerCard.$inferSelect;
 export type ContactRow = typeof contacts.$inferSelect;
 export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;

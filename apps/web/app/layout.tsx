@@ -22,6 +22,7 @@ const navItems = [
   { href: '/approvals', label: 'Approvals' },
   { href: '/tasks', label: 'Tasks' },
   { href: '/goals', label: 'Goals' },
+  { href: '/profile', label: 'Profile' },
   { href: '/settings', label: 'Settings' },
 ];
 

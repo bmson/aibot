@@ -4,6 +4,7 @@ import {
   ensureChatConversation,
   finishTask,
   getAgent,
+  getOwnerCard,
   loadConfig,
   persistMessage,
 } from '@assistant/core';
@@ -65,7 +66,7 @@ export async function POST(req: Request) {
   const outcome = await getRouter().stream('draft', {
     taskId: task.id,
     modelOverride: conversation.modelOverride ?? undefined,
-    system: buildSystemPrompt(agent),
+    system: buildSystemPrompt(agent, { ownerCard: await getOwnerCard(db) }),
     messages: await convertToModelMessages(uiMessages),
     onComplete: async (text) => {
       await persistMessage(db, {

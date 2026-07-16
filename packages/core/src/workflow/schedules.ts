@@ -48,6 +48,8 @@ export async function runDueSchedules(
     const template = (row.taskTemplate ?? {}) as {
       type?: TaskType;
       instruction?: string;
+      /** Code-job schedules run a registered function instead of the model loop. */
+      job?: string;
       budgetUsdLimit?: string;
       maxSteps?: number;
     };
@@ -56,7 +58,11 @@ export async function runDueSchedules(
       externalEventId: `schedule:${row.id}:${firing.toISOString()}`,
       agentId: row.agentId,
       trust: 'assistant',
-      payload: { schedule: row.name, instruction: template.instruction ?? row.name },
+      payload: {
+        schedule: row.name,
+        instruction: template.instruction ?? row.name,
+        ...(template.job ? { job: template.job } : {}),
+      },
     });
     const { task, created } = await enqueueTask(db, {
       event,

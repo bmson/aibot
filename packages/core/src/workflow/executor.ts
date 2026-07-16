@@ -12,6 +12,8 @@ import {
   persistMessage,
 } from '../chat.js';
 import { PlanSchema, type TaskState, type Trust } from '../events.js';
+import { getOwnerCard } from '../memory/consolidation.js';
+import { codeJobName, runCodeJob } from '../memory/jobs.js';
 import type { ModelRole, ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import {
@@ -180,6 +182,15 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
   const agent = await getAgent(db);
   const state = taskState(task);
   const abort = new AbortController();
+
+  // Code jobs (nightly memory extraction/consolidation) run a registered
+  // function instead of the model loop — same retry/budget machinery.
+  const job = codeJobName(task);
+  if (job) {
+    const summary = await runCodeJob({ db, router }, job, task.id);
+    await completeTask(db, task.id, { status: 'done', progress: summary.slice(0, 500) });
+    return { outcome: 'done', detail: summary.slice(0, 200) };
+  }
 
   // Missions never run the step loop themselves: each wake is a deadline
   // check, a reflection, or a fresh bounded session child.
@@ -361,7 +372,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
 
   const role = ROLE_FOR_TYPE[task.type] ?? 'draft';
   const system = [
-    buildSystemPrompt(agent),
+    buildSystemPrompt(agent, { ownerCard: await getOwnerCard(db) }),
     plan
       ? `\nCurrent plan (follow it; deviate only with good reason):\n${JSON.stringify(plan)}`
       : '',
