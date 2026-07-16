@@ -19,10 +19,13 @@ if (!dbUrl) {
 }
 const db = createDb(dbUrl);
 
+const goalIndex = process.argv.indexOf('--goal');
 const INSTRUCTION =
-  'Use the Workspace browser for this (browser.plan, then browser.execute with a read-only plan): ' +
-  'open https://news.ycombinator.com and tell me the current #1 story title. ' +
-  'Reply with just the headline and its rank.';
+  goalIndex !== -1 && process.argv[goalIndex + 1]
+    ? (process.argv[goalIndex + 1] as string)
+    : 'Use the Workspace browser for this (browser.plan, then browser.execute with a read-only plan): ' +
+      'open https://news.ycombinator.com and tell me the current #1 story title. ' +
+      'Reply with just the headline and its rank.';
 
 const watchIndex = process.argv.indexOf('--watch');
 

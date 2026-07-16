@@ -255,6 +255,12 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
         continue;
       }
       if (approval.status === 'approved') {
+        // One browser job at a time — defer further approved calls until the
+        // in-flight job settles; they stay parked and run on the next wake.
+        if (state.pendingJob) {
+          stillPending.push(pending);
+          continue;
+        }
         const outcome = await dispatcher.executeApproved(pending.dbToolCallId, ctx);
         if (outcome.ok && isBrowserJobPending(outcome.result)) {
           // The approved call launched a browser job — park for its callback.
@@ -415,6 +421,18 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
       const pendingApprovals: TaskState['pendingApprovals'] = [];
       const approvalNotices: Array<{ taskId: string; shortCode: string; summary: string }> = [];
       for (const tc of stepResult.toolCalls) {
+        // One browser job at a time: once a call in this batch launched a job,
+        // later calls are refused undispatched (parallel launches would race
+        // the shared profile and orphan all but the last callback token).
+        if (state.pendingJob) {
+          window.push(
+            toolResultMessage(tc.toolCallId, tc.toolName, {
+              error:
+                'a browser job is already running for this task — wait for its result before making more tool calls',
+            }),
+          );
+          continue;
+        }
         const outcome = await dispatcher.dispatch({
           task,
           step: state.step,

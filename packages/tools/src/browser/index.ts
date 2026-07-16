@@ -88,7 +88,7 @@ export function registerBrowserTools(registry: ToolRegistry, deps: BrowserDeps):
     {
       name: 'browser.execute',
       description:
-        'Run an explicit browser plan (from browser.plan) in the Workspace browser — an on-demand headless Chromium job. Read-only plans (goto/waitFor/extract/screenshot/scroll) run autonomously; any interactive step (click/type/select/press) requires owner approval of the exact plan. Results arrive asynchronously in the next turn. Never plan credential entry or purchases.',
+        'Run an explicit browser plan (from browser.plan) in the Workspace browser — an on-demand headless Chromium job. Read-only plans (goto/waitFor/extract/screenshot/scroll) run autonomously; any interactive step (click/type/select/press) requires owner approval of the exact plan. Results arrive asynchronously in the next turn. Call it ONCE and wait for the result — only one browser job can run per task at a time; parallel calls are refused. Never plan credential entry or purchases.',
       inputSchema: z.object({ plan: BrowserPlanSchema }),
       risk: (args) => (isReadOnlyPlan(args.plan) ? 'autonomous' : 'approval'),
       acceptsUntrustedInput: false,

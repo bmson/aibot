@@ -251,6 +251,55 @@ describe('browser job end-to-end (integration, scripted model)', () => {
     expect(run3.outcome).toBe('done');
   });
 
+  it('parallel browser.execute calls in one step launch only one job', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const launches: BrowserJobLaunchInput[] = [];
+    const dispatcher = makeDispatcher(launches);
+    // A model that spams two browser.execute calls in a single step
+    const router = {
+      async object() {
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          object: { action: 'workflow', reasoning: '', steps: ['browse'], missingInfo: [] },
+        };
+      },
+      async step(_role: string, callOpts: { messages?: ModelMessage[] }) {
+        const transcript = JSON.stringify(callOpts.messages ?? []);
+        if (!transcript.includes('"toolName":"browser.execute"')) {
+          return {
+            ok: true,
+            modelId: 'fake/model',
+            degraded: false,
+            text: '',
+            toolCalls: [
+              { toolCallId: 'call_a', toolName: 'browser.execute', input: { plan: readOnlyPlan } },
+              { toolCallId: 'call_b', toolName: 'browser.execute', input: { plan: readOnlyPlan } },
+            ],
+          };
+        }
+        return { ok: true, modelId: 'fake/model', degraded: false, text: 'done', toolCalls: [] };
+      },
+    } as unknown as ModelRouter;
+
+    const { task } = await enqueueTask(db, { event: event(), type: 'adhoc' });
+    createdTaskIds.push(task.id);
+
+    const run1 = await executeTask({ db, router, dispatcher }, task.id);
+    expect(run1.outcome).toBe('sleeping');
+    expect(launches).toHaveLength(1); // second call refused, not launched
+
+    const [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    const state = row?.state as {
+      pendingJob?: { callbackToken: string };
+      contextWindow: unknown[];
+    };
+    expect(state.pendingJob?.callbackToken).toBe(launches[0]?.callbackToken);
+    // the refused call got an explanatory error result in the window
+    expect(JSON.stringify(state.contextWindow)).toContain('already running');
+  });
+
   it('a job that never calls back settles as failed after the timeout', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const launches: BrowserJobLaunchInput[] = [];
