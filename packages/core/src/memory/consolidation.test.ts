@@ -306,6 +306,16 @@ describe('memory consolidation (integration)', () => {
     expect(card?.content).toContain('Newcorp');
     expect(card?.content).not.toContain('Oldcorp');
     expect(card?.content).not.toContain('neighbor');
+
+    // rotation cursor: every reviewed fact is stamped so the next run's window
+    // prefers facts that haven't been looked at yet (nulls first)
+    expect(dupB?.lastConsolidatedAt).not.toBeNull();
+    expect(mergeConfirmed?.lastConsolidatedAt).not.toBeNull();
+    const [quarantinedFact] = await db
+      .select()
+      .from(memories)
+      .where(eq(memories.id, factIds.quarantinedFact as string));
+    expect(quarantinedFact?.lastConsolidatedAt).toBeNull();
   });
 });
 

@@ -361,6 +361,8 @@ export const memories = pgTable(
     sourceTaskId: uuid('source_task_id').references(() => tasks.id),
     goalId: uuid('goal_id').references(() => goals.id),
     lastAccessedAt: timestamp('last_accessed_at', { withTimezone: true }),
+    /** Rotation cursor: when consolidation last reviewed this fact. Null = never. */
+    lastConsolidatedAt: timestamp('last_consolidated_at', { withTimezone: true }),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

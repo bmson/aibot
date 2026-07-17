@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { contacts, type Db, isTombstoned, memories, ownerCard } from '@assistant/db';
-import { and, eq, gt, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
@@ -129,7 +129,9 @@ export async function runMemoryConsolidation(
       .where(and(activeFacts, sql`${memories.subjectContactId} IS NOT NULL`))
       .groupBy(memories.subjectContactId)
       .having(sql`count(*) >= 2`)
-      .orderBy(sql`count(*) desc`)
+      // rotation: the entity whose facts have waited longest goes first, so
+      // a handful of big entities can never starve the rest
+      .orderBy(sql`min(${memories.lastConsolidatedAt}) asc nulls first`, sql`count(*) desc`)
       .limit(MAX_ENTITIES_PER_RUN);
 
     for (const entity of entityRows) {
@@ -151,7 +153,10 @@ export async function runMemoryConsolidation(
         })
         .from(memories)
         .where(and(activeFacts, eq(memories.subjectContactId, entity.subjectContactId)))
-        .orderBy(memories.createdAt)
+        // rotation: least-recently-reviewed facts first, so an entity with more
+        // than MAX_FACTS_PER_ENTITY facts is groomed in full over several runs
+        // instead of re-reviewing the same oldest window forever
+        .orderBy(sql`${memories.lastConsolidatedAt} asc nulls first`, memories.createdAt)
         .limit(MAX_FACTS_PER_ENTITY);
       if (facts.length < 2) continue;
       result.entities += 1;
@@ -272,6 +277,17 @@ export async function runMemoryConsolidation(
           })
           .where(eq(memories.id, t.id));
       }
+
+      // everything reviewed this round goes to the back of the rotation queue
+      await db
+        .update(memories)
+        .set({ lastConsolidatedAt: sql`now()` })
+        .where(
+          inArray(
+            memories.id,
+            facts.map((f) => f.id),
+          ),
+        );
     }
 
     await compileOwnerCard(db);
