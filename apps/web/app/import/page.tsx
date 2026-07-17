@@ -4,6 +4,7 @@ import { SourceCard, type SourceView, StartImportButton } from '@/app/import/sou
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb, getWorkspace } from '@/lib/server';
+import { PageHeader } from '@/lib/ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,13 +46,10 @@ export default async function ImportPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      <h1 className="text-xl font-semibold">Backstory import</h1>
-      <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-        Feed the assistant your digital past — Takeout mail archives (.mbox), chat exports (.json),
-        or plain notes. Archives are distilled into memories with source provenance: a whole source
-        can be re-run or purged atomically, and facts about other people wait in quarantine until
-        you review them.
-      </p>
+      <PageHeader
+        title="Backstory import"
+        intro="Feed the assistant your digital past — Takeout mail archives (.mbox), chat exports (.json), or plain notes. Archives are distilled into memories with source provenance: a whole source can be re-run or purged atomically, and facts about other people wait in quarantine until you review them."
+      />
 
       {/* Upload */}
       <section className="mt-8">

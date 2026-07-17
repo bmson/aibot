@@ -6,6 +6,7 @@ import { updateCaps } from '@/app/costs/actions';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
+import { btn, PageHeader } from '@/lib/ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -67,13 +68,17 @@ export default async function CostsPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      <h1 className="text-xl font-semibold">Costs</h1>
-      <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-        Every billable event in one ledger — model calls, embeddings, SMS, job runtime. Hard caps
-        park new work as{' '}
-        <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">waiting_budget</code> (owner
-        chat keeps a carve-out); parked work resumes when the period resets.
-      </p>
+      <PageHeader
+        title="Costs"
+        intro={
+          <>
+            Every billable event in one ledger — model calls, embeddings, SMS, job runtime. Hard
+            caps park new work as{' '}
+            <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">waiting_budget</code> (owner
+            chat keeps a carve-out); parked work resumes when the period resets.
+          </>
+        }
+      />
 
       {parked > 0 ? (
         <p className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
@@ -132,10 +137,7 @@ export default async function CostsPage() {
               className="w-28 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
             />
           </label>
-          <button
-            type="submit"
-            className="rounded-md border border-zinc-300 px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
+          <button type="submit" className={btn.outline}>
             Update caps
           </button>
         </form>

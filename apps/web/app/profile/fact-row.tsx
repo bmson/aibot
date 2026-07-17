@@ -11,6 +11,7 @@ import {
   rejectQuarantined,
   setFactPinned,
 } from '@/app/profile/actions';
+import { btn } from '@/lib/ui';
 
 /** Plain-serializable fact view, built server-side in page.tsx. */
 export interface FactView {
@@ -30,10 +31,8 @@ export interface FactView {
   validityLabel: string;
 }
 
-const buttonBase =
-  'rounded-md px-2 py-0.5 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-50';
-const outlineButton = `${buttonBase} border border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800`;
-const dangerOutlineButton = `${buttonBase} border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40`;
+const outlineButton = btn.outline;
+const dangerOutlineButton = btn.dangerOutline;
 
 export function FactRow({ fact, quarantine = false }: { fact: FactView; quarantine?: boolean }) {
   const [editing, setEditing] = useState(false);
@@ -167,7 +166,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
                   type="button"
                   disabled={pending}
                   onClick={() => startTransition(() => forgetFact(fact.id))}
-                  className={`${buttonBase} bg-red-600 text-white hover:bg-red-700`}
+                  className={btn.danger}
                 >
                   Really forget
                 </button>
@@ -214,7 +213,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
                   else setEditing(false);
                 })
               }
-              className={`${buttonBase} bg-blue-600 text-white hover:bg-blue-700`}
+              className={btn.primary}
             >
               {pending ? 'Saving…' : 'Save correction'}
             </button>

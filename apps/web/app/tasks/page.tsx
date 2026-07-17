@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { formatUsd, relativeTime, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
+import { EmptyState, PageHeader } from '@/lib/ui';
 import { StatusChip } from '@/lib/views';
 
 export const dynamic = 'force-dynamic';
@@ -17,15 +18,13 @@ export default async function TasksPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      <h1 className="text-xl font-semibold">Tasks</h1>
-      <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-        Everything the assistant is working on — running, queued, and completed tasks.
-      </p>
+      <PageHeader
+        title="Tasks"
+        intro="Everything the assistant is working on — running, queued, and completed tasks."
+      />
 
       {rows.length === 0 ? (
-        <p className="mt-8 text-sm text-zinc-500 dark:text-zinc-400">
-          No tasks yet — work the assistant picks up will appear here.
-        </p>
+        <EmptyState>No tasks yet — work the assistant picks up will appear here.</EmptyState>
       ) : (
         <div className="mt-6 overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
           <table className="w-full text-left text-sm">

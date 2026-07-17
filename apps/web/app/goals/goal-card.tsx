@@ -2,6 +2,7 @@
 
 import { useActionState, useState } from 'react';
 import { setGoalStatus, updateGoal } from '@/app/goals/actions';
+import { btn } from '@/lib/ui';
 import { StatusChip } from '@/lib/views';
 
 /** Plain-serializable props built server-side in page.tsx (labels precomputed there). */
@@ -21,11 +22,9 @@ export interface GoalView {
   updatedLabel: string;
 }
 
-const buttonBase =
-  'rounded-md px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50';
-const outlineButton = `${buttonBase} border border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800`;
-const dangerOutlineButton = `${buttonBase} border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40`;
-const dangerButton = `${buttonBase} bg-red-600 text-white hover:bg-red-700`;
+const outlineButton = btn.outline;
+const dangerOutlineButton = btn.dangerOutline;
+const dangerButton = btn.danger;
 const inputClass =
   'w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900';
 const labelClass = 'flex flex-col gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400';
@@ -218,11 +217,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
             <p className="text-xs text-red-600 dark:text-red-400">{editState.error}</p>
           ) : null}
           <div className="flex gap-2">
-            <button
-              type="submit"
-              disabled={editPending}
-              className={`${buttonBase} bg-blue-600 text-white hover:bg-blue-700`}
-            >
+            <button type="submit" disabled={editPending} className={btn.primary}>
               {editPending ? 'Saving…' : 'Save'}
             </button>
             <button type="button" onClick={() => setEditing(false)} className={outlineButton}>

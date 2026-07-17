@@ -8,6 +8,7 @@ import {
   reviewSourceAction,
   startImportAction,
 } from '@/app/import/actions';
+import { btn } from '@/lib/ui';
 
 /** Plain-serializable source view built in page.tsx. */
 export interface SourceView {
@@ -24,11 +25,9 @@ export interface SourceView {
   updatedLabel: string;
 }
 
-const buttonBase =
-  'rounded-md px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50';
-const outlineButton = `${buttonBase} border border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800`;
-const dangerOutlineButton = `${buttonBase} border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40`;
-const dangerButton = `${buttonBase} bg-red-600 text-white hover:bg-red-700`;
+const outlineButton = btn.outline;
+const dangerOutlineButton = btn.dangerOutline;
+const dangerButton = btn.danger;
 
 const statusChipClasses: Record<string, string> = {
   pending: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',

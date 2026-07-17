@@ -5,6 +5,7 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { auth, authMode } from '@/auth';
 import { getDb } from '@/lib/server';
+import { CountBadge } from '@/lib/ui';
 import { signOutAction } from './actions';
 import './globals.css';
 
@@ -59,9 +60,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                 >
                   {item.label}
                   {item.href === '/approvals' && pendingApprovals > 0 ? (
-                    <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                      {pendingApprovals}
-                    </span>
+                    <CountBadge tone="amber">{pendingApprovals}</CountBadge>
                   ) : null}
                 </Link>
               ))}

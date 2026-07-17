@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
+import { EmptyState, PageHeader, SectionHeading } from '@/lib/ui';
 import { StatusChip, toPendingApprovalView } from '@/lib/views';
 import { ApprovalCard } from './approval-card';
 
@@ -32,16 +33,18 @@ export default async function ApprovalsPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      <h1 className="text-xl font-semibold">Approvals</h1>
-      <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-        Review and approve or reject actions the assistant wants to take on your behalf.
-      </p>
+      <PageHeader
+        title="Approvals"
+        intro="Review and approve or reject actions the assistant wants to take on your behalf."
+      />
 
-      <h2 className="mt-8 text-sm font-medium">Pending</h2>
+      <div className="mt-8">
+        <SectionHeading title="Pending" count={pending.length} />
+      </div>
       {pending.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
+        <EmptyState>
           Nothing to approve — actions that need your sign-off will appear here.
-        </p>
+        </EmptyState>
       ) : (
         <div className="mt-3 flex flex-col gap-3">
           {pending.map(({ approval, taskType, taskTrust }) => (
@@ -53,9 +56,11 @@ export default async function ApprovalsPage() {
         </div>
       )}
 
-      <h2 className="mt-8 text-sm font-medium">Recently resolved</h2>
+      <div className="mt-8">
+        <SectionHeading title="Recently resolved" />
+      </div>
       {resolved.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">No resolved approvals yet.</p>
+        <EmptyState>No resolved approvals yet.</EmptyState>
       ) : (
         <div className="mt-3 flex flex-col gap-2">
           {resolved.map(({ approval, taskType }) => (

@@ -7,40 +7,31 @@ import { cancelTask, retryTask } from '@/app/tasks/actions';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
+import { btn, CountBadge, PageHeader, SectionHeading } from '@/lib/ui';
 import { StatusChip, toPendingApprovalView } from '@/lib/views';
 
 export const dynamic = 'force-dynamic';
 
-const actionButton =
-  'rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800';
-
+/** A dashboard section renders only when it has content — empty ones stay out of the way. */
 function Section({
-  icon,
   title,
   subtitle,
-  empty,
   count,
   children,
 }: {
-  icon: string;
   title: string;
   subtitle: string;
-  empty: string;
   count: number;
   children?: ReactNode;
 }) {
+  if (count === 0) return null;
   return (
     <section className="rounded-lg border border-zinc-200 p-5 dark:border-zinc-800">
       <div className="flex items-baseline gap-2">
-        <span aria-hidden="true">{icon}</span>
-        <h2 className="text-sm font-medium">{title}</h2>
-        <span className="text-xs text-zinc-500 dark:text-zinc-500">{subtitle}</span>
+        <SectionHeading title={title} hint={subtitle} />
+        <CountBadge>{count}</CountBadge>
       </div>
-      {count === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">{empty}</p>
-      ) : (
-        <div className="mt-3 flex flex-col gap-3">{children}</div>
-      )}
+      <div className="mt-3 flex flex-col gap-3">{children}</div>
     </section>
   );
 }
@@ -85,18 +76,32 @@ export default async function DashboardPage() {
         and(eq(tasks.type, 'mission'), notInArray(tasks.status, ['done', 'failed', 'cancelled'])),
       )
       .orderBy(desc(tasks.updatedAt)),
-    db.select().from(goals).orderBy(asc(goals.priority), desc(goals.updatedAt)),
+    db
+      .select({ id: goals.id, title: goals.title, status: goals.status, priority: goals.priority })
+      .from(goals)
+      .orderBy(asc(goals.priority), desc(goals.updatedAt)),
   ]);
+
+  const totalItems =
+    pendingApprovals.length +
+    attention.length +
+    waiting.length +
+    recentDone.length +
+    missions.length +
+    goalRows.length;
 
   return (
     <div className="mx-auto max-w-4xl">
-      <h1 className="text-xl font-semibold">Dashboard</h1>
+      <PageHeader title="Dashboard" />
+      {totalItems === 0 ? (
+        <p className="mt-6 rounded-lg border border-zinc-200 p-5 text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+          All quiet — nothing needs you. Approvals, stuck tasks, and running work will show up here.
+        </p>
+      ) : null}
       <div className="mt-6 flex flex-col gap-4">
         <Section
-          icon="⚠️"
           title="Needs approval"
           subtitle="Actions awaiting your sign-off"
-          empty="Nothing to approve — actions that need your sign-off will appear here."
           count={pendingApprovals.length}
         >
           {pendingApprovals.map(({ approval, taskType, taskTrust }) => (
@@ -108,10 +113,8 @@ export default async function DashboardPage() {
         </Section>
 
         <Section
-          icon="🚨"
           title="Needs attention"
           subtitle="Dead-lettered tasks that need a human"
-          empty="Nothing stuck — tasks that exhausted their retries will appear here."
           count={attention.length}
         >
           {attention.map((task) => (
@@ -129,12 +132,12 @@ export default async function DashboardPage() {
               </div>
               <div className="flex shrink-0 gap-2">
                 <form action={retryTask.bind(null, task.id)}>
-                  <button type="submit" className={actionButton}>
+                  <button type="submit" className={btn.outline}>
                     Retry
                   </button>
                 </form>
                 <form action={cancelTask.bind(null, task.id)}>
-                  <button type="submit" className={actionButton}>
+                  <button type="submit" className={btn.outline}>
                     Cancel
                   </button>
                 </form>
@@ -144,10 +147,8 @@ export default async function DashboardPage() {
         </Section>
 
         <Section
-          icon="⏳"
           title="Waiting"
           subtitle="Blocked or pending on something else"
-          empty="Nothing waiting — no tasks are blocked or pending."
           count={waiting.length}
         >
           {waiting.map((task) => {
@@ -181,13 +182,7 @@ export default async function DashboardPage() {
           })}
         </Section>
 
-        <Section
-          icon="✓"
-          title="Done"
-          subtitle="Recently completed"
-          empty="Nothing yet — the assistant hasn’t completed any work."
-          count={recentDone.length}
-        >
+        <Section title="Done" subtitle="Recently completed" count={recentDone.length}>
           {recentDone.map((task) => (
             <div key={task.id} className="flex items-center justify-between gap-3">
               <div className="flex min-w-0 items-baseline gap-2">
@@ -215,13 +210,7 @@ export default async function DashboardPage() {
           ))}
         </Section>
 
-        <Section
-          icon="👁"
-          title="Monitoring"
-          subtitle="Missions and schedules"
-          empty="No missions yet — active missions and schedules will appear here."
-          count={missions.length}
-        >
+        <Section title="Monitoring" subtitle="Missions in flight" count={missions.length}>
           {missions.map((task) => {
             const percent =
               task.progressPercent ??
@@ -267,13 +256,7 @@ export default async function DashboardPage() {
           })}
         </Section>
 
-        <Section
-          icon="🎯"
-          title="Goals"
-          subtitle="Long-running objectives"
-          empty="No goals yet — long-running objectives will appear here."
-          count={goalRows.length}
-        >
+        <Section title="Goals" subtitle="Long-running objectives" count={goalRows.length}>
           {goalRows.map((goal) => (
             <div key={goal.id} className="flex items-center justify-between gap-3">
               <span className="min-w-0 truncate text-sm font-medium">{goal.title}</span>

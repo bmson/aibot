@@ -5,6 +5,7 @@ import { GoalCreateForm } from '@/app/goals/goal-create-form';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
+import { EmptyState, PageHeader, SectionHeading } from '@/lib/ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,27 +42,22 @@ export default async function GoalsPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      <h1 className="text-xl font-semibold">Goals</h1>
-      <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-        Long-running objectives the assistant plans toward and reports progress on.
-      </p>
+      <PageHeader
+        title="Goals"
+        intro="Long-running objectives the assistant plans toward and reports progress on."
+      />
 
       <GoalCreateForm />
 
       {rows.length === 0 ? (
-        <p className="mt-8 text-sm text-zinc-500 dark:text-zinc-400">
+        <EmptyState>
           No goals yet — add one above to give the assistant a long-running objective.
-        </p>
+        </EmptyState>
       ) : (
         <div className="mt-8 flex flex-col gap-6">
           {groups.map((group) => (
-            <section key={group.status}>
-              <h2 className="flex items-baseline gap-2 text-sm font-medium capitalize">
-                {group.status}
-                <span className="text-xs font-normal text-zinc-500 dark:text-zinc-500">
-                  {group.items.length}
-                </span>
-              </h2>
+            <section key={group.status} className="capitalize">
+              <SectionHeading title={group.status} count={group.items.length} />
               <div className="mt-3 flex flex-col gap-3">
                 {group.items.map((goal) => (
                   <GoalCard

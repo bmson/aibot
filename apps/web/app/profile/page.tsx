@@ -8,6 +8,7 @@ import { RelationshipForm } from '@/app/profile/relationship-form';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
+import { btn, countBadgeClass, PageHeader, summaryClass } from '@/lib/ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,10 +22,7 @@ const DOMAIN_ORDER = [
   'other',
 ] as const;
 
-const summaryClass =
-  'flex cursor-pointer list-none items-baseline gap-2 text-sm font-medium [&::-webkit-details-marker]:hidden';
-const countBadge =
-  'rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400';
+const countBadge = countBadgeClass;
 
 function toFactView(m: MemoryRow, now: Date, inCard = false): FactView {
   const from = m.validFrom?.toISOString().slice(0, 10);
@@ -107,13 +105,10 @@ export default async function ProfilePage() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      <h1 className="text-xl font-semibold">Profile</h1>
-      <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-        What the assistant knows — about {owner?.name ?? 'the owner'} and the people around them.
-        Only the compiled card below is injected into prompts — pinned facts plus a couple of
-        high-importance ones per domain; everything else is fetched on demand via semantic recall.
-        Pin what must always be there, demote minor details.
-      </p>
+      <PageHeader
+        title="Profile"
+        intro={`What the assistant knows — about ${owner?.name ?? 'the owner'} and the people around them. Only the compiled card below is injected into prompts — pinned facts plus a couple of high-importance ones per domain; everything else is fetched on demand via semantic recall. Pin what must always be there, demote minor details.`}
+      />
 
       {/* Quarantine review — the inbox; the only section that needs attention */}
       {quarantined.length > 0 ? (
@@ -162,10 +157,7 @@ export default async function ProfilePage() {
           )}
           <div className="mt-2 flex items-center gap-1.5">
             <form action={recompileCard}>
-              <button
-                type="submit"
-                className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-              >
+              <button type="submit" className={btn.outline}>
                 Recompile
               </button>
             </form>
@@ -173,7 +165,7 @@ export default async function ProfilePage() {
               <button
                 type="submit"
                 title="Queues the consolidation job: dedupes, resolves contradictions, and merges fragmented same-topic facts into unified statements. Runs in the background — check /tasks for the result."
-                className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                className={btn.outline}
               >
                 Unify facts
               </button>

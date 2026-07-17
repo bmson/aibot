@@ -2,10 +2,8 @@
 
 import { useActionState, useState } from 'react';
 import { approveApproval, denyApproval, editAndApprove } from '@/app/approvals/actions';
+import { btn } from '@/lib/ui';
 import type { PendingApprovalView } from '@/lib/views';
-
-const buttonBase =
-  'rounded-md px-3 py-1.5 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed';
 
 export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
   const [editing, setEditing] = useState(false);
@@ -54,18 +52,10 @@ export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
             <p className="mt-1 text-xs text-red-600 dark:text-red-400">{editState.error}</p>
           ) : null}
           <div className="mt-2 flex gap-2">
-            <button
-              type="submit"
-              disabled={editPending}
-              className={`${buttonBase} bg-green-600 text-white hover:bg-green-700`}
-            >
+            <button type="submit" disabled={editPending} className={btn.success}>
               {editPending ? 'Approving…' : 'Approve edited'}
             </button>
-            <button
-              type="button"
-              onClick={() => setEditing(false)}
-              className={`${buttonBase} border border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800`}
-            >
+            <button type="button" onClick={() => setEditing(false)} className={btn.outline}>
               Cancel
             </button>
           </div>
@@ -73,26 +63,16 @@ export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
       ) : (
         <div className="mt-3 flex gap-2">
           <form action={approveApproval.bind(null, approval.id)}>
-            <button
-              type="submit"
-              className={`${buttonBase} bg-green-600 text-white hover:bg-green-700`}
-            >
+            <button type="submit" className={btn.success}>
               Approve
             </button>
           </form>
           <form action={denyApproval.bind(null, approval.id)}>
-            <button
-              type="submit"
-              className={`${buttonBase} bg-red-600 text-white hover:bg-red-700`}
-            >
+            <button type="submit" className={btn.danger}>
               Deny
             </button>
           </form>
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            className={`${buttonBase} border border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800`}
-          >
+          <button type="button" onClick={() => setEditing(true)} className={btn.outline}>
             Edit &amp; approve
           </button>
         </div>

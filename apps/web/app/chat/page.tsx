@@ -1,27 +1,19 @@
 import { getAgent, listConversations } from '@assistant/core';
 import Link from 'next/link';
 import { requireOwner } from '@/auth';
+import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
+import { EmptyState } from '@/lib/ui';
 import { newConversation } from './actions';
 
 export const dynamic = 'force-dynamic';
-
-function relativeTime(date: Date): string {
-  const minutes = Math.round((Date.now() - date.getTime()) / 60_000);
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-}
 
 export default async function ChatListPage() {
   await requireOwner();
   const db = getDb();
   const agent = await getAgent(db);
   const conversations = await listConversations(db, agent.id);
+  const now = new Date();
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -37,9 +29,7 @@ export default async function ChatListPage() {
         </form>
       </div>
       {conversations.length === 0 ? (
-        <p className="mt-6 text-sm text-zinc-500 dark:text-zinc-400">
-          No conversations yet — start one with “New chat”.
-        </p>
+        <EmptyState>No conversations yet — start one with “New chat”.</EmptyState>
       ) : (
         <ul className="mt-6 flex flex-col gap-1">
           {conversations.map((conversation) => (
@@ -50,7 +40,7 @@ export default async function ChatListPage() {
               >
                 <span className="truncate">{conversation.title || 'Untitled'}</span>
                 <span className="ml-4 shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
-                  {relativeTime(conversation.updatedAt)}
+                  {relativeTime(conversation.updatedAt, now)}
                 </span>
               </Link>
             </li>
