@@ -258,14 +258,14 @@ export default async function ProfilePage() {
         ) : (
           <div className="mt-3 flex flex-col gap-2">
             {people.map(({ contact, facts }) => (
-              <details
+              <div
                 key={contact.id}
                 className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
               >
-                <summary className={summaryClass}>
-                  {contact.name}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium">{contact.name}</span>
                   {contact.relationship ? (
-                    <span className="text-xs font-normal text-zinc-500 dark:text-zinc-500">
+                    <span className="text-xs text-zinc-500 dark:text-zinc-500">
                       {contact.relationship}
                     </span>
                   ) : null}
@@ -280,7 +280,7 @@ export default async function ProfilePage() {
                   <span className={countBadge}>
                     {facts.length} fact{facts.length === 1 ? '' : 's'}
                   </span>
-                </summary>
+                </div>
                 <div className="mt-3 flex flex-col gap-2">
                   <PersonControls
                     contactId={contact.id}
@@ -301,16 +301,24 @@ export default async function ProfilePage() {
                     />
                   </div>
                 </div>
-                {facts.length > 0 ? (
-                  <div className="mt-3 flex flex-col gap-2">
-                    {facts.map((m) => (
-                      <FactRow key={m.id} fact={toFactView(m, now)} />
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">No facts yet.</p>
-                )}
-              </details>
+                <details className="mt-3">
+                  <summary className={summaryClass}>
+                    Facts
+                    <span className={countBadge}>
+                      {facts.length} fact{facts.length === 1 ? '' : 's'}
+                    </span>
+                  </summary>
+                  {facts.length > 0 ? (
+                    <div className="mt-3 flex flex-col gap-2">
+                      {facts.map((m) => (
+                        <FactRow key={m.id} fact={toFactView(m, now)} />
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">No facts yet.</p>
+                  )}
+                </details>
+              </div>
             ))}
           </div>
         )}
