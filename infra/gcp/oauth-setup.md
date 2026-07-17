@@ -6,7 +6,7 @@ Goal: an OAuth client the assistant uses to act as `bot@bmson.com` (its own Gmai
 
 1. Go to https://console.cloud.google.com → create project **`bmson-assistant`**.
    **Important:** create it under the **bmson.com organization** (not "No organization") — that's what makes the Internal consent screen possible, which exempts the app from Google's restricted-scope verification.
-2. Enable APIs (APIs & Services → Library): **Gmail API**, **Google Calendar API**. (Pub/Sub comes later, with push notifications.)
+2. Enable APIs (APIs & Services → Library): **Gmail API**, **Google Calendar API**, **Google Docs API**, **Google Drive API**. (Pub/Sub comes later, with push notifications.)
 
 ## 2. OAuth consent screen
 
@@ -42,4 +42,5 @@ Open the printed URL **signed in as `bot@bmson.com`** (use a private window if n
 ## Notes
 
 - The refresh token survives indefinitely (Internal apps have no 7-day expiry) but **dies if the bot account's password changes** — rerun step 5 if that happens.
+- Adding scopes (e.g. Docs/Drive) means the existing refresh token lacks them — **rerun step 5** after enabling the new APIs so the bot re-consents to the fuller scope set. Until then `docs.*` tools return a Google "insufficient scope" error.
 - Later (web auth, Phase 7): the same client can carry the production redirect URI for Auth.js sign-in, or use a separate client — either is fine.
