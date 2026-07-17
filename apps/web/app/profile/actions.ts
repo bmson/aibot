@@ -2,7 +2,7 @@
 
 import { createHash } from 'node:crypto';
 import { compileOwnerCard } from '@assistant/core';
-import { addTombstone, contacts, memories } from '@assistant/db';
+import { addTombstone, contacts, memories, mergeContacts } from '@assistant/db';
 import { eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
@@ -108,5 +108,18 @@ export async function updateContactRelationship(
 export async function recompileCard(): Promise<void> {
   await requireOwner();
   await compileOwnerCard(getDb());
+  revalidateProfile();
+}
+
+/**
+ * Merge duplicate people ("Anna" + "Anna Jónsdóttir"): facts move to the
+ * target, contact fields union, the duplicate row disappears. Merging into
+ * the owner marks facts as being about the owner.
+ */
+export async function mergeContactAction(sourceId: string, targetId: string): Promise<void> {
+  await requireOwner();
+  const db = getDb();
+  await mergeContacts(db, { sourceId, targetId });
+  await compileOwnerCard(db);
   revalidateProfile();
 }

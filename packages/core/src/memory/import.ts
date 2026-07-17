@@ -15,6 +15,7 @@ import { z } from 'zod';
 import type { ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import { enqueueTask } from '../workflow/machine.js';
+import { compileOwnerCard } from './consolidation.js';
 import { ExtractedFactSchema, parseValidFrom } from './extraction.js';
 import {
   ageScaledConfidence,
@@ -222,7 +223,10 @@ export async function runImportJob(
             .insert(memories)
             .values({
               agentId: task.agentId,
-              category: fact.category,
+              // Archives are biography: everything worth importing is durable
+              // knowledge. 'experience' is the assistant's own expiring work
+              // tier — imported life facts must never expire out of the profile.
+              category: 'knowledge',
               kind: fact.kind,
               content: fact.content,
               contentHash,
@@ -236,10 +240,6 @@ export async function runImportJob(
               validFrom: parseValidFrom(fact.validFrom) ?? window.date ?? undefined,
               source: payload.source,
               sourceTaskId: task.id,
-              expiresAt:
-                fact.category === 'experience'
-                  ? new Date(Date.now() + 365 * 24 * 3600 * 1000)
-                  : undefined,
             })
             .onConflictDoNothing({ target: memories.contentHash })
             .returning({ id: memories.id });
@@ -261,6 +261,8 @@ export async function runImportJob(
         .update(importSources)
         .set({ status: 'done', error: null, updatedAt: sql`now()` })
         .where(eq(importSources.id, sourceRow.id));
+      // the profile card must reflect what was just learned
+      await compileOwnerCard(db).catch((err) => console.error('card recompile failed', err));
       return {
         done: true,
         summary: `import ${payload.source}: complete — ${cursor.saved} memories (${cursor.quarantined} quarantined for review), ${cursor.duplicates} duplicates, ${cursor.tombstoned} tombstoned, ${windows.length} windows`,
@@ -387,6 +389,7 @@ export async function purgeImportSource(db: Db, source: string): Promise<{ purge
       updatedAt: sql`now()`,
     })
     .where(eq(importSources.id, sourceRow.id));
+  await compileOwnerCard(db).catch((err) => console.error('card recompile failed', err));
   return { purged: deleted.length };
 }
 
@@ -424,6 +427,7 @@ export async function deleteImportSource(
     });
   }
   await db.delete(importSources).where(eq(importSources.id, sourceRow.id));
+  await compileOwnerCard(db).catch((err) => console.error('card recompile failed', err));
   return { purgedMemories: deleted.length };
 }
 
@@ -460,5 +464,6 @@ export async function reviewImportSource(
     .update(importSources)
     .set({ memoriesQuarantined: 0, updatedAt: sql`now()` })
     .where(eq(importSources.source, source));
+  await compileOwnerCard(db).catch((err) => console.error('card recompile failed', err));
   return { reviewed: quarantined.length };
 }

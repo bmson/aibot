@@ -2,6 +2,7 @@ import { type ContactRow, contacts, type MemoryRow, memories, ownerCard } from '
 import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { recompileCard, updateContactRelationship } from '@/app/profile/actions';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
+import { MergeControl } from '@/app/profile/merge-control';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
@@ -176,31 +177,42 @@ export default async function ProfilePage() {
                 key={contact.id}
                 className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
               >
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <p className="text-sm font-medium">
                     {contact.name}
                     <span className="ml-2 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
                       {contact.trust}
                     </span>
                   </p>
-                  <form
-                    action={updateContactRelationship.bind(null, contact.id)}
-                    className="flex items-center gap-1.5"
-                  >
-                    <input
-                      type="text"
-                      name="relationship"
-                      defaultValue={contact.relationship}
-                      placeholder="relationship"
-                      className="w-32 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
-                    />
-                    <button
-                      type="submit"
-                      className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <form
+                      action={updateContactRelationship.bind(null, contact.id)}
+                      className="flex items-center gap-1.5"
                     >
-                      Save
-                    </button>
-                  </form>
+                      <input
+                        type="text"
+                        name="relationship"
+                        defaultValue={contact.relationship}
+                        placeholder="relationship"
+                        className="w-32 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+                      />
+                      <button
+                        type="submit"
+                        className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      >
+                        Save
+                      </button>
+                    </form>
+                    <MergeControl
+                      contactId={contact.id}
+                      options={allContacts
+                        .filter((c) => c.id !== contact.id)
+                        .map((c) => ({
+                          id: c.id,
+                          label: c.trust === 'owner' ? `${c.name} (you)` : c.name,
+                        }))}
+                    />
+                  </span>
                 </div>
                 {facts.length > 0 ? (
                   <div className="mt-3 flex flex-col gap-2">
