@@ -4,6 +4,7 @@ import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { consolidateNow, recompileCard } from '@/app/profile/actions';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { MergeControl } from '@/app/profile/merge-control';
+import { PersonControls } from '@/app/profile/person-controls';
 import { RelationshipForm } from '@/app/profile/relationship-form';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
@@ -94,8 +95,7 @@ export default async function ProfilePage() {
     .map((contact) => ({
       contact,
       facts: factsByContact.get(contact.id) ?? [],
-    }))
-    .filter((p) => p.facts.length > 0 || p.contact.relationship);
+    }));
 
   const ownerByDomain = DOMAIN_ORDER.map((domain) => ({
     domain,
@@ -268,17 +268,20 @@ export default async function ProfilePage() {
                     {facts.length} fact{facts.length === 1 ? '' : 's'}
                   </span>
                 </summary>
-                <div className="mt-3 flex flex-wrap items-center justify-end gap-1.5">
-                  <RelationshipForm contactId={contact.id} initial={contact.relationship} />
-                  <MergeControl
-                    contactId={contact.id}
-                    options={allContacts
-                      .filter((c) => c.id !== contact.id)
-                      .map((c) => ({
-                        id: c.id,
-                        label: c.trust === 'owner' ? `${c.name} (you)` : c.name,
-                      }))}
-                  />
+                <div className="mt-3 flex flex-col gap-2">
+                  <PersonControls contactId={contact.id} initialName={contact.name} />
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    <RelationshipForm contactId={contact.id} initial={contact.relationship} />
+                    <MergeControl
+                      contactId={contact.id}
+                      options={allContacts
+                        .filter((c) => c.id !== contact.id)
+                        .map((c) => ({
+                          id: c.id,
+                          label: c.trust === 'owner' ? `${c.name} (you)` : c.name,
+                        }))}
+                    />
+                  </div>
                 </div>
                 {facts.length > 0 ? (
                   <div className="mt-3 flex flex-col gap-2">

@@ -2,7 +2,14 @@
 
 import { createHash } from 'node:crypto';
 import { compileOwnerCard, enqueueTask, getAgent, InboundEventSchema } from '@assistant/core';
-import { addTombstone, contacts, memories, mergeContacts } from '@assistant/db';
+import {
+  addTombstone,
+  contacts,
+  deleteContact,
+  memories,
+  mergeContacts,
+  renameContact,
+} from '@assistant/db';
 import { eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
@@ -11,6 +18,8 @@ import { getDb, getRouter } from '@/lib/server';
 function revalidateProfile(): void {
   revalidatePath('/profile');
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /** Owner vouches for a fact: full confidence, consolidation treats it as protected. */
 export async function confirmFact(memoryId: string): Promise<void> {
@@ -136,6 +145,39 @@ export async function updateContactRelationship(
     .where(eq(contacts.id, contactId));
   await compileOwnerCard(db);
   revalidateProfile();
+}
+
+/** Rename a person shown on the Profile page. Owner identity is intentionally excluded. */
+export async function updateContactName(
+  contactId: string,
+  name: string,
+): Promise<{ error?: string }> {
+  await requireOwner();
+  if (!UUID_RE.test(contactId)) return { error: 'Invalid person identifier.' };
+  const db = getDb();
+  try {
+    await renameContact(db, { contactId, name });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Person could not be renamed.' };
+  }
+  await compileOwnerCard(db);
+  revalidateProfile();
+  return {};
+}
+
+/** Delete a person and tombstone every fact about them so they stay deleted. */
+export async function deleteContactAction(contactId: string): Promise<{ error?: string }> {
+  await requireOwner();
+  if (!UUID_RE.test(contactId)) return { error: 'Invalid person identifier.' };
+  const db = getDb();
+  try {
+    await deleteContact(db, contactId);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Person could not be deleted.' };
+  }
+  await compileOwnerCard(db);
+  revalidateProfile();
+  return {};
 }
 
 /** Manual owner-card rebuild (deterministic, model-free). */

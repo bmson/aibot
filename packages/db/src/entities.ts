@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { contacts, memories, memoryTombstones } from './schema.js';
 
@@ -9,6 +9,84 @@ const ASSISTANT_ALIASES = new Set(['assistant', 'ai bot', 'b bot', 'the assistan
 function namePrefixMatch(a: string, b: string): boolean {
   const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
   return shorter.length >= 3 && (longer === shorter || longer.startsWith(`${shorter} `));
+}
+
+export function normalizeContactName(value: string): string {
+  const name = value.trim().replace(/\s+/g, ' ');
+  if (!name) throw new Error('Person name is required.');
+  if (name.length > 120) throw new Error('Person name must be 120 characters or fewer.');
+  if (
+    [...name].some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 0x1f || codePoint === 0x7f;
+    })
+  ) {
+    throw new Error('Person name contains unsupported control characters.');
+  }
+  return name;
+}
+
+/** Rename a non-owner person. The owner identity is managed separately. */
+export async function renameContact(
+  db: Db,
+  input: { contactId: string; name: string },
+): Promise<{ name: string }> {
+  const name = normalizeContactName(input.name);
+  const [renamed] = await db
+    .update(contacts)
+    .set({ name, updatedAt: sql`now()` })
+    .where(and(eq(contacts.id, input.contactId), ne(contacts.trust, 'owner')))
+    .returning({ name: contacts.name });
+  if (!renamed) throw new Error('Person not found or cannot be renamed.');
+  return renamed;
+}
+
+/**
+ * Permanently remove a non-owner person and every fact about them. Facts are
+ * tombstoned first so memory extraction cannot recreate deleted profile data.
+ */
+export async function deleteContact(
+  db: Db,
+  contactId: string,
+): Promise<{ deletedMemories: number }> {
+  return db.transaction(async (tx) => {
+    const [contact] = await tx
+      .select()
+      .from(contacts)
+      .where(eq(contacts.id, contactId))
+      .for('update');
+    if (!contact) throw new Error('Person not found.');
+    if (contact.trust === 'owner') throw new Error('The owner profile cannot be deleted.');
+
+    const facts = await tx
+      .select({ id: memories.id, contentHash: memories.contentHash })
+      .from(memories)
+      .where(eq(memories.subjectContactId, contactId));
+    if (facts.length > 0) {
+      await tx
+        .insert(memoryTombstones)
+        .values(
+          facts.map((fact) => ({
+            contentHash: fact.contentHash,
+            reason: 'owner_delete_contact',
+          })),
+        )
+        .onConflictDoNothing({ target: memoryTombstones.contentHash });
+      const factIds = facts.map((fact) => fact.id);
+      await tx
+        .update(memories)
+        .set({ supersededById: null })
+        .where(inArray(memories.supersededById, factIds));
+      await tx.delete(memories).where(eq(memories.subjectContactId, contactId));
+    }
+
+    const [deleted] = await tx
+      .delete(contacts)
+      .where(and(eq(contacts.id, contactId), ne(contacts.trust, 'owner')))
+      .returning({ id: contacts.id });
+    if (!deleted) throw new Error('Person could not be deleted.');
+    return { deletedMemories: facts.length };
+  });
 }
 
 /**

@@ -1,8 +1,14 @@
 import { eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, type Db } from './client.js';
-import { mergeContacts, resolveSubjectContact } from './entities.js';
-import { contacts, memories } from './schema.js';
+import {
+  deleteContact,
+  mergeContacts,
+  normalizeContactName,
+  renameContact,
+  resolveSubjectContact,
+} from './entities.js';
+import { contacts, memories, memoryTombstones } from './schema.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -33,12 +39,92 @@ afterAll(async () => {
   if (dbUp) {
     await db.update(contacts).set({ name: ownerOriginalName }).where(eq(contacts.id, ownerId));
     await db.delete(memories).where(sql`${memories.content} LIKE 'xtest-entities%'`);
+    await db
+      .delete(memoryTombstones)
+      .where(sql`${memoryTombstones.contentHash} LIKE 'xtest-entities-%'`);
     if (createdContactIds.length) {
       await db.delete(contacts).where(inArray(contacts.id, createdContactIds));
     }
     await db.delete(contacts).where(sql`${contacts.name} LIKE 'Xtest%'`);
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
+});
+
+describe('contact names', () => {
+  it('normalizes whitespace and rejects unsafe names', () => {
+    expect(normalizeContactName('  Anna   Jónsdóttir  ')).toBe('Anna Jónsdóttir');
+    expect(() => normalizeContactName('   ')).toThrow('required');
+    expect(() => normalizeContactName(`Anna\u0000Bad`)).toThrow('control');
+    expect(() => normalizeContactName('x'.repeat(121))).toThrow('120');
+  });
+
+  it('renames a non-owner person but never the owner', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [person] = await db
+      .insert(contacts)
+      .values({ name: 'Xtest-Old Name', trust: 'known' })
+      .returning();
+    if (!person) throw new Error('failed to create test person');
+    createdContactIds.push(person.id);
+
+    await expect(
+      renameContact(db, { contactId: person.id, name: '  Xtest-New   Name ' }),
+    ).resolves.toEqual({ name: 'Xtest-New Name' });
+    const [renamed] = await db.select().from(contacts).where(eq(contacts.id, person.id));
+    expect(renamed?.name).toBe('Xtest-New Name');
+
+    await expect(renameContact(db, { contactId: ownerId, name: 'Not the owner' })).rejects.toThrow(
+      'cannot be renamed',
+    );
+  });
+
+  it('deletes a person, tombstones their facts, and never deletes the owner', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [person] = await db
+      .insert(contacts)
+      .values({ name: 'Xtest-Delete Person', trust: 'known' })
+      .returning();
+    if (!person) throw new Error('failed to create test person');
+    const contentHash = 'xtest-entities-delete-contact-hash';
+    const [personFact] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'person',
+        content: 'xtest-entities: delete this person fact',
+        contentHash,
+        originTrust: 'owner',
+        subjectContactId: person.id,
+      })
+      .returning();
+    if (!personFact) throw new Error('failed to create test person fact');
+    const referringHash = 'xtest-entities-delete-referring-hash';
+    await db.insert(memories).values({
+      agentId,
+      category: 'knowledge',
+      kind: 'fact',
+      content: 'xtest-entities: fact that previously referred to the deleted fact',
+      contentHash: referringHash,
+      originTrust: 'owner',
+      subjectContactId: ownerId,
+      supersededById: personFact.id,
+    });
+
+    await expect(deleteContact(db, person.id)).resolves.toEqual({ deletedMemories: 1 });
+    const [[deletedPerson], [deletedFact], [tombstone], [referringFact]] = await Promise.all([
+      db.select().from(contacts).where(eq(contacts.id, person.id)),
+      db.select().from(memories).where(eq(memories.contentHash, contentHash)),
+      db.select().from(memoryTombstones).where(eq(memoryTombstones.contentHash, contentHash)),
+      db.select().from(memories).where(eq(memories.contentHash, referringHash)),
+    ]);
+    expect(deletedPerson).toBeUndefined();
+    expect(deletedFact).toBeUndefined();
+    expect(tombstone?.reason).toBe('owner_delete_contact');
+    expect(referringFact?.supersededById).toBeNull();
+
+    await expect(deleteContact(db, ownerId)).rejects.toThrow('cannot be deleted');
+  });
 });
 
 describe('resolveSubjectContact', () => {
