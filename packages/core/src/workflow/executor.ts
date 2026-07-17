@@ -112,7 +112,12 @@ const CONTEXT_WINDOW_LIMIT = 40;
 
 function truncateResult(result: unknown): unknown {
   const json = JSON.stringify(result ?? null);
-  if (json.length <= RESULT_CHAR_LIMIT) return result ?? null;
+  // Round-trip through JSON: results straight from tools may hold Date
+  // instances (drizzle rows) or undefined props, which fail the AI SDK's
+  // ModelMessage schema on the NEXT step's validation (checkpointed windows
+  // don't hit this — jsonb already serialized them, which is why retries
+  // succeeded where first attempts crashed).
+  if (json.length <= RESULT_CHAR_LIMIT) return JSON.parse(json);
   return {
     truncated: true,
     note: `result truncated from ${json.length} chars; full result stored in tool_calls`,
@@ -120,7 +125,11 @@ function truncateResult(result: unknown): unknown {
   };
 }
 
-function toolResultMessage(toolCallId: string, toolName: string, value: unknown): ModelMessage {
+export function toolResultMessage(
+  toolCallId: string,
+  toolName: string,
+  value: unknown,
+): ModelMessage {
   return {
     role: 'tool',
     content: [
