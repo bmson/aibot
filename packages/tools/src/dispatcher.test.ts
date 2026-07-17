@@ -150,14 +150,14 @@ describe('ToolDispatcher (integration)', () => {
       makeTool('test.sensitive', { acceptsUntrustedInput: false }),
     );
     const dispatcher = new ToolDispatcher(db, registry);
-    const task = await makeTask('unknown');
+    const task = await makeTask('owner');
 
     const outcome = await dispatcher.dispatch({
       task,
       step: 1,
       toolName: 'test.sensitive',
       args: { value: 'x' },
-      ctx: ctxFor(task),
+      ctx: { ...ctxFor(task), tainted: true },
       provenance,
     });
     expect(outcome.kind).toBe('rejected');
