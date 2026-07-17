@@ -26,6 +26,9 @@ const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/calendar.readonly',
+  // Google Docs: create/edit documents and manage sharing for files the bot created.
+  'https://www.googleapis.com/auth/documents',
+  'https://www.googleapis.com/auth/drive.file',
   'openid',
   'email',
 ].join(' ');

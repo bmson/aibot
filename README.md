@@ -18,7 +18,7 @@ Architecture plan (v4, the source of truth for design decisions): `~/.claude/pla
 - `apps/agent` — Hono worker: webhooks (Gmail Pub/Sub, Twilio), executor endpoints, local poller, email sync, SMS channel
 - `packages/core` — runtime: planner → executor (checkpointed, crash-safe), approvals, missions + reflection, schedules, model router with budget guard, voice pipeline, queue notifier
 - `packages/db` — Drizzle schema (22 tables) + migrations + seed
-- `packages/tools` — risk-gated tool registry: gmail, calendar, sms, memory (knowledge/experience), web.fetch, workspace (local/GCS), goals, missions
+- `packages/tools` — risk-gated tool registry: gmail, calendar, docs (Google Docs create/read/append/share), sms, memory (knowledge/experience), web.fetch, workspace (local/GCS), goals, missions
 - `infra/` — Dockerfiles, Cloud Build config, deploy script, GCP setup docs
 - `scripts/` — `auth-bot.ts` (bot OAuth), `ingest-voice.ts` (writing samples → voice profile), `dev-tunnel.sh`
 

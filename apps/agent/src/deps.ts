@@ -18,6 +18,7 @@ import {
   registerBrowserTools,
   registerBuiltinTools,
   registerCalendarTools,
+  registerDocsTools,
   registerGmailTools,
   registerSmsTools,
   ToolDispatcher,
@@ -101,6 +102,11 @@ export function buildDeps(): AgentDeps {
       },
     });
     registerCalendarTools(registry, {
+      client: googleClient,
+      botEmail,
+      ownerEmail: config.OWNER_EMAIL,
+    });
+    registerDocsTools(registry, {
       client: googleClient,
       botEmail,
       ownerEmail: config.OWNER_EMAIL,
