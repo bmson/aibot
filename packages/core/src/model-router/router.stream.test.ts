@@ -25,13 +25,14 @@ vi.mock('../cost.js', async (importOriginal) => ({
 
 import { ModelRouter } from './router.js';
 
-function makeRouter() {
+function makeRouter({ thinking = false }: { thinking?: boolean } = {}) {
   const router = new ModelRouter({} as Db, 'test-key');
   vi.spyOn(router, 'route').mockResolvedValue({
     ok: true,
     model: {} as LanguageModel,
     modelId: 'test/model',
     degraded: false,
+    thinking,
     decision: { mode: 'primary' },
     params: {},
     promptCostPerMTok: 1,
@@ -98,5 +99,28 @@ describe('ModelRouter streaming finalization', () => {
     });
     await expect(router.stream('draft', { prompt: 'hello' })).rejects.toThrow('setup failed');
     expect(stubs.releaseReservation).toHaveBeenCalledWith({} as Db, 'reservation-1');
+  });
+
+  it('gives a thinking model reasoning headroom on top of the visible budget', async () => {
+    const { router } = makeRouter({ thinking: true });
+    await router.stream('draft', { prompt: 'hello' });
+    const args = stubs.streamText.mock.calls[0]?.[0] as {
+      maxOutputTokens: number;
+      providerOptions?: { openrouter?: { reasoning?: { max_tokens?: number } } };
+    };
+    // draft visible budget (2048) + reasoning headroom (4096)
+    expect(args.maxOutputTokens).toBe(2048 + 4096);
+    expect(args.providerOptions?.openrouter?.reasoning?.max_tokens).toBe(4096);
+  });
+
+  it('leaves a plain model at its visible budget with no reasoning options', async () => {
+    const { router } = makeRouter({ thinking: false });
+    await router.stream('draft', { prompt: 'hello' });
+    const args = stubs.streamText.mock.calls[0]?.[0] as {
+      maxOutputTokens: number;
+      providerOptions?: unknown;
+    };
+    expect(args.maxOutputTokens).toBe(2048);
+    expect(args.providerOptions).toBeUndefined();
   });
 });

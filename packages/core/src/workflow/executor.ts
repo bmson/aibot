@@ -871,10 +871,19 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       return { outcome: 'needs_attention', detail: stepResult.decision.reason };
     }
 
+    // 'length' means the model was cut off at the token budget. With no tool
+    // calls we still hold a (possibly truncated) text answer that is far better
+    // to deliver than to fail the whole turn on — this is the last-line guard
+    // for reasoning models that spend their budget thinking. Truncated tool
+    // arguments, by contrast, are unsafe to dispatch, so a cut-off mid-tool-call
+    // stays a hard failure.
+    const cutOffWithText =
+      stepResult.finishReason === 'length' && stepResult.toolCalls.length === 0;
     const successfulFinish =
       stepResult.finishReason === undefined ||
       stepResult.finishReason === 'stop' ||
-      (stepResult.toolCalls.length > 0 && stepResult.finishReason === 'tool-calls');
+      (stepResult.toolCalls.length > 0 && stepResult.finishReason === 'tool-calls') ||
+      cutOffWithText;
     if (!successfulFinish) {
       throw new Error(`model step ended with finish reason ${stepResult.finishReason}`);
     }

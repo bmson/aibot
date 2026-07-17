@@ -4,6 +4,7 @@ import {
   embedMany,
   generateObject,
   generateText,
+  type JSONValue,
   type LanguageModel,
   type ModelMessage,
   streamText,
@@ -37,6 +38,8 @@ export type Route =
       model: LanguageModel;
       modelId: string;
       degraded: boolean;
+      /** Reasoning model (capability flag): needs its own token headroom. */
+      thinking: boolean;
       decision: BudgetDecision;
       params: Record<string, unknown>;
       promptCostPerMTok: number;
@@ -123,6 +126,22 @@ const DEFAULT_MAX_OUTPUT_TOKENS: Record<Exclude<ModelRole, 'embed'>, number> = {
 const HARD_MAX_OUTPUT_TOKENS = 4_096;
 const ESTIMATE_SAFETY_FACTOR = 1.25;
 const MODEL_CALL_TIMEOUT_MS = 120_000;
+
+/**
+ * Reasoning ("thinking") models spend completion tokens on hidden reasoning
+ * before the visible answer, and that reasoning is billed against the same
+ * `max_tokens` budget. If reasoning shares the visible-output budget it starves
+ * — or entirely preempts — the answer: the model stops at finishReason 'length'
+ * with truncated or empty text (the "request failed after thinking" chat
+ * turns, plus triage/classify JSON that never lands). Give reasoning its own
+ * bounded headroom on top of the visible budget, and cap it via OpenRouter so
+ * the answer always keeps its full allocation. Only thinking models (capability
+ * flag on the model row) get this; plain models are unaffected.
+ */
+const REASONING_HEADROOM_TOKENS = 4_096;
+
+/** Structural match for the AI SDK's `providerOptions` param ({ provider: { ... } }). */
+type ProviderOptions = Record<string, Record<string, JSONValue>>;
 
 function modelCallSignal(signal?: AbortSignal): AbortSignal {
   const deadline = AbortSignal.timeout(MODEL_CALL_TIMEOUT_MS);
@@ -230,12 +249,14 @@ export class ModelRouter {
     ) {
       throw new Error(`model ${modelId} is missing cost rates; refusing an unbudgeted call`);
     }
+    const capabilities = (modelRow.capabilities ?? {}) as { thinking?: boolean };
 
     return {
       ok: true,
       model: this.provider.chat(modelId),
       modelId,
       degraded,
+      thinking: capabilities.thinking === true,
       decision,
       params,
       promptCostPerMTok,
@@ -256,12 +277,36 @@ export class ModelRouter {
     return Math.min(Math.floor(requested), HARD_MAX_OUTPUT_TOKENS);
   }
 
+  /**
+   * The completion budget to send the provider, plus any provider options.
+   * A thinking model gets bounded reasoning headroom on top of the visible
+   * answer budget (and OpenRouter is told to keep reasoning within it), so the
+   * answer never truncates at finishReason 'length'. The inflated total also
+   * flows into the cost reservation below — reasoning tokens are billed, so
+   * reserving for them keeps the budget guard honest. Plain models are
+   * unchanged: same limit, no provider options.
+   */
+  private modelCallBudget(
+    role: Exclude<ModelRole, 'embed'>,
+    route: Extract<Route, { ok: true }>,
+    opts: CallOptions,
+  ): { maxOutputTokens: number; providerOptions?: ProviderOptions } {
+    const visibleLimit = this.outputLimit(role, route, opts);
+    if (!route.thinking) return { maxOutputTokens: visibleLimit };
+    return {
+      maxOutputTokens: visibleLimit + REASONING_HEADROOM_TOKENS,
+      providerOptions: {
+        openrouter: { reasoning: { max_tokens: REASONING_HEADROOM_TOKENS } },
+      },
+    };
+  }
+
   private async reserveModelCall(
     role: Exclude<ModelRole, 'embed'>,
     route: Extract<Route, { ok: true }>,
     opts: CallOptions,
   ) {
-    const maxOutputTokens = this.outputLimit(role, route, opts);
+    const { maxOutputTokens, providerOptions } = this.modelCallBudget(role, route, opts);
     const inputTokens = estimatedInputTokens(opts);
     const estimatedUsd = Math.max(
       0.000001,
@@ -276,7 +321,7 @@ export class ModelRouter {
       description: `${role}:${route.modelId} preflight`,
       critical: opts.critical,
     });
-    return { reservation, maxOutputTokens };
+    return { reservation, maxOutputTokens, providerOptions };
   }
 
   private async meter(input: MeterInput): Promise<void> {
@@ -337,7 +382,11 @@ export class ModelRouter {
     const route = await this.route(role, opts);
     if (!route.ok) return { ok: false, decision: route.decision };
     if (role === 'embed') throw new Error('generate() cannot use the embed role');
-    const { reservation, maxOutputTokens } = await this.reserveModelCall(role, route, opts);
+    const { reservation, maxOutputTokens, providerOptions } = await this.reserveModelCall(
+      role,
+      route,
+      opts,
+    );
     if (!reservation.ok) return { ok: false, decision: reservationDecision(reservation.reason) };
 
     const started = Date.now();
@@ -349,6 +398,7 @@ export class ModelRouter {
           ...promptArgs(opts),
           temperature: opts.temperature ?? (route.params.temperature as number | undefined),
           maxOutputTokens,
+          providerOptions,
           abortSignal: modelCallSignal(opts.abortSignal),
         });
         await this.meterWithoutRepeatingProviderWork({
@@ -389,7 +439,11 @@ export class ModelRouter {
     const route = await this.route(role, opts);
     if (!route.ok) return { ok: false, decision: route.decision };
     if (role === 'embed') throw new Error('stream() cannot use the embed role');
-    const { reservation, maxOutputTokens } = await this.reserveModelCall(role, route, opts);
+    const { reservation, maxOutputTokens, providerOptions } = await this.reserveModelCall(
+      role,
+      route,
+      opts,
+    );
     if (!reservation.ok) return { ok: false, decision: reservationDecision(reservation.reason) };
 
     const started = Date.now();
@@ -401,6 +455,7 @@ export class ModelRouter {
         ...promptArgs(opts),
         temperature: opts.temperature ?? (route.params.temperature as number | undefined),
         maxOutputTokens,
+        providerOptions,
         abortSignal: modelCallSignal(opts.abortSignal),
         onFinish: async (event: FinishEventLike & { text?: string }) => {
           // AI SDK pauses stream finalization until this promise resolves. Run
@@ -463,7 +518,11 @@ export class ModelRouter {
     const route = await this.route(role, opts);
     if (!route.ok) return { ok: false, decision: route.decision };
     if (role === 'embed') throw new Error('step() cannot use the embed role');
-    const { reservation, maxOutputTokens } = await this.reserveModelCall(role, route, opts);
+    const { reservation, maxOutputTokens, providerOptions } = await this.reserveModelCall(
+      role,
+      route,
+      opts,
+    );
     if (!reservation.ok) return { ok: false, decision: reservationDecision(reservation.reason) };
 
     const started = Date.now();
@@ -476,6 +535,7 @@ export class ModelRouter {
           tools: opts.tools,
           temperature: opts.temperature ?? (route.params.temperature as number | undefined),
           maxOutputTokens,
+          providerOptions,
           abortSignal: modelCallSignal(opts.abortSignal),
         });
         await this.meterWithoutRepeatingProviderWork({
@@ -516,7 +576,11 @@ export class ModelRouter {
     const route = await this.route(role, opts);
     if (!route.ok) return { ok: false, decision: route.decision };
     if (role === 'embed') throw new Error('object() cannot use the embed role');
-    const { reservation, maxOutputTokens } = await this.reserveModelCall(role, route, opts);
+    const { reservation, maxOutputTokens, providerOptions } = await this.reserveModelCall(
+      role,
+      route,
+      opts,
+    );
     if (!reservation.ok) return { ok: false, decision: reservationDecision(reservation.reason) };
 
     const started = Date.now();
@@ -529,6 +593,7 @@ export class ModelRouter {
           schema: opts.schema,
           temperature: opts.temperature ?? (route.params.temperature as number | undefined),
           maxOutputTokens,
+          providerOptions,
           abortSignal: modelCallSignal(opts.abortSignal),
         });
         await this.meterWithoutRepeatingProviderWork({
