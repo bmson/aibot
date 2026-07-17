@@ -72,6 +72,15 @@ describe('parseJsonExport', () => {
 });
 
 describe('parseText + windowUnits', () => {
+  it('keeps ALL rows of a CSV-shaped file (newlines but no blank lines)', () => {
+    const rows = Array.from({ length: 200 }, (_, i) => `Person ${i},1990-01-${(i % 28) + 1}`);
+    const units = parseText(rows.join('\n'));
+    const joined = units.map((u) => u.text).join('\n');
+    expect(joined).toContain('Person 0,');
+    expect(joined).toContain('Person 199,'); // the tail must survive, not be truncated away
+    expect(units.length).toBeGreaterThan(1);
+  });
+
   it('merges paragraphs into units and windows preserve order', () => {
     const text = Array.from({ length: 30 }, (_, i) => `Paragraph ${i} ${'x'.repeat(200)}`).join(
       '\n\n',

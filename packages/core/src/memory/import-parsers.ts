@@ -156,10 +156,37 @@ export function parseJsonExport(content: string): ImportUnit[] {
 
 /** Plain text / markdown: paragraphs merged into ~1500-char units, no dates. */
 export function parseText(content: string): ImportUnit[] {
+  // A paragraph longer than the unit cap (CSVs and logs have newlines but no
+  // blank lines — the whole file is "one paragraph") splits at line breaks;
+  // truncating would silently drop everything past the first unit.
+  const chunkLongParagraph = (p: string): string[] => {
+    if (p.length <= UNIT_CHAR_CAP) return [p];
+    const chunks: string[] = [];
+    let chunk = '';
+    for (const line of p.split('\n')) {
+      if (chunk && chunk.length + line.length + 1 > UNIT_CHAR_CAP) {
+        chunks.push(chunk);
+        chunk = '';
+      }
+      // a single line beyond the cap hard-wraps (last resort)
+      if (line.length > UNIT_CHAR_CAP) {
+        for (let i = 0; i < line.length; i += UNIT_CHAR_CAP) {
+          chunks.push(line.slice(i, i + UNIT_CHAR_CAP));
+        }
+        continue;
+      }
+      chunk = chunk ? `${chunk}\n${line}` : line;
+    }
+    if (chunk) chunks.push(chunk);
+    return chunks;
+  };
+
   const paragraphs = content
     .split(/\n{2,}/)
     .map((p) => p.trim())
-    .filter((p) => p.length > 0);
+    .filter((p) => p.length > 0)
+    .flatMap(chunkLongParagraph);
+
   const units: ImportUnit[] = [];
   let buffer = '';
   for (const p of paragraphs) {
