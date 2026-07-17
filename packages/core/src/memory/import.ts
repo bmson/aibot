@@ -231,7 +231,10 @@ export async function runImportJob(
               content: fact.content,
               contentHash,
               embedding,
-              importance: fact.importance,
+              // Archive facts are recall-tier: cap importance so imported
+              // material never auto-fills the owner card (importance >= 4).
+              // The card is for pinned facts and high-importance LIVED facts.
+              importance: Math.min(fact.importance, 3),
               confidence: confidence.toFixed(2),
               originTrust: 'owner',
               quarantined: !aboutOwner,
