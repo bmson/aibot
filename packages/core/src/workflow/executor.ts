@@ -460,6 +460,12 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
         parts: [{ type: 'text', text: question }],
         text: question,
       });
+      // a clarifying question is an answer too — it must reach the source channel
+      if (deps.deliverFinal) {
+        await deps
+          .deliverFinal(task, question)
+          .catch((err) => console.error('clarify delivery failed', err));
+      }
       await completeTask(db, task.id, { status: 'done', progress: 'asked for clarification' });
       return { outcome: 'clarify' };
     }
@@ -690,20 +696,22 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
 
   // max steps exhausted
   const stuck = `stopped after ${task.maxSteps} steps without finishing`;
+  const stuckMessage = `I ${stuck}. Here's where I got: ${state.scratchpad || 'see task log.'}`;
   if (task.conversationId) {
     await persistMessage(db, {
       conversationId: task.conversationId,
       taskId: task.id,
       role: 'assistant',
       origin: 'assistant',
-      parts: [
-        {
-          type: 'text',
-          text: `I ${stuck}. Here's where I got: ${state.scratchpad || 'see task log.'}`,
-        },
-      ],
+      parts: [{ type: 'text', text: stuckMessage }],
       text: stuck,
     });
+  }
+  // even a failure report must reach the source channel, not just the dashboard
+  if (deps.deliverFinal) {
+    await deps
+      .deliverFinal(task, stuckMessage)
+      .catch((err) => console.error('stuck delivery failed', err));
   }
   await completeTask(db, task.id, { status: 'failed', progress: stuck });
   return { outcome: 'failed', detail: stuck };
