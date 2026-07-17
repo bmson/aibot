@@ -218,7 +218,7 @@ gcloud run deploy assistant-agent \
   --image "${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/agent:latest" \
   --region "$REGION" --allow-unauthenticated --service-account "$AGENT_SA" \
   --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3 --concurrency 4 --timeout 900 \
-  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=gcs,WORKSPACE_BUCKET=${PROJECT}-workspace,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},GMAIL_PUBSUB_TOPIC=projects/${PROJECT}/topics/${TOPIC},GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_SA},INTERNAL_AUTH_MODE=oidc,INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA},BROWSER_DRIVER=cloudrun,BROWSER_JOB_NAME=assistant-browser,TRACES_BUCKET=${TRACES_BUCKET},OTEL_EXPORTER=none${TWILIO_ENV}" \
+  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=gcs,WORKSPACE_BUCKET=${PROJECT}-workspace,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},GMAIL_PUBSUB_TOPIC=projects/${PROJECT}/topics/${TOPIC},GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_SA},INTERNAL_AUTH_MODE=oidc,INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA},BROWSER_DRIVER=cloudrun,BROWSER_JOB_NAME=assistant-browser,TRACES_BUCKET=${TRACES_BUCKET},CANARY_ENABLED=true,CANARY_MAX_COST_USD=0.03,OTEL_EXPORTER=none${TWILIO_ENV}" \
   --set-secrets "$AGENT_SECRETS" \
   --quiet
 
@@ -271,11 +271,13 @@ make_job() {
   if gcloud scheduler jobs describe "$name" --location="$REGION" >/dev/null 2>&1; then
     gcloud scheduler jobs update http "$name" --location="$REGION" --schedule="$schedule" \
       --uri="${AGENT_URL}${path}" --http-method=POST \
+      --attempt-deadline=300s --max-retry-attempts=0 \
       --clear-headers --oidc-service-account-email="$INTERNAL_INVOKER_SA" \
       --oidc-token-audience="${AGENT_URL}${path}" --quiet
   else
     gcloud scheduler jobs create http "$name" --location="$REGION" --schedule="$schedule" \
       --uri="${AGENT_URL}${path}" --http-method=POST \
+      --attempt-deadline=300s --max-retry-attempts=0 \
       --oidc-service-account-email="$INTERNAL_INVOKER_SA" \
       --oidc-token-audience="${AGENT_URL}${path}" --quiet
   fi
@@ -283,6 +285,7 @@ make_job() {
 make_job assistant-sweep "* * * * *" "/internal/sweep"
 make_job assistant-gmail-sync "* * * * *" "/internal/gmail/sync"
 make_job assistant-gmail-watch "0 4 * * *" "/internal/gmail/watch"
+make_job assistant-canaries "17 15 * * *" "/internal/canaries/run"
 
 echo "── pub/sub (gmail push)"
 gcloud pubsub topics describe "$TOPIC" >/dev/null 2>&1 ||

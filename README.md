@@ -46,6 +46,28 @@ bypass is rejected when `NODE_ENV=production`. To call `/internal/*` by hand, ge
 - `pnpm voice:ingest [--prod]` — ingest writing samples from `seed-data/voice/`
 - `pnpm auth:bot` — one-time bot Google OAuth (see `infra/gcp/oauth-setup.md`)
 
+## Deployment canaries
+
+`POST /internal/canaries/run` performs real, uniquely marked Gmail, SMS, sandboxed browser,
+approval, and chat checks. `GET /internal/canaries/status` returns the latest durable JSON result.
+Both endpoints use the same OIDC/shared-secret protection as every other internal route.
+
+Canaries are disabled by default because a run sends one SMS to `OWNER_PHONE`. Production deploys
+set `CANARY_ENABLED=true`, enforce a `$0.03` structural run ceiling in addition to the global cost
+ledger, and schedule one run daily. Runs are single-flight across Cloud Run instances, every check
+has a deadline, Gmail artifacts are deleted, browser callbacks use a one-shot token hash, and
+synthetic approvals/tasks are always driven to a terminal state.
+
+Local example (with the agent running and a non-empty `INTERNAL_API_SECRET`):
+
+```sh
+# Set CANARY_ENABLED=true in .env only when the real provider side effects are intended.
+curl -X POST http://localhost:8787/internal/canaries/run \
+  -H "Authorization: Bearer $INTERNAL_API_SECRET"
+curl http://localhost:8787/internal/canaries/status \
+  -H "Authorization: Bearer $INTERNAL_API_SECRET"
+```
+
 ## Security model (enforced in code, not prompts)
 
 Autonomous only inside the bot's own accounts (its inbox/calendar/workspace, public web reads). Outward-facing actions (send email, invite humans, SMS non-owners, browser form-submission) require owner approval — web dashboard or SMS `YES A7`. Tasks triggered by untrusted senders get a reduced tool registry (no outward tools, no memory writes). Approval policies are constrained per-tool templates; every tool call records decision provenance (risk tier, policy, planner/prompt versions, model).

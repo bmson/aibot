@@ -1,5 +1,5 @@
 import { tasks } from '@assistant/db';
-import { desc } from 'drizzle-orm';
+import { desc, sql } from 'drizzle-orm';
 import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { formatUsd, relativeTime, truncate } from '@/lib/format';
@@ -14,7 +14,12 @@ export default async function TasksPage() {
   const db = getDb();
   const now = new Date();
 
-  const rows = await db.select().from(tasks).orderBy(desc(tasks.updatedAt)).limit(50);
+  const rows = await db
+    .select()
+    .from(tasks)
+    .where(sql`${tasks.trigger}->'payload'->>'canary' IS DISTINCT FROM 'true'`)
+    .orderBy(desc(tasks.updatedAt))
+    .limit(50);
 
   return (
     <div className="mx-auto max-w-4xl">

@@ -9,6 +9,7 @@ import {
 } from '@assistant/core';
 import { createDb, type Db } from '@assistant/db';
 import {
+  type BrowserJobLauncher,
   CloudRunJobLauncher,
   GcsWorkspaceStore,
   GoogleClient,
@@ -33,6 +34,7 @@ export interface AgentDeps {
   googleClient: GoogleClient;
   twilio: TwilioClient;
   workspace: LocalWorkspaceStore | GcsWorkspaceStore;
+  browserLauncher: BrowserJobLauncher;
 }
 
 let cached: AgentDeps | undefined;
@@ -127,6 +129,16 @@ export function buildDeps(): AgentDeps {
   }
 
   const dispatcher = new ToolDispatcher(db, registry);
-  cached = { config, db, router, registry, dispatcher, googleClient, twilio, workspace };
+  cached = {
+    config,
+    db,
+    router,
+    registry,
+    dispatcher,
+    googleClient,
+    twilio,
+    workspace,
+    browserLauncher,
+  };
   return cached;
 }

@@ -117,6 +117,36 @@ describe('TwilioClient resilience', () => {
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('reads a message delivery status without issuing another mutation', async () => {
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        Response.json({ status: 'delivered', error_code: null, error_message: null }),
+      );
+    const client = new TwilioClient('AC123', AUTH_TOKEN, '+15550000000', {
+      fetch: fetchMock,
+    });
+
+    await expect(client.getMessageStatus('SM1234567890')).resolves.toEqual({
+      status: 'delivered',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('GET');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/Messages/SM1234567890.json');
+  });
+
+  it('rejects malformed status identifiers before making a request', async () => {
+    const fetchMock = vi.fn<typeof globalThis.fetch>();
+    const client = new TwilioClient('AC123', AUTH_TOKEN, '+15550000000', {
+      fetch: fetchMock,
+    });
+
+    await expect(client.getMessageStatus('../Accounts')).rejects.toThrow(
+      'invalid Twilio Message SID',
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('validateTwilioSignature', () => {

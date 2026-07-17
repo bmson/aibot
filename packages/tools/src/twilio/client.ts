@@ -8,6 +8,12 @@ export interface SmsSender {
   send(to: string, body: string): Promise<{ sid: string }>;
 }
 
+export interface TwilioMessageStatus {
+  status: string;
+  errorCode?: number;
+  errorMessage?: string;
+}
+
 export interface TwilioClientOptions {
   fetch?: typeof globalThis.fetch;
   sleep?: (ms: number) => Promise<void>;
@@ -159,8 +165,46 @@ export class TwilioClient implements SmsSender {
     }
   }
 
+  /** Safe, idempotent provider read used to confirm a canary reached carrier handoff. */
+  async getMessageStatus(sid: string, signal?: AbortSignal): Promise<TwilioMessageStatus> {
+    if (!/^SM[0-9A-Za-z]{8,64}$/.test(sid)) throw new Error('invalid Twilio Message SID');
+    const res = await this.fetchWithTimeout(
+      `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(this.accountSid)}/Messages/${encodeURIComponent(sid)}.json`,
+      {
+        method: 'GET',
+        headers: {
+          authorization: `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString('base64')}`,
+        },
+        signal,
+      },
+    );
+    const text = await res.text();
+    let data: {
+      status?: string;
+      error_code?: number | null;
+      error_message?: string | null;
+      message?: string;
+    } = {};
+    try {
+      data = text ? (JSON.parse(text) as typeof data) : {};
+    } catch {
+      // Preserve status and a bounded body in the stable error below.
+    }
+    if (!res.ok || !data.status) {
+      throw new Error(`twilio status failed: ${res.status} ${data.message ?? text.slice(0, 200)}`);
+    }
+    return {
+      status: data.status,
+      ...(typeof data.error_code === 'number' ? { errorCode: data.error_code } : {}),
+      ...(typeof data.error_message === 'string' ? { errorMessage: data.error_message } : {}),
+    };
+  }
+
   private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+    if (init.signal?.aborted) throw init.signal.reason ?? new Error('request aborted');
     const controller = new AbortController();
+    const abort = () => controller.abort(init.signal?.reason);
+    init.signal?.addEventListener('abort', abort, { once: true });
     const timeout = setTimeout(
       () => controller.abort(new Error(`Twilio request timed out after ${this.timeoutMs}ms`)),
       this.timeoutMs,
@@ -169,6 +213,7 @@ export class TwilioClient implements SmsSender {
       return await this.fetchFn(url, { ...init, signal: controller.signal });
     } finally {
       clearTimeout(timeout);
+      init.signal?.removeEventListener('abort', abort);
     }
   }
 }

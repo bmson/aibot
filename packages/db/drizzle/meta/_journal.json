@@ -57,6 +57,13 @@
       "when": 1784316680120,
       "tag": "0007_overrated_leech",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784319060635,
+      "tag": "0008_mushy_squirrel_girl",
+      "breakpoints": true
     }
   ]
 }

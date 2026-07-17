@@ -1,5 +1,6 @@
 import { executeTask, expireStaleApprovals, findDueTasks, loadConfig } from '@assistant/core';
 import { Hono } from 'hono';
+import { latestCanaryRun, runCanaries } from '../canaries.js';
 import { buildDeps } from '../deps.js';
 import { oidcAudienceForPath, verifyInternalAuthorization } from '../google-oidc.js';
 
@@ -90,4 +91,18 @@ internal.post('/gmail/sync', async (c) => {
   const { syncMailbox } = await import('../email-sync.js');
   const result = await syncMailbox(deps);
   return c.json(result);
+});
+
+internal.post('/canaries/run', async (c) => {
+  const config = loadConfig();
+  if (!config.CANARY_ENABLED) {
+    return c.json({ error: 'canaries are disabled; set CANARY_ENABLED=true explicitly' }, 503);
+  }
+  const result = await runCanaries(buildDeps());
+  return c.json(result);
+});
+
+internal.get('/canaries/status', async (c) => {
+  const latest = await latestCanaryRun(buildDeps().db);
+  return c.json({ latest });
 });

@@ -35,7 +35,7 @@ async function sendMeteredSms(
     description: string;
     critical?: boolean;
   },
-): Promise<void> {
+): Promise<{ deliveryStatus: 'accepted' | 'unknown'; sid?: string }> {
   const rate = await getRate(deps.db, 'twilio_sms');
   const reservation = await reserveCost(deps.db, {
     source: 'twilio_sms',
@@ -55,8 +55,9 @@ async function sendMeteredSms(
       unitPriceUsd: rate.unitPriceUsd,
       description: input.description,
     });
+  let result: { sid: string };
   try {
-    await deps.twilio.send(input.to, input.text);
+    result = await deps.twilio.send(input.to, input.text);
   } catch (error) {
     if (isAmbiguousTwilioDeliveryError(error)) {
       // The provider may already have accepted and billed this message. Count
@@ -66,7 +67,7 @@ async function sendMeteredSms(
         console.error('ambiguous SMS cost reconciliation failed', reconcileError),
       );
       console.error('SMS delivery outcome is unknown; automatic retry suppressed', error);
-      return;
+      return { deliveryStatus: 'unknown' };
     }
     await releaseReservation(deps.db, reservation.reservationId).catch(() => {});
     throw error;
@@ -75,6 +76,26 @@ async function sendMeteredSms(
   // The provider side effect already happened. Never throw from metering and
   // cause a duplicate SMS; keep the hold conservative if reconciliation fails.
   await reconcileAttempt().catch((error) => console.error('SMS cost reconciliation failed', error));
+  return { deliveryStatus: 'accepted', sid: result.sid };
+}
+
+/** One short, metered owner-only SMS for the deployed integration canary. */
+export async function sendCanarySms(
+  deps: AgentDeps,
+  marker: string,
+): Promise<{ deliveryStatus: 'accepted' | 'unknown'; sid?: string }> {
+  if (!deps.twilio.configured() || !deps.config.OWNER_PHONE) {
+    throw new Error('Twilio or OWNER_PHONE is not configured');
+  }
+  const text = `[aibot canary ${marker.slice(0, 8)}] SMS delivery check. No reply needed.`;
+  if (text.length > 160 || /[^\x20-\x7E]/.test(text)) {
+    throw new Error('canary SMS must remain one GSM-compatible segment');
+  }
+  return sendMeteredSms(deps, {
+    to: deps.config.OWNER_PHONE,
+    text,
+    description: `canary SMS ${marker}`,
+  });
 }
 
 async function conversationForPeer(

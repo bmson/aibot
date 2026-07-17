@@ -12,6 +12,8 @@ describe('config', () => {
     expect(config.DATABASE_URL).toContain('postgres://');
     expect(config.INTERNAL_AUTH_MODE).toBe('oidc');
     expect(config.AUTH_DEV_BYPASS).toBe(false);
+    expect(config.CANARY_ENABLED).toBe(false);
+    expect(config.CANARY_MAX_COST_USD).toBe(0.03);
   });
 
   it('parses overrides and coerces numbers', () => {
@@ -30,5 +32,13 @@ describe('config', () => {
     expect(loadConfig({ AUTH_DEV_BYPASS: 'true' }).AUTH_DEV_BYPASS).toBe(true);
     resetConfigForTest();
     expect(() => loadConfig({ AUTH_DEV_BYPASS: 'yes' })).toThrow();
+  });
+
+  it('bounds and explicitly opts into real canary side effects', () => {
+    expect(loadConfig({ CANARY_ENABLED: 'true', CANARY_MAX_COST_USD: '0.04' }).CANARY_ENABLED).toBe(
+      true,
+    );
+    resetConfigForTest();
+    expect(() => loadConfig({ CANARY_MAX_COST_USD: '1' })).toThrow();
   });
 });

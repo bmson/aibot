@@ -64,6 +64,13 @@ const ConfigSchema = z.object({
   BROWSER_JOB_NAME: z.string().default('assistant-browser'),
   /** Trace-archive bucket (30-day lifecycle); empty = store traces in the workspace. */
   TRACES_BUCKET: z.string().default(''),
+  /** Explicit opt-in: canaries send one real email/SMS and launch one browser job. */
+  CANARY_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  /** Structural ceiling across one full canary run (SMS + browser + bounded chat). */
+  CANARY_MAX_COST_USD: z.coerce.number().min(0.01).max(0.1).default(0.03),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

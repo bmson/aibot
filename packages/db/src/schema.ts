@@ -732,6 +732,28 @@ export const schedules = pgTable(
   (t) => [index('schedules_enabled_next_idx').on(t.enabled, t.nextRunAt)],
 );
 
+/** Durable, machine-readable health checks for deployed channel integrations. */
+export const canaryRuns = pgTable(
+  'canary_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    status: text('status').notNull().default('running'),
+    ok: boolean('ok'),
+    checks: jsonb('checks').notNull().default({}),
+    error: text('error'),
+    /** SHA-256 only: the browser worker receives the raw one-shot callback token. */
+    browserCallbackTokenHash: text('browser_callback_token_hash'),
+    /** Written exactly once by the credential-free browser worker callback. */
+    browserResult: jsonb('browser_result'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    check('canary_runs_status_check', sql`${t.status} IN ('running','completed','failed')`),
+    index('canary_runs_started_idx').on(t.startedAt),
+  ],
+);
+
 // ── Workspace files ──────────────────────────────────────────────────────────
 
 export const files = pgTable(
@@ -774,3 +796,4 @@ export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;
 export type ScheduleRow = typeof schedules.$inferSelect;
+export type CanaryRunRow = typeof canaryRuns.$inferSelect;

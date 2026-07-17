@@ -8,7 +8,7 @@ import {
   messages,
   tasks,
 } from '@assistant/db';
-import { and, asc, desc, eq, gt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
 
 const DEFAULT_MESSAGE_LIMIT = 100;
@@ -109,7 +109,7 @@ export async function listConversations(db: Db, agentId: string) {
   return db
     .select()
     .from(conversations)
-    .where(eq(conversations.agentId, agentId))
+    .where(and(eq(conversations.agentId, agentId), isNull(conversations.archivedAt)))
     .orderBy(desc(conversations.updatedAt))
     .limit(50);
 }

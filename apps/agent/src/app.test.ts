@@ -25,4 +25,24 @@ describe('agent app', () => {
     });
     expect(badToken.status).toBe(403);
   });
+
+  it('rejects malformed browser canary callbacks before touching persistence', async () => {
+    const app = createApp();
+    const response = await app.request('/webhooks/canaries/browser', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ taskId: 'not-a-run', token: '', result: {} }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it('keeps canary execution and status behind internal authentication', async () => {
+    const app = createApp();
+    const [run, status] = await Promise.all([
+      app.request('/internal/canaries/run', { method: 'POST' }),
+      app.request('/internal/canaries/status'),
+    ]);
+    expect(run.status).toBe(401);
+    expect(status.status).toBe(401);
+  });
 });

@@ -2,6 +2,7 @@ import { loadConfig, recordBrowserJobResult } from '@assistant/core';
 import { validateTwilioSignature } from '@assistant/tools';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { recordCanaryBrowserResult } from '../canaries.js';
 import { buildDeps } from '../deps.js';
 import { syncMailbox } from '../email-sync.js';
 import { verifyGoogleServiceAccountToken } from '../google-oidc.js';
@@ -68,6 +69,29 @@ webhooks.post('/browser/callback', async (c) => {
   });
   if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
   return c.json({ ok: true });
+});
+
+/** Dedicated one-shot callback for browser canaries; no task/workflow state is exposed. */
+webhooks.post('/canaries/browser', async (c) => {
+  const body = await c.req
+    .json<{ taskId?: string; token?: string; result?: unknown }>()
+    .catch(() => null);
+  if (
+    !body?.taskId ||
+    !body.token ||
+    !body.result ||
+    typeof body.result !== 'object' ||
+    Array.isArray(body.result)
+  ) {
+    return c.json({ error: 'bad request' }, 400);
+  }
+  const outcome = await recordCanaryBrowserResult(buildDeps().db, {
+    runId: body.taskId,
+    token: body.token,
+    result: body.result as Record<string, unknown>,
+  });
+  if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
+  return c.json({ ok: true, duplicate: outcome.duplicate });
 });
 
 webhooks.post('/twilio/sms', async (c) => {

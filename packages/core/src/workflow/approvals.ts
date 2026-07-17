@@ -21,6 +21,8 @@ export interface ResolveApprovalInput {
     match: Record<string, unknown>;
     effect: 'allow' | 'deny';
   };
+  /** Caller will resume the task itself (used by bounded internal canaries/tests). */
+  deferNotification?: boolean;
 }
 
 export type ResolveApprovalResult =
@@ -96,7 +98,9 @@ export async function resolveApproval(
     return { ok: false, reason: 'no pending approval matched (already resolved or expired?)' };
   }
   const { resolved, woken } = resolution;
-  if (woken) getQueueNotifier().notify(resolved.taskId, woken.queueGeneration);
+  if (woken && !input.deferNotification) {
+    getQueueNotifier().notify(resolved.taskId, woken.queueGeneration);
+  }
   return {
     ok: true,
     taskId: resolved.taskId,

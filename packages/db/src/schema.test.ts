@@ -24,6 +24,7 @@ const EXPECTED_TABLES = [
   'voice_profile',
   'gmail_sync_state',
   'schedules',
+  'canary_runs',
   'files',
 ];
 
