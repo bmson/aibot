@@ -8,6 +8,7 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
     db: deps.db,
     router: deps.router,
     dispatcher: deps.dispatcher,
+    workspace: deps.workspace,
     deliverFinal: (task, text) => deliverSmsFinal(deps, task, text),
     notifyApproval: (approvals) => notifyApprovalsBySms(deps, approvals),
   };

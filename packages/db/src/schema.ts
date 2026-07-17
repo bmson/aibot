@@ -425,6 +425,41 @@ export const contacts = pgTable(
   (t) => [check('contacts_trust_check', sql`${t.trust} IN ('owner','known','unknown')`)],
 );
 
+/**
+ * Backstory import sources (Phase 22): one row per archive dropped into the
+ * workspace import/ prefix. `source` is the provenance tag stamped on every
+ * memory the import produces — re-run or purge a whole source atomically.
+ */
+export const importSources = pgTable(
+  'import_sources',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    /** Provenance tag, e.g. 'takeout-mail-2021'. Stamped on memories.source. */
+    source: text('source').notNull().unique(),
+    /** Path under the agent workspace prefix, e.g. 'import/mail-2021.mbox'. */
+    workspacePath: text('workspace_path').notNull(),
+    kind: text('kind').notNull(),
+    status: text('status').notNull().default('pending'),
+    taskId: uuid('task_id').references(() => tasks.id),
+    itemsTotal: integer('items_total'),
+    itemsProcessed: integer('items_processed').notNull().default(0),
+    memoriesSaved: integer('memories_saved').notNull().default(0),
+    memoriesQuarantined: integer('memories_quarantined').notNull().default(0),
+    error: text('error'),
+    ...timestamps,
+  },
+  (t) => [
+    check('import_sources_kind_check', sql`${t.kind} IN ('mbox','json','text')`),
+    check(
+      'import_sources_status_check',
+      sql`${t.status} IN ('pending','running','done','failed','purged')`,
+    ),
+  ],
+);
+
 // ── Models, routing, budgets ─────────────────────────────────────────────────
 
 /** Capability matrix — what the router may pick. Swapping models = editing rows. */
@@ -624,6 +659,7 @@ export type ApprovalPolicyRow = typeof approvalPolicies.$inferSelect;
 export type MemoryRow = typeof memories.$inferSelect;
 export type MemoryTombstoneRow = typeof memoryTombstones.$inferSelect;
 export type OwnerCardRow = typeof ownerCard.$inferSelect;
+export type ImportSourceRow = typeof importSources.$inferSelect;
 export type ContactRow = typeof contacts.$inferSelect;
 export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;

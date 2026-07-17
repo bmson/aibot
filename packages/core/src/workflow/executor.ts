@@ -13,6 +13,7 @@ import {
 } from '../chat.js';
 import { PlanSchema, type TaskState, type Trust } from '../events.js';
 import { getOwnerCard } from '../memory/consolidation.js';
+import type { WorkspaceReader } from '../memory/import.js';
 import { codeJobName, runCodeJob } from '../memory/jobs.js';
 import type { ModelRole, ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
@@ -70,6 +71,8 @@ export interface ExecutorDeps {
   db: Db;
   router: ModelRouter;
   dispatcher: DispatcherPort;
+  /** Workspace file store — required only for code jobs that read archives (imports). */
+  workspace?: WorkspaceReader;
   /** Channel delivery for a task's final text (e.g. SMS reply). Failures log, never crash the task. */
   deliverFinal?: (task: TaskRow, text: string) => Promise<void>;
   /** Out-of-band owner notification when approvals park a task (e.g. SMS "Reply YES A7"). */
@@ -183,13 +186,25 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
   const state = taskState(task);
   const abort = new AbortController();
 
-  // Code jobs (nightly memory extraction/consolidation) run a registered
-  // function instead of the model loop — same retry/budget machinery.
+  // Code jobs (nightly memory extraction/consolidation, imports) run a
+  // registered function instead of the model loop — same retry/budget
+  // machinery. A job may yield (done: false) to sleep and resume later from
+  // its own checkpoint in tasks.state.
   const job = codeJobName(task);
   if (job) {
-    const summary = await runCodeJob({ db, router }, job, task.id);
-    await completeTask(db, task.id, { status: 'done', progress: summary.slice(0, 500) });
-    return { outcome: 'done', detail: summary.slice(0, 200) };
+    const outcome = await runCodeJob({ db, router, workspace: deps.workspace }, job, task);
+    if (!outcome.done) {
+      const [fresh] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+      await sleepTask(
+        db,
+        task.id,
+        taskState(fresh ?? task),
+        outcome.runAfter ?? new Date(Date.now() + 5000),
+      );
+      return { outcome: 'sleeping', detail: outcome.summary.slice(0, 200) };
+    }
+    await completeTask(db, task.id, { status: 'done', progress: outcome.summary.slice(0, 500) });
+    return { outcome: 'done', detail: outcome.summary.slice(0, 200) };
   }
 
   // Missions never run the step loop themselves: each wake is a deadline

@@ -13,6 +13,7 @@
     "@ai-sdk/react": "^4.0.32",
     "@assistant/core": "workspace:*",
     "@assistant/db": "workspace:*",
+    "@assistant/tools": "workspace:*",
     "ai": "^7.0.29",
     "drizzle-orm": "^0.45.2",
     "next": "^15.5.20",

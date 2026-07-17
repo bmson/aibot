@@ -95,7 +95,7 @@ function extractionSystem(knownNames: string[]): string {
     .join('\n');
 }
 
-function parseValidFrom(value: string): Date | null {
+export function parseValidFrom(value: string): Date | null {
   if (!value) return null;
   const d = new Date(value.length === 4 ? `${value}-01-01` : value);
   return Number.isNaN(d.getTime()) ? null : d;

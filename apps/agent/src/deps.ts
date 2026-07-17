@@ -32,6 +32,7 @@ export interface AgentDeps {
   dispatcher: ToolDispatcher;
   googleClient: GoogleClient;
   twilio: TwilioClient;
+  workspace: LocalWorkspaceStore | GcsWorkspaceStore;
 }
 
 let cached: AgentDeps | undefined;
@@ -125,6 +126,6 @@ export function buildDeps(): AgentDeps {
   }
 
   const dispatcher = new ToolDispatcher(db, registry);
-  cached = { config, db, router, registry, dispatcher, googleClient, twilio };
+  cached = { config, db, router, registry, dispatcher, googleClient, twilio, workspace };
   return cached;
 }

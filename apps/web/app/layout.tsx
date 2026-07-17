@@ -23,6 +23,7 @@ const navItems = [
   { href: '/tasks', label: 'Tasks' },
   { href: '/goals', label: 'Goals' },
   { href: '/profile', label: 'Profile' },
+  { href: '/import', label: 'Import' },
   { href: '/settings', label: 'Settings' },
 ];
 

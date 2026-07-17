@@ -93,6 +93,9 @@ importers:
       '@assistant/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@assistant/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
       ai:
         specifier: ^7.0.29
         version: 7.0.29(zod@4.4.3)
