@@ -1,6 +1,7 @@
 export * from './browse.js';
 export * from './chat.js';
 export * from './config.js';
+export * from './cost.js';
 export * from './events.js';
 export * from './memory/index.js';
 export * from './model-router/index.js';

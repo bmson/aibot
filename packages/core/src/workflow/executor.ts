@@ -11,6 +11,7 @@ import {
   PROMPT_VERSION,
   persistMessage,
 } from '../chat.js';
+import { getRate, nextDailyReset, nextMonthlyReset, reconcileReservation } from '../cost.js';
 import { PlanSchema, type TaskState, type Trust } from '../events.js';
 import { getOwnerCard } from '../memory/consolidation.js';
 import type { WorkspaceReader } from '../memory/import.js';
@@ -22,6 +23,7 @@ import {
   claimTask,
   completeTask,
   parkForApproval,
+  parkForBudget,
   recordFailedAttempt,
   sleepTask,
   taskState,
@@ -49,6 +51,7 @@ export interface DispatcherPort {
         summary: string;
       }
     | { kind: 'rejected'; reason: string }
+    | { kind: 'budget_blocked'; reason: string; resumeAt: Date }
   >;
   executeApproved(
     toolCallId: string,
@@ -136,6 +139,41 @@ function compact(window: ModelMessage[]): ModelMessage[] {
   return window.length <= CONTEXT_WINDOW_LIMIT
     ? window
     : window.slice(window.length - CONTEXT_WINDOW_LIMIT);
+}
+
+/**
+ * Reconcile a settled browser job's pre-flight reservation to what it
+ * actually ran (Phase 27): elapsed seconds × rate, in place of the
+ * worst-case estimate that was held at launch. Idempotent — the reservation
+ * reconciles once; crash-retries no-op.
+ */
+async function settleJobReservation(
+  db: Db,
+  row: { decision: unknown; startedAt: Date | null; id: string },
+): Promise<void> {
+  const reservationId = (row.decision as { reservationId?: unknown } | null)?.reservationId;
+  if (typeof reservationId !== 'string') return;
+  try {
+    const rate = await getRate(db, 'cloud_run_job_sec');
+    const elapsedSeconds = row.startedAt
+      ? Math.max(1, Math.round((Date.now() - row.startedAt.getTime()) / 1000))
+      : 60;
+    await reconcileReservation(db, reservationId, {
+      usd: elapsedSeconds * rate.unitPriceUsd,
+      quantity: elapsedSeconds,
+      unit: rate.unit,
+      unitPriceUsd: rate.unitPriceUsd,
+      toolCallId: row.id,
+      description: 'browser job runtime (reconciled at settle)',
+    });
+  } catch (err) {
+    console.error('job reservation reconcile failed', err);
+  }
+}
+
+/** Where budget-parked work resumes: the reset of whichever period is exhausted. */
+function budgetResumeAt(reason: string): Date {
+  return reason.includes('monthly') ? nextMonthlyReset() : nextDailyReset();
 }
 
 async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]> {
@@ -246,6 +284,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
       window.push(toolResultMessage(pending.toolCallId, pending.toolName, row.result));
       state.completedToolCallIds.push(pending.dbToolCallId);
       state.pendingJob = null;
+      await settleJobReservation(db, row);
     } else if (timedOut || !row) {
       const settled = {
         ok: false,
@@ -253,6 +292,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
       };
       if (row) {
         await db.update(toolCalls).set({ result: settled }).where(eq(toolCalls.id, row.id));
+        await settleJobReservation(db, row);
       }
       window.push(toolResultMessage(pending.toolCallId, pending.toolName, settled));
       state.completedToolCallIds.push(pending.dbToolCallId);
@@ -401,6 +441,11 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
     ]),
   );
 
+  // Owner chat/SMS replies are the critical carve-out: hard caps degrade
+  // them to the fallback model instead of blocking (evaluateBudget).
+  const critical =
+    (task.type === 'chat_turn' || task.type === 'sms_turn') && task.trust === 'owner';
+
   // ── Step loop ─────────────────────────────────────────────────────────────
   while (state.step < task.maxSteps) {
     const stepResult = await router.step(role, {
@@ -408,16 +453,16 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
       system,
       messages: window,
       tools: toolSet as never,
+      critical,
     });
 
     if (!stepResult.ok) {
       if (stepResult.decision.mode === 'block') {
-        // daily/monthly exhausted — sleep to the next day, don't kill the task
-        const tomorrow = new Date();
-        tomorrow.setHours(24, 5, 0, 0);
+        // daily/monthly exhausted — park as waiting_budget until the period
+        // resets (checkpointed at this step boundary, never killed mid-step)
         state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-        await sleepTask(db, task.id, state, tomorrow);
-        return { outcome: 'sleeping', detail: stepResult.decision.reason };
+        await parkForBudget(db, task.id, state, budgetResumeAt(stepResult.decision.reason));
+        return { outcome: 'parked', detail: stepResult.decision.reason };
       }
       // task budget exhausted — surface to the owner on the dashboard
       await db
@@ -491,6 +536,20 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
             window.push(toolResultMessage(tc.toolCallId, tc.toolName, outcome.result));
             state.completedToolCallIds.push(outcome.toolCallId);
           }
+        } else if (outcome.kind === 'budget_blocked') {
+          // The pre-flight reservation failed: this expensive action does not
+          // fit the remaining budget. Park BEFORE launching anything — the
+          // task resumes (and the model retries the call) when the cap resets.
+          window.push(
+            toolResultMessage(tc.toolCallId, tc.toolName, {
+              deferred: true,
+              reason: outcome.reason,
+              note: 'budget exhausted — the task is parked and will retry this action when the budget resets',
+            }),
+          );
+          state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
+          await parkForBudget(db, task.id, state, outcome.resumeAt);
+          return { outcome: 'parked', detail: outcome.reason };
         } else if (outcome.kind === 'awaiting_approval') {
           window.push(
             toolResultMessage(tc.toolCallId, tc.toolName, {

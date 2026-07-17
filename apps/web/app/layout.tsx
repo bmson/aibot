@@ -24,6 +24,7 @@ const navItems = [
   { href: '/goals', label: 'Goals' },
   { href: '/profile', label: 'Profile' },
   { href: '/import', label: 'Import' },
+  { href: '/costs', label: 'Costs' },
   { href: '/settings', label: 'Settings' },
 ];
 

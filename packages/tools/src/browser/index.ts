@@ -92,6 +92,17 @@ export function registerBrowserTools(registry: ToolRegistry, deps: BrowserDeps):
       inputSchema: z.object({ plan: BrowserPlanSchema }),
       risk: (args) => (isReadOnlyPlan(args.plan) ? 'autonomous' : 'approval'),
       acceptsUntrustedInput: false,
+      // Phase 27: job launches reserve their worst-case runtime against the
+      // budget before starting; the executor reconciles to actual seconds at settle.
+      estimateCost: (args) => {
+        const { plan } = args as { plan: BrowserPlan };
+        return {
+          source: 'cloud_run_job_sec',
+          rateKey: 'cloud_run_job_sec',
+          quantity: plan.maxDurationSeconds + JOB_TIMEOUT_BUFFER_SECONDS,
+          description: `browser job: ${plan.goal.slice(0, 80)}`,
+        };
+      },
       approvalSummary: (args) => {
         const { plan } = args as { plan: BrowserPlan };
         const interactive = plan.steps.filter((s) => INTERACTIVE_ACTIONS.has(s.action));

@@ -1,4 +1,4 @@
-import { budgets, type Db, modelCalls, modelRoles, models, tasks } from '@assistant/db';
+import { type Db, modelCalls, modelRoles, models, tasks } from '@assistant/db';
 import { createOpenRouter, type OpenRouterProvider } from '@openrouter/ai-sdk-provider';
 import {
   embedMany,
@@ -9,8 +9,9 @@ import {
   streamText,
   type ToolSet,
 } from 'ai';
-import { and, eq, gte, sql, sum } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { ZodType } from 'zod';
+import { costTotals, getRate, recordCostEvent } from '../cost.js';
 import { withSpan } from '../otel.js';
 import { type BudgetDecision, evaluateBudget } from './budget.js';
 
@@ -20,6 +21,8 @@ export interface RouteOptions {
   taskId?: string;
   /** Explicit model pick (chat switcher). Must exist + be enabled; still budget-guarded. */
   modelOverride?: string;
+  /** Owner chat/SMS replies: hard caps degrade instead of blocking (carve-out). */
+  critical?: boolean;
 }
 
 export type Route =
@@ -36,6 +39,8 @@ export type Route =
 export interface CallOptions {
   taskId?: string;
   modelOverride?: string;
+  /** Owner chat/SMS replies: hard caps degrade instead of blocking (carve-out). */
+  critical?: boolean;
   system?: string;
   messages?: ModelMessage[];
   prompt?: string;
@@ -117,21 +122,14 @@ export class ModelRouter {
     this.provider = createOpenRouter({ apiKey });
   }
 
-  /** Budget snapshot for the guard. Sums are cheap at personal scale; revisit if slow. */
+  /**
+   * Budget snapshot for the guard. Daily/monthly spend comes from the unified
+   * cost ledger (Phase 27) — model calls, embeddings, SMS, job-seconds — plus
+   * estimated USD held by unreconciled reservations, so a launched job's
+   * budget can't be double-spent before it reports actuals.
+   */
   private async budgetSnapshot(taskId?: string) {
-    const limits = await this.db.select().from(budgets);
-    const limitFor = (scope: string) =>
-      Number(limits.find((b) => b.scope === scope)?.limitUsd ?? Number.POSITIVE_INFINITY);
-    const softPct = limits.find((b) => b.scope === 'daily')?.softPct ?? 80;
-
-    const [daily] = await this.db
-      .select({ total: sum(modelCalls.costUsd) })
-      .from(modelCalls)
-      .where(gte(modelCalls.createdAt, sql`date_trunc('day', now())`));
-    const [monthly] = await this.db
-      .select({ total: sum(modelCalls.costUsd) })
-      .from(modelCalls)
-      .where(gte(modelCalls.createdAt, sql`date_trunc('month', now())`));
+    const totals = await costTotals(this.db);
 
     let taskLimitUsd: number | undefined;
     let taskSpentUsd: number | undefined;
@@ -149,17 +147,19 @@ export class ModelRouter {
     return {
       taskLimitUsd,
       taskSpentUsd,
-      dailyLimitUsd: limitFor('daily'),
-      dailySpentUsd: Number(daily?.total ?? 0),
-      monthlyLimitUsd: limitFor('monthly'),
-      monthlySpentUsd: Number(monthly?.total ?? 0),
-      softPct,
+      dailyLimitUsd: totals.dailyLimitUsd,
+      dailySpentUsd: totals.dailySpentUsd + totals.heldUsd,
+      monthlyLimitUsd: totals.monthlyLimitUsd,
+      monthlySpentUsd: totals.monthlySpentUsd + totals.heldUsd,
+      softPct: totals.softPct,
     };
   }
 
   /** Resolve role → model through the capability matrix and the budget guard. */
   async route(role: ModelRole, opts: RouteOptions = {}): Promise<Route> {
-    const decision = evaluateBudget(await this.budgetSnapshot(opts.taskId));
+    const decision = evaluateBudget(await this.budgetSnapshot(opts.taskId), {
+      critical: opts.critical,
+    });
     if (decision.mode === 'park' || decision.mode === 'block') {
       return { ok: false, decision };
     }
@@ -195,18 +195,37 @@ export class ModelRouter {
       input.event.providerMetadata ??
       (input.event as { finalStep?: { providerMetadata?: Record<string, unknown> } }).finalStep
         ?.providerMetadata;
-    const costUsd = extractCost(providerMetadata);
+    let costUsd = extractCost(providerMetadata);
+    const inputTokens = input.event.usage?.inputTokens ?? 0;
+    const outputTokens = input.event.usage?.outputTokens ?? 0;
+
+    // Embedding calls don't report usage.cost — price them from the rate table
+    // so embedding spend (batch imports!) is visible, not free.
+    if (input.role === 'embed' && costUsd === 0 && inputTokens > 0) {
+      const rate = await getRate(this.db, 'embedding_mtok').catch(() => null);
+      if (rate) costUsd = (inputTokens / 1_000_000) * rate.unitPriceUsd;
+    }
+
     await this.db.insert(modelCalls).values({
       taskId: input.taskId,
       role: input.role,
       model: input.modelId,
-      inputTokens: input.event.usage?.inputTokens ?? 0,
-      outputTokens: input.event.usage?.outputTokens ?? 0,
+      inputTokens,
+      outputTokens,
       costUsd: costUsd.toFixed(6),
       latencyMs: input.latencyMs,
       finishReason: input.event.finishReason,
       openrouterGenerationId: input.event.response?.id,
     });
+    // Unified ledger (Phase 27): every model/embedding call is a cost event.
+    await recordCostEvent(this.db, {
+      source: input.role === 'embed' ? 'embedding' : 'model',
+      usd: costUsd,
+      taskId: input.taskId,
+      quantity: inputTokens + outputTokens,
+      unit: 'tokens',
+      description: `${input.role}:${input.modelId}`,
+    }).catch((err) => console.error('cost event write failed', err));
     if (input.taskId && costUsd > 0) {
       await this.db
         .update(tasks)

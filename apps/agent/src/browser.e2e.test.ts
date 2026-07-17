@@ -6,7 +6,16 @@ import {
   recordBrowserJobResult,
   resolveApproval,
 } from '@assistant/core';
-import { approvals, createDb, type Db, files, tasks, toolCalls } from '@assistant/db';
+import {
+  approvals,
+  costEvents,
+  costReservations,
+  createDb,
+  type Db,
+  files,
+  tasks,
+  toolCalls,
+} from '@assistant/db';
 import {
   type BrowserJobLaunchInput,
   registerBrowserTools,
@@ -129,6 +138,9 @@ afterAll(async () => {
       .set({ approvalId: null })
       .where(inArray(toolCalls.taskId, createdTaskIds));
     await db.delete(approvals).where(inArray(approvals.taskId, createdTaskIds));
+    // Phase 27 ledger rows reference tool_calls/tasks — clean them first
+    await db.delete(costEvents).where(inArray(costEvents.taskId, createdTaskIds));
+    await db.delete(costReservations).where(inArray(costReservations.taskId, createdTaskIds));
     await db.delete(toolCalls).where(inArray(toolCalls.taskId, createdTaskIds));
     await db.delete(files).where(inArray(files.taskId, createdTaskIds));
     await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));

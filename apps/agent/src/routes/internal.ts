@@ -30,10 +30,20 @@ internal.post('/tasks/execute', async (c) => {
 internal.post('/sweep', async (c) => {
   const deps = buildDeps();
   const woken = await expireStaleApprovals(deps.db);
-  const { backfillMessageEmbeddings, getAgent, getQueueNotifier, purgeExpired, runDueSchedules } =
-    await import('@assistant/core');
+  const {
+    backfillMessageEmbeddings,
+    emitBudgetNotices,
+    getAgent,
+    getQueueNotifier,
+    purgeExpired,
+    runDueSchedules,
+  } = await import('@assistant/core');
   const agent = await getAgent(deps.db);
   const fired = await runDueSchedules(deps.db, agent.timezone);
+  const budgetNotices = await emitBudgetNotices(deps.db, agent.id).catch((err) => {
+    console.error('budget notices failed', err);
+    return [] as string[];
+  });
   // Backstop: re-notify everything due (sleep wake-ups, retries, lost notifications).
   // Locally the poller executes these itself; in prod Cloud Tasks calls back.
   const due = await findDueTasks(deps.db, 50);
@@ -49,6 +59,7 @@ internal.post('/sweep', async (c) => {
     schedulesFired: fired.length,
     dueTasksNotified: due.length,
     messagesEmbedded: embedded,
+    budgetNotices: budgetNotices.length,
     purged,
   });
 });

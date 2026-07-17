@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { getRate, releaseReservation, reserveCost } from '@assistant/core';
 import type { Db, TaskRow } from '@assistant/db';
 import { approvals, rateLimits, toolCache, toolCalls } from '@assistant/db';
 import { and, eq, gte, sql } from 'drizzle-orm';
@@ -25,7 +26,9 @@ export type DispatchOutcome =
       shortCode: string;
       summary: string;
     }
-  | { kind: 'rejected'; reason: string };
+  | { kind: 'rejected'; reason: string }
+  /** Pre-flight reservation failed — the executor parks the task as waiting_budget. */
+  | { kind: 'budget_blocked'; reason: string; resumeAt: Date };
 
 const APPROVAL_TTL_HOURS = 24;
 
@@ -133,9 +136,26 @@ export class ToolDispatcher {
       return { ok: false, error: 'approved args failed validation' };
     }
 
+    // Approved calls reserve too — approval grants permission, not budget.
+    const reserved = await this.reserveForTool(
+      registered,
+      parsed.data as Record<string, unknown>,
+      call.taskId,
+    );
+    if (reserved && !reserved.ok) {
+      return {
+        ok: false,
+        error: `insufficient budget for the approved action: ${reserved.reason} — it retries when the budget resets`,
+      };
+    }
+    const decision = {
+      ...((call.decision ?? {}) as Record<string, unknown>),
+      ...(reserved?.ok ? { reservationId: reserved.reservationId } : {}),
+    };
+
     await this.db
       .update(toolCalls)
-      .set({ status: 'executing', args: parsed.data, startedAt: sql`now()` })
+      .set({ status: 'executing', args: parsed.data, decision, startedAt: sql`now()` })
       .where(eq(toolCalls.id, toolCallId));
 
     try {
@@ -146,6 +166,7 @@ export class ToolDispatcher {
         .where(eq(toolCalls.id, toolCallId));
       return { ok: true, result };
     } catch (err) {
+      if (reserved?.ok) await releaseReservation(this.db, reserved.reservationId).catch(() => {});
       await this.db
         .update(toolCalls)
         .set({ status: 'failed', error: String(err).slice(0, 2000), finishedAt: sql`now()` })
@@ -232,6 +253,17 @@ export class ToolDispatcher {
       return { kind: 'rejected', reason: `rate limit exceeded for ${input.toolName}` };
     }
 
+    // Pre-flight cost reservation (Phase 27): expensive actions must fit the
+    // remaining budget BEFORE they start — metering after the fact can't
+    // prevent overshoot.
+    const reserved = await this.reserveForTool(registered, args, input.task.id);
+    if (reserved && !reserved.ok) {
+      return { kind: 'budget_blocked', reason: reserved.reason, resumeAt: reserved.resumeAt };
+    }
+    if (reserved?.ok) {
+      (decision as Record<string, unknown>).reservationId = reserved.reservationId;
+    }
+
     // Cache
     const key = cacheKey(input.toolName, args);
     if (tool.cacheTtlSeconds) {
@@ -267,6 +299,25 @@ export class ToolDispatcher {
     return this.execute({ input, args, decision, registered });
   }
 
+  /** Reserve a tool's declared cost estimate. null = tool has no estimate (nothing to reserve). */
+  private async reserveForTool(
+    registered: RegisteredTool,
+    args: Record<string, unknown>,
+    taskId: string,
+  ): Promise<Awaited<ReturnType<typeof reserveCost>> | null> {
+    const estimate = registered.tool.estimateCost?.(args);
+    if (!estimate) return null;
+    const rate = await getRate(this.db, estimate.rateKey);
+    const estimatedUsd = estimate.quantity * rate.unitPriceUsd;
+    if (estimatedUsd <= 0) return null;
+    return reserveCost(this.db, {
+      source: estimate.source,
+      estimatedUsd,
+      taskId,
+      description: estimate.description ?? registered.tool.name,
+    });
+  }
+
   private async parkForApproval(opts: {
     input: DispatchInput;
     args: Record<string, unknown>;
@@ -291,19 +342,32 @@ export class ToolDispatcher {
       .returning();
     if (!toolCall) throw new Error('failed to insert tool_call');
 
-    const shortCode = await nextShortCode(this.db);
-    const [approval] = await this.db
-      .insert(approvals)
-      .values({
-        taskId: input.task.id,
-        toolCallId: toolCall.id,
-        shortCode,
-        summary,
-        payload: args,
-        expiresAt: sql`now() + interval '${sql.raw(String(APPROVAL_TTL_HOURS))} hours'`,
-      })
-      .returning();
-    if (!approval) throw new Error('failed to insert approval');
+    // Two executors parking at once can compute the same short code — the
+    // partial unique index rejects the loser; recompute and retry.
+    let approval: typeof approvals.$inferSelect | undefined;
+    for (let attempt = 0; attempt < 5 && !approval; attempt++) {
+      const shortCode = await nextShortCode(this.db);
+      try {
+        [approval] = await this.db
+          .insert(approvals)
+          .values({
+            taskId: input.task.id,
+            toolCallId: toolCall.id,
+            shortCode,
+            summary,
+            payload: args,
+            expiresAt: sql`now() + interval '${sql.raw(String(APPROVAL_TTL_HOURS))} hours'`,
+          })
+          .returning();
+      } catch (err) {
+        const isDuplicate =
+          (err as { code?: string }).code === '23505' ||
+          String(err).includes('approvals_pending_short_code_idx') ||
+          String((err as Error).cause ?? '').includes('approvals_pending_short_code_idx');
+        if (!isDuplicate) throw err;
+      }
+    }
+    if (!approval) throw new Error('failed to insert approval (short-code contention)');
 
     await this.db
       .update(toolCalls)
@@ -314,7 +378,7 @@ export class ToolDispatcher {
       kind: 'awaiting_approval',
       toolCallId: toolCall.id,
       approvalId: approval.id,
-      shortCode,
+      shortCode: approval.shortCode,
       summary,
     };
   }
@@ -393,6 +457,11 @@ export class ToolDispatcher {
 
       return { kind: 'executed', toolCallId: row.id, result, cached: false };
     } catch (err) {
+      // the reserved work never happened — free the hold
+      const reservationId = (decision as Record<string, unknown>).reservationId;
+      if (typeof reservationId === 'string') {
+        await releaseReservation(this.db, reservationId).catch(() => {});
+      }
       await this.db
         .update(toolCalls)
         .set({ status: 'failed', error: String(err).slice(0, 2000), finishedAt: sql`now()` })

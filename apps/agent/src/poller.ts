@@ -1,5 +1,6 @@
 import {
   backfillMessageEmbeddings,
+  emitBudgetNotices,
   executeTask,
   expireStaleApprovals,
   findDueTasks,
@@ -39,6 +40,9 @@ export function startPoller(deps: AgentDeps): () => void {
         await purgeExpired(deps.db);
         await backfillMessageEmbeddings(deps.db, deps.router).catch((err) =>
           console.error('embedding backfill failed', err),
+        );
+        await emitBudgetNotices(deps.db, agent.id).catch((err) =>
+          console.error('budget notices failed', err),
         );
       }
       if (tick % EMAIL_SYNC_EVERY_TICKS === 0 && deps.googleClient.configured()) {

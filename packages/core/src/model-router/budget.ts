@@ -22,20 +22,36 @@ export type BudgetDecision =
   | { mode: 'park'; reason: string }
   | { mode: 'block'; reason: string };
 
-export function evaluateBudget(s: BudgetSnapshot): BudgetDecision {
+export interface BudgetEvalOptions {
+  /**
+   * Critical carve-out (owner chat/SMS replies): a hard daily/monthly cap
+   * degrades to the fallback model instead of blocking, until spend passes
+   * 110% of the cap — the owner can always reach their assistant.
+   */
+  critical?: boolean;
+}
+
+const CARVE_OUT_FACTOR = 1.1;
+
+export function evaluateBudget(s: BudgetSnapshot, opts: BudgetEvalOptions = {}): BudgetDecision {
   if (s.taskLimitUsd !== undefined && (s.taskSpentUsd ?? 0) >= s.taskLimitUsd) {
     return {
       mode: 'park',
       reason: `task budget exhausted ($${(s.taskSpentUsd ?? 0).toFixed(4)} of $${s.taskLimitUsd.toFixed(4)})`,
     };
   }
-  if (s.monthlySpentUsd >= s.monthlyLimitUsd) {
+  const hard = (spent: number, limit: number): boolean => {
+    if (spent < limit) return false;
+    // critical work keeps running (degraded) inside the carve-out margin
+    return !(opts.critical && spent < limit * CARVE_OUT_FACTOR);
+  };
+  if (hard(s.monthlySpentUsd, s.monthlyLimitUsd)) {
     return {
       mode: 'block',
       reason: `monthly budget exhausted ($${s.monthlySpentUsd.toFixed(2)} of $${s.monthlyLimitUsd.toFixed(2)})`,
     };
   }
-  if (s.dailySpentUsd >= s.dailyLimitUsd) {
+  if (hard(s.dailySpentUsd, s.dailyLimitUsd)) {
     return {
       mode: 'block',
       reason: `daily budget exhausted ($${s.dailySpentUsd.toFixed(2)} of $${s.dailyLimitUsd.toFixed(2)})`,

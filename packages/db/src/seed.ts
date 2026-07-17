@@ -12,6 +12,7 @@ import {
   modelRoles,
   models,
   rateLimits,
+  rateTable,
   schedules,
   voiceProfile,
 } from './schema.js';
@@ -146,6 +147,22 @@ const budgetSeed = [
 
 for (const b of budgetSeed) {
   await db.insert(budgets).values(b).onConflictDoNothing();
+}
+
+// ── Rate table (Phase 27) — unit prices for non-model spend ─────────────────
+// Model costs come from OpenRouter usage.cost; everything else prices from here.
+
+const rateSeed = [
+  { key: 'embedding_mtok', unit: 'mtok', unitPriceUsd: '0.02' },
+  { key: 'twilio_sms', unit: 'message', unitPriceUsd: '0.0079' },
+  { key: 'twilio_voice_min', unit: 'minute', unitPriceUsd: '0.014' },
+  // 2 vCPU + 2 GiB Cloud Run job: ~2×$0.000024/vCPU-s + 2×$0.0000025/GiB-s
+  { key: 'cloud_run_job_sec', unit: 'second', unitPriceUsd: '0.00006' },
+  { key: 'storage_gb_month', unit: 'gb-month', unitPriceUsd: '0.023' },
+] as const;
+
+for (const r of rateSeed) {
+  await db.insert(rateTable).values(r).onConflictDoNothing();
 }
 
 const rateLimitSeed = [

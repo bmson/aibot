@@ -1,5 +1,5 @@
 import type { Trust } from '@assistant/core';
-import type { Db } from '@assistant/db';
+import type { Db, SpendSource } from '@assistant/db';
 import type { z } from 'zod';
 
 export type RiskTier = 'autonomous' | 'approval' | 'forbidden';
@@ -38,6 +38,19 @@ export interface AssistantTool<S extends z.ZodType = z.ZodType, Out = unknown> {
   approvalSummary?: (args: z.infer<S>) => string;
   idempotencyKey?: (args: z.infer<S>, ctx: ToolContext) => string;
   cacheTtlSeconds?: number;
+  /**
+   * Pre-flight cost estimate (Phase 27): declared by tools that start
+   * expensive work (job launches, outbound calls). The dispatcher reserves
+   * quantity × rate_table[rateKey] against remaining budget BEFORE execute —
+   * insufficient budget defers the call (task parks as waiting_budget)
+   * instead of launching and overshooting.
+   */
+  estimateCost?: (args: z.infer<S>) => {
+    source: SpendSource;
+    rateKey: string;
+    quantity: number;
+    description?: string;
+  } | null;
   execute: (args: z.infer<S>, ctx: ToolContext) => Promise<Out>;
 }
 

@@ -196,7 +196,7 @@ export const tasks = pgTable(
     ),
     check(
       'tasks_status_check',
-      sql`${t.status} IN ('pending','running','waiting_approval','waiting_event','sleeping','done','failed','needs_attention','cancelled')`,
+      sql`${t.status} IN ('pending','running','waiting_approval','waiting_event','sleeping','waiting_budget','done','failed','needs_attention','cancelled')`,
     ),
     check('tasks_trust_check', sql`${t.trust} IN ('owner','known','unknown','assistant')`),
     check(
@@ -525,6 +525,84 @@ export const modelCalls = pgTable(
   ],
 );
 
+/**
+ * Every billable event, whatever it costs money for (Phase 27). Model calls,
+ * embeddings, SMS, job-seconds — one ledger, one dashboard number. Sources
+ * must stay in sync with the CI wiring check in @assistant/core cost.ts.
+ */
+export const SPEND_SOURCES = [
+  'model',
+  'embedding',
+  'twilio_sms',
+  'twilio_voice_min',
+  'cloud_run_job_sec',
+  'storage_gb_month',
+  'external_api',
+] as const;
+export type SpendSource = (typeof SPEND_SOURCES)[number];
+
+export const costEvents = pgTable(
+  'cost_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    source: text('source').notNull(),
+    taskId: uuid('task_id').references(() => tasks.id),
+    toolCallId: uuid('tool_call_id').references(() => toolCalls.id),
+    /** How much of the unit was consumed (tokens, messages, seconds, GB-months). */
+    quantity: numeric('quantity', { precision: 14, scale: 4 }),
+    unit: text('unit'),
+    unitPriceUsd: numeric('unit_price_usd', { precision: 12, scale: 8 }),
+    usd: numeric('usd', { precision: 10, scale: 6 }).notNull(),
+    description: text('description').notNull().default(''),
+    /** Set when this event reconciles a pre-flight reservation. */
+    reservationId: uuid('reservation_id').references((): AnyPgColumn => costReservations.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      'cost_events_source_check',
+      sql`${t.source} IN ('model','embedding','twilio_sms','twilio_voice_min','cloud_run_job_sec','storage_gb_month','external_api')`,
+    ),
+    index('cost_events_created_idx').on(t.createdAt),
+    index('cost_events_task_idx').on(t.taskId),
+    index('cost_events_source_idx').on(t.source, t.createdAt),
+  ],
+);
+
+/**
+ * Pre-flight budget reservations: expensive actions (job launches, outbound
+ * calls, batch imports) reserve their estimate BEFORE starting — post-hoc
+ * metering alone can't prevent overshoot. Held reservations count against
+ * remaining budget until reconciled to actuals or released.
+ */
+export const costReservations = pgTable(
+  'cost_reservations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id').references(() => tasks.id),
+    source: text('source').notNull(),
+    estimatedUsd: numeric('estimated_usd', { precision: 10, scale: 6 }).notNull(),
+    status: text('status').notNull().default('held'),
+    actualUsd: numeric('actual_usd', { precision: 10, scale: 6 }),
+    description: text('description').notNull().default(''),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    reconciledAt: timestamp('reconciled_at', { withTimezone: true }),
+  },
+  (t) => [
+    check('cost_reservations_status_check', sql`${t.status} IN ('held','reconciled','released')`),
+    index('cost_reservations_status_idx').on(t.status, t.createdAt),
+  ],
+);
+
+/** Unit prices for non-model spend (model costs come from OpenRouter usage.cost). */
+export const rateTable = pgTable('rate_table', {
+  /** e.g. 'twilio_sms', 'cloud_run_job_sec', 'embedding_mtok'. */
+  key: text('key').primaryKey(),
+  unit: text('unit').notNull(),
+  unitPriceUsd: numeric('unit_price_usd', { precision: 12, scale: 8 }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const budgets = pgTable(
   'budgets',
   {
@@ -660,6 +738,9 @@ export type MemoryRow = typeof memories.$inferSelect;
 export type MemoryTombstoneRow = typeof memoryTombstones.$inferSelect;
 export type OwnerCardRow = typeof ownerCard.$inferSelect;
 export type ImportSourceRow = typeof importSources.$inferSelect;
+export type CostEventRow = typeof costEvents.$inferSelect;
+export type CostReservationRow = typeof costReservations.$inferSelect;
+export type RateRow = typeof rateTable.$inferSelect;
 export type ContactRow = typeof contacts.$inferSelect;
 export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;

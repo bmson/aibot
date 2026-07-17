@@ -6,7 +6,7 @@ import { getQueueNotifier } from '../queue.js';
 
 export type TaskType = TaskRow['type'];
 
-const CLAIMABLE = ['pending', 'waiting_event', 'sleeping'] as const;
+const CLAIMABLE = ['pending', 'waiting_event', 'sleeping', 'waiting_budget'] as const;
 const LEASE_MINUTES = 10;
 const MAX_ATTEMPTS = 8;
 
@@ -134,6 +134,30 @@ export async function parkForApproval(
     .where(eq(tasks.id, taskId));
 }
 
+/**
+ * Park because a budget ceiling is exhausted (Phase 27): checkpointed like a
+ * sleep, but the distinct status makes "waiting on money, not on time or a
+ * human" visible on the dashboard. runAfter = the period reset, so parked
+ * work auto-resumes when the cap does.
+ */
+export async function parkForBudget(
+  db: Db,
+  taskId: string,
+  state: TaskState,
+  resumeAt: Date,
+): Promise<void> {
+  await db
+    .update(tasks)
+    .set({
+      status: 'waiting_budget',
+      state,
+      runAfter: resumeAt,
+      lockedUntil: null,
+      updatedAt: sql`now()`,
+    })
+    .where(eq(tasks.id, taskId));
+}
+
 /** Sleep until runAfter (mission wake cadence, retries with backoff, timed waits). */
 export async function sleepTask(
   db: Db,
@@ -204,6 +228,7 @@ export async function findDueTasks(db: Db, limit = 10): Promise<TaskRow[]> {
         or(
           eq(tasks.status, 'pending'),
           and(eq(tasks.status, 'sleeping'), lte(tasks.runAfter, sql`now()`)),
+          and(eq(tasks.status, 'waiting_budget'), lte(tasks.runAfter, sql`now()`)),
           and(eq(tasks.status, 'running'), lte(tasks.lockedUntil, sql`now()`)),
         ),
         or(isNull(tasks.runAfter), lte(tasks.runAfter, sql`now()`)),

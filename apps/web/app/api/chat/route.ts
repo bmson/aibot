@@ -65,6 +65,8 @@ export async function POST(req: Request) {
 
   const outcome = await getRouter().stream('draft', {
     taskId: task.id,
+    // owner chat is the critical carve-out: degrade on a hard cap, don't block
+    critical: true,
     modelOverride: conversation.modelOverride ?? undefined,
     system: buildSystemPrompt(agent, { ownerCard: await getOwnerCard(db) }),
     messages: await convertToModelMessages(uiMessages),
