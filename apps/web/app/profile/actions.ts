@@ -1,7 +1,7 @@
 'use server';
 
 import { createHash } from 'node:crypto';
-import { compileOwnerCard } from '@assistant/core';
+import { compileOwnerCard, enqueueTask, getAgent, InboundEventSchema } from '@assistant/core';
 import { addTombstone, contacts, memories, mergeContacts } from '@assistant/db';
 import { eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
@@ -69,6 +69,27 @@ export async function forgetFact(memoryId: string): Promise<void> {
   revalidateProfile();
 }
 
+/** Pin/unpin: pinned facts are always part of the compiled owner card. */
+export async function setFactPinned(memoryId: string, pinned: boolean): Promise<void> {
+  await requireOwner();
+  const db = getDb();
+  await db.update(memories).set({ pinned }).where(eq(memories.id, memoryId));
+  await compileOwnerCard(db);
+  revalidateProfile();
+}
+
+/**
+ * Demote to minor detail: importance 1 (and unpinned), so the fact never
+ * auto-appears in the compiled card but stays in memory for semantic recall.
+ */
+export async function demoteFact(memoryId: string): Promise<void> {
+  await requireOwner();
+  const db = getDb();
+  await db.update(memories).set({ importance: 1, pinned: false }).where(eq(memories.id, memoryId));
+  await compileOwnerCard(db);
+  revalidateProfile();
+}
+
 /** Quarantine review: approve releases the memory into normal retrieval. */
 export async function approveQuarantined(memoryId: string): Promise<void> {
   await requireOwner();
@@ -108,6 +129,27 @@ export async function updateContactRelationship(
 export async function recompileCard(): Promise<void> {
   await requireOwner();
   await compileOwnerCard(getDb());
+  revalidateProfile();
+}
+
+/**
+ * Queue the memory.consolidate code job (same one the nightly schedule runs):
+ * dedupe, resolve contradictions, and MERGE fragmented same-topic facts into
+ * unified statements. Runs in the background — results show up here and on
+ * /tasks when it finishes. Minute-bucket idempotency absorbs double clicks.
+ */
+export async function consolidateNow(): Promise<void> {
+  await requireOwner();
+  const db = getDb();
+  const agent = await getAgent(db);
+  const event = InboundEventSchema.parse({
+    source: 'internal',
+    externalEventId: `profile:consolidate:${new Date().toISOString().slice(0, 16)}`,
+    agentId: agent.id,
+    trust: 'assistant',
+    payload: { job: 'memory.consolidate', instruction: 'owner-requested memory consolidation' },
+  });
+  await enqueueTask(db, { event, type: 'scheduled', budgetUsdLimit: '0.10' });
   revalidateProfile();
 }
 

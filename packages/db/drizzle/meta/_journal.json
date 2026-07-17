@@ -29,6 +29,13 @@
       "when": 1784248476780,
       "tag": "0003_aromatic_blink",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784267440434,
+      "tag": "0004_flimsy_the_stranger",
+      "breakpoints": true
     }
   ]
 }

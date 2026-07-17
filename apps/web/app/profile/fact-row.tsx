@@ -6,8 +6,10 @@ import {
   approveQuarantined,
   confirmFact,
   correctFact,
+  demoteFact,
   forgetFact,
   rejectQuarantined,
+  setFactPinned,
 } from '@/app/profile/actions';
 
 /** Plain-serializable fact view, built server-side in page.tsx. */
@@ -17,7 +19,11 @@ export interface FactView {
   kind: string;
   domain: string;
   confidence: number;
+  importance: number;
   ownerConfirmed: boolean;
+  pinned: boolean;
+  /** Whether the compile rules put this fact in the owner card right now. */
+  inCard: boolean;
   originTrust: string;
   sourceTaskId: string | null;
   createdLabel: string;
@@ -43,6 +49,18 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-sm">{fact.content}</p>
         <span className="flex shrink-0 items-center gap-1.5">
+          {fact.pinned ? (
+            <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-300">
+              pinned
+            </span>
+          ) : fact.inCard ? (
+            <span
+              className="rounded-full border border-blue-200 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:border-blue-900 dark:text-blue-400"
+              title="Auto-selected into the compiled owner card (high importance)"
+            >
+              in card
+            </span>
+          ) : null}
           {fact.ownerConfirmed ? (
             <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
               confirmed
@@ -59,6 +77,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
       <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-500">
         {fact.kind}
         {fact.domain ? ` · ${fact.domain}` : ''}
+        {!quarantine && fact.importance <= 1 ? ' · minor' : ''}
         {fact.validityLabel ? ` · ${fact.validityLabel}` : ''}
         {` · ${fact.createdLabel}`}
         {quarantine ? ` · from ${fact.originTrust} source` : ''}
@@ -105,6 +124,30 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
                 className={outlineButton}
               >
                 Confirm
+              </button>
+            ) : null}
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => startTransition(() => setFactPinned(fact.id, !fact.pinned))}
+              className={outlineButton}
+              title={
+                fact.pinned
+                  ? 'Remove from the compiled owner card'
+                  : 'Always include in the compiled owner card'
+              }
+            >
+              {fact.pinned ? 'Unpin' : 'Pin to card'}
+            </button>
+            {fact.importance > 1 ? (
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => startTransition(() => demoteFact(fact.id))}
+                className={outlineButton}
+                title="Minor detail: stays in memory for recall but never auto-appears in the card"
+              >
+                Demote
               </button>
             ) : null}
             <button

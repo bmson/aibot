@@ -26,6 +26,8 @@ async function insertFact(
     domain?: string;
     quarantined?: boolean;
     ownerConfirmed?: boolean;
+    importance?: number;
+    pinned?: boolean;
   },
 ) {
   const [row] = await db
@@ -37,10 +39,11 @@ async function insertFact(
       content: input.content,
       contentHash: createHash('sha256').update(input.content).digest('hex'),
       confidence: input.confidence,
-      importance: 3,
+      importance: input.importance ?? 3,
       originTrust: 'owner',
       quarantined: input.quarantined ?? false,
       ownerConfirmed: input.ownerConfirmed ?? false,
+      pinned: input.pinned ?? false,
       subjectContactId: ownerId,
       domain: input.domain,
       createdAt: input.createdAt,
@@ -51,7 +54,10 @@ async function insertFact(
 
 const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 3600 * 1000);
 
-/** Detects one duplicate pair and one contradiction pair; fixes one domain. */
+/**
+ * Detects one duplicate pair and one contradiction pair; fixes one domain;
+ * proposes one merge whose group also (incorrectly) includes a confirmed fact.
+ */
 const fakeRouter = {
   async object() {
     return {
@@ -61,6 +67,12 @@ const fakeRouter = {
       object: {
         duplicateGroups: [[factIds.dupA, factIds.dupB]],
         contradictionGroups: [[factIds.oldJob, factIds.newJob]],
+        mergeGroups: [
+          {
+            ids: [factIds.mergeA, factIds.mergeB, factIds.mergeConfirmed],
+            unified: `${MARKER}: runs 5k on Tuesdays while training for a half marathon`,
+          },
+        ],
         domainFixes: [{ id: factIds.noDomain, domain: 'home' }],
         timeline: [{ id: factIds.newJob, validFrom: '2024-03-01', validUntil: '' }],
       },
@@ -95,17 +107,21 @@ beforeAll(async () => {
     createdAt: daysAgo(2),
     domain: 'preferences',
   });
+  // importance 5 keeps the survivor above the card's auto-include threshold
+  // and inside the per-domain cap even when the database holds real work facts
   await insertFact('oldJob', {
     content: `${MARKER}: works at Oldcorp as an engineer`,
     confidence: '0.90',
     createdAt: daysAgo(300),
     domain: 'work',
+    importance: 5,
   });
   await insertFact('newJob', {
     content: `${MARKER}: works at Newcorp since March 2024`,
     confidence: '0.80',
     createdAt: daysAgo(3),
     domain: 'work',
+    importance: 5,
   });
   await insertFact('noDomain', {
     content: `${MARKER}: lives in a flat in the Mission district`,
@@ -116,6 +132,22 @@ beforeAll(async () => {
     content: `${MARKER}: secretly dislikes his neighbor`,
     confidence: '0.50',
     quarantined: true,
+  });
+  await insertFact('mergeA', {
+    content: `${MARKER}: runs 5k on Tuesday mornings`,
+    confidence: '0.80',
+    domain: 'health',
+  });
+  await insertFact('mergeB', {
+    content: `${MARKER}: is training for a half marathon`,
+    confidence: '0.60',
+    domain: 'health',
+  });
+  await insertFact('mergeConfirmed', {
+    content: `${MARKER}: does yoga every Sunday`,
+    confidence: '1.00',
+    domain: 'health',
+    ownerConfirmed: true,
   });
 });
 
@@ -129,9 +161,12 @@ afterAll(async () => {
 
 describe('pickWinner', () => {
   const base = {
+    agentId: 'agent',
     content: '',
+    kind: 'fact',
     importance: 3,
     domain: null,
+    pinned: false,
     validFrom: null,
     validUntil: null,
   };
@@ -232,10 +267,83 @@ describe('memory consolidation (integration)', () => {
       .where(eq(memories.id, factIds.noDomain as string));
     expect(noDomain?.domain).toBe('home');
 
+    // merge: unified fact created, members expired with provenance,
+    // owner-confirmed member left untouched
+    expect(result.factsUnified).toBe(2);
+    const [unified] = await db
+      .select()
+      .from(memories)
+      .where(
+        sql`${memories.content} = ${`${MARKER}: runs 5k on Tuesdays while training for a half marathon`}`,
+      );
+    expect(unified).toBeDefined();
+    expect(unified?.originTrust).toBe('assistant');
+    expect(unified?.domain).toBe('health');
+    expect(unified?.confidence).toBe('0.60'); // min of members
+    expect(unified?.embedding).not.toBeNull();
+    expect(unified?.expiresAt).toBeNull();
+    const [mergeA] = await db
+      .select()
+      .from(memories)
+      .where(eq(memories.id, factIds.mergeA as string));
+    const [mergeB] = await db
+      .select()
+      .from(memories)
+      .where(eq(memories.id, factIds.mergeB as string));
+    const [mergeConfirmed] = await db
+      .select()
+      .from(memories)
+      .where(eq(memories.id, factIds.mergeConfirmed as string));
+    expect(mergeA?.expiresAt).not.toBeNull();
+    expect(mergeA?.supersededById).toBe(unified?.id);
+    expect(mergeB?.expiresAt).not.toBeNull();
+    expect(mergeB?.supersededById).toBe(unified?.id);
+    expect(mergeConfirmed?.expiresAt).toBeNull();
+    expect(mergeConfirmed?.supersededById).toBeNull();
+
     // owner card: contains survivors, excludes expired losers and quarantined facts
     const [card] = await db.select().from(ownerCard).where(eq(ownerCard.id, 1));
     expect(card?.content).toContain('Newcorp');
     expect(card?.content).not.toContain('Oldcorp');
     expect(card?.content).not.toContain('neighbor');
+  });
+});
+
+describe('compileOwnerCard pinning (integration)', () => {
+  it('pinned facts always make the card; unpinned facts beyond the per-domain cap do not', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+
+    // Auto-inclusion needs importance >= 4 and caps at 2 per domain; pinned
+    // facts make the card no matter how unimportant or shaky they look.
+    const health = [
+      ['cardHigh1', 5, '0.90'], // in: high importance, top ranked
+      ['cardHigh2', 4, '0.85'], // in: high importance, second
+      ['cardHigh3', 4, '0.80'], // out: third high-importance fact, over the cap
+      ['cardMid', 3, '0.99'], // out: ordinary importance never auto-surfaces
+    ] as const;
+    for (const [key, importance, confidence] of health) {
+      await insertFact(key, {
+        content: `${MARKER}: ${key} sleeps with the window open`,
+        confidence,
+        domain: 'health',
+        importance,
+      });
+    }
+    await insertFact('healthPinned', {
+      content: `${MARKER}: healthPinned is allergic to penicillin`,
+      confidence: '0.10',
+      domain: 'health',
+      importance: 1,
+      pinned: true,
+    });
+
+    const content = await compileOwnerCard(db);
+    expect(content).toContain('healthPinned is allergic to penicillin');
+    expect(content).toContain('cardHigh1 sleeps with the window open');
+    expect(content).toContain('cardHigh2 sleeps with the window open');
+    expect(content).not.toContain('cardHigh3 sleeps with the window open');
+    expect(content).not.toContain('cardMid sleeps with the window open');
+    // overflow is surfaced to the model so it knows recall has more
+    expect(content).toContain('memory.recall');
   });
 });

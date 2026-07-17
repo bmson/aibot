@@ -354,6 +354,8 @@ export const memories = pgTable(
     supersededById: uuid('superseded_by_id').references((): AnyPgColumn => memories.id),
     /** Owner clicked confirm/correct on the Profile page — consolidation never expires these lightly. */
     ownerConfirmed: boolean('owner_confirmed').notNull().default(false),
+    /** Owner pinned this fact: always included in the compiled owner card. */
+    pinned: boolean('pinned').notNull().default(false),
     /** Import provenance (e.g. 'takeout-mail-2021') — purge-by-source uses this. */
     source: text('source'),
     sourceTaskId: uuid('source_task_id').references(() => tasks.id),
