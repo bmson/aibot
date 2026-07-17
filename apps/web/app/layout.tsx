@@ -1,17 +1,20 @@
 import { approvals } from '@assistant/db';
 import { count, eq } from 'drizzle-orm';
-import type { Metadata } from 'next';
-import Link from 'next/link';
+import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import { auth, authMode } from '@/auth';
 import { getDb } from '@/lib/server';
-import { CountBadge } from '@/lib/ui';
-import { signOutAction } from './actions';
+import { AppNav } from './app-nav';
 import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Assistant',
   description: 'Personal AI assistant dashboard',
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
 };
 
 // The sidebar badge (DB) and session lookup are per-request — never prerender.
@@ -62,41 +65,13 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             dev mode — auth disabled
           </div>
         ) : null}
-        <div className="flex min-h-screen">
-          <aside className="flex w-56 shrink-0 flex-col border-r border-zinc-200 dark:border-zinc-800">
-            <div className="px-5 py-5">
-              <Link href="/" className="text-sm font-semibold tracking-wide">
-                Assistant
-              </Link>
-            </div>
-            <nav className="flex flex-col gap-1 px-3">
-              {navItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
-                >
-                  {item.label}
-                  {item.href === '/approvals' && pendingApprovals > 0 ? (
-                    <CountBadge tone="amber">{pendingApprovals}</CountBadge>
-                  ) : null}
-                </Link>
-              ))}
-            </nav>
-            {session?.user ? (
-              <div className="mt-auto border-t border-zinc-200 px-5 py-4 dark:border-zinc-800">
-                <form action={signOutAction}>
-                  <button
-                    type="submit"
-                    className="text-xs text-zinc-500 hover:text-zinc-900 hover:underline dark:text-zinc-500 dark:hover:text-zinc-100"
-                  >
-                    Sign out
-                  </button>
-                </form>
-              </div>
-            ) : null}
-          </aside>
-          <main className="flex-1 px-8 py-8">{children}</main>
+        <div className="flex min-h-screen flex-col lg:flex-row">
+          <AppNav
+            navItems={navItems}
+            pendingApprovals={pendingApprovals}
+            signedIn={!!session?.user}
+          />
+          <main className="min-w-0 flex-1 px-4 py-6 lg:px-8 lg:py-8">{children}</main>
         </div>
       </body>
     </html>
