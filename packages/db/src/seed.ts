@@ -208,6 +208,14 @@ const policySeed = [
     match: {},
     effect: 'allow',
   },
+  // Inviting the owner (and only the owner) to an event is autonomous — the
+  // invite email goes nowhere but to them.
+  {
+    toolName: 'calendar.create_event',
+    templateKey: 'calendar.owner_attendee_only',
+    match: { emails: [OWNER_EMAIL] },
+    effect: 'allow',
+  },
 ] as const;
 
 for (const p of policySeed) {

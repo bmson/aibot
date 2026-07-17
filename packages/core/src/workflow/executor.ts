@@ -176,6 +176,33 @@ function budgetResumeAt(reason: string): Date {
   return reason.includes('monthly') ? nextMonthlyReset() : nextDailyReset();
 }
 
+/**
+ * Where this task's final answer lands — the model writes very different
+ * replies for an email thread than for a chat bubble, and must know that
+ * delivery back through the source channel is automatic.
+ */
+function channelContext(task: TaskRow): string {
+  const payload = (task.trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
+  switch (task.type) {
+    case 'email_triage': {
+      const from = typeof payload.from === 'string' ? payload.from : 'the sender';
+      const subject = typeof payload.subject === 'string' ? payload.subject : '';
+      return [
+        `\nThis task was triggered by an email from ${from}${subject ? ` (subject: "${subject}")` : ''}.`,
+        task.trust === 'owner'
+          ? 'When you finish with a text answer, it is AUTOMATICALLY emailed back to the sender on the same thread — write your final message as that email reply, and complete any needed tool actions (calendar, lookups) BEFORE finishing.'
+          : 'The sender is not the owner: nothing is auto-sent. If a reply is warranted, use gmail.create_draft (or gmail.send, which needs owner approval).',
+      ].join('\n');
+    }
+    case 'sms_turn':
+      return '\nThis task came in by SMS; your final text goes back as an SMS — keep it short and plain.';
+    case 'chat_turn':
+      return "\nThis task came from the owner's dashboard chat; your final text appears there as your reply.";
+    default:
+      return '';
+  }
+}
+
 /** Parked/paused tasks with a conversation must say so in the thread, not go silent. */
 async function postConversationNotice(db: Db, task: TaskRow, text: string): Promise<void> {
   if (!task.conversationId) return;
@@ -441,10 +468,13 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
   const role = ROLE_FOR_TYPE[task.type] ?? 'draft';
   const system = [
     buildSystemPrompt(agent, { ownerCard: await getOwnerCard(db) }),
+    channelContext(task),
     plan
       ? `\nCurrent plan (follow it; deviate only with good reason):\n${JSON.stringify(plan)}`
       : '',
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   const toolDefs = dispatcher.toolDefs(task.trust as Trust);
   const toolSet = Object.fromEntries(

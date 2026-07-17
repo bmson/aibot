@@ -150,7 +150,14 @@ export async function runMemoryExtraction(
       byConversation.set(row.conversationId, bucket);
     }
 
-    const conversationIds = [...byConversation.keys()].slice(0, MAX_CONVERSATIONS);
+    // Cap at the most recently ACTIVE conversations — never an arbitrary
+    // (uuid-ordered) sample that could drop tonight's real conversations.
+    const conversationIds = [...byConversation.entries()]
+      .sort(
+        (a, b) => (b[1].at(-1)?.createdAt.getTime() ?? 0) - (a[1].at(-1)?.createdAt.getTime() ?? 0),
+      )
+      .slice(0, MAX_CONVERSATIONS)
+      .map(([id]) => id);
     const convRows = await db
       .select({ id: conversations.id, trust: conversations.trust, title: conversations.title })
       .from(conversations)

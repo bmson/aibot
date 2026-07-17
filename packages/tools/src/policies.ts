@@ -25,6 +25,24 @@ export const policyTemplates: Record<string, PolicyTemplate> = {
     return !attendees || attendees.length === 0;
   },
 
+  /**
+   * Calendar events whose ONLY attendees are the owner's own addresses
+   * (match.emails, set at seed time). Inviting the owner to something they
+   * asked about is the calendar twin of replying to their SMS — the invite
+   * email goes nowhere but to them.
+   */
+  'calendar.owner_attendee_only': (match, args) => {
+    const allowed = (Array.isArray(match.emails) ? match.emails : []).map((e) =>
+      String(e).toLowerCase(),
+    );
+    const attendees = (Array.isArray(args.attendees) ? args.attendees : []).map((a) =>
+      String(a).toLowerCase(),
+    );
+    return (
+      allowed.length > 0 && attendees.length > 0 && attendees.every((a) => allowed.includes(a))
+    );
+  },
+
   /** Email to a specific, owner-approved recipient. */
   'gmail.send.to_recipient': (match, args) => {
     const allowed = String(match.recipient ?? '').toLowerCase();

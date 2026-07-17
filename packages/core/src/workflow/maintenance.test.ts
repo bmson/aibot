@@ -1,5 +1,5 @@
 import { conversations, createDb, type Db, memories, messages, toolCache } from '@assistant/db';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import type { ModelRouter } from '../model-router/router.js';
@@ -67,19 +67,23 @@ describe('maintenance (integration)', () => {
     const first = await backfillMessageEmbeddings(db, fakeRouter, 50);
     expect(first).toBeGreaterThanOrEqual(1);
 
-    const [longAfter] = await db
-      .select({ has: sql<boolean>`${messages.embedding} IS NOT NULL` })
-      .from(messages)
-      .where(eq(messages.id, (long as NonNullable<typeof long>).id));
-    const [shortAfter] = await db
-      .select({ has: sql<boolean>`${messages.embedding} IS NOT NULL` })
-      .from(messages)
-      .where(eq(messages.id, (short as NonNullable<typeof short>).id));
-    expect(longAfter?.has).toBe(true);
-    expect(shortAfter?.has).toBe(false); // too short to bother
+    const embeddingOf = async (id: string) => {
+      const [row] = await db
+        .select({ embedding: messages.embedding })
+        .from(messages)
+        .where(eq(messages.id, id));
+      return row?.embedding ?? null;
+    };
+    const longEmbedding = await embeddingOf((long as NonNullable<typeof long>).id);
+    expect(longEmbedding).not.toBeNull();
+    expect(await embeddingOf((short as NonNullable<typeof short>).id)).toBeNull(); // too short to bother
 
-    const second = await backfillMessageEmbeddings(db, fakeRouter, 50);
-    expect(second).toBe(0); // nothing left to embed
+    // Idempotent for OUR rows: a second pass leaves them untouched. (Other
+    // tests share this DB and may add unembedded messages concurrently, so
+    // the global count is not assertable.)
+    await backfillMessageEmbeddings(db, fakeRouter, 50);
+    expect(await embeddingOf((long as NonNullable<typeof long>).id)).toEqual(longEmbedding);
+    expect(await embeddingOf((short as NonNullable<typeof short>).id)).toBeNull();
   });
 
   it('purges expired cache rows and memories, keeps live ones', async (ctx) => {
