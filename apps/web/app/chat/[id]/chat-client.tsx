@@ -168,7 +168,7 @@ export function ChatClient({
   const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
 
   return (
-    <div className="mx-auto flex h-[calc(100vh-4rem)] max-w-4xl flex-col">
+    <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-4xl flex-col lg:h-[calc(100vh-4rem)]">
       <header className="flex items-center justify-between gap-4 border-b border-zinc-200 pb-3 dark:border-zinc-800">
         <h1 className="truncate text-lg font-semibold">{title}</h1>
         <div className="flex items-center gap-3">
