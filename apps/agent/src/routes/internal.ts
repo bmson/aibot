@@ -1,18 +1,25 @@
 import { executeTask, expireStaleApprovals, findDueTasks, loadConfig } from '@assistant/core';
 import { Hono } from 'hono';
 import { buildDeps } from '../deps.js';
+import { oidcAudienceForPath, verifyInternalAuthorization } from '../google-oidc.js';
 
 /**
- * Queue-facing endpoints. Locally these are exercised by tests/curl with the
- * INTERNAL_API_SECRET bearer; in prod they verify Cloud Tasks / Scheduler OIDC
- * (Phase 7 swaps the auth middleware).
+ * Queue-facing endpoints. Production accepts only a Google-signed ID token
+ * from the configured internal invoker service account. Local development can
+ * explicitly opt into a shared secret with INTERNAL_AUTH_MODE=shared-secret.
  */
 export const internal = new Hono();
 
 internal.use('*', async (c, next) => {
   const config = loadConfig();
-  const auth = c.req.header('authorization') ?? '';
-  if (auth !== `Bearer ${config.INTERNAL_API_SECRET}`) {
+  const authConfig =
+    config.INTERNAL_AUTH_MODE === 'oidc'
+      ? {
+          ...config,
+          INTERNAL_OIDC_AUDIENCE: oidcAudienceForPath(config.INTERNAL_OIDC_AUDIENCE, c.req.path),
+        }
+      : config;
+  if (!(await verifyInternalAuthorization(c.req.header('authorization'), authConfig))) {
     return c.json({ error: 'unauthorized' }, 401);
   }
   return next();
@@ -48,7 +55,7 @@ internal.post('/sweep', async (c) => {
   // Locally the poller executes these itself; in prod Cloud Tasks calls back.
   const due = await findDueTasks(deps.db, 50);
   const notifier = getQueueNotifier();
-  for (const task of due) notifier.notify(task.id);
+  for (const task of due) notifier.notify(task.id, task.queueGeneration);
   const embedded = await backfillMessageEmbeddings(deps.db, deps.router).catch((err) => {
     console.error('embedding backfill failed', err);
     return 0;

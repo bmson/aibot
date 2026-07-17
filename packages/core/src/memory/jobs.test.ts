@@ -32,6 +32,7 @@ const explodingDispatcher: DispatcherPort = {
   toolDefs: () => {
     throw new Error('code job must not build a tool set');
   },
+  resultIsUntrusted: () => false,
   dispatch: async () => {
     throw new Error('code job must not dispatch tools');
   },

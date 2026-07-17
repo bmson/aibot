@@ -53,8 +53,8 @@ export const BrowserPlanSchema = z.object({
   fetchSuggestion: z.string().optional(),
   /** rung headless/visual: the explicit steps — exactly what the owner approves. */
   steps: z.array(BrowserStepSchema).max(30).default([]),
-  /** Load the persisted (encrypted) browser profile — cookies, sessions. */
-  useProfile: z.boolean().default(true),
+  /** Load the persisted encrypted browser profile only when authenticated state is required. */
+  useProfile: z.boolean().default(false),
   maxDurationSeconds: z.number().int().min(30).max(600).default(180),
 });
 export type BrowserPlan = z.infer<typeof BrowserPlanSchema>;
@@ -111,6 +111,7 @@ over brittle CSS chains). Every step gets a short "note" saying why. Never inclu
 in any step — logging in and purchasing are not things you can plan; if the goal requires them, say so in
 rationale and plan only the read-only part. Interactive steps (click/type/select/press) require owner approval,
 so prefer read-only step sequences (goto, waitFor, extract, screenshot) when they suffice.
+Set useProfile=true only when the goal explicitly requires an existing authenticated session; otherwise keep it false.
 Keep plans short: one goto, a waitFor, then extract what's needed.`;
 
 export async function planBrowse(

@@ -23,7 +23,22 @@ const ConfigSchema = z.object({
   PUBLIC_URL: z.string().default('http://localhost:8787'),
   WEB_PORT: z.coerce.number().default(3000),
   AGENT_PORT: z.coerce.number().default(8787),
-  INTERNAL_API_SECRET: z.string().default('dev-internal-secret'),
+  /**
+   * Internal callbacks use Google-signed OIDC in deployed environments. The
+   * shared-secret mode is an explicit local-development escape hatch only.
+   */
+  INTERNAL_AUTH_MODE: z.enum(['oidc', 'shared-secret']).default('oidc'),
+  INTERNAL_API_SECRET: z.string().default(''),
+  /** Service URL used to derive a distinct OIDC audience for each internal route. */
+  INTERNAL_OIDC_AUDIENCE: z.string().default(''),
+  INTERNAL_OIDC_SERVICE_ACCOUNT: z.string().default(''),
+  /** Expected `email` claim on the Pub/Sub push ID token. */
+  GMAIL_PUSH_SERVICE_ACCOUNT: z.string().default(''),
+  /** Explicit opt-in for bypassing owner authentication outside production. */
+  AUTH_DEV_BYPASS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
   OTEL_SERVICE_NAME: z.string().default('assistant'),
   OTEL_EXPORTER: z.enum(['console', 'otlp', 'none']).default('none'),
   // Phase 3+

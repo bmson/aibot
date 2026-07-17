@@ -7,6 +7,7 @@ export default defineConfig({
       'packages/db',
       'packages/tools',
       'apps/agent',
+      'apps/web',
       'workers/browser-job',
     ],
   },

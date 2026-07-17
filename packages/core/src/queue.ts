@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { loadConfig } from './config.js';
 
 /**
@@ -8,10 +9,23 @@ import { loadConfig } from './config.js';
  * so a lost notification delays work, never loses it.
  */
 export interface QueueNotifier {
-  notify(taskId: string): void;
+  /**
+   * `generation` changes whenever a task becomes runnable again. Cloud Tasks
+   * deduplicates the stable (taskId, generation) name while still permitting a
+   * later approval, retry, sleep wake-up, or reclaimed lease to enqueue anew.
+   */
+  notify(taskId: string, generation: number): void;
 }
 
 let cached: QueueNotifier | undefined;
+
+export function queueTaskId(taskId: string, generation: number): string {
+  if (!Number.isInteger(generation) || generation < 0) {
+    throw new Error('queue generation must be a non-negative integer');
+  }
+  const digest = createHash('sha256').update(`${taskId}:${generation}`).digest('hex').slice(0, 32);
+  return `task-${digest}`;
+}
 
 export function getQueueNotifier(): QueueNotifier {
   if (cached) return cached;
@@ -22,13 +36,25 @@ export function getQueueNotifier(): QueueNotifier {
     return cached;
   }
 
-  const { GCP_PROJECT, GCP_LOCATION, CLOUD_TASKS_QUEUE, AGENT_URL, INTERNAL_API_SECRET } = config;
+  const {
+    GCP_PROJECT,
+    GCP_LOCATION,
+    CLOUD_TASKS_QUEUE,
+    AGENT_URL,
+    INTERNAL_OIDC_AUDIENCE,
+    INTERNAL_OIDC_SERVICE_ACCOUNT,
+  } = config;
+  if (!INTERNAL_OIDC_AUDIENCE || !INTERNAL_OIDC_SERVICE_ACCOUNT) {
+    throw new Error('cloudtasks queue requires INTERNAL_OIDC_AUDIENCE and service account');
+  }
+  const callbackUrl = new URL('/internal/tasks/execute', AGENT_URL).toString();
+  const callbackAudience = new URL('/internal/tasks/execute', INTERNAL_OIDC_AUDIENCE).toString();
   const queuePath = `projects/${GCP_PROJECT}/locations/${GCP_LOCATION}/queues/${CLOUD_TASKS_QUEUE}`;
 
   async function accessToken(): Promise<string> {
     const res = await fetch(
       'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
-      { headers: { 'Metadata-Flavor': 'Google' } },
+      { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(5_000) },
     );
     if (!res.ok) throw new Error(`metadata token fetch failed: ${res.status}`);
     const data = (await res.json()) as { access_token: string };
@@ -36,7 +62,8 @@ export function getQueueNotifier(): QueueNotifier {
   }
 
   cached = {
-    notify(taskId: string) {
+    notify(taskId: string, generation: number) {
+      const name = `${queuePath}/tasks/${queueTaskId(taskId, generation)}`;
       void (async () => {
         const token = await accessToken();
         const res = await fetch(`https://cloudtasks.googleapis.com/v2/${queuePath}/tasks`, {
@@ -44,20 +71,27 @@ export function getQueueNotifier(): QueueNotifier {
           headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
           body: JSON.stringify({
             task: {
+              name,
               httpRequest: {
                 httpMethod: 'POST',
-                url: `${AGENT_URL}/internal/tasks/execute`,
+                url: callbackUrl,
                 headers: {
                   'content-type': 'application/json',
-                  // Route-level shared-secret auth (same gate the sweeper uses)
-                  authorization: `Bearer ${INTERNAL_API_SECRET}`,
+                },
+                oidcToken: {
+                  serviceAccountEmail: INTERNAL_OIDC_SERVICE_ACCOUNT,
+                  audience: callbackAudience,
                 },
                 body: Buffer.from(JSON.stringify({ taskId })).toString('base64'),
               },
             },
           }),
+          signal: AbortSignal.timeout(15_000),
         });
-        if (!res.ok) {
+        // An existing name means this runnable generation is already queued.
+        // Treat it as success: the whole point of the explicit name is for
+        // enqueue + sweeper races to converge here without duplicate work.
+        if (!res.ok && res.status !== 409) {
           console.error(`cloud tasks notify failed (${res.status}) — sweeper will pick it up`);
         }
       })().catch((err) => console.error('queue notify error', err));

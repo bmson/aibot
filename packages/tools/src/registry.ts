@@ -2,10 +2,9 @@ import type { Trust } from '@assistant/core';
 import type { AssistantTool, RegisteredTool, ToolFlags } from './types.js';
 
 /**
- * Trust-scoped tool registry. Tasks triggered by untrusted content get a
- * reduced registry: no outward-facing tools, no memory-writing tools — an
- * injected email cannot call gmail.send; it can only propose drafts a human
- * opens. This is architectural, not prompt-level.
+ * Trust-scoped tool registry. Any externally triggered task loses private
+ * owner reads and persistent writes; unknown senders also lose outward-facing
+ * tools entirely. This is architectural, not prompt-level.
  */
 export class ToolRegistry {
   private tools = new Map<string, RegisteredTool>();
@@ -23,14 +22,29 @@ export class ToolRegistry {
   }
 
   /** The tool set exposed to the model for a task with the given trust. */
-  toolsForTask(trust: Trust): AssistantTool[] {
+  toolsForTask(trust: Trust, tainted = false): AssistantTool[] {
     const untrusted = trust === 'unknown';
+    const external = untrusted || trust === 'known';
     return [...this.tools.values()]
-      .filter(({ flags }) => !untrusted || (!flags.outwardFacing && !flags.writesMemory))
-      .map(({ tool }) => tool);
+      .filter(
+        ({ tool, flags }) =>
+          (!untrusted || !flags.outwardFacing) &&
+          (!external || tool.acceptsUntrustedInput) &&
+          (!external ||
+            (!flags.writesMemory &&
+              !flags.confidentialRead &&
+              !flags.writesWorkspace &&
+              !flags.privateWrite)),
+      )
+      .map(({ tool }) => tool)
+      .filter((tool) => !tainted || tool.acceptsUntrustedInput);
   }
 
   all(): RegisteredTool[] {
     return [...this.tools.values()];
+  }
+
+  resultIsUntrusted(name: string): boolean {
+    return this.tools.get(name)?.flags.returnsUntrustedContent === true;
   }
 }

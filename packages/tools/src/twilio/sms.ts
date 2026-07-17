@@ -1,4 +1,3 @@
-import { getRate, recordCostEvent } from '@assistant/core';
 import { z } from 'zod';
 import type { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolFlags } from '../types.js';
@@ -54,22 +53,14 @@ export function registerSmsTools(registry: ToolRegistry, deps: SmsToolDeps): Too
         const a = args as z.infer<typeof schema>;
         return `sms-send-${ctx.taskId}-${a.to}-${a.body.slice(0, 40)}`;
       },
-      execute: async (args, ctx) => {
+      estimateCost: () => ({
+        source: 'twilio_sms',
+        rateKey: 'twilio_sms',
+        quantity: 1,
+        description: 'outbound SMS',
+      }),
+      execute: async (args) => {
         const result = await deps.sender.send(args.to, args.body);
-        // Unified cost ledger (Phase 27): one event per delivered message.
-        const rate = await getRate(ctx.db, 'twilio_sms').catch(() => null);
-        if (rate) {
-          await recordCostEvent(ctx.db, {
-            source: 'twilio_sms',
-            usd: rate.unitPriceUsd,
-            taskId: ctx.taskId,
-            quantity: 1,
-            unit: rate.unit,
-            unitPriceUsd: rate.unitPriceUsd,
-            description: `sms to ${args.to}`,
-            addToTaskSpend: true,
-          }).catch((err) => console.error('sms cost event failed', err));
-        }
         return { sid: result.sid, to: args.to };
       },
     },

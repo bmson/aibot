@@ -1,0 +1,184 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  AmbiguousGoogleMutationError,
+  buildRawEmail,
+  GoogleApiError,
+  GoogleClient,
+} from './client.js';
+
+const API_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/profile';
+
+function tokenResponse(token = 'access-token'): Response {
+  return Response.json({ access_token: token, expires_in: 3600 });
+}
+
+function clientWith(
+  fetchMock: typeof globalThis.fetch,
+  options: {
+    maxRetries?: number;
+    timeoutMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    maxResponseBytes?: number;
+  } = {},
+) {
+  return new GoogleClient({
+    clientId: 'client-id',
+    clientSecret: 'client-secret',
+    refreshToken: 'refresh-token',
+    fetch: fetchMock,
+    retryBaseDelayMs: 10,
+    ...options,
+  });
+}
+
+describe('GoogleClient resilience', () => {
+  it('retries safe reads on network errors, 429, and transient 5xx with bounded delays', async () => {
+    const sleep = vi.fn(async (_ms: number) => {});
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(tokenResponse())
+      .mockRejectedValueOnce(new TypeError('network unavailable'))
+      .mockResolvedValueOnce(
+        new Response('slow down', { status: 429, headers: { 'retry-after': '2' } }),
+      )
+      .mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ historyId: '42' }));
+    const client = clientWith(fetchMock, { maxRetries: 3, sleep });
+
+    await expect(client.api<{ historyId: string }>(API_URL)).resolves.toEqual({ historyId: '42' });
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([10, 2000, 40]);
+  });
+
+  it('retries refresh-token requests on ambiguous and transient failures', async () => {
+    const sleep = vi.fn(async (_ms: number) => {});
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockRejectedValueOnce(new TypeError('token network failure'))
+      .mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
+      .mockResolvedValueOnce(tokenResponse())
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+    const client = clientWith(fetchMock, { maxRetries: 2, sleep });
+
+    await expect(client.api(API_URL)).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([10, 20]);
+  });
+
+  it('does not retry a mutation after an ambiguous 5xx response', async () => {
+    const sleep = vi.fn(async (_ms: number) => {});
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(tokenResponse())
+      .mockResolvedValueOnce(new Response('uncertain', { status: 503 }));
+    const client = clientWith(fetchMock, { maxRetries: 3, sleep });
+
+    await expect(
+      client.api('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method: 'POST',
+        body: JSON.stringify({ raw: 'email' }),
+      }),
+    ).rejects.toBeInstanceOf(AmbiguousGoogleMutationError);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('does not retry mutations after a 429 or ambiguous network failure', async () => {
+    const rateLimitedFetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(tokenResponse())
+      .mockResolvedValueOnce(new Response('rate limited', { status: 429 }));
+    const rateLimitedClient = clientWith(rateLimitedFetch, { maxRetries: 3 });
+    await expect(
+      rateLimitedClient.api('https://calendar.googleapis.com/calendar/v3/calendars/me/events', {
+        method: 'POST',
+        body: JSON.stringify({ summary: 'Meeting' }),
+      }),
+    ).rejects.toBeInstanceOf(GoogleApiError);
+    expect(rateLimitedFetch).toHaveBeenCalledTimes(2);
+
+    const networkFetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(tokenResponse())
+      .mockRejectedValueOnce(new TypeError('connection reset'));
+    const networkClient = clientWith(networkFetch, { maxRetries: 3 });
+    await expect(
+      networkClient.api('https://calendar.googleapis.com/calendar/v3/calendars/me/events', {
+        method: 'POST',
+        body: JSON.stringify({ summary: 'Meeting' }),
+      }),
+    ).rejects.toThrow('connection reset');
+    expect(networkFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a definitively rejected mutation once after refreshing a 401 token', async () => {
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(tokenResponse('old-token'))
+      .mockResolvedValueOnce(new Response('expired', { status: 401 }))
+      .mockResolvedValueOnce(tokenResponse('new-token'))
+      .mockResolvedValueOnce(Response.json({ id: 'sent-id' }));
+    const client = clientWith(fetchMock);
+
+    await expect(
+      client.api<{ id: string }>('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method: 'POST',
+        body: JSON.stringify({ raw: 'email' }),
+      }),
+    ).resolves.toEqual({ id: 'sent-id' });
+    const sentHeaders = fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers));
+    expect(sentHeaders[1]?.get('authorization')).toBe('Bearer old-token');
+    expect(sentHeaders[3]?.get('authorization')).toBe('Bearer new-token');
+  });
+
+  it('aborts each attempt at the configured timeout', async () => {
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(tokenResponse())
+      .mockImplementationOnce((_url, init) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+            once: true,
+          });
+        });
+      });
+    const client = clientWith(fetchMock, { maxRetries: 0, timeoutMs: 5 });
+
+    await expect(client.api(API_URL)).rejects.toThrow('timed out after 5ms');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects non-Google destinations before obtaining credentials', async () => {
+    const fetchMock = vi.fn<typeof globalThis.fetch>();
+    const client = clientWith(fetchMock);
+
+    await expect(client.api('http://169.254.169.254/latest/meta-data')).rejects.toThrow(
+      'refusing non-Google API URL',
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized response bodies before buffering them without retrying', async () => {
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(tokenResponse())
+      .mockResolvedValueOnce(new Response('123456789'));
+    const client = clientWith(fetchMock, { maxResponseBytes: 8, maxRetries: 3 });
+
+    await expect(client.api(API_URL)).rejects.toThrow('Google response exceeds 8 bytes');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('buildRawEmail', () => {
+  it('rejects CRLF header injection', () => {
+    expect(() =>
+      buildRawEmail({
+        from: 'assistant@example.com',
+        to: ['owner@example.com'],
+        subject: 'Approved subject\r\nBcc: attacker@example.com',
+        body: 'hello',
+      }),
+    ).toThrow('Subject contains a forbidden line break');
+  });
+});

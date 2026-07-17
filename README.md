@@ -28,8 +28,13 @@ Architecture plan (v4, the source of truth for design decisions): `~/.claude/pla
 docker compose up -d          # postgres+pgvector :5432, fake-gcs :4443
 cp .env.example .env          # fill in OPENROUTER_API_KEY at minimum
 pnpm install && pnpm db:migrate && pnpm seed
-pnpm dev                      # web :3000, agent :8787 (dev-bypass auth)
+pnpm dev                      # web :3000, agent :8787
 ```
+
+The checked-in `.env.example` explicitly enables the local-only web auth bypass and internal
+shared-secret mode. Remove `AUTH_DEV_BYPASS=true` to exercise fail-closed web auth locally; the
+bypass is rejected when `NODE_ENV=production`. To call `/internal/*` by hand, generate a local
+`INTERNAL_API_SECRET` with `openssl rand -hex 32`; blank secrets are always rejected.
 
 ⚠️ The local agent worker polls the same bot mailbox as production — email actions double up while it runs. Keep it off unless testing email flows.
 

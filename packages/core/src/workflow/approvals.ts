@@ -1,6 +1,6 @@
-import { approvalPolicies, approvals, type Db, toolCalls } from '@assistant/db';
-import { and, eq, lte, sql } from 'drizzle-orm';
-import { wakeTask } from './machine.js';
+import { approvalPolicies, approvals, type Db, tasks, toolCalls } from '@assistant/db';
+import { and, eq, inArray, lte, sql } from 'drizzle-orm';
+import { getQueueNotifier } from '../queue.js';
 
 export interface ResolveApprovalInput {
   approvalId?: string;
@@ -43,39 +43,60 @@ export async function resolveApproval(
     ? and(eq(approvals.id, input.approvalId), eq(approvals.status, 'pending'))
     : and(eq(approvals.shortCode, input.shortCode as string), eq(approvals.status, 'pending'));
 
-  const [resolved] = await db
-    .update(approvals)
-    .set({
-      status: input.decision,
-      resolvedAt: sql`now()`,
-      resolvedVia: input.via,
-      resolutionPayload: input.editedPayload ?? null,
-    })
-    .where(matcher)
-    .returning();
-  if (!resolved) {
+  const resolution = await db.transaction(async (tx) => {
+    const [resolved] = await tx
+      .update(approvals)
+      .set({
+        status: input.decision,
+        resolvedAt: sql`now()`,
+        resolvedVia: input.via,
+        resolutionPayload: input.editedPayload ?? null,
+      })
+      .where(matcher)
+      .returning();
+    if (!resolved) return null;
+
+    await tx
+      .update(toolCalls)
+      .set({ status: input.decision })
+      .where(eq(toolCalls.id, resolved.toolCallId));
+
+    if (input.policy && input.via === 'web') {
+      const [policy] = await tx
+        .insert(approvalPolicies)
+        .values({ ...input.policy, createdVia: 'approval_dialog' })
+        .returning();
+      if (policy) {
+        await tx
+          .update(approvals)
+          .set({ createdPolicyId: policy.id })
+          .where(eq(approvals.id, resolved.id));
+      }
+    }
+
+    // Only the state this approval actually parks may be resumed. A late
+    // response must never resurrect a cancelled/completed task.
+    const [woken] = await tx
+      .update(tasks)
+      .set({
+        status: 'pending',
+        runAfter: null,
+        lockedUntil: null,
+        queueGeneration: sql`${tasks.queueGeneration} + 1`,
+        attempt: 0,
+        updatedAt: sql`now()`,
+      })
+      .where(and(eq(tasks.id, resolved.taskId), eq(tasks.status, 'waiting_approval')))
+      .returning({ id: tasks.id, queueGeneration: tasks.queueGeneration });
+
+    return { resolved, woken };
+  });
+
+  if (!resolution) {
     return { ok: false, reason: 'no pending approval matched (already resolved or expired?)' };
   }
-
-  await db
-    .update(toolCalls)
-    .set({ status: input.decision })
-    .where(eq(toolCalls.id, resolved.toolCallId));
-
-  if (input.policy && input.via === 'web') {
-    const [policy] = await db
-      .insert(approvalPolicies)
-      .values({ ...input.policy, createdVia: 'approval_dialog' })
-      .returning();
-    if (policy) {
-      await db
-        .update(approvals)
-        .set({ createdPolicyId: policy.id })
-        .where(eq(approvals.id, resolved.id));
-    }
-  }
-
-  await wakeTask(db, resolved.taskId);
+  const { resolved, woken } = resolution;
+  if (woken) getQueueNotifier().notify(resolved.taskId, woken.queueGeneration);
   return {
     ok: true,
     taskId: resolved.taskId,
@@ -88,19 +109,48 @@ export async function resolveApproval(
  * Sweep: expire stale pending approvals and wake their tasks so the model
  * learns the approval expired (instead of the task dying silently).
  */
-export async function expireStaleApprovals(db: Db): Promise<string[]> {
-  const expired = await db
-    .update(approvals)
-    .set({ status: 'expired', resolvedAt: sql`now()` })
-    .where(and(eq(approvals.status, 'pending'), lte(approvals.expiresAt, sql`now()`)))
-    .returning();
+export async function expireStaleApprovals(db: Db, batch = 200): Promise<string[]> {
+  const taskIds = await db.transaction(async (tx) => {
+    const due = tx
+      .select({ id: approvals.id })
+      .from(approvals)
+      .where(and(eq(approvals.status, 'pending'), lte(approvals.expiresAt, sql`now()`)))
+      .orderBy(approvals.expiresAt)
+      .limit(batch);
+    const expired = await tx
+      .update(approvals)
+      .set({ status: 'expired', resolvedAt: sql`now()` })
+      .where(and(inArray(approvals.id, due), eq(approvals.status, 'pending')))
+      .returning();
+    if (expired.length === 0) return [];
 
-  for (const approval of expired) {
-    await db
+    await tx
       .update(toolCalls)
       .set({ status: 'denied', error: 'approval expired' })
-      .where(eq(toolCalls.id, approval.toolCallId));
-    await wakeTask(db, approval.taskId);
-  }
-  return expired.map((a) => a.taskId);
+      .where(
+        inArray(
+          toolCalls.id,
+          expired.map((approval) => approval.toolCallId),
+        ),
+      );
+
+    const uniqueTaskIds = [...new Set(expired.map((approval) => approval.taskId))];
+    const woken = await tx
+      .update(tasks)
+      .set({
+        status: 'pending',
+        runAfter: null,
+        lockedUntil: null,
+        queueGeneration: sql`${tasks.queueGeneration} + 1`,
+        attempt: 0,
+        updatedAt: sql`now()`,
+      })
+      .where(and(inArray(tasks.id, uniqueTaskIds), eq(tasks.status, 'waiting_approval')))
+      .returning({ id: tasks.id, queueGeneration: tasks.queueGeneration });
+    return woken;
+  });
+
+  const notifier = getQueueNotifier();
+  for (const task of taskIds) notifier.notify(task.id, task.queueGeneration);
+  return taskIds.map((task) => task.id);
 }

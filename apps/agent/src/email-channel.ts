@@ -1,7 +1,12 @@
 import { getAgent } from '@assistant/core';
 import type { TaskRow } from '@assistant/db';
 import { conversations } from '@assistant/db';
-import { buildRawEmail, type GmailPayload, gmailHeader } from '@assistant/tools';
+import {
+  buildRawEmail,
+  type GmailPayload,
+  gmailHeader,
+  isAmbiguousGoogleMutationError,
+} from '@assistant/tools';
 import { eq } from 'drizzle-orm';
 import type { AgentDeps } from './deps.js';
 
@@ -60,9 +65,16 @@ export async function deliverEmailFinal(
     body: text,
     ...(inReplyTo ? { inReplyTo, references: inReplyTo } : {}),
   });
-  await deps.googleClient.api(`${GMAIL}/messages/send`, {
-    method: 'POST',
-    body: JSON.stringify({ raw, threadId }),
-  });
+  try {
+    await deps.googleClient.api(`${GMAIL}/messages/send`, {
+      method: 'POST',
+      body: JSON.stringify({ raw, threadId }),
+    });
+  } catch (error) {
+    if (!isAmbiguousGoogleMutationError(error)) throw error;
+    // The request may already be in Sent. Suppress an automatic duplicate;
+    // the workflow's durable delivery marker completes this ambiguous attempt.
+    console.error('email delivery outcome is ambiguous; suppressing duplicate retry', error);
+  }
   return true;
 }

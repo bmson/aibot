@@ -63,10 +63,11 @@ export async function loadProfile(
   profileDir: string,
   keyHex: string,
 ): Promise<boolean> {
+  if (!keyHex) throw new Error('PROFILE_ENC_KEY is required when useProfile=true');
   const blob = await store.get(PROFILE_OBJECT);
   if (!blob) return false;
   try {
-    const tarball = keyHex ? decryptProfile(blob, keyHex) : blob;
+    const tarball = decryptProfile(blob, keyHex);
     const tarPath = path.join(path.dirname(profileDir), 'profile-in.tar.gz');
     await writeFile(tarPath, tarball);
     await mkdir(profileDir, { recursive: true });
@@ -87,6 +88,7 @@ export async function saveProfile(
   profileDir: string,
   keyHex: string,
 ): Promise<number> {
+  if (!keyHex) throw new Error('PROFILE_ENC_KEY is required when useProfile=true');
   const tarPath = path.join(path.dirname(profileDir), 'profile-out.tar.gz');
   const excludes = PRUNE_EXCLUDES.flatMap((e) => ['--exclude', e]);
   await exec('tar', ['-czf', tarPath, ...excludes, '-C', profileDir, '.']);
@@ -96,7 +98,7 @@ export async function saveProfile(
     console.error(`profile tarball ${tarball.length}B exceeds cap — not persisting`);
     return 0;
   }
-  const payload = keyHex ? encryptProfile(tarball, keyHex) : tarball;
+  const payload = encryptProfile(tarball, keyHex);
   await store.put(PROFILE_OBJECT, payload, 'application/octet-stream');
   return payload.length;
 }

@@ -1,6 +1,6 @@
 import { createDb, type Db, tasks } from '@assistant/db';
 import { eq, inArray } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getAgent } from '../chat.js';
 import type { InboundEvent } from '../events.js';
 import {
@@ -15,6 +15,9 @@ import {
   taskState,
   wakeTask,
 } from './machine.js';
+
+const { notifyTask } = vi.hoisted(() => ({ notifyTask: vi.fn() }));
+vi.mock('../queue.js', () => ({ getQueueNotifier: () => ({ notify: notifyTask }) }));
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -58,6 +61,8 @@ async function track<T extends { task: { id: string } }>(p: Promise<T>): Promise
 }
 
 describe('task state machine (integration)', () => {
+  beforeEach(() => notifyTask.mockClear());
+
   it('enqueues idempotently on externalEventId', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const ev = event({ externalEventId: `test-evt-${Date.now()}` });
@@ -66,6 +71,8 @@ describe('task state machine (integration)', () => {
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     expect(second.task.id).toBe(first.task.id);
+    expect(notifyTask).toHaveBeenCalledTimes(1);
+    expect(notifyTask).toHaveBeenCalledWith(first.task.id, first.task.queueGeneration);
   });
 
   it('claim wins exactly once between racers', async (ctx) => {
@@ -75,7 +82,7 @@ describe('task state machine (integration)', () => {
     expect([a, b].filter(Boolean)).toHaveLength(1);
     const winner = a ?? b;
     expect(winner?.status).toBe('running');
-    expect(winner?.attempt).toBe(1);
+    expect(winner?.attempt).toBe(0);
   });
 
   it('checkpoint round-trips state; park + wake resumes from it', async (ctx) => {
@@ -88,7 +95,9 @@ describe('task state machine (integration)', () => {
     state.phase = 'step-3';
     state.scratchpad = 'found two options';
     state.completedToolCallIds.push('tc-1');
-    await checkpointTask(db, task.id, state, { progress: 'comparing options' });
+    await checkpointTask(db, claimed as NonNullable<typeof claimed>, state, {
+      progress: 'comparing options',
+    });
 
     const pending = [
       {
@@ -98,7 +107,7 @@ describe('task state machine (integration)', () => {
         toolName: 'gmail.send',
       },
     ];
-    await parkForApproval(db, task.id, state, pending);
+    await parkForApproval(db, claimed as NonNullable<typeof claimed>, state, pending);
     let [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(row?.status).toBe('waiting_approval');
 
@@ -108,13 +117,14 @@ describe('task state machine (integration)', () => {
     await wakeTask(db, task.id);
     const reclaimed = await claimTask(db, task.id);
     expect(reclaimed).not.toBeNull();
+    expect(reclaimed?.attempt).toBe(0);
     const resumed = taskState(reclaimed as NonNullable<typeof reclaimed>);
     expect(resumed.phase).toBe('step-3');
     expect(resumed.scratchpad).toBe('found two options');
     expect(resumed.completedToolCallIds).toContain('tc-1');
     expect(resumed.pendingApprovals).toEqual(pending);
 
-    await completeTask(db, task.id, { status: 'done' });
+    await completeTask(db, reclaimed as NonNullable<typeof reclaimed>, { status: 'done' });
     [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(row?.status).toBe('done');
   });
@@ -124,7 +134,12 @@ describe('task state machine (integration)', () => {
     const { task } = await track(enqueueTask(db, { event: event(), type: 'adhoc' }));
     const claimed = await claimTask(db, task.id);
     const future = new Date(Date.now() + 60_000);
-    await sleepTask(db, task.id, taskState(claimed as NonNullable<typeof claimed>), future);
+    await sleepTask(
+      db,
+      claimed as NonNullable<typeof claimed>,
+      taskState(claimed as NonNullable<typeof claimed>),
+      future,
+    );
 
     const dueNow = await findDueTasks(db, 100);
     expect(dueNow.map((t) => t.id)).not.toContain(task.id);
@@ -138,15 +153,15 @@ describe('task state machine (integration)', () => {
   it('dead-letters after max attempts', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const { task } = await track(enqueueTask(db, { event: event(), type: 'adhoc' }));
-    await db.update(tasks).set({ attempt: 8 }).where(eq(tasks.id, task.id));
-    const [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
-    const outcome = await recordFailedAttempt(db, row as NonNullable<typeof row>, 'boom');
+    await db.update(tasks).set({ attempt: 7 }).where(eq(tasks.id, task.id));
+    const claimed = await claimTask(db, task.id);
+    const outcome = await recordFailedAttempt(db, claimed as NonNullable<typeof claimed>, 'boom');
     expect(outcome).toBe('dead_letter');
     const [after] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(after?.status).toBe('needs_attention');
   });
 
-  it('retries below max attempts', async (ctx) => {
+  it('retries below max attempts with backoff', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const { task } = await track(enqueueTask(db, { event: event(), type: 'adhoc' }));
     const claimed = await claimTask(db, task.id);
@@ -157,6 +172,111 @@ describe('task state machine (integration)', () => {
     );
     expect(outcome).toBe('retry');
     const [after] = await db.select().from(tasks).where(eq(tasks.id, task.id));
-    expect(after?.status).toBe('pending');
+    expect(after?.status).toBe('sleeping');
+    expect(after?.attempt).toBe(1);
+    expect(after?.runAfter?.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('reclaims an expired running lease and fences the stale worker', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { task } = await track(enqueueTask(db, { event: event(), type: 'adhoc' }));
+    const stale = await claimTask(db, task.id);
+    expect(stale).not.toBeNull();
+
+    await db
+      .update(tasks)
+      .set({ lockedUntil: new Date(Date.now() - 1000) })
+      .where(eq(tasks.id, task.id));
+    const reclaimed = await claimTask(db, task.id);
+    expect(reclaimed).not.toBeNull();
+
+    expect(
+      await completeTask(db, stale as NonNullable<typeof stale>, {
+        status: 'done',
+        progress: 'stale completion',
+      }),
+    ).toBe(false);
+    expect(
+      await checkpointTask(
+        db,
+        stale as NonNullable<typeof stale>,
+        taskState(stale as NonNullable<typeof stale>),
+      ),
+    ).toBe(false);
+
+    const [after] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(after?.status).toBe('running');
+    expect(after?.lockedUntil).toEqual(reclaimed?.lockedUntil);
+  });
+
+  it('gives an expired lease one new queue generation for all sweepers', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { task } = await track(enqueueTask(db, { event: event(), type: 'adhoc' }));
+    const stale = await claimTask(db, task.id);
+    expect(stale).not.toBeNull();
+
+    await db
+      .update(tasks)
+      .set({ lockedUntil: new Date(Date.now() - 1000) })
+      .where(eq(tasks.id, task.id));
+    const firstSweep = await findDueTasks(db, 100);
+    const first = firstSweep.find((candidate) => candidate.id === task.id);
+    expect(first?.status).toBe('pending');
+    expect(first?.queueGeneration).toBe(task.queueGeneration + 1);
+
+    const secondSweep = await findDueTasks(db, 100);
+    const second = secondSweep.find((candidate) => candidate.id === task.id);
+    expect(second?.queueGeneration).toBe(first?.queueGeneration);
+  });
+
+  it('terminal cancellation cannot be overwritten or woken by a late worker', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { task } = await track(enqueueTask(db, { event: event(), type: 'adhoc' }));
+    const claimed = await claimTask(db, task.id);
+    expect(claimed).not.toBeNull();
+
+    expect(await completeTask(db, task.id, { status: 'cancelled' })).toBe(true);
+    expect(await completeTask(db, claimed as NonNullable<typeof claimed>, { status: 'done' })).toBe(
+      false,
+    );
+    expect(await wakeTask(db, task.id)).toBe(false);
+
+    const [after] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(after?.status).toBe('cancelled');
+  });
+
+  it('ordinary sleep and approval resumes do not consume the failure budget', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { task } = await track(enqueueTask(db, { event: event(), type: 'adhoc' }));
+    const first = await claimTask(db, task.id);
+    expect(first?.attempt).toBe(0);
+    await sleepTask(
+      db,
+      first as NonNullable<typeof first>,
+      taskState(first as NonNullable<typeof first>),
+      new Date(Date.now() - 1000),
+    );
+    const resumed = await claimTask(db, task.id);
+    expect(resumed?.attempt).toBe(0);
+  });
+
+  it('does not let a duplicate queue delivery resume a task waiting for an event', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { task } = await track(enqueueTask(db, { event: event(), type: 'adhoc' }));
+    await db
+      .update(tasks)
+      .set({ status: 'waiting_event', lockedUntil: null, runAfter: null })
+      .where(eq(tasks.id, task.id));
+    expect(await claimTask(db, task.id)).toBeNull();
+  });
+
+  it('reclaims a legacy running row whose lease token is missing', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { task } = await track(enqueueTask(db, { event: event(), type: 'adhoc' }));
+    await db
+      .update(tasks)
+      .set({ status: 'running', lockedUntil: null })
+      .where(eq(tasks.id, task.id));
+    expect(await claimTask(db, task.id)).not.toBeNull();
   });
 });

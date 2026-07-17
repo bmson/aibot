@@ -141,6 +141,15 @@ export const messages = pgTable(
       .on(t.channelMessageId)
       .where(sql`${t.channelMessageId} IS NOT NULL`),
     index('messages_conversation_idx').on(t.conversationId, t.createdAt),
+    index('messages_created_idx').on(t.createdAt),
+    index('messages_task_created_idx')
+      .on(t.taskId, t.createdAt)
+      .where(sql`${t.taskId} IS NOT NULL`),
+    index('messages_embedding_backfill_idx')
+      .on(t.createdAt)
+      .where(
+        sql`${t.embedding} IS NULL AND ${t.role} IN ('user','assistant') AND length(${t.text}) > 20`,
+      ),
     index('messages_embedding_idx').using('hnsw', t.embedding.op('vector_cosine_ops')),
   ],
 );
@@ -180,6 +189,8 @@ export const tasks = pgTable(
     trust: text('trust').notNull().default('unknown'),
     runAfter: timestamp('run_after', { withTimezone: true }),
     lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    /** Monotonic delivery generation used to deduplicate queue pokes per runnable transition. */
+    queueGeneration: integer('queue_generation').notNull().default(0),
     attempt: integer('attempt').notNull().default(0),
     maxSteps: integer('max_steps').notNull().default(12),
     budgetUsdLimit: numeric('budget_usd_limit', { precision: 8, scale: 4 })
@@ -209,6 +220,11 @@ export const tasks = pgTable(
     index('tasks_status_run_after_idx').on(t.status, t.runAfter),
     index('tasks_agent_status_idx').on(t.agentId, t.status, t.updatedAt),
     index('tasks_parent_idx').on(t.parentTaskId),
+    index('tasks_pending_updated_idx').on(t.updatedAt).where(sql`${t.status} = 'pending'`),
+    index('tasks_sleeping_run_after_idx')
+      .on(t.runAfter)
+      .where(sql`${t.status} IN ('sleeping','waiting_budget')`),
+    index('tasks_running_locked_idx').on(t.lockedUntil).where(sql`${t.status} = 'running'`),
   ],
 );
 
@@ -247,6 +263,7 @@ export const toolCalls = pgTable(
       .on(t.idempotencyKey)
       .where(sql`${t.idempotencyKey} IS NOT NULL`),
     index('tool_calls_task_idx').on(t.taskId, t.step),
+    index('tool_calls_rate_idx').on(t.toolName, t.status, t.createdAt),
   ],
 );
 
@@ -286,6 +303,7 @@ export const approvals = pgTable(
       .on(t.shortCode)
       .where(sql`${t.status} = 'pending'`),
     index('approvals_status_idx').on(t.status, t.expiresAt),
+    index('approvals_task_requested_idx').on(t.taskId, t.requestedAt),
   ],
 );
 
@@ -570,6 +588,9 @@ export const costEvents = pgTable(
     index('cost_events_created_idx').on(t.createdAt),
     index('cost_events_task_idx').on(t.taskId),
     index('cost_events_source_idx').on(t.source, t.createdAt),
+    uniqueIndex('cost_events_reservation_idx')
+      .on(t.reservationId)
+      .where(sql`${t.reservationId} IS NOT NULL`),
   ],
 );
 
@@ -595,6 +616,7 @@ export const costReservations = pgTable(
   (t) => [
     check('cost_reservations_status_check', sql`${t.status} IN ('held','reconciled','released')`),
     index('cost_reservations_status_idx').on(t.status, t.createdAt),
+    index('cost_reservations_task_idx').on(t.taskId, t.status),
   ],
 );
 
@@ -685,6 +707,8 @@ export const voiceProfile = pgTable(
 export const gmailSyncState = pgTable('gmail_sync_state', {
   mailbox: text('mailbox').primaryKey(),
   lastHistoryId: bigint('last_history_id', { mode: 'bigint' }),
+  /** Durable bounded-drain cursor for Gmail history/inbox reconciliation pages. */
+  cursor: jsonb('cursor').notNull().default({}),
   watchExpiration: timestamp('watch_expiration', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

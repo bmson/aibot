@@ -4,7 +4,17 @@ import { z } from 'zod';
 import { persistMessage } from '../chat.js';
 import { InboundEventSchema, type Plan, type TaskState } from '../events.js';
 import type { ModelRouter } from '../model-router/router.js';
-import { completeTask, enqueueTask, sleepTask, taskState } from './machine.js';
+import {
+  checkpointTask,
+  completeTask,
+  enqueueTask,
+  markTaskNeedsAttention,
+  parkForEvent,
+  renewTaskLease,
+  sleepTask,
+  type TaskLease,
+  taskState,
+} from './machine.js';
 
 const DEFAULT_MISSION_DAYS = 30;
 const DEFAULT_WAKE_HOURS = 24;
@@ -38,6 +48,7 @@ export async function startMission(
 
   const event = InboundEventSchema.parse({
     source: 'internal',
+    externalEventId: `mission:source:${source.id}`,
     agentId: source.agentId,
     conversationId: source.conversationId ?? undefined,
     trust: source.trust,
@@ -83,7 +94,8 @@ function sessionInstruction(mission: TaskRow, state: TaskState): string {
 export type MissionWake =
   | { action: 'sessioned'; sessionTaskId: string; sleptUntil: Date }
   | { action: 'reflected'; decision: Reflection['decision']; sleptUntil?: Date }
-  | { action: 'deadline_reached' };
+  | { action: 'deadline_reached' }
+  | { action: 'lease_lost' };
 
 /**
  * One mission wake (the mission task was claimed). Deadline → final report.
@@ -92,22 +104,23 @@ export type MissionWake =
  */
 export async function wakeMission(
   deps: { db: Db; router: ModelRouter },
-  mission: TaskRow,
+  mission: TaskLease,
   agent: AgentRow,
 ): Promise<MissionWake> {
   const { db } = deps;
   const state = taskState(mission);
 
   if (mission.deadline && mission.deadline.getTime() <= Date.now()) {
+    const completed = await completeTask(db, mission, {
+      status: 'done',
+      progress: `deadline reached — ${mission.progress || 'no progress recorded'}`,
+    });
+    if (!completed) return { action: 'lease_lost' };
     await report(
       db,
       mission,
       `Mission reached its deadline. Final status: ${mission.progress || 'no progress recorded'}`,
     );
-    await completeTask(db, mission.id, {
-      status: 'done',
-      progress: `deadline reached — ${mission.progress || 'no progress recorded'}`,
-    });
     return { action: 'deadline_reached' };
   }
 
@@ -117,6 +130,9 @@ export async function wakeMission(
     return reflect(deps, mission, agent, state);
   }
 
+  // Fence immediately before creating the child. An old worker must not
+  // spawn new mission work after the owner cancelled or another lease won.
+  if (!(await renewTaskLease(db, mission))) return { action: 'lease_lost' };
   const { task: session } = await enqueueTask(db, {
     event: InboundEventSchema.parse({
       source: 'mission_wake',
@@ -133,13 +149,14 @@ export async function wakeMission(
 
   state.step += 1; // counts sessions for the mission
   const wakeAt = new Date(Date.now() + DEFAULT_WAKE_HOURS * 3600e3);
-  await sleepTask(db, mission.id, state, wakeAt);
+  if (!(await renewTaskLease(db, mission))) return { action: 'lease_lost' };
+  if (!(await sleepTask(db, mission, state, wakeAt))) return { action: 'lease_lost' };
   return { action: 'sessioned', sessionTaskId: session.id, sleptUntil: wakeAt };
 }
 
 async function reflect(
   deps: { db: Db; router: ModelRouter },
-  mission: TaskRow,
+  mission: TaskLease,
   _agent: AgentRow,
   state: TaskState,
 ): Promise<MissionWake> {
@@ -166,54 +183,55 @@ async function reflect(
     ? outcome.object
     : { decision: 'escalate', reasoning: 'reflection blocked by budget', progressPercent: null };
 
-  await db
-    .update(tasks)
-    .set({
-      lastReflectedAt: sql`now()`,
+  if (!(await renewTaskLease(db, mission))) return { action: 'lease_lost' };
+  if (
+    !(await checkpointTask(db, mission, state, {
+      lastReflectedAt: new Date(),
       progressPercent: reflection.progressPercent ?? mission.progressPercent,
-      updatedAt: sql`now()`,
-    })
-    .where(eq(tasks.id, mission.id));
+    }))
+  ) {
+    return { action: 'lease_lost' };
+  }
 
   switch (reflection.decision) {
     case 'continue': {
       const wakeAt = new Date(Date.now() + DEFAULT_WAKE_HOURS * 3600e3);
-      await sleepTask(db, mission.id, state, wakeAt);
+      if (!(await sleepTask(db, mission, state, wakeAt))) return { action: 'lease_lost' };
       return { action: 'reflected', decision: 'continue', sleptUntil: wakeAt };
     }
     case 'pause': {
+      if (!(await parkForEvent(db, mission))) return { action: 'lease_lost' };
       await report(
         db,
         mission,
         `Mission paused after reflection: ${reflection.reasoning}. Wake it from the dashboard when ready.`,
       );
-      await db
-        .update(tasks)
-        .set({ status: 'waiting_event', lockedUntil: null, updatedAt: sql`now()` })
-        .where(eq(tasks.id, mission.id));
       return { action: 'reflected', decision: 'pause' };
     }
     case 'escalate': {
+      if (!(await markTaskNeedsAttention(db, mission, `escalated: ${reflection.reasoning}`))) {
+        return { action: 'lease_lost' };
+      }
       await report(db, mission, `Mission needs your attention: ${reflection.reasoning}`);
-      await db
-        .update(tasks)
-        .set({
-          status: 'needs_attention',
-          progress: `escalated: ${reflection.reasoning}`.slice(0, 500),
-          lockedUntil: null,
-          updatedAt: sql`now()`,
-        })
-        .where(eq(tasks.id, mission.id));
       return { action: 'reflected', decision: 'escalate' };
     }
     case 'complete': {
+      if (!(await completeTask(db, mission, { status: 'done', progress: mission.progress }))) {
+        return { action: 'lease_lost' };
+      }
       await report(db, mission, `Mission complete: ${reflection.reasoning}`);
-      await completeTask(db, mission.id, { status: 'done', progress: mission.progress });
       return { action: 'reflected', decision: 'complete' };
     }
     case 'abandon': {
+      if (
+        !(await completeTask(db, mission, {
+          status: 'cancelled',
+          progress: reflection.reasoning,
+        }))
+      ) {
+        return { action: 'lease_lost' };
+      }
       await report(db, mission, `Mission abandoned after reflection: ${reflection.reasoning}`);
-      await completeTask(db, mission.id, { status: 'cancelled', progress: reflection.reasoning });
       return { action: 'reflected', decision: 'abandon' };
     }
   }

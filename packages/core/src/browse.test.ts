@@ -21,7 +21,7 @@ const readOnlyPlan = {
 describe('BrowserPlanSchema', () => {
   it('parses a plan and applies defaults', () => {
     const plan = BrowserPlanSchema.parse(readOnlyPlan);
-    expect(plan.useProfile).toBe(true);
+    expect(plan.useProfile).toBe(false);
     expect(plan.maxDurationSeconds).toBe(180);
     expect(plan.rationale).toBe('');
   });

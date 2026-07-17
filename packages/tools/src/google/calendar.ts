@@ -23,74 +23,82 @@ export function registerCalendarTools(
   registry: ToolRegistry,
   deps: CalendarToolDeps,
 ): ToolRegistry {
-  register(registry, {
-    name: 'calendar.availability',
-    description:
-      "Check free/busy for the assistant's calendar and the owner's (if shared). Times are ISO 8601 with offset.",
-    inputSchema: z.object({
-      timeMin: z.string().datetime({ offset: true }),
-      timeMax: z.string().datetime({ offset: true }),
-    }),
-    risk: 'autonomous',
-    acceptsUntrustedInput: true,
-    cacheTtlSeconds: 300,
-    execute: async (args) => {
-      const res = await deps.client.api<{
-        calendars?: Record<
-          string,
-          { busy?: Array<{ start: string; end: string }>; errors?: unknown[] }
-        >;
-      }>(`${CAL}/freeBusy`, {
-        method: 'POST',
-        body: JSON.stringify({
-          timeMin: args.timeMin,
-          timeMax: args.timeMax,
-          items: [{ id: deps.botEmail }, { id: deps.ownerEmail }],
-        }),
-      });
-      const calendars = res.calendars ?? {};
-      return {
-        bot: calendars[deps.botEmail]?.busy ?? [],
-        owner:
-          calendars[deps.ownerEmail]?.errors !== undefined
-            ? 'unavailable — owner has not shared free/busy with the assistant'
-            : (calendars[deps.ownerEmail]?.busy ?? []),
-      };
+  register(
+    registry,
+    {
+      name: 'calendar.availability',
+      description:
+        "Check free/busy for the assistant's calendar and the owner's (if shared). Times are ISO 8601 with offset.",
+      inputSchema: z.object({
+        timeMin: z.string().datetime({ offset: true }),
+        timeMax: z.string().datetime({ offset: true }),
+      }),
+      risk: 'autonomous',
+      acceptsUntrustedInput: true,
+      cacheTtlSeconds: 300,
+      execute: async (args) => {
+        const res = await deps.client.api<{
+          calendars?: Record<
+            string,
+            { busy?: Array<{ start: string; end: string }>; errors?: unknown[] }
+          >;
+        }>(`${CAL}/freeBusy`, {
+          method: 'POST',
+          body: JSON.stringify({
+            timeMin: args.timeMin,
+            timeMax: args.timeMax,
+            items: [{ id: deps.botEmail }, { id: deps.ownerEmail }],
+          }),
+        });
+        const calendars = res.calendars ?? {};
+        return {
+          bot: calendars[deps.botEmail]?.busy ?? [],
+          owner:
+            calendars[deps.ownerEmail]?.errors !== undefined
+              ? 'unavailable — owner has not shared free/busy with the assistant'
+              : (calendars[deps.ownerEmail]?.busy ?? []),
+        };
+      },
     },
-  });
+    { confidentialRead: true, returnsUntrustedContent: true },
+  );
 
-  register(registry, {
-    name: 'calendar.list_events',
-    description: "List upcoming events on the assistant's own calendar.",
-    inputSchema: z.object({
-      timeMin: z.string().datetime({ offset: true }),
-      timeMax: z.string().datetime({ offset: true }),
-      maxResults: z.number().int().min(1).max(50).default(20),
-    }),
-    risk: 'autonomous',
-    acceptsUntrustedInput: true,
-    execute: async (args) => {
-      const url = `${CAL}/calendars/primary/events?timeMin=${encodeURIComponent(args.timeMin)}&timeMax=${encodeURIComponent(args.timeMax)}&maxResults=${args.maxResults}&singleEvents=true&orderBy=startTime`;
-      const res = await deps.client.api<{
-        items?: Array<{
-          id: string;
-          summary?: string;
-          start?: { dateTime?: string; date?: string };
-          end?: { dateTime?: string; date?: string };
-          attendees?: Array<{ email: string; responseStatus?: string }>;
-        }>;
-      }>(url);
-      return {
-        events: (res.items ?? []).map((e) => ({
-          eventId: e.id,
-          summary: e.summary ?? '',
-          start: e.start?.dateTime ?? e.start?.date ?? '',
-          end: e.end?.dateTime ?? e.end?.date ?? '',
-          attendees: (e.attendees ?? []).map((a) => `${a.email} (${a.responseStatus ?? '?'})`),
-        })),
-      };
+  register(
+    registry,
+    {
+      name: 'calendar.list_events',
+      description: "List upcoming events on the assistant's own calendar.",
+      inputSchema: z.object({
+        timeMin: z.string().datetime({ offset: true }),
+        timeMax: z.string().datetime({ offset: true }),
+        maxResults: z.number().int().min(1).max(50).default(20),
+      }),
+      risk: 'autonomous',
+      acceptsUntrustedInput: true,
+      execute: async (args) => {
+        const url = `${CAL}/calendars/primary/events?timeMin=${encodeURIComponent(args.timeMin)}&timeMax=${encodeURIComponent(args.timeMax)}&maxResults=${args.maxResults}&singleEvents=true&orderBy=startTime`;
+        const res = await deps.client.api<{
+          items?: Array<{
+            id: string;
+            summary?: string;
+            start?: { dateTime?: string; date?: string };
+            end?: { dateTime?: string; date?: string };
+            attendees?: Array<{ email: string; responseStatus?: string }>;
+          }>;
+        }>(url);
+        return {
+          events: (res.items ?? []).map((e) => ({
+            eventId: e.id,
+            summary: e.summary ?? '',
+            start: e.start?.dateTime ?? e.start?.date ?? '',
+            end: e.end?.dateTime ?? e.end?.date ?? '',
+            attendees: (e.attendees ?? []).map((a) => `${a.email} (${a.responseStatus ?? '?'})`),
+          })),
+        };
+      },
     },
-  });
+    { confidentialRead: true, returnsUntrustedContent: true },
+  );
 
   const createSchema = z.object({
     summary: z.string().min(1).max(200),

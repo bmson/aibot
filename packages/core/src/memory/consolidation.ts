@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { contacts, type Db, isTombstoned, memories, ownerCard } from '@assistant/db';
 import { and, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
 import type { ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import { MEMORY_DOMAINS } from './extraction.js';
@@ -103,7 +104,7 @@ export interface ConsolidationResult {
 }
 
 export async function runMemoryConsolidation(
-  deps: { db: Db; router: ModelRouter },
+  deps: { db: Db; router: ModelRouter; heartbeat?: () => Promise<void> },
   opts: { taskId?: string } = {},
 ): Promise<ConsolidationResult> {
   const { db, router } = deps;
@@ -135,6 +136,7 @@ export async function runMemoryConsolidation(
       .limit(MAX_ENTITIES_PER_RUN);
 
     for (const entity of entityRows) {
+      await deps.heartbeat?.();
       if (!entity.subjectContactId) continue;
       const facts: FactLite[] = await db
         .select({
@@ -185,7 +187,13 @@ export async function runMemoryConsolidation(
         ].join('\n'),
         prompt: listing,
       });
-      if (!outcome.ok) continue;
+      await deps.heartbeat?.();
+      if (!outcome.ok) {
+        throw new BudgetReservationError(
+          outcome.decision.reason,
+          outcome.decision.reason.includes('monthly') ? nextMonthlyReset() : nextDailyReset(),
+        );
+      }
 
       const expireLosers = async (group: string[], kind: 'duplicate' | 'contradiction') => {
         const members = group.map((id) => byId.get(id)).filter((f): f is FactLite => Boolean(f));
@@ -226,6 +234,7 @@ export async function runMemoryConsolidation(
         const contentHash = createHash('sha256').update(unified).digest('hex');
         if (await isTombstoned(db, contentHash)) continue;
         const [embedding] = await router.embed([unified]);
+        await deps.heartbeat?.();
         const [row] = await db
           .insert(memories)
           .values({
@@ -290,6 +299,7 @@ export async function runMemoryConsolidation(
         );
     }
 
+    await deps.heartbeat?.();
     await compileOwnerCard(db);
     result.cardCompiled = true;
     return result;

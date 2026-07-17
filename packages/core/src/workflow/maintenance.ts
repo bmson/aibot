@@ -1,5 +1,6 @@
 import { type Db, memories, messages, toolCache } from '@assistant/db';
-import { and, eq, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { releaseStaleReservations } from '../cost.js';
 import type { ModelRouter } from '../model-router/router.js';
 
 /**
@@ -37,14 +38,27 @@ export async function backfillMessageEmbeddings(
 }
 
 /** Purge expired tool-cache rows and expired memories. */
-export async function purgeExpired(db: Db): Promise<{ cache: number; memories: number }> {
-  const cacheRows = await db
-    .delete(toolCache)
+export async function purgeExpired(
+  db: Db,
+  batch = 500,
+): Promise<{ cache: number; memories: number; reservations: number }> {
+  const expiredCache = db
+    .select({ id: toolCache.cacheKey })
+    .from(toolCache)
     .where(lte(toolCache.expiresAt, sql`now()`))
-    .returning({ id: toolCache.cacheKey });
-  const memoryRows = await db
-    .delete(memories)
+    .limit(batch);
+  const expiredMemories = db
+    .select({ id: memories.id })
+    .from(memories)
     .where(and(isNotNull(memories.expiresAt), lte(memories.expiresAt, sql`now()`)))
-    .returning({ id: memories.id });
-  return { cache: cacheRows.length, memories: memoryRows.length };
+    .limit(batch);
+  const [cacheRows, memoryRows, reservations] = await Promise.all([
+    db
+      .delete(toolCache)
+      .where(inArray(toolCache.cacheKey, expiredCache))
+      .returning({ id: toolCache.cacheKey }),
+    db.delete(memories).where(inArray(memories.id, expiredMemories)).returning({ id: memories.id }),
+    releaseStaleReservations(db, 120, batch),
+  ]);
+  return { cache: cacheRows.length, memories: memoryRows.length, reservations };
 }

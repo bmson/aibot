@@ -29,11 +29,6 @@ OWNER_EMAIL="$(envval OWNER_EMAIL)"
 [ -n "$OPENROUTER_API_KEY" ] || { echo "OPENROUTER_API_KEY missing from .env"; exit 1; }
 
 # Stable generated secrets (persisted in .env on first run)
-INTERNAL_API_SECRET="$(envval PROD_INTERNAL_API_SECRET)"
-if [ -z "$INTERNAL_API_SECRET" ]; then
-  INTERNAL_API_SECRET="$(openssl rand -hex 32)"
-  printf '\nPROD_INTERNAL_API_SECRET=%s\n' "$INTERNAL_API_SECRET" >> .env
-fi
 AUTH_SECRET="$(envval PROD_AUTH_SECRET)"
 if [ -z "$AUTH_SECRET" ]; then
   AUTH_SECRET="$(openssl rand -base64 32)"
@@ -58,12 +53,56 @@ gcloud services enable run.googleapis.com cloudtasks.googleapis.com \
   artifactregistry.googleapis.com cloudbuild.googleapis.com --quiet
 
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
-RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+LEGACY_RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+WEB_SA="assistant-web@${PROJECT}.iam.gserviceaccount.com"
+AGENT_SA="assistant-agent@${PROJECT}.iam.gserviceaccount.com"
+BROWSER_SA="assistant-browser@${PROJECT}.iam.gserviceaccount.com"
+INTERNAL_INVOKER_SA="assistant-internal-invoker@${PROJECT}.iam.gserviceaccount.com"
+GMAIL_PUSH_SA="assistant-gmail-push@${PROJECT}.iam.gserviceaccount.com"
+CLOUD_TASKS_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
+SCHEDULER_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudscheduler.iam.gserviceaccount.com"
+PUBSUB_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-pubsub.iam.gserviceaccount.com"
 
-grant_bucket() {
-  gcloud storage buckets add-iam-policy-binding "gs://${PROJECT}-workspace" \
-    --member="serviceAccount:${RUNTIME_SA}" --role="roles/storage.objectAdmin" --quiet >/dev/null
+ensure_service_account() {
+  local id="$1" display_name="$2"
+  gcloud iam service-accounts describe "${id}@${PROJECT}.iam.gserviceaccount.com" >/dev/null 2>&1 ||
+    gcloud iam service-accounts create "$id" --display-name="$display_name" --quiet
 }
+
+grant_service_account_role() {
+  local target="$1" member="$2" role="$3"
+  gcloud iam service-accounts add-iam-policy-binding "$target" \
+    --member="serviceAccount:${member}" --role="$role" --quiet >/dev/null
+}
+
+grant_bucket_role() {
+  local bucket="$1" member="$2" role="$3"
+  gcloud storage buckets add-iam-policy-binding "gs://${bucket}" \
+    --member="serviceAccount:${member}" --role="$role" --quiet >/dev/null
+}
+
+echo "── service accounts"
+# Force creation of the Google-managed identities before binding them below.
+for managed_service in cloudtasks.googleapis.com cloudscheduler.googleapis.com pubsub.googleapis.com; do
+  gcloud beta services identity create --service="$managed_service" --project="$PROJECT" \
+    --quiet >/dev/null
+done
+ensure_service_account assistant-web "Assistant web runtime"
+ensure_service_account assistant-agent "Assistant agent runtime"
+ensure_service_account assistant-browser "Assistant sandboxed browser runtime"
+ensure_service_account assistant-internal-invoker "Assistant internal OIDC invoker"
+ensure_service_account assistant-gmail-push "Assistant Gmail Pub/Sub push identity"
+
+# Cloud Tasks callers may request only an ID token for the unprivileged internal
+# invoker identity. Google-managed service agents mint the actual signed tokens.
+grant_service_account_role "$INTERNAL_INVOKER_SA" "$WEB_SA" roles/iam.serviceAccountUser
+grant_service_account_role "$INTERNAL_INVOKER_SA" "$AGENT_SA" roles/iam.serviceAccountUser
+grant_service_account_role \
+  "$INTERNAL_INVOKER_SA" "$CLOUD_TASKS_SERVICE_AGENT" roles/iam.serviceAccountOpenIdTokenCreator
+grant_service_account_role \
+  "$INTERNAL_INVOKER_SA" "$SCHEDULER_SERVICE_AGENT" roles/iam.serviceAccountOpenIdTokenCreator
+grant_service_account_role \
+  "$GMAIL_PUSH_SA" "$PUBSUB_SERVICE_AGENT" roles/iam.serviceAccountOpenIdTokenCreator
 
 echo "── artifact registry"
 gcloud artifacts repositories describe "$REPO" --location="$REGION" >/dev/null 2>&1 ||
@@ -75,6 +114,24 @@ gcloud storage buckets describe "gs://${BUCKET}" >/dev/null 2>&1 ||
   gcloud storage buckets create "gs://${BUCKET}" --location="$REGION" \
     --uniform-bucket-level-access --quiet
 
+# Runtimes can access objects, not bucket IAM/configuration. The browser job
+# gets the same object-level access only because profiles live in this bucket.
+grant_bucket_role "$BUCKET" "$WEB_SA" roles/storage.objectUser
+grant_bucket_role "$BUCKET" "$AGENT_SA" roles/storage.objectUser
+# A compromised browser process can reach only its encrypted profile and
+# screenshots, never imports, memories, or other Workspace objects.
+gcloud storage buckets remove-iam-policy-binding "gs://${BUCKET}" \
+  --member="serviceAccount:${BROWSER_SA}" --role=roles/storage.objectUser --condition=None \
+  --quiet >/dev/null 2>&1 || true
+gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
+  --member="serviceAccount:${BROWSER_SA}" --role=roles/storage.objectUser \
+  --condition="expression=resource.name.startsWith(\"projects/_/buckets/${BUCKET}/objects/workspace/b-bot/browser/\"),title=browser-objects-only,description=Browser profile and screenshots only" \
+  --quiet >/dev/null
+# Remove the broad binding installed by older deploys that used the Compute SA.
+gcloud storage buckets remove-iam-policy-binding "gs://${BUCKET}" \
+  --member="serviceAccount:${LEGACY_RUNTIME_SA}" --role=roles/storage.objectAdmin \
+  --quiet >/dev/null 2>&1 || true
+
 echo "── traces bucket (30-day lifecycle)"
 TRACES_BUCKET="${PROJECT}-traces"
 if ! gcloud storage buckets describe "gs://${TRACES_BUCKET}" >/dev/null 2>&1; then
@@ -83,8 +140,16 @@ if ! gcloud storage buckets describe "gs://${TRACES_BUCKET}" >/dev/null 2>&1; th
   printf '{"rule":[{"action":{"type":"Delete"},"condition":{"age":30}}]}' > /tmp/traces-lifecycle.json
   gcloud storage buckets update "gs://${TRACES_BUCKET}" --lifecycle-file=/tmp/traces-lifecycle.json --quiet
 fi
+gcloud storage buckets remove-iam-policy-binding "gs://${TRACES_BUCKET}" \
+  --member="serviceAccount:${BROWSER_SA}" --role=roles/storage.objectCreator --condition=None \
+  --quiet >/dev/null 2>&1 || true
 gcloud storage buckets add-iam-policy-binding "gs://${TRACES_BUCKET}" \
-  --member="serviceAccount:${RUNTIME_SA}" --role="roles/storage.objectAdmin" --quiet >/dev/null
+  --member="serviceAccount:${BROWSER_SA}" --role=roles/storage.objectCreator \
+  --condition="expression=resource.name.startsWith(\"projects/_/buckets/${TRACES_BUCKET}/objects/b-bot/traces/\"),title=browser-traces-only,description=Browser trace uploads only" \
+  --quiet >/dev/null
+gcloud storage buckets remove-iam-policy-binding "gs://${TRACES_BUCKET}" \
+  --member="serviceAccount:${LEGACY_RUNTIME_SA}" --role=roles/storage.objectAdmin \
+  --quiet >/dev/null 2>&1 || true
 
 echo "── secrets"
 make_secret() {
@@ -95,18 +160,48 @@ make_secret() {
   else
     printf '%s' "$value" | gcloud secrets create "$name" --data-file=- --quiet >/dev/null
   fi
-  gcloud secrets add-iam-policy-binding "$name" \
-    --member="serviceAccount:${RUNTIME_SA}" --role="roles/secretmanager.secretAccessor" --quiet >/dev/null
 }
+
+grant_secret() {
+  local name="$1" member="$2"
+  gcloud secrets describe "$name" >/dev/null 2>&1 || return 0
+  gcloud secrets add-iam-policy-binding "$name" \
+    --member="serviceAccount:${member}" --role=roles/secretmanager.secretAccessor \
+    --quiet >/dev/null
+}
+
+revoke_legacy_secret_access() {
+  local name="$1"
+  gcloud secrets describe "$name" >/dev/null 2>&1 || return 0
+  gcloud secrets remove-iam-policy-binding "$name" \
+    --member="serviceAccount:${LEGACY_RUNTIME_SA}" --role=roles/secretmanager.secretAccessor \
+    --quiet >/dev/null 2>&1 || true
+}
+
 make_secret database-url "$PROD_DATABASE_URL"
 make_secret openrouter-api-key "$OPENROUTER_API_KEY"
 make_secret google-oauth-client-id "$GOOGLE_OAUTH_CLIENT_ID"
 make_secret google-oauth-client-secret "$GOOGLE_OAUTH_CLIENT_SECRET"
 make_secret bot-google-refresh-token "$BOT_GOOGLE_REFRESH_TOKEN"
-make_secret internal-api-secret "$INTERNAL_API_SECRET"
 make_secret auth-secret "$AUTH_SECRET"
 make_secret twilio-auth-token "$TWILIO_AUTH_TOKEN"
 make_secret profile-enc-key "$PROFILE_ENC_KEY"
+
+# Explicit per-runtime secret grants. In particular, the browser can read only
+# its profile key and never receives database, model, OAuth, or Twilio secrets.
+for secret in database-url openrouter-api-key google-oauth-client-id google-oauth-client-secret; do
+  grant_secret "$secret" "$AGENT_SA"
+done
+grant_secret bot-google-refresh-token "$AGENT_SA"
+grant_secret twilio-auth-token "$AGENT_SA"
+for secret in database-url openrouter-api-key google-oauth-client-id google-oauth-client-secret auth-secret; do
+  grant_secret "$secret" "$WEB_SA"
+done
+grant_secret profile-enc-key "$BROWSER_SA"
+for secret in database-url openrouter-api-key google-oauth-client-id google-oauth-client-secret \
+  bot-google-refresh-token internal-api-secret auth-secret twilio-auth-token profile-enc-key; do
+  revoke_legacy_secret_access "$secret"
+done
 
 echo "── building images (Cloud Build)"
 gcloud builds submit --config=infra/gcp/cloudbuild.yaml \
@@ -114,16 +209,16 @@ gcloud builds submit --config=infra/gcp/cloudbuild.yaml \
 
 echo "── deploying agent service"
 TWILIO_ENV=""
-AGENT_SECRETS="DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,GOOGLE_OAUTH_CLIENT_ID=google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,BOT_GOOGLE_REFRESH_TOKEN=bot-google-refresh-token:latest,INTERNAL_API_SECRET=internal-api-secret:latest"
+AGENT_SECRETS="DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,GOOGLE_OAUTH_CLIENT_ID=google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,BOT_GOOGLE_REFRESH_TOKEN=bot-google-refresh-token:latest"
 if [ -n "$TWILIO_ACCOUNT_SID" ] && [ -n "$TWILIO_AUTH_TOKEN" ]; then
   TWILIO_ENV=",TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID},TWILIO_FROM_NUMBER=${TWILIO_FROM_NUMBER},OWNER_PHONE=${OWNER_PHONE}"
   AGENT_SECRETS="${AGENT_SECRETS},TWILIO_AUTH_TOKEN=twilio-auth-token:latest"
 fi
 gcloud run deploy assistant-agent \
   --image "${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/agent:latest" \
-  --region "$REGION" --allow-unauthenticated \
-  --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3 --concurrency 20 --timeout 900 \
-  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=gcs,WORKSPACE_BUCKET=${PROJECT}-workspace,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},GMAIL_PUBSUB_TOPIC=projects/${PROJECT}/topics/${TOPIC},BROWSER_DRIVER=cloudrun,BROWSER_JOB_NAME=assistant-browser,TRACES_BUCKET=${TRACES_BUCKET},OTEL_EXPORTER=none${TWILIO_ENV}" \
+  --region "$REGION" --allow-unauthenticated --service-account "$AGENT_SA" \
+  --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3 --concurrency 4 --timeout 900 \
+  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=gcs,WORKSPACE_BUCKET=${PROJECT}-workspace,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},GMAIL_PUBSUB_TOPIC=projects/${PROJECT}/topics/${TOPIC},GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_SA},INTERNAL_AUTH_MODE=oidc,INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA},BROWSER_DRIVER=cloudrun,BROWSER_JOB_NAME=assistant-browser,TRACES_BUCKET=${TRACES_BUCKET},OTEL_EXPORTER=none${TWILIO_ENV}" \
   --set-secrets "$AGENT_SECRETS" \
   --quiet
 
@@ -132,29 +227,43 @@ echo "   agent: $AGENT_URL"
 
 # second pass: the service needs to know its own URL (Cloud Tasks callbacks, Pub/Sub aud)
 gcloud run services update assistant-agent --region "$REGION" \
-  --update-env-vars "AGENT_URL=${AGENT_URL},PUBLIC_URL=${AGENT_URL}" --quiet
-
-grant_bucket
+  --update-env-vars "AGENT_URL=${AGENT_URL},PUBLIC_URL=${AGENT_URL},INTERNAL_OIDC_AUDIENCE=${AGENT_URL}" --quiet
 
 echo "── browser job (Cloud Run Job — no DB creds)"
 BROWSER_IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/browser:latest"
 if gcloud run jobs describe assistant-browser --region "$REGION" >/dev/null 2>&1; then
   gcloud run jobs update assistant-browser --region "$REGION" \
-    --image "$BROWSER_IMAGE" --memory 2Gi --cpu 2 --task-timeout 900 --max-retries 0 \
+    --image "$BROWSER_IMAGE" --service-account "$BROWSER_SA" \
+    --memory 2Gi --cpu 2 --task-timeout 900 --max-retries 0 \
     --set-secrets "PROFILE_ENC_KEY=profile-enc-key:latest" --quiet
 else
   gcloud run jobs create assistant-browser --region "$REGION" \
-    --image "$BROWSER_IMAGE" --memory 2Gi --cpu 2 --task-timeout 900 --max-retries 0 \
+    --image "$BROWSER_IMAGE" --service-account "$BROWSER_SA" \
+    --memory 2Gi --cpu 2 --task-timeout 900 --max-retries 0 \
     --set-secrets "PROFILE_ENC_KEY=profile-enc-key:latest" --quiet
 fi
 # the agent service launches executions with per-run env overrides
 gcloud run jobs add-iam-policy-binding assistant-browser --region "$REGION" \
-  --member="serviceAccount:${RUNTIME_SA}" --role="roles/run.jobsExecutorWithOverrides" --quiet >/dev/null
+  --member="serviceAccount:${AGENT_SA}" --role="roles/run.jobsExecutorWithOverrides" --quiet >/dev/null
+gcloud run jobs remove-iam-policy-binding assistant-browser --region "$REGION" \
+  --member="serviceAccount:${LEGACY_RUNTIME_SA}" --role="roles/run.jobsExecutorWithOverrides" \
+  --quiet >/dev/null 2>&1 || true
 
 echo "── cloud tasks queue"
-gcloud tasks queues describe "$QUEUE" --location="$REGION" >/dev/null 2>&1 ||
+if gcloud tasks queues describe "$QUEUE" --location="$REGION" >/dev/null 2>&1; then
+  gcloud tasks queues update "$QUEUE" --location="$REGION" \
+    --max-dispatches-per-second=5 --max-concurrent-dispatches=8 \
+    --max-attempts=8 --min-backoff=10s --quiet
+else
   gcloud tasks queues create "$QUEUE" --location="$REGION" \
-    --max-dispatches-per-second=5 --max-attempts=8 --min-backoff=10s --quiet
+    --max-dispatches-per-second=5 --max-concurrent-dispatches=8 \
+    --max-attempts=8 --min-backoff=10s --quiet
+fi
+for runtime_sa in "$WEB_SA" "$AGENT_SA"; do
+  gcloud tasks queues add-iam-policy-binding "$QUEUE" --location="$REGION" \
+    --member="serviceAccount:${runtime_sa}" --role=roles/cloudtasks.enqueuer \
+    --quiet >/dev/null
+done
 
 echo "── scheduler jobs"
 make_job() {
@@ -162,14 +271,17 @@ make_job() {
   if gcloud scheduler jobs describe "$name" --location="$REGION" >/dev/null 2>&1; then
     gcloud scheduler jobs update http "$name" --location="$REGION" --schedule="$schedule" \
       --uri="${AGENT_URL}${path}" --http-method=POST \
-      --update-headers "Authorization=Bearer ${INTERNAL_API_SECRET}" --quiet
+      --clear-headers --oidc-service-account-email="$INTERNAL_INVOKER_SA" \
+      --oidc-token-audience="${AGENT_URL}${path}" --quiet
   else
     gcloud scheduler jobs create http "$name" --location="$REGION" --schedule="$schedule" \
       --uri="${AGENT_URL}${path}" --http-method=POST \
-      --headers "Authorization=Bearer ${INTERNAL_API_SECRET}" --quiet
+      --oidc-service-account-email="$INTERNAL_INVOKER_SA" \
+      --oidc-token-audience="${AGENT_URL}${path}" --quiet
   fi
 }
 make_job assistant-sweep "* * * * *" "/internal/sweep"
+make_job assistant-gmail-sync "* * * * *" "/internal/gmail/sync"
 make_job assistant-gmail-watch "0 4 * * *" "/internal/gmail/watch"
 
 echo "── pub/sub (gmail push)"
@@ -178,20 +290,27 @@ gcloud pubsub topics describe "$TOPIC" >/dev/null 2>&1 ||
 gcloud pubsub topics add-iam-policy-binding "$TOPIC" \
   --member="serviceAccount:gmail-api-push@system.gserviceaccount.com" \
   --role="roles/pubsub.publisher" --quiet >/dev/null
-if ! gcloud pubsub subscriptions describe gmail-events-push >/dev/null 2>&1; then
+if gcloud pubsub subscriptions describe gmail-events-push >/dev/null 2>&1; then
+  gcloud pubsub subscriptions update gmail-events-push \
+    --push-endpoint="${AGENT_URL}/webhooks/gmail/pubsub" \
+    --push-auth-service-account="$GMAIL_PUSH_SA" \
+    --push-auth-token-audience="${AGENT_URL}/webhooks/gmail/pubsub" \
+    --ack-deadline=600 --quiet
+else
   gcloud pubsub subscriptions create gmail-events-push --topic="$TOPIC" \
     --push-endpoint="${AGENT_URL}/webhooks/gmail/pubsub" \
-    --push-auth-service-account="$RUNTIME_SA" \
-    --push-auth-token-audience="${AGENT_URL}/webhooks/gmail/pubsub" --quiet
+    --push-auth-service-account="$GMAIL_PUSH_SA" \
+    --push-auth-token-audience="${AGENT_URL}/webhooks/gmail/pubsub" \
+    --ack-deadline=600 --quiet
 fi
 
 echo "── deploying web service"
 gcloud run deploy assistant-web \
   --image "${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/web:latest" \
-  --region "$REGION" --allow-unauthenticated \
+  --region "$REGION" --allow-unauthenticated --service-account "$WEB_SA" \
   --memory 512Mi --cpu 1 --min-instances 0 --max-instances 2 --timeout 300 \
-  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=gcs,WORKSPACE_BUCKET=${PROJECT}-workspace,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},AUTH_TRUST_HOST=true,OTEL_EXPORTER=none" \
-  --set-secrets "DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,AUTH_SECRET=auth-secret:latest,AUTH_GOOGLE_ID=google-oauth-client-id:latest,AUTH_GOOGLE_SECRET=google-oauth-client-secret:latest,INTERNAL_API_SECRET=internal-api-secret:latest" \
+  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=gcs,WORKSPACE_BUCKET=${PROJECT}-workspace,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},AUTH_TRUST_HOST=true,AUTH_DEV_BYPASS=false,INTERNAL_AUTH_MODE=oidc,INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA},OTEL_EXPORTER=none" \
+  --set-secrets "DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,AUTH_SECRET=auth-secret:latest,AUTH_GOOGLE_ID=google-oauth-client-id:latest,AUTH_GOOGLE_SECRET=google-oauth-client-secret:latest" \
   --quiet
 
 WEB_URL="$(gcloud run services describe assistant-web --region "$REGION" --format='value(status.url)')"
@@ -202,7 +321,7 @@ if [ -n "$WEB_DOMAIN" ]; then
     gcloud beta run domain-mappings create --service assistant-web --domain "$WEB_DOMAIN" --region "$REGION" --quiet
 fi
 gcloud run services update assistant-web --region "$REGION" \
-  --update-env-vars "AGENT_URL=${AGENT_URL},PUBLIC_URL=${AGENT_URL},AUTH_URL=${AUTH_URL}" --quiet
+  --update-env-vars "AGENT_URL=${AGENT_URL},PUBLIC_URL=${AGENT_URL},INTERNAL_OIDC_AUDIENCE=${AGENT_URL},AUTH_URL=${AUTH_URL}" --quiet
 
 echo ""
 echo "══════════════════════════════════════════════════════"
@@ -214,8 +333,8 @@ echo " 1. Add OAuth redirect URI in the Google console:"
 echo "    ${AUTH_URL}/api/auth/callback/google"
 echo " 1b. DNS for the custom domain (wherever bmson.com DNS is managed):"
 echo "    bot  CNAME  ghs.googlehosted.com."
-echo " 2. Kick the Gmail watch:"
-echo "    curl -X POST ${AGENT_URL}/internal/gmail/watch -H 'Authorization: Bearer <PROD_INTERNAL_API_SECRET from .env>'"
+echo " 2. Kick the Gmail watch (uses the Scheduler OIDC identity):"
+echo "    gcloud scheduler jobs run assistant-gmail-watch --location=${REGION}"
 echo " 3. Point the Twilio number's webhook at:"
 echo "    ${AGENT_URL}/webhooks/twilio/sms"
 echo "══════════════════════════════════════════════════════"

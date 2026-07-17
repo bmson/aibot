@@ -1,13 +1,17 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { LocalWorkspaceStore, safeRelPath } from './workspace-store.js';
 
 const root = mkdtempSync(path.join(tmpdir(), 'ws-test-'));
+const outside = mkdtempSync(path.join(tmpdir(), 'ws-outside-test-'));
 const store = new LocalWorkspaceStore(root);
 
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+afterAll(() => {
+  rmSync(root, { recursive: true, force: true });
+  rmSync(outside, { recursive: true, force: true });
+});
 
 describe('safeRelPath', () => {
   it('normalizes and accepts nested paths', () => {
@@ -36,5 +40,12 @@ describe('LocalWorkspaceStore', () => {
 
   it('read of a missing file throws', async () => {
     await expect(store.read('nope.txt')).rejects.toThrow();
+  });
+
+  it('blocks reads and writes through a symlink that escapes the root', async () => {
+    writeFileSync(path.join(outside, 'secret.txt'), 'outside');
+    symlinkSync(outside, path.join(root, 'escape'), 'dir');
+    await expect(store.read('escape/secret.txt')).rejects.toThrow(/outside/);
+    await expect(store.write('escape/new.txt', 'nope')).rejects.toThrow(/outside/);
   });
 });

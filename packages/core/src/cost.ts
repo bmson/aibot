@@ -10,7 +10,22 @@ import {
   tasks,
   toolCache,
 } from '@assistant/db';
-import { and, eq, gte, sql, sum } from 'drizzle-orm';
+import { and, eq, gte, inArray, sql, sum } from 'drizzle-orm';
+
+/**
+ * A billable operation could not reserve enough budget to start safely.
+ * Callers that own a workflow should park it until `resumeAt`; request/maintenance
+ * callers may surface the error or retry after the reset.
+ */
+export class BudgetReservationError extends Error {
+  constructor(
+    message: string,
+    public readonly resumeAt: Date,
+  ) {
+    super(message);
+    this.name = 'BudgetReservationError';
+  }
+}
 
 /**
  * Total cost governance (Phase 27): one ledger for every billable event, and
@@ -29,7 +44,8 @@ import { and, eq, gte, sql, sum } from 'drizzle-orm';
 export const LEDGER_WIRING: Record<SpendSource, string> = {
   model: 'ModelRouter.meter() — every model call, cost from OpenRouter usage.cost',
   embedding: 'ModelRouter.meter() — embed role, tokens × rate_table embedding_mtok',
-  twilio_sms: 'sms.send tool execute — one event per delivered message',
+  twilio_sms:
+    'ToolDispatcher exact-cost reservation for sms.send; SMS channel delivery reservations for replies/approval notices',
   twilio_voice_min: 'reserved for Phase 9 voice calls (rate seeded, no caller yet)',
   cloud_run_job_sec:
     'ToolDispatcher reservation on browser.execute launch; executor reconciles at job settle',
@@ -71,7 +87,17 @@ export interface CostEventInput {
   addToTaskSpend?: boolean;
 }
 
-export async function recordCostEvent(db: Db, input: CostEventInput): Promise<void> {
+/**
+ * Every mutation that moves money into or out of the held/spent totals takes
+ * this transaction-scoped lock. Without it, a reservation check could read
+ * spend before a reconciliation commits and held reservations afterward,
+ * briefly counting the same provider call as neither held nor spent.
+ */
+async function lockCostLedger(db: Db): Promise<void> {
+  await db.execute(sql`select pg_advisory_xact_lock(hashtext('assistant:cost-reservations'))`);
+}
+
+async function writeCostEvent(db: Db, input: CostEventInput): Promise<void> {
   await db.insert(costEvents).values({
     source: input.source,
     taskId: input.taskId ?? undefined,
@@ -91,6 +117,14 @@ export async function recordCostEvent(db: Db, input: CostEventInput): Promise<vo
   }
 }
 
+/** Write the global ledger and per-task counter as one atomic operation. */
+export async function recordCostEvent(db: Db, input: CostEventInput): Promise<void> {
+  await db.transaction(async (tx) => {
+    await lockCostLedger(tx as unknown as Db);
+    await writeCostEvent(tx as unknown as Db, input);
+  });
+}
+
 export interface CostTotals {
   dailySpentUsd: number;
   monthlySpentUsd: number;
@@ -103,22 +137,23 @@ export interface CostTotals {
 
 /** Spend + holds vs caps — the shared snapshot for the router guard, reservations, and the dashboard. */
 export async function costTotals(db: Db): Promise<CostTotals> {
-  const limits = await db.select().from(budgets);
+  const [limits, [daily], [monthly], [held]] = await Promise.all([
+    db.select().from(budgets),
+    db
+      .select({ total: sum(costEvents.usd) })
+      .from(costEvents)
+      .where(gte(costEvents.createdAt, sql`date_trunc('day', now())`)),
+    db
+      .select({ total: sum(costEvents.usd) })
+      .from(costEvents)
+      .where(gte(costEvents.createdAt, sql`date_trunc('month', now())`)),
+    db
+      .select({ total: sum(costReservations.estimatedUsd) })
+      .from(costReservations)
+      .where(eq(costReservations.status, 'held')),
+  ]);
   const limitFor = (scope: string) =>
     Number(limits.find((b) => b.scope === scope)?.limitUsd ?? Number.POSITIVE_INFINITY);
-
-  const [daily] = await db
-    .select({ total: sum(costEvents.usd) })
-    .from(costEvents)
-    .where(gte(costEvents.createdAt, sql`date_trunc('day', now())`));
-  const [monthly] = await db
-    .select({ total: sum(costEvents.usd) })
-    .from(costEvents)
-    .where(gte(costEvents.createdAt, sql`date_trunc('month', now())`));
-  const [held] = await db
-    .select({ total: sum(costReservations.estimatedUsd) })
-    .from(costReservations)
-    .where(eq(costReservations.status, 'held'));
 
   return {
     dailySpentUsd: Number(daily?.total ?? 0),
@@ -158,50 +193,74 @@ export async function reserveCost(
     estimatedUsd: number;
     taskId?: string;
     description?: string;
+    /** Owner reply model calls may use the bounded 10% global carve-out. */
+    critical?: boolean;
   },
 ): Promise<ReserveOutcome> {
-  const totals = await costTotals(db);
-  const committed = totals.heldUsd + input.estimatedUsd;
+  if (!Number.isFinite(input.estimatedUsd) || input.estimatedUsd <= 0) {
+    throw new Error('cost reservation estimate must be a positive finite number');
+  }
 
-  if (totals.monthlySpentUsd + committed > totals.monthlyLimitUsd) {
-    return {
-      ok: false,
-      reason: `monthly budget cannot cover this (spent $${totals.monthlySpentUsd.toFixed(2)} + held $${totals.heldUsd.toFixed(2)} + est $${input.estimatedUsd.toFixed(2)} > cap $${totals.monthlyLimitUsd.toFixed(2)})`,
-      resumeAt: nextMonthlyReset(),
-    };
-  }
-  if (totals.dailySpentUsd + committed > totals.dailyLimitUsd) {
-    return {
-      ok: false,
-      reason: `daily budget cannot cover this (spent $${totals.dailySpentUsd.toFixed(2)} + held $${totals.heldUsd.toFixed(2)} + est $${input.estimatedUsd.toFixed(2)} > cap $${totals.dailyLimitUsd.toFixed(2)})`,
-      resumeAt: nextDailyReset(),
-    };
-  }
-  if (input.taskId) {
-    const [task] = await db
-      .select({ limit: tasks.budgetUsdLimit, spent: tasks.spentUsd })
-      .from(tasks)
-      .where(eq(tasks.id, input.taskId));
-    if (task && Number(task.spent) + input.estimatedUsd > Number(task.limit)) {
+  // All reservations share one transaction-scoped advisory lock. This turns
+  // the previous check-then-insert race into a serializable budget decision
+  // without holding row locks across provider/network calls.
+  return db.transaction(async (tx) => {
+    await lockCostLedger(tx as unknown as Db);
+    const totals = await costTotals(tx as unknown as Db);
+    const committed = totals.heldUsd + input.estimatedUsd;
+    const globalLimitFactor = input.critical ? 1.1 : 1;
+    const monthlyCeiling = totals.monthlyLimitUsd * globalLimitFactor;
+    const dailyCeiling = totals.dailyLimitUsd * globalLimitFactor;
+
+    if (totals.monthlySpentUsd + committed > monthlyCeiling) {
       return {
         ok: false,
-        reason: `task budget cannot cover this (spent $${Number(task.spent).toFixed(4)} + est $${input.estimatedUsd.toFixed(4)} > cap $${Number(task.limit).toFixed(4)})`,
-        resumeAt: nextDailyReset(),
-      };
+        reason: `monthly budget cannot cover this (spent $${totals.monthlySpentUsd.toFixed(2)} + held $${totals.heldUsd.toFixed(2)} + est $${input.estimatedUsd.toFixed(2)} > cap $${monthlyCeiling.toFixed(2)}${input.critical ? ' including owner-reply carve-out' : ''})`,
+        resumeAt: nextMonthlyReset(),
+      } as const;
     }
-  }
+    if (totals.dailySpentUsd + committed > dailyCeiling) {
+      return {
+        ok: false,
+        reason: `daily budget cannot cover this (spent $${totals.dailySpentUsd.toFixed(2)} + held $${totals.heldUsd.toFixed(2)} + est $${input.estimatedUsd.toFixed(2)} > cap $${dailyCeiling.toFixed(2)}${input.critical ? ' including owner-reply carve-out' : ''})`,
+        resumeAt: nextDailyReset(),
+      } as const;
+    }
+    if (input.taskId) {
+      const [[task], [taskHeld]] = await Promise.all([
+        tx
+          .select({ limit: tasks.budgetUsdLimit, spent: tasks.spentUsd })
+          .from(tasks)
+          .where(eq(tasks.id, input.taskId)),
+        tx
+          .select({ total: sum(costReservations.estimatedUsd) })
+          .from(costReservations)
+          .where(
+            and(eq(costReservations.taskId, input.taskId), eq(costReservations.status, 'held')),
+          ),
+      ]);
+      const heldForTask = Number(taskHeld?.total ?? 0);
+      if (task && Number(task.spent) + heldForTask + input.estimatedUsd > Number(task.limit)) {
+        return {
+          ok: false,
+          reason: `task budget cannot cover this (spent $${Number(task.spent).toFixed(4)} + held $${heldForTask.toFixed(4)} + est $${input.estimatedUsd.toFixed(4)} > cap $${Number(task.limit).toFixed(4)})`,
+          resumeAt: nextDailyReset(),
+        } as const;
+      }
+    }
 
-  const [row] = await db
-    .insert(costReservations)
-    .values({
-      taskId: input.taskId,
-      source: input.source,
-      estimatedUsd: input.estimatedUsd.toFixed(6),
-      description: input.description ?? '',
-    })
-    .returning({ id: costReservations.id });
-  if (!row) throw new Error('reservation insert failed');
-  return { ok: true, reservationId: row.id };
+    const [row] = await tx
+      .insert(costReservations)
+      .values({
+        taskId: input.taskId,
+        source: input.source,
+        estimatedUsd: input.estimatedUsd.toFixed(6),
+        description: input.description ?? '',
+      })
+      .returning({ id: costReservations.id });
+    if (!row) throw new Error('reservation insert failed');
+    return { ok: true, reservationId: row.id } as const;
+  });
 }
 
 /** Reconcile a held reservation to actuals: release the hold, write the ledger row. */
@@ -217,40 +276,76 @@ export async function reconcileReservation(
     description?: string;
   },
 ): Promise<void> {
-  const [reservation] = await db
-    .select()
-    .from(costReservations)
-    .where(and(eq(costReservations.id, reservationId), eq(costReservations.status, 'held')));
-  if (!reservation) return; // already reconciled/released (crash-retry safe)
+  await db.transaction(async (tx) => {
+    await lockCostLedger(tx as unknown as Db);
+    const [reservation] = await tx
+      .update(costReservations)
+      .set({
+        status: 'reconciled',
+        actualUsd: actual.usd.toFixed(6),
+        reconciledAt: sql`now()`,
+      })
+      .where(and(eq(costReservations.id, reservationId), eq(costReservations.status, 'held')))
+      .returning();
+    if (!reservation) return; // another reconciler/releaser already won
 
-  await db
-    .update(costReservations)
-    .set({
-      status: 'reconciled',
-      actualUsd: actual.usd.toFixed(6),
-      reconciledAt: sql`now()`,
-    })
-    .where(eq(costReservations.id, reservationId));
-  await recordCostEvent(db, {
-    source: reservation.source as SpendSource,
-    usd: actual.usd,
-    taskId: reservation.taskId,
-    toolCallId: actual.toolCallId,
-    quantity: actual.quantity,
-    unit: actual.unit,
-    unitPriceUsd: actual.unitPriceUsd,
-    description: actual.description ?? reservation.description,
-    reservationId,
-    addToTaskSpend: true,
+    await writeCostEvent(tx as unknown as Db, {
+      source: reservation.source as SpendSource,
+      usd: actual.usd,
+      taskId: reservation.taskId,
+      toolCallId: actual.toolCallId,
+      quantity: actual.quantity,
+      unit: actual.unit,
+      unitPriceUsd: actual.unitPriceUsd,
+      description: actual.description ?? reservation.description,
+      reservationId,
+      addToTaskSpend: true,
+    });
   });
 }
 
 /** Drop a hold without a ledger entry (the action never ran). */
 export async function releaseReservation(db: Db, reservationId: string): Promise<void> {
-  await db
-    .update(costReservations)
-    .set({ status: 'released', reconciledAt: sql`now()` })
-    .where(and(eq(costReservations.id, reservationId), eq(costReservations.status, 'held')));
+  await db.transaction(async (tx) => {
+    await lockCostLedger(tx as unknown as Db);
+    await tx
+      .update(costReservations)
+      .set({ status: 'released', reconciledAt: sql`now()` })
+      .where(and(eq(costReservations.id, reservationId), eq(costReservations.status, 'held')));
+  });
+}
+
+/**
+ * Crash backstop for reservations whose process disappeared before it could
+ * reconcile/release them. The normal browser/model deadlines are <=15 minutes;
+ * two hours leaves ample room for provider callbacks without letting one dead
+ * hold disable the assistant indefinitely.
+ */
+export async function releaseStaleReservations(
+  db: Db,
+  olderThanMinutes = 120,
+  batch = 500,
+): Promise<number> {
+  return db.transaction(async (tx) => {
+    await lockCostLedger(tx as unknown as Db);
+    const stale = tx
+      .select({ id: costReservations.id })
+      .from(costReservations)
+      .where(
+        and(
+          eq(costReservations.status, 'held'),
+          sql`${costReservations.createdAt} < now() - (${olderThanMinutes} * interval '1 minute')`,
+        ),
+      )
+      .orderBy(costReservations.createdAt)
+      .limit(batch);
+    const released = await tx
+      .update(costReservations)
+      .set({ status: 'released', reconciledAt: sql`now()` })
+      .where(inArray(costReservations.id, stale))
+      .returning({ id: costReservations.id });
+    return released.length;
+  });
 }
 
 // ── Threshold notifications (sweep hook) ─────────────────────────────────────

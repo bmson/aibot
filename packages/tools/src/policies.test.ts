@@ -5,6 +5,18 @@ import type { ToolContext } from './types.js';
 const ctx = { trust: 'owner' } as ToolContext;
 
 describe('policy templates', () => {
+  it('sms.reply_to_owner: owner task and exact configured destination only', () => {
+    const t = policyTemplates['sms.reply_to_owner'] as NonNullable<
+      (typeof policyTemplates)[string]
+    >;
+    const owner = { phone: '+14155550100' };
+
+    expect(t(owner, { to: '+14155550100' }, ctx)).toBe(true);
+    expect(t(owner, { to: '+14155550199' }, ctx)).toBe(false);
+    expect(t({}, { to: '+14155550100' }, ctx)).toBe(false);
+    expect(t(owner, { to: '+14155550100' }, { ...ctx, trust: 'unknown' })).toBe(false);
+  });
+
   it('calendar.self_only_events: no attendees only', () => {
     const t = policyTemplates['calendar.self_only_events'] as NonNullable<
       (typeof policyTemplates)[string]

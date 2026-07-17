@@ -23,6 +23,9 @@ const DOMAIN_ORDER = [
 ] as const;
 
 const countBadge = countBadgeClass;
+const PROFILE_CONTACT_LIMIT = 500;
+const PROFILE_FACT_LIMIT = 1_000;
+const QUARANTINE_LIMIT = 100;
 
 function toFactView(m: MemoryRow, now: Date, inCard = false): FactView {
   const from = m.validFrom?.toISOString().slice(0, 10);
@@ -56,12 +59,13 @@ export default async function ProfilePage() {
   );
 
   const [allContacts, activeFacts, quarantined, [card]] = await Promise.all([
-    db.select().from(contacts).orderBy(contacts.name),
+    db.select().from(contacts).orderBy(contacts.name).limit(PROFILE_CONTACT_LIMIT),
     db
       .select()
       .from(memories)
       .where(and(active, sql`${memories.subjectContactId} IS NOT NULL`))
-      .orderBy(desc(memories.pinned), desc(memories.importance), desc(memories.confidence)),
+      .orderBy(desc(memories.pinned), desc(memories.importance), desc(memories.confidence))
+      .limit(PROFILE_FACT_LIMIT),
     db
       .select()
       .from(memories)
@@ -71,17 +75,25 @@ export default async function ProfilePage() {
           or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
         ),
       )
-      .orderBy(desc(memories.createdAt)),
+      .orderBy(desc(memories.createdAt))
+      .limit(QUARANTINE_LIMIT),
     db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
   ]);
 
+  const factsByContact = new Map<string, MemoryRow[]>();
+  for (const fact of activeFacts) {
+    if (!fact.subjectContactId) continue;
+    const group = factsByContact.get(fact.subjectContactId) ?? [];
+    group.push(fact);
+    factsByContact.set(fact.subjectContactId, group);
+  }
   const owner = allContacts.find((c) => c.trust === 'owner');
-  const ownerFacts = activeFacts.filter((m) => m.subjectContactId === owner?.id);
+  const ownerFacts = owner ? (factsByContact.get(owner.id) ?? []) : [];
   const people: Array<{ contact: ContactRow; facts: MemoryRow[] }> = allContacts
     .filter((c) => c.trust !== 'owner')
     .map((contact) => ({
       contact,
-      facts: activeFacts.filter((m) => m.subjectContactId === contact.id),
+      facts: factsByContact.get(contact.id) ?? [],
     }))
     .filter((p) => p.facts.length > 0 || p.contact.relationship);
 

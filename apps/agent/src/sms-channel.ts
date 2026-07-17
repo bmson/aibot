@@ -1,6 +1,16 @@
-import { enqueueTask, getAgent, persistMessage, resolveApproval } from '@assistant/core';
-import { channelBindings, conversations } from '@assistant/db';
-import { parseApprovalReply } from '@assistant/tools';
+import {
+  BudgetReservationError,
+  enqueueTask,
+  getAgent,
+  getRate,
+  persistMessage,
+  reconcileReservation,
+  releaseReservation,
+  reserveCost,
+  resolveApproval,
+} from '@assistant/core';
+import { channelBindings, conversations, type TaskRow } from '@assistant/db';
+import { isAmbiguousTwilioDeliveryError, parseApprovalReply } from '@assistant/tools';
 import { and, eq } from 'drizzle-orm';
 import type { AgentDeps } from './deps.js';
 
@@ -15,6 +25,57 @@ export type SmsHandled =
   | { kind: 'approval'; resolved: boolean; shortCode: string; decision: string }
   | { kind: 'task'; taskId: string; created: boolean }
   | { kind: 'ignored'; reason: string };
+
+async function sendMeteredSms(
+  deps: AgentDeps,
+  input: {
+    to: string;
+    text: string;
+    taskId?: string;
+    description: string;
+    critical?: boolean;
+  },
+): Promise<void> {
+  const rate = await getRate(deps.db, 'twilio_sms');
+  const reservation = await reserveCost(deps.db, {
+    source: 'twilio_sms',
+    estimatedUsd: rate.unitPriceUsd,
+    taskId: input.taskId,
+    description: input.description,
+    critical: input.critical,
+  });
+  if (!reservation.ok) {
+    throw new BudgetReservationError(reservation.reason, reservation.resumeAt);
+  }
+  const reconcileAttempt = () =>
+    reconcileReservation(deps.db, reservation.reservationId, {
+      usd: rate.unitPriceUsd,
+      quantity: 1,
+      unit: rate.unit,
+      unitPriceUsd: rate.unitPriceUsd,
+      description: input.description,
+    });
+  try {
+    await deps.twilio.send(input.to, input.text);
+  } catch (error) {
+    if (isAmbiguousTwilioDeliveryError(error)) {
+      // The provider may already have accepted and billed this message. Count
+      // the attempt, then treat it as delivered so the durable final-response
+      // retry loop cannot send a duplicate merely because the response was lost.
+      await reconcileAttempt().catch((reconcileError) =>
+        console.error('ambiguous SMS cost reconciliation failed', reconcileError),
+      );
+      console.error('SMS delivery outcome is unknown; automatic retry suppressed', error);
+      return;
+    }
+    await releaseReservation(deps.db, reservation.reservationId).catch(() => {});
+    throw error;
+  }
+
+  // The provider side effect already happened. Never throw from metering and
+  // cause a duplicate SMS; keep the hold conservative if reconciliation fails.
+  await reconcileAttempt().catch((error) => console.error('SMS cost reconciliation failed', error));
+}
 
 async function conversationForPeer(
   deps: AgentDeps,
@@ -45,12 +106,17 @@ async function conversationForPeer(
  * workflow. Idempotent on MessageSid.
  */
 export async function handleInboundSms(deps: AgentDeps, sms: InboundSms): Promise<SmsHandled> {
-  const agent = await getAgent(deps.db);
   const isOwner = sms.from === deps.config.OWNER_PHONE;
+
+  // SMS is a private owner channel, not a public chatbot. Fail closed before
+  // touching the database so an unpaired number cannot create a conversation,
+  // enqueue model work, or obtain an automated response.
+  if (!isOwner) return { kind: 'ignored', reason: 'sms sender is not paired owner' };
+
+  const agent = await getAgent(deps.db);
 
   const approvalReply = parseApprovalReply(sms.body);
   if (approvalReply) {
-    if (!isOwner) return { kind: 'ignored', reason: 'approval reply from non-owner' };
     const result = await resolveApproval(deps.db, {
       shortCode: approvalReply.shortCode,
       decision: approvalReply.decision,
@@ -64,12 +130,12 @@ export async function handleInboundSms(deps: AgentDeps, sms: InboundSms): Promis
     };
   }
 
-  const trust = isOwner ? ('owner' as const) : ('unknown' as const);
+  const trust = 'owner' as const;
   const conversationId = await conversationForPeer(deps, agent.id, sms.from, trust);
   await persistMessage(deps.db, {
     conversationId,
     role: 'user',
-    origin: isOwner ? 'owner' : 'unknown',
+    origin: 'owner',
     parts: [{ type: 'text', text: sms.body }],
     text: sms.body,
     channelMessageId: `sms:${sms.messageSid}`,
@@ -92,15 +158,15 @@ export async function handleInboundSms(deps: AgentDeps, sms: InboundSms): Promis
 /** Executor hook: deliver a finished sms_turn's final text back to the peer. */
 export async function deliverSmsFinal(
   deps: AgentDeps,
-  task: { id: string; conversationId: string | null },
+  task: Pick<TaskRow, 'id' | 'conversationId' | 'trust'>,
   text: string,
 ): Promise<void> {
-  if (!task.conversationId || !deps.twilio.configured()) return;
+  if (task.trust !== 'owner' || !task.conversationId || !deps.twilio.configured()) return;
   const [conversation] = await deps.db
     .select()
     .from(conversations)
     .where(eq(conversations.id, task.conversationId));
-  if (conversation?.channel !== 'sms') return;
+  if (conversation?.channel !== 'sms' || conversation.trust !== 'owner') return;
   const [binding] = await deps.db
     .select()
     .from(channelBindings)
@@ -110,20 +176,28 @@ export async function deliverSmsFinal(
         eq(channelBindings.channel, 'sms'),
       ),
     );
-  if (!binding) return;
-  await deps.twilio.send(binding.externalId, text.slice(0, 1500));
+  if (!binding || binding.externalId !== deps.config.OWNER_PHONE) return;
+  await sendMeteredSms(deps, {
+    to: binding.externalId,
+    text: text.slice(0, 1500),
+    taskId: task.id,
+    description: 'owner SMS task reply',
+    critical: true,
+  });
 }
 
 /** Executor hook: SMS the owner when approvals park a task. */
 export async function notifyApprovalsBySms(
   deps: AgentDeps,
-  approvals: Array<{ shortCode: string; summary: string }>,
+  approvals: Array<{ taskId: string; shortCode: string; summary: string }>,
 ): Promise<void> {
   if (!deps.twilio.configured() || !deps.config.OWNER_PHONE) return;
   for (const approval of approvals) {
-    await deps.twilio.send(
-      deps.config.OWNER_PHONE,
-      `Approval ${approval.shortCode} — ${approval.summary.slice(0, 120)}. Reply YES ${approval.shortCode} or NO ${approval.shortCode} (or use the dashboard).`,
-    );
+    await sendMeteredSms(deps, {
+      to: deps.config.OWNER_PHONE,
+      text: `Approval ${approval.shortCode} — ${approval.summary.slice(0, 120)}. Reply YES ${approval.shortCode} or NO ${approval.shortCode} (or use the dashboard).`,
+      taskId: approval.taskId,
+      description: `approval notification ${approval.shortCode}`,
+    });
   }
 }

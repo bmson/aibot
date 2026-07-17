@@ -1,15 +1,25 @@
 import { createHash } from 'node:crypto';
-import { getRate, releaseReservation, reserveCost } from '@assistant/core';
+import {
+  getRate,
+  isBrowserJobPending,
+  reconcileReservation,
+  releaseReservation,
+  reserveCost,
+} from '@assistant/core';
 import type { Db, TaskRow } from '@assistant/db';
 import { approvals, rateLimits, toolCache, toolCalls } from '@assistant/db';
 import { and, eq, gte, sql } from 'drizzle-orm';
+import { isAmbiguousGoogleMutationError } from './google/client.js';
 import { matchPolicies } from './policies.js';
 import type { ToolRegistry } from './registry.js';
+import { isAmbiguousTwilioDeliveryError } from './twilio/client.js';
 import type { RegisteredTool, RiskTier, ToolContext } from './types.js';
 
 export interface DispatchInput {
   task: TaskRow;
   step: number;
+  /** AI SDK tool-call id, persisted so async tools can rebuild the transcript after a crash. */
+  modelToolCallId?: string;
   toolName: string;
   args: Record<string, unknown>;
   ctx: ToolContext;
@@ -32,22 +42,36 @@ export type DispatchOutcome =
 
 const APPROVAL_TTL_HOURS = 24;
 
+type ToolReservation =
+  | {
+      ok: true;
+      reservationId: string;
+      estimatedUsd: number;
+      quantity: number;
+      unit: string;
+      unitPriceUsd: number;
+      description: string;
+    }
+  | { ok: false; reason: string; resumeAt: Date };
+
 function cacheKey(toolName: string, args: Record<string, unknown>): string {
   return createHash('sha256')
     .update(`${toolName}:${JSON.stringify(args)}`)
     .digest('hex');
 }
 
-/** Lowest unused short code among pending approvals: A1, A2, ... */
+/**
+ * Monotonic human code across all historical approvals. Call only while
+ * holding the approval-code advisory lock so a delayed SMS can never match a
+ * later, unrelated approval after its original code was resolved.
+ */
 async function nextShortCode(db: Db): Promise<string> {
-  const pending = await db
-    .select({ shortCode: approvals.shortCode })
-    .from(approvals)
-    .where(eq(approvals.status, 'pending'));
-  const used = new Set(pending.map((p) => p.shortCode));
-  let n = 1;
-  while (used.has(`A${n}`)) n += 1;
-  return `A${n}`;
+  const [row] = await db
+    .select({
+      next: sql<number>`coalesce(max(case when ${approvals.shortCode} ~ '^A[0-9]+$' then substring(${approvals.shortCode} from 2)::bigint end), 0) + 1`,
+    })
+    .from(approvals);
+  return `A${Number(row?.next ?? 1)}`;
 }
 
 async function underRateLimit(db: Db, scope: string): Promise<boolean> {
@@ -89,12 +113,17 @@ export class ToolDispatcher {
   ) {}
 
   /** Model-facing tool definitions for a task's trust level (no execute functions). */
-  toolDefs(trust: ToolContext['trust']) {
-    return this.registry.toolsForTask(trust).map((tool) => ({
+  toolDefs(trust: ToolContext['trust'], tainted = false) {
+    return this.registry.toolsForTask(trust, tainted).map((tool) => ({
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema,
     }));
+  }
+
+  /** Used by the workflow to durably propagate tool-result provenance. */
+  resultIsUntrusted(toolName: string): boolean {
+    return this.registry.resultIsUntrusted(toolName);
   }
 
   /**
@@ -105,16 +134,23 @@ export class ToolDispatcher {
   async executeApproved(
     toolCallId: string,
     ctx: ToolContext,
-  ): Promise<{ ok: true; result: unknown } | { ok: false; error: string }> {
+  ): Promise<
+    | { kind: 'executed'; result: unknown }
+    | { kind: 'failed'; error: string }
+    | { kind: 'budget_blocked'; reason: string; resumeAt: Date }
+  > {
     const [call] = await this.db.select().from(toolCalls).where(eq(toolCalls.id, toolCallId));
-    if (!call) return { ok: false, error: 'tool call not found' };
-    if (call.status === 'succeeded') return { ok: true, result: call.result };
+    if (!call) return { kind: 'failed', error: 'tool call not found' };
+    if (isBrowserJobPending(call.result)) return { kind: 'executed', result: call.result };
+    if (call.status === 'succeeded') return { kind: 'executed', result: call.result };
     if (call.status !== 'approved') {
-      return { ok: false, error: `tool call is ${call.status}, not approved` };
+      return { kind: 'failed', error: `tool call is ${call.status}, not approved` };
     }
 
     const registered = this.registry.get(call.toolName);
-    if (!registered) return { ok: false, error: `tool ${call.toolName} no longer registered` };
+    if (!registered) {
+      return { kind: 'failed', error: `tool ${call.toolName} no longer registered` };
+    }
 
     let args = (call.args ?? {}) as Record<string, unknown>;
     if (call.approvalId) {
@@ -133,7 +169,7 @@ export class ToolDispatcher {
         .update(toolCalls)
         .set({ status: 'failed', error: `invalid approved args: ${parsed.error.message}` })
         .where(eq(toolCalls.id, toolCallId));
-      return { ok: false, error: 'approved args failed validation' };
+      return { kind: 'failed', error: 'approved args failed validation' };
     }
 
     // Approved calls reserve too — approval grants permission, not budget.
@@ -144,8 +180,9 @@ export class ToolDispatcher {
     );
     if (reserved && !reserved.ok) {
       return {
-        ok: false,
-        error: `insufficient budget for the approved action: ${reserved.reason} — it retries when the budget resets`,
+        kind: 'budget_blocked',
+        reason: reserved.reason,
+        resumeAt: reserved.resumeAt,
       };
     }
     const decision = {
@@ -153,25 +190,79 @@ export class ToolDispatcher {
       ...(reserved?.ok ? { reservationId: reserved.reservationId } : {}),
     };
 
-    await this.db
+    const [claimed] = await this.db
       .update(toolCalls)
       .set({ status: 'executing', args: parsed.data, decision, startedAt: sql`now()` })
-      .where(eq(toolCalls.id, toolCallId));
+      .where(and(eq(toolCalls.id, toolCallId), eq(toolCalls.status, 'approved')))
+      .returning({ id: toolCalls.id });
+    if (!claimed) {
+      if (reserved?.ok) await releaseReservation(this.db, reserved.reservationId).catch(() => {});
+      const [current] = await this.db.select().from(toolCalls).where(eq(toolCalls.id, toolCallId));
+      return current?.status === 'succeeded'
+        ? { kind: 'executed', result: current.result }
+        : { kind: 'failed', error: `tool call is ${current?.status ?? 'missing'}, not approved` };
+    }
 
     try {
-      const result = await registered.tool.execute(parsed.data, ctx);
+      const result = await registered.tool.execute(
+        parsed.data,
+        this.executionContext(
+          ctx,
+          toolCallId,
+          call.toolName,
+          ((call.decision ?? {}) as { modelToolCallId?: string }).modelToolCallId,
+        ),
+      );
       await this.db
         .update(toolCalls)
-        .set({ status: 'succeeded', result: result ?? null, finishedAt: sql`now()` })
+        .set({
+          status: 'succeeded',
+          ...(isBrowserJobPending(result) ? {} : { result: result ?? null }),
+          finishedAt: sql`now()`,
+        })
         .where(eq(toolCalls.id, toolCallId));
-      return { ok: true, result };
+      if (reserved?.ok && !isBrowserJobPending(result)) {
+        await reconcileReservation(this.db, reserved.reservationId, {
+          usd: reserved.estimatedUsd,
+          quantity: reserved.quantity,
+          unit: reserved.unit,
+          unitPriceUsd: reserved.unitPriceUsd,
+          toolCallId,
+          description: reserved.description,
+        }).catch((error) => console.error('approved tool cost reconciliation failed', error));
+      }
+      return { kind: 'executed', result };
     } catch (err) {
+      if (isAmbiguousTwilioDeliveryError(err) || isAmbiguousGoogleMutationError(err)) {
+        const result = {
+          deliveryStatus: 'unknown',
+          retrySuppressed: true,
+          note: 'The provider may have accepted this mutation; do not retry automatically.',
+        };
+        if (reserved?.ok) {
+          await reconcileReservation(this.db, reserved.reservationId, {
+            usd: reserved.estimatedUsd,
+            quantity: reserved.quantity,
+            unit: reserved.unit,
+            unitPriceUsd: reserved.unitPriceUsd,
+            toolCallId,
+            description: `${reserved.description} (delivery outcome unknown)`,
+          }).catch((error) =>
+            console.error('ambiguous approved tool cost reconciliation failed', error),
+          );
+        }
+        await this.db
+          .update(toolCalls)
+          .set({ status: 'succeeded', result, finishedAt: sql`now()` })
+          .where(eq(toolCalls.id, toolCallId));
+        return { kind: 'executed', result };
+      }
       if (reserved?.ok) await releaseReservation(this.db, reserved.reservationId).catch(() => {});
       await this.db
         .update(toolCalls)
         .set({ status: 'failed', error: String(err).slice(0, 2000), finishedAt: sql`now()` })
         .where(eq(toolCalls.id, toolCallId));
-      return { ok: false, error: String(err).slice(0, 500) };
+      return { kind: 'failed', error: String(err).slice(0, 500) };
     }
   }
 
@@ -188,12 +279,15 @@ export class ToolDispatcher {
     }
     const { tool } = registered;
 
-    // Taint: tools that must never see untrusted-derived args. Phase 2
-    // approximation: task-level trust; per-arg provenance is a later refinement.
-    if (!tool.acceptsUntrustedInput && input.ctx.trust === 'unknown') {
+    // Taint: reject tools that explicitly cannot consume externally-derived
+    // arguments. The workflow also propagates taint from marked tool results.
+    if (
+      !tool.acceptsUntrustedInput &&
+      (input.ctx.trust === 'unknown' || input.ctx.trust === 'known' || input.ctx.tainted)
+    ) {
       return {
         kind: 'rejected',
-        reason: `tool ${input.toolName} does not accept untrusted input`,
+        reason: `tool ${input.toolName} does not accept externally sourced input`,
       };
     }
 
@@ -229,12 +323,31 @@ export class ToolDispatcher {
     if (baseTier === 'forbidden') {
       return { kind: 'rejected', reason: `tool ${input.toolName} is forbidden` };
     }
-    const tier: RiskTier = policyMatch?.effect === 'allow' ? 'autonomous' : baseTier;
+    // Once attacker-controlled content enters a privileged owner/assistant
+    // workflow, private reads/writes and network egress need exact-argument
+    // owner approval. This prevents a fetched page or email from chaining a
+    // private read into an autonomous exfiltration request. Policy allow rules
+    // deliberately cannot override this provenance boundary.
+    const privilegedTaint =
+      input.ctx.tainted && (input.ctx.trust === 'owner' || input.ctx.trust === 'assistant');
+    const taintNeedsApproval =
+      privilegedTaint &&
+      (registered.flags.confidentialRead === true ||
+        registered.flags.writesMemory === true ||
+        registered.flags.writesWorkspace === true ||
+        registered.flags.privateWrite === true ||
+        registered.flags.networkEgress === true);
+    const tier: RiskTier = taintNeedsApproval
+      ? 'approval'
+      : policyMatch?.effect === 'allow'
+        ? 'autonomous'
+        : baseTier;
 
     const decision = {
       riskTier: tier,
-      reason:
-        policyMatch?.effect === 'allow'
+      reason: taintNeedsApproval
+        ? 'owner approval required because untrusted content entered this workflow'
+        : policyMatch?.effect === 'allow'
           ? `allowed by policy ${policyMatch.policy.templateKey}`
           : `tool default (${baseTier})`,
       policyId: policyMatch?.policy.id,
@@ -242,6 +355,7 @@ export class ToolDispatcher {
       plannerVersion: input.provenance.plannerVersion,
       promptVersion: input.provenance.promptVersion,
       model: input.provenance.model,
+      modelToolCallId: input.modelToolCallId,
     };
 
     if (tier === 'approval') {
@@ -251,17 +365,6 @@ export class ToolDispatcher {
     // Rate limit (autonomous executions only — approvals are human-gated anyway)
     if (!(await underRateLimit(this.db, `tool:${input.toolName}`))) {
       return { kind: 'rejected', reason: `rate limit exceeded for ${input.toolName}` };
-    }
-
-    // Pre-flight cost reservation (Phase 27): expensive actions must fit the
-    // remaining budget BEFORE they start — metering after the fact can't
-    // prevent overshoot.
-    const reserved = await this.reserveForTool(registered, args, input.task.id);
-    if (reserved && !reserved.ok) {
-      return { kind: 'budget_blocked', reason: reserved.reason, resumeAt: reserved.resumeAt };
-    }
-    if (reserved?.ok) {
-      (decision as Record<string, unknown>).reservationId = reserved.reservationId;
     }
 
     // Cache
@@ -304,18 +407,28 @@ export class ToolDispatcher {
     registered: RegisteredTool,
     args: Record<string, unknown>,
     taskId: string,
-  ): Promise<Awaited<ReturnType<typeof reserveCost>> | null> {
+  ): Promise<ToolReservation | null> {
     const estimate = registered.tool.estimateCost?.(args);
     if (!estimate) return null;
     const rate = await getRate(this.db, estimate.rateKey);
     const estimatedUsd = estimate.quantity * rate.unitPriceUsd;
     if (estimatedUsd <= 0) return null;
-    return reserveCost(this.db, {
+    const reservation = await reserveCost(this.db, {
       source: estimate.source,
       estimatedUsd,
       taskId,
       description: estimate.description ?? registered.tool.name,
     });
+    return reservation.ok
+      ? {
+          ...reservation,
+          estimatedUsd,
+          quantity: estimate.quantity,
+          unit: rate.unit,
+          unitPriceUsd: rate.unitPriceUsd,
+          description: estimate.description ?? registered.tool.name,
+        }
+      : reservation;
   }
 
   private async parkForApproval(opts: {
@@ -328,57 +441,48 @@ export class ToolDispatcher {
     const summary =
       registered.tool.approvalSummary?.(args) ?? `${input.toolName}(${JSON.stringify(args)})`;
 
-    const [toolCall] = await this.db
-      .insert(toolCalls)
-      .values({
-        taskId: input.task.id,
-        step: input.step,
-        toolName: input.toolName,
-        args,
-        risk: 'approval',
-        status: 'awaiting_approval',
-        decision,
-      })
-      .returning();
-    if (!toolCall) throw new Error('failed to insert tool_call');
-
-    // Two executors parking at once can compute the same short code — the
-    // partial unique index rejects the loser; recompute and retry.
-    let approval: typeof approvals.$inferSelect | undefined;
-    for (let attempt = 0; attempt < 5 && !approval; attempt++) {
-      const shortCode = await nextShortCode(this.db);
-      try {
-        [approval] = await this.db
-          .insert(approvals)
-          .values({
-            taskId: input.task.id,
-            toolCallId: toolCall.id,
-            shortCode,
-            summary,
-            payload: args,
-            expiresAt: sql`now() + interval '${sql.raw(String(APPROVAL_TTL_HOURS))} hours'`,
-          })
-          .returning();
-      } catch (err) {
-        const isDuplicate =
-          (err as { code?: string }).code === '23505' ||
-          String(err).includes('approvals_pending_short_code_idx') ||
-          String((err as Error).cause ?? '').includes('approvals_pending_short_code_idx');
-        if (!isDuplicate) throw err;
-      }
-    }
-    if (!approval) throw new Error('failed to insert approval (short-code contention)');
-
-    await this.db
-      .update(toolCalls)
-      .set({ approvalId: approval.id })
-      .where(eq(toolCalls.id, toolCall.id));
+    const parked = await this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('assistant:approval-codes'))`);
+      const shortCode = await nextShortCode(tx as unknown as Db);
+      const [toolCall] = await tx
+        .insert(toolCalls)
+        .values({
+          taskId: input.task.id,
+          step: input.step,
+          toolName: input.toolName,
+          args,
+          risk: 'approval',
+          status: 'awaiting_approval',
+          decision,
+        })
+        .returning();
+      if (!toolCall) throw new Error('failed to insert tool_call');
+      const [approval] = await tx
+        .insert(approvals)
+        .values({
+          taskId: input.task.id,
+          toolCallId: toolCall.id,
+          shortCode,
+          summary,
+          payload: args,
+          expiresAt: sql`now() + interval '${sql.raw(String(APPROVAL_TTL_HOURS))} hours'`,
+        })
+        .returning();
+      if (!approval) throw new Error('failed to insert approval');
+      const [linked] = await tx
+        .update(toolCalls)
+        .set({ approvalId: approval.id })
+        .where(eq(toolCalls.id, toolCall.id))
+        .returning({ id: toolCalls.id });
+      if (!linked) throw new Error('failed to link approval');
+      return { toolCall: { ...toolCall, approvalId: approval.id }, approval };
+    });
 
     return {
       kind: 'awaiting_approval',
-      toolCallId: toolCall.id,
-      approvalId: approval.id,
-      shortCode: approval.shortCode,
+      toolCallId: parked.toolCall.id,
+      approvalId: parked.approval.id,
+      shortCode: parked.approval.shortCode,
       summary,
     };
   }
@@ -405,7 +509,21 @@ export class ToolDispatcher {
       if (prior && prior.status === 'executing') {
         return { kind: 'rejected', reason: 'identical call already executing' };
       }
+      if (prior) {
+        return {
+          kind: 'rejected',
+          reason: `identical call is already recorded as ${prior.status}; refusing an ambiguous side-effect retry`,
+        };
+      }
     }
+
+    // Reserve only after cache/idempotency shortcuts. A free replay must not
+    // strand a budget hold until the stale-reservation sweeper runs.
+    const reserved = await this.reserveForTool(registered, args, input.task.id);
+    if (reserved && !reserved.ok) {
+      return { kind: 'budget_blocked', reason: reserved.reason, resumeAt: reserved.resumeAt };
+    }
+    if (reserved?.ok) decision.reservationId = reserved.reservationId;
 
     const [row] = await this.db
       .insert(toolCalls)
@@ -427,15 +545,34 @@ export class ToolDispatcher {
       .returning();
     if (!row) {
       // lost an idempotency race to a concurrent executor
+      if (reserved?.ok) await releaseReservation(this.db, reserved.reservationId).catch(() => {});
       return { kind: 'rejected', reason: 'identical call already in flight' };
     }
 
     try {
-      const result = await registered.tool.execute(args, input.ctx);
+      const result = await registered.tool.execute(
+        args,
+        this.executionContext(input.ctx, row.id, input.toolName, input.modelToolCallId),
+      );
       await this.db
         .update(toolCalls)
-        .set({ status: 'succeeded', result: result ?? null, finishedAt: sql`now()` })
+        .set({
+          status: 'succeeded',
+          ...(isBrowserJobPending(result) ? {} : { result: result ?? null }),
+          finishedAt: sql`now()`,
+        })
         .where(eq(toolCalls.id, row.id));
+
+      if (reserved?.ok && !isBrowserJobPending(result)) {
+        await reconcileReservation(this.db, reserved.reservationId, {
+          usd: reserved.estimatedUsd,
+          quantity: reserved.quantity,
+          unit: reserved.unit,
+          unitPriceUsd: reserved.unitPriceUsd,
+          toolCallId: row.id,
+          description: reserved.description,
+        }).catch((error) => console.error('tool cost reconciliation failed', error));
+      }
 
       if (registered.tool.cacheTtlSeconds) {
         await this.db
@@ -457,7 +594,30 @@ export class ToolDispatcher {
 
       return { kind: 'executed', toolCallId: row.id, result, cached: false };
     } catch (err) {
-      // the reserved work never happened — free the hold
+      if (isAmbiguousTwilioDeliveryError(err) || isAmbiguousGoogleMutationError(err)) {
+        const result = {
+          deliveryStatus: 'unknown',
+          retrySuppressed: true,
+          note: 'The provider may have accepted this mutation; do not retry automatically.',
+        };
+        if (reserved?.ok) {
+          await reconcileReservation(this.db, reserved.reservationId, {
+            usd: reserved.estimatedUsd,
+            quantity: reserved.quantity,
+            unit: reserved.unit,
+            unitPriceUsd: reserved.unitPriceUsd,
+            toolCallId: row.id,
+            description: `${reserved.description} (delivery outcome unknown)`,
+          }).catch((error) => console.error('ambiguous tool cost reconciliation failed', error));
+        }
+        await this.db
+          .update(toolCalls)
+          .set({ status: 'succeeded', result, finishedAt: sql`now()` })
+          .where(eq(toolCalls.id, row.id));
+        return { kind: 'executed', toolCallId: row.id, result, cached: false };
+      }
+
+      // A definitive rejection means the reserved work never happened.
       const reservationId = (decision as Record<string, unknown>).reservationId;
       if (typeof reservationId === 'string') {
         await releaseReservation(this.db, reservationId).catch(() => {});
@@ -468,5 +628,21 @@ export class ToolDispatcher {
         .where(eq(toolCalls.id, row.id));
       return { kind: 'rejected', reason: `execution failed: ${String(err).slice(0, 500)}` };
     }
+  }
+
+  private executionContext(
+    ctx: ToolContext,
+    dbToolCallId: string,
+    toolName: string,
+    modelToolCallId?: string,
+  ): ToolContext {
+    return {
+      ...ctx,
+      execution: {
+        dbToolCallId,
+        modelToolCallId: modelToolCallId ?? '',
+        toolName,
+      },
+    };
   }
 }

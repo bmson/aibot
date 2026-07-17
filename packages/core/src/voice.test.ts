@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ModelRouter } from './model-router/router.js';
 import { rewriteInVoice, type VoiceContext } from './voice.js';
 
@@ -92,5 +92,58 @@ describe('voice pipeline', () => {
     expect(result.text).toBe(DRAFT); // fails safe to the original
     expect(result.rewritten).toBe(false);
     expect(result.flagged).toMatch(/fact-preservation/);
+  });
+
+  it('fails closed to the original when verification is budget-blocked', async () => {
+    const generate = vi.fn(async () => ({
+      ok: true as const,
+      modelId: 'fake',
+      degraded: false,
+      text: 'lunch is next Tuesday, somewhere else.',
+    }));
+    const object = vi.fn(async () => ({
+      ok: false as const,
+      decision: { mode: 'block' as const, reason: 'daily budget exhausted' },
+    }));
+    const router = { generate, object } as unknown as ModelRouter;
+
+    const result = await rewriteInVoice(router, {
+      draft: DRAFT,
+      register: 'email_casual',
+      context,
+    });
+
+    expect(result.text).toBe(DRAFT);
+    expect(result.rewritten).toBe(false);
+    expect(result.flagged).toMatch(/could not be fact-checked.*daily budget exhausted/);
+    expect(generate).toHaveBeenCalledOnce();
+    expect(object).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed to the original when the verifier throws', async () => {
+    const router = {
+      generate: async () => ({
+        ok: true as const,
+        modelId: 'fake',
+        degraded: false,
+        text: 'rewrite with unknown fidelity',
+      }),
+      object: async () => {
+        throw new Error('provider unavailable');
+      },
+    } as unknown as ModelRouter;
+
+    const result = await rewriteInVoice(router, {
+      draft: DRAFT,
+      register: 'sms',
+      context,
+    });
+
+    expect(result).toEqual({
+      text: DRAFT,
+      rewritten: false,
+      flagged:
+        'voice rewrite could not be fact-checked (verifier unavailable); using the original draft',
+    });
   });
 });

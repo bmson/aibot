@@ -10,5 +10,7 @@ COPY apps/agent ./apps/agent
 RUN pnpm install --frozen-lockfile --filter @assistant/agent...
 
 ENV NODE_ENV=production
+RUN chown -R node:node /app
+USER node
 EXPOSE 8080
 CMD ["pnpm", "--filter", "@assistant/agent", "start"]

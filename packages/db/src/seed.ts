@@ -204,7 +204,7 @@ const policySeed = [
   {
     toolName: 'sms.send',
     templateKey: 'sms.reply_to_owner',
-    match: {},
+    match: { phone: OWNER_PHONE },
     effect: 'allow',
   },
   {

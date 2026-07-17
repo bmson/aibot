@@ -85,10 +85,21 @@ const fakeRouter = {
   },
 } as unknown as ModelRouter;
 
+const workspaceFiles = new Map<string, string>();
+let sourceArchiveReads = 0;
+
 const fakeWorkspace: WorkspaceReader = {
   async read(relPath: string) {
-    if (relPath !== 'import/archive.txt') throw new Error(`no such file: ${relPath}`);
-    return ARCHIVE;
+    if (relPath === 'import/archive.txt') {
+      sourceArchiveReads += 1;
+      return ARCHIVE;
+    }
+    const content = workspaceFiles.get(relPath);
+    if (content === undefined) throw new Error(`no such file: ${relPath}`);
+    return content;
+  },
+  async write(relPath: string, content: string) {
+    workspaceFiles.set(relPath, content);
   },
   async list() {
     return [{ name: 'archive.txt', dir: false }];
@@ -99,6 +110,7 @@ const noopDispatcher: DispatcherPort = {
   toolDefs: () => {
     throw new Error('import job must not build tools');
   },
+  resultIsUntrusted: () => false,
   dispatch: async () => {
     throw new Error('import job must not dispatch tools');
   },
@@ -115,6 +127,8 @@ async function cleanup() {
 }
 
 beforeAll(async () => {
+  workspaceFiles.clear();
+  sourceArchiveReads = 0;
   db = createDb(DATABASE_URL);
   try {
     agentId = (await getAgent(db)).id;
@@ -166,6 +180,14 @@ describe('backstory import (integration)', () => {
 
     const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId));
     expect(task?.status).toBe('done');
+    expect(sourceArchiveReads).toBe(1); // resumes read the manifest + current shard, not the archive
+    const taskState = task?.state as { plannerState?: { import?: unknown } } | undefined;
+    const importCheckpoint = taskState?.plannerState?.import as
+      | { manifestPath?: string; manifestHash?: string }
+      | undefined;
+    expect(importCheckpoint?.manifestPath).toMatch(/\.assistant\/imports\/.+\/manifest\.json$/);
+    expect(importCheckpoint?.manifestHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(workspaceFiles.has(importCheckpoint?.manifestPath ?? '')).toBe(true);
     [src] = await db.select().from(importSources).where(eq(importSources.source, SOURCE));
     expect(src?.status).toBe('done');
     expect(src?.memoriesSaved).toBe(3);

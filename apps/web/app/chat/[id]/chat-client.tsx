@@ -39,7 +39,7 @@ export function ChatClient({
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   const [isSwitching, startTransition] = useTransition();
   /** Set when the route handed the turn to the executor — we poll until it settles. */
-  const [asyncTaskId, setAsyncTaskId] = useState<string | null>(null);
+  const [asyncTurn, setAsyncTurn] = useState<{ taskId: string; cursor: string } | null>(null);
   const [asyncNote, setAsyncNote] = useState<string | null>(null);
 
   const transport = useMemo(
@@ -47,13 +47,22 @@ export function ChatClient({
       new DefaultChatTransport({
         api: '/api/chat',
         body: { conversationId },
+        // The server owns history. Sending only the new user turn keeps request
+        // size flat and prevents a client from selecting model context.
+        prepareSendMessagesRequest: ({ messages, body }) => {
+          const latestUser = [...messages].reverse().find((message) => message.role === 'user');
+          return { body: { ...body, messages: latestUser ? [latestUser] : [] } };
+        },
         // Wrap fetch to capture the routing headers set by the chat route.
         fetch: (async (info, init) => {
           const response = await fetch(info, init);
           const modelId = response.headers.get('x-model-id');
           const degraded = response.headers.get('x-model-degraded') === 'true';
           setFallbackNote(degraded && modelId ? `responded with ${modelId} (fallback)` : null);
-          setAsyncTaskId(response.headers.get('x-async-task'));
+          const taskId = response.headers.get('x-async-task');
+          const cursor = response.headers.get('x-message-cursor');
+          setAsyncTurn(taskId && cursor ? { taskId, cursor } : null);
+          if (taskId) setAsyncNote(null);
           return response;
         }) as typeof fetch,
       }),
@@ -69,35 +78,67 @@ export function ChatClient({
   // Action turns run in the executor (tools, approvals) — poll the thread
   // until the task settles, then replace the local ack with the real answer.
   useEffect(() => {
-    if (!asyncTaskId) return;
+    if (!asyncTurn) return;
     const startedAt = Date.now();
     const TIMEOUT_MS = 5 * 60 * 1000;
     let cancelled = false;
+    let cursor = asyncTurn.cursor;
+    let sawAssistant = false;
 
-    const settle = (note: string | null, serverMessages?: UIMessage[]) => {
+    const mergeMessages = (incoming: UIMessage[]) => {
+      if (incoming.length === 0) return;
+      setMessages((current) => {
+        const merged = [...current];
+        const indexes = new Map(merged.map((message, index) => [message.id, index]));
+        for (const message of incoming) {
+          const index = indexes.get(message.id);
+          if (index === undefined) {
+            indexes.set(message.id, merged.length);
+            merged.push(message);
+          } else {
+            merged[index] = message;
+          }
+        }
+        return merged;
+      });
+    };
+
+    const settle = (note: string | null) => {
       if (cancelled) return;
-      if (serverMessages) setMessages(serverMessages);
       setAsyncNote(note);
-      setAsyncTaskId(null);
+      setAsyncTurn(null);
     };
 
     const tick = async () => {
       if (cancelled) return;
       try {
-        const res = await fetch(
-          `/api/chat/status?conversationId=${conversationId}&taskId=${asyncTaskId}`,
-        );
+        const query = new URLSearchParams({
+          conversationId,
+          taskId: asyncTurn.taskId,
+          cursor,
+        });
+        const res = await fetch(`/api/chat/status?${query.toString()}`);
         if (res.ok) {
-          const data = (await res.json()) as { taskStatus: string; messages: UIMessage[] };
-          const last = data.messages.at(-1);
-          const answered = last?.role === 'assistant';
+          const data = (await res.json()) as {
+            taskStatus: string;
+            messages: UIMessage[];
+            nextCursor: string | null;
+            hasMore: boolean;
+          };
+          mergeMessages(data.messages);
+          sawAssistant ||= data.messages.some((message) => message.role === 'assistant');
+          if (data.nextCursor) cursor = data.nextCursor;
+          if (data.hasMore) {
+            if (!cancelled) window.setTimeout(tick, 0);
+            return;
+          }
           if (
             (data.taskStatus === 'done' ||
               data.taskStatus === 'waiting_approval' ||
               data.taskStatus === 'waiting_budget') &&
-            answered
+            sawAssistant
           ) {
-            return settle(null, data.messages);
+            return settle(null);
           }
           if (
             data.taskStatus === 'failed' ||
@@ -106,7 +147,6 @@ export function ChatClient({
           ) {
             return settle(
               `the task ${data.taskStatus === 'cancelled' ? 'was cancelled' : `ended ${data.taskStatus}`} — see the Tasks page`,
-              data.messages,
             );
           }
         }
@@ -123,9 +163,9 @@ export function ChatClient({
     return () => {
       cancelled = true;
     };
-  }, [asyncTaskId, conversationId, setMessages]);
+  }, [asyncTurn, conversationId, setMessages]);
 
-  const busy = status === 'submitted' || status === 'streaming' || asyncTaskId !== null;
+  const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
 
   return (
     <div className="mx-auto flex h-[calc(100vh-4rem)] max-w-4xl flex-col">
@@ -197,7 +237,7 @@ export function ChatClient({
             {status === 'submitted' ? (
               <p className="animate-pulse text-sm text-zinc-500 dark:text-zinc-400">Thinking…</p>
             ) : null}
-            {asyncTaskId ? (
+            {asyncTurn ? (
               <p className="animate-pulse text-sm text-zinc-500 dark:text-zinc-400">
                 Running as a task (tools &amp; approvals)…
               </p>

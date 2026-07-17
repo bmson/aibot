@@ -2,26 +2,25 @@ import { loadConfig } from '@assistant/core/config';
 import { redirect, unauthorized } from 'next/navigation';
 import NextAuth from 'next-auth';
 import Google from 'next-auth/providers/google';
+import { resolveAuthMode } from './auth-mode';
 
 // loadConfig() side-loads the repo-root .env, so AUTH_* vars defined there are
 // visible even though Next only reads apps/web/.env* files.
 const config = loadConfig();
 
-export type AuthMode = 'google' | 'dev-bypass' | 'disabled';
-
 /**
  * google     — AUTH_GOOGLE_ID is set; real Google sign-in, allowlisted to the owner.
- * dev-bypass — no AUTH_GOOGLE_ID outside production; auth is skipped entirely.
- * disabled   — no AUTH_GOOGLE_ID in production; every request is rejected (401).
+ * dev-bypass — explicitly enabled outside production; auth is skipped entirely.
+ * disabled   — auth is not configured; every request is rejected (401).
  */
-export const authMode: AuthMode = process.env.AUTH_GOOGLE_ID
-  ? 'google'
-  : process.env.NODE_ENV !== 'production'
-    ? 'dev-bypass'
-    : 'disabled';
+export const authMode = resolveAuthMode({
+  googleClientId: process.env.AUTH_GOOGLE_ID ?? '',
+  devBypass: config.AUTH_DEV_BYPASS,
+  nodeEnv: process.env.NODE_ENV,
+});
 
 if (authMode === 'dev-bypass') {
-  console.warn('[auth] dev mode — auth disabled (set AUTH_GOOGLE_ID to enable Google sign-in)');
+  console.warn('[auth] explicit development bypass enabled — owner authentication is disabled');
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({

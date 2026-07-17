@@ -1,9 +1,9 @@
 import type { Db, TaskRow } from '@assistant/db';
-import { approvals, tasks, toolCalls } from '@assistant/db';
+import { approvals, messages, tasks, toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { ZodType } from 'zod';
-import { isBrowserJobPending } from '../browse.js';
+import { type BrowserJobPendingResult, isBrowserJobPending } from '../browse.js';
 import {
   buildSystemPrompt,
   getAgent,
@@ -11,21 +11,30 @@ import {
   PROMPT_VERSION,
   persistMessage,
 } from '../chat.js';
-import { getRate, nextDailyReset, nextMonthlyReset, reconcileReservation } from '../cost.js';
-import { PlanSchema, type TaskState, type Trust } from '../events.js';
+import {
+  BudgetReservationError,
+  getRate,
+  nextDailyReset,
+  nextMonthlyReset,
+  reconcileReservation,
+} from '../cost.js';
+import { type PendingFinal, PlanSchema, type TaskState, type Trust } from '../events.js';
 import { getOwnerCard } from '../memory/consolidation.js';
 import type { WorkspaceReader } from '../memory/import.js';
 import { codeJobName, runCodeJob } from '../memory/jobs.js';
-import type { ModelRole, ModelRouter } from '../model-router/router.js';
+import type { ModelRole, ModelRouter, ProposedToolCall } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import {
   checkpointTask,
   claimTask,
   completeTask,
+  markTaskNeedsAttention,
   parkForApproval,
   parkForBudget,
   recordFailedAttempt,
+  renewTaskLease,
   sleepTask,
+  type TaskLease,
   taskState,
 } from './machine.js';
 import { startMission, wakeMission } from './missions.js';
@@ -33,10 +42,15 @@ import { PLANNER_VERSION, planTask } from './planner.js';
 
 /** Structural port implemented by @assistant/tools' ToolDispatcher — keeps core free of a package cycle. */
 export interface DispatcherPort {
-  toolDefs(trust: Trust): Array<{ name: string; description: string; inputSchema: ZodType }>;
+  toolDefs(
+    trust: Trust,
+    tainted?: boolean,
+  ): Array<{ name: string; description: string; inputSchema: ZodType }>;
+  resultIsUntrusted(toolName: string): boolean;
   dispatch(input: {
     task: TaskRow;
     step: number;
+    modelToolCallId: string;
     toolName: string;
     args: Record<string, unknown>;
     ctx: ToolContextLike;
@@ -56,7 +70,11 @@ export interface DispatcherPort {
   executeApproved(
     toolCallId: string,
     ctx: ToolContextLike,
-  ): Promise<{ ok: true; result: unknown } | { ok: false; error: string }>;
+  ): Promise<
+    | { kind: 'executed'; result: unknown }
+    | { kind: 'failed'; error: string }
+    | { kind: 'budget_blocked'; reason: string; resumeAt: Date }
+  >;
 }
 
 export interface ToolContextLike {
@@ -64,10 +82,24 @@ export interface ToolContextLike {
   agentId: string;
   conversationId?: string;
   trust: Trust;
+  tainted: boolean;
   db: Db;
   now: () => Date;
   signal: AbortSignal;
   log: (type: string, payload: unknown) => Promise<void>;
+  execution?: { dbToolCallId: string; modelToolCallId: string; toolName: string };
+  stageBrowserJob?: (job: {
+    dbToolCallId: string;
+    modelToolCallId: string;
+    toolName: string;
+    pending: BrowserJobPendingResult;
+  }) => Promise<void>;
+  clearStagedBrowserJob?: (job: {
+    dbToolCallId: string;
+    modelToolCallId: string;
+    toolName: string;
+    pending: BrowserJobPendingResult;
+  }) => Promise<void>;
 }
 
 export interface ExecutorDeps {
@@ -76,7 +108,7 @@ export interface ExecutorDeps {
   dispatcher: DispatcherPort;
   /** Workspace file store — required only for code jobs that read archives (imports). */
   workspace?: WorkspaceReader;
-  /** Channel delivery for a task's final text (e.g. SMS reply). Failures log, never crash the task. */
+  /** Channel delivery for a task's final text (e.g. SMS reply). Errors are retried by the workflow. */
   deliverFinal?: (task: TaskRow, text: string) => Promise<void>;
   /** Out-of-band owner notification when approvals park a task (e.g. SMS "Reply YES A7"). */
   notifyApproval?: (
@@ -109,6 +141,11 @@ const ROLE_FOR_TYPE: Record<string, ModelRole> = {
 
 const RESULT_CHAR_LIMIT = 4000;
 const CONTEXT_WINDOW_LIMIT = 40;
+
+const LOST_LEASE: ExecuteResult = {
+  outcome: 'not_claimable',
+  detail: 'task lease was cancelled, expired, or reclaimed',
+};
 
 function truncateResult(result: unknown): unknown {
   const json = JSON.stringify(result ?? null);
@@ -225,8 +262,119 @@ async function postConversationNotice(db: Db, task: TaskRow, text: string): Prom
   }).catch((err) => console.error('conversation notice failed', err));
 }
 
+/** A retry must not duplicate the dashboard/chat copy of a final response. */
+async function persistFinalConversationOnce(db: Db, task: TaskRow, text: string): Promise<void> {
+  if (!task.conversationId) return;
+  const [existing] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.taskId, task.id),
+        eq(messages.role, 'assistant'),
+        eq(messages.origin, 'assistant'),
+        eq(messages.text, text),
+      ),
+    )
+    .limit(1);
+  if (existing) return;
+  await persistMessage(db, {
+    conversationId: task.conversationId,
+    taskId: task.id,
+    role: 'assistant',
+    origin: 'assistant',
+    parts: [{ type: 'text', text }],
+    text,
+  });
+}
+
+/** Deliver a previously checkpointed final response, then finish under CAS. */
+async function finalizePendingResponse(
+  deps: ExecutorDeps,
+  task: TaskLease,
+  pending: PendingFinal,
+  checkpointState?: TaskState,
+): Promise<ExecuteResult> {
+  if (!(await renewTaskLease(deps.db, task))) return LOST_LEASE;
+  await persistFinalConversationOnce(deps.db, task, pending.text);
+
+  // Check cancellation/reclaim immediately before the external side effect.
+  if (deps.deliverFinal && !pending.deliveryAttempted) {
+    // Fence the provider call at-most-once. If the process disappears after
+    // provider acceptance but before task completion, the retry assumes this
+    // ambiguous attempt may have delivered instead of sending a duplicate.
+    pending.deliveryAttempted = true;
+    const state = checkpointState ?? taskState(task);
+    state.pendingFinal = pending;
+    if (!(await checkpointTask(deps.db, task, state))) return LOST_LEASE;
+    if (!(await renewTaskLease(deps.db, task))) return LOST_LEASE;
+    try {
+      await deps.deliverFinal(task, pending.text);
+    } catch (error) {
+      // A definitive provider rejection is retryable. Ambiguous transport
+      // failures are normalized by channel adapters and do not throw.
+      pending.deliveryAttempted = false;
+      state.pendingFinal = pending;
+      if (!(await checkpointTask(deps.db, task, state))) return LOST_LEASE;
+      throw error;
+    }
+  }
+
+  const completed = await completeTask(deps.db, task, {
+    status: pending.terminalStatus,
+    progress: pending.progress,
+  });
+  if (!completed) return LOST_LEASE;
+  return { outcome: pending.outcome, detail: pending.progress.slice(0, 200) };
+}
+
+/** Persist-before-send turns the task checkpoint into a small durable outbox. */
+async function stageFinalResponse(
+  deps: ExecutorDeps,
+  task: TaskLease,
+  state: TaskState,
+  window: ModelMessage[],
+  pending: PendingFinal,
+): Promise<ExecuteResult> {
+  state.pendingFinal = pending;
+  state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
+  if (!(await checkpointTask(deps.db, task, state))) return LOST_LEASE;
+  return finalizePendingResponse(deps, task, pending, state);
+}
+
 async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]> {
   if (task.conversationId) {
+    if (task.trust === 'known' || task.trust === 'unknown') {
+      const trigger = task.trigger as {
+        source?: unknown;
+        payload?: { messageId?: unknown };
+      } | null;
+      const messageId =
+        trigger?.source === 'email' && typeof trigger.payload?.messageId === 'string'
+          ? trigger.payload.messageId
+          : undefined;
+      if (messageId) {
+        const [inbound] = await db
+          .select({ text: messages.text })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, task.conversationId),
+              eq(messages.channelMessageId, `gmail:${messageId}`),
+            ),
+          )
+          .limit(1);
+        if (inbound) return [{ role: 'user', content: inbound.text } as ModelMessage];
+      }
+      // Never expose the rest of a private bound conversation to an external
+      // sender when no event-specific message can be proven.
+      return [
+        {
+          role: 'user',
+          content: `External task trigger (${task.type}):\n${JSON.stringify(task.trigger)}`,
+        } as ModelMessage,
+      ];
+    }
     const rows = await listMessages(db, task.conversationId);
     return rows
       .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -258,7 +406,29 @@ export async function executeTask(deps: ExecutorDeps, taskId: string): Promise<E
     try {
       return await runSteps(deps, task);
     } catch (err) {
+      if (err instanceof BudgetReservationError) {
+        if (err.message.startsWith('task budget')) {
+          const marked = await markTaskNeedsAttention(db, task, `budget: ${err.message}`);
+          if (!marked) return LOST_LEASE;
+          await postConversationNotice(
+            db,
+            task,
+            `I hit this task's own budget cap (${err.message}) and stopped. Raise the task budget on the Tasks page if you want it retried.`,
+          );
+          return { outcome: 'needs_attention', detail: err.message.slice(0, 500) };
+        }
+        const [fresh] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+        const parked = await parkForBudget(db, task, taskState(fresh ?? task), err.resumeAt);
+        if (!parked) return LOST_LEASE;
+        await postConversationNotice(
+          db,
+          task,
+          `I'm pausing here — ${err.message}. This resumes automatically when the budget resets.`,
+        );
+        return { outcome: 'parked', detail: err.message.slice(0, 500) };
+      }
       const disposition = await recordFailedAttempt(db, task, String(err));
+      if (disposition === 'lost_lease') return LOST_LEASE;
       return {
         outcome: disposition === 'dead_letter' ? 'dead_letter' : 'failed',
         detail: String(err).slice(0, 500),
@@ -267,10 +437,18 @@ export async function executeTask(deps: ExecutorDeps, taskId: string): Promise<E
   });
 }
 
-async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResult> {
+async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteResult> {
   const { db, router, dispatcher } = deps;
-  const agent = await getAgent(db);
+  const lease = task;
   const state = taskState(task);
+  if (state.pendingFinal) return finalizePendingResponse(deps, lease, state.pendingFinal, state);
+
+  const triggerSource = (task.trigger as { source?: unknown } | null)?.source;
+  if (task.trust === 'known' || task.trust === 'unknown' || triggerSource === 'email') {
+    state.untrustedContext = true;
+  }
+
+  const agent = await getAgent(db);
   const abort = new AbortController();
 
   // Code jobs (nightly memory extraction/consolidation, imports) run a
@@ -279,18 +457,35 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
   // its own checkpoint in tasks.state.
   const job = codeJobName(task);
   if (job) {
-    const outcome = await runCodeJob({ db, router, workspace: deps.workspace }, job, task);
+    const outcome = await runCodeJob(
+      {
+        db,
+        router,
+        workspace: deps.workspace,
+        heartbeat: async () => {
+          if (!(await renewTaskLease(db, lease))) throw new Error('task lease lost');
+        },
+      },
+      job,
+      task,
+    );
+    if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
     if (!outcome.done) {
       const [fresh] = await db.select().from(tasks).where(eq(tasks.id, task.id));
-      await sleepTask(
+      const slept = await sleepTask(
         db,
-        task.id,
+        lease,
         taskState(fresh ?? task),
         outcome.runAfter ?? new Date(Date.now() + 5000),
       );
+      if (!slept) return LOST_LEASE;
       return { outcome: 'sleeping', detail: outcome.summary.slice(0, 200) };
     }
-    await completeTask(db, task.id, { status: 'done', progress: outcome.summary.slice(0, 500) });
+    const completed = await completeTask(db, lease, {
+      status: 'done',
+      progress: outcome.summary.slice(0, 500),
+    });
+    if (!completed) return LOST_LEASE;
     return { outcome: 'done', detail: outcome.summary.slice(0, 200) };
   }
 
@@ -298,27 +493,120 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
   // check, a reflection, or a fresh bounded session child.
   if (task.type === 'mission') {
     const wake = await wakeMission({ db, router }, task, agent);
+    if (wake.action === 'lease_lost') return LOST_LEASE;
     return {
       outcome: wake.action === 'deadline_reached' ? 'done' : 'sleeping',
       detail: wake.action,
     };
   }
 
+  let window = state.contextWindow as unknown as ModelMessage[];
+  if (window.length === 0) {
+    window = await seedContext(db, task);
+  }
+  let browserStageRemainder: ProposedToolCall[] = [];
+  const browserStageSnapshots = new Map<
+    string,
+    { contextWindow: TaskState['contextWindow']; pendingJob: TaskState['pendingJob'] }
+  >();
+
   const ctx: ToolContextLike = {
     taskId: task.id,
     agentId: task.agentId,
     conversationId: task.conversationId ?? undefined,
     trust: task.trust as Trust,
+    tainted: state.untrustedContext,
     db,
     now: () => new Date(),
     signal: abort.signal,
     log: async () => {},
+    stageBrowserJob: async (job) => {
+      const pendingJob = {
+        dbToolCallId: job.dbToolCallId,
+        toolCallId: job.modelToolCallId,
+        toolName: job.toolName,
+        callbackToken: job.pending.callbackToken,
+        timeoutAt: job.pending.timeoutAt,
+      };
+      // The model may have proposed several calls in one assistant message. A
+      // crash after launch cannot leave dangling tool calls in the durable
+      // transcript, so calls after browser.execute are checkpointed as refused
+      // exactly as the live loop will refuse them below.
+      const durableWindow = [
+        ...window,
+        ...browserStageRemainder.map((call) =>
+          toolResultMessage(call.toolCallId, call.toolName, {
+            error:
+              'a browser job is already running for this task — wait for its result before making more tool calls',
+          }),
+        ),
+      ];
+      const contextWindow = compact(durableWindow) as unknown as TaskState['contextWindow'];
+      const snapshot = {
+        contextWindow: state.contextWindow,
+        pendingJob: state.pendingJob,
+      };
+      // If this is an approved call, remove the approval from the DURABLE
+      // recovery checkpoint before launch. Keep the in-memory list untouched so
+      // the current loop can continue processing its remaining approvals.
+      const checkpointState: TaskState = {
+        ...state,
+        pendingApprovals: state.pendingApprovals.filter(
+          (approval) => approval.dbToolCallId !== job.dbToolCallId,
+        ),
+        pendingJob,
+        contextWindow,
+      };
+      await db.transaction(async (tx) => {
+        const [staged] = await tx
+          .update(toolCalls)
+          .set({ result: job.pending })
+          .where(
+            and(
+              eq(toolCalls.id, job.dbToolCallId),
+              eq(toolCalls.taskId, task.id),
+              eq(toolCalls.status, 'executing'),
+            ),
+          )
+          .returning({ id: toolCalls.id });
+        if (!staged) throw new Error('browser tool call could not be staged');
+        if (!(await checkpointTask(tx as unknown as Db, lease, checkpointState))) {
+          throw new Error('task lease lost while staging browser job');
+        }
+      });
+      browserStageSnapshots.set(job.dbToolCallId, snapshot);
+      state.pendingJob = pendingJob;
+      state.contextWindow = contextWindow;
+    },
+    clearStagedBrowserJob: async (job) => {
+      const snapshot = browserStageSnapshots.get(job.dbToolCallId);
+      const checkpointState: TaskState = {
+        ...state,
+        pendingJob: snapshot?.pendingJob ?? null,
+        contextWindow: snapshot?.contextWindow ?? state.contextWindow,
+      };
+      await db.transaction(async (tx) => {
+        const [cleared] = await tx
+          .update(toolCalls)
+          .set({ result: null })
+          .where(
+            and(
+              eq(toolCalls.id, job.dbToolCallId),
+              eq(toolCalls.taskId, task.id),
+              eq(toolCalls.status, 'executing'),
+            ),
+          )
+          .returning({ id: toolCalls.id });
+        if (!cleared) throw new Error('staged browser tool call could not be cleared');
+        if (!(await checkpointTask(tx as unknown as Db, lease, checkpointState))) {
+          throw new Error('task lease lost while clearing browser job');
+        }
+      });
+      state.pendingJob = checkpointState.pendingJob;
+      state.contextWindow = checkpointState.contextWindow;
+      browserStageSnapshots.delete(job.dbToolCallId);
+    },
   };
-
-  let window = state.contextWindow as unknown as ModelMessage[];
-  if (window.length === 0) {
-    window = await seedContext(db, task);
-  }
 
   // ── Resume: settle a finished (or timed-out) browser job ──────────────────
   // The job's callback replaced the sentinel result on the tool_calls row
@@ -331,6 +619,10 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
     const timedOut = Date.now() >= new Date(pending.timeoutAt).getTime();
     if (row && !isBrowserJobPending(row.result)) {
       window.push(toolResultMessage(pending.toolCallId, pending.toolName, row.result));
+      if (dispatcher.resultIsUntrusted(pending.toolName)) {
+        state.untrustedContext = true;
+        ctx.tainted = true;
+      }
       state.completedToolCallIds.push(pending.dbToolCallId);
       state.pendingJob = null;
       await settleJobReservation(db, row);
@@ -340,7 +632,15 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
         error: 'the browser job never reported back (timed out) — treat this attempt as failed',
       };
       if (row) {
-        await db.update(toolCalls).set({ result: settled }).where(eq(toolCalls.id, row.id));
+        await db
+          .update(toolCalls)
+          .set({
+            status: 'failed',
+            result: settled,
+            error: settled.error,
+            finishedAt: new Date(),
+          })
+          .where(eq(toolCalls.id, row.id));
         await settleJobReservation(db, row);
       }
       window.push(toolResultMessage(pending.toolCallId, pending.toolName, settled));
@@ -363,7 +663,8 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
     const byId = new Map(rows.map((r) => [r.id, r]));
     const stillPending: typeof state.pendingApprovals = [];
 
-    for (const pending of state.pendingApprovals) {
+    for (let i = 0; i < state.pendingApprovals.length; i += 1) {
+      const pending = state.pendingApprovals[i] as (typeof state.pendingApprovals)[number];
       const approval = byId.get(pending.approvalId);
       if (!approval || approval.status === 'pending') {
         stillPending.push(pending);
@@ -376,8 +677,23 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
           stillPending.push(pending);
           continue;
         }
+        if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
         const outcome = await dispatcher.executeApproved(pending.dbToolCallId, ctx);
-        if (outcome.ok && isBrowserJobPending(outcome.result)) {
+        if (outcome.kind === 'budget_blocked') {
+          // Keep this approved call (and every unprocessed call) in the
+          // checkpoint. Approval grants permission, not unlimited spend.
+          state.pendingApprovals = [...stillPending, ...state.pendingApprovals.slice(i)];
+          state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
+          const parked = await parkForBudget(db, lease, state, outcome.resumeAt);
+          if (!parked) return LOST_LEASE;
+          await postConversationNotice(
+            db,
+            task,
+            `I'm pausing here — the approved action doesn't fit the remaining budget (${outcome.reason}). It resumes automatically when the budget resets.`,
+          );
+          return { outcome: 'parked', detail: outcome.reason };
+        }
+        if (outcome.kind === 'executed' && isBrowserJobPending(outcome.result)) {
           // The approved call launched a browser job — park for its callback.
           window.push(
             toolResultMessage(pending.toolCallId, pending.toolName, {
@@ -397,10 +713,14 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
             toolResultMessage(
               pending.toolCallId,
               pending.toolName,
-              outcome.ok ? outcome.result : { error: outcome.error },
+              outcome.kind === 'executed' ? outcome.result : { error: outcome.error },
             ),
           );
           state.completedToolCallIds.push(pending.dbToolCallId);
+          if (outcome.kind === 'executed' && dispatcher.resultIsUntrusted(pending.toolName)) {
+            state.untrustedContext = true;
+            ctx.tainted = true;
+          }
         }
       } else {
         window.push(
@@ -417,7 +737,8 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
 
     if (stillPending.length > 0) {
       state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-      await parkForApproval(db, task.id, state, stillPending);
+      const parked = await parkForApproval(db, lease, state, stillPending);
+      if (!parked) return LOST_LEASE;
       return { outcome: 'parked', detail: 'still waiting on approvals' };
     }
     state.pendingApprovals = [];
@@ -426,7 +747,8 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
   // A browser job is (still) in flight — sleep until its callback or timeout.
   if (state.pendingJob) {
     state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-    await sleepTask(db, task.id, state, new Date(state.pendingJob.timeoutAt));
+    const slept = await sleepTask(db, lease, state, new Date(state.pendingJob.timeoutAt));
+    if (!slept) return LOST_LEASE;
     return { outcome: 'sleeping', detail: 'browser job running' };
   }
 
@@ -434,70 +756,49 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
   let plan = task.plan ? PlanSchema.parse(task.plan) : null;
   if (!plan) {
     plan = await planTask({ db, router }, task, agent, window);
+    if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
     if (plan?.action === 'mission') {
+      if (state.untrustedContext || (task.trust !== 'owner' && task.trust !== 'assistant')) {
+        const refused = 'I did not start a long-running mission from an external request.';
+        window.push({ role: 'assistant', content: refused } as ModelMessage);
+        return stageFinalResponse(deps, lease, state, window, {
+          text: refused,
+          progress: 'refused externally triggered mission',
+          terminalStatus: 'done',
+          outcome: 'done',
+        });
+      }
       const statement = plan.steps.length
         ? `${plan.reasoning || 'Long-horizon work'} — steps: ${plan.steps.join('; ')}`
         : plan.reasoning || 'Long-horizon work from owner request';
       const mission = await startMission(db, task, plan, statement);
       const confirmation = `Started a mission for this (id ${mission.id.slice(0, 8)}). I'll work on it in daily sessions, reflect weekly on whether it's still worth pursuing, and report as things happen. It's visible under Monitoring on the dashboard.`;
-      if (task.conversationId) {
-        await persistMessage(db, {
-          conversationId: task.conversationId,
-          taskId: task.id,
-          role: 'assistant',
-          origin: 'assistant',
-          parts: [{ type: 'text', text: confirmation }],
-          text: confirmation,
-        });
-      }
-      if (deps.deliverFinal) {
-        await deps.deliverFinal(task, confirmation).catch(() => {});
-      }
-      await completeTask(db, task.id, { status: 'done', progress: 'spawned mission' });
-      return { outcome: 'done', detail: `mission ${mission.id}` };
+      window.push({ role: 'assistant', content: confirmation } as ModelMessage);
+      return stageFinalResponse(deps, lease, state, window, {
+        text: confirmation,
+        progress: `spawned mission ${mission.id}`,
+        terminalStatus: 'done',
+        outcome: 'done',
+      });
     }
     if (plan?.action === 'clarify' && task.conversationId) {
       const question =
         plan.missingInfo.length > 0
           ? `Before I proceed, I need to know: ${plan.missingInfo.join('; ')}`
           : 'I need more detail before I can act on this — what exactly would you like me to do?';
-      await persistMessage(db, {
-        conversationId: task.conversationId,
-        taskId: task.id,
-        role: 'assistant',
-        origin: 'assistant',
-        parts: [{ type: 'text', text: question }],
+      window.push({ role: 'assistant', content: question } as ModelMessage);
+      return stageFinalResponse(deps, lease, state, window, {
         text: question,
+        progress: 'asked for clarification',
+        terminalStatus: 'done',
+        outcome: 'clarify',
       });
-      // a clarifying question is an answer too — it must reach the source channel
-      if (deps.deliverFinal) {
-        await deps
-          .deliverFinal(task, question)
-          .catch((err) => console.error('clarify delivery failed', err));
-      }
-      await completeTask(db, task.id, { status: 'done', progress: 'asked for clarification' });
-      return { outcome: 'clarify' };
     }
   }
 
   const role = ROLE_FOR_TYPE[task.type] ?? 'draft';
-  const system = [
-    buildSystemPrompt(agent, { ownerCard: await getOwnerCard(db) }),
-    channelContext(task),
-    plan
-      ? `\nCurrent plan (follow it; deviate only with good reason):\n${JSON.stringify(plan)}`
-      : '',
-  ]
-    .filter(Boolean)
-    .join('\n');
-
-  const toolDefs = dispatcher.toolDefs(task.trust as Trust);
-  const toolSet = Object.fromEntries(
-    toolDefs.map((def) => [
-      def.name,
-      { description: def.description, inputSchema: def.inputSchema },
-    ]),
-  );
+  const privilegedTask = task.trust === 'owner' || task.trust === 'assistant';
+  const ownerCard = privilegedTask && !state.untrustedContext ? await getOwnerCard(db) : undefined;
 
   // Owner chat/SMS replies are the critical carve-out: hard caps degrade
   // them to the fallback model instead of blocking (evaluateBudget).
@@ -506,6 +807,27 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
 
   // ── Step loop ─────────────────────────────────────────────────────────────
   while (state.step < task.maxSteps) {
+    // Rebuild the system prompt after each tool turn. Once an external result
+    // taints the context, the private owner card is removed from every later
+    // model call instead of lingering in a constant system prompt.
+    const system = [
+      buildSystemPrompt(agent, {
+        ownerCard: !state.untrustedContext ? ownerCard : undefined,
+      }),
+      channelContext(task),
+      plan
+        ? `\nCurrent plan (follow it; deviate only with good reason):\n${JSON.stringify(plan)}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const toolDefs = dispatcher.toolDefs(task.trust as Trust, state.untrustedContext);
+    const toolSet = Object.fromEntries(
+      toolDefs.map((def) => [
+        def.name,
+        { description: def.description, inputSchema: def.inputSchema },
+      ]),
+    );
     const stepResult = await router.step(role, {
       taskId: task.id,
       system,
@@ -513,13 +835,20 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
       tools: toolSet as never,
       critical,
     });
+    if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
 
     if (!stepResult.ok) {
       if (stepResult.decision.mode === 'block') {
         // daily/monthly exhausted — park as waiting_budget until the period
         // resets (checkpointed at this step boundary, never killed mid-step)
         state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-        await parkForBudget(db, task.id, state, budgetResumeAt(stepResult.decision.reason));
+        const parked = await parkForBudget(
+          db,
+          lease,
+          state,
+          budgetResumeAt(stepResult.decision.reason),
+        );
+        if (!parked) return LOST_LEASE;
         await postConversationNotice(
           db,
           task,
@@ -528,16 +857,26 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
         return { outcome: 'parked', detail: stepResult.decision.reason };
       }
       // task budget exhausted — surface to the owner on the dashboard
-      await db
-        .update(tasks)
-        .set({ status: 'needs_attention', progress: `budget: ${stepResult.decision.reason}` })
-        .where(eq(tasks.id, task.id));
+      const marked = await markTaskNeedsAttention(
+        db,
+        lease,
+        `budget: ${stepResult.decision.reason}`,
+      );
+      if (!marked) return LOST_LEASE;
       await postConversationNotice(
         db,
         task,
         `I hit this task's own budget cap (${stepResult.decision.reason}) and stopped. It's marked needs-attention on the Tasks page — raise the task budget there if you want me to finish.`,
       );
       return { outcome: 'needs_attention', detail: stepResult.decision.reason };
+    }
+
+    const successfulFinish =
+      stepResult.finishReason === undefined ||
+      stepResult.finishReason === 'stop' ||
+      (stepResult.toolCalls.length > 0 && stepResult.finishReason === 'tool-calls');
+    if (!successfulFinish) {
+      throw new Error(`model step ended with finish reason ${stepResult.finishReason}`);
     }
 
     state.step += 1;
@@ -559,7 +898,8 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
 
       const pendingApprovals: TaskState['pendingApprovals'] = [];
       const approvalNotices: Array<{ taskId: string; shortCode: string; summary: string }> = [];
-      for (const tc of stepResult.toolCalls) {
+      for (let toolIndex = 0; toolIndex < stepResult.toolCalls.length; toolIndex += 1) {
+        const tc = stepResult.toolCalls[toolIndex] as (typeof stepResult.toolCalls)[number];
         // One browser job at a time: once a call in this batch launched a job,
         // later calls are refused undispatched (parallel launches would race
         // the shared profile and orphan all but the last callback token).
@@ -572,9 +912,12 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
           );
           continue;
         }
+        if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+        browserStageRemainder = stepResult.toolCalls.slice(toolIndex + 1);
         const outcome = await dispatcher.dispatch({
           task,
           step: state.step,
+          modelToolCallId: tc.toolCallId,
           toolName: tc.toolName,
           args: tc.input,
           ctx,
@@ -584,6 +927,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
             model: stepResult.modelId,
           },
         });
+        browserStageRemainder = [];
 
         if (outcome.kind === 'executed') {
           if (isBrowserJobPending(outcome.result)) {
@@ -603,6 +947,10 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
           } else {
             window.push(toolResultMessage(tc.toolCallId, tc.toolName, outcome.result));
             state.completedToolCallIds.push(outcome.toolCallId);
+            if (dispatcher.resultIsUntrusted(tc.toolName)) {
+              state.untrustedContext = true;
+              ctx.tainted = true;
+            }
           }
         } else if (outcome.kind === 'budget_blocked') {
           // The pre-flight reservation failed: this expensive action does not
@@ -616,7 +964,8 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
             }),
           );
           state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-          await parkForBudget(db, task.id, state, outcome.resumeAt);
+          const parked = await parkForBudget(db, lease, state, outcome.resumeAt);
+          if (!parked) return LOST_LEASE;
           await postConversationNotice(
             db,
             task,
@@ -651,7 +1000,8 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
       state.contextWindow = window as unknown as TaskState['contextWindow'];
 
       if (pendingApprovals.length > 0) {
-        await parkForApproval(db, task.id, state, pendingApprovals);
+        const parked = await parkForApproval(db, lease, state, pendingApprovals);
+        if (!parked) return LOST_LEASE;
         if (deps.notifyApproval && approvalNotices.length > 0) {
           await deps
             .notifyApproval(approvalNotices)
@@ -672,56 +1022,34 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
       }
 
       if (state.pendingJob) {
-        await sleepTask(db, task.id, state, new Date(state.pendingJob.timeoutAt));
+        const slept = await sleepTask(db, lease, state, new Date(state.pendingJob.timeoutAt));
+        if (!slept) return LOST_LEASE;
         return { outcome: 'sleeping', detail: 'browser job running' };
       }
 
-      await checkpointTask(db, task.id, state);
+      if (!(await checkpointTask(db, lease, state))) return LOST_LEASE;
       continue;
     }
 
     // no tool calls → final answer
     const text = stepResult.text.trim() || '(no response)';
-    if (task.conversationId) {
-      await persistMessage(db, {
-        conversationId: task.conversationId,
-        taskId: task.id,
-        role: 'assistant',
-        origin: 'assistant',
-        parts: [{ type: 'text', text }],
-        text,
-      });
-    }
-    if (deps.deliverFinal) {
-      await deps
-        .deliverFinal(task, text)
-        .catch((err) => console.error('final delivery failed', err));
-    }
-    state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-    await checkpointTask(db, task.id, state);
-    await completeTask(db, task.id, { status: 'done', progress: text.slice(0, 200) });
-    return { outcome: 'done', detail: text.slice(0, 200) };
+    window.push({ role: 'assistant', content: text } as ModelMessage);
+    return stageFinalResponse(deps, lease, state, window, {
+      text,
+      progress: text.slice(0, 200),
+      terminalStatus: 'done',
+      outcome: 'done',
+    });
   }
 
   // max steps exhausted
   const stuck = `stopped after ${task.maxSteps} steps without finishing`;
   const stuckMessage = `I ${stuck}. Here's where I got: ${state.scratchpad || 'see task log.'}`;
-  if (task.conversationId) {
-    await persistMessage(db, {
-      conversationId: task.conversationId,
-      taskId: task.id,
-      role: 'assistant',
-      origin: 'assistant',
-      parts: [{ type: 'text', text: stuckMessage }],
-      text: stuck,
-    });
-  }
-  // even a failure report must reach the source channel, not just the dashboard
-  if (deps.deliverFinal) {
-    await deps
-      .deliverFinal(task, stuckMessage)
-      .catch((err) => console.error('stuck delivery failed', err));
-  }
-  await completeTask(db, task.id, { status: 'failed', progress: stuck });
-  return { outcome: 'failed', detail: stuck };
+  window.push({ role: 'assistant', content: stuckMessage } as ModelMessage);
+  return stageFinalResponse(deps, lease, state, window, {
+    text: stuckMessage,
+    progress: stuck,
+    terminalStatus: 'failed',
+    outcome: 'failed',
+  });
 }

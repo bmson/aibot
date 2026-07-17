@@ -11,6 +11,7 @@ import {
 import { and, eq, gte, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getAgent } from '../chat.js';
+import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
 import type { ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 
@@ -62,6 +63,7 @@ const ExtractionOutputSchema = z.object({
 export interface ExtractionDeps {
   db: Db;
   router: ModelRouter;
+  heartbeat?: () => Promise<void>;
 }
 
 export interface ExtractionResult {
@@ -77,6 +79,7 @@ export interface ExtractionResult {
 const WINDOW_HOURS = 26; // nightly run with an hour of overlap slack
 const MAX_CONVERSATIONS = 12;
 const MAX_CHARS_PER_CONVERSATION = 8000;
+const MAX_MESSAGES_PER_CONVERSATION = 100;
 
 function extractionSystem(knownNames: string[]): string {
   return [
@@ -125,12 +128,10 @@ export async function runMemoryExtraction(
       contactsCreated: 0,
     };
 
-    const recent = await db
+    const activeConversations = await db
       .select({
         conversationId: messages.conversationId,
-        role: messages.role,
-        text: messages.text,
-        createdAt: messages.createdAt,
+        lastMessageAt: sql<Date>`max(${messages.createdAt})`,
       })
       .from(messages)
       .where(
@@ -140,24 +141,40 @@ export async function runMemoryExtraction(
           sql`length(${messages.text}) > 5`,
         ),
       )
-      .orderBy(messages.conversationId, messages.createdAt);
-    if (recent.length === 0) return result;
+      .groupBy(messages.conversationId)
+      .orderBy(sql`max(${messages.createdAt}) desc`)
+      .limit(MAX_CONVERSATIONS);
+    if (activeConversations.length === 0) return result;
 
-    const byConversation = new Map<string, typeof recent>();
-    for (const row of recent) {
-      const bucket = byConversation.get(row.conversationId) ?? [];
-      bucket.push(row);
-      byConversation.set(row.conversationId, bucket);
-    }
-
-    // Cap at the most recently ACTIVE conversations — never an arbitrary
-    // (uuid-ordered) sample that could drop tonight's real conversations.
-    const conversationIds = [...byConversation.entries()]
-      .sort(
-        (a, b) => (b[1].at(-1)?.createdAt.getTime() ?? 0) - (a[1].at(-1)?.createdAt.getTime() ?? 0),
-      )
-      .slice(0, MAX_CONVERSATIONS)
-      .map(([id]) => id);
+    // Bound both selected conversations and rows per conversation at the
+    // database. A high-volume thread can no longer make nightly extraction
+    // load an unbounded day of messages into memory.
+    const conversationIds = activeConversations.map((row) => row.conversationId);
+    const boundedRows = await Promise.all(
+      conversationIds.map((conversationId) =>
+        db
+          .select({
+            conversationId: messages.conversationId,
+            role: messages.role,
+            text: messages.text,
+            createdAt: messages.createdAt,
+          })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, conversationId),
+              gte(messages.createdAt, since),
+              or(eq(messages.role, 'user'), eq(messages.role, 'assistant')),
+              sql`length(${messages.text}) > 5`,
+            ),
+          )
+          .orderBy(sql`${messages.createdAt} desc`)
+          .limit(MAX_MESSAGES_PER_CONVERSATION),
+      ),
+    );
+    const byConversation = new Map(
+      boundedRows.map((rows, index) => [conversationIds[index] as string, rows.reverse()]),
+    );
     const convRows = await db
       .select({ id: conversations.id, trust: conversations.trust, title: conversations.title })
       .from(conversations)
@@ -169,6 +186,7 @@ export async function runMemoryExtraction(
     const agentId = (await getAgent(db)).id;
 
     for (const conversationId of conversationIds) {
+      await deps.heartbeat?.();
       const rows = byConversation.get(conversationId) ?? [];
       const trust = trustById.get(conversationId) ?? 'unknown';
       const transcript = rows
@@ -184,7 +202,13 @@ export async function runMemoryExtraction(
         system: extractionSystem(knownNames),
         prompt: `Conversation (source trust: ${trust}):\n${transcript}`,
       });
-      if (!outcome.ok) continue;
+      await deps.heartbeat?.();
+      if (!outcome.ok) {
+        throw new BudgetReservationError(
+          outcome.decision.reason,
+          outcome.decision.reason.includes('monthly') ? nextMonthlyReset() : nextDailyReset(),
+        );
+      }
 
       const facts = outcome.object.facts;
       result.extracted += facts.length;
@@ -194,6 +218,7 @@ export async function runMemoryExtraction(
         facts.map((f) => f.content),
         { taskId: opts.taskId },
       );
+      await deps.heartbeat?.();
 
       for (let i = 0; i < facts.length; i++) {
         const fact = facts[i];

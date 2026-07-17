@@ -1,6 +1,11 @@
 import { createHmac } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
-import { parseApprovalReply, validateTwilioSignature } from './client.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  AmbiguousTwilioDeliveryError,
+  parseApprovalReply,
+  TwilioClient,
+  validateTwilioSignature,
+} from './client.js';
 
 const AUTH_TOKEN = 'test-auth-token-12345';
 const URL_ = 'https://example.com/webhooks/twilio/sms';
@@ -14,6 +19,105 @@ function sign(url: string, params: Record<string, string>, token = AUTH_TOKEN): 
       .join('');
   return createHmac('sha1', token).update(data, 'utf8').digest('base64');
 }
+
+describe('TwilioClient resilience', () => {
+  it('retries only an explicit 429 rejection and respects Retry-After', async () => {
+    const sleep = vi.fn(async (_ms: number) => {});
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          { code: 20429, message: 'too many requests' },
+          { status: 429, headers: { 'retry-after': '1' } },
+        ),
+      )
+      .mockResolvedValueOnce(Response.json({ sid: 'SM123' }));
+    const client = new TwilioClient('AC123', AUTH_TOKEN, '+15550000000', {
+      fetch: fetchMock,
+      sleep,
+      maxRetries: 2,
+    });
+
+    await expect(client.send('+15551112222', 'hello')).resolves.toEqual({ sid: 'SM123' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(1000);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('does not retry ambiguous 5xx or network failures', async () => {
+    const serverFetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(Response.json({ message: 'uncertain' }, { status: 503 }));
+    const serverClient = new TwilioClient('AC123', AUTH_TOKEN, '+15550000000', {
+      fetch: serverFetch,
+      maxRetries: 3,
+    });
+    await expect(serverClient.send('+15551112222', 'hello')).rejects.toBeInstanceOf(
+      AmbiguousTwilioDeliveryError,
+    );
+    expect(serverFetch).toHaveBeenCalledTimes(1);
+
+    const networkFetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockRejectedValueOnce(new TypeError('connection reset'));
+    const networkClient = new TwilioClient('AC123', AUTH_TOKEN, '+15550000000', {
+      fetch: networkFetch,
+      maxRetries: 3,
+    });
+    await expect(networkClient.send('+15551112222', 'hello')).rejects.toBeInstanceOf(
+      AmbiguousTwilioDeliveryError,
+    );
+    expect(networkFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('times out an ambiguous send without retrying it', async () => {
+    const fetchMock = vi.fn<typeof globalThis.fetch>().mockImplementationOnce((_url, init) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+      });
+    });
+    const client = new TwilioClient('AC123', AUTH_TOKEN, '+15550000000', {
+      fetch: fetchMock,
+      timeoutMs: 5,
+      maxRetries: 3,
+    });
+
+    await expect(client.send('+15551112222', 'hello')).rejects.toBeInstanceOf(
+      AmbiguousTwilioDeliveryError,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps explicit client rejections definitive', async () => {
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        Response.json({ code: 21211, message: 'invalid phone number' }, { status: 400 }),
+      );
+    const client = new TwilioClient('AC123', AUTH_TOKEN, '+15550000000', {
+      fetch: fetchMock,
+    });
+
+    const error = await client.send('+15551112222', 'hello').catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(AmbiguousTwilioDeliveryError);
+    expect(String(error)).toContain('twilio send failed: 21211 invalid phone number');
+  });
+
+  it('treats a successful response without a Message SID as ambiguous', async () => {
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(Response.json({ status: 'queued' }));
+    const client = new TwilioClient('AC123', AUTH_TOKEN, '+15550000000', {
+      fetch: fetchMock,
+    });
+
+    await expect(client.send('+15551112222', 'hello')).rejects.toBeInstanceOf(
+      AmbiguousTwilioDeliveryError,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('validateTwilioSignature', () => {
   const params = { MessageSid: 'SM123', From: '+14155551234', To: '+18885550000', Body: 'hi' };

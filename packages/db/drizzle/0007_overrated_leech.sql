@@ -1,0 +1,1 @@
+ALTER TABLE "gmail_sync_state" ADD COLUMN "cursor" jsonb DEFAULT '{}'::jsonb NOT NULL;

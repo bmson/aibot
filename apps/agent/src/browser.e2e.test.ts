@@ -1,5 +1,6 @@
 import type { BrowserPlan, InboundEvent, ModelRouter, StepCallOutcome } from '@assistant/core';
 import {
+  completeTask,
   enqueueTask,
   executeTask,
   getAgent,
@@ -17,6 +18,7 @@ import {
   toolCalls,
 } from '@assistant/db';
 import {
+  AmbiguousBrowserJobLaunchError,
   type BrowserJobLaunchInput,
   registerBrowserTools,
   ToolDispatcher,
@@ -199,13 +201,13 @@ describe('browser job end-to-end (integration, scripted model)', () => {
     const inventoried = await db.select().from(files).where(eq(files.taskId, task.id));
     expect(inventoried.map((f) => f.workspacePath)).toContain('traces/test.zip');
 
-    // A second callback with the same token must not double-wake later runs
+    // A second callback with the same token must not overwrite the accepted result
     const replay = await recordBrowserJobResult(db, {
       taskId: task.id,
       token: launches[0]?.callbackToken ?? '',
       result: { ok: false, error: 'replay' },
     });
-    expect(replay.ok).toBe(true); // pendingJob still set until the executor settles — result idempotently overwritten
+    expect(replay).toMatchObject({ ok: false, status: 409 });
 
     // Run 2: settles the job result from tool_calls and finishes
     const run2 = await executeTask({ db, router, dispatcher }, task.id);
@@ -215,7 +217,7 @@ describe('browser job end-to-end (integration, scripted model)', () => {
     const calls = await db.select().from(toolCalls).where(eq(toolCalls.taskId, task.id));
     const browse = calls.find((c) => c.toolName === 'browser.execute');
     expect(browse?.status).toBe('succeeded');
-    expect(browse?.result).toMatchObject({ ok: false, error: 'replay' });
+    expect(browse?.result).toMatchObject(jobResult);
 
     // After settling, late callbacks are rejected
     const late = await recordBrowserJobResult(db, {
@@ -224,6 +226,27 @@ describe('browser job end-to-end (integration, scripted model)', () => {
       result: { ok: true },
     });
     expect(late).toMatchObject({ ok: false, status: 409 });
+  });
+
+  it('rejects a browser callback after terminal cancellation', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const launches: BrowserJobLaunchInput[] = [];
+    const dispatcher = makeDispatcher(launches);
+    const router = makeFakeRouter(readOnlyPlan);
+
+    const { task } = await enqueueTask(db, { event: event(), type: 'adhoc' });
+    createdTaskIds.push(task.id);
+    await executeTask({ db, router, dispatcher }, task.id);
+    await completeTask(db, task.id, { status: 'cancelled' });
+
+    const callback = await recordBrowserJobResult(db, {
+      taskId: task.id,
+      token: launches[0]?.callbackToken ?? '',
+      result: { ok: true, outputs: [] },
+    });
+    expect(callback).toMatchObject({ ok: false, status: 409 });
+    const [after] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(after?.status).toBe('cancelled');
   });
 
   it('interactive plan: parks for approval of the exact plan before any launch', async (ctx) => {
@@ -310,6 +333,85 @@ describe('browser job end-to-end (integration, scripted model)', () => {
     expect(state.pendingJob?.callbackToken).toBe(launches[0]?.callbackToken);
     // the refused call got an explanatory error result in the window
     expect(JSON.stringify(state.contextWindow)).toContain('already running');
+  });
+
+  it('accepts a fast callback while launch still owns the task lease', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const launches: BrowserJobLaunchInput[] = [];
+    let callbackAccepted = false;
+    const registry = registerBrowserTools(new ToolRegistry(), {
+      plan: async () => readOnlyPlan,
+      launcher: {
+        launch: async (input) => {
+          launches.push(input);
+          const callback = await recordBrowserJobResult(db, {
+            taskId: input.taskId,
+            token: input.callbackToken,
+            result: { ok: true, outputs: [{ action: 'extract', text: 'fast result' }] },
+          });
+          callbackAccepted = callback.ok;
+          return { executionName: 'exec-fast' };
+        },
+      },
+      callbackUrl: 'http://localhost:8787/webhooks/browser/callback',
+    });
+    const dispatcher = new ToolDispatcher(db, registry);
+    const router = makeFakeRouter(readOnlyPlan);
+    const { task } = await enqueueTask(db, { event: event(), type: 'adhoc' });
+    createdTaskIds.push(task.id);
+
+    const launchingRun = await executeTask({ db, router, dispatcher }, task.id);
+    expect(callbackAccepted).toBe(true);
+    expect(launches).toHaveLength(1);
+    // The callback atomically moved running → pending, fencing the launcher.
+    expect(launchingRun.outcome).toBe('not_claimable');
+
+    const settledRun = await executeTask({ db, router, dispatcher }, task.id);
+    expect(settledRun.outcome).toBe('done');
+    expect(launches).toHaveLength(1);
+  });
+
+  it('never relaunches after an ambiguous Cloud Run launch response', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const launches: BrowserJobLaunchInput[] = [];
+    const registry = registerBrowserTools(new ToolRegistry(), {
+      plan: async () => readOnlyPlan,
+      launcher: {
+        launch: async (input) => {
+          launches.push(input);
+          throw new AmbiguousBrowserJobLaunchError('connection closed after request upload');
+        },
+      },
+      callbackUrl: 'http://localhost:8787/webhooks/browser/callback',
+    });
+    const dispatcher = new ToolDispatcher(db, registry);
+    const router = makeFakeRouter(readOnlyPlan);
+    const { task } = await enqueueTask(db, { event: event(), type: 'adhoc' });
+    createdTaskIds.push(task.id);
+
+    const first = await executeTask({ db, router, dispatcher }, task.id);
+    expect(first.outcome).toBe('sleeping');
+    expect(launches).toHaveLength(1);
+
+    const [sleeping] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    const pending = (sleeping?.state as { pendingJob?: { callbackToken?: string } } | undefined)
+      ?.pendingJob;
+    expect(pending?.callbackToken).toBe(launches[0]?.callbackToken);
+    const [call] = await db.select().from(toolCalls).where(eq(toolCalls.taskId, task.id));
+    expect(call?.result).toMatchObject({
+      pending: 'browser_job_pending',
+      callbackToken: launches[0]?.callbackToken,
+    });
+
+    // Simulate an early retry poke. The durable pending state is re-slept; the
+    // launcher is never invoked a second time even though launch is uncertain.
+    await db
+      .update(tasks)
+      .set({ runAfter: sql`now() - interval '1 second'` })
+      .where(eq(tasks.id, task.id));
+    const retry = await executeTask({ db, router, dispatcher }, task.id);
+    expect(retry.outcome).toBe('sleeping');
+    expect(launches).toHaveLength(1);
   });
 
   it('a job that never calls back settles as failed after the timeout', async (ctx) => {

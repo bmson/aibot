@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import type { Plan } from '../events.js';
 import type { ModelRouter } from '../model-router/router.js';
-import { enqueueTask, taskState } from './machine.js';
+import { claimTask, enqueueTask, taskState } from './machine.js';
 import { parseIntervalMs, type Reflection, startMission, wakeMission } from './missions.js';
 import { nextRun, runDueSchedules } from './schedules.js';
 
@@ -89,11 +89,13 @@ describe('missions (integration, scripted model)', () => {
     const source = await makeSourceTask();
     const mission = await startMission(db, source, basePlan, 'Watch rates');
     cleanupTaskIds.push(mission.id);
+    const claimed = await claimTask(db, mission.id);
+    expect(claimed).not.toBeNull();
 
     const agent = await getAgent(db);
     const wake = await wakeMission(
       { db, router: reflectingRouter({ decision: 'continue', reasoning: '' }) },
-      mission,
+      claimed as NonNullable<typeof claimed>,
       agent,
     );
     expect(wake.action).toBe('sessioned');
@@ -122,12 +124,13 @@ describe('missions (integration, scripted model)', () => {
       .update(tasks)
       .set({ deadline: new Date(Date.now() - 1000) })
       .where(eq(tasks.id, mission.id));
-    const [stale] = await db.select().from(tasks).where(eq(tasks.id, mission.id));
+    const claimed = await claimTask(db, mission.id);
+    expect(claimed).not.toBeNull();
 
     const agent = await getAgent(db);
     const wake = await wakeMission(
       { db, router: reflectingRouter({ decision: 'continue', reasoning: '' }) },
-      stale as NonNullable<typeof stale>,
+      claimed as NonNullable<typeof claimed>,
       agent,
     );
     expect(wake.action).toBe('deadline_reached');
@@ -150,11 +153,12 @@ describe('missions (integration, scripted model)', () => {
         .update(tasks)
         .set({ lastReflectedAt: new Date(Date.now() - 8 * 24 * 3600e3) }) // > 7 days ago
         .where(eq(tasks.id, mission.id));
-      const [dueForReflection] = await db.select().from(tasks).where(eq(tasks.id, mission.id));
+      const claimed = await claimTask(db, mission.id);
+      expect(claimed).not.toBeNull();
 
       const wake = await wakeMission(
         { db, router: reflectingRouter({ decision, reasoning: 'test', progressPercent: 40 }) },
-        dueForReflection as NonNullable<typeof dueForReflection>,
+        claimed as NonNullable<typeof claimed>,
         agent,
       );
       expect(wake.action).toBe('reflected');

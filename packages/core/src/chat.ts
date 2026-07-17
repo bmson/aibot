@@ -8,7 +8,33 @@ import {
   messages,
   tasks,
 } from '@assistant/db';
-import { desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, or, sql } from 'drizzle-orm';
+import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
+
+const DEFAULT_MESSAGE_LIMIT = 100;
+const MAX_MESSAGE_LIMIT = 200;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface MessageCursor {
+  createdAt: Date;
+  id: string;
+}
+
+/** Stable chronological cursor; the UUID breaks timestamp ties. */
+export function encodeMessageCursor(cursor: MessageCursor): string {
+  return `${cursor.createdAt.toISOString()}|${cursor.id}`;
+}
+
+export function decodeMessageCursor(value: string | null | undefined): MessageCursor | undefined {
+  if (!value) return undefined;
+  const separator = value.indexOf('|');
+  if (separator === -1) return undefined;
+  const timestamp = value.slice(0, separator);
+  const id = value.slice(separator + 1);
+  const createdAt = new Date(timestamp);
+  if (Number.isNaN(createdAt.getTime()) || !UUID_RE.test(id)) return undefined;
+  return { createdAt, id };
+}
 
 /**
  * v4 identity prompt (v2: compiled owner card injected; v3: never-claim-
@@ -62,7 +88,13 @@ export async function ensureChatConversation(
     const [existing] = await db
       .select()
       .from(conversations)
-      .where(eq(conversations.id, conversationId));
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.agentId, agentId),
+          eq(conversations.channel, 'chat'),
+        ),
+      );
     if (existing) return existing;
   }
   const [created] = await db
@@ -82,12 +114,43 @@ export async function listConversations(db: Db, agentId: string) {
     .limit(50);
 }
 
-export async function listMessages(db: Db, conversationId: string) {
-  return db
+export async function listMessages(
+  db: Db,
+  conversationId: string,
+  options: { limit?: number; after?: MessageCursor } = {},
+) {
+  const requestedLimit = options.limit ?? DEFAULT_MESSAGE_LIMIT;
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(MAX_MESSAGE_LIMIT, Math.floor(requestedLimit)))
+    : DEFAULT_MESSAGE_LIMIT;
+
+  if (options.after) {
+    const after = options.after;
+    return db
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, conversationId),
+          or(
+            gt(messages.createdAt, after.createdAt),
+            and(eq(messages.createdAt, after.createdAt), gt(messages.id, after.id)),
+          ),
+        ),
+      )
+      .orderBy(asc(messages.createdAt), asc(messages.id))
+      .limit(limit);
+  }
+
+  // Fetch from the indexed tail, then restore chronological order for model
+  // and UI consumers. This stays O(limit) as a conversation grows.
+  const rows = await db
     .select()
     .from(messages)
     .where(eq(messages.conversationId, conversationId))
-    .orderBy(messages.createdAt);
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(limit);
+  return rows.reverse();
 }
 
 export async function persistMessage(
@@ -126,34 +189,62 @@ export async function persistMessage(
  * Every chat turn is a workflow ("everything is a workflow") — Phase 1 uses a
  * minimal running→done lifecycle; Phase 2 adds the full state machine.
  */
-export async function createChatTask(db: Db, input: { agentId: string; conversationId: string }) {
-  const [budgetRow] = await db.select().from(budgets).where(eq(budgets.scope, 'task_default'));
-  const [task] = await db
-    .insert(tasks)
-    .values({
-      agentId: input.agentId,
-      conversationId: input.conversationId,
-      type: 'chat_turn',
-      status: 'running',
-      trust: 'owner',
-      budgetUsdLimit: budgetRow?.limitUsd ?? '0.25',
-      trigger: { source: 'chat', conversationId: input.conversationId },
-    })
-    .returning();
-  if (!task) throw new Error('failed to create chat task');
-  return task;
+export async function createChatTask(
+  db: Db,
+  input: { agentId: string; conversationId: string },
+): Promise<TaskLease> {
+  // Direct streaming owns this task without queueing it. Insert as pending and
+  // claim it in one transaction so no poller can observe a running row without
+  // a real lease (or race us to the pending row between the two operations).
+  return db.transaction(async (tx) => {
+    const [budgetRow] = await tx.select().from(budgets).where(eq(budgets.scope, 'task_default'));
+    const [task] = await tx
+      .insert(tasks)
+      .values({
+        agentId: input.agentId,
+        conversationId: input.conversationId,
+        type: 'chat_turn',
+        status: 'pending',
+        trust: 'owner',
+        budgetUsdLimit: budgetRow?.limitUsd ?? '0.25',
+        trigger: { source: 'chat', conversationId: input.conversationId },
+      })
+      .returning({ id: tasks.id });
+    if (!task) throw new Error('failed to create chat task');
+
+    const claimed = await claimTask(tx as unknown as Db, task.id);
+    if (!claimed) throw new Error('failed to claim direct chat task');
+    return claimed;
+  });
 }
 
 export async function finishTask(
   db: Db,
-  taskId: string,
-  status: 'done' | 'failed' | 'needs_attention',
-  progress?: string,
-) {
-  await db
-    .update(tasks)
-    .set({ status, progress: progress ?? '', updatedAt: sql`now()` })
-    .where(eq(tasks.id, taskId));
+  task: TaskLease,
+  outcome: { status: 'done' | 'failed'; progress?: string; responseText?: string },
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    // Fence first, then persist the reply in the same transaction. If an owner
+    // cancellation or a reclaimed lease won, a stale stream writes neither the
+    // terminal transition nor an assistant message.
+    const completed = await completeTask(tx as unknown as Db, task, {
+      status: outcome.status,
+      progress: outcome.progress,
+    });
+    if (!completed) return false;
+
+    if (outcome.responseText !== undefined && task.conversationId) {
+      await persistMessage(tx as unknown as Db, {
+        conversationId: task.conversationId,
+        taskId: task.id,
+        role: 'assistant',
+        origin: 'assistant',
+        parts: [{ type: 'text', text: outcome.responseText }],
+        text: outcome.responseText,
+      });
+    }
+    return true;
+  });
 }
 
 /** Set (or clear) the per-conversation model override used by the chat switcher. */

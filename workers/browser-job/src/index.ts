@@ -1,8 +1,10 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { type BrowserEgressProxy, startBrowserEgressProxy } from './egress-proxy.js';
 import { type JobInput, parseJobInput } from './input.js';
+import { assertPublicHttpUrl } from './network.js';
 import { loadProfile, saveProfile } from './profile.js';
 import { runSteps } from './steps.js';
 import { buildStores } from './storage.js';
@@ -27,65 +29,107 @@ interface JobResult {
   [key: string]: unknown;
 }
 
+const MAX_TRACE_BYTES = 50 * 1024 * 1024;
+
 async function run(input: JobInput): Promise<JobResult> {
   const stores = buildStores(input.storage);
   const encKey = process.env.PROFILE_ENC_KEY ?? '';
   const work = await mkdtemp(path.join(os.tmpdir(), 'browser-job-'));
   const profileDir = path.join(work, 'profile');
-
-  const profileLoaded = input.plan.useProfile
-    ? await loadProfile(stores.workspace, profileDir, encKey)
-    : false;
-
-  const context = await chromium.launchPersistentContext(profileDir, {
-    headless: true,
-    viewport: { width: 1280, height: 800 },
-    userAgent:
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 assistant-workspace/0.1',
-  });
-
-  let finalUrl: string | undefined;
-  let tracePath: string | undefined;
-  let stepResult: Awaited<ReturnType<typeof runSteps>>;
+  let egressProxy: BrowserEgressProxy | undefined;
   try {
-    await context.tracing.start({ screenshots: true, snapshots: true });
-    const page = context.pages()[0] ?? (await context.newPage());
-    stepResult = await runSteps(page, input.plan.steps, {
-      taskId: input.taskId,
-      workspace: stores.workspace,
+    const profileLoaded = input.plan.useProfile
+      ? await loadProfile(stores.workspace, profileDir, encKey)
+      : false;
+    const tracesEnabled = process.env.BROWSER_TRACES === 'true';
+    egressProxy = await startBrowserEgressProxy();
+    const context = await chromium.launchPersistentContext(profileDir, {
+      headless: true,
+      chromiumSandbox: true,
+      serviceWorkers: 'block',
+      acceptDownloads: false,
+      permissions: [],
+      proxy: { server: egressProxy.url },
+      args: ['--proxy-bypass-list=<-loopback>', '--disable-quic'],
+      viewport: { width: 1280, height: 800 },
+      userAgent:
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 assistant-workspace/0.1',
     });
-    finalUrl = page.url();
 
-    const traceFile = path.join(work, 'trace.zip');
-    await context.tracing.stop({ path: traceFile });
-    tracePath = `traces/${input.taskId}-${Date.now()}.zip`;
-    const { readFile } = await import('node:fs/promises');
-    await stores.traces.put(tracePath, await readFile(traceFile), 'application/zip');
+    let finalUrl: string | undefined;
+    let tracePath: string | undefined;
+    let stepResult: Awaited<ReturnType<typeof runSteps>>;
+    try {
+      // Every HTTP request, including redirects and subresources, is checked
+      // immediately before Chromium may issue it. Blocking service workers and
+      // WebSockets closes the two common paths around request routing.
+      await context.route('**/*', async (route) => {
+        const requestUrl = route.request().url();
+        let protocol = '';
+        try {
+          protocol = new URL(requestUrl).protocol;
+          if (protocol === 'http:' || protocol === 'https:') {
+            await assertPublicHttpUrl(requestUrl);
+          } else if (!['data:', 'blob:', 'about:'].includes(protocol)) {
+            throw new Error(`unsupported request protocol: ${protocol}`);
+          }
+          await route.continue();
+        } catch (err) {
+          console.error(`blocked browser request (${protocol || 'invalid URL'}): ${String(err)}`);
+          await route.abort('blockedbyclient');
+        }
+      });
+      await context.routeWebSocket('**/*', (socket) => socket.close({ code: 1008 }));
+
+      if (tracesEnabled) {
+        await context.tracing.start({ screenshots: true, snapshots: true });
+      }
+      const page = context.pages()[0] ?? (await context.newPage());
+      stepResult = await runSteps(page, input.plan.steps, {
+        taskId: input.taskId,
+        workspace: stores.workspace,
+      });
+      finalUrl = page.url();
+
+      if (tracesEnabled) {
+        const traceFile = path.join(work, 'trace.zip');
+        await context.tracing.stop({ path: traceFile });
+        const traceSize = (await stat(traceFile)).size;
+        if (traceSize <= MAX_TRACE_BYTES) {
+          tracePath = `traces/${input.taskId}-${Date.now()}.zip`;
+          await stores.traces.put(tracePath, await readFile(traceFile), 'application/zip');
+        } else {
+          console.error(`trace ${traceSize}B exceeds cap — not uploading`);
+        }
+      }
+    } finally {
+      await context.close().catch(() => {});
+    }
+
+    let persistedBytes = 0;
+    if (input.plan.useProfile) {
+      persistedBytes = await saveProfile(stores.workspace, profileDir, encKey).catch((err) => {
+        console.error('profile persist failed', err);
+        return 0;
+      });
+    }
+
+    return {
+      ok: stepResult.failedAtStep === undefined,
+      goal: input.plan.goal,
+      outputs: stepResult.outputs,
+      screenshots: stepResult.screenshots,
+      finalUrl,
+      tracePath,
+      profile: { loaded: profileLoaded, persistedBytes },
+      ...(stepResult.failedAtStep !== undefined
+        ? { error: `plan failed at step ${stepResult.failedAtStep}` }
+        : {}),
+    };
   } finally {
-    await context.close().catch(() => {});
+    await egressProxy?.close().catch((error) => console.error('egress proxy close failed', error));
+    await rm(work, { recursive: true, force: true });
   }
-
-  let persistedBytes = 0;
-  if (input.plan.useProfile) {
-    persistedBytes = await saveProfile(stores.workspace, profileDir, encKey).catch((err) => {
-      console.error('profile persist failed', err);
-      return 0;
-    });
-  }
-  await rm(work, { recursive: true, force: true });
-
-  return {
-    ok: stepResult.failedAtStep === undefined,
-    goal: input.plan.goal,
-    outputs: stepResult.outputs,
-    screenshots: stepResult.screenshots,
-    finalUrl,
-    tracePath,
-    profile: { loaded: profileLoaded, persistedBytes },
-    ...(stepResult.failedAtStep !== undefined
-      ? { error: `plan failed at step ${stepResult.failedAtStep}` }
-      : {}),
-  };
 }
 
 async function postCallback(input: JobInput, result: JobResult): Promise<void> {
@@ -102,6 +146,7 @@ async function postCallback(input: JobInput, result: JobResult): Promise<void> {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body,
+        signal: AbortSignal.timeout(15_000),
       });
       if (res.ok) return;
       // 4xx other than 409 will not improve with retries

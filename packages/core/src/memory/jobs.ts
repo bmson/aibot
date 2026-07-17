@@ -32,12 +32,18 @@ export function codeJobName(task: TaskRow): CodeJobName | null {
 }
 
 export async function runCodeJob(
-  deps: { db: Db; router: ModelRouter; workspace?: WorkspaceReader },
+  deps: {
+    db: Db;
+    router: ModelRouter;
+    workspace?: WorkspaceReader;
+    heartbeat?: () => Promise<void>;
+  },
   job: CodeJobName,
   task: TaskRow,
 ): Promise<CodeJobOutcome> {
   switch (job) {
     case 'memory.extract': {
+      await deps.heartbeat?.();
       const r = await runMemoryExtraction(deps, { taskId: task.id });
       return {
         done: true,
@@ -45,6 +51,7 @@ export async function runCodeJob(
       };
     }
     case 'memory.consolidate': {
+      await deps.heartbeat?.();
       const r = await runMemoryConsolidation(deps, { taskId: task.id });
       return {
         done: true,

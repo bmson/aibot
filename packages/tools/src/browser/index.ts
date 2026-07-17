@@ -10,7 +10,7 @@ import {
 import { z } from 'zod';
 import type { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolFlags } from '../types.js';
-import type { BrowserJobLauncher } from './launcher.js';
+import { type BrowserJobLauncher, isAmbiguousBrowserJobLaunchError } from './launcher.js';
 
 export * from './launcher.js';
 
@@ -122,30 +122,63 @@ export function registerBrowserTools(registry: ToolRegistry, deps: BrowserDeps):
         if (!plan.steps.some((s) => s.action === 'goto' && s.url)) {
           throw new Error('plan must start from a goto step with a URL');
         }
+        if (
+          !ctx.execution?.dbToolCallId ||
+          !ctx.execution.modelToolCallId ||
+          !ctx.stageBrowserJob ||
+          !ctx.clearStagedBrowserJob
+        ) {
+          throw new Error('browser job launch requires a durable dispatcher execution context');
+        }
 
         const callbackToken = randomBytes(24).toString('hex');
         const timeoutAt = new Date(
           ctx.now().getTime() + (plan.maxDurationSeconds + JOB_TIMEOUT_BUFFER_SECONDS) * 1000,
         ).toISOString();
-        const { executionName } = await deps.launcher.launch({
-          taskId: ctx.taskId,
-          plan,
-          callbackUrl: deps.callbackUrl,
-          callbackToken,
-        });
-        await ctx.log('browser_job_launched', { executionName, goal: plan.goal });
-
         const pending: BrowserJobPendingResult = {
           pending: BROWSER_JOB_PENDING,
           callbackToken,
           timeoutAt,
-          executionName,
         };
-        return pending;
+        const staged = { ...ctx.execution, pending };
+
+        // This transactionally checkpoints both tool_calls.result and
+        // tasks.state.pendingJob. Nothing external happens before it succeeds.
+        await ctx.stageBrowserJob(staged);
+        try {
+          const { executionName } = await deps.launcher.launch({
+            taskId: ctx.taskId,
+            plan,
+            callbackUrl: deps.callbackUrl,
+            callbackToken,
+          });
+          await ctx
+            .log('browser_job_launched', { executionName, goal: plan.goal })
+            .catch((error) => console.error('browser launch log failed', error));
+          return { ...pending, executionName };
+        } catch (error) {
+          if (isAmbiguousBrowserJobLaunchError(error)) {
+            await ctx
+              .log('browser_job_launch_unknown', { goal: plan.goal, error: String(error) })
+              .catch((logError) => console.error('browser ambiguous-launch log failed', logError));
+            // The POST may have started a job. Preserve the durable token and
+            // wait for its callback/timeout; never issue a second launch.
+            return pending;
+          }
+          // A definitive rejection means no job exists. Restore the pre-call
+          // checkpoint so the dispatcher can safely record a normal failure.
+          await ctx.clearStagedBrowserJob(staged);
+          throw error;
+        }
       },
     },
     // A logged-in browser acts on the outside world; never blanket-allowable.
-    { outwardFacing: true, blanketAllowIneligible: true },
+    {
+      outwardFacing: true,
+      blanketAllowIneligible: true,
+      returnsUntrustedContent: true,
+      networkEgress: true,
+    },
   );
 
   return registry;

@@ -16,8 +16,11 @@ export type PolicyTemplate = (
 ) => boolean;
 
 export const policyTemplates: Record<string, PolicyTemplate> = {
-  /** SMS replies within the owner's own conversation. */
-  'sms.reply_to_owner': (_match, _args, ctx) => ctx.trust === 'owner',
+  /** SMS replies from an owner task to the configured owner number only. */
+  'sms.reply_to_owner': (match, args, ctx) => {
+    const ownerPhone = String(match.phone ?? '');
+    return ownerPhone.length > 0 && ctx.trust === 'owner' && args.to === ownerPhone;
+  },
 
   /** Calendar events with no attendees — nothing leaves the assistant's world. */
   'calendar.self_only_events': (_match, args) => {

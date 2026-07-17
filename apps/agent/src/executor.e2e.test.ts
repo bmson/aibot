@@ -1,5 +1,5 @@
-import type { InboundEvent, ModelRouter, StepCallOutcome } from '@assistant/core';
-import { enqueueTask, executeTask, getAgent, resolveApproval } from '@assistant/core';
+import type { DispatcherPort, InboundEvent, ModelRouter, StepCallOutcome } from '@assistant/core';
+import { completeTask, enqueueTask, executeTask, getAgent, resolveApproval } from '@assistant/core';
 import {
   approvals,
   conversations,
@@ -236,6 +236,51 @@ describe('executor end-to-end (integration, scripted model)', () => {
     expect(outbound?.status).toBe('denied');
   });
 
+  it('parks an approved action when its reservation is budget-blocked, then retries it', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const key = `approved-budget-${Date.now()}`;
+    const base = new ToolDispatcher(db, makeRegistry(key));
+    let blocked = true;
+    const dispatcher: DispatcherPort = {
+      toolDefs: (trust) => base.toolDefs(trust),
+      resultIsUntrusted: (toolName) => base.resultIsUntrusted(toolName),
+      dispatch: (input) => base.dispatch(input),
+      executeApproved: async () =>
+        blocked
+          ? {
+              kind: 'budget_blocked',
+              reason: 'daily budget exhausted (test)',
+              resumeAt: new Date(Date.now() + 3600e3),
+            }
+          : { kind: 'executed', result: { sent: true, message: 'hello world' } },
+    };
+    const { task } = await enqueueTask(db, { event: event(), type: 'adhoc' });
+    createdTaskIds.push(task.id);
+
+    await executeTask({ db, router: makeFakeRouter(), dispatcher }, task.id);
+    const [approval] = await db.select().from(approvals).where(eq(approvals.taskId, task.id));
+    await resolveApproval(db, { approvalId: approval?.id, decision: 'approved', via: 'web' });
+
+    const parked = await executeTask({ db, router: makeFakeRouter(), dispatcher }, task.id);
+    expect(parked.outcome).toBe('parked');
+    let [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(row?.status).toBe('waiting_budget');
+    expect(((row?.state ?? {}) as { pendingApprovals?: unknown[] }).pendingApprovals).toHaveLength(
+      1,
+    );
+    expect(row?.attempt).toBe(0);
+
+    blocked = false;
+    await db
+      .update(tasks)
+      .set({ runAfter: new Date(Date.now() - 1000) })
+      .where(eq(tasks.id, task.id));
+    const resumed = await executeTask({ db, router: makeFakeRouter(), dispatcher }, task.id);
+    expect(resumed.outcome).toBe('done');
+    [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(row?.status).toBe('done');
+  });
+
   it('an approval park in a conversation posts a notice message (the thread never goes silent)', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const key = `t4-${Date.now()}`;
@@ -293,7 +338,11 @@ describe('executor end-to-end (integration, scripted model)', () => {
     expect(executions[key]).toBe(1);
 
     let [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
-    expect(row?.status).toBe('pending'); // queued for retry, not dead
+    expect(row?.status).toBe('sleeping'); // bounded backoff, not dead
+    await db
+      .update(tasks)
+      .set({ runAfter: new Date(Date.now() - 1_000) })
+      .where(eq(tasks.id, task.id));
 
     // Retry with a healthy model: resumes from checkpoint — counter NOT re-run
     const healthy = makeFakeRouter();
@@ -303,5 +352,199 @@ describe('executor end-to-end (integration, scripted model)', () => {
 
     [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(row?.status).toBe('waiting_approval');
+  });
+
+  it('retries a failed final delivery from the exact checkpoint without rerunning the model', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    let stepCalls = 0;
+    let deliveries = 0;
+    const router = {
+      async object() {
+        return { ok: true, modelId: 'fake/model', degraded: false, object: { trivial: true } };
+      },
+      async step(): Promise<StepCallOutcome> {
+        stepCalls += 1;
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: 'A stable final response.',
+          toolCalls: [],
+          finishReason: 'stop',
+        };
+      },
+    } as unknown as ModelRouter;
+    const dispatcher = new ToolDispatcher(db, new ToolRegistry());
+
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner', title: 'delivery-retry-test' })
+      .returning();
+    const conversationId = (conversation as NonNullable<typeof conversation>).id;
+    createdConversationIds.push(conversationId);
+    await db.insert(messages).values({
+      conversationId,
+      role: 'user',
+      origin: 'owner',
+      parts: [{ type: 'text', text: 'answer once' }],
+      text: 'answer once',
+    });
+    const { task } = await enqueueTask(db, {
+      event: { ...event(), conversationId },
+      type: 'chat_turn',
+    });
+    createdTaskIds.push(task.id);
+
+    const deliverFinal = async () => {
+      deliveries += 1;
+      if (deliveries === 1) throw new Error('provider unavailable');
+    };
+    const first = await executeTask({ db, router, dispatcher, deliverFinal }, task.id);
+    expect(first.outcome).toBe('failed');
+    let [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(row?.status).toBe('sleeping');
+    expect(row?.attempt).toBe(1);
+    expect(((row?.state ?? {}) as { pendingFinal?: { text?: string } }).pendingFinal?.text).toBe(
+      'A stable final response.',
+    );
+
+    await db
+      .update(tasks)
+      .set({ runAfter: new Date(Date.now() - 1_000) })
+      .where(eq(tasks.id, task.id));
+    const second = await executeTask({ db, router, dispatcher, deliverFinal }, task.id);
+    expect(second.outcome).toBe('done');
+    expect(stepCalls).toBe(1);
+    expect(deliveries).toBe(2);
+    [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(row?.status).toBe('done');
+    expect(row?.attempt).toBe(0);
+    const assistantCopies = await db
+      .select()
+      .from(messages)
+      .where(
+        sql`${messages.taskId} = ${task.id} and ${messages.role} = 'assistant' and ${messages.text} = 'A stable final response.'`,
+      );
+    expect(assistantCopies).toHaveLength(1);
+  });
+
+  it('does not duplicate a final delivery whose provider attempt was already staged', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    let deliveries = 0;
+    const dispatcher = new ToolDispatcher(db, new ToolRegistry());
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner', title: 'delivery-ambiguous-test' })
+      .returning();
+    const conversationId = (conversation as NonNullable<typeof conversation>).id;
+    createdConversationIds.push(conversationId);
+    const { task } = await enqueueTask(db, {
+      event: { ...event(), conversationId },
+      type: 'chat_turn',
+    });
+    createdTaskIds.push(task.id);
+    await db
+      .update(tasks)
+      .set({
+        state: {
+          pendingFinal: {
+            text: 'Possibly delivered already.',
+            progress: 'final response',
+            terminalStatus: 'done',
+            outcome: 'done',
+            deliveryAttempted: true,
+          },
+        },
+      })
+      .where(eq(tasks.id, task.id));
+
+    const result = await executeTask(
+      {
+        db,
+        router: {
+          step: async () => {
+            throw new Error('model must not rerun');
+          },
+        } as unknown as ModelRouter,
+        dispatcher,
+        deliverFinal: async () => {
+          deliveries += 1;
+        },
+      },
+      task.id,
+    );
+
+    expect(result.outcome).toBe('done');
+    expect(deliveries).toBe(0);
+  });
+
+  it('a late approval resolution cannot resurrect a cancelled task', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const key = `cancel-${Date.now()}`;
+    const dispatcher = new ToolDispatcher(db, makeRegistry(key));
+    const { task } = await enqueueTask(db, { event: event(), type: 'adhoc' });
+    createdTaskIds.push(task.id);
+
+    await executeTask({ db, router: makeFakeRouter(), dispatcher }, task.id);
+    const [approval] = await db.select().from(approvals).where(eq(approvals.taskId, task.id));
+    await completeTask(db, task.id, { status: 'cancelled' });
+    const resolved = await resolveApproval(db, {
+      approvalId: approval?.id,
+      decision: 'approved',
+      via: 'web',
+    });
+    expect(resolved.ok).toBe(true);
+    const [after] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(after?.status).toBe('cancelled');
+  });
+
+  it('does not finalize or deliver a truncated model response', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    let deliveries = 0;
+    const router = {
+      async object() {
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          object: { action: 'reply', reasoning: '', steps: [], missingInfo: [] },
+        };
+      },
+      async step(): Promise<StepCallOutcome> {
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: 'partial output',
+          toolCalls: [],
+          finishReason: 'length',
+        };
+      },
+    } as unknown as ModelRouter;
+    const dispatcher: DispatcherPort = {
+      toolDefs: () => [],
+      resultIsUntrusted: () => false,
+      dispatch: async () => ({ kind: 'rejected', reason: 'unused' }),
+      executeApproved: async () => ({ kind: 'failed', error: 'unused' }),
+    };
+    const { task } = await enqueueTask(db, { event: event(), type: 'adhoc' });
+    createdTaskIds.push(task.id);
+
+    const result = await executeTask(
+      {
+        db,
+        router,
+        dispatcher,
+        deliverFinal: async () => {
+          deliveries += 1;
+        },
+      },
+      task.id,
+    );
+    expect(result.outcome).toBe('failed');
+    expect(deliveries).toBe(0);
+    const [after] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(after?.status).toBe('sleeping');
+    expect(after?.progress).toContain('finish reason length');
   });
 });

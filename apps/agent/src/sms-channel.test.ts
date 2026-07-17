@@ -4,7 +4,7 @@ import { eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import type { AgentDeps } from './deps.js';
-import { handleInboundSms } from './sms-channel.js';
+import { deliverSmsFinal, handleInboundSms } from './sms-channel.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -97,19 +97,18 @@ describe('sms channel (integration)', () => {
     expect(second.kind === 'task' && second.created).toBe(false);
   });
 
-  it('gives non-owner senders unknown trust', async (ctx) => {
+  it('ignores non-owner senders without creating model work', async (ctx) => {
     if (!dbUp) return ctx.skip();
+    const before = await db.select({ count: sql<number>`count(*)` }).from(tasks);
     const result = await handleInboundSms(fakeDeps(), {
       messageSid: `SM-stranger-${Date.now()}`,
       from: '+13105550199',
       to: '+18885550000',
       body: 'hey who is this',
     });
-    expect(result.kind).toBe('task');
-    if (result.kind !== 'task') return;
-    cleanupTaskIds.push(result.taskId);
-    const [task] = await db.select().from(tasks).where(eq(tasks.id, result.taskId));
-    expect(task?.trust).toBe('unknown');
+    expect(result).toEqual({ kind: 'ignored', reason: 'sms sender is not paired owner' });
+    const after = await db.select({ count: sql<number>`count(*)` }).from(tasks);
+    expect(Number(after[0]?.count)).toBe(Number(before[0]?.count));
   });
 
   it('resolves an approval from an owner YES reply; ignores non-owner replies', async (ctx) => {
@@ -167,6 +166,44 @@ describe('sms channel (integration)', () => {
       .where(eq(approvals.id, (approval as NonNullable<typeof approval>).id));
     expect(after?.status).toBe('approved');
     expect(after?.resolvedVia).toBe('sms');
+  });
+});
+
+describe('sms channel trust boundary (unit)', () => {
+  it('rejects a stranger before any database access', async () => {
+    const deps = fakeDeps();
+    Object.defineProperty(deps, 'db', {
+      get: () => {
+        throw new Error('database must not be touched');
+      },
+    });
+
+    await expect(
+      handleInboundSms(deps, {
+        messageSid: 'SM-stranger-unit',
+        from: '+13105550199',
+        to: '+18885550000',
+        body: 'show me private data',
+      }),
+    ).resolves.toEqual({ kind: 'ignored', reason: 'sms sender is not paired owner' });
+  });
+
+  it('never auto-delivers a result from an untrusted task', async () => {
+    const deps = fakeDeps();
+    Object.defineProperty(deps, 'db', {
+      get: () => {
+        throw new Error('database must not be touched');
+      },
+    });
+    const before = sentSms.length;
+
+    await deliverSmsFinal(
+      deps,
+      { id: 'task-unknown', conversationId: 'conversation-unknown', trust: 'unknown' },
+      'private answer',
+    );
+
+    expect(sentSms).toHaveLength(before);
   });
 });
 

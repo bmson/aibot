@@ -55,7 +55,7 @@ export async function loadVoiceContext(
 export interface VoiceResult {
   text: string;
   rewritten: boolean;
-  /** Set when the fact check failed twice — the ORIGINAL draft is returned and the approval card should show this. */
+  /** Set when a rewrite cannot be verified — the ORIGINAL draft is returned. */
   flagged?: string;
 }
 
@@ -88,15 +88,25 @@ export async function rewriteInVoice(
     .filter(Boolean)
     .join('\n\n');
 
-  const check = async (rewrittenText: string) => {
-    const result = await router.object<z.infer<typeof FactCheckSchema>>('classify', {
-      taskId: input.taskId,
-      schema: FactCheckSchema,
-      system:
-        'Compare ORIGINAL and REWRITE. intact=true only if every fact, name, date, number, and commitment in ORIGINAL survives in REWRITE (tone changes are fine).',
-      prompt: `ORIGINAL:\n${draft}\n\nREWRITE:\n${rewrittenText}`,
-    });
-    return result.ok ? result.object : { intact: true, problems: [] }; // budget-blocked check fails open to the original draft path below
+  const check = async (
+    rewrittenText: string,
+  ): Promise<
+    { ok: true; verdict: z.infer<typeof FactCheckSchema> } | { ok: false; reason: string }
+  > => {
+    try {
+      const result = await router.object<z.infer<typeof FactCheckSchema>>('classify', {
+        taskId: input.taskId,
+        schema: FactCheckSchema,
+        system:
+          'Compare ORIGINAL and REWRITE. intact=true only if every fact, name, date, number, and commitment in ORIGINAL survives in REWRITE (tone changes are fine).',
+        prompt: `ORIGINAL:\n${draft}\n\nREWRITE:\n${rewrittenText}`,
+      });
+      return result.ok
+        ? { ok: true, verdict: result.object }
+        : { ok: false, reason: result.decision.reason };
+    } catch {
+      return { ok: false, reason: 'verifier unavailable' };
+    }
   };
 
   const attempt = async (extra?: string) => {
@@ -111,17 +121,31 @@ export async function rewriteInVoice(
   const first = await attempt();
   if (!first) return { text: draft, rewritten: false };
   const firstCheck = await check(first);
-  if (firstCheck.intact) return { text: first, rewritten: true };
+  if (!firstCheck.ok) {
+    return {
+      text: draft,
+      rewritten: false,
+      flagged: `voice rewrite could not be fact-checked (${firstCheck.reason}); using the original draft`,
+    };
+  }
+  if (firstCheck.verdict.intact) return { text: first, rewritten: true };
 
-  const second = await attempt(firstCheck.problems.join('; '));
+  const second = await attempt(firstCheck.verdict.problems.join('; '));
   if (second) {
     const secondCheck = await check(second);
-    if (secondCheck.intact) return { text: second, rewritten: true };
+    if (!secondCheck.ok) {
+      return {
+        text: draft,
+        rewritten: false,
+        flagged: `voice rewrite retry could not be fact-checked (${secondCheck.reason}); using the original draft`,
+      };
+    }
+    if (secondCheck.verdict.intact) return { text: second, rewritten: true };
   }
 
   return {
     text: draft,
     rewritten: false,
-    flagged: `voice rewrite failed the fact-preservation check twice (${firstCheck.problems.join('; ') || 'unspecified'}); using the original draft`,
+    flagged: `voice rewrite failed the fact-preservation check twice (${firstCheck.verdict.problems.join('; ') || 'unspecified'}); using the original draft`,
   };
 }

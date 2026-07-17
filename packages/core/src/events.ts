@@ -74,6 +74,22 @@ export const PendingJobSchema = z.object({
 });
 export type PendingJob = z.infer<typeof PendingJobSchema>;
 
+/**
+ * A final response is checkpointed before channel delivery. If the provider
+ * fails (or the process crashes), a retry delivers this exact text instead of
+ * asking the model again and potentially producing duplicate/inconsistent
+ * replies.
+ */
+export const PendingFinalSchema = z.object({
+  text: z.string(),
+  progress: z.string(),
+  terminalStatus: z.enum(['done', 'failed']),
+  outcome: z.enum(['done', 'clarify', 'failed']),
+  /** Persisted before channel send; retries never duplicate an ambiguous accepted delivery. */
+  deliveryAttempted: z.boolean().optional(),
+});
+export type PendingFinal = z.infer<typeof PendingFinalSchema>;
+
 export const TaskStateSchema = z.object({
   phase: z.string().default('start'),
   step: z.number().int().default(0),
@@ -82,6 +98,10 @@ export const TaskStateSchema = z.object({
   pendingApprovals: z.array(PendingApprovalSchema).default([]),
   /** An in-flight browser job this task is waiting on. */
   pendingJob: PendingJobSchema.nullish(),
+  /** Durable final-channel delivery checkpoint. */
+  pendingFinal: PendingFinalSchema.nullish(),
+  /** External/tool content has entered the model context; privileged calls are constrained. */
+  untrustedContext: z.boolean().default(false),
   plannerState: z.record(z.string(), z.unknown()).default({}),
   scratchpad: z.string().default(''),
   contextWindow: z.array(z.record(z.string(), z.unknown())).default([]),

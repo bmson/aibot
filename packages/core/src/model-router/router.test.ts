@@ -2,6 +2,7 @@ import { createDb, type Db, tasks } from '@assistant/db';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createChatTask, ensureChatConversation, getAgent } from '../chat.js';
+import { BudgetReservationError } from '../cost.js';
 import { ModelRouter } from './router.js';
 
 const DATABASE_URL =
@@ -87,6 +88,23 @@ describe('ModelRouter.route (integration)', () => {
       expect(route.modelId).toBe('openai/gpt-oss-120b'); // draft fallback
     }
 
+    await db.delete(tasks).where(eq(tasks.id, task.id));
+  });
+
+  it('blocks embeddings before calling the provider when the task cap is exhausted', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const agent = await getAgent(db);
+    const conversation = await ensureChatConversation(db, agent.id);
+    const task = await createChatTask(db, { agentId: agent.id, conversationId: conversation.id });
+    await db
+      .update(tasks)
+      .set({ budgetUsdLimit: '0.0010', spentUsd: '0.0010' })
+      .where(eq(tasks.id, task.id));
+
+    const router = new ModelRouter(db, 'provider-must-not-be-called');
+    await expect(router.embed(['budget guard'], { taskId: task.id })).rejects.toBeInstanceOf(
+      BudgetReservationError,
+    );
     await db.delete(tasks).where(eq(tasks.id, task.id));
   });
 });

@@ -12,5 +12,7 @@ RUN pnpm install --frozen-lockfile --filter @assistant/web...
 RUN pnpm --filter @assistant/web build
 
 ENV NODE_ENV=production
+RUN chown -R node:node /app
+USER node
 EXPOSE 8080
 CMD ["pnpm", "--filter", "@assistant/web", "start"]

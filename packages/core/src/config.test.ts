@@ -10,6 +10,8 @@ describe('config', () => {
     expect(config.QUEUE_DRIVER).toBe('local');
     expect(config.AGENT_PORT).toBe(8787);
     expect(config.DATABASE_URL).toContain('postgres://');
+    expect(config.INTERNAL_AUTH_MODE).toBe('oidc');
+    expect(config.AUTH_DEV_BYPASS).toBe(false);
   });
 
   it('parses overrides and coerces numbers', () => {
@@ -22,5 +24,11 @@ describe('config', () => {
   it('rejects invalid driver values', () => {
     resetConfigForTest();
     expect(() => loadConfig({ QUEUE_DRIVER: 'rabbitmq' })).toThrow();
+  });
+
+  it('requires an exact opt-in for the development auth bypass', () => {
+    expect(loadConfig({ AUTH_DEV_BYPASS: 'true' }).AUTH_DEV_BYPASS).toBe(true);
+    resetConfigForTest();
+    expect(() => loadConfig({ AUTH_DEV_BYPASS: 'yes' })).toThrow();
   });
 });

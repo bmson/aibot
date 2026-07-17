@@ -1,11 +1,23 @@
 import type { BrowserPlan, Trust } from '@assistant/core';
 import { isBrowserJobPending } from '@assistant/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolContext } from '../types.js';
-import { type BrowserJobLaunchInput, registerBrowserTools } from './index.js';
+import {
+  AmbiguousBrowserJobLaunchError,
+  type BrowserJobLaunchInput,
+  CloudRunJobLauncher,
+  registerBrowserTools,
+} from './index.js';
 
-function makeRegistry(overrides: { plan?: BrowserPlan } = {}) {
+afterEach(() => vi.restoreAllMocks());
+
+function makeRegistry(
+  overrides: {
+    plan?: BrowserPlan;
+    launch?: (input: BrowserJobLaunchInput) => Promise<{ executionName?: string }>;
+  } = {},
+) {
   const launches: BrowserJobLaunchInput[] = [];
   const registry = registerBrowserTools(new ToolRegistry(), {
     plan: async () =>
@@ -20,7 +32,7 @@ function makeRegistry(overrides: { plan?: BrowserPlan } = {}) {
     launcher: {
       launch: async (input) => {
         launches.push(input);
-        return { executionName: 'exec-1' };
+        return overrides.launch?.(input) ?? { executionName: 'exec-1' };
       },
     },
     callbackUrl: 'http://localhost:8787/webhooks/browser/callback',
@@ -28,15 +40,24 @@ function makeRegistry(overrides: { plan?: BrowserPlan } = {}) {
   return { registry, launches };
 }
 
-function ctx(trust: Trust = 'owner'): ToolContext {
+function ctx(trust: Trust = 'owner', overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     taskId: 'task-1',
     agentId: 'agent-1',
     trust,
+    tainted: false,
     db: {} as ToolContext['db'],
     now: () => new Date('2026-07-16T12:00:00Z'),
     signal: new AbortController().signal,
     log: vi.fn(async () => {}),
+    execution: {
+      dbToolCallId: 'db-call-1',
+      modelToolCallId: 'model-call-1',
+      toolName: 'browser.execute',
+    },
+    stageBrowserJob: vi.fn(async () => {}),
+    clearStagedBrowserJob: vi.fn(async () => {}),
+    ...overrides,
   };
 }
 
@@ -95,7 +116,8 @@ describe('browser.execute risk tiers', () => {
 describe('browser.execute launch', () => {
   it('launches the job and returns the pending sentinel with a timeout after the plan budget', async () => {
     const { registry, launches } = makeRegistry();
-    const result = await tool(registry, 'browser.execute').execute({ plan: readOnlyPlan }, ctx());
+    const context = ctx();
+    const result = await tool(registry, 'browser.execute').execute({ plan: readOnlyPlan }, context);
     expect(isBrowserJobPending(result)).toBe(true);
     const pending = result as { callbackToken: string; timeoutAt: string };
     expect(pending.callbackToken).toMatch(/^[0-9a-f]{48}$/);
@@ -104,6 +126,51 @@ describe('browser.execute launch', () => {
     expect(launches).toHaveLength(1);
     expect(launches[0]?.plan.goal).toBe('read the front page');
     expect(launches[0]?.callbackUrl).toBe('http://localhost:8787/webhooks/browser/callback');
+    expect(context.stageBrowserJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dbToolCallId: 'db-call-1',
+        modelToolCallId: 'model-call-1',
+        pending: expect.objectContaining({ callbackToken: pending.callbackToken }),
+      }),
+    );
+  });
+
+  it('durably stages the token before launch and keeps it on an ambiguous response', async () => {
+    const order: string[] = [];
+    const { registry, launches } = makeRegistry({
+      launch: async () => {
+        order.push('launch');
+        throw new AmbiguousBrowserJobLaunchError('response timed out');
+      },
+    });
+    const clear = vi.fn(async () => {});
+    const context = ctx('owner', {
+      stageBrowserJob: async () => {
+        order.push('stage');
+      },
+      clearStagedBrowserJob: clear,
+    });
+
+    const result = await tool(registry, 'browser.execute').execute({ plan: readOnlyPlan }, context);
+    expect(order).toEqual(['stage', 'launch']);
+    expect(launches).toHaveLength(1);
+    expect(isBrowserJobPending(result)).toBe(true);
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  it('clears a staged intent after a definitive launch rejection', async () => {
+    const { registry } = makeRegistry({
+      launch: async () => {
+        throw new Error('permission denied');
+      },
+    });
+    const clear = vi.fn(async () => {});
+    const context = ctx('owner', { clearStagedBrowserJob: clear });
+
+    await expect(
+      tool(registry, 'browser.execute').execute({ plan: readOnlyPlan }, context),
+    ).rejects.toThrow(/permission denied/);
+    expect(clear).toHaveBeenCalledOnce();
   });
 
   it('rejects fetch-rung plans and plans without a goto', async () => {
@@ -115,6 +182,32 @@ describe('browser.execute launch', () => {
     await expect(
       execute({ plan: { ...readOnlyPlan, steps: [{ action: 'extract' }] } }, ctx()),
     ).rejects.toThrow(/goto/);
+  });
+});
+
+describe('CloudRunJobLauncher ambiguity', () => {
+  it('marks a transport failure after token acquisition as an ambiguous launch', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: 'test-token' }), { status: 200 }),
+      )
+      .mockRejectedValueOnce(new TypeError('socket closed after upload'));
+    const launcher = new CloudRunJobLauncher({
+      project: 'test-project',
+      location: 'us-central1',
+      jobName: 'browser',
+      storage: { driver: 'gcs', bucket: 'workspace' },
+    });
+
+    await expect(
+      launcher.launch({
+        taskId: 'task-1',
+        plan: readOnlyPlan,
+        callbackUrl: 'https://agent.test/webhooks/browser/callback',
+        callbackToken: 'token',
+      }),
+    ).rejects.toBeInstanceOf(AmbiguousBrowserJobLaunchError);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
 

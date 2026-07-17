@@ -6,16 +6,18 @@ import {
   SPEND_SOURCES,
   tasks,
 } from '@assistant/db';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from './chat.js';
 import {
+  BudgetReservationError,
   LEDGER_WIRING,
   nextDailyReset,
   nextMonthlyReset,
   reconcileReservation,
   recordCostEvent,
   releaseReservation,
+  releaseStaleReservations,
   reserveCost,
 } from './cost.js';
 import type { InboundEvent } from './events.js';
@@ -203,14 +205,134 @@ describe('reservations (integration)', () => {
     const rows = await db.select().from(costEvents).where(eq(costEvents.description, 'xtest-cost'));
     expect(rows.length).toBeGreaterThanOrEqual(1);
   });
+
+  it('serializes concurrent reservations against the same task cap', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { task } = await enqueueTask(db, {
+      event: { source: 'internal', agentId, trust: 'owner', payload: {} } as InboundEvent,
+      type: 'adhoc',
+      budgetUsdLimit: '0.0150',
+    });
+    createdTaskIds.push(task.id);
+
+    const results = await Promise.all([
+      reserveCost(db, {
+        source: 'external_api',
+        estimatedUsd: 0.01,
+        taskId: task.id,
+        description: 'xtest-cost concurrent-a',
+      }),
+      reserveCost(db, {
+        source: 'external_api',
+        estimatedUsd: 0.01,
+        taskId: task.id,
+        description: 'xtest-cost concurrent-b',
+      }),
+    ]);
+    const accepted = results.filter((result) => result.ok);
+    expect(accepted).toHaveLength(1);
+    for (const result of accepted) {
+      if (result.ok) createdReservationIds.push(result.reservationId);
+    }
+  });
+
+  it('serializes reconciliation behind the same ledger lock as reservations', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const reservation = await reserveCost(db, {
+      source: 'external_api',
+      estimatedUsd: 0.001,
+      description: 'xtest-cost locked reconciliation',
+    });
+    expect(reservation.ok).toBe(true);
+    if (!reservation.ok) return;
+    createdReservationIds.push(reservation.reservationId);
+
+    let releaseLock!: () => void;
+    const holdLock = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    let lockAcquired!: () => void;
+    const acquired = new Promise<void>((resolve) => {
+      lockAcquired = resolve;
+    });
+    const blocker = db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('assistant:cost-reservations'))`);
+      lockAcquired();
+      await holdLock;
+    });
+    await acquired;
+
+    let reconciled = false;
+    const reconciliation = reconcileReservation(db, reservation.reservationId, {
+      usd: 0.001,
+      description: 'xtest-cost',
+    }).then(() => {
+      reconciled = true;
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(reconciled).toBe(false);
+    } finally {
+      releaseLock();
+    }
+    await blocker;
+    await reconciliation;
+    expect(reconciled).toBe(true);
+  });
+
+  it('releases crash-orphaned reservations after the safety window', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const reservation = await reserveCost(db, {
+      source: 'external_api',
+      estimatedUsd: 0.001,
+      description: 'xtest-cost stale',
+    });
+    expect(reservation.ok).toBe(true);
+    if (!reservation.ok) return;
+    createdReservationIds.push(reservation.reservationId);
+    await db
+      .update(costReservations)
+      .set({ createdAt: sql`now() - interval '3 hours'` })
+      .where(eq(costReservations.id, reservation.reservationId));
+
+    await releaseStaleReservations(db, 120);
+    const [released] = await db
+      .select({ status: costReservations.status })
+      .from(costReservations)
+      .where(eq(costReservations.id, reservation.reservationId));
+    expect(released?.status).toBe('released');
+  });
 });
 
 describe('waiting_budget parking (integration)', () => {
   const noopDispatcher: DispatcherPort = {
     toolDefs: () => [],
+    resultIsUntrusted: () => false,
     dispatch: async () => ({ kind: 'rejected', reason: 'no tools in this test' }),
-    executeApproved: async () => ({ ok: false, error: 'no approvals in this test' }),
+    executeApproved: async () => ({ kind: 'failed', error: 'no approvals in this test' }),
   };
+
+  it('parks reservation exceptions without consuming the failure allowance', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const resumeAt = new Date(Date.now() + 3600e3);
+    const router = {
+      async object() {
+        throw new BudgetReservationError('embedding budget exhausted (test)', resumeAt);
+      },
+    } as unknown as ModelRouter;
+    const { task } = await enqueueTask(db, {
+      event: { source: 'internal', agentId, trust: 'owner', payload: {} } as InboundEvent,
+      type: 'adhoc',
+    });
+    createdTaskIds.push(task.id);
+
+    const result = await executeTask({ db, router, dispatcher: noopDispatcher }, task.id);
+    expect(result.outcome).toBe('parked');
+    const [after] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(after?.status).toBe('waiting_budget');
+    expect(after?.attempt).toBe(0);
+    expect(after?.runAfter).toEqual(resumeAt);
+  });
 
   it('a hard-blocked step parks the task as waiting_budget and it resumes after reset', async (ctx) => {
     if (!dbUp) return ctx.skip();
@@ -271,6 +393,7 @@ describe('waiting_budget parking (integration)', () => {
     let dispatched = 0;
     const blockingDispatcher: DispatcherPort = {
       toolDefs: () => [],
+      resultIsUntrusted: () => false,
       dispatch: async () => {
         dispatched += 1;
         return {
@@ -279,7 +402,7 @@ describe('waiting_budget parking (integration)', () => {
           resumeAt: new Date(Date.now() + 3600e3),
         };
       },
-      executeApproved: async () => ({ ok: false, error: 'unused' }),
+      executeApproved: async () => ({ kind: 'failed', error: 'unused' }),
     };
     const fakeRouter = {
       async object() {
