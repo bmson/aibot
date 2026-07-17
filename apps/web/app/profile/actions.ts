@@ -110,18 +110,31 @@ export async function rejectQuarantined(memoryId: string): Promise<void> {
   revalidateProfile();
 }
 
-/** Bound as a form action: updateContactRelationship.bind(null, contactId). */
+/**
+ * Set a contact's relationship. Naming a non-empty relationship is the owner
+ * vouching for the person, so an 'unknown' contact is promoted to 'known'
+ * (owner stays owner; already-known stays known).
+ */
 export async function updateContactRelationship(
   contactId: string,
-  formData: FormData,
+  relationship: string,
 ): Promise<void> {
   await requireOwner();
-  const relationship = String(formData.get('relationship') ?? '');
-  await getDb()
+  const db = getDb();
+  const trimmed = relationship.trim().slice(0, 80);
+  await db
     .update(contacts)
-    .set({ relationship: relationship.trim().slice(0, 80), updatedAt: sql`now()` })
+    .set({
+      relationship: trimmed,
+      ...(trimmed
+        ? {
+            trust: sql`CASE WHEN ${contacts.trust} = 'unknown' THEN 'known' ELSE ${contacts.trust} END`,
+          }
+        : {}),
+      updatedAt: sql`now()`,
+    })
     .where(eq(contacts.id, contactId));
-  await compileOwnerCard(getDb());
+  await compileOwnerCard(db);
   revalidateProfile();
 }
 

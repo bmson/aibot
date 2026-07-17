@@ -1,9 +1,10 @@
 import { CARD_AUTO_FACTS_PER_DOMAIN, CARD_AUTO_MIN_IMPORTANCE } from '@assistant/core';
 import { type ContactRow, contacts, type MemoryRow, memories, ownerCard } from '@assistant/db';
 import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
-import { consolidateNow, recompileCard, updateContactRelationship } from '@/app/profile/actions';
+import { consolidateNow, recompileCard } from '@/app/profile/actions';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { MergeControl } from '@/app/profile/merge-control';
+import { RelationshipForm } from '@/app/profile/relationship-form';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
@@ -251,30 +252,20 @@ export default async function ProfilePage() {
                       {contact.relationship}
                     </span>
                   ) : null}
-                  <span className={countBadge}>{contact.trust}</span>
+                  {contact.trust === 'unknown' ? (
+                    <span
+                      className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                      title="The assistant doesn't know who this is yet, so content from them is treated as untrusted. Saving a relationship marks them as known."
+                    >
+                      unverified
+                    </span>
+                  ) : null}
                   <span className={countBadge}>
                     {facts.length} fact{facts.length === 1 ? '' : 's'}
                   </span>
                 </summary>
                 <div className="mt-3 flex flex-wrap items-center justify-end gap-1.5">
-                  <form
-                    action={updateContactRelationship.bind(null, contact.id)}
-                    className="flex items-center gap-1.5"
-                  >
-                    <input
-                      type="text"
-                      name="relationship"
-                      defaultValue={contact.relationship}
-                      placeholder="relationship"
-                      className="w-32 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
-                    />
-                    <button
-                      type="submit"
-                      className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                    >
-                      Save
-                    </button>
-                  </form>
+                  <RelationshipForm contactId={contact.id} initial={contact.relationship} />
                   <MergeControl
                     contactId={contact.id}
                     options={allContacts
