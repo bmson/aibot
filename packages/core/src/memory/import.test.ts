@@ -23,11 +23,13 @@ let dbUp = false;
 let agentId: string;
 const createdTaskIds: string[] = [];
 
-// Three windows' worth of content (windowsPerRun=1 forces three runs)
+// Three windows' worth of content (windowsPerRun=1 forces three runs).
+// Fillers stay under the 2000-char unit cap so each paragraph is exactly one
+// unit — longer paragraphs now chunk into multiple units instead of truncating.
 const ARCHIVE = [
-  `In 2019 I lived on Laugavegur in Reykjavik. ${'a'.repeat(5000)}`,
-  `My cousin Ragnar Importsson fixes my car every spring. ${'b'.repeat(5000)}`,
-  `I have always preferred window seats on flights. ${'c'.repeat(5000)}`,
+  `In 2019 I lived on Laugavegur in Reykjavik. ${'a'.repeat(1500)}`,
+  `My cousin Ragnar Importsson fixes my car every spring. ${'b'.repeat(1500)}`,
+  `I have always preferred window seats on flights. ${'c'.repeat(1500)}`,
 ].join('\n\n');
 
 /** One distinct fact per window, keyed off the window's leading content. */
