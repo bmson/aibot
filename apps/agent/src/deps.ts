@@ -91,6 +91,7 @@ export function buildDeps(): AgentDeps {
     registerGmailTools(registry, {
       client: googleClient,
       botEmail,
+      botName: 'B Bot',
       prepareOutbound: async (text, register) => {
         const context = await loadVoiceContext(db, router, register, text);
         const result = await rewriteInVoice(router, { draft: text, register, context });

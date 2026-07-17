@@ -14,6 +14,8 @@ const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 export interface GmailToolDeps {
   client: GoogleClient;
   botEmail: string;
+  /** Display name stamped on outbound From headers (falls back to the bare address). */
+  botName?: string;
   /** Voice pipeline hook — rewrites outbound body text before approval/execution. */
   prepareOutbound?: (
     text: string,
@@ -34,6 +36,11 @@ function register<S extends z.ZodType, Out>(
   flags: ToolFlags = {},
 ) {
   registry.register(tool as unknown as AssistantTool, flags);
+}
+
+/** From header with an explicit display name — otherwise recipients see the Google account's profile name. */
+function fromHeader(deps: GmailToolDeps): string {
+  return deps.botName ? `"${deps.botName}" <${deps.botEmail}>` : deps.botEmail;
 }
 
 export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps): ToolRegistry {
@@ -123,7 +130,7 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
     prepare: prepareOutbound,
     execute: async (args) => {
       const raw = buildRawEmail({
-        from: deps.botEmail,
+        from: fromHeader(deps),
         to: args.to,
         subject: args.subject,
         body: args.body,
@@ -159,7 +166,7 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
       },
       execute: async (args) => {
         const raw = buildRawEmail({
-          from: deps.botEmail,
+          from: fromHeader(deps),
           to: args.to,
           subject: args.subject,
           body: args.body,

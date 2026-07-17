@@ -95,6 +95,7 @@ describe('deliverEmailFinal', () => {
     const body = JSON.parse(sent[0]?.body ?? '{}') as { raw: string; threadId: string };
     expect(body.threadId).toBe('thread-1');
     const decoded = Buffer.from(body.raw, 'base64url').toString('utf8');
+    expect(decoded).toContain('From: "B Bot" <bot@bmson.com>'); // display name, not the account profile name
     expect(decoded).toContain('To: bmson@bmson.com');
     expect(decoded).toContain('Subject: Re: Camp performance');
     expect(decoded).toContain('In-Reply-To: <orig-123@mail>');

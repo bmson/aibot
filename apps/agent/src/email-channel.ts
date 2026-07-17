@@ -52,7 +52,9 @@ export async function deliverEmailFinal(
 
   const agent = await getAgent(deps.db);
   const raw = buildRawEmail({
-    from: agent.email,
+    // explicit display name — otherwise recipients see the Google account's
+    // profile name, which nothing in this stack controls
+    from: `"${agent.name}" <${agent.email}>`,
     to: [from],
     subject: /^re:/i.test(subject) ? subject : `Re: ${subject || '(no subject)'}`,
     body: text,
