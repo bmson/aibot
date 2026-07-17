@@ -176,6 +176,19 @@ function budgetResumeAt(reason: string): Date {
   return reason.includes('monthly') ? nextMonthlyReset() : nextDailyReset();
 }
 
+/** Parked/paused tasks with a conversation must say so in the thread, not go silent. */
+async function postConversationNotice(db: Db, task: TaskRow, text: string): Promise<void> {
+  if (!task.conversationId) return;
+  await persistMessage(db, {
+    conversationId: task.conversationId,
+    taskId: task.id,
+    role: 'assistant',
+    origin: 'assistant',
+    parts: [{ type: 'text', text }],
+    text,
+  }).catch((err) => console.error('conversation notice failed', err));
+}
+
 async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]> {
   if (task.conversationId) {
     const rows = await listMessages(db, task.conversationId);
@@ -462,6 +475,11 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
         // resets (checkpointed at this step boundary, never killed mid-step)
         state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
         await parkForBudget(db, task.id, state, budgetResumeAt(stepResult.decision.reason));
+        await postConversationNotice(
+          db,
+          task,
+          `I'm pausing here — ${stepResult.decision.reason}. This resumes automatically when the budget resets; you can also raise the caps on the Costs page.`,
+        );
         return { outcome: 'parked', detail: stepResult.decision.reason };
       }
       // task budget exhausted — surface to the owner on the dashboard
@@ -469,6 +487,11 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
         .update(tasks)
         .set({ status: 'needs_attention', progress: `budget: ${stepResult.decision.reason}` })
         .where(eq(tasks.id, task.id));
+      await postConversationNotice(
+        db,
+        task,
+        `I hit this task's own budget cap (${stepResult.decision.reason}) and stopped. It's marked needs-attention on the Tasks page — raise the task budget there if you want me to finish.`,
+      );
       return { outcome: 'needs_attention', detail: stepResult.decision.reason };
     }
 
@@ -549,6 +572,11 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
           );
           state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
           await parkForBudget(db, task.id, state, outcome.resumeAt);
+          await postConversationNotice(
+            db,
+            task,
+            `I'm pausing here — this action doesn't fit the remaining budget (${outcome.reason}). The task resumes automatically when the budget resets; you can also raise the caps on the Costs page.`,
+          );
           return { outcome: 'parked', detail: outcome.reason };
         } else if (outcome.kind === 'awaiting_approval') {
           window.push(
@@ -584,6 +612,17 @@ async function runSteps(deps: ExecutorDeps, task: TaskRow): Promise<ExecuteResul
             .notifyApproval(approvalNotices)
             .catch((err) => console.error('approval notification failed', err));
         }
+        // The conversation must not go silent while parked — tell the owner
+        // exactly what is waiting and where to approve it.
+        await postConversationNotice(
+          db,
+          task,
+          [
+            'This needs your approval before I act:',
+            ...approvalNotices.map((n) => `- **[${n.shortCode}]** ${n.summary}`),
+            "Approve or deny it on the Approvals page — I'll pick up from there.",
+          ].join('\n'),
+        );
         return { outcome: 'parked', detail: `${pendingApprovals.length} approval(s) pending` };
       }
 

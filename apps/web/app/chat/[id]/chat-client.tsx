@@ -2,7 +2,7 @@
 
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
 import { changeConversationModel } from '../actions';
 import { MessageMarkdown } from './markdown';
 
@@ -38,6 +38,9 @@ export function ChatClient({
   const [input, setInput] = useState('');
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   const [isSwitching, startTransition] = useTransition();
+  /** Set when the route handed the turn to the executor — we poll until it settles. */
+  const [asyncTaskId, setAsyncTaskId] = useState<string | null>(null);
+  const [asyncNote, setAsyncNote] = useState<string | null>(null);
 
   const transport = useMemo(
     () =>
@@ -50,19 +53,79 @@ export function ChatClient({
           const modelId = response.headers.get('x-model-id');
           const degraded = response.headers.get('x-model-degraded') === 'true';
           setFallbackNote(degraded && modelId ? `responded with ${modelId} (fallback)` : null);
+          setAsyncTaskId(response.headers.get('x-async-task'));
           return response;
         }) as typeof fetch,
       }),
     [conversationId],
   );
 
-  const { messages, sendMessage, status, error, clearError } = useChat({
+  const { messages, sendMessage, setMessages, status, error, clearError } = useChat({
     id: conversationId,
     messages: initialMessages,
     transport,
   });
 
-  const busy = status === 'submitted' || status === 'streaming';
+  // Action turns run in the executor (tools, approvals) — poll the thread
+  // until the task settles, then replace the local ack with the real answer.
+  useEffect(() => {
+    if (!asyncTaskId) return;
+    const startedAt = Date.now();
+    const TIMEOUT_MS = 5 * 60 * 1000;
+    let cancelled = false;
+
+    const settle = (note: string | null, serverMessages?: UIMessage[]) => {
+      if (cancelled) return;
+      if (serverMessages) setMessages(serverMessages);
+      setAsyncNote(note);
+      setAsyncTaskId(null);
+    };
+
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const res = await fetch(
+          `/api/chat/status?conversationId=${conversationId}&taskId=${asyncTaskId}`,
+        );
+        if (res.ok) {
+          const data = (await res.json()) as { taskStatus: string; messages: UIMessage[] };
+          const last = data.messages.at(-1);
+          const answered = last?.role === 'assistant';
+          if (
+            (data.taskStatus === 'done' ||
+              data.taskStatus === 'waiting_approval' ||
+              data.taskStatus === 'waiting_budget') &&
+            answered
+          ) {
+            return settle(null, data.messages);
+          }
+          if (
+            data.taskStatus === 'failed' ||
+            data.taskStatus === 'needs_attention' ||
+            data.taskStatus === 'cancelled'
+          ) {
+            return settle(
+              `the task ${data.taskStatus === 'cancelled' ? 'was cancelled' : `ended ${data.taskStatus}`} — see the Tasks page`,
+              data.messages,
+            );
+          }
+        }
+      } catch {
+        // transient poll failure — keep trying until the timeout
+      }
+      if (Date.now() - startedAt > TIMEOUT_MS) {
+        return settle('still running in the background — the answer will appear on reload');
+      }
+      if (!cancelled) window.setTimeout(tick, 2500);
+    };
+
+    void tick();
+    return () => {
+      cancelled = true;
+    };
+  }, [asyncTaskId, conversationId, setMessages]);
+
+  const busy = status === 'submitted' || status === 'streaming' || asyncTaskId !== null;
 
   return (
     <div className="mx-auto flex h-[calc(100vh-4rem)] max-w-4xl flex-col">
@@ -133,6 +196,14 @@ export function ChatClient({
             ))}
             {status === 'submitted' ? (
               <p className="animate-pulse text-sm text-zinc-500 dark:text-zinc-400">Thinking…</p>
+            ) : null}
+            {asyncTaskId ? (
+              <p className="animate-pulse text-sm text-zinc-500 dark:text-zinc-400">
+                Running as a task (tools &amp; approvals)…
+              </p>
+            ) : null}
+            {asyncNote ? (
+              <p className="text-xs text-zinc-500 dark:text-zinc-500">{asyncNote}</p>
             ) : null}
           </div>
         )}

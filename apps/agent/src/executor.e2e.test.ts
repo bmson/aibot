@@ -1,6 +1,14 @@
 import type { InboundEvent, ModelRouter, StepCallOutcome } from '@assistant/core';
 import { enqueueTask, executeTask, getAgent, resolveApproval } from '@assistant/core';
-import { approvals, createDb, type Db, tasks, toolCalls } from '@assistant/db';
+import {
+  approvals,
+  conversations,
+  createDb,
+  type Db,
+  messages,
+  tasks,
+  toolCalls,
+} from '@assistant/db';
 import { ToolDispatcher, ToolRegistry } from '@assistant/tools';
 import type { ModelMessage } from 'ai';
 import { eq, inArray, sql } from 'drizzle-orm';
@@ -14,6 +22,7 @@ let db: Db;
 let dbUp = false;
 let agentId: string;
 const createdTaskIds: string[] = [];
+const createdConversationIds: string[] = [];
 const executions: Record<string, number> = {};
 
 /**
@@ -144,7 +153,13 @@ afterAll(async () => {
         sql`${approvals.toolCallId} IN (select id from ${toolCalls} where ${toolCalls.toolName} LIKE 'exec.%')`,
       );
     await db.delete(toolCalls).where(sql`${toolCalls.toolName} LIKE 'exec.%'`);
+    if (createdConversationIds.length) {
+      await db.delete(messages).where(inArray(messages.conversationId, createdConversationIds));
+    }
     if (createdTaskIds.length) await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
+    if (createdConversationIds.length) {
+      await db.delete(conversations).where(inArray(conversations.id, createdConversationIds));
+    }
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
 });
@@ -219,6 +234,48 @@ describe('executor end-to-end (integration, scripted model)', () => {
     const calls = await db.select().from(toolCalls).where(eq(toolCalls.taskId, task.id));
     const outbound = calls.find((c) => c.toolName === 'exec.outbound');
     expect(outbound?.status).toBe('denied');
+  });
+
+  it('an approval park in a conversation posts a notice message (the thread never goes silent)', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const key = `t4-${Date.now()}`;
+    const dispatcher = new ToolDispatcher(db, makeRegistry(key));
+    const router = makeFakeRouter();
+
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner', title: 'exec-notice-test' })
+      .returning();
+    const convId = (conversation as NonNullable<typeof conversation>).id;
+    createdConversationIds.push(convId);
+    await db.insert(messages).values({
+      conversationId: convId,
+      role: 'user',
+      origin: 'owner',
+      parts: [{ type: 'text', text: 'please count then send hello world' }],
+      text: 'please count then send hello world',
+      embedding: new Array(1536).fill(0.01),
+    });
+
+    const { task } = await enqueueTask(db, {
+      event: { ...event(), conversationId: convId },
+      type: 'chat_turn',
+    });
+    createdTaskIds.push(task.id);
+
+    const run = await executeTask({ db, router, dispatcher }, task.id);
+    expect(run.outcome).toBe('parked');
+
+    const [approval] = await db.select().from(approvals).where(eq(approvals.taskId, task.id));
+    const thread = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, convId))
+      .orderBy(messages.createdAt);
+    const last = thread.at(-1);
+    expect(last?.role).toBe('assistant');
+    expect(last?.text).toContain('approval');
+    expect(last?.text).toContain(approval?.shortCode ?? '@@missing@@');
   });
 
   it('a crash mid-run retries and resumes from the checkpoint without double side effects', async (ctx) => {
