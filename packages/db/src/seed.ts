@@ -30,19 +30,24 @@ const db = createDb(DATABASE_URL);
 
 // ── Agent identity ───────────────────────────────────────────────────────────
 
+// Display identity is seed-owned: renames here propagate to existing rows on
+// re-seed (deploy). The workspace prefix is storage identity — never renamed.
+const AGENT_NAME = 'AI Bot';
+const AGENT_SIGNATURE = "— AI Bot (Baldvin's assistant)";
+
 const [agent] = await db
   .insert(agents)
   .values({
-    name: 'B Bot',
+    name: AGENT_NAME,
     email: 'bot@bmson.com',
     workspacePrefix: 'workspace/b-bot',
     timezone: 'America/Los_Angeles',
     locale: 'en',
-    signature: "— B Bot (Baldvin's assistant)",
+    signature: AGENT_SIGNATURE,
   })
   .onConflictDoUpdate({
     target: agents.email,
-    set: { updatedAt: sql`now()` },
+    set: { name: AGENT_NAME, signature: AGENT_SIGNATURE, updatedAt: sql`now()` },
   })
   .returning();
 

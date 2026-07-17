@@ -1,4 +1,4 @@
-# Assistant ("B Bot")
+# Assistant ("AI Bot")
 
 A personal AI assistant that is a **separate actor** — its own identity (email `bot@bmson.com`, calendar, phone, cloud Workspace), not a chat feature. It monitors its own inbox, drafts and schedules on your behalf (inviting you to events on *its* calendar), runs long-horizon missions that wake/work/sleep/reflect, and gates every outward-facing action behind your approval.
 
