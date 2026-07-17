@@ -30,11 +30,29 @@ const navItems = [
 ];
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const [[pendingRow], session] = await Promise.all([
-    getDb().select({ value: count() }).from(approvals).where(eq(approvals.status, 'pending')),
-    authMode === 'google' ? auth() : null,
+  const [pendingApprovals, session] = await Promise.all([
+    (async () => {
+      try {
+        const [pendingRow] = await getDb()
+          .select({ value: count() })
+          .from(approvals)
+          .where(eq(approvals.status, 'pending'));
+        return pendingRow?.value ?? 0;
+      } catch (error) {
+        console.error('[layout] failed to load pending approval count', error);
+        return 0;
+      }
+    })(),
+    (async () => {
+      if (authMode !== 'google') return null;
+      try {
+        return await auth();
+      } catch (error) {
+        console.error('[layout] failed to load auth session', error);
+        return null;
+      }
+    })(),
   ]);
-  const pendingApprovals = pendingRow?.value ?? 0;
 
   return (
     <html lang="en">

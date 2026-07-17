@@ -286,6 +286,7 @@ make_job assistant-sweep "* * * * *" "/internal/sweep"
 make_job assistant-gmail-sync "* * * * *" "/internal/gmail/sync"
 make_job assistant-gmail-watch "0 4 * * *" "/internal/gmail/watch"
 make_job assistant-canaries "17 15 * * *" "/internal/canaries/run"
+make_job assistant-canary-health "30 * * * *" "/internal/canaries/health"
 
 echo "── pub/sub (gmail push)"
 gcloud pubsub topics describe "$TOPIC" >/dev/null 2>&1 ||

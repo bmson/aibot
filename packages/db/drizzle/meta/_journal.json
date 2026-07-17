@@ -64,6 +64,13 @@
       "when": 1784319060635,
       "tag": "0008_mushy_squirrel_girl",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1784320439376,
+      "tag": "0009_nasty_solo",
+      "breakpoints": true
     }
   ]
 }

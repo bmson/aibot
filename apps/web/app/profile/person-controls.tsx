@@ -1,17 +1,20 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import { deleteContactAction, updateContactName } from '@/app/profile/actions';
+import { deleteContactAction, updateContactIdentityAction } from '@/app/profile/actions';
 import { btn } from '@/lib/ui';
 
 export function PersonControls({
   contactId,
   initialName,
+  initialAliases,
 }: {
   contactId: string;
   initialName: string;
+  initialAliases: string[];
 }) {
   const [name, setName] = useState(initialName);
+  const [aliases, setAliases] = useState(initialAliases.join(', '));
   const [saved, setSaved] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -22,7 +25,7 @@ export function PersonControls({
     setError(null);
     setSaved(false);
     startTransition(async () => {
-      const result = await updateContactName(contactId, name);
+      const result = await updateContactIdentityAction(contactId, name, aliases);
       if (result.error) setError(result.error);
       else setSaved(true);
     });
@@ -57,8 +60,25 @@ export function PersonControls({
         }}
         className="w-48 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
       />
+      <input
+        type="text"
+        value={aliases}
+        maxLength={4_000}
+        disabled={pending}
+        aria-label={`Aliases for ${initialName}`}
+        placeholder="aliases, comma separated"
+        onChange={(event) => {
+          setAliases(event.target.value);
+          setSaved(false);
+          setError(null);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') save();
+        }}
+        className="w-56 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+      />
       <button type="button" disabled={pending} onClick={save} className={btn.outline}>
-        {pending && !confirmingDelete ? 'Saving…' : 'Save name'}
+        {pending && !confirmingDelete ? 'Saving…' : 'Save identity'}
       </button>
       {saved && !pending ? (
         <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">

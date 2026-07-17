@@ -437,6 +437,8 @@ export const contacts = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name').notNull(),
+    /** Prior/manual names used by entity resolution after a canonical rename. */
+    aliases: text('aliases').array().notNull().default([]),
     emails: text('emails').array().notNull().default([]),
     phones: text('phones').array().notNull().default([]),
     relationship: text('relationship').notNull().default(''),

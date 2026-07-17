@@ -7,11 +7,13 @@ import { mergeContactAction } from '@/app/profile/actions';
 export function MergeControl({
   contactId,
   options,
+  suggested,
 }: {
   contactId: string;
   options: Array<{ id: string; label: string }>;
+  suggested?: { targetId: string; reason: string };
 }) {
-  const [targetId, setTargetId] = useState('');
+  const [targetId, setTargetId] = useState(suggested?.targetId ?? '');
   const [confirming, setConfirming] = useState(false);
   const [pending, startTransition] = useTransition();
 
@@ -19,6 +21,14 @@ export function MergeControl({
 
   return (
     <span className="flex items-center gap-1.5">
+      {suggested ? (
+        <span
+          className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+          title={`Possible duplicate: ${suggested.reason}`}
+        >
+          possible duplicate
+        </span>
+      ) : null}
       <select
         aria-label="Merge into"
         value={targetId}
@@ -33,6 +43,7 @@ export function MergeControl({
         {options.map((o) => (
           <option key={o.id} value={o.id}>
             {o.label}
+            {suggested?.targetId === o.id ? ' — suggested' : ''}
           </option>
         ))}
       </select>

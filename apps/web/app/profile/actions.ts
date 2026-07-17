@@ -8,7 +8,7 @@ import {
   deleteContact,
   memories,
   mergeContacts,
-  renameContact,
+  updateContactIdentity,
 } from '@assistant/db';
 import { eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
@@ -148,15 +148,24 @@ export async function updateContactRelationship(
 }
 
 /** Rename a person shown on the Profile page. Owner identity is intentionally excluded. */
-export async function updateContactName(
+export async function updateContactIdentityAction(
   contactId: string,
   name: string,
+  aliasesText: string,
 ): Promise<{ error?: string }> {
   await requireOwner();
   if (!UUID_RE.test(contactId)) return { error: 'Invalid person identifier.' };
   const db = getDb();
   try {
-    await renameContact(db, { contactId, name });
+    await updateContactIdentity(db, {
+      contactId,
+      name,
+      aliases: aliasesText
+        .slice(0, 4_000)
+        .split(/[,\n]/)
+        .map((alias) => alias.trim())
+        .filter(Boolean),
+    });
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Person could not be renamed.' };
   }

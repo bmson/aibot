@@ -1,4 +1,10 @@
-import { executeTask, expireStaleApprovals, findDueTasks, loadConfig } from '@assistant/core';
+import {
+  evaluateCanaryHealth,
+  executeTask,
+  expireStaleApprovals,
+  findDueTasks,
+  loadConfig,
+} from '@assistant/core';
 import { Hono } from 'hono';
 import { latestCanaryRun, runCanaries } from '../canaries.js';
 import { buildDeps } from '../deps.js';
@@ -105,4 +111,20 @@ internal.post('/canaries/run', async (c) => {
 internal.get('/canaries/status', async (c) => {
   const latest = await latestCanaryRun(buildDeps().db);
   return c.json({ latest });
+});
+
+internal.on(['GET', 'POST'], '/canaries/health', async (c) => {
+  const latest = await latestCanaryRun(buildDeps().db);
+  const health = evaluateCanaryHealth(latest);
+  if (!health.ok && health.state !== 'running') {
+    console.error(
+      JSON.stringify({
+        msg: 'canary_alert',
+        state: health.state,
+        detail: health.detail,
+        runId: latest?.runId,
+      }),
+    );
+  }
+  return c.json({ health, latest }, health.ok ? 200 : 503);
 });

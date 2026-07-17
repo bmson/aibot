@@ -1,6 +1,6 @@
 import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
-import { contacts, memories, memoryTombstones } from './schema.js';
+import { type ContactRow, contacts, memories, memoryTombstones } from './schema.js';
 
 /** Subjects that are the assistant itself — facts about it never become contacts. */
 const ASSISTANT_ALIASES = new Set(['assistant', 'ai bot', 'b bot', 'the assistant', 'bot']);
@@ -26,19 +26,104 @@ export function normalizeContactName(value: string): string {
   return name;
 }
 
+export function normalizeContactAliases(values: string[], canonicalName: string): string[] {
+  const canonical = canonicalName.toLocaleLowerCase();
+  const aliases = new Map<string, string>();
+  for (const value of values) {
+    const alias = normalizeContactName(value);
+    const key = alias.toLocaleLowerCase();
+    if (key !== canonical && !aliases.has(key)) aliases.set(key, alias);
+  }
+  if (aliases.size > 20) throw new Error('A person can have at most 20 aliases.');
+  return [...aliases.values()];
+}
+
+/** Update canonical name and aliases while remembering the old name after a rename. */
+export async function updateContactIdentity(
+  db: Db,
+  input: { contactId: string; name: string; aliases?: string[] },
+): Promise<{ name: string; aliases: string[] }> {
+  const name = normalizeContactName(input.name);
+  return db.transaction(async (tx) => {
+    const [contact] = await tx
+      .select()
+      .from(contacts)
+      .where(eq(contacts.id, input.contactId))
+      .for('update');
+    if (!contact || contact.trust === 'owner') {
+      throw new Error('Person not found or cannot be renamed.');
+    }
+    const renamed = contact.name.toLocaleLowerCase() !== name.toLocaleLowerCase();
+    const aliases = normalizeContactAliases(
+      [...(input.aliases ?? contact.aliases), ...(renamed ? [contact.name] : [])],
+      name,
+    );
+    const [updated] = await tx
+      .update(contacts)
+      .set({ name, aliases, updatedAt: sql`now()` })
+      .where(and(eq(contacts.id, input.contactId), ne(contacts.trust, 'owner')))
+      .returning({ name: contacts.name, aliases: contacts.aliases });
+    if (!updated) throw new Error('Person not found or cannot be renamed.');
+    return updated;
+  });
+}
+
 /** Rename a non-owner person. The owner identity is managed separately. */
 export async function renameContact(
   db: Db,
   input: { contactId: string; name: string },
 ): Promise<{ name: string }> {
-  const name = normalizeContactName(input.name);
-  const [renamed] = await db
-    .update(contacts)
-    .set({ name, updatedAt: sql`now()` })
-    .where(and(eq(contacts.id, input.contactId), ne(contacts.trust, 'owner')))
-    .returning({ name: contacts.name });
-  if (!renamed) throw new Error('Person not found or cannot be renamed.');
-  return renamed;
+  const renamed = await updateContactIdentity(db, input);
+  return { name: renamed.name };
+}
+
+export interface DuplicateContactSuggestion {
+  contactId: string;
+  targetId: string;
+  reason: 'matching name or alias' | 'same email' | 'same phone';
+}
+
+/** Conservative, advisory-only duplicate hints; merges still require owner confirmation. */
+export function findDuplicateContactSuggestions(
+  rows: Array<Pick<ContactRow, 'id' | 'name' | 'aliases' | 'emails' | 'phones' | 'trust'>>,
+): DuplicateContactSuggestion[] {
+  const people = rows.filter((row) => row.trust !== 'owner');
+  const suggestions: DuplicateContactSuggestion[] = [];
+  for (let index = 0; index < people.length; index += 1) {
+    const source = people[index] as (typeof people)[number];
+    for (let targetIndex = 0; targetIndex < index; targetIndex += 1) {
+      const target = people[targetIndex] as (typeof people)[number];
+      const sourceEmails = new Set(source.emails.map((value) => value.trim().toLocaleLowerCase()));
+      const sourcePhones = new Set(source.phones.map((value) => value.replace(/\D/g, '')));
+      const sameEmail = target.emails.some(
+        (value) => value.trim() && sourceEmails.has(value.trim().toLocaleLowerCase()),
+      );
+      const samePhone = target.phones.some(
+        (value) => value.replace(/\D/g, '') && sourcePhones.has(value.replace(/\D/g, '')),
+      );
+      const sourceNames = [source.name, ...source.aliases].map((value) =>
+        value.toLocaleLowerCase(),
+      );
+      const targetNames = [target.name, ...target.aliases].map((value) =>
+        value.toLocaleLowerCase(),
+      );
+      const sameName = sourceNames.some((left) =>
+        targetNames.some((right) => namePrefixMatch(left, right)),
+      );
+      const reason = sameEmail
+        ? 'same email'
+        : samePhone
+          ? 'same phone'
+          : sameName
+            ? 'matching name or alias'
+            : undefined;
+      if (reason) {
+        suggestions.push({ contactId: source.id, targetId: target.id, reason });
+        break;
+      }
+    }
+  }
+  return suggestions;
 }
 
 /**
@@ -109,30 +194,42 @@ export async function resolveSubjectContact(
   if (ASSISTANT_ALIASES.has(lower)) return null;
 
   const [owner] = await db.select().from(contacts).where(eq(contacts.trust, 'owner')).limit(1);
-  if (lower === 'owner' || (owner && namePrefixMatch(lower, owner.name.toLowerCase()))) {
+  const ownerMatch = owner
+    ? [owner.name, ...owner.aliases].find((candidate) =>
+        namePrefixMatch(lower, candidate.toLocaleLowerCase()),
+      )
+    : undefined;
+  if (lower === 'owner' || ownerMatch) {
     if (!owner) return null;
     // adopt the fuller name ("Baldvin" → "Baldvin Kristjánsson")
-    if (name.length > owner.name.length && lower !== 'owner') {
+    if (name.length > owner.name.length && ownerMatch === owner.name && lower !== 'owner') {
       await db
         .update(contacts)
-        .set({ name, updatedAt: sql`now()` })
+        .set({
+          name,
+          aliases: normalizeContactAliases([...owner.aliases, owner.name], name),
+          updatedAt: sql`now()`,
+        })
         .where(eq(contacts.id, owner.id));
     }
     return { contactId: owner.id, created: false };
   }
 
   const candidates = await db.select().from(contacts);
-  const match = candidates.find(
-    (c) => c.trust !== 'owner' && namePrefixMatch(lower, c.name.toLowerCase()),
-  );
+  const match = candidates
+    .filter((contact) => contact.trust !== 'owner')
+    .map((contact) => ({
+      contact,
+      matchedName: [contact.name, ...contact.aliases].find((candidate) =>
+        namePrefixMatch(lower, candidate.toLocaleLowerCase()),
+      ),
+    }))
+    .find((candidate) => candidate.matchedName);
   if (match) {
-    if (name.length > match.name.length) {
-      await db
-        .update(contacts)
-        .set({ name, updatedAt: sql`now()` })
-        .where(eq(contacts.id, match.id));
+    if (name.length > match.contact.name.length && match.matchedName === match.contact.name) {
+      await updateContactIdentity(db, { contactId: match.contact.id, name });
     }
-    return { contactId: match.id, created: false };
+    return { contactId: match.contact.id, created: false };
   }
 
   const [created] = await db
@@ -165,6 +262,10 @@ export async function mergeContacts(
   await db
     .update(contacts)
     .set({
+      aliases: normalizeContactAliases(
+        [...target.aliases, ...source.aliases, source.name],
+        target.name,
+      ),
       emails: [...new Set([...target.emails, ...source.emails])],
       phones: [...new Set([...target.phones, ...source.phones])],
       relationship: target.relationship || source.relationship,

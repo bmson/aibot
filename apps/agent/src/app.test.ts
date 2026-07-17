@@ -38,11 +38,13 @@ describe('agent app', () => {
 
   it('keeps canary execution and status behind internal authentication', async () => {
     const app = createApp();
-    const [run, status] = await Promise.all([
+    const [run, status, health] = await Promise.all([
       app.request('/internal/canaries/run', { method: 'POST' }),
       app.request('/internal/canaries/status'),
+      app.request('/internal/canaries/health'),
     ]);
     expect(run.status).toBe(401);
     expect(status.status).toBe(401);
+    expect(health.status).toBe(401);
   });
 });

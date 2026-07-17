@@ -49,7 +49,8 @@ bypass is rejected when `NODE_ENV=production`. To call `/internal/*` by hand, ge
 ## Deployment canaries
 
 `POST /internal/canaries/run` performs real, uniquely marked Gmail, SMS, sandboxed browser,
-approval, and chat checks. `GET /internal/canaries/status` returns the latest durable JSON result.
+approval, and chat checks. `GET /internal/canaries/status` returns the latest durable JSON result;
+`GET /internal/canaries/health` returns 503 for failed, stuck, missing, or >26-hour-old results.
 Both endpoints use the same OIDC/shared-secret protection as every other internal route.
 
 Canaries are disabled by default because a run sends one SMS to `OWNER_PHONE`. Production deploys
@@ -57,6 +58,8 @@ set `CANARY_ENABLED=true`, enforce a `$0.03` structural run ceiling in addition 
 ledger, and schedule one run daily. Runs are single-flight across Cloud Run instances, every check
 has a deadline, Gmail artifacts are deleted, browser callbacks use a one-shot token hash, and
 synthetic approvals/tasks are always driven to a terminal state.
+An hourly authenticated health probe logs `canary_alert` and fails its Scheduler execution when
+the result needs attention, while the dashboard shows the same health state to the owner.
 
 Local example (with the agent running and a non-empty `INTERNAL_API_SECRET`):
 

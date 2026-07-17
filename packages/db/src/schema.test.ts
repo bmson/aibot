@@ -79,4 +79,8 @@ describe('schema', () => {
     expect(cols).toHaveProperty('confidence');
     expect(cols).toHaveProperty('quarantined');
   });
+
+  it('contacts preserve aliases across canonical renames', () => {
+    expect(getTableColumns(schema.contacts)).toHaveProperty('aliases');
+  });
 });

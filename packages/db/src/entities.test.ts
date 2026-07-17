@@ -3,7 +3,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, type Db } from './client.js';
 import {
   deleteContact,
+  findDuplicateContactSuggestions,
   mergeContacts,
+  normalizeContactAliases,
   normalizeContactName,
   renameContact,
   resolveSubjectContact,
@@ -56,6 +58,48 @@ describe('contact names', () => {
     expect(() => normalizeContactName('   ')).toThrow('required');
     expect(() => normalizeContactName(`Anna\u0000Bad`)).toThrow('control');
     expect(() => normalizeContactName('x'.repeat(121))).toThrow('120');
+    expect(normalizeContactAliases([' Annie ', 'annie', 'Anna'], 'Anna')).toEqual(['Annie']);
+  });
+
+  it('suggests duplicate people from names, aliases, email, or phone without auto-merging', () => {
+    const suggestions = findDuplicateContactSuggestions([
+      {
+        id: 'first',
+        name: 'Anna Jónsdóttir',
+        aliases: ['Annie'],
+        emails: [],
+        phones: [],
+        trust: 'known',
+      },
+      {
+        id: 'second',
+        name: 'Annie',
+        aliases: [],
+        emails: [],
+        phones: [],
+        trust: 'unknown',
+      },
+      {
+        id: 'third',
+        name: 'Different Person',
+        aliases: [],
+        emails: ['shared@example.com'],
+        phones: [],
+        trust: 'known',
+      },
+      {
+        id: 'fourth',
+        name: 'Another Person',
+        aliases: [],
+        emails: ['SHARED@example.com'],
+        phones: [],
+        trust: 'unknown',
+      },
+    ]);
+    expect(suggestions).toEqual([
+      { contactId: 'second', targetId: 'first', reason: 'matching name or alias' },
+      { contactId: 'fourth', targetId: 'third', reason: 'same email' },
+    ]);
   });
 
   it('renames a non-owner person but never the owner', async (ctx) => {
@@ -72,6 +116,11 @@ describe('contact names', () => {
     ).resolves.toEqual({ name: 'Xtest-New Name' });
     const [renamed] = await db.select().from(contacts).where(eq(contacts.id, person.id));
     expect(renamed?.name).toBe('Xtest-New Name');
+    expect(renamed?.aliases).toContain('Xtest-Old Name');
+    const resolvedOldName = await resolveSubjectContact(db, { subject: 'Xtest-Old Name' });
+    expect(resolvedOldName?.contactId).toBe(person.id);
+    const [stillCanonical] = await db.select().from(contacts).where(eq(contacts.id, person.id));
+    expect(stillCanonical?.name).toBe('Xtest-New Name');
 
     await expect(renameContact(db, { contactId: ownerId, name: 'Not the owner' })).rejects.toThrow(
       'cannot be renamed',
@@ -215,6 +264,7 @@ describe('mergeContacts', () => {
       .from(contacts)
       .where(eq(contacts.id, (target as NonNullable<typeof target>).id));
     expect(merged?.relationship).toBe('cousin');
+    expect(merged?.aliases).toContain('Xtest-Dup');
     expect(merged?.emails.sort()).toEqual(['dup@x.is', 'full@x.is']);
     const [fact] = await db
       .select()

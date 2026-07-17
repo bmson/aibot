@@ -1,5 +1,12 @@
 import { CARD_AUTO_FACTS_PER_DOMAIN, CARD_AUTO_MIN_IMPORTANCE } from '@assistant/core';
-import { type ContactRow, contacts, type MemoryRow, memories, ownerCard } from '@assistant/db';
+import {
+  type ContactRow,
+  contacts,
+  findDuplicateContactSuggestions,
+  type MemoryRow,
+  memories,
+  ownerCard,
+} from '@assistant/db';
 import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { consolidateNow, recompileCard } from '@/app/profile/actions';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
@@ -96,6 +103,12 @@ export default async function ProfilePage() {
       contact,
       facts: factsByContact.get(contact.id) ?? [],
     }));
+  const duplicateSuggestions = new Map(
+    findDuplicateContactSuggestions(allContacts).map((suggestion) => [
+      suggestion.contactId,
+      suggestion,
+    ]),
+  );
 
   const ownerByDomain = DOMAIN_ORDER.map((domain) => ({
     domain,
@@ -269,11 +282,16 @@ export default async function ProfilePage() {
                   </span>
                 </summary>
                 <div className="mt-3 flex flex-col gap-2">
-                  <PersonControls contactId={contact.id} initialName={contact.name} />
+                  <PersonControls
+                    contactId={contact.id}
+                    initialName={contact.name}
+                    initialAliases={contact.aliases}
+                  />
                   <div className="flex flex-wrap items-center justify-end gap-1.5">
                     <RelationshipForm contactId={contact.id} initial={contact.relationship} />
                     <MergeControl
                       contactId={contact.id}
+                      suggested={duplicateSuggestions.get(contact.id)}
                       options={allContacts
                         .filter((c) => c.id !== contact.id)
                         .map((c) => ({

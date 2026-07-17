@@ -1,4 +1,5 @@
 export * from './browse.js';
+export * from './canary.js';
 export * from './chat.js';
 export * from './config.js';
 export * from './cost.js';

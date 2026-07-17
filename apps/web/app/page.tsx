@@ -1,4 +1,5 @@
-import { approvals, goals, tasks } from '@assistant/db';
+import { evaluateCanaryHealth } from '@assistant/core';
+import { approvals, canaryRuns, goals, tasks } from '@assistant/db';
 import { and, asc, desc, eq, inArray, notInArray } from 'drizzle-orm';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
@@ -46,7 +47,7 @@ export default async function DashboardPage() {
   const db = getDb();
   const now = new Date();
 
-  const [pendingApprovals, attention, waiting, recentDone, missions, goalRows] = await Promise.all([
+  const dashboardData = await Promise.all([
     db
       .select({ approval: approvals, taskType: tasks.type, taskTrust: tasks.trust })
       .from(approvals)
@@ -77,10 +78,38 @@ export default async function DashboardPage() {
       )
       .orderBy(desc(tasks.updatedAt)),
     db
-      .select({ id: goals.id, title: goals.title, status: goals.status, priority: goals.priority })
+      .select({
+        id: goals.id,
+        title: goals.title,
+        status: goals.status,
+        priority: goals.priority,
+      })
       .from(goals)
       .orderBy(asc(goals.priority), desc(goals.updatedAt)),
-  ]);
+    db.select().from(canaryRuns).orderBy(desc(canaryRuns.startedAt)).limit(1),
+  ]).catch((error: unknown) => {
+    console.error('[dashboard] failed to load page data', error);
+    return null;
+  });
+  if (!dashboardData) {
+    return (
+      <div className="mx-auto max-w-4xl">
+        <PageHeader title="Dashboard" />
+        <p className="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
+          The dashboard is having trouble loading live data right now. The app shell is still up,
+          and we are treating this as a data-layer failure rather than a full outage.
+        </p>
+      </div>
+    );
+  }
+  const [pendingApprovals, attention, waiting, recentDone, missions, goalRows, [latestCanary]] =
+    dashboardData;
+  const canaryHealth = evaluateCanaryHealth(latestCanary, { now });
+  const failedCanaryChecks = Object.entries(
+    (latestCanary?.checks ?? {}) as Record<string, { ok?: boolean }>,
+  )
+    .filter(([, check]) => check.ok === false)
+    .map(([name]) => name);
 
   const totalItems =
     pendingApprovals.length +
@@ -93,6 +122,33 @@ export default async function DashboardPage() {
   return (
     <div className="mx-auto max-w-4xl">
       <PageHeader title="Dashboard" />
+      <section
+        className={`mt-6 rounded-lg border p-4 ${
+          canaryHealth.ok
+            ? 'border-emerald-200 bg-emerald-50/50 dark:border-emerald-900/60 dark:bg-emerald-950/20'
+            : 'border-red-200 bg-red-50/50 dark:border-red-900/60 dark:bg-red-950/20'
+        }`}
+      >
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="text-sm font-medium">Integration health</h2>
+          <span
+            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
+              canaryHealth.ok
+                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
+            }`}
+          >
+            {canaryHealth.state}
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+          {canaryHealth.detail}
+          {latestCanary?.finishedAt
+            ? ` Last finished ${relativeTime(latestCanary.finishedAt, now)}.`
+            : ''}
+          {failedCanaryChecks.length > 0 ? ` Failed: ${failedCanaryChecks.join(', ')}.` : ''}
+        </p>
+      </section>
       {totalItems === 0 ? (
         <p className="mt-6 rounded-lg border border-zinc-200 p-5 text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
           All quiet — nothing needs you. Approvals, stuck tasks, and running work will show up here.
