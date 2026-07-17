@@ -6,6 +6,7 @@ import type { ModelRouter } from '../model-router/router.js';
 import type { DispatcherPort } from '../workflow/executor.js';
 import { executeTask } from '../workflow/executor.js';
 import {
+  deleteImportSource,
   purgeImportSource,
   reviewImportSource,
   startImport,
@@ -239,5 +240,23 @@ describe('backstory import (integration)', () => {
     expect(remaining.map((m) => m.content)).toEqual([marker2]);
     [src] = await db.select().from(importSources).where(eq(importSources.source, SOURCE));
     expect(src?.status).toBe('purged');
+
+    // delete removes the source row AND the uploaded archive — no husk left
+    const deletedPaths: string[] = [];
+    const result = await deleteImportSource(db, SOURCE, {
+      delete: async (relPath: string) => {
+        deletedPaths.push(relPath);
+      },
+    });
+    expect(result.purgedMemories).toBe(0); // already purged above
+    expect(deletedPaths).toEqual(['import/archive.txt']);
+    const [gone] = await db.select().from(importSources).where(eq(importSources.source, SOURCE));
+    expect(gone).toBeUndefined();
+    // the unrelated memory still survives
+    const survivors = await db
+      .select()
+      .from(memories)
+      .where(sql`${memories.content} LIKE ${`${MARKER}%`}`);
+    expect(survivors.map((m) => m.content)).toEqual([marker2]);
   });
 });

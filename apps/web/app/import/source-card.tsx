@@ -2,7 +2,12 @@
 
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
-import { purgeSourceAction, reviewSourceAction, startImportAction } from '@/app/import/actions';
+import {
+  deleteSourceAction,
+  purgeSourceAction,
+  reviewSourceAction,
+  startImportAction,
+} from '@/app/import/actions';
 
 /** Plain-serializable source view built in page.tsx. */
 export interface SourceView {
@@ -34,7 +39,7 @@ const statusChipClasses: Record<string, string> = {
 };
 
 export function SourceCard({ view }: { view: SourceView }) {
-  const [confirmingPurge, setConfirmingPurge] = useState(false);
+  const [confirming, setConfirming] = useState<'purge' | 'delete' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -124,37 +129,52 @@ export function SourceCard({ view }: { view: SourceView }) {
             Re-run
           </button>
         ) : null}
-        {view.status !== 'purged' ? (
-          confirmingPurge ? (
-            <>
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => startTransition(() => purgeSourceAction(view.source))}
-                className={dangerButton}
-              >
-                Really purge {view.memoriesSaved} memories
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmingPurge(false)}
-                className={outlineButton}
-              >
-                Cancel
-              </button>
-            </>
-          ) : (
+        {confirming ? (
+          <>
             <button
               type="button"
               disabled={pending}
-              onClick={() => setConfirmingPurge(true)}
-              className={dangerOutlineButton}
-              title="Remove every memory this source produced — and nothing else"
+              onClick={() =>
+                startTransition(() =>
+                  confirming === 'purge'
+                    ? purgeSourceAction(view.source)
+                    : deleteSourceAction(view.source),
+                )
+              }
+              className={dangerButton}
             >
-              Purge
+              {confirming === 'purge'
+                ? `Really purge ${view.memoriesSaved} memories`
+                : `Really delete source${view.memoriesSaved > 0 ? ` + ${view.memoriesSaved} memories` : ''}`}
             </button>
-          )
-        ) : null}
+            <button type="button" onClick={() => setConfirming(null)} className={outlineButton}>
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            {view.status !== 'purged' && view.memoriesSaved > 0 ? (
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => setConfirming('purge')}
+                className={dangerOutlineButton}
+                title="Remove every memory this source produced, keep the source for re-running"
+              >
+                Purge
+              </button>
+            ) : null}
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => setConfirming('delete')}
+              className={dangerOutlineButton}
+              title="Remove the source entirely: its memories, the uploaded file, and this entry"
+            >
+              Delete
+            </button>
+          </>
+        )}
       </div>
       {error ? <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p> : null}
     </div>

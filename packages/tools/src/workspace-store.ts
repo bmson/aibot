@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 /**
@@ -9,6 +9,8 @@ export interface WorkspaceStore {
   read(relPath: string): Promise<string>;
   write(relPath: string, content: string): Promise<{ bytes: number }>;
   list(relPath: string): Promise<Array<{ name: string; dir: boolean }>>;
+  /** Remove a file. Missing files are a no-op, not an error. */
+  delete(relPath: string): Promise<void>;
 }
 
 /** Reject traversal; normalize to forward slashes. */
@@ -43,6 +45,10 @@ export class LocalWorkspaceStore implements WorkspaceStore {
       () => [],
     );
     return entries.map((e) => ({ name: e.name, dir: e.isDirectory() }));
+  }
+
+  async delete(rel: string): Promise<void> {
+    await rm(this.resolve(rel), { force: true });
   }
 }
 
@@ -89,6 +95,17 @@ export class GcsWorkspaceStore implements WorkspaceStore {
     );
     if (!res.ok) throw new Error(`gcs write failed: ${res.status} ${await res.text()}`);
     return { bytes: Buffer.byteLength(content) };
+  }
+
+  async delete(rel: string): Promise<void> {
+    const token = await this.token();
+    const res = await fetch(
+      `https://storage.googleapis.com/storage/v1/b/${this.bucket}/o/${encodeURIComponent(this.object(rel))}`,
+      { method: 'DELETE', headers: { authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`gcs delete failed: ${res.status}`);
+    }
   }
 
   async list(rel: string): Promise<Array<{ name: string; dir: boolean }>> {

@@ -1,6 +1,7 @@
 'use server';
 
 import {
+  deleteImportSource,
   detectKind,
   getAgent,
   purgeImportSource,
@@ -39,6 +40,13 @@ export async function startImportAction(
 export async function purgeSourceAction(source: string): Promise<void> {
   await requireOwner();
   await purgeImportSource(getDb(), source);
+  revalidateImport();
+}
+
+/** Remove the source entirely: memories, uploaded file, and the row itself. */
+export async function deleteSourceAction(source: string): Promise<void> {
+  await requireOwner();
+  await deleteImportSource(getDb(), source, getWorkspace());
   revalidateImport();
 }
 

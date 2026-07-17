@@ -391,6 +391,43 @@ export async function purgeImportSource(db: Db, source: string): Promise<{ purge
 }
 
 /**
+ * Delete an import source outright: cancel its task, remove its memories
+ * (a delete implies a purge), remove the uploaded archive from the
+ * workspace, and drop the source row — no purged/failed husk left behind.
+ */
+export async function deleteImportSource(
+  db: Db,
+  source: string,
+  workspace?: { delete(relPath: string): Promise<void> },
+): Promise<{ purgedMemories: number }> {
+  const [sourceRow] = await db.select().from(importSources).where(eq(importSources.source, source));
+  if (!sourceRow) throw new Error(`unknown import source: ${source}`);
+
+  if (sourceRow.taskId) {
+    await db
+      .update(tasks)
+      .set({ status: 'cancelled', updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(tasks.id, sourceRow.taskId),
+          inArray(tasks.status, ['pending', 'sleeping', 'running', 'needs_attention']),
+        ),
+      );
+  }
+  const deleted = await db
+    .delete(memories)
+    .where(eq(memories.source, source))
+    .returning({ id: memories.id });
+  if (workspace) {
+    await workspace.delete(sourceRow.workspacePath).catch((err) => {
+      console.error(`workspace delete failed for ${sourceRow.workspacePath}`, err);
+    });
+  }
+  await db.delete(importSources).where(eq(importSources.id, sourceRow.id));
+  return { purgedMemories: deleted.length };
+}
+
+/**
  * Batch quarantine review by source: approve releases all quarantined facts
  * from this source; reject deletes them AND tombstones their hashes.
  */
