@@ -8,6 +8,7 @@ import {
   ensureChatConversation,
   finishTask,
   getAgent,
+  listConversations,
 } from './chat.js';
 import { completeTask, findDueTasks } from './workflow/machine.js';
 
@@ -50,6 +51,26 @@ describe('message cursors', () => {
 });
 
 describe('direct chat task leases (integration)', () => {
+  it('keeps archived chats out of the current list but makes them restorable', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const agent = await getAgent(db);
+    const conversation = await ensureChatConversation(db, agent.id);
+
+    await db
+      .update(conversations)
+      .set({ archivedAt: new Date() })
+      .where(eq(conversations.id, conversation.id));
+
+    const [current, archived] = await Promise.all([
+      listConversations(db, agent.id),
+      listConversations(db, agent.id, { archived: true }),
+    ]);
+    expect(current.some((row) => row.id === conversation.id)).toBe(false);
+    expect(archived.some((row) => row.id === conversation.id)).toBe(true);
+
+    await db.delete(conversations).where(eq(conversations.id, conversation.id));
+  });
+
   it('creates a real running lease that the due-task sweeper cannot reclaim', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const agent = await getAgent(db);

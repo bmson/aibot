@@ -187,6 +187,15 @@ export async function POST(req: Request) {
   const agent = await getAgent(db);
   const conversation = await ensureChatConversation(db, agent.id, body.conversationId);
 
+  // Replying is an explicit choice to resume an archived chat. Preserve the
+  // history, but make it visible again instead of creating a duplicate thread.
+  if (conversation.archivedAt) {
+    await db
+      .update(conversations)
+      .set({ archivedAt: null, updatedAt: new Date() })
+      .where(eq(conversations.id, conversation.id));
+  }
+
   if (!conversation.title) {
     await db
       .update(conversations)

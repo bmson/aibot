@@ -1,6 +1,6 @@
 import { getAgent } from '@assistant/core';
 import { conversations, type GoalRow, goals } from '@assistant/db';
-import { and, asc, desc, eq, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import { GoalCard, type GoalView } from '@/app/goals/goal-card';
 import { GoalCreateForm } from '@/app/goals/goal-create-form';
 import { requireOwner } from '@/auth';
@@ -58,13 +58,7 @@ export default async function GoalsPage() {
     db
       .select({ id: conversations.id, metadata: conversations.metadata })
       .from(conversations)
-      .where(
-        and(
-          eq(conversations.agentId, agent.id),
-          eq(conversations.channel, 'chat'),
-          isNull(conversations.archivedAt),
-        ),
-      )
+      .where(and(eq(conversations.agentId, agent.id), eq(conversations.channel, 'chat')))
       .orderBy(desc(conversations.updatedAt)),
   ]);
   const chatByGoalId = new Map<string, string>();

@@ -3,7 +3,8 @@
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { useEffect, useMemo, useState, useTransition } from 'react';
-import { changeConversationModel } from '../actions';
+import { btn } from '@/lib/ui';
+import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
 import { MessageMarkdown } from './markdown';
 
 interface ChatClientProps {
@@ -15,6 +16,8 @@ interface ChatClientProps {
   goalTitle?: string;
   /** A task created by the goal form before this page opened. */
   initialAsyncTurn?: { taskId: string; cursor: string };
+  archived: boolean;
+  canArchive: boolean;
 }
 
 const ASYNC_ACK_TEXT = 'Got it — I’m working on this now. I’ll post the result here.';
@@ -53,6 +56,8 @@ export function ChatClient({
   modelOverride,
   goalTitle,
   initialAsyncTurn,
+  archived,
+  canArchive,
 }: ChatClientProps) {
   const [input, setInput] = useState('');
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
@@ -211,8 +216,26 @@ export function ChatClient({
               Working toward: {goalTitle}
             </p>
           ) : null}
+          {archived ? (
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              Archived — sending a message restores this chat.
+            </p>
+          ) : null}
         </div>
         <div className="flex min-w-0 items-center gap-2">
+          {archived ? (
+            <form action={restoreConversation.bind(null, conversationId)}>
+              <button type="submit" className={btn.outline}>
+                Restore
+              </button>
+            </form>
+          ) : canArchive ? (
+            <form action={archiveConversation.bind(null, conversationId)}>
+              <button type="submit" className={btn.outline}>
+                Archive
+              </button>
+            </form>
+          ) : null}
           {fallbackNote ? (
             <span className="text-xs text-zinc-500 dark:text-zinc-500">{fallbackNote}</span>
           ) : null}

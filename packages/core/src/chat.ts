@@ -8,7 +8,7 @@ import {
   messages,
   tasks,
 } from '@assistant/db';
-import { and, asc, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
 
 const DEFAULT_MESSAGE_LIMIT = 100;
@@ -109,11 +109,21 @@ export async function ensureChatConversation(
   return created;
 }
 
-export async function listConversations(db: Db, agentId: string) {
+/** List current chats by default; archived history is opt-in in the interface. */
+export async function listConversations(
+  db: Db,
+  agentId: string,
+  options: { archived?: boolean } = {},
+) {
   return db
     .select()
     .from(conversations)
-    .where(and(eq(conversations.agentId, agentId), isNull(conversations.archivedAt)))
+    .where(
+      and(
+        eq(conversations.agentId, agentId),
+        options.archived ? isNotNull(conversations.archivedAt) : isNull(conversations.archivedAt),
+      ),
+    )
     .orderBy(desc(conversations.updatedAt))
     .limit(50);
 }

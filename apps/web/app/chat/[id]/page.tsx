@@ -1,7 +1,7 @@
 import { decodeMessageCursor, getAgent, listMessages } from '@assistant/core';
 import { conversations, goals, models, tasks } from '@assistant/db';
 import type { UIMessage } from 'ai';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, count, eq, notInArray, sql } from 'drizzle-orm';
 import { notFound } from 'next/navigation';
 import { requireOwner } from '@/auth';
 import { getDb } from '@/lib/server';
@@ -10,6 +10,7 @@ import { ChatClient } from './chat-client';
 export const dynamic = 'force-dynamic';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'];
 
 function goalIdFromMetadata(metadata: unknown): string | undefined {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
@@ -45,7 +46,7 @@ export default async function ChatConversationPage({
   const goalId = goalIdFromMetadata(conversation.metadata);
   const requestedTaskId = query.task && UUID_RE.test(query.task) ? query.task : undefined;
   const requestedCursor = decodeMessageCursor(query.cursor);
-  const [rows, linkedGoal, requestedTask] = await Promise.all([
+  const [rows, linkedGoal, requestedTask, activeTasks] = await Promise.all([
     listMessages(db, id),
     goalId
       ? db
@@ -61,6 +62,16 @@ export default async function ChatConversationPage({
           .where(and(eq(tasks.id, requestedTaskId), eq(tasks.conversationId, id)))
           .then(([task]) => task)
       : Promise.resolve(undefined),
+    db
+      .select({ value: count() })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.agentId, agent.id),
+          eq(tasks.conversationId, id),
+          notInArray(tasks.status, TERMINAL_TASK_STATUSES),
+        ),
+      ),
   ]);
   const initialMessages: UIMessage[] = rows
     .filter((row) => row.role === 'user' || row.role === 'assistant')
@@ -90,6 +101,8 @@ export default async function ChatConversationPage({
       models={enabledModels}
       modelOverride={conversation.modelOverride}
       goalTitle={linkedGoal?.title}
+      archived={conversation.archivedAt !== null}
+      canArchive={(activeTasks[0]?.value ?? 0) === 0}
       initialAsyncTurn={
         requestedTask && requestedCursor
           ? { taskId: requestedTask.id, cursor: query.cursor as string }
