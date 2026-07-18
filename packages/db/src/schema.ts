@@ -337,7 +337,11 @@ export const applicationConfirmations = pgTable(
     /** Non-sensitive last four characters for owner-facing audit messages. */
     confirmationTokenHint: text('confirmation_token_hint').notNull(),
     /** { spreadsheetId, sheetName, startCell, rows } approved before email arrival. */
-    trackerUpdate: jsonb('tracker_update').notNull(),
+    trackerUpdate: jsonb('tracker_update'),
+    /** { documentId, content } approved before email arrival. */
+    documentUpdate: jsonb('document_update'),
+    /** Per-action durable state: { sheet?: { status }, document?: { status } }. */
+    actionState: jsonb('action_state').notNull().default({}),
     status: text('status').notNull().default('awaiting_confirmation'),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     confirmationMessageId: text('confirmation_message_id'),
@@ -349,7 +353,7 @@ export const applicationConfirmations = pgTable(
   (t) => [
     check(
       'application_confirmations_status_check',
-      sql`${t.status} IN ('awaiting_confirmation','confirmation_received','updated','update_unknown','update_failed','cancelled','expired')`,
+      sql`${t.status} IN ('awaiting_confirmation','confirmation_received','updated','partially_updated','update_unknown','update_failed','cancelled','expired')`,
     ),
     uniqueIndex('application_confirmations_message_idx')
       .on(t.confirmationMessageId)

@@ -82,6 +82,8 @@ describe('schema', () => {
       'expectedSenderEmails',
       'confirmationTokenHash',
       'trackerUpdate',
+      'documentUpdate',
+      'actionState',
       'confirmationMessageId',
       'status',
       'expiresAt',

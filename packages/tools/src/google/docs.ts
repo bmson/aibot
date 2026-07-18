@@ -117,7 +117,7 @@ export function buildContentRequests(
   return { requests, insertedLength: text.length };
 }
 
-interface DocsDocument {
+export interface DocsDocument {
   documentId?: string;
   title?: string;
   body?: { content?: DocsStructuralElement[] };
@@ -140,7 +140,7 @@ export function documentText(doc: DocsDocument): string {
 }
 
 /** The index just before the document's trailing newline — where appends insert. */
-function endInsertIndex(doc: DocsDocument): number {
+export function endInsertIndex(doc: DocsDocument): number {
   const content = doc.body?.content ?? [];
   const last = content[content.length - 1];
   const end = last?.endIndex ?? 2;

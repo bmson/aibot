@@ -3,11 +3,13 @@ import { applicationConfirmations, conversations, tasks } from '@assistant/db';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { GoogleClient } from './google/client.js';
+import { buildContentRequests, type DocsDocument, endInsertIndex } from './google/docs.js';
 import { a1Range } from './google/sheets.js';
 import type { ToolRegistry } from './registry.js';
 import type { AssistantTool, ToolFlags } from './types.js';
 
 const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets';
+const DOCS = 'https://docs.googleapis.com/v1/documents';
 const MAX_WATCH_DAYS = 90;
 
 const spreadsheetId = z.string().regex(/^[a-zA-Z0-9_-]{10,200}$/, 'not a Google spreadsheet id');
@@ -31,6 +33,33 @@ export const ApplicationTrackerUpdateSchema = z.object({
 
 export type ApplicationTrackerUpdate = z.infer<typeof ApplicationTrackerUpdateSchema>;
 
+const documentId = z.string().regex(/^[a-zA-Z0-9_-]{10,200}$/, 'not a Google document id');
+
+/** Fixed Google Doc append approved before external mail arrives. */
+export const ApplicationDocumentUpdateSchema = z.object({
+  documentId,
+  content: z.string().trim().min(1).max(20_000),
+});
+
+export type ApplicationDocumentUpdate = z.infer<typeof ApplicationDocumentUpdateSchema>;
+
+export const ApplicationActionOutcomeSchema = z.object({
+  status: z.enum(['pending', 'succeeded', 'failed', 'unknown']),
+  error: z.string().max(2_000).optional(),
+});
+
+export const ApplicationActionStateSchema = z.object({
+  sheet: ApplicationActionOutcomeSchema.optional(),
+  document: ApplicationActionOutcomeSchema.optional(),
+});
+
+export type ApplicationActionState = z.infer<typeof ApplicationActionStateSchema>;
+
+export function parseApplicationActionState(value: unknown): ApplicationActionState {
+  const parsed = ApplicationActionStateSchema.safeParse(value);
+  return parsed.success ? parsed.data : {};
+}
+
 const confirmationToken = z
   .string()
   .trim()
@@ -42,18 +71,23 @@ const confirmationToken = z
   )
   .transform((value) => value.toUpperCase());
 
-const watchSchema = z.object({
-  company: z.string().trim().min(1).max(200),
-  role: z.string().trim().min(1).max(200),
-  expectedSenderEmails: z
-    .array(z.string().trim().toLowerCase().email())
-    .min(1)
-    .max(5)
-    .transform((values) => [...new Set(values)]),
-  confirmationToken,
-  expiresAt: z.string().datetime({ offset: true }),
-  trackerUpdate: ApplicationTrackerUpdateSchema,
-});
+const watchSchema = z
+  .object({
+    company: z.string().trim().min(1).max(200),
+    role: z.string().trim().min(1).max(200),
+    expectedSenderEmails: z
+      .array(z.string().trim().toLowerCase().email())
+      .min(1)
+      .max(5)
+      .transform((values) => [...new Set(values)]),
+    confirmationToken,
+    expiresAt: z.string().datetime({ offset: true }),
+    trackerUpdate: ApplicationTrackerUpdateSchema.optional(),
+    documentUpdate: ApplicationDocumentUpdateSchema.optional(),
+  })
+  .refine((value) => value.trackerUpdate || value.documentUpdate, {
+    message: 'at least one trackerUpdate or documentUpdate is required',
+  });
 
 const applySchema = z.object({ applicationId: z.string().uuid() });
 const listSchema = z.object({
@@ -62,6 +96,7 @@ const listSchema = z.object({
       'awaiting_confirmation',
       'confirmation_received',
       'updated',
+      'partially_updated',
       'update_unknown',
       'update_failed',
       'cancelled',
@@ -78,6 +113,18 @@ function literalRows(rows: ApplicationTrackerUpdate['rows']) {
   // Google RAW input prevents confirmation text beginning with '=' from
   // becoming a formula in the owner's tracker.
   return rows.map((row) => row.map((value) => value ?? ''));
+}
+
+function approvedActionSummary(input: z.infer<typeof watchSchema>): string {
+  const actions = [
+    input.trackerUpdate
+      ? `update ${input.trackerUpdate.sheetName}!${input.trackerUpdate.startCell}`
+      : undefined,
+    input.documentUpdate
+      ? `append to Google Doc ${input.documentUpdate.documentId.slice(0, 8)}…`
+      : undefined,
+  ].filter((value): value is string => Boolean(value));
+  return actions.join(' and ');
 }
 
 function register<S extends z.ZodType, Out>(
@@ -106,13 +153,13 @@ export function registerApplicationTools(
     {
       name: 'applications.watch_confirmation',
       description:
-        'After a portal has verifiably accepted a job application, watch for one later confirmation email and update one exact tracker range automatically. Requires the exact authenticated sender email, an opaque receipt or requisition token expected in the email, an expiry, and the literal Sheet values to write. Always requires owner approval.',
+        'After a portal has verifiably accepted a job application, watch for one later confirmation email and perform exact pre-authorized Google Sheet and/or Google Doc updates automatically. Requires the authenticated sender email, an opaque receipt or requisition token, an expiry, and every literal destination/value/content. Always requires owner approval.',
       inputSchema: watchSchema,
       risk: 'approval',
       acceptsUntrustedInput: true,
       approvalSummary: (args) => {
         const input = args as z.infer<typeof watchSchema>;
-        return `Watch ${input.expectedSenderEmails.join(', ')} for ${input.company} — ${input.role}, then update ${input.trackerUpdate.sheetName}!${input.trackerUpdate.startCell}`;
+        return `Watch ${input.expectedSenderEmails.join(', ')} for ${input.company} — ${input.role}, then ${approvedActionSummary(input)}`;
       },
       idempotencyKey: (args, ctx) => {
         const input = args as z.infer<typeof watchSchema>;
@@ -169,6 +216,11 @@ export function registerApplicationTools(
             confirmationTokenHash: tokenHash,
             confirmationTokenHint: args.confirmationToken.slice(-4),
             trackerUpdate: args.trackerUpdate,
+            documentUpdate: args.documentUpdate,
+            actionState: {
+              ...(args.trackerUpdate ? { sheet: { status: 'pending' as const } } : {}),
+              ...(args.documentUpdate ? { document: { status: 'pending' as const } } : {}),
+            },
             expiresAt,
           })
           .returning();
@@ -181,6 +233,8 @@ export function registerApplicationTools(
           tokenHint: record.confirmationTokenHint,
           expiresAt: record.expiresAt.toISOString(),
           trackerUpdate: record.trackerUpdate,
+          documentUpdate: record.documentUpdate,
+          actionState: record.actionState,
           conversationId: record.conversationId,
           status: record.status,
         };
@@ -194,7 +248,7 @@ export function registerApplicationTools(
     {
       name: 'applications.list_confirmations',
       description:
-        'List the owner-approved application confirmation watches, their status, expiry, sender, masked token, and tracker target. Use this before cancelling or explaining an automated follow-up.',
+        'List owner-approved application confirmation watches, their per-action status, expiry, sender, masked token, and Sheet/Doc targets. Use this before cancelling or explaining an automated follow-up.',
       inputSchema: listSchema,
       risk: 'autonomous',
       acceptsUntrustedInput: false,
@@ -214,7 +268,12 @@ export function registerApplicationTools(
           .limit(100);
         return {
           confirmations: rows.map((row) => {
-            const tracker = ApplicationTrackerUpdateSchema.parse(row.trackerUpdate);
+            const tracker = row.trackerUpdate
+              ? ApplicationTrackerUpdateSchema.parse(row.trackerUpdate)
+              : undefined;
+            const document = row.documentUpdate
+              ? ApplicationDocumentUpdateSchema.parse(row.documentUpdate)
+              : undefined;
             return {
               applicationId: row.id,
               company: row.company,
@@ -223,7 +282,9 @@ export function registerApplicationTools(
               expectedSenderEmails: row.expectedSenderEmails,
               tokenHint: row.confirmationTokenHint,
               expiresAt: row.expiresAt.toISOString(),
-              trackerTarget: `${tracker.sheetName}!${tracker.startCell}`,
+              trackerTarget: tracker ? `${tracker.sheetName}!${tracker.startCell}` : undefined,
+              documentTarget: document?.documentId,
+              actionState: parseApplicationActionState(row.actionState),
               confirmedAt: row.confirmedAt?.toISOString(),
               lastError: row.lastError,
             };
@@ -239,7 +300,7 @@ export function registerApplicationTools(
     {
       name: 'applications.cancel_confirmation',
       description:
-        'Cancel one pending application confirmation watch by id. Cancellation succeeds only before a matching email has been claimed; it never races or reverses an already-started tracker update.',
+        'Cancel one pending application confirmation watch by id. Cancellation succeeds only before a matching email has been claimed; it never races or reverses an already-started Sheet or Doc action.',
       inputSchema: applySchema,
       risk: 'autonomous',
       acceptsUntrustedInput: false,
@@ -284,7 +345,7 @@ export function registerApplicationTools(
     {
       name: 'applications.apply_confirmation',
       description:
-        'Internal confirmation worker. It can execute only for the exact pre-authorized application record carried by a verified internal event.',
+        'Internal Sheet confirmation worker. It can execute only the exact pre-authorized application record carried by a verified internal event.',
       inputSchema: applySchema,
       risk: 'autonomous',
       acceptsUntrustedInput: false,
@@ -323,6 +384,20 @@ export function registerApplicationTools(
           );
         if (!record) throw new Error('application confirmation is not ready to apply');
         const update = ApplicationTrackerUpdateSchema.parse(record.trackerUpdate);
+        const actionState = parseApplicationActionState(record.actionState);
+        if (actionState.sheet?.status === 'succeeded') {
+          return {
+            applicationId: record.id,
+            action: 'sheet',
+            status: 'succeeded',
+            alreadyApplied: true,
+          };
+        }
+        if (actionState.sheet?.status === 'failed' || actionState.sheet?.status === 'unknown') {
+          throw new Error(
+            `Sheet confirmation action is ${actionState.sheet.status}; automatic retry is forbidden`,
+          );
+        }
 
         await deps.client.api(
           `${SHEETS}/${encodeURIComponent(update.spreadsheetId)}/values/${encodeURIComponent(a1Range(update.sheetName, update.startCell))}?valueInputOption=RAW`,
@@ -334,7 +409,11 @@ export function registerApplicationTools(
 
         const [updated] = await ctx.db
           .update(applicationConfirmations)
-          .set({ status: 'updated', lastError: null, updatedAt: ctx.now() })
+          .set({
+            actionState: { ...actionState, sheet: { status: 'succeeded' } },
+            lastError: null,
+            updatedAt: ctx.now(),
+          })
           .where(
             and(
               eq(applicationConfirmations.id, record.id),
@@ -352,7 +431,117 @@ export function registerApplicationTools(
           sheetName: update.sheetName,
           startCell: update.startCell,
           writtenRows: update.rows.length,
-          status: 'updated',
+          action: 'sheet',
+          status: 'succeeded',
+        };
+      },
+    },
+    {
+      internalEventKind: 'application_confirmation',
+      internalEventArgument: 'applicationId',
+      privateWrite: true,
+      blanketAllowIneligible: true,
+    },
+  );
+
+  register(
+    registry,
+    {
+      name: 'applications.append_confirmation_doc',
+      description:
+        'Internal Google Doc confirmation worker. It can append only the exact pre-authorized content carried by a verified internal application event.',
+      inputSchema: applySchema,
+      risk: 'autonomous',
+      acceptsUntrustedInput: false,
+      idempotencyKey: (args) => {
+        const input = args as z.infer<typeof applySchema>;
+        return `application-confirmation-doc-${input.applicationId}`;
+      },
+      execute: async (args, ctx) => {
+        const [task] = await ctx.db
+          .select({ agentId: tasks.agentId, trigger: tasks.trigger })
+          .from(tasks)
+          .where(eq(tasks.id, ctx.taskId));
+        const trigger = task?.trigger as
+          | { source?: unknown; payload?: Record<string, unknown> }
+          | undefined;
+        if (
+          task?.agentId !== ctx.agentId ||
+          trigger?.source !== 'internal' ||
+          trigger.payload?.kind !== 'application_confirmation' ||
+          trigger.payload.applicationId !== args.applicationId
+        ) {
+          throw new Error(
+            'application confirmation tool requires its exact verified internal event',
+          );
+        }
+
+        const [record] = await ctx.db
+          .select()
+          .from(applicationConfirmations)
+          .where(
+            and(
+              eq(applicationConfirmations.id, args.applicationId),
+              eq(applicationConfirmations.agentId, ctx.agentId),
+              eq(applicationConfirmations.status, 'confirmation_received'),
+            ),
+          );
+        if (!record) throw new Error('application confirmation is not ready to apply');
+        const update = ApplicationDocumentUpdateSchema.parse(record.documentUpdate);
+        const actionState = parseApplicationActionState(record.actionState);
+        if (actionState.document?.status === 'succeeded') {
+          return {
+            applicationId: record.id,
+            action: 'document',
+            status: 'succeeded',
+            alreadyApplied: true,
+          };
+        }
+        if (
+          actionState.document?.status === 'failed' ||
+          actionState.document?.status === 'unknown'
+        ) {
+          throw new Error(
+            `Google Doc confirmation action is ${actionState.document.status}; automatic retry is forbidden`,
+          );
+        }
+
+        const document = await deps.client.api<DocsDocument>(
+          `${DOCS}/${encodeURIComponent(update.documentId)}`,
+        );
+        const { requests } = buildContentRequests(update.content, endInsertIndex(document), {
+          leadingNewline: true,
+        });
+        if (requests.length === 0) throw new Error('approved Google Doc append was empty');
+        await deps.client.api(`${DOCS}/${encodeURIComponent(update.documentId)}:batchUpdate`, {
+          method: 'POST',
+          body: JSON.stringify({ requests }),
+        });
+
+        const [updated] = await ctx.db
+          .update(applicationConfirmations)
+          .set({
+            actionState: { ...actionState, document: { status: 'succeeded' } },
+            lastError: null,
+            updatedAt: ctx.now(),
+          })
+          .where(
+            and(
+              eq(applicationConfirmations.id, record.id),
+              eq(applicationConfirmations.status, 'confirmation_received'),
+            ),
+          )
+          .returning({ id: applicationConfirmations.id });
+        if (!updated) throw new Error('application confirmation changed during document update');
+
+        return {
+          applicationId: record.id,
+          company: record.company,
+          role: record.role,
+          documentId: update.documentId,
+          appendedCharacters: update.content.length,
+          action: 'document',
+          status: 'succeeded',
         };
       },
     },

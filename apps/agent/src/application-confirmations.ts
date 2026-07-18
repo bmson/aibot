@@ -11,7 +11,13 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
-import { ApplicationTrackerUpdateSchema, hashConfirmationToken } from '@assistant/tools';
+import {
+  type ApplicationActionState,
+  ApplicationDocumentUpdateSchema,
+  ApplicationTrackerUpdateSchema,
+  hashConfirmationToken,
+  parseApplicationActionState,
+} from '@assistant/tools';
 import { and, eq, gt, lte, sql } from 'drizzle-orm';
 import type { AgentDeps } from './deps.js';
 
@@ -97,7 +103,7 @@ async function reportAmbiguous(
       await markTaskNeedsAttention(
         deps.db,
         claimed,
-        `Authenticated confirmation from ${input.from.toLowerCase()} matched ${matches.length} active applications; no tracker was changed.`,
+        `Authenticated confirmation from ${input.from.toLowerCase()} matched ${matches.length} active applications; no Sheet or Doc was changed.`,
       );
     }
   }
@@ -107,7 +113,7 @@ async function reportAmbiguous(
       deps,
       record,
       task.id,
-      `I received an authenticated email from ${input.from.toLowerCase()}, but it matched more than one active application watch. I did not update any tracker. Review the application references ending in ${matches.map((candidate) => candidate.confirmationTokenHint).join(', ')}.`,
+      `I received an authenticated email from ${input.from.toLowerCase()}, but it matched more than one active application watch. I did not update any Sheet or Doc. Review the application references ending in ${matches.map((candidate) => candidate.confirmationTokenHint).join(', ')}.`,
       `ambiguous:${record.id}`,
     );
   }
@@ -132,7 +138,7 @@ async function enqueueAuthorizedUpdate(
         confirmationMessageId: `gmail:${input.messageId}`,
       },
     },
-    maxSteps: 1,
+    maxSteps: 2,
   });
 
   if (task.status === 'done') {
@@ -174,9 +180,177 @@ export async function executeAmbiguousApplicationConfirmationTask(
   await markTaskNeedsAttention(
     deps.db,
     claimed,
-    `Authenticated confirmation from ${from} matched ${Number.isInteger(count) ? count : 'multiple'} active applications; no tracker was changed.`,
+    `Authenticated confirmation from ${from} matched ${Number.isInteger(count) ? count : 'multiple'} active applications; no Sheet or Doc was changed.`,
   );
   return { outcome: 'needs_attention' };
+}
+
+type ApplicationAction = 'sheet' | 'document';
+
+const ACTION_TOOL: Record<ApplicationAction, { name: string; step: number }> = {
+  sheet: { name: 'applications.apply_confirmation', step: 1 },
+  document: { name: 'applications.append_confirmation_doc', step: 2 },
+};
+
+function plannedActions(record: ApplicationConfirmationRow): ApplicationAction[] {
+  return [
+    record.trackerUpdate ? 'sheet' : undefined,
+    record.documentUpdate ? 'document' : undefined,
+  ].filter((action): action is ApplicationAction => Boolean(action));
+}
+
+function normalizedActionState(record: ApplicationConfirmationRow): ApplicationActionState {
+  const state = parseApplicationActionState(record.actionState);
+  const fallback =
+    record.status === 'updated'
+      ? 'succeeded'
+      : record.status === 'update_unknown'
+        ? 'unknown'
+        : record.status === 'update_failed'
+          ? 'failed'
+          : 'pending';
+  return {
+    ...(record.trackerUpdate ? { sheet: state.sheet ?? { status: fallback } } : {}),
+    ...(record.documentUpdate ? { document: state.document ?? { status: fallback } } : {}),
+  };
+}
+
+async function loadApplicationRecord(deps: AgentDeps, id: string) {
+  const [record] = await deps.db
+    .select()
+    .from(applicationConfirmations)
+    .where(eq(applicationConfirmations.id, id));
+  return record;
+}
+
+async function setActionOutcome(
+  deps: AgentDeps,
+  id: string,
+  action: ApplicationAction,
+  status: 'failed' | 'unknown',
+  error: string,
+): Promise<ApplicationConfirmationRow> {
+  const current = await loadApplicationRecord(deps, id);
+  if (!current) throw new Error('application confirmation disappeared during execution');
+  const state = normalizedActionState(current);
+  const [updated] = await deps.db
+    .update(applicationConfirmations)
+    .set({
+      actionState: { ...state, [action]: { status, error: error.slice(0, 2_000) } },
+      updatedAt: new Date(),
+    })
+    .where(eq(applicationConfirmations.id, id))
+    .returning();
+  if (!updated) throw new Error('failed to checkpoint application action outcome');
+  return updated;
+}
+
+async function rejectedOutcomeIsUnknown(
+  deps: AgentDeps,
+  recordId: string,
+  action: ApplicationAction,
+  reason: string,
+): Promise<boolean> {
+  const idempotencyKey =
+    action === 'sheet'
+      ? `application-confirmation-apply-${recordId}`
+      : `application-confirmation-doc-${recordId}`;
+  const [prior] = await deps.db
+    .select({ status: toolCalls.status })
+    .from(toolCalls)
+    .where(eq(toolCalls.idempotencyKey, idempotencyKey));
+  if (prior?.status === 'failed') return false;
+  if (prior?.status === 'executing') return true;
+  return /already executing|ambiguous side-effect retry/i.test(reason);
+}
+
+function finalRecordStatus(record: ApplicationConfirmationRow, state: ApplicationActionState) {
+  const statuses = plannedActions(record).map((action) => state[action]?.status ?? 'failed');
+  if (statuses.every((status) => status === 'succeeded')) return 'updated' as const;
+  if (statuses.some((status) => status === 'succeeded')) return 'partially_updated' as const;
+  if (statuses.some((status) => status === 'unknown')) return 'update_unknown' as const;
+  return 'update_failed' as const;
+}
+
+function actionLabel(record: ApplicationConfirmationRow, action: ApplicationAction): string {
+  if (action === 'sheet') {
+    const tracker = ApplicationTrackerUpdateSchema.parse(record.trackerUpdate);
+    return `Sheet ${tracker.sheetName}!${tracker.startCell}`;
+  }
+  return 'Google Doc append';
+}
+
+function resultCopy(record: ApplicationConfirmationRow, state: ApplicationActionState) {
+  const grouped = { succeeded: [] as string[], failed: [] as string[], unknown: [] as string[] };
+  for (const action of plannedActions(record)) {
+    const status = state[action]?.status;
+    if (status === 'succeeded' || status === 'failed' || status === 'unknown') {
+      grouped[status].push(actionLabel(record, action));
+    }
+  }
+  const details = [
+    grouped.succeeded.length ? `${grouped.succeeded.join(' and ')} succeeded.` : '',
+    grouped.failed.length
+      ? `${grouped.failed.join(' and ')} failed. No success is being claimed for the failed action.`
+      : '',
+    grouped.unknown.length
+      ? `${grouped.unknown.join(' and ')} may have succeeded; I suppressed automatic retry.`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return {
+    notice: `I matched the authenticated confirmation for ${record.company} — ${record.role} (reference ending ${record.confirmationTokenHint}). ${details}`,
+    progress: `Matched authenticated confirmation for ${record.company} — ${record.role}. ${details}`,
+  };
+}
+
+async function reconcileSucceededLedger(
+  deps: AgentDeps,
+  taskId: string,
+  record: ApplicationConfirmationRow,
+  state: ApplicationActionState,
+): Promise<void> {
+  for (const action of plannedActions(record)) {
+    if (state[action]?.status !== 'succeeded') continue;
+    const definition = ACTION_TOOL[action];
+    const result =
+      action === 'sheet'
+        ? (() => {
+            const update = ApplicationTrackerUpdateSchema.parse(record.trackerUpdate);
+            return {
+              applicationId: record.id,
+              action,
+              status: 'succeeded',
+              spreadsheetId: update.spreadsheetId,
+              sheetName: update.sheetName,
+              startCell: update.startCell,
+              writtenRows: update.rows.length,
+              recoveredFromRecord: true,
+            };
+          })()
+        : (() => {
+            const update = ApplicationDocumentUpdateSchema.parse(record.documentUpdate);
+            return {
+              applicationId: record.id,
+              action,
+              status: 'succeeded',
+              documentId: update.documentId,
+              appendedCharacters: update.content.length,
+              recoveredFromRecord: true,
+            };
+          })();
+    await deps.db
+      .update(toolCalls)
+      .set({ status: 'succeeded', result, finishedAt: new Date() })
+      .where(
+        and(
+          eq(toolCalls.taskId, taskId),
+          eq(toolCalls.toolName, definition.name),
+          eq(toolCalls.status, 'executing'),
+        ),
+      );
+  }
 }
 
 /** Durable queue handler: confirmation tasks never enter the model executor. */
@@ -197,190 +371,126 @@ export async function executeApplicationConfirmationTask(
   ) {
     return { outcome: 'not_claimable' };
   }
-
-  const [record] = await deps.db
-    .select()
-    .from(applicationConfirmations)
-    .where(
-      and(
-        eq(applicationConfirmations.id, applicationId),
-        eq(applicationConfirmations.agentId, queued.agentId),
-      ),
-    );
-  if (!record) return { outcome: 'not_claimable' };
+  let record = await loadApplicationRecord(deps, applicationId);
+  if (!record || record.agentId !== queued.agentId) return { outcome: 'not_claimable' };
   if (queued.status === 'done') return { outcome: 'done', applicationId };
   if (queued.status === 'needs_attention' || queued.status === 'failed') {
     return { outcome: 'needs_attention', applicationId };
   }
-
   const claimed = await claimTask(deps.db, queued.id);
   if (!claimed) return { outcome: 'not_claimable', applicationId };
 
-  // The Sheet may have committed before a process died while recording the
-  // tool result. The record transition happens inside the tool immediately
-  // after Google's response, so it is the durable recovery checkpoint.
-  if (record.status === 'updated') {
-    const tracker = ApplicationTrackerUpdateSchema.parse(record.trackerUpdate);
-    // Reconcile the ledger if the process died after the durable record
-    // checkpoint but before Dispatcher marked its tool call succeeded.
-    await deps.db
-      .update(toolCalls)
-      .set({
-        status: 'succeeded',
-        result: {
-          applicationId: record.id,
-          company: record.company,
-          role: record.role,
-          spreadsheetId: tracker.spreadsheetId,
-          sheetName: tracker.sheetName,
-          startCell: tracker.startCell,
-          writtenRows: tracker.rows.length,
-          status: 'updated',
-          recoveredFromRecord: true,
+  if (plannedActions(record).length === 0) {
+    await markTaskNeedsAttention(deps.db, claimed, 'No pre-authorized confirmation action exists.');
+    return { outcome: 'needs_attention', applicationId };
+  }
+  if (
+    ![
+      'confirmation_received',
+      'updated',
+      'partially_updated',
+      'update_unknown',
+      'update_failed',
+    ].includes(record.status)
+  ) {
+    await markTaskNeedsAttention(
+      deps.db,
+      claimed,
+      `Application confirmation record is ${record.status}; no update was attempted.`,
+    );
+    return { outcome: 'needs_attention', applicationId };
+  }
+
+  let state = normalizedActionState(record);
+  await reconcileSucceededLedger(deps, claimed.id, record, state);
+
+  if (record.status === 'confirmation_received') {
+    for (const action of plannedActions(record)) {
+      if (state[action]?.status !== 'pending') continue;
+      const definition = ACTION_TOOL[action];
+      const outcome = await deps.dispatcher.dispatch({
+        task: claimed,
+        step: definition.step,
+        toolName: definition.name,
+        args: { applicationId: record.id },
+        ctx: {
+          taskId: claimed.id,
+          agentId: claimed.agentId,
+          conversationId: claimed.conversationId ?? undefined,
+          trust: 'assistant',
+          tainted: false,
+          db: deps.db,
+          now: () => new Date(),
+          signal: new AbortController().signal,
+          log: async () => {},
         },
-        finishedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(toolCalls.taskId, claimed.id),
-          eq(toolCalls.toolName, 'applications.apply_confirmation'),
-          eq(toolCalls.status, 'executing'),
-        ),
-      );
-    await postNotice(
-      deps,
-      record,
-      claimed.id,
-      `I matched the authenticated confirmation for ${record.company} — ${record.role} (reference ending ${record.confirmationTokenHint}) and updated the approved tracker range.`,
-      'updated',
-    );
-    await completeTask(deps.db, claimed, {
-      status: 'done',
-      progress: `Matched authenticated confirmation for ${record.company} — ${record.role} and applied the pre-authorized tracker update.`,
-    });
-    return { outcome: 'done', applicationId };
-  }
-  if (record.status === 'update_unknown' || record.status === 'update_failed') {
-    await postNotice(
-      deps,
-      record,
-      claimed.id,
-      record.status === 'update_unknown'
-        ? `I matched the authenticated confirmation for ${record.company} — ${record.role}, but the tracker update outcome is unknown after an interrupted attempt. I did not retry. Please verify the Sheet manually.`
-        : `I matched the authenticated confirmation for ${record.company} — ${record.role}, but the approved tracker update failed. No success is being claimed; the task needs attention.`,
-      record.status === 'update_unknown' ? 'unknown' : 'failed',
-    );
-    await markTaskNeedsAttention(
-      deps.db,
-      claimed,
-      record.lastError ?? 'The pre-authorized tracker update needs attention.',
-    );
-    return { outcome: 'needs_attention', applicationId };
-  }
-  if (record.status !== 'confirmation_received') {
-    await markTaskNeedsAttention(
-      deps.db,
-      claimed,
-      `Application confirmation record is ${record.status}; no tracker update was attempted.`,
-    );
-    return { outcome: 'needs_attention', applicationId };
-  }
+        provenance: { plannerVersion: 0, promptVersion: 0, model: 'deterministic/email-match' },
+      });
 
-  const outcome = await deps.dispatcher.dispatch({
-    task: claimed,
-    step: 1,
-    toolName: 'applications.apply_confirmation',
-    args: { applicationId: record.id },
-    ctx: {
-      taskId: claimed.id,
-      agentId: claimed.agentId,
-      conversationId: claimed.conversationId ?? undefined,
-      trust: 'assistant',
-      tainted: false,
-      db: deps.db,
-      now: () => new Date(),
-      signal: new AbortController().signal,
-      log: async () => {},
-    },
-    provenance: { plannerVersion: 0, promptVersion: 0, model: 'deterministic/email-match' },
-  });
-
-  if (outcome.kind === 'executed') {
-    const result = outcome.result as { deliveryStatus?: unknown; status?: unknown } | null;
-    if (result?.deliveryStatus === 'unknown') {
-      const detail = 'Google may have accepted the tracker update; automatic retry was suppressed.';
-      await deps.db
-        .update(applicationConfirmations)
-        .set({ status: 'update_unknown', lastError: detail, updatedAt: new Date() })
-        .where(
-          and(
-            eq(applicationConfirmations.id, record.id),
-            eq(applicationConfirmations.status, 'confirmation_received'),
-          ),
+      if (outcome.kind === 'executed') {
+        const result = outcome.result as { deliveryStatus?: unknown } | null;
+        if (result?.deliveryStatus === 'unknown') {
+          record = await setActionOutcome(
+            deps,
+            record.id,
+            action,
+            'unknown',
+            `Google may have accepted the ${action} update; automatic retry was suppressed.`,
+          );
+        } else {
+          record = (await loadApplicationRecord(deps, record.id)) ?? record;
+        }
+      } else {
+        const reason =
+          outcome.kind === 'rejected'
+            ? outcome.reason
+            : outcome.kind === 'budget_blocked'
+              ? outcome.reason
+              : `the ${action} update unexpectedly requested approval`;
+        const unknown =
+          outcome.kind === 'rejected' &&
+          (await rejectedOutcomeIsUnknown(deps, record.id, action, outcome.reason));
+        record = await setActionOutcome(
+          deps,
+          record.id,
+          action,
+          unknown ? 'unknown' : 'failed',
+          reason,
         );
-      await postNotice(
-        deps,
-        record,
-        claimed.id,
-        `I matched the authenticated confirmation for ${record.company} — ${record.role}, but Google returned an ambiguous result while updating the tracker. I did not retry because that could duplicate or overwrite data. Please verify the Sheet manually.`,
-        'unknown',
-      );
-      await markTaskNeedsAttention(deps.db, claimed, detail);
-      return { outcome: 'needs_attention', applicationId };
+      }
+      state = normalizedActionState(record);
     }
-
-    const progress = `Matched authenticated confirmation for ${record.company} — ${record.role} and applied the pre-authorized tracker update.`;
-    await postNotice(
-      deps,
-      record,
-      claimed.id,
-      `I matched the authenticated confirmation for ${record.company} — ${record.role} (reference ending ${record.confirmationTokenHint}) and updated the approved tracker range.`,
-      'updated',
-    );
-    await completeTask(deps.db, claimed, { status: 'done', progress });
-    return { outcome: 'done', applicationId };
   }
 
-  const reason =
-    outcome.kind === 'rejected'
-      ? outcome.reason
-      : outcome.kind === 'budget_blocked'
-        ? outcome.reason
-        : 'the confirmation update unexpectedly requested approval';
-  const retryWouldBeAmbiguous =
-    outcome.kind === 'rejected' &&
-    /already executing|ambiguous side-effect retry|already recorded/i.test(outcome.reason);
-  const status = retryWouldBeAmbiguous ? 'update_unknown' : 'update_failed';
-  await deps.db
+  record = (await loadApplicationRecord(deps, record.id)) ?? record;
+  state = normalizedActionState(record);
+  await reconcileSucceededLedger(deps, claimed.id, record, state);
+  const status = finalRecordStatus(record, state);
+  const errors = plannedActions(record)
+    .flatMap((action) => (state[action]?.error ? [`${action}: ${state[action]?.error}`] : []))
+    .join('; ')
+    .slice(0, 2_000);
+  const [finalRecord] = await deps.db
     .update(applicationConfirmations)
-    .set({
-      status,
-      lastError: reason.slice(0, 2_000),
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(applicationConfirmations.id, record.id),
-        eq(applicationConfirmations.status, 'confirmation_received'),
-      ),
-    );
-  await postNotice(
-    deps,
-    record,
-    claimed.id,
-    retryWouldBeAmbiguous
-      ? `I matched the authenticated confirmation for ${record.company} — ${record.role}, but the tracker update outcome is unknown after an interrupted attempt. I did not retry. Please verify the Sheet manually.`
-      : `I matched the authenticated confirmation for ${record.company} — ${record.role}, but the approved tracker update failed. No success is being claimed; the task needs attention.`,
-    retryWouldBeAmbiguous ? 'unknown' : 'failed',
-  );
-  await markTaskNeedsAttention(deps.db, claimed, reason);
+    .set({ status, actionState: state, lastError: errors || null, updatedAt: new Date() })
+    .where(eq(applicationConfirmations.id, record.id))
+    .returning();
+  if (finalRecord) record = finalRecord;
+
+  const copy = resultCopy(record, state);
+  await postNotice(deps, record, claimed.id, copy.notice, status);
+  if (status === 'updated') {
+    await completeTask(deps.db, claimed, { status: 'done', progress: copy.progress });
+    return { outcome: 'done', applicationId };
+  }
+  await markTaskNeedsAttention(deps.db, claimed, copy.progress);
   return { outcome: 'needs_attention', applicationId };
 }
 
 /**
  * Match one Gmail message to one pre-authorized application watch and execute
- * only its frozen tracker update. Raw subject/body never enters the internal
- * assistant task or model context.
+ * only its frozen Sheet and/or Doc actions. Raw subject/body never enters the
+ * internal assistant task or model context.
  */
 export async function processApplicationConfirmation(
   deps: AgentDeps,
