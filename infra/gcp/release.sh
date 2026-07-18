@@ -16,6 +16,7 @@ fi
 
 IMAGE_ROOT="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}"
 AGENT_SERVICE_ACCOUNT="assistant-agent@${PROJECT}.iam.gserviceaccount.com"
+BROWSER_SERVICE_ACCOUNT="assistant-browser@${PROJECT}.iam.gserviceaccount.com"
 
 if [[ "${SKIP_IMAGE_BUILD:-false}" != "true" ]]; then
   echo "Building release ${TAG} with Cloud Build"
@@ -60,7 +61,8 @@ gcloud run services update assistant-agent \
 echo "Rolling out browser job"
 gcloud run jobs update assistant-browser \
   --project "$PROJECT" --region "$REGION" \
-  --image "${IMAGE_ROOT}/browser:${TAG}" --quiet
+  --image "${IMAGE_ROOT}/browser:${TAG}" \
+  --service-account "$BROWSER_SERVICE_ACCOUNT" --quiet
 
 echo "Rolling out web"
 gcloud run services update assistant-web \
