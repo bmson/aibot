@@ -218,7 +218,10 @@ export async function notifyOwnerBySms(
   deps: AgentDeps,
   input: { taskId?: string; text: string },
 ): Promise<void> {
-  if (!deps.twilio.configured() || !deps.config.OWNER_PHONE) return;
+  // Optional chaining: some internal/test call paths build a partial deps
+  // without a Twilio client or config. A missing notifier is a silent no-op,
+  // never an error — owner pings are best-effort.
+  if (!deps.twilio?.configured() || !deps.config?.OWNER_PHONE) return;
   await sendMeteredSms(deps, {
     to: deps.config.OWNER_PHONE,
     text: input.text.slice(0, 480),
