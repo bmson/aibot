@@ -1,6 +1,6 @@
 import { evaluateCanaryHealth } from '@assistant/core';
 import { approvals, canaryRuns, goals, tasks } from '@assistant/db';
-import { and, asc, desc, eq, inArray, notInArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { ApprovalCard } from '@/app/approvals/approval-card';
@@ -70,7 +70,7 @@ export default async function DashboardPage() {
     db
       .select()
       .from(tasks)
-      .where(inArray(tasks.status, ['done', 'failed']))
+      .where(and(inArray(tasks.status, ['done', 'failed']), isNull(tasks.archivedAt)))
       .orderBy(desc(tasks.updatedAt))
       .limit(10),
     db

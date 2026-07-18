@@ -1,16 +1,20 @@
+import { getAgent } from '@assistant/core';
 import { approvals, messages, modelCalls, tasks, toolCalls } from '@assistant/db';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, prettyJson, relativeTime, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
+import { btn } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
+import { archiveTask, restoreTask } from '../actions';
 
 export const dynamic = 'force-dynamic';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TERMINAL_TASK_STATUSES = new Set(['done', 'failed', 'cancelled']);
 
 interface TimelineEntry {
   key: string;
@@ -70,9 +74,13 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   if (!UUID_RE.test(id)) notFound();
 
   const db = getDb();
+  const agent = await getAgent(db);
   const now = new Date();
 
-  const [task] = await db.select().from(tasks).where(eq(tasks.id, id));
+  const [task] = await db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.id, id), eq(tasks.agentId, agent.id)));
   if (!task) notFound();
 
   const [taskToolCalls, taskModelCalls, taskApprovals, taskMessages] = await Promise.all([
@@ -185,6 +193,19 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold tracking-[-0.03em]">{taskTypeLabel(task.type)}</h1>
         <StatusChip status={task.status} />
+        {task.archivedAt ? (
+          <form action={restoreTask.bind(null, task.id)}>
+            <button type="submit" className={btn.outline}>
+              Restore to Activity
+            </button>
+          </form>
+        ) : TERMINAL_TASK_STATUSES.has(task.status) ? (
+          <form action={archiveTask.bind(null, task.id)}>
+            <button type="submit" className={btn.outline}>
+              Archive
+            </button>
+          </form>
+        ) : null}
       </div>
 
       <div className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">

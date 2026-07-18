@@ -198,6 +198,8 @@ export const tasks = pgTable(
       .default('0.25'),
     spentUsd: numeric('spent_usd', { precision: 10, scale: 6 }).notNull().default('0'),
     parentTaskId: uuid('parent_task_id').references((): AnyPgColumn => tasks.id),
+    /** Owner-hidden terminal history. Evidence stays intact and can be restored. */
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     ...timestamps,
   },
   (t) => [

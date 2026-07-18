@@ -71,6 +71,13 @@
       "when": 1784320439376,
       "tag": "0009_nasty_solo",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784355444132,
+      "tag": "0010_gorgeous_wallow",
+      "breakpoints": true
     }
   ]
 }
