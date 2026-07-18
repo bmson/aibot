@@ -1,7 +1,7 @@
 import type { Db, TaskRow } from '@assistant/db';
 import { approvals, messages, tasks, toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { ZodType } from 'zod';
 import { type BrowserJobPendingResult, isBrowserJobPending } from '../browse.js';
 import {
@@ -32,8 +32,10 @@ import {
   artifactRoutingFailure,
   artifactToolUnavailable,
   directArtifactArgs,
+  documentReadDispatchFailure,
   needsArtifactToolRetry,
   requestedArtifactIntent,
+  requestedDocumentReadIntent,
 } from './artifact-intent.js';
 import {
   checkpointTask,
@@ -209,6 +211,38 @@ function latestUserText(window: ModelMessage[]): string | undefined {
     }
   }
   return undefined;
+}
+
+/** The most recent owner-supplied Google Doc URL still present in this chat. */
+function sharedDocumentIntent(window: ModelMessage[]) {
+  for (let i = window.length - 1; i >= 0; i -= 1) {
+    const message = window[i];
+    if (message?.role !== 'user' || typeof message.content !== 'string') continue;
+    const intent = requestedDocumentReadIntent(message.content);
+    if (intent) return intent;
+  }
+  return undefined;
+}
+
+/** Avoid repeatedly re-reading the same shared document on every chat turn. */
+async function unreadSharedDocumentIntent(db: Db, task: TaskRow, window: ModelMessage[]) {
+  if (task.trust !== 'owner') return undefined;
+  const intent = sharedDocumentIntent(window);
+  if (!intent || !task.conversationId) return intent;
+  const [alreadyRead] = await db
+    .select({ id: toolCalls.id })
+    .from(toolCalls)
+    .innerJoin(tasks, eq(tasks.id, toolCalls.taskId))
+    .where(
+      and(
+        eq(tasks.conversationId, task.conversationId),
+        eq(toolCalls.toolName, intent.toolName),
+        eq(toolCalls.status, 'succeeded'),
+        sql`${toolCalls.args}->>'documentId' = ${intent.documentId}`,
+      ),
+    )
+    .limit(1);
+  return alreadyRead ? undefined : intent;
 }
 
 /**
@@ -584,6 +618,10 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   // through the matching creation tool.
   const artifactIntent =
     state.step === 0 ? requestedArtifactIntent(latestUserText(window) ?? '') : undefined;
+  const documentReadIntent =
+    state.step === 0 && !artifactIntent
+      ? await unreadSharedDocumentIntent(db, task, window)
+      : undefined;
   let browserStageRemainder: ProposedToolCall[] = [];
   const browserStageSnapshots = new Map<
     string,
@@ -885,6 +923,74 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       terminalStatus: outcome.kind === 'executed' ? 'done' : 'failed',
       outcome: outcome.kind === 'executed' ? 'done' : 'failed',
     });
+  }
+
+  // The owner supplied a real Google Doc URL (commonly a CV). Read it before
+  // asking the model to continue, so the assistant has durable evidence of
+  // whether it could access the document instead of merely promising to do so.
+  if (documentReadIntent && state.step === 0) {
+    const outcome = await dispatcher.dispatch({
+      task,
+      step: state.step,
+      modelToolCallId: `direct-document-read-${task.id}`,
+      toolName: documentReadIntent.toolName,
+      args: { documentId: documentReadIntent.documentId },
+      ctx,
+      provenance: {
+        plannerVersion: PLANNER_VERSION,
+        promptVersion: PROMPT_VERSION,
+        model: 'direct-document-router',
+      },
+    });
+    if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+
+    if (outcome.kind === 'budget_blocked') {
+      state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
+      const parked = await parkForBudget(db, lease, state, outcome.resumeAt);
+      if (!parked) return LOST_LEASE;
+      return { outcome: 'parked', detail: outcome.reason };
+    }
+    if (outcome.kind === 'awaiting_approval') {
+      const parked = await parkForApproval(db, lease, state, [
+        {
+          approvalId: outcome.approvalId,
+          dbToolCallId: outcome.toolCallId,
+          toolCallId: `direct-document-read-${task.id}`,
+          toolName: documentReadIntent.toolName,
+        },
+      ]);
+      if (!parked) return LOST_LEASE;
+      await postConversationNotice(
+        db,
+        task,
+        `I need your approval before reading the shared Google Doc: ${outcome.summary}`,
+      );
+      return { outcome: 'parked', detail: 'document read awaiting approval' };
+    }
+    if (outcome.kind !== 'executed') {
+      const text = documentReadDispatchFailure(documentReadIntent, outcome.reason);
+      window.push({ role: 'assistant', content: text } as ModelMessage);
+      return stageFinalResponse(deps, lease, state, window, {
+        text,
+        progress: text.slice(0, 200),
+        terminalStatus: 'failed',
+        outcome: 'failed',
+      });
+    }
+
+    window.push(
+      toolResultMessage(
+        `direct-document-read-${task.id}`,
+        documentReadIntent.toolName,
+        outcome.result,
+      ),
+    );
+    state.completedToolCallIds.push(outcome.toolCallId);
+    if (dispatcher.resultIsUntrusted(documentReadIntent.toolName)) {
+      state.untrustedContext = true;
+      ctx.tainted = true;
+    }
+    state.step += 1;
   }
 
   let plan = task.plan ? PlanSchema.parse(task.plan) : null;

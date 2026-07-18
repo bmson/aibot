@@ -6,8 +6,10 @@ import {
   artifactRoutingFailure,
   artifactToolUnavailable,
   directArtifactArgs,
+  documentReadDispatchFailure,
   needsArtifactToolRetry,
   requestedArtifactIntent,
+  requestedDocumentReadIntent,
 } from './artifact-intent.js';
 
 describe('requestedArtifactIntent', () => {
@@ -65,6 +67,21 @@ describe('requestedArtifactIntent', () => {
     'create a document and a spreadsheet',
   ])('does not force a tool for %s', (text) => {
     expect(requestedArtifactIntent(text)).toBeUndefined();
+  });
+
+  it('recognizes a directly shared Google Doc as a real document-read request', () => {
+    const intent = requestedDocumentReadIntent(
+      'CV: https://docs.google.com/document/d/1SLbcTqOwMMQG3QmD7gj755xzOKwQtVyv5cvaPjSwGSs/edit?tab=t.0',
+    );
+    expect(intent).toEqual({
+      toolName: 'docs.get',
+      documentId: '1SLbcTqOwMMQG3QmD7gj755xzOKwQtVyv5cvaPjSwGSs',
+    });
+    if (!intent) return;
+    expect(
+      requestedDocumentReadIntent('https://example.com/document/d/not-a-google-doc'),
+    ).toBeUndefined();
+    expect(documentReadDispatchFailure(intent, 'Google API 403')).toContain('Google API 403');
   });
 
   it('requires the matching tool call and describes both no-attempt outcomes precisely', () => {

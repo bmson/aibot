@@ -11,7 +11,7 @@ import {
 } from '@assistant/db';
 import { ToolDispatcher, ToolRegistry } from '@assistant/tools';
 import type { ModelMessage } from 'ai';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -588,5 +588,76 @@ describe('executor end-to-end (integration, scripted model)', () => {
       .where(sql`${messages.taskId} = ${task.id} and ${messages.role} = 'assistant'`);
     expect(reply?.text).toContain("I can't claim that work was completed");
     expect(reply?.text).not.toContain('I created a shared spreadsheet');
+  });
+
+  it('reads an owner-shared Google Doc before the model continues the chat', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const registry = new ToolRegistry();
+    registry.register(
+      {
+        name: 'docs.get',
+        description: 'Read a shared Google Doc.',
+        inputSchema: z.object({ documentId: z.string() }),
+        risk: 'autonomous',
+        acceptsUntrustedInput: true,
+        execute: async (args) => ({
+          documentId: (args as { documentId: string }).documentId,
+          title: 'CV',
+          text: 'Senior staff frontend engineer',
+        }),
+      },
+      { confidentialRead: true, returnsUntrustedContent: true },
+    );
+    const dispatcher = new ToolDispatcher(db, registry);
+    const router = {
+      async object() {
+        return { ok: true, modelId: 'fake/model', degraded: false, object: { trivial: true } };
+      },
+      async step(): Promise<StepCallOutcome> {
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: 'I reviewed the CV and am ready to continue.',
+          toolCalls: [],
+          finishReason: 'stop',
+        };
+      },
+    } as unknown as ModelRouter;
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner', title: 'shared-cv-test' })
+      .returning();
+    const conversationId = (conversation as NonNullable<typeof conversation>).id;
+    createdConversationIds.push(conversationId);
+    await db.insert(messages).values({
+      conversationId,
+      role: 'user',
+      origin: 'owner',
+      parts: [
+        {
+          type: 'text',
+          text: 'CV: https://docs.google.com/document/d/1SLbcTqOwMMQG3QmD7gj755xzOKwQtVyv5cvaPjSwGSs/edit',
+        },
+      ],
+      text: 'CV: https://docs.google.com/document/d/1SLbcTqOwMMQG3QmD7gj755xzOKwQtVyv5cvaPjSwGSs/edit',
+    });
+    const { task } = await enqueueTask(db, {
+      event: { ...event(), conversationId },
+      type: 'chat_turn',
+    });
+    createdTaskIds.push(task.id);
+
+    const result = await executeTask({ db, router, dispatcher }, task.id);
+    expect(result.outcome).toBe('done');
+    const [read] = await db
+      .select()
+      .from(toolCalls)
+      .where(and(eq(toolCalls.taskId, task.id), eq(toolCalls.toolName, 'docs.get')));
+    expect(read).toMatchObject({
+      status: 'succeeded',
+      args: { documentId: '1SLbcTqOwMMQG3QmD7gj755xzOKwQtVyv5cvaPjSwGSs' },
+    });
+    await db.delete(toolCalls).where(eq(toolCalls.taskId, task.id));
   });
 });

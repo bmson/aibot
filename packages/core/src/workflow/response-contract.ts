@@ -83,8 +83,13 @@ function firstPersonCompletedAction(text: string, actions: string): boolean {
   ).test(text);
 }
 
+/**
+ * Keep the guard focused on promises of *ongoing* hidden work. A next-step
+ * plan such as "I'll research jobs" is not a completed-action claim, so it
+ * must not be rewritten into a misleading failure response.
+ */
 const backgroundPromise =
-  /\b(?:i|we)(?:(?:\s+will|['’]ll)\s+(?:(?:continue|keep)\s+)?|(?:\s+(?:am|are)|['’](?:m|re))\s+)(?:work(?:ing)?\s+on|research(?:ing)?|monitor(?:ing)?|track(?:ing)?|appl(?:y|ying)|submit(?:ting)?|send(?:ing)?|creat(?:e|ing)|shar(?:e|ing)|schedul(?:e|ing)|book(?:ing)?|handl(?:e|ing)|proceed(?:ing)?)\b|\b(?:starting|proceeding|running)\s+(?:this|applications?|research|silently|in the background)\b|\b(?:silently|in the background|real[- ]time tracker|mission launched)\b/i;
+  /\b(?:i|we)(?:\s+will|['’]ll)\s+(?:continue|keep)\b|\b(?:i|we)[^.\n]{0,80}\b(?:silently|in the background|while you(?:'|’)re away)\b|\b(?:starting|proceeding|running)\s+(?:silently|in the background)\b|\b(?:silently|in the background|real[- ]time tracker|mission launched)\b/i;
 const progressClaim =
   /\b\d+\s+(?:target\s+)?(?:companies|applications|outreach(?:\s+messages)?|drafts)\s+(?:identified|logged|added|ready|submitted|sent|completed)\b/i;
 const statusNarrative =

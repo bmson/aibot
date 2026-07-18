@@ -53,6 +53,12 @@ describe('response execution contract', () => {
     expect(enforceResponseContract(text, [])).toMatchObject({ blocked: false, text });
   });
 
+  it('does not rewrite a future-tense plan as if it were a failed action', () => {
+    const text =
+      "I'll research senior frontend roles at AI companies, compile a shortlist, and share it for your approval. No tool action has happened yet.";
+    expect(enforceResponseContract(text, [])).toMatchObject({ blocked: false, text });
+  });
+
   it.each([
     [
       'Your spreadsheet is ready. The tracker now has 18 companies.',

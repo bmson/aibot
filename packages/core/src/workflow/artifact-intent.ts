@@ -11,6 +11,12 @@ export interface ArtifactIntent {
   label: 'Google Doc' | 'Google Sheet' | 'Google Slides presentation';
 }
 
+/** A Google Doc URL directly supplied by the owner is an explicit read request. */
+export interface DocumentReadIntent {
+  toolName: 'docs.get';
+  documentId: string;
+}
+
 /** Valid creation arguments built from an explicit owner request, never model prose. */
 export type DirectArtifactArgs =
   | { toolName: 'docs.create'; args: { title: string; content: string } }
@@ -25,6 +31,8 @@ const CREATION_VERB =
 const DOC = /\b(?:google\s+)?docs?\b|\bdocument\b/i;
 const SHEET = /\b(?:google\s+)?sheets?\b|\bspreadsheet\b/i;
 const SLIDES = /\b(?:google\s+)?slides?\b|\b(?:slide deck|presentation)\b/i;
+const GOOGLE_DOC_URL =
+  /https:\/\/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]{10,200})(?:[/?#][^\s]*)?/i;
 
 function explicitTitle(text: string): string | undefined {
   const quoted = /\btitled\s+["“]([^"”]{1,300})["”]/i.exec(text)?.[1];
@@ -67,6 +75,24 @@ export function requestedArtifactIntent(text: string): ArtifactIntent | undefine
     matches.push({ toolName: 'slides.create', label: 'Google Slides presentation' });
   }
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * A bare Google Doc URL from the owner is enough authorization to read that
+ * document. The executor makes this deterministic so a model cannot merely
+ * promise to review a CV and then reply without attempting docs.get.
+ */
+export function requestedDocumentReadIntent(text: string): DocumentReadIntent | undefined {
+  const documentId = GOOGLE_DOC_URL.exec(text)?.[1];
+  return documentId ? { toolName: 'docs.get', documentId } : undefined;
+}
+
+export function documentReadDispatchFailure(intent: DocumentReadIntent, reason: string): string {
+  return [
+    "I couldn't read the shared Google Doc.",
+    `${intent.toolName} did not complete: ${reason.replace(/\s+/g, ' ').slice(0, 500)}.`,
+    'I cannot confirm that the document was accessed.',
+  ].join(' ');
 }
 
 /**
