@@ -240,10 +240,15 @@ export async function reserveCost(
           ),
       ]);
       const heldForTask = Number(taskHeld?.total ?? 0);
-      if (task && Number(task.spent) + heldForTask + input.estimatedUsd > Number(task.limit)) {
+      // Critical owner replies (final chat/SMS/email delivery) get the same
+      // bounded carve-out on the per-task cap as on the global caps — otherwise
+      // a task that finished just under its own budget could block delivering
+      // the answer it already produced, and the task would wrongly dead-letter.
+      const taskCeiling = Number(task?.limit ?? 0) * globalLimitFactor;
+      if (task && Number(task.spent) + heldForTask + input.estimatedUsd > taskCeiling) {
         return {
           ok: false,
-          reason: `task budget cannot cover this (spent $${Number(task.spent).toFixed(4)} + held $${heldForTask.toFixed(4)} + est $${input.estimatedUsd.toFixed(4)} > cap $${Number(task.limit).toFixed(4)})`,
+          reason: `task budget cannot cover this (spent $${Number(task.spent).toFixed(4)} + held $${heldForTask.toFixed(4)} + est $${input.estimatedUsd.toFixed(4)} > cap $${taskCeiling.toFixed(4)}${input.critical ? ' including owner-reply carve-out' : ''})`,
           resumeAt: nextDailyReset(),
         } as const;
       }

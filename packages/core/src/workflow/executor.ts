@@ -973,6 +973,13 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         },
       ]);
       if (!parked) return LOST_LEASE;
+      if (deps.notifyApproval) {
+        await deps
+          .notifyApproval([
+            { taskId: task.id, shortCode: outcome.shortCode, summary: outcome.summary },
+          ])
+          .catch((err) => console.error('approval notification failed', err));
+      }
       await postConversationNotice(
         db,
         task,
@@ -1029,6 +1036,13 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         },
       ]);
       if (!parked) return LOST_LEASE;
+      if (deps.notifyApproval) {
+        await deps
+          .notifyApproval([
+            { taskId: task.id, shortCode: outcome.shortCode, summary: outcome.summary },
+          ])
+          .catch((err) => console.error('approval notification failed', err));
+      }
       await postConversationNotice(
         db,
         task,
