@@ -44,6 +44,10 @@ for ROLE in roles/artifactregistry.writer roles/cloudbuild.builds.editor roles/r
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:${DEPLOY_SA}" --role="$ROLE"
 done
+for ROLE in roles/storage.legacyBucketReader roles/storage.objectAdmin; do
+  gcloud storage buckets add-iam-policy-binding "gs://${PROJECT_ID}_cloudbuild" \
+    --member="serviceAccount:${DEPLOY_SA}" --role="$ROLE"
+done
 for RUNTIME_SA in assistant-agent assistant-web assistant-browser; do
   gcloud iam service-accounts add-iam-policy-binding \
     "${RUNTIME_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
