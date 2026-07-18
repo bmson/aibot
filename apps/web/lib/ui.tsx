@@ -6,15 +6,15 @@ import type { ReactNode } from 'react';
 
 export const btn = {
   outline:
-    'rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800',
+    'mobile-touch-target inline-flex items-center justify-center rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800',
   dangerOutline:
-    'rounded-md border border-red-300 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40',
+    'mobile-touch-target inline-flex items-center justify-center rounded-md border border-red-300 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40',
   primary:
-    'rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50',
+    'mobile-touch-target inline-flex items-center justify-center rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50',
   danger:
-    'rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50',
+    'mobile-touch-target inline-flex items-center justify-center rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50',
   success:
-    'rounded-md bg-green-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50',
+    'mobile-touch-target inline-flex items-center justify-center rounded-md bg-green-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50',
 } as const;
 
 /** Zinc count-pill as a raw class string, for spans that can't use <CountBadge>. */
@@ -22,7 +22,7 @@ export const countBadgeClass =
   'rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 whitespace-nowrap dark:bg-zinc-800 dark:text-zinc-400';
 
 export const inputClass =
-  'rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900';
+  'rounded-md border border-zinc-300 bg-white px-2 py-1 text-base sm:text-sm dark:border-zinc-700 dark:bg-zinc-900';
 
 export const labelClass = 'text-xs font-medium text-zinc-600 dark:text-zinc-400';
 

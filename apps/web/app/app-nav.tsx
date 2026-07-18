@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CountBadge } from '@/lib/ui';
 import { signOutAction } from './actions';
 
@@ -28,6 +28,9 @@ export function AppNav({
 }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   // Close the drawer whenever the route changes (a link was tapped).
   // biome-ignore lint/correctness/useExhaustiveDependencies: close on navigation
@@ -35,18 +38,41 @@ export function AppNav({
     setOpen(false);
   }, [pathname]);
 
-  // While the drawer is open, lock body scroll and close on Escape.
+  // While the drawer is open, contain keyboard focus, lock body scroll, and
+  // return focus to the trigger when it closes.
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key === 'Escape') {
+        setOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = Array.from(
+        drawerRef.current?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
     };
     document.addEventListener('keydown', onKey);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    const frame = window.requestAnimationFrame(() => closeButtonRef.current?.focus());
     return () => {
+      window.cancelAnimationFrame(frame);
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = previousOverflow;
+      menuTriggerRef.current?.focus();
     };
   }, [open]);
 
@@ -57,8 +83,9 @@ export function AppNav({
         <Link
           key={item.href}
           href={item.href}
+          data-mobile-touch-target="true"
           aria-current={active ? 'page' : undefined}
-          className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
+          className={`mobile-touch-target flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
             tone === 'rail'
               ? active
                 ? 'bg-white/12 font-medium text-white shadow-sm'
@@ -115,16 +142,21 @@ export function AppNav({
 
       {/* Mobile top bar */}
       <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-800 bg-slate-950/95 px-4 text-white backdrop-blur lg:hidden">
-        <Link href="/" className="text-sm font-semibold tracking-[-0.02em]">
+        <Link
+          href="/"
+          data-mobile-touch-target="true"
+          className="mobile-touch-target inline-flex items-center text-sm font-semibold tracking-[-0.02em]"
+        >
           Assistant
         </Link>
         <button
+          ref={menuTriggerRef}
           type="button"
           onClick={() => setOpen(true)}
           aria-label="Open navigation menu"
           aria-expanded={open}
           aria-controls="mobile-nav"
-          className="relative -mr-2 inline-flex h-10 w-10 items-center justify-center rounded-lg text-slate-200 hover:bg-white/10"
+          className="relative -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-slate-200 hover:bg-white/10"
         >
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
             <title>Menu</title>
@@ -150,20 +182,29 @@ export function AppNav({
           <button
             type="button"
             aria-label="Close navigation menu"
+            aria-hidden="true"
+            tabIndex={-1}
             onClick={() => setOpen(false)}
             className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm"
           />
           <div
+            ref={drawerRef}
             id="mobile-nav"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-nav-title"
             className="absolute inset-y-0 right-0 flex w-72 max-w-[84%] flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950"
           >
             <div className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
-              <span className="text-sm font-semibold tracking-[-0.02em]">Menu</span>
+              <span id="mobile-nav-title" className="text-sm font-semibold tracking-[-0.02em]">
+                Menu
+              </span>
               <button
+                ref={closeButtonRef}
                 type="button"
                 onClick={() => setOpen(false)}
                 aria-label="Close navigation menu"
-                className="-mr-2 inline-flex h-10 w-10 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                className="-mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
               >
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
                   <title>Close</title>
@@ -192,7 +233,7 @@ export function AppNav({
                 <form action={signOutAction}>
                   <button
                     type="submit"
-                    className="text-xs text-slate-500 hover:text-slate-950 hover:underline dark:text-zinc-500 dark:hover:text-zinc-100"
+                    className="inline-flex min-h-11 items-center text-xs text-slate-500 hover:text-slate-950 hover:underline dark:text-zinc-500 dark:hover:text-zinc-100"
                   >
                     Sign out
                   </button>

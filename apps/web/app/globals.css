@@ -1,1 +1,28 @@
 @import "tailwindcss";
+
+/* Phone controls share one physical rhythm: large enough to tap without
+   making the desktop UI unnecessarily loose. Sixteen-pixel form text also
+   prevents Safari from zooming the viewport when a field receives focus. */
+@media (max-width: 639px) {
+  button,
+  summary {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+  select,
+  textarea {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .mobile-touch-target {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .mobile-safe-bottom {
+    padding-bottom: max(0.25rem, env(safe-area-inset-bottom));
+  }
+}

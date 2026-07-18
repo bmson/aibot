@@ -50,3 +50,26 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - name: Exercise the mobile UI in a real browser
+        env:
+          AUTH_DEV_BYPASS: 'true'
+          SMOKE_BASE_URL: http://127.0.0.1:3000
+          SMOKE_BROWSER_CHANNEL: chrome
+          SMOKE_CREATE_FIXTURE: 'true'
+        run: |
+          pnpm --filter @assistant/web exec next dev --webpack --hostname 127.0.0.1 --port 3000 > "$RUNNER_TEMP/assistant-web.log" 2>&1 &
+          assistant_web_pid=$!
+          trap 'kill "$assistant_web_pid" 2>/dev/null || true' EXIT
+          assistant_web_ready=false
+          for assistant_attempt in {1..60}; do
+            if curl --fail --silent --output /dev/null http://127.0.0.1:3000/; then
+              assistant_web_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$assistant_web_ready" != true ]; then
+            cat "$RUNNER_TEMP/assistant-web.log"
+            exit 1
+          fi
+          pnpm smoke:mobile

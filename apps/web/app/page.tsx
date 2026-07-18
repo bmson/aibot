@@ -138,7 +138,8 @@ export default async function DashboardPage() {
         </div>
         <Link
           href="/chat"
-          className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700"
+          data-mobile-touch-target="true"
+          className="mobile-touch-target inline-flex items-center rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700"
         >
           Ask assistant
         </Link>
@@ -184,7 +185,11 @@ export default async function DashboardPage() {
               className="flex items-center justify-between gap-3 rounded-md border border-orange-200 bg-orange-50/50 px-3 py-2 dark:border-orange-900/60 dark:bg-orange-950/20"
             >
               <div className="min-w-0">
-                <Link href={`/tasks/${task.id}`} className="text-sm font-medium hover:underline">
+                <Link
+                  href={`/tasks/${task.id}`}
+                  data-mobile-touch-target="true"
+                  className="mobile-touch-target inline-flex items-center text-sm font-medium hover:underline"
+                >
                   {taskTypeLabel(task.type)}
                 </Link>
                 <p className="truncate text-xs text-zinc-600 dark:text-zinc-400">
@@ -222,7 +227,11 @@ export default async function DashboardPage() {
             return (
               <div key={task.id} className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <Link href={`/tasks/${task.id}`} className="text-sm font-medium hover:underline">
+                  <Link
+                    href={`/tasks/${task.id}`}
+                    data-mobile-touch-target="true"
+                    className="mobile-touch-target inline-flex items-center text-sm font-medium hover:underline"
+                  >
                     {taskTypeLabel(task.type)}
                   </Link>
                   <p className="text-xs text-zinc-600 dark:text-zinc-400">{line}</p>
@@ -261,7 +270,11 @@ export default async function DashboardPage() {
                 >
                   {task.status === 'done' ? '✓' : '✗'}
                 </span>
-                <Link href={`/tasks/${task.id}`} className="text-sm font-medium hover:underline">
+                <Link
+                  href={`/tasks/${task.id}`}
+                  data-mobile-touch-target="true"
+                  className="mobile-touch-target inline-flex items-center text-sm font-medium hover:underline"
+                >
                   {taskTypeLabel(task.type)}
                 </Link>
                 <span className="truncate text-xs text-zinc-500 dark:text-zinc-400">

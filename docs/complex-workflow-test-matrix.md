@@ -35,14 +35,16 @@ must end with evidence for each claimed action.
 | Goal wakes repeatedly | Carry verified progress and next action forward; do not overlap a still-running Goal task | `packages/core/src/workflow/missions.test.ts` |
 | Model claims an unsupported external action | Replace the prose with the evidence-backed failure response | `packages/core/src/workflow/response-contract.test.ts`, `apps/agent/src/executor.e2e.test.ts` |
 | A multi-action response mixes verified success with an unsupported claim | Preserve the verified actions in deterministic copy and reject only the unsupported completion claim; never replace real partial success with “nothing happened” | `packages/core/src/workflow/response-contract.test.ts` |
+| Core UI runs at a 390×844 touch viewport | Dashboard, chat, Goals, tasks, profile, and settings have no horizontal overflow; interactive controls are at least 44×44; fields do not trigger iOS focus zoom; the navigation drawer contains focus and restores it on close | `scripts/mobile-smoke.ts`, `.github/workflows/ci.yml` |
 
 ## Still requiring stronger proof
 
 - A real production job-board sandbox that allows safe repeatable form submissions. The local
   end-to-end suite executes the full state machine, but provider DOM and anti-bot behavior still
   require a consenting test target.
-- Automated mobile-browser assertions for the live production UI. Responsive source and production
-  builds are covered, but viewport-specific interaction should be part of the release smoke test.
+- An unattended, authenticated mobile-browser smoke test against the post-deploy production UI. CI
+  now exercises the core UI in real Chrome at 390×844, and production is inspected with the owner's
+  authenticated session, but the deployment gate cannot safely reuse that interactive OAuth session.
 - OAuth revocation and insufficient-scope checks against a real bot account. The HTTP/token failure
   paths are tested with deterministic provider responses; live account state is covered only by
   deployment canaries.

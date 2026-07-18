@@ -105,7 +105,8 @@ export default async function ChatListPage({
             <li key={conversation.id} className="flex items-center gap-2">
               <Link
                 href={`/chat/${conversation.id}`}
-                className="flex min-w-0 flex-1 items-baseline justify-between rounded-md px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900"
+                data-mobile-touch-target="true"
+                className="mobile-touch-target flex min-w-0 flex-1 items-center justify-between rounded-md px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900"
               >
                 <span className="truncate">{conversation.title || 'Untitled'}</span>
                 <span className="ml-4 shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
