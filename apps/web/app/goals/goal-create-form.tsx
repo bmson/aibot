@@ -15,7 +15,11 @@ export function GoalCreateForm() {
       action={formAction}
       className="mt-6 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
     >
-      <h2 className="text-sm font-medium">Start a plan</h2>
+      <h2 className="text-sm font-medium">Create a goal</h2>
+      <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-400">
+        This opens a work chat and starts one task now. It will not set up recurring work unless you
+        ask for it.
+      </p>
       <div className="mt-3 flex flex-col gap-3">
         <label className={labelClass}>
           Title
@@ -72,7 +76,7 @@ export function GoalCreateForm() {
         disabled={pending}
         className="mt-3 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {pending ? 'Adding…' : 'Start plan'}
+        {pending ? 'Starting…' : 'Create goal and start work'}
       </button>
     </form>
   );

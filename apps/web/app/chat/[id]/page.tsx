@@ -1,5 +1,5 @@
-import { listMessages } from '@assistant/core';
-import { conversations, models } from '@assistant/db';
+import { decodeMessageCursor, getAgent, listMessages } from '@assistant/core';
+import { conversations, goals, models, tasks } from '@assistant/db';
 import type { UIMessage } from 'ai';
 import { and, eq, sql } from 'drizzle-orm';
 import { notFound } from 'next/navigation';
@@ -11,20 +11,57 @@ export const dynamic = 'force-dynamic';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function goalIdFromMetadata(metadata: unknown): string | undefined {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
+  const goalId = (metadata as Record<string, unknown>).goalId;
+  return typeof goalId === 'string' && UUID_RE.test(goalId) ? goalId : undefined;
+}
+
 export default async function ChatConversationPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ task?: string; cursor?: string }>;
 }) {
   await requireOwner();
-  const { id } = await params;
+  const [{ id }, query] = await Promise.all([params, searchParams]);
   if (!UUID_RE.test(id)) notFound();
 
   const db = getDb();
-  const [conversation] = await db.select().from(conversations).where(eq(conversations.id, id));
+  const agent = await getAgent(db);
+  const [conversation] = await db
+    .select()
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.id, id),
+        eq(conversations.agentId, agent.id),
+        eq(conversations.channel, 'chat'),
+      ),
+    );
   if (!conversation) notFound();
 
-  const rows = await listMessages(db, id);
+  const goalId = goalIdFromMetadata(conversation.metadata);
+  const requestedTaskId = query.task && UUID_RE.test(query.task) ? query.task : undefined;
+  const requestedCursor = decodeMessageCursor(query.cursor);
+  const [rows, linkedGoal, requestedTask] = await Promise.all([
+    listMessages(db, id),
+    goalId
+      ? db
+          .select({ title: goals.title })
+          .from(goals)
+          .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id)))
+          .then(([goal]) => goal)
+      : Promise.resolve(undefined),
+    requestedTaskId
+      ? db
+          .select({ id: tasks.id })
+          .from(tasks)
+          .where(and(eq(tasks.id, requestedTaskId), eq(tasks.conversationId, id)))
+          .then(([task]) => task)
+      : Promise.resolve(undefined),
+  ]);
   const initialMessages: UIMessage[] = rows
     .filter((row) => row.role === 'user' || row.role === 'assistant')
     .map((row) => ({
@@ -52,6 +89,12 @@ export default async function ChatConversationPage({
       initialMessages={initialMessages}
       models={enabledModels}
       modelOverride={conversation.modelOverride}
+      goalTitle={linkedGoal?.title}
+      initialAsyncTurn={
+        requestedTask && requestedCursor
+          ? { taskId: requestedTask.id, cursor: query.cursor as string }
+          : undefined
+      }
     />
   );
 }

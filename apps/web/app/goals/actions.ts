@@ -1,9 +1,16 @@
 'use server';
 
-import { getAgent } from '@assistant/core';
-import { goals } from '@assistant/db';
-import { eq } from 'drizzle-orm';
+import {
+  encodeMessageCursor,
+  enqueueTask,
+  getAgent,
+  getQueueNotifier,
+  persistMessage,
+} from '@assistant/core';
+import { conversations, type Db, type GoalRow, goals } from '@assistant/db';
+import { and, eq } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
 import { requireOwner } from '@/auth';
 import { getDb } from '@/lib/server';
 
@@ -69,6 +76,100 @@ function revalidateGoalViews(): void {
   revalidatePath('/goals');
 }
 
+type WorkGoal = Pick<GoalRow, 'id' | 'title' | 'description' | 'targetDate'>;
+
+function openingWorkMessage(goal: WorkGoal): string {
+  return [
+    `Start working on my goal: ${goal.title}`,
+    goal.description ? `Context: ${goal.description}` : '',
+    goal.targetDate ? `Target date: ${goal.targetDate.toISOString().slice(0, 10)}` : '',
+    'Take one useful, concrete step now. If you need information or my approval, say exactly what you need. Do not create a mission, recurring schedule, or background work unless I explicitly ask for it in this chat.',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+/**
+ * Goals are outcomes, not inert notes. This writes the linked chat, its first
+ * owner request, and a runnable task in the same transaction. The queue poke
+ * deliberately happens only after commit; the periodic sweeper remains the
+ * recovery path if a notification is lost.
+ */
+async function createGoalWork(
+  db: Db,
+  agentId: string,
+  goal: WorkGoal,
+): Promise<{
+  conversationId: string;
+  taskId: string;
+  taskGeneration: number;
+  messageCursor: string;
+}> {
+  const messageText = openingWorkMessage(goal);
+  const [conversation] = await db
+    .insert(conversations)
+    .values({
+      agentId,
+      channel: 'chat',
+      trust: 'owner',
+      title: `Work: ${goal.title}`.slice(0, 120),
+      metadata: { goalId: goal.id },
+    })
+    .returning();
+  if (!conversation) throw new Error('failed to create work chat');
+
+  const userMessage = await persistMessage(db, {
+    conversationId: conversation.id,
+    role: 'user',
+    origin: 'owner',
+    parts: [{ type: 'text', text: messageText }],
+    text: messageText,
+  });
+  if (!userMessage) throw new Error('failed to start work chat');
+
+  const { task } = await enqueueTask(db, {
+    event: {
+      source: 'chat',
+      agentId,
+      conversationId: conversation.id,
+      trust: 'owner',
+      payload: { text: messageText, goalId: goal.id, createdFrom: 'goal' },
+    },
+    type: 'chat_turn',
+    goalId: goal.id,
+    // Do not let a worker run against a goal/chat/message set that has not
+    // committed yet. The caller notifies immediately after the transaction.
+    deferNotification: true,
+  });
+
+  return {
+    conversationId: conversation.id,
+    taskId: task.id,
+    taskGeneration: task.queueGeneration,
+    messageCursor: encodeMessageCursor(userMessage),
+  };
+}
+
+function notifyWorkTask(taskId: string, generation: number): void {
+  try {
+    getQueueNotifier().notify(taskId, generation);
+  } catch (error) {
+    // The task is durable and the scheduler will claim it. Do not make the
+    // owner retry and accidentally create a second goal just because the
+    // best-effort queue notification is temporarily misconfigured.
+    console.error('goal work task queued without an immediate notification', error);
+  }
+}
+
+function workChatUrl(work: {
+  conversationId: string;
+  taskId: string;
+  messageCursor: string;
+}): string {
+  const query = new URLSearchParams({ task: work.taskId, cursor: work.messageCursor });
+  return `/chat/${work.conversationId}?${query.toString()}`;
+}
+
 export async function createGoal(_prev: GoalFormState, formData: FormData): Promise<GoalFormState> {
   await requireOwner();
   const parsed = parseGoalForm(formData);
@@ -76,10 +177,40 @@ export async function createGoal(_prev: GoalFormState, formData: FormData): Prom
 
   const db = getDb();
   const agent = await getAgent(db);
-  await db.insert(goals).values({ agentId: agent.id, ...parsed.form });
+  const work = await db.transaction(async (tx) => {
+    const [goal] = await tx
+      .insert(goals)
+      .values({
+        agentId: agent.id,
+        ...parsed.form,
+        progress: 'First task queued.',
+        nextAction: 'Check the work chat for the first update.',
+      })
+      .returning();
+    if (!goal) throw new Error('failed to create goal');
+    return createGoalWork(tx as unknown as Db, agent.id, goal);
+  });
 
   revalidateGoalViews();
-  return { error: null };
+  notifyWorkTask(work.taskId, work.taskGeneration);
+  redirect(workChatUrl(work));
+}
+
+/** Start the same one-off work flow for an older goal that predates linked chats. */
+export async function startGoalWork(goalId: string): Promise<void> {
+  await requireOwner();
+  const db = getDb();
+  const agent = await getAgent(db);
+  const [goal] = await db
+    .select()
+    .from(goals)
+    .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id)));
+  if (!goal) throw new Error('goal not found');
+
+  const work = await db.transaction((tx) => createGoalWork(tx as unknown as Db, agent.id, goal));
+  revalidateGoalViews();
+  notifyWorkTask(work.taskId, work.taskGeneration);
+  redirect(workChatUrl(work));
 }
 
 export async function updateGoal(_prev: GoalFormState, formData: FormData): Promise<GoalFormState> {
@@ -90,10 +221,12 @@ export async function updateGoal(_prev: GoalFormState, formData: FormData): Prom
   const parsed = parseGoalForm(formData);
   if ('error' in parsed) return { error: parsed.error, values: echo(formData) };
 
-  await getDb()
+  const db = getDb();
+  const agent = await getAgent(db);
+  await db
     .update(goals)
     .set({ ...parsed.form, updatedAt: new Date() })
-    .where(eq(goals.id, goalId));
+    .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id)));
 
   revalidateGoalViews();
   return { error: null };
@@ -103,6 +236,11 @@ export async function updateGoal(_prev: GoalFormState, formData: FormData): Prom
 export async function setGoalStatus(goalId: string, status: GoalStatus): Promise<void> {
   await requireOwner();
   if (!GOAL_STATUSES.includes(status)) throw new Error(`invalid goal status: ${String(status)}`);
-  await getDb().update(goals).set({ status, updatedAt: new Date() }).where(eq(goals.id, goalId));
+  const db = getDb();
+  const agent = await getAgent(db);
+  await db
+    .update(goals)
+    .set({ status, updatedAt: new Date() })
+    .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id)));
   revalidateGoalViews();
 }

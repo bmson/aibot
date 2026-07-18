@@ -1,7 +1,8 @@
 'use client';
 
+import Link from 'next/link';
 import { useActionState, useState } from 'react';
-import { setGoalStatus, updateGoal } from '@/app/goals/actions';
+import { setGoalStatus, startGoalWork, updateGoal } from '@/app/goals/actions';
 import { btn } from '@/lib/ui';
 import { StatusChip } from '@/lib/views';
 
@@ -20,6 +21,8 @@ export interface GoalView {
   targetLabel: string;
   /** e.g. 'updated 3m ago'. */
   updatedLabel: string;
+  /** The chat created when this goal was started, if it has one. */
+  conversationId?: string;
 }
 
 const outlineButton = btn.outline;
@@ -95,6 +98,17 @@ export function GoalCard({ goal }: { goal: GoalView }) {
       </p>
 
       <div className="mt-3 flex flex-wrap gap-2">
+        {goal.conversationId ? (
+          <Link href={`/chat/${goal.conversationId}`} className={outlineButton}>
+            Open work chat
+          </Link>
+        ) : (
+          <form action={startGoalWork.bind(null, goal.id)}>
+            <button type="submit" className={outlineButton}>
+              Start work now
+            </button>
+          </form>
+        )}
         <button type="button" onClick={() => setEditing((v) => !v)} className={outlineButton}>
           {editing ? 'Close' : 'Edit'}
         </button>

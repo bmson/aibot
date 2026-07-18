@@ -328,7 +328,7 @@ export default async function DashboardPage() {
         </Section>
 
         <Section
-          title="Plans"
+          title="Goals"
           subtitle="Outcomes you want the assistant to keep moving forward"
           count={goalRows.length}
         >

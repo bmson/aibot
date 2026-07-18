@@ -25,7 +25,7 @@ const navItems = [
   { href: '/chat', label: 'Chat' },
   { href: '/approvals', label: 'Approvals' },
   { href: '/tasks', label: 'Activity' },
-  { href: '/goals', label: 'Plans' },
+  { href: '/goals', label: 'Goals' },
   { href: '/profile', label: 'Memory' },
   { href: '/import', label: 'Import', utility: true },
   { href: '/costs', label: 'Costs', utility: true },

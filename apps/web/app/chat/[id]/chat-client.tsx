@@ -12,6 +12,9 @@ interface ChatClientProps {
   initialMessages: UIMessage[];
   models: { id: string; label: string }[];
   modelOverride: string | null;
+  goalTitle?: string;
+  /** A task created by the goal form before this page opened. */
+  initialAsyncTurn?: { taskId: string; cursor: string };
 }
 
 const ASYNC_ACK_TEXT = 'Got it — I’m working on this now. I’ll post the result here.';
@@ -48,12 +51,16 @@ export function ChatClient({
   initialMessages,
   models,
   modelOverride,
+  goalTitle,
+  initialAsyncTurn,
 }: ChatClientProps) {
   const [input, setInput] = useState('');
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   const [isSwitching, startTransition] = useTransition();
   /** Set when the route handed the turn to the executor — we poll until it settles. */
-  const [asyncTurn, setAsyncTurn] = useState<{ taskId: string; cursor: string } | null>(null);
+  const [asyncTurn, setAsyncTurn] = useState<{ taskId: string; cursor: string } | null>(
+    initialAsyncTurn ?? null,
+  );
   const [asyncNote, setAsyncNote] = useState<string | null>(null);
 
   const transport = useMemo(
@@ -199,6 +206,11 @@ export function ChatClient({
             Chat
           </p>
           <h1 className="mt-1 truncate text-xl font-semibold tracking-[-0.03em]">{title}</h1>
+          {goalTitle ? (
+            <p className="mt-1 truncate text-xs text-slate-500 dark:text-zinc-400">
+              Working toward: {goalTitle}
+            </p>
+          ) : null}
         </div>
         <div className="flex min-w-0 items-center gap-2">
           {fallbackNote ? (

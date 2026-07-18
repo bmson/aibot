@@ -1,5 +1,6 @@
-import { type GoalRow, goals } from '@assistant/db';
-import { asc, desc } from 'drizzle-orm';
+import { getAgent } from '@assistant/core';
+import { conversations, type GoalRow, goals } from '@assistant/db';
+import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import { GoalCard, type GoalView } from '@/app/goals/goal-card';
 import { GoalCreateForm } from '@/app/goals/goal-create-form';
 import { requireOwner } from '@/auth';
@@ -17,7 +18,13 @@ const statusHeadings: Record<(typeof STATUS_ORDER)[number], string> = {
   abandoned: 'Stopped',
 };
 
-function toGoalView(goal: GoalRow, now: Date): GoalView {
+function goalIdFromMetadata(metadata: unknown): string | undefined {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
+  const goalId = (metadata as Record<string, unknown>).goalId;
+  return typeof goalId === 'string' ? goalId : undefined;
+}
+
+function toGoalView(goal: GoalRow, now: Date, conversationId?: string): GoalView {
   const targetDateInput = goal.targetDate ? goal.targetDate.toISOString().slice(0, 10) : '';
   return {
     id: goal.id,
@@ -32,6 +39,7 @@ function toGoalView(goal: GoalRow, now: Date): GoalView {
       ? `target ${relativeTime(goal.targetDate, now)} (${targetDateInput})`
       : '',
     updatedLabel: `updated ${relativeTime(goal.updatedAt, now)}`,
+    conversationId,
   };
 }
 
@@ -40,7 +48,30 @@ export default async function GoalsPage() {
   const db = getDb();
   const now = new Date();
 
-  const rows = await db.select().from(goals).orderBy(asc(goals.priority), desc(goals.updatedAt));
+  const agent = await getAgent(db);
+  const [rows, chatRows] = await Promise.all([
+    db
+      .select()
+      .from(goals)
+      .where(eq(goals.agentId, agent.id))
+      .orderBy(asc(goals.priority), desc(goals.updatedAt)),
+    db
+      .select({ id: conversations.id, metadata: conversations.metadata })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.agentId, agent.id),
+          eq(conversations.channel, 'chat'),
+          isNull(conversations.archivedAt),
+        ),
+      )
+      .orderBy(desc(conversations.updatedAt)),
+  ]);
+  const chatByGoalId = new Map<string, string>();
+  for (const chat of chatRows) {
+    const goalId = goalIdFromMetadata(chat.metadata);
+    if (goalId && !chatByGoalId.has(goalId)) chatByGoalId.set(goalId, chat.id);
+  }
   const groups = STATUS_ORDER.map((status) => ({
     status,
     items: rows.filter((goal) => goal.status === status),
@@ -49,16 +80,15 @@ export default async function GoalsPage() {
   return (
     <div className="mx-auto max-w-4xl">
       <PageHeader
-        title="Plans"
-        intro="Use a plan for an outcome that takes several steps or needs follow-up. For a one-off request, just ask in Chat."
+        title="Goals"
+        intro="A goal is an outcome you want to move forward. Creating one starts a work chat and one concrete task; ask in that chat if you want ongoing work."
       />
 
       <GoalCreateForm />
 
       {rows.length === 0 ? (
         <EmptyState>
-          No plans yet — add one above when you want the assistant to keep an outcome moving over
-          time.
+          No goals yet — create one above when you want to start an outcome with a real task.
         </EmptyState>
       ) : (
         <div className="mt-8 flex flex-col gap-6">
@@ -69,7 +99,7 @@ export default async function GoalsPage() {
                 {group.items.map((goal) => (
                   <GoalCard
                     key={`${goal.id}:${goal.updatedAt.getTime()}`}
-                    goal={toGoalView(goal, now)}
+                    goal={toGoalView(goal, now, chatByGoalId.get(goal.id))}
                   />
                 ))}
               </div>
