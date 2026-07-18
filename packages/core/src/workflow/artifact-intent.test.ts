@@ -10,6 +10,7 @@ import {
   needsArtifactToolRetry,
   requestedArtifactIntent,
   requestedDocumentReadIntent,
+  spreadsheetRowsFromContent,
 } from './artifact-intent.js';
 
 describe('requestedArtifactIntent', () => {
@@ -47,6 +48,28 @@ describe('requestedArtifactIntent', () => {
       toolName: 'docs.create',
       args: { title: 'Untitled document', content: '' },
     });
+  });
+
+  it('populates a directly requested sheet from columns or a Markdown table', () => {
+    const intent = requestedArtifactIntent(
+      'Create a Google Sheet titled "Job tracker" with columns Company, Role, Status',
+    );
+    expect(intent?.toolName).toBe('sheets.create');
+    if (!intent) return;
+    expect(
+      directArtifactArgs(
+        intent,
+        'Create a Google Sheet titled "Job tracker" with columns Company, Role, Status',
+      ),
+    ).toMatchObject({
+      args: { title: 'Job tracker', rows: [['Company', 'Role', 'Status']] },
+    });
+    expect(
+      spreadsheetRowsFromContent('| Company | Role |\n| --- | --- |\n| Acme | Engineer |'),
+    ).toEqual([
+      ['Company', 'Role'],
+      ['Acme', 'Engineer'],
+    ]);
   });
 
   it('derives deterministic, evidence-backed artifact responses', () => {

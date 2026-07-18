@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ToolRegistry } from '../registry.js';
 import type { GoogleClient } from './client.js';
-import { a1StartRange, registerSheetsTools } from './sheets.js';
+import { a1Range, a1StartRange, registerSheetsTools } from './sheets.js';
 
 const DEPS = { ownerEmail: 'owner@example.com' };
 
@@ -14,6 +14,7 @@ function toolsWith(api: ReturnType<typeof vi.fn>) {
 describe('Google Sheets tools', () => {
   it('quotes a tab name safely for A1 notation', () => {
     expect(a1StartRange("Q1 team's plan")).toBe("'Q1 team''s plan'!A1");
+    expect(a1Range("Q1 team's plan", 'B12')).toBe("'Q1 team''s plan'!B12");
   });
 
   it('creates, fills, and shares a sheet using literal cell values', async () => {
@@ -68,7 +69,36 @@ describe('Google Sheets tools', () => {
       'sheets.create',
     );
     expect(registry.toolsForTask('owner').map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(['sheets.create', 'sheets.append_rows', 'sheets.get_rows']),
+      expect.arrayContaining([
+        'sheets.create',
+        'sheets.append_rows',
+        'sheets.write_rows',
+        'sheets.get_rows',
+      ]),
     );
+  });
+
+  it('updates a precise range using raw values', async () => {
+    const api = vi.fn().mockResolvedValue({});
+    const tool = toolsWith(api).get('sheets.write_rows')?.tool;
+
+    const result = await tool?.execute(
+      {
+        spreadsheetId: 'SHEET-123_abc',
+        sheetName: 'Applications',
+        startCell: 'A7',
+        rows: [['Acme', 'Applied', '=not a formula']],
+      },
+      {} as never,
+    );
+
+    expect(result).toMatchObject({ writtenRows: 1, startCell: 'A7' });
+    const [url, init] = api.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain(encodeURIComponent("'Applications'!A7"));
+    expect(url).toContain('valueInputOption=RAW');
+    expect(JSON.parse(String(init.body))).toEqual({
+      majorDimension: 'ROWS',
+      values: [['Acme', 'Applied', '=not a formula']],
+    });
   });
 });

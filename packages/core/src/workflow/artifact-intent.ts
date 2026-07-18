@@ -48,6 +48,47 @@ function explicitContent(text: string): string {
   return match?.[1]?.trim().slice(0, 100_000) ?? '';
 }
 
+/** A small, literal-only table parser for direct Google Sheet creation. */
+export function spreadsheetRowsFromContent(content: string): unknown[][] {
+  const lines = content
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return [];
+
+  const table = lines
+    .filter((line) => line.includes('|'))
+    .filter((line) => !/^\|?\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*\|?$/.test(line))
+    .map((line) =>
+      line
+        .replace(/^\||\|$/g, '')
+        .split('|')
+        .map((cell) => cell.trim()),
+    );
+  if (table.length > 0) return table.slice(0, 1_000);
+
+  const delimiter = lines.some((line) => line.includes('\t'))
+    ? '\t'
+    : lines.some((line) => line.includes(','))
+      ? ','
+      : undefined;
+  if (delimiter) {
+    return lines.map((line) => line.split(delimiter).map((cell) => cell.trim())).slice(0, 1_000);
+  }
+  return lines.map((line) => [line]).slice(0, 1_000);
+}
+
+function spreadsheetContent(text: string): string {
+  const exact = explicitContent(text);
+  if (exact) return exact;
+  return (
+    /\b(?:with\s+)?(?:columns?|headers?|table|rows?|data)\s*:?\s*([\s\S]+)$/i
+      .exec(text)?.[1]
+      ?.trim() ?? ''
+  );
+}
+
 /**
  * Finds a direct request to make one durable artifact. Capability questions
  * ("can it create docs?") and multi-artifact requests stay model-directed;
@@ -111,7 +152,14 @@ export function directArtifactArgs(intent: ArtifactIntent, text: string): Direct
     }
     case 'sheets.create': {
       const title = explicitTitle(text) ?? 'Untitled spreadsheet';
-      return { toolName: intent.toolName, args: { title, sheetName: 'Sheet1', rows: [] } };
+      return {
+        toolName: intent.toolName,
+        args: {
+          title,
+          sheetName: 'Sheet1',
+          rows: spreadsheetRowsFromContent(spreadsheetContent(text)),
+        },
+      };
     }
     case 'slides.create': {
       const title = explicitTitle(text) ?? 'Untitled presentation';

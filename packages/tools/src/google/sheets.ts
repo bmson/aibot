@@ -13,6 +13,10 @@ const sheetName = z
   .min(1)
   .max(100)
   .refine((value) => !/[[\]:*?/\\]/.test(value), 'sheet name contains a reserved character');
+/** A bounded, single-cell A1 anchor — callers cannot smuggle a second tab or range expression. */
+const startCell = z
+  .string()
+  .regex(/^[A-Z]{1,3}[1-9]\d{0,6}$/, 'startCell must be an A1 cell such as A2');
 const cell = z.union([z.string().max(10_000), z.number().finite(), z.boolean(), z.null()]);
 const rows = z.array(z.array(cell).max(100)).max(1_000);
 
@@ -37,6 +41,10 @@ function spreadsheetUrl(id: string): string {
 /** Quote a tab name safely for an A1 range, including names containing spaces or apostrophes. */
 export function a1StartRange(name: string): string {
   return `'${name.replaceAll("'", "''")}'!A1`;
+}
+
+export function a1Range(name: string, start: string): string {
+  return `'${name.replaceAll("'", "''")}'!${start}`;
 }
 
 function values(rowsToWrite: z.infer<typeof rows>): Array<Array<string | number | boolean>> {
@@ -135,6 +143,42 @@ export function registerSheetsTools(registry: ToolRegistry, deps: SheetsToolDeps
           sheetName: args.sheetName,
           url: spreadsheetUrl(args.spreadsheetId),
           appendedRows: args.rows.length,
+        };
+      },
+    },
+    { privateWrite: true },
+  );
+
+  const writeSchema = z.object({
+    spreadsheetId,
+    sheetName,
+    startCell,
+    rows: rows.min(1),
+  });
+
+  register(
+    registry,
+    {
+      name: 'sheets.write_rows',
+      description:
+        'Replace values starting at one exact A1 cell in a Google Sheet tab the assistant can access. Use this to update a tracker row or a known table range. Values are written literally, so spreadsheet formulas are never evaluated from supplied text.',
+      inputSchema: writeSchema,
+      risk: 'autonomous',
+      acceptsUntrustedInput: true,
+      execute: async (args) => {
+        await deps.client.api(
+          `${SHEETS}/${encodeURIComponent(args.spreadsheetId)}/values/${encodeURIComponent(a1Range(args.sheetName, args.startCell))}?valueInputOption=RAW`,
+          {
+            method: 'PUT',
+            body: JSON.stringify({ majorDimension: 'ROWS', values: values(args.rows) }),
+          },
+        );
+        return {
+          spreadsheetId: args.spreadsheetId,
+          sheetName: args.sheetName,
+          startCell: args.startCell,
+          url: spreadsheetUrl(args.spreadsheetId),
+          writtenRows: args.rows.length,
         };
       },
     },
