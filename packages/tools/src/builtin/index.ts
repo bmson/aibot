@@ -644,7 +644,16 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       notes: z.string().max(2000).default(''),
     }),
     risk: 'autonomous',
-    acceptsUntrustedInput: false,
+    // A mission session almost always reads untrusted content (web.fetch,
+    // gmail.search, browser.execute) before it can summarise progress. Gating
+    // this internal state write on taint would strip the ONLY progress writer
+    // once tainted, silently stalling the mission loop (it would repeat step
+    // one forever). It writes bounded, model-authored text to the assistant's
+    // own mission row — no outward or privileged effect — and is already
+    // restricted to real mission sessions by the dispatcher's parent-mission
+    // gate. Persisted text is re-surfaced to the next session as reference
+    // data, never as instructions (see sessionInstruction).
+    acceptsUntrustedInput: true,
     execute: async (args, ctx) => {
       const [self] = await ctx.db.select().from(tasks).where(eq(tasks.id, ctx.taskId));
       if (!self?.parentTaskId) throw new Error('this task has no parent mission');
@@ -709,8 +718,17 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       nextAction: z.string().max(500).default(''),
     }),
     risk: 'autonomous',
-    acceptsUntrustedInput: false,
+    // Like mission.update: a goal work session taints itself with ordinary
+    // research reads before it can record progress, so gating this on taint
+    // stalls the goal loop. It writes bounded model-authored text to the
+    // owner's own goal row. Allowed under taint, but the execute below
+    // fails closed for any non-owner/assistant trust so flipping the flag
+    // never exposes goal writes to an external sender's task.
+    acceptsUntrustedInput: true,
     execute: async (args, ctx) => {
+      if (ctx.trust !== 'owner' && ctx.trust !== 'assistant') {
+        throw new Error('goals.update_progress is available only to owner/assistant tasks');
+      }
       const [row] = await ctx.db
         .update(goals)
         .set({ progress: args.progress, nextAction: args.nextAction, updatedAt: sql`now()` })

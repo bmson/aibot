@@ -1,7 +1,7 @@
 import { type ExecutorDeps, TrustSchema } from '@assistant/core';
 import type { AgentDeps } from './deps.js';
 import { deliverEmailFinal } from './email-channel.js';
-import { deliverSmsFinal, notifyApprovalsBySms } from './sms-channel.js';
+import { deliverSmsFinal, notifyApprovalsBySms, notifyOwnerBySms } from './sms-channel.js';
 
 /**
  * The executor wired with this app's channel hooks: final answers route back
@@ -39,5 +39,6 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
       );
     },
     notifyApproval: (approvals) => notifyApprovalsBySms(deps, approvals),
+    notifyOwner: ({ taskId, text }) => notifyOwnerBySms(deps, { taskId, text }),
   };
 }
