@@ -1,11 +1,12 @@
 import { approvals, messages, modelCalls, tasks, toolCalls } from '@assistant/db';
 import { asc, eq } from 'drizzle-orm';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, prettyJson, relativeTime, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { StatusChip } from '@/lib/views';
+import { StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +31,37 @@ function JsonDetails({ summary, value }: { summary: string; value: unknown }) {
       </pre>
     </details>
   );
+}
+
+const actionLabels: Record<string, string> = {
+  'docs.create': 'Created a document',
+  'docs.append': 'Updated a document',
+  'docs.share': 'Shared a document',
+  'sheets.create': 'Created a spreadsheet',
+  'sheets.append_rows': 'Updated a spreadsheet',
+  'slides.create': 'Created a presentation',
+  'slides.append': 'Updated a presentation',
+  'calendar.create_event': 'Created a calendar event',
+  'gmail.send': 'Sent an email',
+  'sms.send': 'Sent a text message',
+  'web.fetch': 'Read a web page',
+  'browser.execute': 'Ran a browser task',
+  'mission.update': 'Updated ongoing work',
+};
+
+function completedSuccessfully(call: { status: string; result: unknown }) {
+  if (call.status !== 'succeeded') return false;
+  if (!call.result || typeof call.result !== 'object') return true;
+  const result = call.result as { ok?: unknown; status?: unknown; deliveryStatus?: unknown };
+  return (
+    result.ok !== false &&
+    !(typeof result.status === 'number' && result.status >= 400) &&
+    result.deliveryStatus !== 'unknown'
+  );
+}
+
+function actionLabel(toolName: string) {
+  return actionLabels[toolName] ?? toolName.replaceAll('.', ' ');
 }
 
 export default async function TaskDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -139,22 +171,30 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       }),
     ),
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
+  const completedActions = taskToolCalls.filter(completedSuccessfully);
+  const incompleteActions = taskToolCalls.filter((call) => !completedSuccessfully(call));
 
   return (
     <div className="mx-auto max-w-4xl">
-      <div className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold">{task.type}</h1>
+      <Link
+        href="/tasks"
+        className="text-xs font-medium text-indigo-700 hover:underline dark:text-indigo-300"
+      >
+        ← Activity
+      </Link>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <h1 className="text-2xl font-semibold tracking-[-0.03em]">{taskTypeLabel(task.type)}</h1>
         <StatusChip status={task.status} />
       </div>
 
-      <div className="mt-4 rounded-lg border border-zinc-200 p-5 dark:border-zinc-800">
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
+      <div className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm sm:grid-cols-3">
           <div>
-            <dt className="text-xs text-zinc-500 dark:text-zinc-400">Trust</dt>
-            <dd>{task.trust}</dd>
+            <dt className="text-xs text-zinc-500 dark:text-zinc-400">Started by</dt>
+            <dd>{trustLabel(task.trust)}</dd>
           </div>
           <div>
-            <dt className="text-xs text-zinc-500 dark:text-zinc-400">Budget</dt>
+            <dt className="text-xs text-zinc-500 dark:text-zinc-400">Cost</dt>
             <dd>
               {formatUsd(task.spentUsd)} of {formatUsd(task.budgetUsdLimit)}
             </dd>
@@ -167,21 +207,21 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           </div>
           {task.deadline ? (
             <div>
-              <dt className="text-xs text-zinc-500 dark:text-zinc-400">Deadline</dt>
+              <dt className="text-xs text-zinc-500 dark:text-zinc-400">Target date</dt>
               <dd>
                 {formatDateTime(task.deadline)} ({relativeTime(task.deadline, now)})
               </dd>
             </div>
           ) : null}
           {task.nextAction ? (
-            <div className="col-span-2">
-              <dt className="text-xs text-zinc-500 dark:text-zinc-400">Next action</dt>
+            <div className="sm:col-span-2">
+              <dt className="text-xs text-zinc-500 dark:text-zinc-400">What happens next</dt>
               <dd>{task.nextAction}</dd>
             </div>
           ) : null}
           {task.progress ? (
-            <div className="col-span-2 sm:col-span-3">
-              <dt className="text-xs text-zinc-500 dark:text-zinc-400">Progress</dt>
+            <div className="sm:col-span-3">
+              <dt className="text-xs text-zinc-500 dark:text-zinc-400">Latest update</dt>
               <dd>
                 {task.progress}
                 {task.progressPercent != null ? ` (${task.progressPercent}%)` : ''}
@@ -189,39 +229,92 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             </div>
           ) : null}
         </dl>
-        {task.plan != null ? <JsonDetails summary="Plan" value={task.plan} /> : null}
       </div>
 
-      <h2 className="mt-8 text-sm font-medium">Timeline</h2>
-      {timeline.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-          No activity recorded for this task yet.
+      <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+        <h2 className="text-sm font-semibold">What actually happened</h2>
+        <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-zinc-400">
+          This list is built from completed tool results, not from the assistant’s wording.
         </p>
-      ) : (
-        <ol className="mt-3 flex flex-col gap-3">
-          {timeline.map((entry) => (
-            <li
-              key={entry.key}
-              className="flex gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
-            >
-              <span aria-hidden="true" className="mt-0.5">
-                {entry.icon}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline justify-between gap-3">
-                  <span className="text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">
-                    {entry.label}
-                  </span>
-                  <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
-                    {formatDateTime(entry.at)}
-                  </span>
+        {completedActions.length === 0 ? (
+          <p className="mt-4 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:bg-zinc-900 dark:text-zinc-400">
+            No external action completed for this item.
+          </p>
+        ) : (
+          <ul className="mt-4 divide-y divide-slate-100 dark:divide-zinc-800">
+            {completedActions.map((call) => (
+              <li key={call.id} className="py-3 first:pt-0 last:pb-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium">{actionLabel(call.toolName)}</p>
+                    <p className="mt-0.5 text-xs text-slate-500 dark:text-zinc-400">
+                      {relativeTime(call.finishedAt ?? call.createdAt, now)}
+                    </p>
+                  </div>
+                  <StatusChip status="done" />
                 </div>
-                <div className="mt-1">{entry.content}</div>
-              </div>
-            </li>
-          ))}
-        </ol>
-      )}
+                {call.result != null ? (
+                  <JsonDetails summary="View result" value={call.result} />
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+        {incompleteActions.length > 0 ? (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/60 dark:bg-amber-950/20">
+            <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+              Didn’t complete
+            </p>
+            <ul className="mt-1 space-y-1 text-xs text-amber-800 dark:text-amber-300">
+              {incompleteActions.map((call) => (
+                <li key={call.id}>
+                  {actionLabel(call.toolName)}
+                  {call.error ? ` — ${call.error}` : ''}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </section>
+
+      <details className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+        <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-zinc-300">
+          Full technical record
+        </summary>
+        <p className="mt-1 text-xs text-slate-500 dark:text-zinc-400">
+          Tool calls, approvals, messages, and model activity for troubleshooting.
+        </p>
+        {task.plan != null ? <JsonDetails summary="Plan" value={task.plan} /> : null}
+        {timeline.length === 0 ? (
+          <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
+            No activity recorded for this item yet.
+          </p>
+        ) : (
+          <ol className="mt-4 flex flex-col gap-3">
+            {timeline.map((entry) => (
+              <li
+                key={entry.key}
+                className="flex gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <span aria-hidden="true" className="mt-0.5">
+                  {entry.icon}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">
+                      {entry.label}
+                    </span>
+                    <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
+                      {formatDateTime(entry.at)}
+                    </span>
+                  </div>
+                  <div className="mt-1">{entry.content}</div>
+                </div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </details>
     </div>
   );
 }

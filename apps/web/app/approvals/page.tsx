@@ -5,7 +5,7 @@ import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import { EmptyState, PageHeader, SectionHeading } from '@/lib/ui';
-import { StatusChip, toPendingApprovalView } from '@/lib/views';
+import { StatusChip, taskTypeLabel, toPendingApprovalView } from '@/lib/views';
 import { ApprovalCard } from './approval-card';
 
 export const dynamic = 'force-dynamic';
@@ -79,7 +79,7 @@ export default async function ApprovalsPage() {
               </div>
               <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
                 <Link href={`/tasks/${approval.taskId}`} className="hover:underline">
-                  task {taskType}
+                  {taskTypeLabel(taskType)}
                 </Link>
                 {' · '}requested {formatDateTime(approval.requestedAt)}
                 {approval.resolvedAt

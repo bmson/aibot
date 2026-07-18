@@ -7,6 +7,8 @@ steps:
         infra/docker/agent.Dockerfile,
         -t,
         '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/agent:latest',
+        -t,
+        '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/agent:${_TAG}',
         .,
       ]
   - name: gcr.io/cloud-builders/docker
@@ -17,6 +19,8 @@ steps:
         infra/docker/web.Dockerfile,
         -t,
         '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:latest',
+        -t,
+        '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:${_TAG}',
         .,
       ]
   - name: gcr.io/cloud-builders/docker
@@ -27,15 +31,21 @@ steps:
         infra/docker/browser-job.Dockerfile,
         -t,
         '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/browser:latest',
+        -t,
+        '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/browser:${_TAG}',
         .,
       ]
 images:
   - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/agent:latest'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/agent:${_TAG}'
   - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:latest'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:${_TAG}'
   - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/browser:latest'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/browser:${_TAG}'
 substitutions:
   _REGION: us-west1
   _REPO: assistant
+  _TAG: manual
 options:
   machineType: E2_HIGHCPU_8
   logging: CLOUD_LOGGING_ONLY

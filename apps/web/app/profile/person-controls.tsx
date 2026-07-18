@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { deleteContactAction, updateContactIdentityAction } from '@/app/profile/actions';
 import { btn } from '@/lib/ui';
@@ -19,6 +20,7 @@ export function PersonControls({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const router = useRouter();
   const displayName = name.trim() || initialName;
 
   const save = () => {
@@ -38,6 +40,9 @@ export function PersonControls({
       if (result.error) {
         setError(result.error);
         setConfirmingDelete(false);
+      } else {
+        router.push('/profile');
+        router.refresh();
       }
     });
   };

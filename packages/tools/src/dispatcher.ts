@@ -7,7 +7,7 @@ import {
   reserveCost,
 } from '@assistant/core';
 import type { Db, TaskRow } from '@assistant/db';
-import { approvals, rateLimits, toolCache, toolCalls } from '@assistant/db';
+import { approvals, rateLimits, tasks, toolCache, toolCalls } from '@assistant/db';
 import { and, eq, gte, sql } from 'drizzle-orm';
 import { isAmbiguousGoogleMutationError } from './google/client.js';
 import { matchPolicies } from './policies.js';
@@ -113,12 +113,24 @@ export class ToolDispatcher {
   ) {}
 
   /** Model-facing tool definitions for a task's trust level (no execute functions). */
-  toolDefs(trust: ToolContext['trust'], tainted = false) {
-    return this.registry.toolsForTask(trust, tainted).map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema,
-    }));
+  toolDefs(
+    trust: ToolContext['trust'],
+    tainted = false,
+    scope: { isMissionSession: boolean } = { isMissionSession: false },
+  ) {
+    return (
+      this.registry
+        .toolsForTask(trust, tainted)
+        // mission.update writes the parent mission. A normal chat task has no
+        // parent, so exposing it lets the model manufacture a progress update
+        // that can only fail after it has already narrated the work.
+        .filter((tool) => tool.name !== 'mission.update' || scope.isMissionSession)
+        .map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        }))
+    );
   }
 
   /** Used by the workflow to durably propagate tool-result provenance. */
@@ -276,6 +288,27 @@ export class ToolDispatcher {
         kind: 'rejected',
         reason: `tool ${input.toolName} is not available for this task`,
       };
+    }
+    // Hiding a tool from the model is not an enforcement boundary: models can
+    // still emit a guessed tool name. Mission progress may only be written by
+    // the bounded child session created from an actual mission.
+    if (input.toolName === 'mission.update') {
+      if (!input.task.parentTaskId) {
+        return {
+          kind: 'rejected',
+          reason: 'mission.update is available only inside a mission work session',
+        };
+      }
+      const [parent] = await this.db
+        .select({ type: tasks.type })
+        .from(tasks)
+        .where(eq(tasks.id, input.task.parentTaskId));
+      if (parent?.type !== 'mission') {
+        return {
+          kind: 'rejected',
+          reason: 'mission.update requires a mission as its parent task',
+        };
+      }
     }
     const { tool } = registered;
 

@@ -17,6 +17,55 @@ export interface PendingApprovalView {
   voiceFlag: string | null;
 }
 
+/** Internal workflow names are useful to engineers, not to the person using the assistant. */
+const taskTypeLabels: Record<string, string> = {
+  chat_turn: 'Chat request',
+  adhoc: 'One-time work',
+  scheduled: 'Scheduled check',
+  mission: 'Ongoing work',
+  email_triage: 'Inbox request',
+  sms_turn: 'Text conversation',
+  import: 'Import',
+};
+
+export function taskTypeLabel(type: string): string {
+  return taskTypeLabels[type] ?? type.replaceAll('_', ' ');
+}
+
+const trustLabels: Record<string, string> = {
+  owner: 'You',
+  assistant: 'Assistant',
+  known: 'Known contact',
+  unknown: 'Outside contact',
+};
+
+export function trustLabel(trust: string): string {
+  return trustLabels[trust] ?? trust.replaceAll('_', ' ');
+}
+
+const statusLabels: Record<string, string> = {
+  pending: 'Queued',
+  running: 'Working',
+  waiting_approval: 'Needs your approval',
+  waiting_event: 'Waiting for a reply',
+  waiting_budget: 'Paused for budget',
+  sleeping: 'Scheduled to resume',
+  done: 'Completed',
+  failed: 'Could not finish',
+  needs_attention: 'Needs attention',
+  cancelled: 'Cancelled',
+  approved: 'Approved',
+  denied: 'Declined',
+  expired: 'Expired',
+  active: 'Active',
+  paused: 'Paused',
+  abandoned: 'Stopped',
+};
+
+export function statusLabel(status: string): string {
+  return statusLabels[status] ?? status.replaceAll('_', ' ');
+}
+
 /** The voice-rewrite tool sets `voiceFlag` on its args when fact-preservation fails. */
 function extractVoiceFlag(payload: unknown): string | null {
   if (payload === null || typeof payload !== 'object') return null;
@@ -36,7 +85,7 @@ export function toPendingApprovalView(
     payloadJson: prettyJson(approval.payload),
     requestedLabel: `requested ${relativeTime(approval.requestedAt, now)} (${formatDateTime(approval.requestedAt)})`,
     expiresLabel: `expires ${relativeTime(approval.expiresAt, now)} (${formatDateTime(approval.expiresAt)})`,
-    provenance: `task ${task.type}, trust ${task.trust}`,
+    provenance: `${taskTypeLabel(task.type)} · requested by ${trustLabel(task.trust)}`,
     taskId: approval.taskId,
     voiceFlag: extractVoiceFlag(approval.payload),
   };
@@ -48,6 +97,7 @@ export const statusChipClasses: Record<string, string> = {
   running: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
   waiting_approval: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
   waiting_event: 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300',
+  waiting_budget: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
   sleeping: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300',
   done: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300',
   failed: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
@@ -70,7 +120,7 @@ export function StatusChip({ status }: { status: string }) {
     <span
       className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${classes}`}
     >
-      {status.replaceAll('_', ' ')}
+      {statusLabel(status)}
     </span>
   );
 }

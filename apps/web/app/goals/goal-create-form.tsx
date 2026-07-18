@@ -15,7 +15,7 @@ export function GoalCreateForm() {
       action={formAction}
       className="mt-6 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
     >
-      <h2 className="text-sm font-medium">New goal</h2>
+      <h2 className="text-sm font-medium">Start a plan</h2>
       <div className="mt-3 flex flex-col gap-3">
         <label className={labelClass}>
           Title
@@ -46,11 +46,11 @@ export function GoalCreateForm() {
               defaultValue={state.values?.priority || '3'}
               className={inputClass}
             >
-              <option value="1">P1 — highest</option>
-              <option value="2">P2</option>
-              <option value="3">P3</option>
-              <option value="4">P4</option>
-              <option value="5">P5 — lowest</option>
+              <option value="1">Urgent</option>
+              <option value="2">High</option>
+              <option value="3">Normal</option>
+              <option value="4">Low</option>
+              <option value="5">Later</option>
             </select>
           </label>
           <label className={labelClass}>
@@ -72,7 +72,7 @@ export function GoalCreateForm() {
         disabled={pending}
         className="mt-3 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {pending ? 'Adding…' : 'Add goal'}
+        {pending ? 'Adding…' : 'Start plan'}
       </button>
     </form>
   );

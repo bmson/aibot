@@ -8,6 +8,7 @@
  * Run: pnpm auth:bot  — then sign in AS THE BOT ACCOUNT in the browser.
  * On success the refresh token is written to .env as BOT_GOOGLE_REFRESH_TOKEN.
  */
+import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -28,6 +29,9 @@ const SCOPES = [
   'https://www.googleapis.com/auth/calendar.readonly',
   // Google Docs: create/edit documents and manage sharing for files the bot created.
   'https://www.googleapis.com/auth/documents',
+  // Google Sheets and Slides: create/edit workspace artifacts the bot creates.
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/presentations',
   'https://www.googleapis.com/auth/drive.file',
   'openid',
   'email',
@@ -40,6 +44,7 @@ if (!CLIENT_ID || !CLIENT_SECRET) {
 }
 
 const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+const oauthState = randomBytes(32).toString('base64url');
 authUrl.searchParams.set('client_id', CLIENT_ID);
 authUrl.searchParams.set('redirect_uri', REDIRECT_URI);
 authUrl.searchParams.set('response_type', 'code');
@@ -47,6 +52,10 @@ authUrl.searchParams.set('scope', SCOPES);
 authUrl.searchParams.set('access_type', 'offline');
 authUrl.searchParams.set('prompt', 'consent');
 authUrl.searchParams.set('login_hint', BOT_EMAIL);
+// The local callback writes a long-lived credential. Bind it to the browser
+// session that started this flow so another local-network request cannot swap
+// in an authorization code for an unintended account.
+authUrl.searchParams.set('state', oauthState);
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', REDIRECT_URI);
@@ -55,6 +64,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+  if (state !== oauthState) {
+    res.writeHead(400).end('invalid OAuth state');
+    return;
+  }
   if (!code) {
     res.writeHead(400).end('missing code');
     return;

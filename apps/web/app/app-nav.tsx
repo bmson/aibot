@@ -9,6 +9,7 @@ import { signOutAction } from './actions';
 interface NavItem {
   href: string;
   label: string;
+  utility?: boolean;
 }
 
 /**
@@ -49,18 +50,22 @@ export function AppNav({
     };
   }, [open]);
 
-  const renderLinks = () =>
-    navItems.map((item) => {
+  const renderLinks = (items: NavItem[], tone: 'rail' | 'drawer') =>
+    items.map((item) => {
       const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
       return (
         <Link
           key={item.href}
           href={item.href}
           aria-current={active ? 'page' : undefined}
-          className={`flex items-center justify-between rounded-md px-2 py-1.5 text-sm ${
-            active
-              ? 'bg-zinc-100 font-medium text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100'
-              : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100'
+          className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
+            tone === 'rail'
+              ? active
+                ? 'bg-white/12 font-medium text-white shadow-sm'
+                : 'text-slate-300 hover:bg-white/7 hover:text-white'
+              : active
+                ? 'bg-slate-900 font-medium text-white'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100'
           }`}
         >
           {item.label}
@@ -73,35 +78,44 @@ export function AppNav({
 
   const signOut = signedIn ? (
     <form action={signOutAction}>
-      <button
-        type="submit"
-        className="text-xs text-zinc-500 hover:text-zinc-900 hover:underline dark:text-zinc-500 dark:hover:text-zinc-100"
-      >
+      <button type="submit" className="text-xs text-slate-400 hover:text-white hover:underline">
         Sign out
       </button>
     </form>
   ) : null;
 
+  const primaryItems = navItems.filter((item) => !item.utility);
+  const utilityItems = navItems.filter((item) => item.utility);
+
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden w-56 shrink-0 flex-col border-r border-zinc-200 lg:flex dark:border-zinc-800">
-        <div className="px-5 py-5">
-          <Link href="/" className="text-sm font-semibold tracking-wide">
-            Assistant
+      <aside className="hidden w-60 shrink-0 flex-col bg-slate-950 text-white lg:flex">
+        <div className="px-5 pt-6 pb-7">
+          <Link href="/" className="group inline-flex flex-col gap-1">
+            <span className="text-[10px] font-semibold tracking-[0.18em] text-indigo-300 uppercase">
+              Personal assistant
+            </span>
+            <span className="text-lg font-semibold tracking-[-0.03em]">Assistant</span>
           </Link>
         </div>
-        <nav className="flex flex-col gap-1 px-3">{renderLinks()}</nav>
-        {signOut ? (
-          <div className="mt-auto border-t border-zinc-200 px-5 py-4 dark:border-zinc-800">
-            {signOut}
+        <nav className="flex flex-col gap-1 px-3">{renderLinks(primaryItems, 'rail')}</nav>
+        {utilityItems.length > 0 ? (
+          <div className="mt-6 px-3">
+            <p className="px-3 text-[10px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+              Manage
+            </p>
+            <nav className="mt-2 flex flex-col gap-1">{renderLinks(utilityItems, 'rail')}</nav>
           </div>
+        ) : null}
+        {signOut ? (
+          <div className="mt-auto border-t border-white/10 px-5 py-4">{signOut}</div>
         ) : null}
       </aside>
 
       {/* Mobile top bar */}
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-zinc-200 bg-white/90 px-4 backdrop-blur lg:hidden dark:border-zinc-800 dark:bg-zinc-950/90">
-        <Link href="/" className="text-sm font-semibold tracking-wide">
+      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-800 bg-slate-950/95 px-4 text-white backdrop-blur lg:hidden">
+        <Link href="/" className="text-sm font-semibold tracking-[-0.02em]">
           Assistant
         </Link>
         <button
@@ -110,7 +124,7 @@ export function AppNav({
           aria-label="Open navigation menu"
           aria-expanded={open}
           aria-controls="mobile-nav"
-          className="relative -mr-2 inline-flex h-10 w-10 items-center justify-center rounded-md text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
+          className="relative -mr-2 inline-flex h-10 w-10 items-center justify-center rounded-lg text-slate-200 hover:bg-white/10"
         >
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
             <title>Menu</title>
@@ -137,19 +151,19 @@ export function AppNav({
             type="button"
             aria-label="Close navigation menu"
             onClick={() => setOpen(false)}
-            className="absolute inset-0 bg-zinc-900/40 backdrop-blur-sm"
+            className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm"
           />
           <div
             id="mobile-nav"
-            className="absolute inset-y-0 right-0 flex w-72 max-w-[80%] flex-col border-l border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950"
+            className="absolute inset-y-0 right-0 flex w-72 max-w-[84%] flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950"
           >
             <div className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
-              <span className="text-sm font-semibold tracking-wide">Menu</span>
+              <span className="text-sm font-semibold tracking-[-0.02em]">Menu</span>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
                 aria-label="Close navigation menu"
-                className="-mr-2 inline-flex h-10 w-10 items-center justify-center rounded-md text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                className="-mr-2 inline-flex h-10 w-10 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
               >
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
                   <title>Close</title>
@@ -162,10 +176,27 @@ export function AppNav({
                 </svg>
               </button>
             </div>
-            <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-3">{renderLinks()}</nav>
+            <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-3">
+              {renderLinks(primaryItems, 'drawer')}
+              {utilityItems.length > 0 ? (
+                <>
+                  <p className="mt-5 px-3 text-[10px] font-semibold tracking-[0.14em] text-slate-400 uppercase">
+                    Manage
+                  </p>
+                  {renderLinks(utilityItems, 'drawer')}
+                </>
+              ) : null}
+            </nav>
             {signOut ? (
               <div className="shrink-0 border-t border-zinc-200 px-5 py-4 dark:border-zinc-800">
-                {signOut}
+                <form action={signOutAction}>
+                  <button
+                    type="submit"
+                    className="text-xs text-slate-500 hover:text-slate-950 hover:underline dark:text-zinc-500 dark:hover:text-zinc-100"
+                  >
+                    Sign out
+                  </button>
+                </form>
               </div>
             ) : null}
           </div>

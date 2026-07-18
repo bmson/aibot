@@ -85,10 +85,26 @@ const NeedsActionSchema = z.object({
     ),
 });
 
-/** Complete the SDK request without inventing a temporary assistant message. */
-function acceptedStreamResponse(headers: Record<string, string>): Response {
+/**
+ * Action turns are accepted by the workflow queue rather than answered in this
+ * request. An empty UI message stream is not a valid completed assistant turn
+ * for every AI SDK client version, which surfaced as a generic "request failed"
+ * after an otherwise successful submission. Send one explicit acknowledgement;
+ * the client replaces the temporary state with the durable task reply it polls.
+ */
+function acceptedStreamResponse(taskId: string, headers: Record<string, string>): Response {
   const stream = createUIMessageStream({
-    execute: () => {},
+    execute: ({ writer }) => {
+      const partId = `task-${taskId}`;
+      writer.write({ type: 'text-start', id: partId });
+      writer.write({
+        type: 'text-delta',
+        id: partId,
+        delta: 'Got it — I’m working on this now. I’ll post the result here.',
+      });
+      writer.write({ type: 'text-end', id: partId });
+      writer.write({ type: 'finish', finishReason: 'stop' });
+    },
   });
   return createUIMessageStreamResponse({ stream, headers });
 }
@@ -119,7 +135,8 @@ export async function POST(req: Request) {
   if (!(await isAuthed())) {
     return Response.json({ error: 'unauthorized' }, { status: 401 });
   }
-  if (!loadConfig().OPENROUTER_API_KEY) {
+  const config = loadConfig();
+  if (!config.OPENROUTER_API_KEY) {
     return Response.json({ error: 'OPENROUTER_API_KEY not set — add it to .env' }, { status: 503 });
   }
 
@@ -211,23 +228,50 @@ export async function POST(req: Request) {
   }
 
   if (needsAction) {
+    // Fail before creating a task when the deployed queue cannot authenticate
+    // to the agent. Previously this threw from getQueueNotifier and surfaced as
+    // an opaque 500, most often on a second turn that was action-routed.
+    if (
+      config.QUEUE_DRIVER === 'cloudtasks' &&
+      (!config.INTERNAL_OIDC_AUDIENCE || !config.INTERNAL_OIDC_SERVICE_ACCOUNT)
+    ) {
+      console.error('chat action queue is missing its OIDC configuration');
+      return Response.json(
+        {
+          error:
+            'The task service is temporarily unavailable. Your message was saved; refresh this chat in a moment before retrying.',
+        },
+        { status: 503 },
+      );
+    }
     // The executor persists its answer (or an approval notice) into this
     // conversation; the client polls /api/chat/status until it lands.
-    const { task } = await enqueueTask(db, {
-      event: {
-        source: 'chat',
-        agentId: agent.id,
-        conversationId: conversation.id,
-        trust: 'owner',
-        payload: { text: userText },
-      },
-      type: 'chat_turn',
-    });
-    return acceptedStreamResponse({
-      'x-conversation-id': conversation.id,
-      'x-async-task': task.id,
-      'x-message-cursor': messageCursor,
-    });
+    try {
+      const { task } = await enqueueTask(db, {
+        event: {
+          source: 'chat',
+          agentId: agent.id,
+          conversationId: conversation.id,
+          trust: 'owner',
+          payload: { text: userText },
+        },
+        type: 'chat_turn',
+      });
+      return acceptedStreamResponse(task.id, {
+        'x-conversation-id': conversation.id,
+        'x-async-task': task.id,
+        'x-message-cursor': messageCursor,
+      });
+    } catch (error) {
+      console.error('chat action task could not be queued', error);
+      return Response.json(
+        {
+          error:
+            'The task service is temporarily unavailable. Your message was saved; refresh this chat in a moment before retrying.',
+        },
+        { status: 503 },
+      );
+    }
   }
 
   const task = await createChatTask(db, {

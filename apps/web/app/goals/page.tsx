@@ -10,6 +10,12 @@ import { EmptyState, PageHeader, SectionHeading } from '@/lib/ui';
 export const dynamic = 'force-dynamic';
 
 const STATUS_ORDER = ['active', 'paused', 'done', 'abandoned'] as const;
+const statusHeadings: Record<(typeof STATUS_ORDER)[number], string> = {
+  active: 'In progress',
+  paused: 'Paused',
+  done: 'Finished',
+  abandoned: 'Stopped',
+};
 
 function toGoalView(goal: GoalRow, now: Date): GoalView {
   const targetDateInput = goal.targetDate ? goal.targetDate.toISOString().slice(0, 10) : '';
@@ -43,21 +49,22 @@ export default async function GoalsPage() {
   return (
     <div className="mx-auto max-w-4xl">
       <PageHeader
-        title="Goals"
-        intro="Long-running objectives the assistant plans toward and reports progress on."
+        title="Plans"
+        intro="Use a plan for an outcome that takes several steps or needs follow-up. For a one-off request, just ask in Chat."
       />
 
       <GoalCreateForm />
 
       {rows.length === 0 ? (
         <EmptyState>
-          No goals yet — add one above to give the assistant a long-running objective.
+          No plans yet — add one above when you want the assistant to keep an outcome moving over
+          time.
         </EmptyState>
       ) : (
         <div className="mt-8 flex flex-col gap-6">
           {groups.map((group) => (
-            <section key={group.status} className="capitalize">
-              <SectionHeading title={group.status} count={group.items.length} />
+            <section key={group.status}>
+              <SectionHeading title={statusHeadings[group.status]} count={group.items.length} />
               <div className="mt-3 flex flex-col gap-3">
                 {group.items.map((goal) => (
                   <GoalCard

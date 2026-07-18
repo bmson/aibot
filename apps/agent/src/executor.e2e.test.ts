@@ -498,7 +498,7 @@ describe('executor end-to-end (integration, scripted model)', () => {
     expect(after?.status).toBe('cancelled');
   });
 
-  it('does not finalize or deliver a truncated model response', async (ctx) => {
+  it('delivers a text-only response cut off after model reasoning', async (ctx) => {
     if (!dbUp) return ctx.skip();
     let deliveries = 0;
     const router = {
@@ -541,10 +541,52 @@ describe('executor end-to-end (integration, scripted model)', () => {
       },
       task.id,
     );
-    expect(result.outcome).toBe('failed');
-    expect(deliveries).toBe(0);
+    // A reasoning model can consume its output budget before returning a
+    // formal stop. With no incomplete tool call, the partial text is safer and
+    // more useful than failing an otherwise valid owner reply.
+    expect(result.outcome).toBe('done');
+    expect(deliveries).toBe(1);
     const [after] = await db.select().from(tasks).where(eq(tasks.id, task.id));
-    expect(after?.status).toBe('sleeping');
-    expect(after?.progress).toContain('finish reason length');
+    expect(after?.status).toBe('done');
+  });
+
+  it('replaces a model-invented action report with a ledger-backed limitation', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const router = {
+      async object() {
+        return { ok: true, modelId: 'fake/model', degraded: false, object: { trivial: true } };
+      },
+      async step(): Promise<StepCallOutcome> {
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: "I created a shared spreadsheet, emailed the first candidates, booked their interviews, and submitted the applications. I'll keep handling it silently.",
+          toolCalls: [],
+          finishReason: 'stop',
+        };
+      },
+    } as unknown as ModelRouter;
+    const dispatcher = new ToolDispatcher(db, new ToolRegistry());
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner', title: 'response-contract-test' })
+      .returning();
+    const conversationId = (conversation as NonNullable<typeof conversation>).id;
+    createdConversationIds.push(conversationId);
+    const { task } = await enqueueTask(db, {
+      event: { ...event(), conversationId },
+      type: 'chat_turn',
+    });
+    createdTaskIds.push(task.id);
+
+    const outcome = await executeTask({ db, router, dispatcher }, task.id);
+    expect(outcome.outcome).toBe('done');
+    const [reply] = await db
+      .select()
+      .from(messages)
+      .where(sql`${messages.taskId} = ${task.id} and ${messages.role} = 'assistant'`);
+    expect(reply?.text).toContain("I can't claim that work was completed");
+    expect(reply?.text).not.toContain('I created a shared spreadsheet');
   });
 });

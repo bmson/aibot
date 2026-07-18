@@ -39,12 +39,14 @@ import {
 } from './machine.js';
 import { startMission, wakeMission } from './missions.js';
 import { PLANNER_VERSION, planTask } from './planner.js';
+import { type ActionEvidence, enforceResponseContract } from './response-contract.js';
 
 /** Structural port implemented by @assistant/tools' ToolDispatcher — keeps core free of a package cycle. */
 export interface DispatcherPort {
   toolDefs(
     trust: Trust,
     tainted?: boolean,
+    scope?: { isMissionSession: boolean },
   ): Array<{ name: string; description: string; inputSchema: ZodType }>;
   resultIsUntrusted(toolName: string): boolean;
   dispatch(input: {
@@ -340,6 +342,44 @@ async function stageFinalResponse(
   state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
   if (!(await checkpointTask(deps.db, task, state))) return LOST_LEASE;
   return finalizePendingResponse(deps, task, pending, state);
+}
+
+/**
+ * The prose model is never the evidence source for an external action. Query
+ * the durable ledger immediately before publishing a free-form final answer;
+ * this also covers tool failures that were visible to the model but ignored.
+ */
+async function stageModelFinalResponse(
+  deps: ExecutorDeps,
+  task: TaskLease,
+  state: TaskState,
+  window: ModelMessage[],
+  pending: PendingFinal,
+): Promise<ExecuteResult> {
+  const rows = await deps.db
+    .select({
+      toolName: toolCalls.toolName,
+      status: toolCalls.status,
+      result: toolCalls.result,
+      error: toolCalls.error,
+    })
+    .from(toolCalls)
+    .where(eq(toolCalls.taskId, task.id));
+  const evidence: ActionEvidence[] = rows;
+  const checked = enforceResponseContract(pending.text, evidence);
+  const text = checked.text;
+  if (checked.blocked) {
+    console.warn('blocked unsupported assistant action claim', {
+      taskId: task.id,
+      unsupported: checked.unsupported,
+      toolCalls: rows.map((row) => ({ toolName: row.toolName, status: row.status })),
+    });
+  }
+  return stageFinalResponse(deps, task, state, window, {
+    ...pending,
+    text,
+    progress: text.slice(0, 200),
+  });
 }
 
 async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]> {
@@ -821,7 +861,9 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     ]
       .filter(Boolean)
       .join('\n');
-    const toolDefs = dispatcher.toolDefs(task.trust as Trust, state.untrustedContext);
+    const toolDefs = dispatcher.toolDefs(task.trust as Trust, state.untrustedContext, {
+      isMissionSession: task.type === 'adhoc' && task.parentTaskId !== null,
+    });
     const toolSet = Object.fromEntries(
       toolDefs.map((def) => [
         def.name,
@@ -1043,7 +1085,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     // no tool calls → final answer
     const text = stepResult.text.trim() || '(no response)';
     window.push({ role: 'assistant', content: text } as ModelMessage);
-    return stageFinalResponse(deps, lease, state, window, {
+    return stageModelFinalResponse(deps, lease, state, window, {
       text,
       progress: text.slice(0, 200),
       terminalStatus: 'done',

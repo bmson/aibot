@@ -20,7 +20,7 @@ export function MergeControl({
   const targetLabel = options.find((o) => o.id === targetId)?.label ?? '';
 
   return (
-    <span className="flex items-center gap-1.5">
+    <span className="flex flex-wrap items-center gap-1.5">
       {suggested ? (
         <span
           className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"

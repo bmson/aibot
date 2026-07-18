@@ -21,15 +21,15 @@ export const viewport: Viewport = {
 export const dynamic = 'force-dynamic';
 
 const navItems = [
-  { href: '/', label: 'Dashboard' },
+  { href: '/', label: 'Home' },
   { href: '/chat', label: 'Chat' },
   { href: '/approvals', label: 'Approvals' },
-  { href: '/tasks', label: 'Tasks' },
-  { href: '/goals', label: 'Goals' },
-  { href: '/profile', label: 'Profile' },
-  { href: '/import', label: 'Import' },
-  { href: '/costs', label: 'Costs' },
-  { href: '/settings', label: 'Settings' },
+  { href: '/tasks', label: 'Activity' },
+  { href: '/goals', label: 'Plans' },
+  { href: '/profile', label: 'Memory' },
+  { href: '/import', label: 'Import', utility: true },
+  { href: '/costs', label: 'Costs', utility: true },
+  { href: '/settings', label: 'Settings', utility: true },
 ];
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
@@ -59,7 +59,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
 
   return (
     <html lang="en">
-      <body className="min-h-screen bg-white text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">
+      <body className="min-h-screen bg-[#f5f7fb] text-slate-950 antialiased dark:bg-zinc-950 dark:text-zinc-100">
         {authMode === 'dev-bypass' ? (
           <div className="bg-amber-100 px-4 py-1 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
             dev mode — auth disabled
@@ -71,7 +71,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             pendingApprovals={pendingApprovals}
             signedIn={!!session?.user}
           />
-          <main className="min-w-0 flex-1 px-4 py-6 lg:px-8 lg:py-8">{children}</main>
+          <main className="min-w-0 flex-1 px-4 py-6 lg:px-10 lg:py-9">{children}</main>
         </div>
       </body>
     </html>

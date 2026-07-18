@@ -9,7 +9,7 @@ Architecture plan (v4, the source of truth for design decisions): `~/.claude/pla
 - **Web dashboard**: https://assistant-web-3gimfiaifa-uw.a.run.app (Google sign-in, owner-only)
 - **Agent worker**: https://assistant-agent-3gimfiaifa-uw.a.run.app
 - Stack: Cloud Run (us-west1, scale-to-zero) · Neon Postgres + pgvector · Cloud Tasks (instant task dispatch) · Cloud Scheduler (1-min sweep, daily Gmail watch renewal) · Pub/Sub (Gmail push) · Secret Manager · GCS (Workspace files)
-- Deploy/reconcile everything: `bash infra/gcp/deploy.sh` (idempotent; reads `.env`)
+- First provision/reconcile everything: `bash infra/gcp/deploy.sh` (idempotent; reads `.env`). Normal releases: `bash infra/gcp/release.sh` (no `.env`; uses only existing Cloud Run configuration). Merges to `main` run the same release path after CI through keyless GitHub OIDC; see [`infra/gcp/github-actions.md`](infra/gcp/github-actions.md).
 - Run cost ≈ $15–30/mo including the Workspace seat; model spend guarded per-task/daily/monthly in-app, plus OpenRouter key limit and a GCP budget alert.
 
 ## Layout

@@ -14,6 +14,17 @@ interface ChatClientProps {
   modelOverride: string | null;
 }
 
+const ASYNC_ACK_TEXT = 'Got it — I’m working on this now. I’ll post the result here.';
+
+function messageText(message: UIMessage): string {
+  return message.parts
+    .filter(
+      (part): part is Extract<UIMessage['parts'][number], { type: 'text' }> => part.type === 'text',
+    )
+    .map((part) => part.text)
+    .join('');
+}
+
 /**
  * The transport throws `Error(await response.text())` on non-ok responses, so
  * 402/503 JSON bodies from the chat route arrive as the error message.
@@ -25,7 +36,10 @@ function errorText(error: Error): string {
   } catch {
     // not JSON — fall through to the raw message
   }
-  return error.message || 'request failed';
+  return (
+    error.message ||
+    'We could not display the response. Your message may still have been saved — refresh this chat before retrying.'
+  );
 }
 
 export function ChatClient({
@@ -99,7 +113,17 @@ export function ChatClient({
             merged[index] = message;
           }
         }
-        return merged;
+        // The route sends a short acknowledgement while an action task starts.
+        // Once the durable assistant reply arrives, remove that temporary copy
+        // so a simple request still reads as one coherent conversation.
+        const hasDurableReply = incoming.some(
+          (message) => message.role === 'assistant' && messageText(message) !== ASYNC_ACK_TEXT,
+        );
+        return hasDurableReply
+          ? merged.filter(
+              (message) => message.role !== 'assistant' || messageText(message) !== ASYNC_ACK_TEXT,
+            )
+          : merged;
       });
     };
 
@@ -154,7 +178,7 @@ export function ChatClient({
         // transient poll failure — keep trying until the timeout
       }
       if (Date.now() - startedAt > TIMEOUT_MS) {
-        return settle('still running in the background — the answer will appear on reload');
+        return settle('Still working. The result will appear here when it finishes.');
       }
       if (!cancelled) window.setTimeout(tick, 2500);
     };
@@ -169,36 +193,55 @@ export function ChatClient({
 
   return (
     <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-4xl flex-col lg:h-[calc(100vh-4rem)]">
-      <header className="flex items-center justify-between gap-4 border-b border-zinc-200 pb-3 dark:border-zinc-800">
-        <h1 className="truncate text-lg font-semibold">{title}</h1>
-        <div className="flex items-center gap-3">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4 dark:border-zinc-800">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold tracking-[0.14em] text-indigo-700 uppercase dark:text-indigo-300">
+            Chat
+          </p>
+          <h1 className="mt-1 truncate text-xl font-semibold tracking-[-0.03em]">{title}</h1>
+        </div>
+        <div className="flex min-w-0 items-center gap-2">
           {fallbackNote ? (
             <span className="text-xs text-zinc-500 dark:text-zinc-500">{fallbackNote}</span>
           ) : null}
-          <select
-            aria-label="Model"
-            defaultValue={modelOverride ?? ''}
-            disabled={isSwitching}
-            onChange={(event) => {
-              const value = event.target.value;
-              startTransition(() => changeConversationModel(conversationId, value || null));
-            }}
-            className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-          >
-            <option value="">Auto (role default)</option>
-            {models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.label}
-              </option>
-            ))}
-          </select>
+          <details className="relative">
+            <summary className="cursor-pointer list-none rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+              Model
+            </summary>
+            <div className="absolute top-full right-0 z-10 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-950">
+              <label
+                htmlFor="conversation-model"
+                className="px-1 text-[10px] font-semibold tracking-[0.12em] text-slate-500 uppercase dark:text-zinc-400"
+              >
+                Response model
+              </label>
+              <select
+                id="conversation-model"
+                aria-label="Model"
+                defaultValue={modelOverride ?? ''}
+                disabled={isSwitching}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  startTransition(() => changeConversationModel(conversationId, value || null));
+                }}
+                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              >
+                <option value="">Auto</option>
+                {models.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </details>
         </div>
       </header>
 
       <div className="flex-1 overflow-y-auto py-4">
         {messages.length === 0 ? (
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Say something to start the conversation.
+          <p className="mt-8 text-sm leading-6 text-slate-500 dark:text-zinc-400">
+            Ask for a plan, a document, a summary, or help with something you need to get done.
           </p>
         ) : (
           <div className="flex flex-col gap-4">
@@ -210,8 +253,8 @@ export function ChatClient({
                 <div
                   className={
                     message.role === 'user'
-                      ? 'max-w-[80%] rounded-lg bg-zinc-900 px-3 py-2 text-sm text-white dark:bg-zinc-100 dark:text-zinc-900'
-                      : 'max-w-[80%] rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900'
+                      ? 'max-w-[88%] rounded-2xl rounded-br-md bg-indigo-600 px-3 py-2 text-sm text-white shadow-sm sm:max-w-[80%]'
+                      : 'max-w-[88%] rounded-2xl rounded-bl-md border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm sm:max-w-[80%] dark:border-zinc-800 dark:bg-zinc-900'
                   }
                 >
                   {message.parts.map((part, index) =>
@@ -238,8 +281,8 @@ export function ChatClient({
               <p className="animate-pulse text-sm text-zinc-500 dark:text-zinc-400">Thinking…</p>
             ) : null}
             {asyncTurn ? (
-              <p className="animate-pulse text-sm text-zinc-500 dark:text-zinc-400">
-                Running as a task (tools &amp; approvals)…
+              <p className="animate-pulse text-sm text-slate-500 dark:text-zinc-400">
+                Checking the tools and any required approvals…
               </p>
             ) : null}
             {asyncNote ? (
@@ -270,19 +313,19 @@ export function ChatClient({
           setInput('');
           void sendMessage({ text });
         }}
-        className="flex gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800"
+        className="flex gap-2 border-t border-slate-200 pt-4 dark:border-zinc-800"
       >
         <input
           aria-label="Message"
           value={input}
           onChange={(event) => setInput(event.target.value)}
-          placeholder="Message the assistant… (Enter to send)"
-          className="flex-1 rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
+          placeholder="Ask anything…"
+          className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition-shadow placeholder:text-slate-400 focus:border-indigo-400 focus:ring-3 focus:ring-indigo-100 dark:border-zinc-700 dark:bg-zinc-900"
         />
         <button
           type="submit"
           disabled={busy || input.trim() === ''}
-          className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+          className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-50"
         >
           {busy ? '…' : 'Send'}
         </button>

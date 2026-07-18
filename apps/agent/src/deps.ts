@@ -20,6 +20,8 @@ import {
   registerCalendarTools,
   registerDocsTools,
   registerGmailTools,
+  registerSheetsTools,
+  registerSlidesTools,
   registerSmsTools,
   ToolDispatcher,
   ToolRegistry,
@@ -109,6 +111,14 @@ export function buildDeps(): AgentDeps {
     registerDocsTools(registry, {
       client: googleClient,
       botEmail,
+      ownerEmail: config.OWNER_EMAIL,
+    });
+    registerSheetsTools(registry, {
+      client: googleClient,
+      ownerEmail: config.OWNER_EMAIL,
+    });
+    registerSlidesTools(registry, {
+      client: googleClient,
       ownerEmail: config.OWNER_EMAIL,
     });
   } else {

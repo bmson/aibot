@@ -7,6 +7,7 @@ import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import { btn, PageHeader } from '@/lib/ui';
+import { taskTypeLabel } from '@/lib/views';
 
 export const dynamic = 'force-dynamic';
 
@@ -221,7 +222,7 @@ export default async function CostsPage() {
               className="flex items-center justify-between gap-3 rounded-md border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
             >
               <span className="min-w-0 truncate">
-                <span className="text-xs text-zinc-500">[{row.type}]</span>{' '}
+                <span className="text-xs text-zinc-500">[{taskTypeLabel(row.type)}]</span>{' '}
                 {truncate(row.progress || row.taskId || '', 80)}
               </span>
               <span className="shrink-0">{formatUsd(String(row.usd ?? '0'))}</span>

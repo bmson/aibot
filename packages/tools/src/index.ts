@@ -5,6 +5,8 @@ export * from './google/calendar.js';
 export * from './google/client.js';
 export * from './google/docs.js';
 export * from './google/gmail.js';
+export * from './google/sheets.js';
+export * from './google/slides.js';
 export * from './policies.js';
 export * from './registry.js';
 export * from './twilio/client.js';

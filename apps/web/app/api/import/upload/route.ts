@@ -5,6 +5,7 @@ import { isAuthed } from '@/auth';
 import { getDb, getWorkspace } from '@/lib/server';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // Cloud Run request cap is 32MB — stay under it
+const MAX_MULTIPART_BYTES = MAX_UPLOAD_BYTES + 1024 * 1024; // form fields + MIME boundary overhead
 
 /**
  * Backstory archive upload: multipart form → workspace import/<name> →
@@ -16,8 +17,16 @@ export async function POST(req: Request) {
   if (!(await isAuthed())) {
     return Response.json({ error: 'unauthorized' }, { status: 401 });
   }
+  const contentLength = Number(req.headers.get('content-length') ?? 0);
+  if (Number.isFinite(contentLength) && contentLength > MAX_MULTIPART_BYTES) {
+    return Response.json(
+      { error: 'file too large for upload — copy it into the workspace import/ prefix instead' },
+      { status: 413 },
+    );
+  }
 
-  const form = await req.formData();
+  const form = await req.formData().catch(() => null);
+  if (!form) return Response.json({ error: 'invalid multipart form' }, { status: 400 });
   const file = form.get('file');
   if (!(file instanceof File) || file.size === 0) {
     return Response.json({ error: 'no file uploaded' }, { status: 400 });

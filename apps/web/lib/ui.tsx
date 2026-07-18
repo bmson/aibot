@@ -10,7 +10,7 @@ export const btn = {
   dangerOutline:
     'rounded-md border border-red-300 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40',
   primary:
-    'rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50',
+    'rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50',
   danger:
     'rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50',
   success:
@@ -33,15 +33,23 @@ export const summaryClass =
 export function PageHeader({ title, intro }: { title: string; intro?: ReactNode }) {
   return (
     <header>
-      <h1 className="text-xl font-semibold">{title}</h1>
-      {intro ? <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">{intro}</p> : null}
+      <h1 className="text-2xl font-semibold tracking-[-0.03em] text-slate-950 dark:text-zinc-100">
+        {title}
+      </h1>
+      {intro ? (
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500 dark:text-zinc-400">
+          {intro}
+        </p>
+      ) : null}
     </header>
   );
 }
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`rounded-lg border border-zinc-200 p-4 dark:border-zinc-800 ${className}`}>
+    <div
+      className={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 ${className}`}
+    >
       {children}
     </div>
   );
@@ -80,7 +88,7 @@ export function SectionHeading({
   hint?: string;
 }) {
   return (
-    <h2 className="flex items-baseline gap-2 text-sm font-medium">
+    <h2 className="flex min-w-0 flex-wrap items-baseline gap-2 text-sm font-medium">
       {title}
       {count !== undefined ? <CountBadge>{count}</CountBadge> : null}
       {hint ? (

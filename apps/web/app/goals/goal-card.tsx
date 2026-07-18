@@ -37,14 +37,22 @@ const priorityChipClasses: Record<number, string> = {
   5: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
 };
 
+const priorityLabels: Record<number, string> = {
+  1: 'Urgent',
+  2: 'High',
+  3: 'Normal',
+  4: 'Low',
+  5: 'Later',
+};
+
 function PriorityBadge({ priority }: { priority: number }) {
   const classes = priorityChipClasses[priority] ?? priorityChipClasses[3];
   return (
     <span
       className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${classes}`}
-      title={`Priority ${priority} (1 = highest)`}
+      title={`Priority: ${priorityLabels[priority] ?? 'Normal'}`}
     >
-      P{priority}
+      {priorityLabels[priority] ?? 'Normal'}
     </span>
   );
 }
@@ -178,11 +186,11 @@ export function GoalCard({ goal }: { goal: GoalView }) {
                 defaultValue={value('priority', String(goal.priority))}
                 className={inputClass}
               >
-                <option value="1">P1 — highest</option>
-                <option value="2">P2</option>
-                <option value="3">P3</option>
-                <option value="4">P4</option>
-                <option value="5">P5 — lowest</option>
+                <option value="1">Urgent</option>
+                <option value="2">High</option>
+                <option value="3">Normal</option>
+                <option value="4">Low</option>
+                <option value="5">Later</option>
               </select>
             </label>
             <label className={labelClass}>
