@@ -1,14 +1,16 @@
 # Keyless GitHub deployment setup
 
 The normal release command is `bash infra/gcp/release.sh`. It builds immutable
-images, runs the database migrations in a short-lived Cloud Run Job, then
-updates the services and browser job. It assumes the Cloud Run services,
-service accounts, secrets, queues, and Artifact Registry already exist;
-provision or reconcile those once with `bash infra/gcp/deploy.sh`.
+images with Cloud Build, runs the database migrations in a short-lived Cloud
+Run Job, then updates the services and browser job. It assumes the Cloud Run
+services, service accounts, secrets, queues, and Artifact Registry already
+exist; provision or reconcile those once with `bash infra/gcp/deploy.sh`.
 
 The `Deploy production` workflow releases only after the `CI` workflow
-succeeds for a push to `main`. It uses GitHub's OIDC token and Google Workload
-Identity Federation, not a downloadable service-account key.
+succeeds for a push to `main`. It builds and pushes the immutable images from
+GitHub Actions, then runs the migration and Cloud Run rollout. It uses GitHub's
+OIDC token and Google Workload Identity Federation, not a downloadable
+service-account key.
 
 ## One-time Google Cloud setup
 
@@ -40,12 +42,8 @@ gcloud iam service-accounts add-iam-policy-binding "$DEPLOY_SA" \
   --project="$PROJECT_ID" --role=roles/iam.workloadIdentityUser \
   --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}/attribute.repository/${REPOSITORY}"
 
-for ROLE in roles/artifactregistry.writer roles/cloudbuild.builds.editor roles/run.admin roles/serviceusage.serviceUsageConsumer; do
+for ROLE in roles/artifactregistry.writer roles/run.admin; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:${DEPLOY_SA}" --role="$ROLE"
-done
-for ROLE in roles/storage.legacyBucketReader roles/storage.objectAdmin; do
-  gcloud storage buckets add-iam-policy-binding "gs://${PROJECT_ID}_cloudbuild" \
     --member="serviceAccount:${DEPLOY_SA}" --role="$ROLE"
 done
 for RUNTIME_SA in assistant-agent assistant-web assistant-browser; do
@@ -55,10 +53,10 @@ for RUNTIME_SA in assistant-agent assistant-web assistant-browser; do
 done
 ```
 
-The Cloud Build service account must retain permission to push into the
-existing Artifact Registry repository. The original bootstrap deploy grants
-the required runtime access; if this is a new project, finish that bootstrap
-before enabling GitHub deployments.
+The Cloud Build service account is used only by the optional local release
+path. GitHub Actions pushes directly to Artifact Registry, so the deployer
+does not receive Cloud Build or Cloud Storage permissions. If this is a new
+project, finish the bootstrap deploy before enabling GitHub deployments.
 
 ## GitHub configuration
 

@@ -33,10 +33,27 @@ jobs:
           project_id: bmson-assistant
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Authorize Artifact Registry
+        run: gcloud auth configure-docker us-west1-docker.pkg.dev --quiet
+      - name: Build and push immutable images
+        env:
+          GCP_PROJECT: bmson-assistant
+          GCP_REGION: us-west1
+          ARTIFACT_REPOSITORY: assistant
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          IMAGE_ROOT="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${ARTIFACT_REPOSITORY}"
+          docker build --file infra/docker/agent.Dockerfile --tag "${IMAGE_ROOT}/agent:${IMAGE_TAG}" .
+          docker push "${IMAGE_ROOT}/agent:${IMAGE_TAG}"
+          docker build --file infra/docker/web.Dockerfile --tag "${IMAGE_ROOT}/web:${IMAGE_TAG}" .
+          docker push "${IMAGE_ROOT}/web:${IMAGE_TAG}"
+          docker build --file infra/docker/browser-job.Dockerfile --tag "${IMAGE_ROOT}/browser:${IMAGE_TAG}" .
+          docker push "${IMAGE_ROOT}/browser:${IMAGE_TAG}"
       - name: Release immutable images
         env:
           GCP_PROJECT: bmson-assistant
           GCP_REGION: us-west1
           ARTIFACT_REPOSITORY: assistant
           IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+          SKIP_IMAGE_BUILD: 'true'
         run: bash infra/gcp/release.sh

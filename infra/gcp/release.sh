@@ -17,12 +17,16 @@ fi
 IMAGE_ROOT="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}"
 AGENT_SERVICE_ACCOUNT="assistant-agent@${PROJECT}.iam.gserviceaccount.com"
 
-echo "Building release ${TAG}"
-gcloud builds submit . \
-  --project "$PROJECT" \
-  --config infra/gcp/cloudbuild.yaml \
-  --substitutions "_REGION=${REGION},_REPO=${REPO},_TAG=${TAG}" \
-  --quiet
+if [[ "${SKIP_IMAGE_BUILD:-false}" != "true" ]]; then
+  echo "Building release ${TAG} with Cloud Build"
+  gcloud builds submit . \
+    --project "$PROJECT" \
+    --config infra/gcp/cloudbuild.yaml \
+    --substitutions "_REGION=${REGION},_REPO=${REPO},_TAG=${TAG}" \
+    --quiet
+else
+  echo "Using pre-built release images ${TAG}"
+fi
 
 # Migrations run in a short-lived Cloud Run Job with the agent's existing
 # database-secret access. The GitHub deployer never receives the database URL,
