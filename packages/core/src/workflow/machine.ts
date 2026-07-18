@@ -17,6 +17,11 @@ const WAKEABLE = [
 const TERMINAL = ['done', 'failed', 'cancelled'] as const;
 const LEASE_MINUTES = 10;
 const MAX_ATTEMPTS = 8;
+// A worker that hangs or is killed (rather than throwing) never records a
+// failed attempt, so it can't reach MAX_ATTEMPTS. Its lease simply expires and
+// the task is reclaimed. Bound that separately: a task reclaimed this many
+// times without ever checkpointing progress is a poison pill and dead-letters.
+const MAX_RECLAIMS = 8;
 
 function newLeaseExpiry() {
   // Truncate in PostgreSQL before decoding to JS Date. Raw now() can contain
@@ -187,7 +192,10 @@ export async function checkpointTask(
 ): Promise<boolean> {
   const [updated] = await db
     .update(tasks)
-    .set({ state, ...extra, attempt: 0, updatedAt: sql`now()` })
+    // A checkpoint is proof of forward progress, so clear both failure counters:
+    // the retry attempt count AND the lease-reclaim count (this task is not a
+    // poison pill — it advanced past a step boundary).
+    .set({ state, ...extra, attempt: 0, reclaimCount: 0, updatedAt: sql`now()` })
     .where(activeLease(task))
     .returning({ id: tasks.id });
   return Boolean(updated);
@@ -404,7 +412,14 @@ export async function findDueTasks(db: Db, limit = 10): Promise<TaskRow[]> {
   await db
     .update(tasks)
     .set({
-      status: 'pending',
+      // Count the reclaim, and dead-letter to needs_attention once a task has
+      // been reclaimed MAX_RECLAIMS times without ever checkpointing progress
+      // (a deterministically hanging/crashing step) instead of resurrecting it
+      // to churn a worker forever with no owner-visible terminal state.
+      status: sql`CASE WHEN ${tasks.reclaimCount} + 1 >= ${MAX_RECLAIMS} THEN 'needs_attention' ELSE 'pending' END`,
+      reclaimCount: sql`${tasks.reclaimCount} + 1`,
+      progress: sql`CASE WHEN ${tasks.reclaimCount} + 1 >= ${MAX_RECLAIMS} THEN 'stopped after a worker repeatedly failed to complete a step without recording progress (hung or killed ' || (${tasks.reclaimCount} + 1)::text || ' times)' ELSE ${tasks.progress} END`,
+      runAfter: sql`CASE WHEN ${tasks.reclaimCount} + 1 >= ${MAX_RECLAIMS} THEN NULL ELSE ${tasks.runAfter} END`,
       lockedUntil: null,
       queueGeneration: sql`${tasks.queueGeneration} + 1`,
     })
