@@ -123,9 +123,15 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
     args: z.infer<typeof outboundSchema>,
     ctx: ToolContext,
   ): Promise<z.infer<typeof outboundSchema>> => {
-    // External email content must never be placed beside the owner's private
-    // writing samples in a rewrite prompt.
-    if (!deps.prepareOutbound || (ctx.trust !== 'owner' && ctx.trust !== 'assistant')) return args;
+    // External content must never be placed beside the owner's private writing
+    // samples in a rewrite prompt, even when it entered an owner-started task.
+    if (
+      !deps.prepareOutbound ||
+      ctx.tainted ||
+      (ctx.trust !== 'owner' && ctx.trust !== 'assistant')
+    ) {
+      return args;
+    }
     const result = await deps.prepareOutbound(args.body, args.register);
     return { ...args, body: result.text, voiceFlag: result.flagged };
   };
@@ -165,10 +171,13 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
     {
       name: 'gmail.send',
       description:
-        'Send an email from the assistant’s own address. ALWAYS requires owner approval — prefer gmail.create_draft unless sending was explicitly requested.',
+        'Send an email from the assistant’s own address. ALWAYS requires owner approval of the exact recipient, subject, and body — prefer gmail.create_draft unless sending was explicitly requested.',
       inputSchema: outboundSchema,
       risk: 'approval',
-      acceptsUntrustedInput: false,
+      // Owner-led research and reply workflows may legitimately quote web or
+      // email content. The outward-facing registry flag removes this tool from
+      // unknown tasks, and networkEgress forces exact approval after taint.
+      acceptsUntrustedInput: true,
       prepare: prepareOutbound,
       approvalSummary: (args) => {
         const a = args as z.infer<typeof outboundSchema>;
@@ -195,7 +204,7 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
         return { messageId: sent.id, threadId: sent.threadId, to: args.to };
       },
     },
-    { outwardFacing: true, blanketAllowIneligible: true },
+    { outwardFacing: true, networkEgress: true, blanketAllowIneligible: true },
   );
 
   return registry;

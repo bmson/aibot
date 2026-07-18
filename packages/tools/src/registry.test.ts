@@ -79,6 +79,7 @@ describe('ToolRegistry', () => {
     expect(unknown).not.toContain('gmail.search');
     expect(unknown).not.toContain('gmail.read_thread');
     expect(unknown).not.toContain('gmail.create_draft');
+    expect(unknown).not.toContain('gmail.send');
     expect(unknown).not.toContain('calendar.availability');
     expect(unknown).not.toContain('calendar.list_events');
   });

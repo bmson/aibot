@@ -76,4 +76,27 @@ describe('Drive attachment tools', () => {
       ),
     ).rejects.toThrow(/browser\/attachments/);
   });
+
+  it('rejects an oversized attachment before writing it to Workspace storage', async () => {
+    const writeBytes = vi.fn();
+    const registry = registerDriveTools(new ToolRegistry(), {
+      client: {
+        api: vi.fn(async () => ({
+          id: 'file_1234567890',
+          name: 'oversized.pdf',
+          mimeType: 'application/pdf',
+        })),
+        apiBytes: vi.fn(async () => ({
+          body: Buffer.alloc(8 * 1024 * 1024 + 1),
+          contentType: 'application/pdf',
+        })),
+      } as never,
+      workspace: { writeBytes } as never,
+    });
+
+    await expect(
+      tool(registry, 'drive.download').execute({ fileId: 'file_1234567890' }, context),
+    ).rejects.toThrow(/exceeds 8 MB/);
+    expect(writeBytes).not.toHaveBeenCalled();
+  });
 });

@@ -73,4 +73,29 @@ describe('browser upload step', () => {
     expect(workspace.get).not.toHaveBeenCalled();
     expect(result.outputs[0]?.error).toContain('browser/attachments');
   });
+
+  it('rejects an oversized staged attachment before touching the file input', async () => {
+    const setInputFiles = vi.fn();
+    const page = {
+      locator: vi.fn(() => ({ first: () => ({ setInputFiles }) })),
+    } as unknown as Page;
+    const workspace = {
+      get: vi.fn(async () => Buffer.alloc(8 * 1024 * 1024 + 1)),
+    } as unknown as BlobStore;
+
+    const result = await runSteps(
+      page,
+      [
+        {
+          action: 'upload',
+          selector: 'input[type=file]',
+          workspacePath: 'browser/attachments/portfolio.pdf',
+        },
+      ],
+      { taskId: 'task-1', workspace },
+    );
+
+    expect(setInputFiles).not.toHaveBeenCalled();
+    expect(result.outputs[0]?.error).toContain('exceeds 8 MB');
+  });
 });

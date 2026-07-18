@@ -7,7 +7,9 @@ import type { GoogleClient } from './client.js';
 
 const DRIVE = 'https://www.googleapis.com/drive/v3/files';
 const fileId = z.string().regex(/^[a-zA-Z0-9_-]{10,200}$/, 'not a Google Drive file id');
-const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+// Match GoogleClient's bounded response ceiling so every layer reports the
+// same supported attachment size and never buffers a larger provider body.
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 interface DriveFile {
   id?: string;

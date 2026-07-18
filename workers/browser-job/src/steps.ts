@@ -5,7 +5,7 @@ import type { BlobStore } from './storage.js';
 
 const STEP_TIMEOUT_MS = 20_000;
 const EXTRACT_CHAR_LIMIT = 4_000;
-const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 const BROWSER_ATTACHMENT_PREFIX = 'browser/attachments/';
 
 /** Defense in depth: the job can upload only purpose-staged attachments, never its profile or traces. */
