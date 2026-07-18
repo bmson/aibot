@@ -45,6 +45,14 @@ describe('ModelRouter.route (integration)', () => {
     expect(route.ok && route.modelId).toBe('openai/gpt-oss-120b');
   });
 
+  it('uses the configured role fallback when a caller requires it', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const router = new ModelRouter(db, 'test-key-unused');
+    const route = await router.route('draft', { forceFallback: true });
+    expect(route.ok && route.modelId).toBe('openai/gpt-oss-120b');
+    expect(route.ok && route.degraded).toBe(true);
+  });
+
   it('ignores an unknown model override and keeps the role primary', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const router = new ModelRouter(db, 'test-key-unused');

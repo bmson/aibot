@@ -28,6 +28,8 @@ export interface RouteOptions {
   taskId?: string;
   /** Explicit model pick (chat switcher). Must exist + be enabled; still budget-guarded. */
   modelOverride?: string;
+  /** Use this role's configured fallback model even when the budget is healthy. */
+  forceFallback?: boolean;
   /** Owner chat/SMS replies: hard caps degrade instead of blocking (carve-out). */
   critical?: boolean;
 }
@@ -50,6 +52,8 @@ export type Route =
 export interface CallOptions {
   taskId?: string;
   modelOverride?: string;
+  /** Use this role's configured fallback model even when the budget is healthy. */
+  forceFallback?: boolean;
   /** Owner chat/SMS replies: hard caps degrade instead of blocking (carve-out). */
   critical?: boolean;
   system?: string;
@@ -57,6 +61,8 @@ export interface CallOptions {
   prompt?: string;
   temperature?: number;
   maxOutputTokens?: number;
+  /** Skip hidden reasoning for a narrow, deterministic tool-selection call. */
+  disableReasoning?: boolean;
   abortSignal?: AbortSignal;
 }
 
@@ -237,7 +243,7 @@ export class ModelRouter {
       if (override) primaryId = override.id;
     }
 
-    const degraded = decision.mode === 'fallback';
+    const degraded = opts.forceFallback || decision.mode === 'fallback';
     const modelId = degraded ? roleRow.fallbackModel : primaryId;
     const params = (roleRow.params ?? {}) as Record<string, unknown>;
     const [modelRow] = await this.db.select().from(models).where(eq(models.id, modelId));
@@ -296,6 +302,12 @@ export class ModelRouter {
   ): { maxOutputTokens: number; providerOptions?: ProviderOptions } {
     const visibleLimit = this.outputLimit(role, route, opts);
     if (!route.thinking) return { maxOutputTokens: visibleLimit };
+    if (opts.disableReasoning) {
+      return {
+        maxOutputTokens: visibleLimit,
+        providerOptions: { openrouter: { reasoning: { enabled: false } } },
+      };
+    }
     return {
       maxOutputTokens: visibleLimit + REASONING_HEADROOM_TOKENS,
       providerOptions: {
