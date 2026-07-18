@@ -1,5 +1,5 @@
 import { type AgentRow, type Db, type TaskRow, tasks } from '@assistant/db';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, notInArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { persistMessage } from '../chat.js';
 import { InboundEventSchema, type Plan, type TaskState } from '../events.js';
@@ -16,6 +16,7 @@ import {
   taskState,
 } from './machine.js';
 
+const TERMINAL_STATUSES = ['done', 'failed', 'cancelled'] as const;
 const DEFAULT_MISSION_DAYS = 30;
 const DEFAULT_WAKE_HOURS = 24;
 const DEFAULT_REFLECT_DAYS = 7;
@@ -151,6 +152,25 @@ export async function wakeMission(
   const lastReflected = mission.lastReflectedAt ?? mission.createdAt;
   if (Date.now() - lastReflected.getTime() >= reflectMs) {
     return reflect(deps, mission, agent, state);
+  }
+
+  // Never overlap sessions. If the previous session child is still in flight
+  // (commonly parked on an owner approval that outlived the 24h wake cadence),
+  // skip this wake and sleep again rather than spawning a duplicate that could
+  // repeat the same real-world side effect (a second form submission, a second
+  // email). One work session per mission at a time.
+  const [activeSession] = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(
+      and(eq(tasks.parentTaskId, mission.id), notInArray(tasks.status, [...TERMINAL_STATUSES])),
+    )
+    .limit(1);
+  if (activeSession) {
+    const wakeAt = new Date(Date.now() + DEFAULT_WAKE_HOURS * 3600e3);
+    if (!(await renewTaskLease(db, mission))) return { action: 'lease_lost' };
+    if (!(await sleepTask(db, mission, state, wakeAt))) return { action: 'lease_lost' };
+    return { action: 'sessioned', sessionTaskId: activeSession.id, sleptUntil: wakeAt };
   }
 
   // Fence immediately before creating the child. An old worker must not

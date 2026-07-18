@@ -3,6 +3,7 @@ import {
   expireStaleApprovals,
   findDueTasks,
   loadConfig,
+  resumeResolvedApprovalTasks,
 } from '@assistant/core';
 import { Hono } from 'hono';
 import { latestCanaryRun, runCanaries } from '../canaries.js';
@@ -43,6 +44,7 @@ internal.post('/tasks/execute', async (c) => {
 internal.post('/sweep', async (c) => {
   const deps = buildDeps();
   const woken = await expireStaleApprovals(deps.db);
+  const resumedApprovalTasks = await resumeResolvedApprovalTasks(deps.db);
   const {
     backfillMessageEmbeddings,
     emitBudgetNotices,
@@ -69,6 +71,7 @@ internal.post('/sweep', async (c) => {
   const purged = await purgeExpired(deps.db);
   return c.json({
     expiredApprovalsWoke: woken.length,
+    resumedApprovalTasks: resumedApprovalTasks.length,
     schedulesFired: fired.length,
     dueTasksNotified: due.length,
     messagesEmbedded: embedded,

@@ -791,38 +791,49 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   // check below puts the task back to sleep until the job's timeout.
   if (state.pendingJob) {
     const pending = state.pendingJob;
-    const [row] = await db.select().from(toolCalls).where(eq(toolCalls.id, pending.dbToolCallId));
-    const timedOut = Date.now() >= new Date(pending.timeoutAt).getTime();
-    if (row && !isBrowserJobPending(row.result)) {
-      window.push(toolResultMessage(pending.toolCallId, pending.toolName, row.result));
+    // Settle under a task-row lock. recordBrowserJobResult also locks the task
+    // FOR UPDATE before replacing the sentinel, so serializing here closes the
+    // window where a late callback commits the real result between our read and
+    // a timeout write that would otherwise clobber it. The timeout failure is
+    // written only while the sentinel is still present; a real result wins.
+    const settled = await db.transaction(async (tx) => {
+      await tx.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, task.id)).for('update');
+      const [row] = await tx.select().from(toolCalls).where(eq(toolCalls.id, pending.dbToolCallId));
+      if (row && !isBrowserJobPending(row.result)) {
+        return { kind: 'result' as const, row };
+      }
+      const timedOut = Date.now() >= new Date(pending.timeoutAt).getTime();
+      if (row && !timedOut) return { kind: 'still_pending' as const };
+      const failure = {
+        ok: false,
+        error: 'the browser job never reported back (timed out) — treat this attempt as failed',
+      };
+      if (row) {
+        await tx
+          .update(toolCalls)
+          .set({ status: 'failed', result: failure, error: failure.error, finishedAt: new Date() })
+          .where(eq(toolCalls.id, row.id));
+      }
+      return { kind: 'timeout' as const, row: row ?? null, failure };
+    });
+
+    if (settled.kind === 'result') {
+      window.push(toolResultMessage(pending.toolCallId, pending.toolName, settled.row.result));
       if (dispatcher.resultIsUntrusted(pending.toolName)) {
         state.untrustedContext = true;
         ctx.tainted = true;
       }
       state.completedToolCallIds.push(pending.dbToolCallId);
       state.pendingJob = null;
-      await settleJobReservation(db, row);
-    } else if (timedOut || !row) {
-      const settled = {
-        ok: false,
-        error: 'the browser job never reported back (timed out) — treat this attempt as failed',
-      };
-      if (row) {
-        await db
-          .update(toolCalls)
-          .set({
-            status: 'failed',
-            result: settled,
-            error: settled.error,
-            finishedAt: new Date(),
-          })
-          .where(eq(toolCalls.id, row.id));
-        await settleJobReservation(db, row);
-      }
-      window.push(toolResultMessage(pending.toolCallId, pending.toolName, settled));
+      await settleJobReservation(db, settled.row);
+    } else if (settled.kind === 'timeout') {
+      if (settled.row) await settleJobReservation(db, settled.row);
+      window.push(toolResultMessage(pending.toolCallId, pending.toolName, settled.failure));
       state.completedToolCallIds.push(pending.dbToolCallId);
       state.pendingJob = null;
     }
+    // 'still_pending' (row present, sentinel intact, not yet timed out): leave
+    // pendingJob set — the sleep-until-timeout below handles it, as before.
   }
 
   // ── Resume: settle pending approvals first ────────────────────────────────

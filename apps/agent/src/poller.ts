@@ -5,6 +5,7 @@ import {
   findDueTasks,
   getAgent,
   purgeExpired,
+  resumeResolvedApprovalTasks,
   runDueSchedules,
 } from '@assistant/core';
 import type { AgentDeps } from './deps.js';
@@ -32,6 +33,9 @@ export function startPoller(deps: AgentDeps): () => void {
       if (tick % SWEEP_EVERY_TICKS === 0) {
         const woken = await expireStaleApprovals(deps.db);
         if (woken.length) console.log(`sweep: expired approvals woke ${woken.length} task(s)`);
+        const resumed = await resumeResolvedApprovalTasks(deps.db);
+        if (resumed.length)
+          console.log(`sweep: resumed ${resumed.length} stranded approval task(s)`);
         const agent = await getAgent(deps.db);
         const fired = await runDueSchedules(deps.db, agent.timezone);
         for (const f of fired)
