@@ -26,9 +26,12 @@ import type { ModelRole, ModelRouter, ProposedToolCall } from '../model-router/r
 import { withSpan } from '../otel.js';
 import {
   type ArtifactIntent,
+  artifactCreatedResponse,
+  artifactDispatchFailure,
   artifactExecutionFailure,
   artifactRoutingFailure,
   artifactToolUnavailable,
+  directArtifactArgs,
   needsArtifactToolRetry,
   requestedArtifactIntent,
 } from './artifact-intent.js';
@@ -830,6 +833,60 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   }
 
   // ── Plan (decide, don't execute) ──────────────────────────────────────────
+  if (artifactIntent && state.step === 0) {
+    const direct = directArtifactArgs(artifactIntent, latestUserText(window) ?? '');
+    const outcome = await dispatcher.dispatch({
+      task,
+      step: state.step,
+      modelToolCallId: `direct-artifact-${task.id}`,
+      toolName: direct.toolName,
+      args: direct.args,
+      ctx,
+      provenance: {
+        plannerVersion: PLANNER_VERSION,
+        promptVersion: PROMPT_VERSION,
+        model: 'direct-artifact-router',
+      },
+    });
+    if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+
+    if (outcome.kind === 'budget_blocked') {
+      state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
+      const parked = await parkForBudget(db, lease, state, outcome.resumeAt);
+      if (!parked) return LOST_LEASE;
+      return { outcome: 'parked', detail: outcome.reason };
+    }
+    if (outcome.kind === 'awaiting_approval') {
+      const parked = await parkForApproval(db, lease, state, [
+        {
+          approvalId: outcome.approvalId,
+          dbToolCallId: outcome.toolCallId,
+          toolCallId: `direct-artifact-${task.id}`,
+          toolName: direct.toolName,
+        },
+      ]);
+      if (!parked) return LOST_LEASE;
+      await postConversationNotice(
+        db,
+        task,
+        `I need your approval before creating the requested ${artifactIntent.label}: ${outcome.summary}`,
+      );
+      return { outcome: 'parked', detail: 'artifact creation awaiting approval' };
+    }
+
+    const text =
+      outcome.kind === 'executed'
+        ? artifactCreatedResponse(artifactIntent, outcome.result)
+        : artifactDispatchFailure(artifactIntent, outcome.reason);
+    window.push({ role: 'assistant', content: text } as ModelMessage);
+    return stageFinalResponse(deps, lease, state, window, {
+      text,
+      progress: text.slice(0, 200),
+      terminalStatus: outcome.kind === 'executed' ? 'done' : 'failed',
+      outcome: outcome.kind === 'executed' ? 'done' : 'failed',
+    });
+  }
+
   let plan = task.plan ? PlanSchema.parse(task.plan) : null;
   if (!plan && !artifactIntent) {
     plan = await planTask({ db, router }, task, agent, window);

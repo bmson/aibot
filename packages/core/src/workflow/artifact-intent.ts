@@ -11,11 +11,34 @@ export interface ArtifactIntent {
   label: 'Google Doc' | 'Google Sheet' | 'Google Slides presentation';
 }
 
+/** Valid creation arguments built from an explicit owner request, never model prose. */
+export type DirectArtifactArgs =
+  | { toolName: 'docs.create'; args: { title: string; content: string } }
+  | { toolName: 'sheets.create'; args: { title: string; sheetName: string; rows: unknown[][] } }
+  | {
+      toolName: 'slides.create';
+      args: { title: string; slides: Array<{ title: string; body: string }> };
+    };
+
 const CREATION_VERB =
   /\b(?:create|creating|make|making|generate|generating|write|writing|draft|drafting|build|building|prepare|preparing)\b/i;
 const DOC = /\b(?:google\s+)?docs?\b|\bdocument\b/i;
 const SHEET = /\b(?:google\s+)?sheets?\b|\bspreadsheet\b/i;
 const SLIDES = /\b(?:google\s+)?slides?\b|\b(?:slide deck|presentation)\b/i;
+
+function explicitTitle(text: string): string | undefined {
+  const quoted = /\btitled\s+["“]([^"”]{1,300})["”]/i.exec(text)?.[1];
+  if (quoted?.trim()) return quoted.trim();
+  const plain = /\btitled\s+(.+?)(?=\s+(?:with|containing|for)\b|[.!?\n]|$)/i.exec(text)?.[1];
+  return plain?.trim().replace(/["“”]+$/g, '') || undefined;
+}
+
+function explicitContent(text: string): string {
+  const match =
+    /\bwith\s+(?:this\s+)?(?:exact\s+)?content\s*:\s*([\s\S]+)$/i.exec(text) ??
+    /\bcontaining\s*:\s*([\s\S]+)$/i.exec(text);
+  return match?.[1]?.trim().slice(0, 100_000) ?? '';
+}
 
 /**
  * Finds a direct request to make one durable artifact. Capability questions
@@ -44,6 +67,56 @@ export function requestedArtifactIntent(text: string): ArtifactIntent | undefine
     matches.push({ toolName: 'slides.create', label: 'Google Slides presentation' });
   }
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * Direct artifact creation is a small deterministic path for an owner who has
+ * already said exactly which Google artifact to make. It cannot invent the
+ * artifact type, and it uses conservative blank defaults when the owner did
+ * not supply a title or body. This prevents a model declining an otherwise
+ * valid tool call from turning an executable request into prose.
+ */
+export function directArtifactArgs(intent: ArtifactIntent, text: string): DirectArtifactArgs {
+  const content = explicitContent(text);
+  switch (intent.toolName) {
+    case 'docs.create': {
+      const title = explicitTitle(text) ?? 'Untitled document';
+      return { toolName: intent.toolName, args: { title, content } };
+    }
+    case 'sheets.create': {
+      const title = explicitTitle(text) ?? 'Untitled spreadsheet';
+      return { toolName: intent.toolName, args: { title, sheetName: 'Sheet1', rows: [] } };
+    }
+    case 'slides.create': {
+      const title = explicitTitle(text) ?? 'Untitled presentation';
+      return {
+        toolName: intent.toolName,
+        args: { title, slides: [{ title, body: content }] },
+      };
+    }
+  }
+}
+
+/** A deterministic success response follows the durable tool result. */
+export function artifactCreatedResponse(intent: ArtifactIntent, result: unknown): string {
+  const url =
+    result &&
+    typeof result === 'object' &&
+    typeof (result as Record<string, unknown>).url === 'string'
+      ? (result as Record<string, unknown>).url
+      : undefined;
+  return url
+    ? `Created the requested ${intent.label}: ${url}`
+    : `Created the requested ${intent.label}.`;
+}
+
+/** A direct dispatcher failure must name the failed action and never imply success. */
+export function artifactDispatchFailure(intent: ArtifactIntent, reason: string): string {
+  return [
+    `I couldn't create the requested ${intent.label}.`,
+    `${intent.toolName} did not complete: ${reason.replace(/\s+/g, ' ').slice(0, 500)}.`,
+    `I cannot confirm that a ${intent.label} was created.`,
+  ].join(' ');
 }
 
 export function artifactRoutingFailure(intent: ArtifactIntent): string {
