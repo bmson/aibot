@@ -209,15 +209,15 @@ export default async function DashboardPage() {
 
         <Section
           title="Up next"
-          subtitle="What is waiting to continue — no action is needed from you"
+          subtitle="Work that will continue on its own — no action is needed from you"
           count={waiting.length}
         >
           {waiting.map((task) => {
             const line =
               task.status === 'sleeping'
                 ? task.runAfter
-                  ? `Scheduled to continue ${relativeTime(task.runAfter, now)} (${formatDateTime(task.runAfter)})`
-                  : 'Scheduled to continue automatically.'
+                  ? `Next check ${relativeTime(task.runAfter, now)} (${formatDateTime(task.runAfter)})`
+                  : 'Its next check is being scheduled.'
                 : (waitingLine[task.status] ?? task.status);
             return (
               <div key={task.id} className="flex items-center justify-between gap-3">
@@ -276,8 +276,8 @@ export default async function DashboardPage() {
         </Section>
 
         <Section
-          title="Monitoring"
-          subtitle="Recurring work with a scheduled next check"
+          title="Automatic work"
+          subtitle="Longer-running work the assistant checks on a schedule"
           count={missions.length}
         >
           {missions.map((task) => {

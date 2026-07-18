@@ -44,7 +44,9 @@ const readOnlyPlan: BrowserPlan = {
     { action: 'goto', url: 'https://news.ycombinator.com' },
     { action: 'extract', what: 'top story titles' },
   ],
-  useProfile: true,
+  // Anonymous read-only browsing is the autonomous tier. A signed-in profile
+  // intentionally requires exact-plan approval, even when it only reads.
+  useProfile: false,
   maxDurationSeconds: 120,
 };
 

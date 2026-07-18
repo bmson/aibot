@@ -38,6 +38,12 @@ describe('LocalWorkspaceStore', () => {
     expect(notesList).toContainEqual({ name: 'hello.txt', dir: false });
   });
 
+  it('round-trips binary attachments without decoding them as text', async () => {
+    const attachment = Buffer.from([0, 255, 1, 2, 0, 250]);
+    await store.writeBytes('attachments/resume.pdf', attachment, 'application/pdf');
+    expect(await store.readBytes('attachments/resume.pdf')).toEqual(attachment);
+  });
+
   it('read of a missing file throws', async () => {
     await expect(store.read('nope.txt')).rejects.toThrow();
   });

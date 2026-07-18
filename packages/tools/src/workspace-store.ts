@@ -37,6 +37,9 @@ async function boundedResponseText(response: Response, maxBytes: number): Promis
 export interface WorkspaceStore {
   read(relPath: string): Promise<string>;
   write(relPath: string, content: string): Promise<{ bytes: number }>;
+  /** Binary artifacts such as resumes prepared for an approved browser upload. */
+  readBytes(relPath: string): Promise<Buffer>;
+  writeBytes(relPath: string, content: Buffer, contentType: string): Promise<{ bytes: number }>;
   list(relPath: string): Promise<Array<{ name: string; dir: boolean }>>;
   /** Remove a file. Missing files are a no-op, not an error. */
   delete(relPath: string): Promise<void>;
@@ -97,6 +100,24 @@ export class LocalWorkspaceStore implements WorkspaceStore {
     const target = await this.resolveWrite(rel);
     await writeFile(target, content, 'utf8');
     return { bytes: Buffer.byteLength(content) };
+  }
+
+  async readBytes(rel: string): Promise<Buffer> {
+    const target = await this.resolveExisting(rel);
+    const info = await stat(target);
+    if (info.size > MAX_WORKSPACE_READ_BYTES) {
+      throw new Error(`workspace file exceeds ${MAX_WORKSPACE_READ_BYTES} bytes`);
+    }
+    return readFile(target);
+  }
+
+  async writeBytes(rel: string, content: Buffer, _contentType: string): Promise<{ bytes: number }> {
+    if (content.length > MAX_WORKSPACE_READ_BYTES) {
+      throw new Error(`workspace file exceeds ${MAX_WORKSPACE_READ_BYTES} bytes`);
+    }
+    const target = await this.resolveWrite(rel);
+    await writeFile(target, content);
+    return { bytes: content.length };
   }
 
   async list(rel: string): Promise<Array<{ name: string; dir: boolean }>> {
@@ -170,6 +191,38 @@ export class GcsWorkspaceStore implements WorkspaceStore {
     return { bytes: Buffer.byteLength(content) };
   }
 
+  async readBytes(rel: string): Promise<Buffer> {
+    const token = await this.token();
+    const res = await fetch(
+      `https://storage.googleapis.com/storage/v1/b/${this.bucket}/o/${encodeURIComponent(this.object(rel))}?alt=media`,
+      {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(STORAGE_TIMEOUT_MS),
+      },
+    );
+    if (res.status === 404) throw new Error(`no such file: ${rel}`);
+    if (!res.ok) throw new Error(`gcs read failed: ${res.status}`);
+    return boundedResponseBytes(res, MAX_WORKSPACE_READ_BYTES);
+  }
+
+  async writeBytes(rel: string, content: Buffer, contentType: string): Promise<{ bytes: number }> {
+    if (content.length > MAX_WORKSPACE_READ_BYTES) {
+      throw new Error(`workspace file exceeds ${MAX_WORKSPACE_READ_BYTES} bytes`);
+    }
+    const token = await this.token();
+    const res = await fetch(
+      `https://storage.googleapis.com/upload/storage/v1/b/${this.bucket}/o?uploadType=media&name=${encodeURIComponent(this.object(rel))}`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': contentType },
+        body: new Uint8Array(content),
+        signal: AbortSignal.timeout(STORAGE_TIMEOUT_MS),
+      },
+    );
+    if (!res.ok) throw new Error(`gcs write failed: ${res.status} ${await res.text()}`);
+    return { bytes: content.length };
+  }
+
   async delete(rel: string): Promise<void> {
     const token = await this.token();
     const res = await fetch(
@@ -208,4 +261,26 @@ export class GcsWorkspaceStore implements WorkspaceStore {
         .map((i) => ({ name: i.name.slice(dirPrefix.length), dir: false })),
     ];
   }
+}
+
+async function boundedResponseBytes(response: Response, maxBytes: number): Promise<Buffer> {
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error(`workspace object exceeds ${maxBytes} bytes`);
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(
+    chunks.map((chunk) => Buffer.from(chunk)),
+    total,
+  );
 }

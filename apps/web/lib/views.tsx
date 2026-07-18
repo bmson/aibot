@@ -49,7 +49,7 @@ const statusLabels: Record<string, string> = {
   waiting_approval: 'Needs your approval',
   waiting_event: 'Waiting for a reply',
   waiting_budget: 'Paused for budget',
-  sleeping: 'Scheduled to resume',
+  sleeping: 'Next check scheduled',
   done: 'Completed',
   failed: 'Could not finish',
   needs_attention: 'Needs attention',

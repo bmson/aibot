@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { JobStorageConfig } from './input.js';
 
@@ -45,11 +45,42 @@ function safeRel(rel: string): string {
 class LocalBlobStore implements BlobStore {
   constructor(private root: string) {}
 
+  private async canonicalRoot(): Promise<string> {
+    await mkdir(this.root, { recursive: true });
+    return realpath(this.root);
+  }
+
+  private assertInside(root: string, target: string): string {
+    if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
+      throw new Error('blob path resolves outside the store root');
+    }
+    return target;
+  }
+
+  private async resolveExisting(rel: string): Promise<string> {
+    const root = await this.canonicalRoot();
+    return this.assertInside(root, await realpath(path.join(root, safeRel(rel))));
+  }
+
+  private async resolveWrite(rel: string): Promise<string> {
+    const root = await this.canonicalRoot();
+    const target = path.join(root, safeRel(rel));
+    await mkdir(path.dirname(target), { recursive: true });
+    this.assertInside(root, await realpath(path.dirname(target)));
+    const info = await lstat(target).catch((error) => {
+      if ((error as { code?: string }).code === 'ENOENT') return null;
+      throw error;
+    });
+    if (info?.isSymbolicLink()) throw new Error('blob writes through symlinks are blocked');
+    return target;
+  }
+
   async get(rel: string): Promise<Buffer | null> {
     try {
-      const data = await readFile(path.join(this.root, safeRel(rel)));
-      if (data.length > MAX_BLOB_BYTES) throw new Error(`blob exceeds ${MAX_BLOB_BYTES} bytes`);
-      return data;
+      const target = await this.resolveExisting(rel);
+      const info = await stat(target);
+      if (info.size > MAX_BLOB_BYTES) throw new Error(`blob exceeds ${MAX_BLOB_BYTES} bytes`);
+      return await readFile(target);
     } catch (error) {
       if ((error as { code?: string }).code === 'ENOENT') return null;
       throw error;
@@ -58,8 +89,7 @@ class LocalBlobStore implements BlobStore {
 
   async put(rel: string, data: Buffer): Promise<void> {
     if (data.length > MAX_BLOB_BYTES) throw new Error(`blob exceeds ${MAX_BLOB_BYTES} bytes`);
-    const target = path.join(this.root, safeRel(rel));
-    await mkdir(path.dirname(target), { recursive: true });
+    const target = await this.resolveWrite(rel);
     await writeFile(target, data);
   }
 }

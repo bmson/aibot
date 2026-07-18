@@ -15,12 +15,14 @@ export interface BrowserStep {
     | 'click'
     | 'type'
     | 'select'
-    | 'press';
+    | 'press'
+    | 'upload';
   url?: string;
   selector?: string;
   text?: string;
   value?: string;
   key?: string;
+  workspacePath?: string;
   name?: string;
   what?: string;
   note?: string;

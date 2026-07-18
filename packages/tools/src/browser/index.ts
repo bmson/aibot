@@ -47,6 +47,12 @@ function planHosts(plan: BrowserPlan): string[] {
   return [...hosts];
 }
 
+function planUploads(plan: BrowserPlan): string[] {
+  return plan.steps.flatMap((step) =>
+    step.action === 'upload' && step.workspacePath ? [step.workspacePath] : [],
+  );
+}
+
 export function registerBrowserTools(registry: ToolRegistry, deps: BrowserDeps): ToolRegistry {
   register(registry, {
     name: 'browser.plan',
@@ -88,10 +94,18 @@ export function registerBrowserTools(registry: ToolRegistry, deps: BrowserDeps):
     {
       name: 'browser.execute',
       description:
-        'Run an explicit browser plan (from browser.plan) in the Workspace browser — an on-demand headless Chromium job. Read-only plans (goto/waitFor/extract/screenshot/scroll) run autonomously; any interactive step (click/type/select/press) requires owner approval of the exact plan. Results arrive asynchronously in the next turn. Call it ONCE and wait for the result — only one browser job can run per task at a time; parallel calls are refused. Never plan credential entry or purchases.',
+        'Run an explicit browser plan (from browser.plan) in the Workspace browser — an on-demand headless Chromium job. Read-only plans (goto/waitFor/extract/screenshot/scroll) run autonomously; any interactive step (click/type/select/press/upload) requires owner approval of the exact plan. An upload may only use a Workspace path produced by drive.download. Results arrive asynchronously in the next turn. Call it ONCE and wait for the result — only one browser job can run per task at a time; parallel calls are refused. Never plan credential entry or purchases.',
       inputSchema: z.object({ plan: BrowserPlanSchema }),
-      risk: (args) => (isReadOnlyPlan(args.plan) ? 'autonomous' : 'approval'),
-      acceptsUntrustedInput: false,
+      // A persisted signed-in browser profile is sensitive even for a
+      // read-only plan, so it receives the same exact-plan approval as an
+      // interactive browser session.
+      risk: (args) =>
+        isReadOnlyPlan(args.plan) && !args.plan.useProfile ? 'autonomous' : 'approval',
+      // Owner workflows may inspect public web content and then use that data
+      // in a browser plan. The registry strips this outward-facing tool from
+      // external tasks, while the dispatcher requires exact owner approval
+      // after taint has entered an owner task.
+      acceptsUntrustedInput: true,
       // Phase 27: job launches reserve their worst-case runtime against the
       // budget before starting; the executor reconciles to actual seconds at settle.
       estimateCost: (args) => {
@@ -107,9 +121,12 @@ export function registerBrowserTools(registry: ToolRegistry, deps: BrowserDeps):
         const { plan } = args as { plan: BrowserPlan };
         const interactive = plan.steps.filter((s) => INTERACTIVE_ACTIONS.has(s.action));
         const hosts = planHosts(plan);
+        const uploads = planUploads(plan);
         return `Browse: ${plan.goal} — ${plan.steps.length} steps (${interactive.length} interactive: ${
           [...new Set(interactive.map((s) => s.action))].join(', ') || 'none'
-        })${hosts.length ? ` on ${hosts.join(', ')}` : ''}`;
+        })${hosts.length ? ` on ${hosts.join(', ')}` : ''}${
+          uploads.length ? `; upload ${uploads.join(', ')}` : ''
+        }`;
       },
       execute: async (args, ctx) => {
         const plan = args.plan;

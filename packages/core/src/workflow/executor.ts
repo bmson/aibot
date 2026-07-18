@@ -485,13 +485,30 @@ async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]> {
       ];
     }
     const rows = await listMessages(db, task.conversationId);
-    return rows
+    const conversationWindow = rows
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .slice(-20)
       .map(
         (m) =>
           ({ role: m.role as 'user' | 'assistant', content: m.text || '(empty)' }) as ModelMessage,
       );
+    if (conversationWindow.length > 0) return conversationWindow;
+
+    // A newly-created Goal work chat deliberately does not render the
+    // system-generated opening instruction as if the owner had written it.
+    // Its durable task trigger remains the source of truth for the first
+    // model step, so the work can begin without a misleading chat bubble.
+    const trigger = task.trigger as { payload?: { text?: unknown; instruction?: unknown } } | null;
+    const initialInstruction =
+      typeof trigger?.payload?.text === 'string'
+        ? trigger.payload.text
+        : typeof trigger?.payload?.instruction === 'string'
+          ? trigger.payload.instruction
+          : undefined;
+    if (initialInstruction) {
+      return [{ role: 'user', content: initialInstruction } as ModelMessage];
+    }
+    return conversationWindow;
   }
   return [
     {

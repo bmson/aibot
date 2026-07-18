@@ -125,7 +125,7 @@ export default async function ProfilePage() {
   return (
     <div className="mx-auto max-w-4xl">
       <PageHeader
-        title="Memory"
+        title="What I remember"
         intro={`Review what the assistant remembers about ${owner?.name ?? 'you'} and the people around you. Keep the important things accurate; everything else stays available when needed.`}
       />
 
@@ -154,7 +154,7 @@ export default async function ProfilePage() {
       <section className="mt-8">
         <details open>
           <summary className={summaryClass}>
-            What the assistant uses in chat
+            Used to help in chat
             <span className={countBadge}>{pinnedCount} pinned</span>
             <span className="text-xs font-normal text-zinc-500 dark:text-zinc-500">
               {card ? `updated ${formatDateTime(card.compiledAt)} UTC` : 'not prepared yet'}

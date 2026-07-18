@@ -6,7 +6,6 @@ import {
   ensureGoalAutomation,
   getAgent,
   getQueueNotifier,
-  persistMessage,
 } from '@assistant/core';
 import { conversations, type Db, type GoalRow, goals, tasks } from '@assistant/db';
 import { and, eq, inArray, isNotNull, isNull, lt, notInArray } from 'drizzle-orm';
@@ -122,15 +121,6 @@ async function createGoalWork(
     .returning();
   if (!conversation) throw new Error('failed to create work chat');
 
-  const userMessage = await persistMessage(db, {
-    conversationId: conversation.id,
-    role: 'user',
-    origin: 'owner',
-    parts: [{ type: 'text', text: messageText }],
-    text: messageText,
-  });
-  if (!userMessage) throw new Error('failed to start work chat');
-
   const { task } = await enqueueTask(db, {
     event: {
       source: 'chat',
@@ -150,7 +140,10 @@ async function createGoalWork(
     conversationId: conversation.id,
     taskId: task.id,
     taskGeneration: task.queueGeneration,
-    messageCursor: encodeMessageCursor(userMessage),
+    // The opening instruction is an internal task trigger, not something the
+    // owner typed. Start polling just after the task was created so the work
+    // chat opens cleanly and only shows real owner/assistant messages.
+    messageCursor: encodeMessageCursor({ createdAt: task.createdAt, id: task.id }),
   };
 }
 

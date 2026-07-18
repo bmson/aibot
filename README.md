@@ -18,7 +18,7 @@ Architecture plan (v4, the source of truth for design decisions): `~/.claude/pla
 - `apps/agent` — Hono worker: webhooks (Gmail Pub/Sub, Twilio), executor endpoints, local poller, email sync, SMS channel
 - `packages/core` — runtime: planner → executor (checkpointed, crash-safe), approvals, missions + reflection, schedules, model router with budget guard, voice pipeline, queue notifier
 - `packages/db` — Drizzle schema (22 tables) + migrations + seed
-- `packages/tools` — risk-gated tool registry: gmail, calendar, docs (Google Docs create/read/append/share), sms, memory (knowledge/experience), web.fetch, workspace (local/GCS), goals, missions
+- `packages/tools` — risk-gated tool registry: Gmail, Calendar, Docs/Sheets/Slides, Drive search + attachment staging, browser plans, SMS, memory, public web fetch, Workspace, goals, missions
 - `infra/` — Dockerfiles, Cloud Build config, deploy script, GCP setup docs
 - `scripts/` — `auth-bot.ts` (bot OAuth), `ingest-voice.ts` (writing samples → voice profile), `dev-tunnel.sh`
 
@@ -73,4 +73,4 @@ curl http://localhost:8787/internal/canaries/status \
 
 ## Security model (enforced in code, not prompts)
 
-Autonomous only inside the bot's own accounts (its inbox/calendar/workspace, public web reads). Outward-facing actions (send email, invite humans, SMS non-owners, browser form-submission) require owner approval — web dashboard or SMS `YES A7`. Tasks triggered by untrusted senders get a reduced tool registry (no outward tools, no memory writes). Approval policies are constrained per-tool templates; every tool call records decision provenance (risk tier, policy, planner/prompt versions, model).
+Autonomous only inside the bot's own accounts (its inbox/calendar/workspace, public web reads). Outward-facing actions (send email, invite humans, SMS non-owners, browser form entry, uploads, and submission) require owner approval — web dashboard or SMS `YES A7`. A Drive file can be staged only in the browser's purpose-limited attachment area; the isolated browser worker cannot read the rest of the Workspace. Tasks triggered by untrusted senders get a reduced tool registry (no outward tools, no memory writes). Approval policies are constrained per-tool templates; every tool call records decision provenance (risk tier, policy, planner/prompt versions, model).

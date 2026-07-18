@@ -168,6 +168,24 @@ describe('GoogleClient resilience', () => {
     await expect(client.api(API_URL)).rejects.toThrow('Google response exceeds 8 bytes');
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it('downloads bounded binary Drive content with the same authenticated read guard', async () => {
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(tokenResponse())
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([37, 80, 68, 70]), {
+          headers: { 'content-type': 'application/pdf' },
+        }),
+      );
+    const client = clientWith(fetchMock);
+
+    await expect(
+      client.apiBytes(
+        'https://www.googleapis.com/drive/v3/files/file-id/export?mimeType=application/pdf',
+      ),
+    ).resolves.toEqual({ body: Buffer.from([37, 80, 68, 70]), contentType: 'application/pdf' });
+  });
 });
 
 describe('buildRawEmail', () => {

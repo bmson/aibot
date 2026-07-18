@@ -1,6 +1,20 @@
 import { z } from 'zod';
 import type { ModelRouter } from './model-router/router.js';
 
+/** The browser worker may read only this narrow, attachment-only Workspace area. */
+export const BROWSER_ATTACHMENT_PREFIX = 'browser/attachments/';
+
+/** Reject traversal, profile files, and arbitrary Workspace data as browser uploads. */
+export function isBrowserAttachmentPath(workspacePath: string): boolean {
+  if (!workspacePath.startsWith(BROWSER_ATTACHMENT_PREFIX) || workspacePath.includes('\\')) {
+    return false;
+  }
+  const parts = workspacePath.split('/');
+  return (
+    parts.length >= 3 && parts.every((part) => part.length > 0 && part !== '.' && part !== '..')
+  );
+}
+
 /**
  * Browser plans — the two-stage browser.plan → approval → browser.execute
  * contract. The schema lives in core so the executor (core), the tools
@@ -22,6 +36,7 @@ export const BrowserStepSchema = z.object({
     'type',
     'select',
     'press',
+    'upload',
   ]),
   /** goto */
   url: z.string().optional(),
@@ -33,6 +48,8 @@ export const BrowserStepSchema = z.object({
   value: z.string().optional(),
   /** press — e.g. Enter */
   key: z.string().optional(),
+  /** upload — a previously staged path from drive.download in the assistant Workspace. */
+  workspacePath: z.string().max(300).optional(),
   /** screenshot label */
   name: z.string().optional(),
   /** extract — what to pull, in plain words (used when selector is omitted) */
@@ -45,18 +62,33 @@ export type BrowserStep = z.infer<typeof BrowserStepSchema>;
 /** Escalation ladder: cheapest capable rung wins; 'visual' is a last resort. */
 export const BrowserLadderSchema = z.enum(['api', 'fetch', 'parse', 'headless', 'visual']);
 
-export const BrowserPlanSchema = z.object({
-  goal: z.string().min(3).max(500),
-  rung: BrowserLadderSchema,
-  rationale: z.string().default(''),
-  /** rung api/fetch/parse: the URL web.fetch should hit instead of a browser. */
-  fetchSuggestion: z.string().optional(),
-  /** rung headless/visual: the explicit steps — exactly what the owner approves. */
-  steps: z.array(BrowserStepSchema).max(30).default([]),
-  /** Load the persisted encrypted browser profile only when authenticated state is required. */
-  useProfile: z.boolean().default(false),
-  maxDurationSeconds: z.number().int().min(30).max(600).default(180),
-});
+export const BrowserPlanSchema = z
+  .object({
+    goal: z.string().min(3).max(500),
+    rung: BrowserLadderSchema,
+    rationale: z.string().default(''),
+    /** rung api/fetch/parse: the URL web.fetch should hit instead of a browser. */
+    fetchSuggestion: z.string().optional(),
+    /** rung headless/visual: the explicit steps — exactly what the owner approves. */
+    steps: z.array(BrowserStepSchema).max(30).default([]),
+    /** Load the persisted encrypted browser profile only when authenticated state is required. */
+    useProfile: z.boolean().default(false),
+    maxDurationSeconds: z.number().int().min(30).max(600).default(180),
+  })
+  .superRefine((plan, ctx) => {
+    plan.steps.forEach((step, index) => {
+      if (
+        step.action === 'upload' &&
+        (!step.workspacePath || !isBrowserAttachmentPath(step.workspacePath))
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['steps', index, 'workspacePath'],
+          message: `uploads must use a staged ${BROWSER_ATTACHMENT_PREFIX} path`,
+        });
+      }
+    });
+  });
 export type BrowserPlan = z.infer<typeof BrowserPlanSchema>;
 
 export const INTERACTIVE_ACTIONS: ReadonlySet<BrowserStep['action']> = new Set([
@@ -64,6 +96,7 @@ export const INTERACTIVE_ACTIONS: ReadonlySet<BrowserStep['action']> = new Set([
   'type',
   'select',
   'press',
+  'upload',
 ]);
 
 /** True when the plan only reads — the autonomous tier of browser.execute. */
@@ -111,6 +144,9 @@ over brittle CSS chains). Every step gets a short "note" saying why. Never inclu
 in any step — logging in and purchasing are not things you can plan; if the goal requires them, say so in
 rationale and plan only the read-only part. Interactive steps (click/type/select/press) require owner approval,
 so prefer read-only step sequences (goto, waitFor, extract, screenshot) when they suffice.
+For a file upload, first obtain the exact Workspace path with drive.download, then use its browser/attachments/ path
+in an upload step with a file-input selector. Uploads always require owner approval and must be followed by a clear
+confirmation extract; never guess that a form was submitted.
 Set useProfile=true only when the goal explicitly requires an existing authenticated session; otherwise keep it false.
 Keep plans short: one goto, a waitFor, then extract what's needed.`;
 

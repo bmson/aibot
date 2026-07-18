@@ -40,6 +40,22 @@ describe('BrowserPlanSchema', () => {
       }),
     ).toThrow();
   });
+
+  it('allows uploads only from the purpose-staged attachment area', () => {
+    expect(() =>
+      BrowserPlanSchema.parse({
+        ...readOnlyPlan,
+        steps: [
+          ...readOnlyPlan.steps,
+          {
+            action: 'upload',
+            selector: 'input[type=file]',
+            workspacePath: 'browser/profile.tar.enc',
+          },
+        ],
+      }),
+    ).toThrow(/browser\/attachments/);
+  });
 });
 
 describe('isReadOnlyPlan', () => {
@@ -47,16 +63,26 @@ describe('isReadOnlyPlan', () => {
     expect(isReadOnlyPlan(BrowserPlanSchema.parse(readOnlyPlan))).toBe(true);
   });
 
-  it.each(['click', 'type', 'select', 'press'])('is false when a %s step appears', (action) => {
-    const plan = BrowserPlanSchema.parse({
-      ...readOnlyPlan,
-      steps: [
-        ...readOnlyPlan.steps,
-        { action, selector: '#x', text: 'q', value: 'v', key: 'Enter' },
-      ],
-    });
-    expect(isReadOnlyPlan(plan)).toBe(false);
-  });
+  it.each(['click', 'type', 'select', 'press', 'upload'])(
+    'is false when a %s step appears',
+    (action) => {
+      const plan = BrowserPlanSchema.parse({
+        ...readOnlyPlan,
+        steps: [
+          ...readOnlyPlan.steps,
+          {
+            action,
+            selector: '#x',
+            text: 'q',
+            value: 'v',
+            key: 'Enter',
+            workspacePath: 'browser/attachments/resume.pdf',
+          },
+        ],
+      });
+      expect(isReadOnlyPlan(plan)).toBe(false);
+    },
+  );
 });
 
 describe('isBrowserJobPending', () => {

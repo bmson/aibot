@@ -32,6 +32,27 @@ describe('response execution contract', () => {
     expect(result.unsupported).toContain('application');
   });
 
+  it('allows an application claim after an approved browser run extracts a portal confirmation', () => {
+    const text = 'I submitted the application. The portal confirmed it received your application.';
+    expect(
+      enforceResponseContract(text, [
+        {
+          toolName: 'browser.execute',
+          status: 'succeeded',
+          result: {
+            ok: true,
+            outputs: [
+              {
+                action: 'extract',
+                text: 'Thank you for applying. We have received your application.',
+              },
+            ],
+          },
+        },
+      ]),
+    ).toMatchObject({ blocked: false, text });
+  });
+
   it('allows a document claim only after a successful workspace tool', () => {
     const result = enforceResponseContract('I created the shared document.', [
       { toolName: 'docs.create', status: 'succeeded', result: { documentId: 'doc-1' } },

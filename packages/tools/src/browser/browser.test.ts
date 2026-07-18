@@ -75,7 +75,7 @@ const readOnlyPlan: BrowserPlan = {
     { action: 'goto', url: 'https://news.ycombinator.com' },
     { action: 'extract', what: 'titles' },
   ],
-  useProfile: true,
+  useProfile: false,
   maxDurationSeconds: 120,
 };
 
@@ -85,7 +85,7 @@ const interactivePlan: BrowserPlan = {
 };
 
 describe('browser.execute risk tiers', () => {
-  it('read-only plans are autonomous; interactive plans need approval', () => {
+  it('autonomously runs only read-only plans without a signed-in profile', () => {
     const { registry } = makeRegistry();
     const risk = tool(registry, 'browser.execute').risk as (
       args: unknown,
@@ -93,6 +93,7 @@ describe('browser.execute risk tiers', () => {
     ) => string;
     expect(risk({ plan: readOnlyPlan }, ctx())).toBe('autonomous');
     expect(risk({ plan: interactivePlan }, ctx())).toBe('approval');
+    expect(risk({ plan: { ...readOnlyPlan, useProfile: true } }, ctx())).toBe('approval');
   });
 
   it('is stripped from untrusted-trigger registries and never blanket-allowable', () => {
@@ -102,14 +103,25 @@ describe('browser.execute risk tiers', () => {
     expect(registry.get('browser.execute')?.flags.blanketAllowIneligible).toBe(true);
   });
 
-  it('approval summary names the goal, hosts and interactive actions', () => {
+  it('approval summary names the goal, hosts, interactive actions, and upload path', () => {
     const { registry } = makeRegistry();
     const summary = tool(registry, 'browser.execute').approvalSummary?.({
-      plan: interactivePlan,
+      plan: {
+        ...interactivePlan,
+        steps: [
+          ...interactivePlan.steps,
+          {
+            action: 'upload',
+            selector: 'input[type=file]',
+            workspacePath: 'browser/attachments/resume.pdf',
+          },
+        ],
+      },
     });
     expect(summary).toContain('read the front page');
     expect(summary).toContain('news.ycombinator.com');
     expect(summary).toContain('type');
+    expect(summary).toContain('browser/attachments/resume.pdf');
   });
 });
 

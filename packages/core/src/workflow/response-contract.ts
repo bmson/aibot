@@ -110,6 +110,24 @@ function successful(evidence: ActionEvidence): boolean {
   return true;
 }
 
+/** A browser click alone is not a submission receipt; an explicit portal confirmation is. */
+function browserApplicationConfirmed(evidence: ActionEvidence): boolean {
+  if (!successful(evidence) || evidence.toolName !== 'browser.execute') return false;
+  if (!evidence.result || typeof evidence.result !== 'object') return false;
+  const outputs = (evidence.result as { outputs?: unknown }).outputs;
+  if (!Array.isArray(outputs)) return false;
+  return outputs.some((output) => {
+    if (!output || typeof output !== 'object') return false;
+    const text = (output as { text?: unknown }).text;
+    return (
+      typeof text === 'string' &&
+      /\b(?:application[^.\n]{0,100}\b(?:submitted|received|complete|confirmed)|thank\s+you\s+for\s+applying|we(?:'|’)ve\s+received\s+your\s+application)\b/i.test(
+        text,
+      )
+    );
+  });
+}
+
 function supports(kind: ActionKind, evidence: ActionEvidence[]): boolean {
   const names = evidence.filter(successful).map((item) => item.toolName);
   switch (kind) {
@@ -125,7 +143,10 @@ function supports(kind: ActionKind, evidence: ActionEvidence[]): boolean {
     // application tool with an explicit confirmation result, never claim an
     // application was submitted.
     case 'application':
-      return names.some((name) => name === 'application.submit');
+      return (
+        names.some((name) => name === 'application.submit') ||
+        evidence.some(browserApplicationConfirmed)
+      );
     case 'calendar':
       return names.some((name) => /^calendar\.(create|update|delete)/.test(name));
     case 'research':

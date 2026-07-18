@@ -1,9 +1,37 @@
+import path from 'node:path';
 import type { Page } from 'playwright';
 import type { BrowserStep } from './input.js';
 import type { BlobStore } from './storage.js';
 
 const STEP_TIMEOUT_MS = 20_000;
 const EXTRACT_CHAR_LIMIT = 4_000;
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+const BROWSER_ATTACHMENT_PREFIX = 'browser/attachments/';
+
+/** Defense in depth: the job can upload only purpose-staged attachments, never its profile or traces. */
+function isAttachmentPath(workspacePath: string): boolean {
+  if (!workspacePath.startsWith(BROWSER_ATTACHMENT_PREFIX) || workspacePath.includes('\\')) {
+    return false;
+  }
+  const parts = workspacePath.split('/');
+  return (
+    parts.length >= 3 && parts.every((part) => part.length > 0 && part !== '.' && part !== '..')
+  );
+}
+
+function uploadMimeType(workspacePath: string): string {
+  const extension = path.extname(workspacePath).toLowerCase();
+  return (
+    {
+      '.pdf': 'application/pdf',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.txt': 'text/plain',
+      '.csv': 'text/csv',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }[extension] ?? 'application/octet-stream'
+  );
+}
 
 export interface StepOutput {
   index: number;
@@ -130,6 +158,29 @@ export async function runSteps(
         case 'press': {
           if (!step.key) throw new Error('press needs a key');
           await page.keyboard.press(step.key);
+          outputs.push(base);
+          break;
+        }
+        case 'upload': {
+          if (!step.selector || !step.workspacePath) {
+            throw new Error('upload needs selector + workspacePath');
+          }
+          if (!isAttachmentPath(step.workspacePath)) {
+            throw new Error(`upload path must be inside ${BROWSER_ATTACHMENT_PREFIX}`);
+          }
+          const file = await opts.workspace.get(step.workspacePath);
+          if (!file) throw new Error(`workspace attachment not found: ${step.workspacePath}`);
+          if (file.length > MAX_UPLOAD_BYTES) {
+            throw new Error(`workspace attachment exceeds ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB`);
+          }
+          await page
+            .locator(step.selector)
+            .first()
+            .setInputFiles({
+              name: path.basename(step.workspacePath),
+              mimeType: uploadMimeType(step.workspacePath),
+              buffer: file,
+            });
           outputs.push(base);
           break;
         }

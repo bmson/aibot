@@ -217,6 +217,8 @@ describe('schedules (integration)', () => {
         title: `test automated goal ${Date.now()}`,
         status: 'active',
         priority: 3,
+        progress: 'Resume tailored applications after the current tracker is checked.',
+        nextAction: 'Review new roles and prepare the next application.',
       })
       .returning();
     const actualGoal = goal as NonNullable<typeof goal>;
@@ -242,6 +244,12 @@ describe('schedules (integration)', () => {
       goalId: actualGoal.id,
       conversationId: actualConversation.id,
     });
+    const instruction =
+      ((schedule as NonNullable<typeof schedule>).taskTemplate as { instruction?: string })
+        .instruction ?? '';
+    expect(instruction).toContain(actualGoal.id);
+    expect(instruction).toContain(actualGoal.progress);
+    expect(instruction).toContain(actualGoal.nextAction);
     const repeated = await ensureGoalAutomation(db, agent, actualGoal, actualConversation.id);
     expect(repeated?.id).toBe(schedule?.id);
     cleanupScheduleIds.push((schedule as NonNullable<typeof schedule>).id);

@@ -19,6 +19,7 @@ import {
   registerBuiltinTools,
   registerCalendarTools,
   registerDocsTools,
+  registerDriveTools,
   registerGmailTools,
   registerSheetsTools,
   registerSlidesTools,
@@ -113,6 +114,7 @@ export function buildDeps(): AgentDeps {
       botEmail,
       ownerEmail: config.OWNER_EMAIL,
     });
+    registerDriveTools(registry, { client: googleClient, workspace });
     registerSheetsTools(registry, {
       client: googleClient,
       ownerEmail: config.OWNER_EMAIL,

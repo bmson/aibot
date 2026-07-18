@@ -26,7 +26,7 @@ const navItems = [
   { href: '/approvals', label: 'Approvals' },
   { href: '/tasks', label: 'Activity' },
   { href: '/goals', label: 'Goals' },
-  { href: '/profile', label: 'Memory' },
+  { href: '/profile', label: 'What I remember' },
   { href: '/import', label: 'Import', utility: true },
   { href: '/costs', label: 'Costs', utility: true },
   { href: '/settings', label: 'Settings', utility: true },

@@ -234,6 +234,53 @@ export class GoogleClient {
     }
   }
 
+  /** Authenticated, bounded GET for Drive downloads and exports. */
+  async apiBytes(
+    url: string,
+    init: RequestInit = {},
+  ): Promise<{ body: Buffer; contentType: string }> {
+    assertGoogleApiUrl(url);
+    const method = (init.method ?? 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD') {
+      throw new Error('apiBytes supports read requests only');
+    }
+    let retries = 0;
+    let refreshedAfterUnauthorized = false;
+
+    while (true) {
+      const token = await this.token();
+      const headers = new Headers(init.headers);
+      headers.set('authorization', `Bearer ${token}`);
+      let res: Response;
+      try {
+        res = await this.fetchWithTimeout(url, { ...init, method, headers });
+      } catch (error) {
+        if (init.signal?.aborted || retries >= this.maxRetries) throw error;
+        await this.waitBeforeRetry(undefined, retries++);
+        continue;
+      }
+      if (res.status === 401 && !refreshedAfterUnauthorized) {
+        await res.body?.cancel().catch(() => {});
+        if (this.access?.token === token) this.access = undefined;
+        refreshedAfterUnauthorized = true;
+        continue;
+      }
+      if (isTransientStatus(res.status) && retries < this.maxRetries) {
+        await res.body?.cancel().catch(() => {});
+        await this.waitBeforeRetry(res, retries++);
+        continue;
+      }
+      if (!res.ok) {
+        const text = await boundedResponseText(res, this.maxResponseBytes);
+        throw new GoogleApiError(res.status, text, url);
+      }
+      return {
+        body: await boundedResponseBytes(res, this.maxResponseBytes),
+        contentType: res.headers.get('content-type') || 'application/octet-stream',
+      };
+    }
+  }
+
   private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
     if (init.signal?.aborted) throw init.signal.reason ?? new Error('request aborted');
     const controller = new AbortController();
@@ -288,6 +335,33 @@ async function boundedResponseText(response: Response, maxBytes: number): Promis
     offset += chunk.byteLength;
   }
   return new TextDecoder().decode(body);
+}
+
+async function boundedResponseBytes(response: Response, maxBytes: number): Promise<Buffer> {
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error(`Google response exceeds ${maxBytes} bytes`);
+  }
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error(`Google response exceeds ${maxBytes} bytes`);
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(
+    chunks.map((chunk) => Buffer.from(chunk)),
+    total,
+  );
 }
 
 function isTransientStatus(status: number): boolean {
