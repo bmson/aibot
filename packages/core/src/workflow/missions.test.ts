@@ -1,4 +1,4 @@
-import { createDb, type Db, schedules, tasks } from '@assistant/db';
+import { conversations, createDb, type Db, goals, schedules, tasks } from '@assistant/db';
 import { eq, inArray, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
@@ -6,7 +6,12 @@ import type { Plan } from '../events.js';
 import type { ModelRouter } from '../model-router/router.js';
 import { claimTask, enqueueTask, taskState } from './machine.js';
 import { parseIntervalMs, type Reflection, startMission, wakeMission } from './missions.js';
-import { nextRun, runDueSchedules } from './schedules.js';
+import {
+  ensureGoalAutomation,
+  goalAutomationCadence,
+  nextRun,
+  runDueSchedules,
+} from './schedules.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -16,6 +21,9 @@ let dbUp = false;
 let agentId: string;
 let agentTimezone = 'America/Los_Angeles';
 const cleanupTaskIds: string[] = [];
+const cleanupScheduleIds: string[] = [];
+const cleanupGoalIds: string[] = [];
+const cleanupConversationIds: string[] = [];
 
 function reflectingRouter(reflection: Reflection) {
   return {
@@ -50,6 +58,13 @@ afterAll(async () => {
       await db.delete(tasks).where(inArray(tasks.parentTaskId, cleanupTaskIds));
       await db.delete(tasks).where(inArray(tasks.id, cleanupTaskIds));
     }
+    if (cleanupScheduleIds.length) {
+      await db.delete(schedules).where(inArray(schedules.id, cleanupScheduleIds));
+    }
+    if (cleanupConversationIds.length) {
+      await db.delete(conversations).where(inArray(conversations.id, cleanupConversationIds));
+    }
+    if (cleanupGoalIds.length) await db.delete(goals).where(inArray(goals.id, cleanupGoalIds));
     await db.delete(schedules).where(like(schedules.name, 'test-%'));
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
@@ -174,6 +189,76 @@ describe('schedules (integration)', () => {
   it('nextRun computes a future firing in the agent timezone', () => {
     const next = nextRun('30 7 * * *', 'America/Los_Angeles');
     expect(next.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('uses priority as the baseline pace and only increases it near a target date', () => {
+    const now = new Date('2026-07-17T12:00:00Z');
+    expect(goalAutomationCadence({ priority: 1, targetDate: null }, now).label).toBe(
+      'every 6 hours',
+    );
+    expect(goalAutomationCadence({ priority: 4, targetDate: null }, now).label).toBe('weekly');
+    expect(
+      goalAutomationCadence({ priority: 4, targetDate: new Date('2026-07-20T12:00:00Z') }, now)
+        .label,
+    ).toBe('every 4 hours until the target date');
+    // A high-priority goal already runs more often than the 12-hour deadline pace.
+    expect(
+      goalAutomationCadence({ priority: 1, targetDate: new Date('2026-07-25T12:00:00Z') }, now)
+        .label,
+    ).toBe('every 6 hours');
+  });
+
+  it('creates one goal runner and queues its scheduled work for the linked chat', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [goal] = await db
+      .insert(goals)
+      .values({
+        agentId,
+        title: `test automated goal ${Date.now()}`,
+        status: 'active',
+        priority: 3,
+      })
+      .returning();
+    const actualGoal = goal as NonNullable<typeof goal>;
+    cleanupGoalIds.push(actualGoal.id);
+
+    const [conversation] = await db
+      .insert(conversations)
+      .values({
+        agentId,
+        channel: 'chat',
+        trust: 'owner',
+        title: `test goal work ${Date.now()}`,
+        metadata: { goalId: actualGoal.id },
+      })
+      .returning();
+    const actualConversation = conversation as NonNullable<typeof conversation>;
+    cleanupConversationIds.push(actualConversation.id);
+
+    const agent = await getAgent(db);
+    const schedule = await ensureGoalAutomation(db, agent, actualGoal, actualConversation.id);
+    expect(schedule?.enabled).toBe(true);
+    expect(schedule?.taskTemplate).toMatchObject({
+      goalId: actualGoal.id,
+      conversationId: actualConversation.id,
+    });
+    const repeated = await ensureGoalAutomation(db, agent, actualGoal, actualConversation.id);
+    expect(repeated?.id).toBe(schedule?.id);
+    cleanupScheduleIds.push((schedule as NonNullable<typeof schedule>).id);
+    await db
+      .update(schedules)
+      .set({ nextRunAt: new Date(Date.now() - 60_000) })
+      .where(eq(schedules.id, (schedule as NonNullable<typeof schedule>).id));
+
+    const fired = await runDueSchedules(db, agentTimezone);
+    const mine = fired.find((item) => item.schedule === schedule?.name);
+    expect(mine).toBeTruthy();
+    if (!mine) return;
+    cleanupTaskIds.push(mine.taskId);
+
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, mine.taskId));
+    expect(task?.goalId).toBe(actualGoal.id);
+    expect(task?.conversationId).toBe(actualConversation.id);
   });
 
   it('due schedules fire exactly one task per firing and advance next_run_at', async (ctx) => {

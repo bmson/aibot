@@ -42,6 +42,10 @@ export default async function SettingsPage() {
     db.select().from(approvalPolicies).orderBy(asc(approvalPolicies.toolName)),
   ]);
   const budgetByScope = new Map(budgetRows.map((b) => [b.scope, b]));
+  // Goal-owned schedules are explained and controlled on Goals, where their
+  // title, urgency, deadline, and work chat are visible together.
+  const directScheduleRows = scheduleRows.filter((schedule) => !schedule.name.startsWith('goal:'));
+  const goalAutomationCount = scheduleRows.length - directScheduleRows.length;
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-8">
@@ -67,15 +71,23 @@ export default async function SettingsPage() {
       {/* Schedules */}
       <section>
         <SectionHeading
-          title="Schedules"
-          count={scheduleRows.length}
-          hint="proactive jobs the assistant runs on its own"
+          title="Other schedules"
+          count={directScheduleRows.length}
+          hint={
+            goalAutomationCount
+              ? `${goalAutomationCount} goal automations are managed from Goals.`
+              : 'proactive jobs the assistant runs on its own'
+          }
         />
-        {scheduleRows.length === 0 ? (
-          <EmptyState>No schedules — they're created by the seed and by the assistant.</EmptyState>
+        {directScheduleRows.length === 0 ? (
+          <EmptyState>
+            {goalAutomationCount
+              ? 'No other schedules. Manage your automatic goal work from Goals.'
+              : 'No other schedules yet.'}
+          </EmptyState>
         ) : (
           <div className="mt-3 flex flex-col gap-2">
-            {scheduleRows.map((s) => (
+            {directScheduleRows.map((s) => (
               <Card key={s.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                 <div className="min-w-0">
                   <p className="flex items-center gap-2 text-sm font-medium">

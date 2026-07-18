@@ -17,8 +17,8 @@ export function GoalCreateForm() {
     >
       <h2 className="text-sm font-medium">Create a goal</h2>
       <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-400">
-        This opens a work chat and starts one task now. It will not set up recurring work unless you
-        ask for it.
+        This opens a work chat, starts one task now, and keeps the goal moving automatically. Use
+        the work chat to steer what happens next.
       </p>
       <div className="mt-3 flex flex-col gap-3">
         <label className={labelClass}>
@@ -44,21 +44,21 @@ export function GoalCreateForm() {
         </label>
         <div className="flex flex-wrap gap-3">
           <label className={labelClass}>
-            Priority
+            Automation pace
             <select
               name="priority"
               defaultValue={state.values?.priority || '3'}
               className={inputClass}
             >
-              <option value="1">Urgent</option>
-              <option value="2">High</option>
-              <option value="3">Normal</option>
-              <option value="4">Low</option>
-              <option value="5">Later</option>
+              <option value="1">Urgent — every 6 hours</option>
+              <option value="2">High — daily</option>
+              <option value="3">Normal — twice a week</option>
+              <option value="4">Low — weekly</option>
+              <option value="5">Later — monthly</option>
             </select>
           </label>
           <label className={labelClass}>
-            Target date (optional)
+            Target date (optional; speeds up near the deadline)
             <input
               type="date"
               name="targetDate"

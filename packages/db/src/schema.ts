@@ -735,7 +735,10 @@ export const schedules = pgTable(
     nextRunAt: timestamp('next_run_at', { withTimezone: true }),
     ...timestamps,
   },
-  (t) => [index('schedules_enabled_next_idx').on(t.enabled, t.nextRunAt)],
+  (t) => [
+    index('schedules_enabled_next_idx').on(t.enabled, t.nextRunAt),
+    uniqueIndex('schedules_agent_name_idx').on(t.agentId, t.name),
+  ],
 );
 
 /** Durable, machine-readable health checks for deployed channel integrations. */

@@ -33,6 +33,10 @@ export interface GoalView {
   archived: boolean;
   /** Archive is unavailable while the linked goal still has unfinished work. */
   workActive: boolean;
+  /** A human-readable recurrence; cron expressions stay out of the Goals UI. */
+  automationLabel: string;
+  /** e.g. 'next in 4h', empty if automation is not running. */
+  automationNextLabel: string;
 }
 
 const outlineButton = btn.outline;
@@ -106,6 +110,10 @@ export function GoalCard({ goal }: { goal: GoalView }) {
         {goal.targetLabel ? `${goal.targetLabel} · ` : ''}
         {goal.updatedLabel}
       </p>
+      <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+        {goal.automationLabel}
+        {goal.automationNextLabel ? ` · ${goal.automationNextLabel}` : ''}
+      </p>
 
       <div className="mt-3 flex flex-wrap gap-2">
         {goal.conversationId ? (
@@ -134,14 +142,14 @@ export function GoalCard({ goal }: { goal: GoalView }) {
             {goal.status === 'active' ? (
               <form action={setGoalStatus.bind(null, goal.id, 'paused')}>
                 <button type="submit" className={outlineButton}>
-                  Pause
+                  Pause automation
                 </button>
               </form>
             ) : null}
             {goal.status === 'paused' ? (
               <form action={setGoalStatus.bind(null, goal.id, 'active')}>
                 <button type="submit" className={outlineButton}>
-                  Resume
+                  Resume automation
                 </button>
               </form>
             ) : null}
@@ -226,21 +234,21 @@ export function GoalCard({ goal }: { goal: GoalView }) {
           </label>
           <div className="flex flex-wrap gap-3">
             <label className={labelClass}>
-              Priority
+              Automation pace
               <select
                 name="priority"
                 defaultValue={value('priority', String(goal.priority))}
                 className={inputClass}
               >
-                <option value="1">Urgent</option>
-                <option value="2">High</option>
-                <option value="3">Normal</option>
-                <option value="4">Low</option>
-                <option value="5">Later</option>
+                <option value="1">Urgent — every 6 hours</option>
+                <option value="2">High — daily</option>
+                <option value="3">Normal — twice a week</option>
+                <option value="4">Low — weekly</option>
+                <option value="5">Later — monthly</option>
               </select>
             </label>
             <label className={labelClass}>
-              Target date
+              Target date (speeds up as it gets close)
               <input
                 type="date"
                 name="targetDate"

@@ -1,5 +1,5 @@
-import { getAgent } from '@assistant/core';
-import { conversations, type GoalRow, goals, tasks } from '@assistant/db';
+import { getAgent, goalAutomationCadence, goalScheduleName } from '@assistant/core';
+import { conversations, type GoalRow, goals, schedules, tasks } from '@assistant/db';
 import { and, asc, count, desc, eq, isNotNull, isNull, notInArray } from 'drizzle-orm';
 import Link from 'next/link';
 import { GoalCard, type GoalView } from '@/app/goals/goal-card';
@@ -31,6 +31,7 @@ function toGoalView(
   now: Date,
   conversationId: string | undefined,
   workActive: boolean,
+  automation: { enabled: boolean; nextRunAt: Date | null } | undefined,
 ): GoalView {
   const targetDateInput = goal.targetDate ? goal.targetDate.toISOString().slice(0, 10) : '';
   return {
@@ -49,6 +50,14 @@ function toGoalView(
     conversationId,
     archived: goal.archivedAt !== null,
     workActive,
+    automationLabel:
+      goal.status === 'active' && !goal.archivedAt
+        ? `Automatic work: ${goalAutomationCadence(goal, now).label}`
+        : 'Automatic work is paused',
+    automationNextLabel:
+      goal.status === 'active' && !goal.archivedAt && automation?.enabled && automation.nextRunAt
+        ? `next ${relativeTime(automation.nextRunAt, now)}`
+        : '',
   };
 }
 
@@ -64,7 +73,7 @@ export default async function GoalsPage({
   const now = new Date();
 
   const agent = await getAgent(db);
-  const [rows, chatRows, archivedCountRows, activeTaskRows] = await Promise.all([
+  const [rows, chatRows, archivedCountRows, activeTaskRows, automationRows] = await Promise.all([
     db
       .select()
       .from(goals)
@@ -94,6 +103,10 @@ export default async function GoalsPage({
           notInArray(tasks.status, ['done', 'failed', 'cancelled']),
         ),
       ),
+    db
+      .select({ name: schedules.name, enabled: schedules.enabled, nextRunAt: schedules.nextRunAt })
+      .from(schedules)
+      .where(eq(schedules.agentId, agent.id)),
   ]);
   const chatByGoalId = new Map<string, string>();
   for (const chat of chatRows) {
@@ -104,6 +117,13 @@ export default async function GoalsPage({
     activeTaskRows.map((task) => task.goalId).filter((goalId): goalId is string => goalId !== null),
   );
   const archivedCount = archivedCountRows[0]?.value ?? 0;
+  const automationByGoalId = new Map<string, { enabled: boolean; nextRunAt: Date | null }>();
+  for (const goal of rows) {
+    const automation = automationRows.find(
+      (schedule) => schedule.name === goalScheduleName(goal.id),
+    );
+    if (automation) automationByGoalId.set(goal.id, automation);
+  }
   const groups = STATUS_ORDER.map((status) => ({
     status,
     items: rows.filter((goal) => goal.status === status),
@@ -117,7 +137,7 @@ export default async function GoalsPage({
           intro={
             archived
               ? 'Archived goals keep their work chats, tasks, and evidence. Restore one whenever you want to continue.'
-              : 'A goal is an outcome you want to move forward. Creating one starts a work chat and one concrete task; ask in that chat if you want ongoing work.'
+              : 'A goal is an outcome you want to move forward. It starts work now, then continues automatically on the pace you choose. Use its work chat to guide each run.'
           }
         />
         <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -164,6 +184,7 @@ export default async function GoalsPage({
                       now,
                       chatByGoalId.get(goal.id),
                       activeGoalIds.has(goal.id),
+                      automationByGoalId.get(goal.id),
                     )}
                   />
                 ))}

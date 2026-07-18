@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "schedules_agent_name_idx" ON "schedules" USING btree ("agent_id","name");
