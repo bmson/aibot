@@ -7,8 +7,8 @@ import {
   getQueueNotifier,
   persistMessage,
 } from '@assistant/core';
-import { conversations, type Db, type GoalRow, goals } from '@assistant/db';
-import { and, eq } from 'drizzle-orm';
+import { conversations, type Db, type GoalRow, goals, tasks } from '@assistant/db';
+import { and, eq, inArray, isNotNull, isNull, lt, notInArray } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requireOwner } from '@/auth';
@@ -16,6 +16,8 @@ import { getDb } from '@/lib/server';
 
 const GOAL_STATUSES = ['active', 'paused', 'done', 'abandoned'] as const;
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
+const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'];
+const ARCHIVE_AFTER_DAYS = 30;
 
 export interface GoalFormState {
   error: string | null;
@@ -204,8 +206,8 @@ export async function startGoalWork(goalId: string): Promise<void> {
   const [goal] = await db
     .select()
     .from(goals)
-    .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id)));
-  if (!goal) throw new Error('goal not found');
+    .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id), isNull(goals.archivedAt)));
+  if (!goal) throw new Error('goal not found or is archived');
 
   const work = await db.transaction((tx) => createGoalWork(tx as unknown as Db, agent.id, goal));
   revalidateGoalViews();
@@ -243,4 +245,102 @@ export async function setGoalStatus(goalId: string, status: GoalStatus): Promise
     .set({ status, updatedAt: new Date() })
     .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id)));
   revalidateGoalViews();
+}
+
+async function requireArchivableGoal(goalId: string) {
+  const db = getDb();
+  const agent = await getAgent(db);
+  const [goal] = await db
+    .select({ id: goals.id })
+    .from(goals)
+    .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id)))
+    .limit(1);
+  if (!goal) throw new Error('goal not found');
+
+  const [activeTask] = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.agentId, agent.id),
+        eq(tasks.goalId, goal.id),
+        notInArray(tasks.status, TERMINAL_TASK_STATUSES),
+      ),
+    )
+    .limit(1);
+  if (activeTask)
+    throw new Error('finish, cancel, or pause active work before archiving this goal');
+  return { db, agent, goal };
+}
+
+/** Hide a goal from the daily view without deleting its chat, tasks, or evidence. */
+export async function archiveGoal(goalId: string): Promise<void> {
+  await requireOwner();
+  const { db, goal } = await requireArchivableGoal(goalId);
+  await db
+    .update(goals)
+    .set({ archivedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(goals.id, goal.id), isNull(goals.archivedAt)));
+  revalidateGoalViews();
+  redirect('/goals');
+}
+
+/** Return a goal to the daily view. Its status and all prior work are preserved. */
+export async function restoreGoal(goalId: string): Promise<void> {
+  await requireOwner();
+  const db = getDb();
+  const agent = await getAgent(db);
+  const [goal] = await db
+    .select({ id: goals.id })
+    .from(goals)
+    .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id)))
+    .limit(1);
+  if (!goal) throw new Error('goal not found');
+  await db
+    .update(goals)
+    .set({ archivedAt: null, updatedAt: new Date() })
+    .where(and(eq(goals.id, goal.id), isNotNull(goals.archivedAt)));
+  revalidateGoalViews();
+  redirect('/goals');
+}
+
+/** A safe tidy-up for long-finished goals. Current work is never hidden. */
+export async function archiveInactiveGoals(): Promise<void> {
+  await requireOwner();
+  const db = getDb();
+  const agent = await getAgent(db);
+  const cutoff = new Date(Date.now() - ARCHIVE_AFTER_DAYS * 24 * 60 * 60 * 1000);
+  const candidates = await db
+    .select({ id: goals.id })
+    .from(goals)
+    .where(
+      and(
+        eq(goals.agentId, agent.id),
+        isNull(goals.archivedAt),
+        inArray(goals.status, ['done', 'abandoned']),
+        lt(goals.updatedAt, cutoff),
+      ),
+    )
+    .limit(100);
+
+  for (const candidate of candidates) {
+    const [activeTask] = await db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.agentId, agent.id),
+          eq(tasks.goalId, candidate.id),
+          notInArray(tasks.status, TERMINAL_TASK_STATUSES),
+        ),
+      )
+      .limit(1);
+    if (activeTask) continue;
+    await db
+      .update(goals)
+      .set({ archivedAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(goals.id, candidate.id), isNull(goals.archivedAt)));
+  }
+  revalidateGoalViews();
+  redirect('/goals');
 }

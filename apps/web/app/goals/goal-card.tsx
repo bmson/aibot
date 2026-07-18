@@ -2,7 +2,13 @@
 
 import Link from 'next/link';
 import { useActionState, useState } from 'react';
-import { setGoalStatus, startGoalWork, updateGoal } from '@/app/goals/actions';
+import {
+  archiveGoal,
+  restoreGoal,
+  setGoalStatus,
+  startGoalWork,
+  updateGoal,
+} from '@/app/goals/actions';
 import { btn } from '@/lib/ui';
 import { StatusChip } from '@/lib/views';
 
@@ -23,6 +29,10 @@ export interface GoalView {
   updatedLabel: string;
   /** The chat created when this goal was started, if it has one. */
   conversationId?: string;
+  /** Archived goals are hidden from the current list but not deleted. */
+  archived: boolean;
+  /** Archive is unavailable while the linked goal still has unfinished work. */
+  workActive: boolean;
 }
 
 const outlineButton = btn.outline;
@@ -102,72 +112,94 @@ export function GoalCard({ goal }: { goal: GoalView }) {
           <Link href={`/chat/${goal.conversationId}`} className={outlineButton}>
             Open work chat
           </Link>
-        ) : (
-          <form action={startGoalWork.bind(null, goal.id)}>
-            <button type="submit" className={outlineButton}>
-              Start work now
-            </button>
-          </form>
-        )}
-        <button type="button" onClick={() => setEditing((v) => !v)} className={outlineButton}>
-          {editing ? 'Close' : 'Edit'}
-        </button>
-        {goal.status === 'active' ? (
-          <form action={setGoalStatus.bind(null, goal.id, 'paused')}>
-            <button type="submit" className={outlineButton}>
-              Pause
-            </button>
-          </form>
         ) : null}
-        {goal.status === 'paused' ? (
-          <form action={setGoalStatus.bind(null, goal.id, 'active')}>
+        {goal.archived ? (
+          <form action={restoreGoal.bind(null, goal.id)}>
             <button type="submit" className={outlineButton}>
-              Resume
-            </button>
-          </form>
-        ) : null}
-        {open ? (
-          <form action={setGoalStatus.bind(null, goal.id, 'done')}>
-            <button type="submit" className={outlineButton}>
-              Mark done
+              Restore goal
             </button>
           </form>
         ) : (
-          <form action={setGoalStatus.bind(null, goal.id, 'active')}>
-            <button type="submit" className={outlineButton}>
-              Reactivate
-            </button>
-          </form>
-        )}
-        {goal.status !== 'abandoned' ? (
-          confirmingAbandon ? (
-            <>
-              <form action={setGoalStatus.bind(null, goal.id, 'abandoned')}>
-                <button type="submit" className={dangerButton}>
-                  Confirm abandon
+          <>
+            {!goal.conversationId ? (
+              <form action={startGoalWork.bind(null, goal.id)}>
+                <button type="submit" className={outlineButton}>
+                  Start work now
                 </button>
               </form>
-              <button
-                type="button"
-                onClick={() => setConfirmingAbandon(false)}
-                className={outlineButton}
-              >
-                Cancel
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setConfirmingAbandon(true)}
-              className={dangerOutlineButton}
-            >
-              Abandon
+            ) : null}
+            <button type="button" onClick={() => setEditing((v) => !v)} className={outlineButton}>
+              {editing ? 'Close' : 'Edit'}
             </button>
-          )
-        ) : null}
+            {goal.status === 'active' ? (
+              <form action={setGoalStatus.bind(null, goal.id, 'paused')}>
+                <button type="submit" className={outlineButton}>
+                  Pause
+                </button>
+              </form>
+            ) : null}
+            {goal.status === 'paused' ? (
+              <form action={setGoalStatus.bind(null, goal.id, 'active')}>
+                <button type="submit" className={outlineButton}>
+                  Resume
+                </button>
+              </form>
+            ) : null}
+            {open ? (
+              <form action={setGoalStatus.bind(null, goal.id, 'done')}>
+                <button type="submit" className={outlineButton}>
+                  Mark done
+                </button>
+              </form>
+            ) : (
+              <form action={setGoalStatus.bind(null, goal.id, 'active')}>
+                <button type="submit" className={outlineButton}>
+                  Reactivate
+                </button>
+              </form>
+            )}
+            {goal.status !== 'abandoned' ? (
+              confirmingAbandon ? (
+                <>
+                  <form action={setGoalStatus.bind(null, goal.id, 'abandoned')}>
+                    <button type="submit" className={dangerButton}>
+                      Confirm abandon
+                    </button>
+                  </form>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingAbandon(false)}
+                    className={outlineButton}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingAbandon(true)}
+                  className={dangerOutlineButton}
+                >
+                  Abandon
+                </button>
+              )
+            ) : null}
+            {goal.workActive ? (
+              <span className="self-center text-xs text-zinc-500 dark:text-zinc-500">
+                Work active
+              </span>
+            ) : (
+              <form action={archiveGoal.bind(null, goal.id)}>
+                <button type="submit" className={outlineButton}>
+                  Archive
+                </button>
+              </form>
+            )}
+          </>
+        )}
       </div>
 
-      {editing ? (
+      {editing && !goal.archived ? (
         <form
           action={editAction}
           className="mt-3 flex flex-col gap-3 border-t border-zinc-200 pt-3 dark:border-zinc-800"

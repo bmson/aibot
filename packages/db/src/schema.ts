@@ -60,6 +60,8 @@ export const goals = pgTable(
     progress: text('progress').notNull().default(''),
     nextAction: text('next_action').notNull().default(''),
     targetDate: timestamp('target_date', { withTimezone: true }),
+    /** Owner-hidden goal history. Linked chats, tasks, and evidence stay intact. */
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     ...timestamps,
   },
   (t) => [

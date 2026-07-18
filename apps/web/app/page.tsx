@@ -88,6 +88,7 @@ export default async function DashboardPage() {
         priority: goals.priority,
       })
       .from(goals)
+      .where(isNull(goals.archivedAt))
       .orderBy(asc(goals.priority), desc(goals.updatedAt)),
     db.select().from(canaryRuns).orderBy(desc(canaryRuns.startedAt)).limit(1),
   ]).catch((error: unknown) => {

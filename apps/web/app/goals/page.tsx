@@ -1,12 +1,14 @@
 import { getAgent } from '@assistant/core';
-import { conversations, type GoalRow, goals } from '@assistant/db';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { conversations, type GoalRow, goals, tasks } from '@assistant/db';
+import { and, asc, count, desc, eq, isNotNull, isNull, notInArray } from 'drizzle-orm';
+import Link from 'next/link';
 import { GoalCard, type GoalView } from '@/app/goals/goal-card';
 import { GoalCreateForm } from '@/app/goals/goal-create-form';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { EmptyState, PageHeader, SectionHeading } from '@/lib/ui';
+import { btn, EmptyState, PageHeader, SectionHeading } from '@/lib/ui';
+import { archiveInactiveGoals } from './actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +26,12 @@ function goalIdFromMetadata(metadata: unknown): string | undefined {
   return typeof goalId === 'string' ? goalId : undefined;
 }
 
-function toGoalView(goal: GoalRow, now: Date, conversationId?: string): GoalView {
+function toGoalView(
+  goal: GoalRow,
+  now: Date,
+  conversationId: string | undefined,
+  workActive: boolean,
+): GoalView {
   const targetDateInput = goal.targetDate ? goal.targetDate.toISOString().slice(0, 10) : '';
   return {
     id: goal.id,
@@ -40,32 +47,63 @@ function toGoalView(goal: GoalRow, now: Date, conversationId?: string): GoalView
       : '',
     updatedLabel: `updated ${relativeTime(goal.updatedAt, now)}`,
     conversationId,
+    archived: goal.archivedAt !== null,
+    workActive,
   };
 }
 
-export default async function GoalsPage() {
+export default async function GoalsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string }>;
+}) {
   await requireOwner();
+  const { view } = await searchParams;
+  const archived = view === 'archived';
   const db = getDb();
   const now = new Date();
 
   const agent = await getAgent(db);
-  const [rows, chatRows] = await Promise.all([
+  const [rows, chatRows, archivedCountRows, activeTaskRows] = await Promise.all([
     db
       .select()
       .from(goals)
-      .where(eq(goals.agentId, agent.id))
+      .where(
+        and(
+          eq(goals.agentId, agent.id),
+          archived ? isNotNull(goals.archivedAt) : isNull(goals.archivedAt),
+        ),
+      )
       .orderBy(asc(goals.priority), desc(goals.updatedAt)),
     db
       .select({ id: conversations.id, metadata: conversations.metadata })
       .from(conversations)
       .where(and(eq(conversations.agentId, agent.id), eq(conversations.channel, 'chat')))
       .orderBy(desc(conversations.updatedAt)),
+    db
+      .select({ value: count() })
+      .from(goals)
+      .where(and(eq(goals.agentId, agent.id), isNotNull(goals.archivedAt))),
+    db
+      .selectDistinct({ goalId: tasks.goalId })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.agentId, agent.id),
+          isNotNull(tasks.goalId),
+          notInArray(tasks.status, ['done', 'failed', 'cancelled']),
+        ),
+      ),
   ]);
   const chatByGoalId = new Map<string, string>();
   for (const chat of chatRows) {
     const goalId = goalIdFromMetadata(chat.metadata);
     if (goalId && !chatByGoalId.has(goalId)) chatByGoalId.set(goalId, chat.id);
   }
+  const activeGoalIds = new Set(
+    activeTaskRows.map((task) => task.goalId).filter((goalId): goalId is string => goalId !== null),
+  );
+  const archivedCount = archivedCountRows[0]?.value ?? 0;
   const groups = STATUS_ORDER.map((status) => ({
     status,
     items: rows.filter((goal) => goal.status === status),
@@ -73,16 +111,44 @@ export default async function GoalsPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      <PageHeader
-        title="Goals"
-        intro="A goal is an outcome you want to move forward. Creating one starts a work chat and one concrete task; ask in that chat if you want ongoing work."
-      />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <PageHeader
+          title={archived ? 'Archived goals' : 'Goals'}
+          intro={
+            archived
+              ? 'Archived goals keep their work chats, tasks, and evidence. Restore one whenever you want to continue.'
+              : 'A goal is an outcome you want to move forward. Creating one starts a work chat and one concrete task; ask in that chat if you want ongoing work.'
+          }
+        />
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          {archived ? (
+            <Link href="/goals" className={btn.outline}>
+              Current goals
+            </Link>
+          ) : (
+            <>
+              {archivedCount > 0 ? (
+                <Link href="/goals?view=archived" className={btn.outline}>
+                  Archived ({archivedCount})
+                </Link>
+              ) : null}
+              <form action={archiveInactiveGoals}>
+                <button type="submit" className={btn.outline}>
+                  Archive finished goals (30+ days)
+                </button>
+              </form>
+            </>
+          )}
+        </div>
+      </div>
 
-      <GoalCreateForm />
+      {!archived ? <GoalCreateForm /> : null}
 
       {rows.length === 0 ? (
         <EmptyState>
-          No goals yet — create one above when you want to start an outcome with a real task.
+          {archived
+            ? 'No archived goals.'
+            : 'No goals yet — create one above when you want to start an outcome with a real task.'}
         </EmptyState>
       ) : (
         <div className="mt-8 flex flex-col gap-6">
@@ -93,7 +159,12 @@ export default async function GoalsPage() {
                 {group.items.map((goal) => (
                   <GoalCard
                     key={`${goal.id}:${goal.updatedAt.getTime()}`}
-                    goal={toGoalView(goal, now, chatByGoalId.get(goal.id))}
+                    goal={toGoalView(
+                      goal,
+                      now,
+                      chatByGoalId.get(goal.id),
+                      activeGoalIds.has(goal.id),
+                    )}
                   />
                 ))}
               </div>
