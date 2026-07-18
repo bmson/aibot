@@ -50,7 +50,17 @@ async function run(input: JobInput): Promise<JobResult> {
       acceptDownloads: false,
       permissions: [],
       proxy: { server: egressProxy.url },
-      args: ['--proxy-bypass-list=<-loopback>', '--disable-quic'],
+      // WebRTC's ICE/STUN/TURN traffic egresses as raw UDP that never passes
+      // through the loopback HTTP(S) proxy or context.route, so it would be an
+      // exfiltration path around every other network control. Force any WebRTC
+      // through the proxy (which cannot carry UDP, so it simply fails) and
+      // additionally remove the peer-connection constructors below.
+      args: [
+        '--proxy-bypass-list=<-loopback>',
+        '--disable-quic',
+        '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+        '--disable-features=WebRtcHideLocalIpsWithMdns',
+      ],
       viewport: { width: 1280, height: 800 },
       userAgent:
         'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 assistant-workspace/0.1',
@@ -80,6 +90,14 @@ async function run(input: JobInput): Promise<JobResult> {
         }
       });
       await context.routeWebSocket('**/*', (socket) => socket.close({ code: 1008 }));
+      // Defense in depth for the WebRTC UDP egress path: no form-fill/read plan
+      // needs peer connections, so remove the constructors entirely before any
+      // page script runs. Injected as a string so it is not type-checked against
+      // the worker's Node lib (it runs in the page, where globalThis is window).
+      await context.addInitScript({
+        content:
+          "for (const n of ['RTCPeerConnection','webkitRTCPeerConnection','RTCDataChannel']) { try { Object.defineProperty(globalThis, n, { value: undefined, configurable: false }); } catch (e) {} }",
+      });
 
       if (tracesEnabled) {
         await context.tracing.start({ screenshots: true, snapshots: true });
