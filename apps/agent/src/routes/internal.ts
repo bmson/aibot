@@ -69,6 +69,11 @@ internal.post('/sweep', async (c) => {
     return 0;
   });
   const purged = await purgeExpired(deps.db);
+  const { reapExpiredApplicationWatches } = await import('../application-confirmations.js');
+  const expiredWatches = await reapExpiredApplicationWatches(deps).catch((err) => {
+    console.error('application watch reaper failed', err);
+    return 0;
+  });
   return c.json({
     expiredApprovalsWoke: woken.length,
     resumedApprovalTasks: resumedApprovalTasks.length,
@@ -76,6 +81,7 @@ internal.post('/sweep', async (c) => {
     dueTasksNotified: due.length,
     messagesEmbedded: embedded,
     budgetNotices: budgetNotices.length,
+    expiredWatches,
     purged,
   });
 });

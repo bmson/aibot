@@ -8,6 +8,7 @@ import {
   resumeResolvedApprovalTasks,
   runDueSchedules,
 } from '@assistant/core';
+import { reapExpiredApplicationWatches } from './application-confirmations.js';
 import type { AgentDeps } from './deps.js';
 import { syncMailbox } from './email-sync.js';
 import { executeAgentTask } from './task-runner.js';
@@ -46,6 +47,9 @@ export function startPoller(deps: AgentDeps): () => void {
         );
         await emitBudgetNotices(deps.db, agent.id).catch((err) =>
           console.error('budget notices failed', err),
+        );
+        await reapExpiredApplicationWatches(deps).catch((err) =>
+          console.error('application watch reaper failed', err),
         );
       }
       if (tick % EMAIL_SYNC_EVERY_TICKS === 0 && deps.googleClient.configured()) {

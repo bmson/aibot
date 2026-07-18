@@ -501,6 +501,48 @@ export async function executeApplicationConfirmationTask(
 }
 
 /**
+ * Proactively expire application watches whose window has closed with no
+ * matching confirmation, and tell the owner. Without this, a watch only expires
+ * lazily when some other authenticated mail happens to arrive, and it does so
+ * silently — the owner's owner-approved follow-up just ends with no signal.
+ * Idempotent: the status-guarded UPDATE transitions each row once, and the
+ * notice channelMessageId dedupes the dashboard message.
+ */
+export async function reapExpiredApplicationWatches(
+  deps: AgentDeps,
+  now = new Date(),
+): Promise<number> {
+  const expired = await deps.db
+    .update(applicationConfirmations)
+    .set({ status: 'expired', updatedAt: now })
+    .where(
+      and(
+        eq(applicationConfirmations.status, 'awaiting_confirmation'),
+        lte(applicationConfirmations.expiresAt, now),
+      ),
+    )
+    .returning();
+
+  for (const record of expired) {
+    const text = `I watched ${record.expectedSenderEmails.join(', ')} for the ${record.company} — ${record.role} confirmation until ${record.expiresAt.toISOString().slice(0, 10)} and it never arrived. I made no Sheet or Doc update.`;
+    if (record.conversationId) {
+      await persistMessage(deps.db, {
+        conversationId: record.conversationId,
+        role: 'assistant',
+        origin: 'assistant',
+        parts: [{ type: 'text', text }],
+        text,
+        channelMessageId: `application-watch-expired:${record.id}`,
+      }).catch((err) => console.error('watch expiry notice failed', err));
+    }
+    await notifyOwnerBySms(deps, { text }).catch((err) =>
+      console.error('watch expiry owner notification failed', err),
+    );
+  }
+  return expired.length;
+}
+
+/**
  * Match one Gmail message to one pre-authorized application watch and execute
  * only its frozen Sheet and/or Doc actions. Raw subject/body never enters the
  * internal assistant task or model context.

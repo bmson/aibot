@@ -113,6 +113,27 @@ function normalizedAuthDomain(value: string): string {
 }
 
 /**
+ * Alignment between the From domain and the domain a pass clause authenticated.
+ * DMARC is always strict (its header.from IS the alignment result). DKIM/SPF
+ * additionally allow relaxed organizational alignment, but ONLY as a genuine
+ * subdomain relationship on a dot boundary (mail.example.com ~ example.com), so
+ * two different orgs under a shared public suffix never align (a.co.uk is not a
+ * subdomain of b.co.uk) and nothing aligns to a bare TLD. This is conservative
+ * on purpose: DKIM/SPF pass semantics already make a bare public-suffix signer
+ * impossible, and a missed alignment only downgrades to "unauthenticated"
+ * (never a spoof).
+ */
+function authDomainAligned(fromDomain: string, propertyDomain: string, relaxed: boolean): boolean {
+  if (!propertyDomain) return false;
+  if (propertyDomain === fromDomain) return true;
+  if (!relaxed) return false;
+  const hasParent = (domain: string) => domain.split('.').length >= 2;
+  if (fromDomain.endsWith(`.${propertyDomain}`) && hasParent(propertyDomain)) return true;
+  if (propertyDomain.endsWith(`.${fromDomain}`) && hasParent(fromDomain)) return true;
+  return false;
+}
+
+/**
  * A matching From header is identity only when Gmail's own receiver reports
  * aligned SPF, DKIM, or DMARC. Sender-supplied Authentication-Results headers
  * are ignored by requiring Google's authserv-id.
@@ -139,7 +160,12 @@ export function gmailSenderAuthenticated(
           : method === 'dkim'
             ? clause.match(/\bheader\.(?:d|i)=([^\s;]+)/i)?.[1]
             : clause.match(/\bsmtp\.mailfrom=([^\s;]+)/i)?.[1];
-      if (property && normalizedAuthDomain(property) === fromDomain) return true;
+      if (
+        property &&
+        authDomainAligned(fromDomain, normalizedAuthDomain(property), method !== 'dmarc')
+      ) {
+        return true;
+      }
     }
   }
   return false;

@@ -95,4 +95,45 @@ describe('Gmail sender authentication', () => {
       ),
     ).toBe(false);
   });
+
+  it('accepts relaxed DKIM/SPF organizational alignment for subdomain senders', () => {
+    // Very common: a careers portal at jobs.company.com signs DKIM with the
+    // organizational domain company.com. Strict-only alignment dropped these.
+    expect(
+      gmailSenderAuthenticated(
+        payload('mx.google.com; dkim=pass header.d=company.com header.s=sel'),
+        'careers@jobs.company.com',
+      ),
+    ).toBe(true);
+    expect(
+      gmailSenderAuthenticated(
+        payload('mx.google.com; spf=pass smtp.mailfrom=bounce.company.com'),
+        'careers@company.com',
+      ),
+    ).toBe(true);
+  });
+
+  it('does not relax alignment across different orgs or for DMARC', () => {
+    // Different second-level domains must never align, even sharing a suffix.
+    expect(
+      gmailSenderAuthenticated(
+        payload('mx.google.com; dkim=pass header.d=attacker.com header.s=sel'),
+        'careers@company.com',
+      ),
+    ).toBe(false);
+    // Two orgs under a shared public suffix are not a subdomain relationship.
+    expect(
+      gmailSenderAuthenticated(
+        payload('mx.google.com; dkim=pass header.d=attacker.co.uk header.s=sel'),
+        'user@victim.co.uk',
+      ),
+    ).toBe(false);
+    // DMARC stays strict: relaxed subdomain alignment must not apply to it.
+    expect(
+      gmailSenderAuthenticated(
+        payload('mx.google.com; dmarc=pass header.from=company.com'),
+        'careers@jobs.company.com',
+      ),
+    ).toBe(false);
+  });
 });
