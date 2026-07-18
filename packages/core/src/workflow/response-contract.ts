@@ -90,6 +90,8 @@ function firstPersonCompletedAction(text: string, actions: string): boolean {
  */
 const backgroundPromise =
   /\b(?:i|we)(?:\s+will|['’]ll)\s+(?:continue|keep)\b|\b(?:i|we)[^.\n]{0,80}\b(?:silently|in the background|while you(?:'|’)re away)\b|\b(?:starting|proceeding|running)\s+(?:silently|in the background)\b|\b(?:silently|in the background|real[- ]time tracker|mission launched)\b/i;
+const backgroundApplicationPromise =
+  /\b(?:i|we)(?:\s+will|['’]ll)\s+(?:continue|keep)\s+(?:applying|submitting|filing|completing)\b|\b(?:continue|keep)\s+(?:applying|submitting|filing)\s+(?:to|for)\b/i;
 const progressClaim =
   /\b\d+\s+(?:target\s+)?(?:companies|applications|outreach(?:\s+messages)?|drafts)\s+(?:identified|logged|added|ready|submitted|sent|completed)\b/i;
 const statusNarrative =
@@ -132,11 +134,15 @@ function supports(kind: ActionKind, evidence: ActionEvidence[]): boolean {
   const names = evidence.filter(successful).map((item) => item.toolName);
   switch (kind) {
     case 'workspace':
-      return names.some((name) => /^(docs|workspace)\./.test(name));
+      return names.some(
+        (name) =>
+          /^(docs\.(?:create|append|share)|workspace\.write)$/.test(name) ||
+          name === 'drive.download',
+      );
     case 'spreadsheet':
-      return names.some((name) => /^sheets\./.test(name));
+      return names.some((name) => /^sheets\.(?:create|append_rows|write_rows)$/.test(name));
     case 'presentation':
-      return names.some((name) => /^slides\./.test(name));
+      return names.some((name) => /^slides\.(?:create|append)$/.test(name));
     case 'outbound':
       return names.some((name) => /^(gmail\.send|sms\.send|email\.send)$/.test(name));
     // A browser run is not a submission receipt. Until there is a dedicated
@@ -148,11 +154,16 @@ function supports(kind: ActionKind, evidence: ActionEvidence[]): boolean {
         evidence.some(browserApplicationConfirmed)
       );
     case 'calendar':
-      return names.some((name) => /^calendar\.(create|update|delete)/.test(name));
+      return names.some((name) => /^calendar\.(create|update|cancel|delete)/.test(name));
     case 'research':
       return names.some((name) => name === 'web.fetch' || name === 'browser.execute');
     case 'background':
-      return names.some((name) => name === 'mission.update' || name === 'task.schedule');
+      return names.some(
+        (name) =>
+          name === 'mission.update' ||
+          name === 'task.schedule' ||
+          name === 'applications.watch_confirmation',
+      );
   }
 }
 
@@ -163,20 +174,19 @@ function claimedKinds(text: string): ActionKind[] {
   if (
     completedActionClaim(
       text,
-      'document|doc|file|drive file|tracker',
+      'document|doc|file|drive file',
       'created|shared|uploaded|downloaded|saved|deleted|updated|published|generated|prepared|exported|added',
       'created|shared|uploaded|downloaded|saved|deleted|updated|published|generated|prepared|exported|added|ready|live|active|available',
     ) ||
     /https:\/\/docs\.google\.com\//.test(text) ||
-    (/\b(?:document|doc|file|tracker)\b/.test(lower) && artifactStatus.test(text)) ||
-    countedTracker.test(text)
+    (/\b(?:document|doc|file)\b/.test(lower) && artifactStatus.test(text))
   ) {
     kinds.add('workspace');
   }
   if (
     completedActionClaim(
       text,
-      'spreadsheet|sheet',
+      'spreadsheet|sheet|tracker',
       'created|shared|uploaded|downloaded|saved|deleted|updated|published|generated|prepared|exported|added',
       'created|shared|uploaded|downloaded|saved|deleted|updated|published|generated|prepared|exported|added|ready|live|active|available',
     ) ||
@@ -218,10 +228,7 @@ function claimedKinds(text: string): ActionKind[] {
       'submitted|applied|complete|completed|confirmed|uploaded|saved|filed|received|went through|gone through',
     ) ||
     firstPersonCompletedAction(text, 'submitted|applied|completed|confirmed|uploaded|filed') ||
-    (/\b(?:application|apply|applied|submit|submitted|career portal|form submission)\b/.test(
-      lower,
-    ) &&
-      backgroundPromise.test(text))
+    backgroundApplicationPromise.test(text)
   ) {
     kinds.add('application');
   }
@@ -288,6 +295,62 @@ export function transparentFailureResponse(evidence: ActionEvidence[]): string {
   ].join(' ');
 }
 
+const UNSUPPORTED_LABEL: Record<ActionKind, string> = {
+  workspace: 'the requested document or file action',
+  spreadsheet: 'the requested spreadsheet or tracker action',
+  presentation: 'the requested presentation action',
+  outbound: 'the requested outbound message',
+  application: 'the application submission',
+  calendar: 'the requested calendar action',
+  research: 'the requested research',
+  background: 'the promised background work',
+};
+
+function verifiedActionDescriptions(evidence: ActionEvidence[]): string[] {
+  const descriptions = new Set<string>();
+  for (const item of evidence) {
+    if (!successful(item)) continue;
+    const name = item.toolName;
+    if (name === 'drive.download') descriptions.add('the requested Drive file was staged');
+    else if (/^docs\.(?:create|append|share)$/.test(name)) {
+      descriptions.add('the Google Doc action completed');
+    } else if (name === 'workspace.write') descriptions.add('the workspace file was written');
+    else if (/^sheets\.(?:create|append_rows|write_rows)$/.test(name)) {
+      descriptions.add('the Google Sheet action completed');
+    } else if (/^slides\.(?:create|append)$/.test(name)) {
+      descriptions.add('the Google Slides action completed');
+    } else if (name === 'gmail.send') descriptions.add('the email was sent');
+    else if (name === 'sms.send' || name === 'email.send') descriptions.add('the message was sent');
+    else if (/^calendar\.(create|update|cancel|delete)/.test(name)) {
+      descriptions.add('the calendar action completed');
+    } else if (name === 'web.fetch') descriptions.add('the web request completed');
+    else if (name === 'application.submit') descriptions.add('the application was submitted');
+    else if (name === 'applications.watch_confirmation') {
+      descriptions.add('the confirmation watch was created');
+    } else if (name === 'mission.update' || name === 'task.schedule') {
+      descriptions.add('the background task was created or updated');
+    }
+    if (browserApplicationConfirmed(item)) {
+      descriptions.add('the portal returned an explicit application confirmation');
+    }
+  }
+  return [...descriptions];
+}
+
+function partialFailureResponse(
+  evidence: ActionEvidence[],
+  unsupported: ActionKind[],
+): string | undefined {
+  const verified = verifiedActionDescriptions(evidence);
+  if (verified.length === 0) return undefined;
+  const missing = [...new Set(unsupported.map((kind) => UNSUPPORTED_LABEL[kind]))];
+  const failures = failureDetails(evidence);
+  const failureDetail = failures.length
+    ? ` The incomplete action reported: ${failures.join('; ')}.`
+    : '';
+  return `I can verify that ${verified.join('; ')}. I cannot verify ${missing.join(' or ')} from successful tool evidence, so I am not claiming it completed.${failureDetail}`;
+}
+
 /** Replace unsupported action claims with a deterministic, evidence-based reply. */
 export function enforceResponseContract(
   text: string,
@@ -296,7 +359,7 @@ export function enforceResponseContract(
   const unsupported = claimedKinds(text).filter((kind) => !supports(kind, evidence));
   if (unsupported.length === 0) return { text, blocked: false, unsupported: [] };
   return {
-    text: transparentFailureResponse(evidence),
+    text: partialFailureResponse(evidence, unsupported) ?? transparentFailureResponse(evidence),
     blocked: true,
     unsupported,
   };

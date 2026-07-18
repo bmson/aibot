@@ -432,8 +432,9 @@ describe('complex job application workflow (integration, scripted model)', () =>
     ).toBe('done');
 
     const [finalTask] = await db.select().from(tasks).where(eq(tasks.id, task.id));
-    expect(finalTask?.progress).toContain("I can't claim that work was completed");
-    expect(finalTask?.progress).toContain('No supporting tool action completed');
+    expect(finalTask?.progress).toContain('requested Drive file was staged');
+    expect(finalTask?.progress).toContain('cannot verify the application submission');
+    expect(finalTask?.progress).toContain('not claiming it completed');
     expect(finalTask?.progress).not.toContain('successfully');
   });
 

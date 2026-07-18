@@ -19,7 +19,7 @@ describe('response execution contract', () => {
     );
     expect(result.blocked).toBe(true);
     expect(result.unsupported).toEqual(
-      expect.arrayContaining(['workspace', 'research', 'background']),
+      expect.arrayContaining(['spreadsheet', 'research', 'background']),
     );
   });
 
@@ -95,10 +95,11 @@ describe('response execution contract', () => {
     ['I researched the industry and browsed the competitors.', ['research']],
     ["I've emailed the hiring manager a follow-up.", ['outbound']],
     ["I'll keep handling this while you're away.", ['background']],
+    ["I'll keep applying to more roles while you're away.", ['application', 'background']],
     ['Your task is running and the monitoring mission is active.', ['background']],
     [
       'Created a tracker, sent outreach to the first eight people, and submitted their applications.',
-      ['workspace', 'outbound', 'application'],
+      ['spreadsheet', 'outbound', 'application'],
     ],
   ])('blocks a plausible but unevidenced status update: %s', (text, expected) => {
     const result = enforceResponseContract(text, []);
@@ -113,6 +114,65 @@ describe('response execution contract', () => {
     );
     expect(result.blocked).toBe(true);
     expect(result.unsupported).toEqual(expect.arrayContaining(['spreadsheet', 'outbound']));
+    expect(result.text).toContain('I can verify that the Google Doc action completed');
+    expect(result.text).toContain('I cannot verify');
+    expect(result.text).not.toContain('I have not created');
+  });
+
+  it('preserves a verified submission when a later document claim is unsupported', () => {
+    const result = enforceResponseContract(
+      'I submitted the application and updated the Google Doc.',
+      [
+        {
+          toolName: 'browser.execute',
+          status: 'succeeded',
+          result: {
+            outputs: [{ text: 'Thank you for applying. We have received your application.' }],
+          },
+        },
+      ],
+    );
+    expect(result).toMatchObject({ blocked: true, unsupported: ['workspace'] });
+    expect(result.text).toContain('portal returned an explicit application confirmation');
+    expect(result.text).toContain('cannot verify the requested document or file action');
+    expect(result.text).not.toContain('I have not submitted');
+  });
+
+  it('accepts a Sheet-backed tracker update and a durable confirmation watch', () => {
+    const text =
+      "I updated the application tracker. The confirmation watcher is active, and I'll keep monitoring for the receipt.";
+    expect(
+      enforceResponseContract(text, [
+        { toolName: 'sheets.write_rows', status: 'succeeded', result: { writtenRows: 1 } },
+        {
+          toolName: 'applications.watch_confirmation',
+          status: 'succeeded',
+          result: { applicationId: 'app-1', status: 'awaiting_confirmation' },
+        },
+      ]),
+    ).toMatchObject({ blocked: false, text });
+  });
+
+  it.each([
+    ['I updated the Google Doc.', 'docs.get', { documentId: 'doc-1', text: 'existing' }],
+    ['I updated the tracker.', 'sheets.get_rows', { values: [['existing']] }],
+    ['I scheduled the interview.', 'calendar.list_events', { events: [] }],
+  ])('does not let a read-only tool justify a mutation claim: %s', (text, toolName, result) => {
+    const guarded = enforceResponseContract(text, [{ toolName, status: 'succeeded', result }]);
+    expect(guarded.blocked).toBe(true);
+  });
+
+  it('accepts a verified calendar cancellation', () => {
+    const text = 'I cancelled the calendar event.';
+    expect(
+      enforceResponseContract(text, [
+        {
+          toolName: 'calendar.cancel_event',
+          status: 'succeeded',
+          result: { eventId: 'event-1', status: 'cancelled' },
+        },
+      ]),
+    ).toMatchObject({ blocked: false, text });
   });
 
   it('allows a complex report only when every claimed action has matching success evidence', () => {

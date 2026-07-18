@@ -15,6 +15,8 @@ must end with evidence for each claimed action.
 | Resume is larger than the supported 8 MB | Reject it before Workspace persistence or form interaction | `packages/tools/src/google/drive.test.ts`, `workers/browser-job/src/steps.test.ts` |
 | Browser callback is replayed, late, forged, or never arrives | Accept one valid callback, reject replays/late tokens, and time out without relaunching | `apps/agent/src/browser.e2e.test.ts` |
 | Browser launch response is ambiguous | Preserve the staged callback token and never start a duplicate job | `apps/agent/src/browser.e2e.test.ts` |
+| Drive resume → approved portal submission → delayed authenticated email → Sheet + Doc → original chat | Preserve one approved action contract across the browser and email event boundary; reject spoofed mail, execute each frozen Workspace action once, and report the evidence in the originating conversation | `apps/agent/src/job-application-continuity.e2e.test.ts` |
+| Portal submission succeeds but the owner denies the delayed confirmation watch | Preserve and report the verified submission while accurately reporting that no watch or future Workspace action was created | `apps/agent/src/job-application-continuity.e2e.test.ts` |
 
 ## Cross-cutting workflow guarantees
 
@@ -32,6 +34,7 @@ must end with evidence for each claimed action.
 | Provider response is lost after a mutation may have committed | Suppress automatic retry and report an unknown outcome instead of inventing success | `packages/tools/src/google/client.test.ts`, `packages/tools/src/twilio/client.test.ts` |
 | Goal wakes repeatedly | Carry verified progress and next action forward; do not overlap a still-running Goal task | `packages/core/src/workflow/missions.test.ts` |
 | Model claims an unsupported external action | Replace the prose with the evidence-backed failure response | `packages/core/src/workflow/response-contract.test.ts`, `apps/agent/src/executor.e2e.test.ts` |
+| A multi-action response mixes verified success with an unsupported claim | Preserve the verified actions in deterministic copy and reject only the unsupported completion claim; never replace real partial success with “nothing happened” | `packages/core/src/workflow/response-contract.test.ts` |
 
 ## Still requiring stronger proof
 
