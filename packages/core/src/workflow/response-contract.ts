@@ -100,6 +100,12 @@ const artifactStatus =
   /\b(?:spreadsheet|sheet|document|doc|deck|slides|file|tracker)\b[^.\n]{0,40}\b(?:ready|live|active|updated|available|shared)\b/i;
 const countedTracker =
   /\b(?:tracker|company list|spreadsheet|sheet)\b[^.\n]{0,70}\b(?:now\s+)?(?:has|have)\s+\d+\b/i;
+// Passive outbound: the subject is the recipient rather than the message, so
+// the object-anchored outbound patterns miss it ("the client has been emailed",
+// "they were notified"). Requires the "(has|have|was|were) been <verb>" form so
+// it does not fire on ordinary prose.
+const passiveOutbound =
+  /\b(?:has|have|was|were)\s+been\s+(?:contacted|emailed|texted|messaged|notified|pinged|reached\s+out\s+to)\b/i;
 
 function successful(evidence: ActionEvidence): boolean {
   if (evidence.status !== 'succeeded') return false;
@@ -112,21 +118,45 @@ function successful(evidence: ActionEvidence): boolean {
   return true;
 }
 
-/** A browser click alone is not a submission receipt; an explicit portal confirmation is. */
+/** Browser step actions that actually submit a form (vs. read-only navigation). */
+const BROWSER_SUBMIT_ACTIONS: ReadonlySet<string> = new Set([
+  'click',
+  'press',
+  'select',
+  'type',
+  'upload',
+]);
+
+const CONFIRMATION_TEXT =
+  /\b(?:application[^.\n]{0,100}\b(?:submitted|received|complete|confirmed)|thank\s+you\s+for\s+applying|we(?:'|’)ve\s+received\s+your\s+application)\b/i;
+
+/**
+ * A submission receipt only counts when THIS browser run actually interacted
+ * with a form AND then read back an explicit confirmation. A read-only
+ * goto+extract of a careers/marketing page that merely contains "thank you for
+ * applying" is not evidence of a submission — and that extracted page text is
+ * attacker-influenceable, so on its own it must never authorise an
+ * "I submitted your application" claim.
+ */
 function browserApplicationConfirmed(evidence: ActionEvidence): boolean {
   if (!successful(evidence) || evidence.toolName !== 'browser.execute') return false;
   if (!evidence.result || typeof evidence.result !== 'object') return false;
   const outputs = (evidence.result as { outputs?: unknown }).outputs;
   if (!Array.isArray(outputs)) return false;
+  const submitted = outputs.some((output) => {
+    if (!output || typeof output !== 'object') return false;
+    const action = (output as { action?: unknown }).action;
+    return (
+      typeof action === 'string' &&
+      BROWSER_SUBMIT_ACTIONS.has(action) &&
+      (output as { ok?: unknown }).ok !== false
+    );
+  });
+  if (!submitted) return false;
   return outputs.some((output) => {
     if (!output || typeof output !== 'object') return false;
     const text = (output as { text?: unknown }).text;
-    return (
-      typeof text === 'string' &&
-      /\b(?:application[^.\n]{0,100}\b(?:submitted|received|complete|confirmed)|thank\s+you\s+for\s+applying|we(?:'|’)ve\s+received\s+your\s+application)\b/i.test(
-        text,
-      )
-    );
+    return typeof text === 'string' && CONFIRMATION_TEXT.test(text);
   });
 }
 
@@ -210,13 +240,14 @@ function claimedKinds(text: string): ActionKind[] {
     completedActionClaim(
       text,
       OUTBOUND_OBJECTS,
-      'sent|delivered|contacted|emailed|texted|called|replied|forwarded|reached out to',
-      'sent|delivered|contacted|emailed|texted|called|replied|forwarded|reached out to|confirmed',
+      'sent|delivered|contacted|emailed|texted|messaged|called|replied|forwarded|reached out to|notified|pinged',
+      'sent|delivered|contacted|emailed|texted|messaged|called|replied|forwarded|reached out to|notified|pinged|confirmed',
     ) ||
     firstPersonCompletedAction(
       text,
-      'sent|delivered|contacted|emailed|texted|called|replied|forwarded|reached out to',
-    )
+      'sent|delivered|contacted|emailed|texted|messaged|called|replied|forwarded|reached out to|notified|pinged',
+    ) ||
+    passiveOutbound.test(text)
   ) {
     kinds.add('outbound');
   }
@@ -227,7 +258,12 @@ function claimedKinds(text: string): ActionKind[] {
       'submitted|applied|completed|confirmed|uploaded|saved|filed',
       'submitted|applied|complete|completed|confirmed|uploaded|saved|filed|received|went through|gone through',
     ) ||
-    firstPersonCompletedAction(text, 'submitted|applied|completed|confirmed|uploaded|filed') ||
+    // Object-free application verbs must stay application-specific. "completed"
+    // and "confirmed" are ordinary English ("I've completed the review",
+    // "confirmed the address") and were rewriting perfectly good replies into
+    // failure boilerplate; they still count when anchored to an application
+    // object via completedActionClaim above.
+    firstPersonCompletedAction(text, 'submitted|applied|uploaded|filed') ||
     backgroundApplicationPromise.test(text)
   ) {
     kinds.add('application');

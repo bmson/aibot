@@ -32,7 +32,7 @@ describe('response execution contract', () => {
     expect(result.unsupported).toContain('application');
   });
 
-  it('allows an application claim after an approved browser run extracts a portal confirmation', () => {
+  it('allows an application claim after an approved browser run submits and extracts a portal confirmation', () => {
     const text = 'I submitted the application. The portal confirmed it received your application.';
     expect(
       enforceResponseContract(text, [
@@ -42,6 +42,8 @@ describe('response execution contract', () => {
           result: {
             ok: true,
             outputs: [
+              { action: 'type', ok: true },
+              { action: 'click', ok: true },
               {
                 action: 'extract',
                 text: 'Thank you for applying. We have received your application.',
@@ -51,6 +53,32 @@ describe('response execution contract', () => {
         },
       ]),
     ).toMatchObject({ blocked: false, text });
+  });
+
+  it('does not accept a read-only extract of confirmation-looking page text as a submission', () => {
+    // The page text is attacker-influenceable; without an actual form
+    // interaction in the run it must not authorise a submission claim.
+    const result = enforceResponseContract(
+      'I submitted your application — the portal confirmed it received your application.',
+      [
+        {
+          toolName: 'browser.execute',
+          status: 'succeeded',
+          result: {
+            ok: true,
+            outputs: [
+              { action: 'goto', ok: true, url: 'https://careers.example/jobs' },
+              {
+                action: 'extract',
+                text: 'Careers at Acme. Thank you for applying! Browse more open roles below.',
+              },
+            ],
+          },
+        },
+      ],
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.unsupported).toContain('application');
   });
 
   it('allows a document claim only after a successful workspace tool', () => {
@@ -78,6 +106,26 @@ describe('response execution contract', () => {
     const text =
       "I'll research senior frontend roles at AI companies, compile a shortlist, and share it for your approval. No tool action has happened yet.";
     expect(enforceResponseContract(text, [])).toMatchObject({ blocked: false, text });
+  });
+
+  it.each([
+    "I've completed the review of the three finalists — here are my notes.",
+    'I confirmed the two salary figures match.',
+    "I've completed my analysis of the two offers.",
+  ])('does not treat generic "completed"/"confirmed" as an application claim: %s', (text) => {
+    // These verbs are ordinary English, not application submissions; without an
+    // application object they must not be rewritten into failure boilerplate.
+    expect(enforceResponseContract(text, [])).toMatchObject({ blocked: false, text });
+  });
+
+  it.each([
+    'The hiring manager has been emailed with your follow-up.',
+    'They have been notified about the schedule change.',
+    'The client has been contacted.',
+  ])('blocks passive-voice outbound claims with no send evidence: %s', (text) => {
+    const result = enforceResponseContract(text, []);
+    expect(result.blocked).toBe(true);
+    expect(result.unsupported).toContain('outbound');
   });
 
   it.each([
@@ -127,7 +175,13 @@ describe('response execution contract', () => {
           toolName: 'browser.execute',
           status: 'succeeded',
           result: {
-            outputs: [{ text: 'Thank you for applying. We have received your application.' }],
+            outputs: [
+              { action: 'click', ok: true },
+              {
+                action: 'extract',
+                text: 'Thank you for applying. We have received your application.',
+              },
+            ],
           },
         },
       ],
