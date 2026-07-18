@@ -117,6 +117,65 @@ export async function ensureChatConversation(
   return created;
 }
 
+/**
+ * Resolve the single canonical chat thread the UI opens by default (Phase 3 of
+ * the long-running-chat design). The primary is sticky and always live: if one
+ * exists it is un-archived and returned, so the "one forever thread" never
+ * disappears. Otherwise the most recent non-goal chat is promoted (giving an
+ * existing owner their real main thread), or a fresh thread is created.
+ * Serialized in a transaction; the partial unique index guarantees one primary.
+ */
+export async function getOrCreatePrimaryConversation(
+  db: Db,
+  agentId: string,
+): Promise<ConversationRow> {
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.agentId, agentId), eq(conversations.isPrimary, true)))
+      .limit(1);
+    if (existing) {
+      if (!existing.archivedAt) return existing;
+      const [restored] = await tx
+        .update(conversations)
+        .set({ archivedAt: null, updatedAt: sql`now()` })
+        .where(eq(conversations.id, existing.id))
+        .returning();
+      return restored ?? existing;
+    }
+
+    const [recent] = await tx
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.agentId, agentId),
+          eq(conversations.channel, 'chat'),
+          isNull(conversations.archivedAt),
+          sql`${conversations.metadata}->>'goalId' IS NULL`,
+        ),
+      )
+      .orderBy(desc(conversations.updatedAt))
+      .limit(1);
+    if (recent) {
+      const [promoted] = await tx
+        .update(conversations)
+        .set({ isPrimary: true, updatedAt: sql`now()` })
+        .where(eq(conversations.id, recent.id))
+        .returning();
+      if (promoted) return promoted;
+    }
+
+    const [created] = await tx
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner', isPrimary: true })
+      .returning();
+    if (!created) throw new Error('failed to create primary conversation');
+    return created;
+  });
+}
+
 /** List current chats by default; archived history is opt-in in the interface. */
 export async function listConversations(
   db: Db,

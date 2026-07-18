@@ -13,6 +13,7 @@ const ARCHIVE_AFTER_DAYS = 30;
 
 function revalidateChatViews(conversationId?: string): void {
   revalidatePath('/chat');
+  revalidatePath('/chat/all');
   if (conversationId) revalidatePath(`/chat/${conversationId}`);
 }
 
@@ -20,7 +21,7 @@ async function requireOwnedChat(conversationId: string) {
   const db = getDb();
   const agent = await getAgent(db);
   const [conversation] = await db
-    .select({ id: conversations.id })
+    .select({ id: conversations.id, isPrimary: conversations.isPrimary })
     .from(conversations)
     .where(
       and(
@@ -55,6 +56,9 @@ export async function changeConversationModel(
 export async function archiveConversation(conversationId: string): Promise<void> {
   if (!(await isAuthed())) throw new Error('unauthorized');
   const { db, agent, conversation } = await requireOwnedChat(conversationId);
+  if (conversation.isPrimary) {
+    throw new Error('the main thread cannot be archived');
+  }
   const [activeTask] = await db
     .select({ id: tasks.id })
     .from(tasks)
@@ -75,7 +79,7 @@ export async function archiveConversation(conversationId: string): Promise<void>
     .set({ archivedAt: new Date(), updatedAt: new Date() })
     .where(and(eq(conversations.id, conversation.id), isNull(conversations.archivedAt)));
   revalidateChatViews(conversation.id);
-  redirect('/chat');
+  redirect('/chat/all');
 }
 
 /** Restore a chat to the current list. Its messages and evidence were never removed. */
@@ -106,6 +110,7 @@ export async function archiveInactiveConversations(): Promise<void> {
       and(
         eq(conversations.agentId, agent.id),
         eq(conversations.channel, 'chat'),
+        eq(conversations.isPrimary, false),
         isNull(conversations.archivedAt),
         lt(conversations.updatedAt, cutoff),
       ),
@@ -132,5 +137,5 @@ export async function archiveInactiveConversations(): Promise<void> {
       .where(and(eq(conversations.id, candidate.id), isNull(conversations.archivedAt)));
   }
   revalidateChatViews();
-  redirect('/chat');
+  redirect('/chat/all');
 }

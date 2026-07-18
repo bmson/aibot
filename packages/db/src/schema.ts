@@ -84,6 +84,11 @@ export const conversations = pgTable(
     trust: text('trust').notNull().default('unknown'),
     /** Per-conversation model override for the chat switcher (models.id), null = role default. */
     modelOverride: text('model_override'),
+    /**
+     * The single canonical chat thread the UI opens by default (Phase 3 of the
+     * long-running-chat design). At most one per agent, enforced below.
+     */
+    isPrimary: boolean('is_primary').notNull().default(false),
     metadata: jsonb('metadata').notNull().default({}),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     ...timestamps,
@@ -92,6 +97,7 @@ export const conversations = pgTable(
     check('conversations_channel_check', sql`${t.channel} IN ('chat','sms','email')`),
     check('conversations_trust_check', sql`${t.trust} IN ('owner','known','unknown','assistant')`),
     index('conversations_agent_idx').on(t.agentId, t.updatedAt),
+    uniqueIndex('conversations_primary_idx').on(t.agentId).where(sql`${t.isPrimary}`),
   ],
 );
 
@@ -153,6 +159,48 @@ export const messages = pgTable(
         sql`${t.embedding} IS NULL AND ${t.role} IN ('user','assistant') AND length(${t.text}) > 20`,
       ),
     index('messages_embedding_idx').using('hnsw', t.embedding.op('vector_cosine_ops')),
+  ],
+);
+
+/**
+ * Topic segments over the single long-running chat (Phase 2 of the
+ * long-running-chat design). Each segment is a contiguous run of messages on
+ * one topic within a conversation, with a rolling summary + embedding. Recall
+ * matches the SUMMARY embedding — a far better retrieval unit than lone
+ * messages — and injects the summary plus a key line. Produced offline by the
+ * `chat.segment` code job; never written on the chat hot path.
+ */
+export const conversationSegments = pgTable(
+  'conversation_segments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id),
+    /** Inclusive message range this segment summarizes. */
+    startMessageId: uuid('start_message_id')
+      .notNull()
+      .references(() => messages.id),
+    endMessageId: uuid('end_message_id')
+      .notNull()
+      .references(() => messages.id),
+    /** Rolling topic summary — the recall retrieval unit. */
+    summary: text('summary').notNull().default(''),
+    embedding: vector('embedding', { dimensions: 1536 }),
+    messageCount: integer('message_count').notNull().default(0),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+    endedAt: timestamp('ended_at', { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    index('conversation_segments_embedding_idx').using('hnsw', t.embedding.op('vector_cosine_ops')),
+    index('conversation_segments_conversation_idx').on(t.conversationId, t.endedAt),
+    index('conversation_segments_agent_idx').on(t.agentId, t.endedAt),
+    // Idempotent re-runs: a given start message anchors at most one segment.
+    uniqueIndex('conversation_segments_start_idx').on(t.conversationId, t.startMessageId),
   ],
 );
 
@@ -844,6 +892,7 @@ export type AgentRow = typeof agents.$inferSelect;
 export type GoalRow = typeof goals.$inferSelect;
 export type ConversationRow = typeof conversations.$inferSelect;
 export type MessageRow = typeof messages.$inferSelect;
+export type ConversationSegmentRow = typeof conversationSegments.$inferSelect;
 export type TaskRow = typeof tasks.$inferSelect;
 export type ToolCallRow = typeof toolCalls.$inferSelect;
 export type ApprovalRow = typeof approvals.$inferSelect;

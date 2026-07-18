@@ -260,10 +260,22 @@ const scheduleSeed = [
     cron: '30 22 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'memory.consolidate' },
   },
+  // Phase 2 (long-running chat): segment the day's conversations into topic
+  // summaries recall can retrieve. A code job like extraction/consolidation;
+  // runs before them so summaries reflect the freshest boundaries.
+  {
+    name: 'chat-segmentation',
+    cron: '0 21 * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'chat.segment' },
+  },
 ] as const;
 
 /** Schedules whose definition the seed owns — updated in place on re-seed (prod picks up changes on deploy). */
-const SEED_OWNED_SCHEDULES = new Set(['memory-extraction', 'memory-consolidation']);
+const SEED_OWNED_SCHEDULES = new Set([
+  'memory-extraction',
+  'memory-consolidation',
+  'chat-segmentation',
+]);
 
 for (const s of scheduleSeed) {
   const existing = await db.select().from(schedules).where(eq(schedules.name, s.name));

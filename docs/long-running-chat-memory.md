@@ -5,8 +5,8 @@ bound. The live prompt stays a bounded recent window; older discussion is reache
 demand through the pgvector store we already populate. "Topics" are a soft, derived label over the
 one thread — **not** separate hidden conversations behind a router.
 
-Status: **Phase 1 (auto-recall layer) is implemented** — see the rollout section. Phases 2–4 remain
-design. Integration points below are the contract for the work that follows.
+Status: **Phases 1–3 are implemented** — auto-recall, topic segments, and the single-thread UI. See
+the rollout section for what shipped where. Phase 4 (a UI transparency affordance) remains optional.
 
 ## Goal / non-goals
 
@@ -151,12 +151,17 @@ safe to re-run.
 | Embedding lag on new messages | Recall only needs *older* messages, which are already backfilled; recent turns are in the live window regardless. |
 | Wrong segment boundaries | Soft degradation only — never misfiles the live thread (the router failure mode we avoided). |
 
-## UX (phase 3, described not yet built)
+## UX (phase 3 — implemented)
 
-`/chat` opens one canonical **primary** thread by default (mark via `conversations.metadata.primary`
-or a dedicated column, resolved/created in `ensureChatConversation`). The existing chat list stays
-reachable as "All chats"; archive/restore (`route.ts:192-197`) is unchanged. Optionally surface a
-small "pulled in an earlier discussion from {date}" affordance for transparency when recall fires.
+`/chat` opens one canonical **primary** thread by default: it redirects to `/chat/{primaryId}`,
+resolved by `getOrCreatePrimaryConversation()` (`packages/core/src/chat.ts`), which is *sticky* — the
+primary is un-archived and returned if it exists, else the most recent non-goal chat is promoted,
+else a fresh thread is created. The flag lives on `conversations.is_primary` with a partial unique
+index (one primary per agent). The full list of threads stays reachable at `/chat/all` (a new
+"All chats" nav item); "New chat" still spawns separate threads that recall stitches back in. The
+main thread can't be archived (guarded in `apps/web/app/chat/actions.ts`); archive/restore of other
+threads is unchanged. Phase 4 could still surface a "pulled in an earlier discussion from {date}"
+affordance when recall fires.
 
 ## Integration with goals, tasks, retries, approvals
 
@@ -212,12 +217,21 @@ grow-the-prompt approach.
   (`packages/core/src/workflow/executor.ts`, gated on `privilegedTask && !untrustedContext`). Behind
   the `CHAT_RECALL_ENABLED` flag (off by default). Covered by
   `packages/core/src/memory/recall.test.ts` (window exclusion, similarity threshold, trust filter,
-  neighborhood expansion, dedup). Next: turn the flag on and measure recall hit-rate and injected
-  size before starting Phase 2.
-- **Phase 2 — segments.** `conversation_segments` + rolling summaries + boundary detection in the
-  maintenance pass; switch recall to segment summaries.
-- **Phase 3 — single-thread UX.** `/chat` → primary thread; list becomes "All chats."
-- **Phase 4 (optional) — transparency affordance** in the UI.
+  neighborhood expansion, dedup). Behind the `CHAT_RECALL_ENABLED` flag (off by default); turn it on
+  and measure recall hit-rate and injected size.
+- **Phase 2 — segments. ✅ Implemented.** `conversation_segments` table (migration `0015`) with
+  rolling summaries + embeddings, produced by the `chat.segment` code job
+  (`packages/core/src/memory/segmentation.ts`, registered in `jobs.ts`, scheduled nightly at 21:00 in
+  `seed.ts`). Boundary detection is time-gap + embedding-drift against a running centroid; the
+  trailing group is held back until it settles so an in-progress topic isn't split. Recall now
+  prefers segment summaries and falls back to message neighborhoods for un-segmented conversations
+  (`recall.ts`, `RecallResult.tier`). Covered by `segmentation.test.ts` (boundary split, idempotency,
+  settle) and `recall-segments.test.ts` (segment tier + window exclusion).
+- **Phase 3 — single-thread UX. ✅ Implemented.** `/chat` → sticky primary thread; the list moved to
+  `/chat/all`. `conversations.is_primary` + `getOrCreatePrimaryConversation()`; the main thread is
+  archive-protected. Covered by `primary-conversation.test.ts` (create/sticky/un-archive/promote).
+- **Phase 4 (optional) — transparency affordance** in the UI ("pulled in an earlier discussion from
+  {date}").
 
 ## Test plan
 
@@ -229,10 +243,12 @@ grow-the-prompt approach.
 
 ## Open questions
 
-1. Segment boundaries: ship heuristic-only (time + drift), or gate phase 2 on the LLM pass for
-   summary quality?
-2. Primary-thread migration for the existing multi-chat history — pick an existing chat as primary,
-   or start a fresh primary and leave old chats in "All chats"?
-3. τ and K defaults — set from a measurement pass in phase 1 rather than guessed here.
-4. Autonomous-work threads — recall-only (option A) to start, or route mission updates into the
-   primary thread (option B)? Recommend A first, B as later per-goal opt-in.
+1. ~~Segment boundaries: heuristic-only vs LLM pass.~~ **Resolved:** shipped heuristic boundaries
+   (time-gap + embedding-drift) with an LLM-generated summary per segment, plus a naive summary
+   fallback when the model is unavailable. Revisit boundary quality once there is real usage.
+2. ~~Primary-thread migration.~~ **Resolved:** `getOrCreatePrimaryConversation()` promotes the most
+   recent non-goal chat to primary (so an existing owner keeps their real main thread), or creates a
+   fresh one; the primary is then sticky.
+3. τ and K defaults — still guessed (τ = 0.75, K = 4). Tune from a measurement pass with the flag on.
+4. Autonomous-work threads — recall-only (option A) is what ships (recall spans all owner threads).
+   Routing mission updates into the primary thread (option B) is still a later per-goal opt-in.
