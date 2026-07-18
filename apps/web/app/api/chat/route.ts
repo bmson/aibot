@@ -10,6 +10,7 @@ import {
   listMessages,
   loadConfig,
   persistMessage,
+  recallRelevantContext,
   type StreamOutcome,
 } from '@assistant/core';
 import { conversations } from '@assistant/db';
@@ -212,9 +213,8 @@ export async function POST(req: Request) {
   });
   if (!persistedUser) throw new Error('failed to persist chat message');
   const messageCursor = encodeMessageCursor(persistedUser);
-  const modelHistory = boundedModelHistory(
-    await listMessages(db, conversation.id, { limit: MODEL_HISTORY_LIMIT }),
-  );
+  const historyRows = await listMessages(db, conversation.id, { limit: MODEL_HISTORY_LIMIT });
+  const modelHistory = boundedModelHistory(historyRows);
 
   // Triage: conversation streams below; action requests go to the executor.
   // On triage failure default to the executor — a slow honest answer beats a
@@ -283,6 +283,27 @@ export async function POST(req: Request) {
     }
   }
 
+  // Long-running-chat auto-recall (Phase 1): reach back into the owner's own
+  // earlier discussion that is relevant to this turn but has scrolled out of
+  // the live window. Best-effort — a recall failure must never fail the chat.
+  let recallBlock: string | undefined;
+  if (config.CHAT_RECALL_ENABLED) {
+    try {
+      const recall = await recallRelevantContext(db, {
+        agentId: agent.id,
+        queryText: userText,
+        embed: (values, embedOpts) => getRouter().embed(values, embedOpts ?? {}),
+        exclude: {
+          conversationId: conversation.id,
+          sinceCreatedAt: historyRows[0]?.createdAt ?? persistedUser.createdAt,
+        },
+      });
+      recallBlock = recall.block || undefined;
+    } catch (err) {
+      console.error('chat recall failed — continuing without it', err);
+    }
+  }
+
   const task = await createChatTask(db, {
     agentId: agent.id,
     conversationId: conversation.id,
@@ -296,7 +317,7 @@ export async function POST(req: Request) {
       critical: true,
       modelOverride: conversation.modelOverride ?? undefined,
       system: [
-        buildSystemPrompt(agent, { ownerCard: await getOwnerCard(db) }),
+        buildSystemPrompt(agent, { ownerCard: await getOwnerCard(db), recall: recallBlock }),
         '',
         'This turn is conversational: just answer. You have no tools in this turn, so if the user is actually asking you to take an action, say plainly that you cannot do it in this reply and ask them to restate it as a direct request. Otherwise do not mention tools, capabilities, or this instruction at all — no postscripts.',
       ].join('\n'),

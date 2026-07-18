@@ -5,8 +5,8 @@ bound. The live prompt stays a bounded recent window; older discussion is reache
 demand through the pgvector store we already populate. "Topics" are a soft, derived label over the
 one thread — **not** separate hidden conversations behind a router.
 
-Status: design only. No feature code has been written for this yet. Phases and integration points
-below are the contract for the implementation that follows.
+Status: **Phase 1 (auto-recall layer) is implemented** — see the rollout section. Phases 2–4 remain
+design. Integration points below are the contract for the work that follows.
 
 ## Goal / non-goals
 
@@ -203,10 +203,17 @@ grow-the-prompt approach.
 
 ## Rollout
 
-- **Phase 0 — this doc.**
-- **Phase 1 — recall layer, no schema change.** `recallRelevantContext()` in core over existing
-  message embeddings (neighborhood + dedupe), trust-gated, behind a config flag, wired into both
-  chat paths. Ship and measure recall hit-rate and injected size.
+- **Phase 0 — this doc.** ✅
+- **Phase 1 — recall layer, no schema change. ✅ Implemented.** `recallRelevantContext()` +
+  `recentWindowStart()` in `packages/core/src/memory/recall.ts` over existing message embeddings
+  (neighborhood + dedupe), pulling only from owner/assistant-trust threads. Injected via a `recall`
+  extra on `buildSystemPrompt` (`chat.ts`), wired into the streaming path
+  (`apps/web/app/api/chat/route.ts`) and the executor chat-turn path
+  (`packages/core/src/workflow/executor.ts`, gated on `privilegedTask && !untrustedContext`). Behind
+  the `CHAT_RECALL_ENABLED` flag (off by default). Covered by
+  `packages/core/src/memory/recall.test.ts` (window exclusion, similarity threshold, trust filter,
+  neighborhood expansion, dedup). Next: turn the flag on and measure recall hit-rate and injected
+  size before starting Phase 2.
 - **Phase 2 — segments.** `conversation_segments` + rolling summaries + boundary detection in the
   maintenance pass; switch recall to segment summaries.
 - **Phase 3 — single-thread UX.** `/chat` → primary thread; list becomes "All chats."

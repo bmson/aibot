@@ -48,7 +48,10 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  */
 export const PROMPT_VERSION = 8;
 
-export function buildSystemPrompt(agent: AgentRow, extras: { ownerCard?: string } = {}): string {
+export function buildSystemPrompt(
+  agent: AgentRow,
+  extras: { ownerCard?: string; recall?: string } = {},
+): string {
   const now = new Intl.DateTimeFormat('en-US', {
     timeZone: agent.timezone,
     dateStyle: 'full',
@@ -77,6 +80,7 @@ export function buildSystemPrompt(agent: AgentRow, extras: { ownerCard?: string 
           extras.ownerCard,
         ]
       : []),
+    ...(extras.recall ? ['', extras.recall] : []),
   ].join('\n');
 }
 
