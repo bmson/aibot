@@ -927,9 +927,8 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       toolChoice: forcedArtifact ? { type: 'tool', toolName: forcedArtifact.toolName } : undefined,
       // The primary chat model has intermittently timed out when a named tool
       // is mandatory. Use the role's configured tool-capable fallback for this
-      // narrow, deterministic request, without spending time on hidden reasoning.
+      // narrow, deterministic request.
       forceFallback: Boolean(forcedArtifact),
-      disableReasoning: Boolean(forcedArtifact),
       maxOutputTokens: forcedArtifact ? 256 : undefined,
       critical,
     });
@@ -954,7 +953,6 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         tools: toolSet as never,
         toolChoice: { type: 'tool', toolName: forcedArtifact.toolName },
         forceFallback: true,
-        disableReasoning: true,
         maxOutputTokens: 256,
         critical,
       });

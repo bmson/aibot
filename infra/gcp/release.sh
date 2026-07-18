@@ -17,6 +17,7 @@ fi
 IMAGE_ROOT="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}"
 AGENT_SERVICE_ACCOUNT="assistant-agent@${PROJECT}.iam.gserviceaccount.com"
 BROWSER_SERVICE_ACCOUNT="assistant-browser@${PROJECT}.iam.gserviceaccount.com"
+INTERNAL_INVOKER_SERVICE_ACCOUNT="assistant-internal-invoker@${PROJECT}.iam.gserviceaccount.com"
 
 if [[ "${SKIP_IMAGE_BUILD:-false}" != "true" ]]; then
   echo "Building release ${TAG} with Cloud Build"
@@ -57,6 +58,28 @@ echo "Rolling out agent"
 gcloud run services update assistant-agent \
   --project "$PROJECT" --region "$REGION" \
   --image "${IMAGE_ROOT}/agent:${TAG}" --quiet
+
+# Scheduler jobs call protected internal endpoints. Keep their authentication
+# route-scoped and self-healing on every release so an old static header cannot
+# strand retries or silently weaken the boundary after an infrastructure change.
+AGENT_URL="$(gcloud run services describe assistant-agent --project "$PROJECT" --region "$REGION" --format='value(status.url)')"
+echo "Refreshing internal scheduler OIDC"
+for JOB_SPEC in \
+  'assistant-sweep:/internal/sweep' \
+  'assistant-gmail-sync:/internal/gmail/sync' \
+  'assistant-gmail-watch:/internal/gmail/watch' \
+  'assistant-canaries:/internal/canaries/run' \
+  'assistant-canary-health:/internal/canaries/health'; do
+  JOB_NAME="${JOB_SPEC%%:*}"
+  JOB_PATH="${JOB_SPEC#*:}"
+  if gcloud scheduler jobs describe "$JOB_NAME" --project "$PROJECT" --location "$REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "$JOB_NAME" --project "$PROJECT" --location "$REGION" \
+      --uri="${AGENT_URL}${JOB_PATH}" --http-method=POST --attempt-deadline=300s \
+      --max-retry-attempts=0 --clear-headers \
+      --oidc-service-account-email="$INTERNAL_INVOKER_SERVICE_ACCOUNT" \
+      --oidc-token-audience="${AGENT_URL}${JOB_PATH}" --quiet
+  fi
+done
 
 echo "Rolling out browser job"
 gcloud run jobs update assistant-browser \

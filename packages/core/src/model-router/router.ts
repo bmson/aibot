@@ -61,8 +61,6 @@ export interface CallOptions {
   prompt?: string;
   temperature?: number;
   maxOutputTokens?: number;
-  /** Skip hidden reasoning for a narrow, deterministic tool-selection call. */
-  disableReasoning?: boolean;
   abortSignal?: AbortSignal;
 }
 
@@ -302,12 +300,6 @@ export class ModelRouter {
   ): { maxOutputTokens: number; providerOptions?: ProviderOptions } {
     const visibleLimit = this.outputLimit(role, route, opts);
     if (!route.thinking) return { maxOutputTokens: visibleLimit };
-    if (opts.disableReasoning) {
-      return {
-        maxOutputTokens: visibleLimit,
-        providerOptions: { openrouter: { reasoning: { enabled: false } } },
-      };
-    }
     return {
       maxOutputTokens: visibleLimit + REASONING_HEADROOM_TOKENS,
       providerOptions: {
