@@ -158,6 +158,34 @@ or a dedicated column, resolved/created in `ensureChatConversation`). The existi
 reachable as "All chats"; archive/restore (`route.ts:192-197`) is unchanged. Optionally surface a
 small "pulled in an earlier discussion from {date}" affordance for transparency when recall fires.
 
+## Integration with goals, tasks, retries, approvals
+
+Recall is additive context injection — it does not touch the task state machine, so everything that
+runs on tasks keeps working unchanged:
+
+- **Async / running tasks** carry a `conversationId` (`schema.ts:170`) and post their result back
+  into that conversation (`chat.ts:254-263`). Work kicked off from the primary thread reports into
+  the primary thread.
+- **Retries** are task-level and crash-safe — `attempt`, `maxSteps`, the `lockedUntil` lease, and
+  the checkpointed `state.contextWindow` (`schema.ts:192-197`). They resume from checkpoint
+  independent of how the chat window is assembled. Recall never rewrites history or gates execution.
+- **Approvals, budget guards, missions** all hang off a task → conversation. Unchanged.
+
+**Seam — autonomous work runs in its own threads today.** A goal creates a separate conversation
+titled `"Work: {goal.title}"` with `metadata.goalId` (`apps/web/app/goals/actions.ts:112-121`); a
+mission reports progress into *that* conversation (`packages/core/src/workflow/missions.ts:240-251`),
+not the primary chat. Two ways to reconcile with "one discussion":
+
+- **A (recommended).** Keep work threads separate but reachable. The primary thread's auto-recall
+  spans all threads (embeddings are channel/thread-agnostic), so asking about a goal in the primary
+  thread surfaces the mission's latest update — without a chatty mission flooding the main feed.
+- **B.** Route mission `report()` into the primary thread so background progress appears inline. More
+  "single feed," but a noisy mission spams the main conversation. Layer on later as opt-in per goal.
+
+Identity is already unified independent of this — one agent, one owner card (`chat.ts:73-79`), one
+voice profile — so it already *talks* like one person. Single-thread + recall adds the continuous
+*memory* to match.
+
 ## Rejected: hidden threads + router
 
 Auto-creating a conversation row per topic behind one UI, with a classifier routing each incoming
@@ -199,3 +227,5 @@ grow-the-prompt approach.
 2. Primary-thread migration for the existing multi-chat history — pick an existing chat as primary,
    or start a fresh primary and leave old chats in "All chats"?
 3. τ and K defaults — set from a measurement pass in phase 1 rather than guessed here.
+4. Autonomous-work threads — recall-only (option A) to start, or route mission updates into the
+   primary thread (option B)? Recommend A first, B as later per-goal opt-in.
