@@ -125,6 +125,8 @@ export class ToolDispatcher {
         // parent, so exposing it lets the model manufacture a progress update
         // that can only fail after it has already narrated the work.
         .filter((tool) => tool.name !== 'mission.update' || scope.isMissionSession)
+        // Deterministic internal tools are never model capabilities.
+        .filter((tool) => !this.registry.get(tool.name)?.flags.internalEventKind)
         .map((tool) => ({
           name: tool.name,
           description: tool.description,
@@ -288,6 +290,24 @@ export class ToolDispatcher {
         kind: 'rejected',
         reason: `tool ${input.toolName} is not available for this task`,
       };
+    }
+    if (registered.flags.internalEventKind) {
+      const trigger = input.task.trigger as
+        | { source?: unknown; payload?: Record<string, unknown> }
+        | undefined;
+      if (
+        input.ctx.trust !== 'assistant' ||
+        trigger?.source !== 'internal' ||
+        trigger.payload?.kind !== registered.flags.internalEventKind ||
+        (registered.flags.internalEventArgument !== undefined &&
+          input.args[registered.flags.internalEventArgument] !==
+            trigger.payload?.[registered.flags.internalEventArgument])
+      ) {
+        return {
+          kind: 'rejected',
+          reason: `tool ${input.toolName} is restricted to internal ${registered.flags.internalEventKind} events`,
+        };
+      }
     }
     // Hiding a tool from the model is not an enforcement boundary: models can
     // still emit a guessed tool name. Mission progress may only be written by

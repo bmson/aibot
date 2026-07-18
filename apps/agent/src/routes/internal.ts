@@ -1,6 +1,5 @@
 import {
   evaluateCanaryHealth,
-  executeTask,
   expireStaleApprovals,
   findDueTasks,
   loadConfig,
@@ -36,8 +35,8 @@ internal.post('/tasks/execute', async (c) => {
   const { taskId } = await c.req.json<{ taskId?: string }>().catch(() => ({ taskId: undefined }));
   if (!taskId) return c.json({ error: 'taskId required' }, 400);
   const deps = buildDeps();
-  const { executorDeps } = await import('../executor-deps.js');
-  const result = await executeTask(executorDeps(deps), taskId);
+  const { executeAgentTask } = await import('../task-runner.js');
+  const result = await executeAgentTask(deps, taskId);
   return c.json(result);
 });
 

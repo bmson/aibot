@@ -1,7 +1,6 @@
 import {
   backfillMessageEmbeddings,
   emitBudgetNotices,
-  executeTask,
   expireStaleApprovals,
   findDueTasks,
   getAgent,
@@ -10,7 +9,7 @@ import {
 } from '@assistant/core';
 import type { AgentDeps } from './deps.js';
 import { syncMailbox } from './email-sync.js';
-import { executorDeps } from './executor-deps.js';
+import { executeAgentTask } from './task-runner.js';
 
 const POLL_INTERVAL_MS = 2000;
 const SWEEP_EVERY_TICKS = 150; // ~5 min, matching the prod Cloud Scheduler cadence
@@ -50,7 +49,7 @@ export function startPoller(deps: AgentDeps): () => void {
       }
       const due = await findDueTasks(deps.db, 5);
       for (const task of due) {
-        const result = await executeTask(executorDeps(deps), task.id);
+        const result = await executeAgentTask(deps, task.id);
         if (result.outcome !== 'not_claimable') {
           console.log(`task ${task.id.slice(0, 8)} [${task.type}] → ${result.outcome}`);
         }

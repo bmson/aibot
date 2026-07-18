@@ -311,6 +311,57 @@ export const approvals = pgTable(
   ],
 );
 
+// ── Pre-authorized cross-event workflows ────────────────────────────────────
+
+/**
+ * One owner-approved application-confirmation watch. The untrusted email never
+ * supplies a Sheet destination or values: those exact arguments are frozen in
+ * tracker_update when the owner approves the watch.
+ */
+export const applicationConfirmations = pgTable(
+  'application_confirmations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    sourceTaskId: uuid('source_task_id')
+      .notNull()
+      .references(() => tasks.id),
+    conversationId: uuid('conversation_id').references(() => conversations.id),
+    company: text('company').notNull(),
+    role: text('role').notNull(),
+    expectedSenderEmails: text('expected_sender_emails').array().notNull(),
+    /** SHA-256 of an opaque, case-normalized receipt/requisition token. */
+    confirmationTokenHash: text('confirmation_token_hash').notNull(),
+    /** Non-sensitive last four characters for owner-facing audit messages. */
+    confirmationTokenHint: text('confirmation_token_hint').notNull(),
+    /** { spreadsheetId, sheetName, startCell, rows } approved before email arrival. */
+    trackerUpdate: jsonb('tracker_update').notNull(),
+    status: text('status').notNull().default('awaiting_confirmation'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    confirmationMessageId: text('confirmation_message_id'),
+    confirmationFrom: text('confirmation_from'),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      'application_confirmations_status_check',
+      sql`${t.status} IN ('awaiting_confirmation','confirmation_received','updated','update_unknown','update_failed','cancelled','expired')`,
+    ),
+    uniqueIndex('application_confirmations_message_idx')
+      .on(t.confirmationMessageId)
+      .where(sql`${t.confirmationMessageId} IS NOT NULL`),
+    uniqueIndex('application_confirmations_active_token_idx')
+      .on(t.agentId, t.confirmationTokenHash)
+      .where(sql`${t.status} = 'awaiting_confirmation'`),
+    index('application_confirmations_pending_idx').on(t.agentId, t.status, t.expiresAt),
+    index('application_confirmations_source_task_idx').on(t.sourceTaskId),
+  ],
+);
+
 /**
  * User-authored autonomy rules created from the approval dialog (Always/Never) or /settings.
  * Constrained per-tool templates — never free-form predicates. Consulted by the risk gate
@@ -792,6 +843,7 @@ export type MessageRow = typeof messages.$inferSelect;
 export type TaskRow = typeof tasks.$inferSelect;
 export type ToolCallRow = typeof toolCalls.$inferSelect;
 export type ApprovalRow = typeof approvals.$inferSelect;
+export type ApplicationConfirmationRow = typeof applicationConfirmations.$inferSelect;
 export type ApprovalPolicyRow = typeof approvalPolicies.$inferSelect;
 export type MemoryRow = typeof memories.$inferSelect;
 export type MemoryTombstoneRow = typeof memoryTombstones.$inferSelect;

@@ -74,6 +74,10 @@ export interface AssistantTool<S extends z.ZodType = z.ZodType, Out = unknown> {
 
 /** Security capabilities used to remove tools from untrusted task registries. */
 export interface ToolFlags {
+  /** Hidden from models and callable only by this exact internal event kind. */
+  internalEventKind?: string;
+  /** Argument whose value must equal the same-named internal event payload field. */
+  internalEventArgument?: string;
   /** Stripped from the registry for tasks triggered by untrusted content. */
   outwardFacing?: boolean;
   /** Stripped for untrusted-trigger tasks (prevents memory-persistence attacks). */

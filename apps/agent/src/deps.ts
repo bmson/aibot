@@ -15,6 +15,7 @@ import {
   GoogleClient,
   LocalProcessLauncher,
   LocalWorkspaceStore,
+  registerApplicationTools,
   registerBrowserTools,
   registerBuiltinTools,
   registerCalendarTools,
@@ -119,6 +120,7 @@ export function buildDeps(): AgentDeps {
       client: googleClient,
       ownerEmail: config.OWNER_EMAIL,
     });
+    registerApplicationTools(registry, { client: googleClient });
     registerSlidesTools(registry, {
       client: googleClient,
       ownerEmail: config.OWNER_EMAIL,

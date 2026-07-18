@@ -11,6 +11,7 @@ import {
 import { extractGmailText, type GmailPayload, gmailHeader } from '@assistant/tools';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import { processApplicationConfirmation } from './application-confirmations.js';
 import type { AgentDeps } from './deps.js';
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -201,7 +202,7 @@ async function conversationForThread(
   return conversation.id;
 }
 
-async function processMessage(
+export async function processMessage(
   deps: AgentDeps,
   agentId: string,
   botEmail: string,
@@ -240,6 +241,18 @@ async function processMessage(
   if (from === botEmail.toLowerCase()) return 'skipped';
   if (!msg.labelIds?.includes('INBOX')) return 'skipped';
 
+  const text = extractGmailText(msg.payload).slice(0, 20000);
+  const authenticated = gmailSenderAuthenticated(msg.payload, from);
+  const application = await processApplicationConfirmation(deps, {
+    agentId,
+    messageId: msg.id,
+    from,
+    subject,
+    body: text,
+    authenticated,
+  });
+  if (application.kind !== 'ignored') return 'triaged';
+
   // Recover the narrow crash window after message persistence but before task
   // creation without paying for sender classification again.
   if (existing) {
@@ -269,7 +282,7 @@ async function processMessage(
     from,
     subject,
     msg.snippet ?? '',
-    gmailSenderAuthenticated(msg.payload, from),
+    authenticated,
   );
   if (automated) {
     console.log(`email-sync: skipping automated mail from ${from} ("${subject.slice(0, 40)}")`);
@@ -277,7 +290,6 @@ async function processMessage(
   }
 
   const conversationId = await conversationForThread(deps, agentId, msg.threadId, trust, subject);
-  const text = extractGmailText(msg.payload).slice(0, 20000);
   const persisted = await persistMessage(deps.db, {
     conversationId,
     role: 'user',

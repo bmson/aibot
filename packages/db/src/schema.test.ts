@@ -11,6 +11,7 @@ const EXPECTED_TABLES = [
   'tasks',
   'tool_calls',
   'approvals',
+  'application_confirmations',
   'approval_policies',
   'memories',
   'contacts',
@@ -71,6 +72,22 @@ describe('schema', () => {
     const cols = getTableColumns(schema.toolCalls);
     expect(cols).toHaveProperty('decision');
     expect(cols).toHaveProperty('idempotencyKey');
+  });
+
+  it('application confirmations freeze sender, token, and tracker authorization', () => {
+    const cols = getTableColumns(schema.applicationConfirmations);
+    for (const col of [
+      'sourceTaskId',
+      'conversationId',
+      'expectedSenderEmails',
+      'confirmationTokenHash',
+      'trackerUpdate',
+      'confirmationMessageId',
+      'status',
+      'expiresAt',
+    ]) {
+      expect(cols, `missing application confirmation column ${col}`).toHaveProperty(col);
+    }
   });
 
   it('memories carries category/confidence/quarantine', () => {
