@@ -25,6 +25,14 @@ import { codeJobName, runCodeJob } from '../memory/jobs.js';
 import type { ModelRole, ModelRouter, ProposedToolCall } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import {
+  type ArtifactIntent,
+  artifactExecutionFailure,
+  artifactRoutingFailure,
+  artifactToolUnavailable,
+  needsArtifactToolRetry,
+  requestedArtifactIntent,
+} from './artifact-intent.js';
+import {
   checkpointTask,
   claimTask,
   completeTask,
@@ -187,6 +195,17 @@ function compact(window: ModelMessage[]): ModelMessage[] {
   return window.length <= CONTEXT_WINDOW_LIMIT
     ? window
     : window.slice(window.length - CONTEXT_WINDOW_LIMIT);
+}
+
+/** Latest direct owner wording, used only for deterministic artifact routing. */
+function latestUserText(window: ModelMessage[]): string | undefined {
+  for (let i = window.length - 1; i >= 0; i -= 1) {
+    const message = window[i];
+    if (message?.role === 'user' && typeof message.content === 'string') {
+      return message.content;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -355,6 +374,7 @@ async function stageModelFinalResponse(
   state: TaskState,
   window: ModelMessage[],
   pending: PendingFinal,
+  expectedArtifact?: ArtifactIntent,
 ): Promise<ExecuteResult> {
   const rows = await deps.db
     .select({
@@ -366,6 +386,18 @@ async function stageModelFinalResponse(
     .from(toolCalls)
     .where(eq(toolCalls.taskId, task.id));
   const evidence: ActionEvidence[] = rows;
+  const explicitFailure = expectedArtifact
+    ? artifactExecutionFailure(expectedArtifact, rows)
+    : undefined;
+  if (explicitFailure) {
+    return stageFinalResponse(deps, task, state, window, {
+      ...pending,
+      text: explicitFailure,
+      progress: explicitFailure.slice(0, 200),
+      terminalStatus: 'failed',
+      outcome: 'failed',
+    });
+  }
   const checked = enforceResponseContract(pending.text, evidence);
   const text = checked.text;
   if (checked.blocked) {
@@ -544,6 +576,11 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   if (window.length === 0) {
     window = await seedContext(db, task);
   }
+  // A direct document/sheet/slides request is executable without a separate
+  // planning turn. The model still supplies title/content, but it must do so
+  // through the matching creation tool.
+  const artifactIntent =
+    state.step === 0 ? requestedArtifactIntent(latestUserText(window) ?? '') : undefined;
   let browserStageRemainder: ProposedToolCall[] = [];
   const browserStageSnapshots = new Map<
     string,
@@ -794,7 +831,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
 
   // ── Plan (decide, don't execute) ──────────────────────────────────────────
   let plan = task.plan ? PlanSchema.parse(task.plan) : null;
-  if (!plan) {
+  if (!plan && !artifactIntent) {
     plan = await planTask({ db, router }, task, agent, window);
     if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
     if (plan?.action === 'mission') {
@@ -870,14 +907,65 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         { description: def.description, inputSchema: def.inputSchema },
       ]),
     );
-    const stepResult = await router.step(role, {
+    const forcedArtifact = state.step === 0 ? artifactIntent : undefined;
+    if (forcedArtifact && !toolDefs.some((tool) => tool.name === forcedArtifact.toolName)) {
+      const text = artifactToolUnavailable(forcedArtifact);
+      window.push({ role: 'assistant', content: text } as ModelMessage);
+      return stageFinalResponse(deps, lease, state, window, {
+        text,
+        progress: text.slice(0, 200),
+        terminalStatus: 'done',
+        outcome: 'done',
+      });
+    }
+
+    let stepResult = await router.step(role, {
       taskId: task.id,
       system,
       messages: window,
       tools: toolSet as never,
+      toolChoice: forcedArtifact ? { type: 'tool', toolName: forcedArtifact.toolName } : undefined,
       critical,
     });
     if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+
+    // A provider is allowed to return prose despite a forced tool choice. Give
+    // it one tightly constrained retry; never turn that prose into a claimed
+    // artifact or dispatch unrelated calls on behalf of this direct request.
+    if (
+      stepResult.ok &&
+      forcedArtifact &&
+      needsArtifactToolRetry(forcedArtifact, stepResult.toolCalls)
+    ) {
+      console.warn('retrying missing required artifact tool call', {
+        taskId: task.id,
+        requiredTool: forcedArtifact.toolName,
+      });
+      stepResult = await router.step(role, {
+        taskId: task.id,
+        system: `${system}\n\nThis is an explicit artifact request. Call ${forcedArtifact.toolName} now. Do not answer with prose until that tool call has been emitted.`,
+        messages: window,
+        tools: toolSet as never,
+        toolChoice: { type: 'tool', toolName: forcedArtifact.toolName },
+        critical,
+      });
+      if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+
+      if (stepResult.ok && needsArtifactToolRetry(forcedArtifact, stepResult.toolCalls)) {
+        const text = artifactRoutingFailure(forcedArtifact);
+        console.error('required artifact tool call was not emitted', {
+          taskId: task.id,
+          requiredTool: forcedArtifact.toolName,
+        });
+        window.push({ role: 'assistant', content: text } as ModelMessage);
+        return stageFinalResponse(deps, lease, state, window, {
+          text,
+          progress: text.slice(0, 200),
+          terminalStatus: 'failed',
+          outcome: 'failed',
+        });
+      }
+    }
 
     if (!stepResult.ok) {
       if (stepResult.decision.mode === 'block') {
@@ -911,6 +999,15 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         `I hit this task's own budget cap (${stepResult.decision.reason}) and stopped. It's marked needs-attention on the Tasks page — raise the task budget there if you want me to finish.`,
       );
       return { outcome: 'needs_attention', detail: stepResult.decision.reason };
+    }
+
+    if (forcedArtifact) {
+      // A forced creation request authorizes only its matching tool. This is
+      // defense in depth in case a provider emits additional calls anyway.
+      const requiredCall = stepResult.toolCalls.find(
+        (toolCall) => toolCall.toolName === forcedArtifact.toolName,
+      );
+      if (requiredCall) stepResult = { ...stepResult, toolCalls: [requiredCall] };
     }
 
     // 'length' means the model was cut off at the token budget. With no tool
@@ -1085,12 +1182,19 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     // no tool calls → final answer
     const text = stepResult.text.trim() || '(no response)';
     window.push({ role: 'assistant', content: text } as ModelMessage);
-    return stageModelFinalResponse(deps, lease, state, window, {
-      text,
-      progress: text.slice(0, 200),
-      terminalStatus: 'done',
-      outcome: 'done',
-    });
+    return stageModelFinalResponse(
+      deps,
+      lease,
+      state,
+      window,
+      {
+        text,
+        progress: text.slice(0, 200),
+        terminalStatus: 'done',
+        outcome: 'done',
+      },
+      artifactIntent,
+    );
   }
 
   // max steps exhausted

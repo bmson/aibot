@@ -60,6 +60,9 @@ export interface CallOptions {
   abortSignal?: AbortSignal;
 }
 
+/** The small tool-choice surface the workflow needs from the AI SDK. */
+export type StepToolChoice = 'auto' | 'none' | 'required' | { type: 'tool'; toolName: string };
+
 export type GenerateOutcome =
   | { ok: false; decision: Extract<BudgetDecision, { mode: 'park' | 'block' }> }
   | { ok: true; modelId: string; degraded: boolean; text: string; finishReason?: string };
@@ -514,7 +517,10 @@ export class ModelRouter {
    * One executor step: tools are passed WITHOUT execute functions, so the SDK
    * returns unexecuted tool calls — exactly what the risk gate needs.
    */
-  async step(role: ModelRole, opts: CallOptions & { tools: ToolSet }): Promise<StepCallOutcome> {
+  async step(
+    role: ModelRole,
+    opts: CallOptions & { tools: ToolSet; toolChoice?: StepToolChoice },
+  ): Promise<StepCallOutcome> {
     const route = await this.route(role, opts);
     if (!route.ok) return { ok: false, decision: route.decision };
     if (role === 'embed') throw new Error('step() cannot use the embed role');
@@ -533,6 +539,7 @@ export class ModelRouter {
           system: opts.system,
           ...promptArgs(opts),
           tools: opts.tools,
+          toolChoice: opts.toolChoice as never,
           temperature: opts.temperature ?? (route.params.temperature as number | undefined),
           maxOutputTokens,
           providerOptions,

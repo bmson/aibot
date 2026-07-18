@@ -1,0 +1,62 @@
+import { describe, expect, it } from 'vitest';
+import {
+  artifactExecutionFailure,
+  artifactRoutingFailure,
+  artifactToolUnavailable,
+  needsArtifactToolRetry,
+  requestedArtifactIntent,
+} from './artifact-intent.js';
+
+describe('requestedArtifactIntent', () => {
+  it.each([
+    ['try creating the doc again', 'docs.create'],
+    ['Create a Google Document for the project plan', 'docs.create'],
+    ['make a spreadsheet for the budget', 'sheets.create'],
+    ['prepare slides for the customer briefing', 'slides.create'],
+  ])('routes an explicit artifact request to %s', (text, toolName) => {
+    expect(requestedArtifactIntent(text)?.toolName).toBe(toolName);
+  });
+
+  it.each([
+    'can it create docs, sheets, and slides?',
+    'how do I create a Google Doc?',
+    "don't create a document yet",
+    'create a document and a spreadsheet',
+  ])('does not force a tool for %s', (text) => {
+    expect(requestedArtifactIntent(text)).toBeUndefined();
+  });
+
+  it('requires the matching tool call and describes both no-attempt outcomes precisely', () => {
+    const intent = requestedArtifactIntent('Try creating the doc again');
+    expect(intent).toBeDefined();
+    if (!intent) return;
+
+    expect(needsArtifactToolRetry(intent, [])).toBe(true);
+    expect(needsArtifactToolRetry(intent, [{ toolName: 'docs.create' }])).toBe(false);
+    expect(artifactRoutingFailure(intent)).toContain('docs.create');
+    expect(artifactRoutingFailure(intent)).toContain('No request was sent to Google');
+    expect(artifactToolUnavailable(intent)).toContain('not available to this task');
+  });
+
+  it('surfaces the durable Google error and never calls a failed creation complete', () => {
+    const intent = requestedArtifactIntent('Create a document');
+    expect(intent).toBeDefined();
+    if (!intent) return;
+
+    expect(
+      artifactExecutionFailure(intent, [
+        {
+          toolName: 'docs.create',
+          status: 'failed',
+          result: null,
+          error: 'Google API 403: insufficient authentication scopes',
+        },
+      ]),
+    ).toContain('Google API 403');
+    expect(
+      artifactExecutionFailure(intent, [
+        { toolName: 'docs.create', status: 'succeeded', result: { documentId: 'doc-1' } },
+      ]),
+    ).toBeUndefined();
+  });
+});
