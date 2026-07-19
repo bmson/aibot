@@ -74,6 +74,11 @@ internal.post('/sweep', async (c) => {
     console.error('application watch reaper failed', err);
     return 0;
   });
+  const { reapExpiredWatches } = await import('../watches.js');
+  const expiredInboxWatches = await reapExpiredWatches(deps).catch((err) => {
+    console.error('watch reaper failed', err);
+    return 0;
+  });
   return c.json({
     expiredApprovalsWoke: woken.length,
     resumedApprovalTasks: resumedApprovalTasks.length,
@@ -82,6 +87,7 @@ internal.post('/sweep', async (c) => {
     messagesEmbedded: embedded,
     budgetNotices: budgetNotices.length,
     expiredWatches,
+    expiredInboxWatches,
     purged,
   });
 });

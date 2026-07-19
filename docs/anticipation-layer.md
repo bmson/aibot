@@ -7,8 +7,10 @@ Design for the assistant acting *before* it is asked. Two capabilities, one shar
 2. **The briefing** — a standing, scheduled digest (calendar conflicts, things that need the owner,
    mission/goal deltas, watcher hits, suggested next actions) delivered in the owner's voice.
 
-Status: **proposed** (Phase 0). This document is the source of truth for the design; nothing here is
-built yet. It deliberately reuses the two pieces of machinery that already exist for exactly this
+Status: **Phase 1 shipped** — notify-tier email watchers (the `watches`/`watch_fires` tables, the
+`watch.create`/`watch.list`/`watch.cancel` tools, the `matchEmailWatches` pass on the inbound-mail
+hook, and the expiry reaper). Phases 2–4 remain proposed. This document is the source of truth for
+the design. It deliberately reuses the two pieces of machinery that already exist for exactly this
 shape of work — the application-confirmation *watch* and the goal-automation *schedule* — and copies
 their security discipline verbatim rather than inventing a new one.
 
@@ -204,9 +206,11 @@ Cadence comes from an owner setting (default: weekday morning in `agent.timezone
 
 ## Phased rollout
 
-- **Phase 1 — `notify`-tier email watchers.** `watches` table, `watch.create`/`watch.list`/
-  `watch.cancel` tools, the general `matchWatches` pass wired into the existing inbound-mail hook,
-  expiry reaper. Zero autonomous action ⇒ lowest risk, immediate "it noticed" value.
+- **Phase 1 — `notify`-tier email watchers. ✅ Shipped.** `watches` + `watch_fires` tables,
+  `watch.create`/`watch.list`/`watch.cancel` tools, the `matchEmailWatches` pass wired into the
+  existing inbound-mail hook (side-effect only — it never short-circuits normal triage), and an
+  expiry reaper on the sweep. Zero autonomous action ⇒ lowest risk, immediate "it noticed" value.
+  Firing is idempotent per (watch, message) via the `watch_fires` unique index.
 - **Phase 2 — the briefing + suggestion surface.** `briefing.compose` code-job, per-agent cadence
   setting, `suggestions` table and dashboard surface, `suggest`-tier watchers.
 - **Phase 3 — web-change watchers.** `watch.poll_web` code-job over sandboxed `web.fetch` with

@@ -25,6 +25,7 @@ import {
   registerSheetsTools,
   registerSlidesTools,
   registerSmsTools,
+  registerWatchTools,
   ToolDispatcher,
   ToolRegistry,
   TwilioClient,
@@ -92,6 +93,9 @@ export function buildDeps(): AgentDeps {
     launcher: browserLauncher,
     callbackUrl: `${config.PUBLIC_URL}/webhooks/browser/callback`,
   });
+  // Inbox watchers take no outward action and need no provider client, so they
+  // are available even when Google/Twilio are not configured.
+  registerWatchTools(registry);
 
   if (googleClient.configured()) {
     const botEmail = 'bot@bmson.com';

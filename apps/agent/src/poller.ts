@@ -12,6 +12,7 @@ import { reapExpiredApplicationWatches } from './application-confirmations.js';
 import type { AgentDeps } from './deps.js';
 import { syncMailbox } from './email-sync.js';
 import { executeAgentTask } from './task-runner.js';
+import { reapExpiredWatches } from './watches.js';
 
 const POLL_INTERVAL_MS = 2000;
 const SWEEP_EVERY_TICKS = 150; // ~5 min, matching the prod Cloud Scheduler cadence
@@ -51,6 +52,7 @@ export function startPoller(deps: AgentDeps): () => void {
         await reapExpiredApplicationWatches(deps).catch((err) =>
           console.error('application watch reaper failed', err),
         );
+        await reapExpiredWatches(deps).catch((err) => console.error('watch reaper failed', err));
       }
       if (tick % EMAIL_SYNC_EVERY_TICKS === 0 && deps.googleClient.configured()) {
         await syncMailbox(deps).catch((err) => console.error('email-sync error', err));

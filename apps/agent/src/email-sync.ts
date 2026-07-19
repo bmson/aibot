@@ -13,6 +13,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { processApplicationConfirmation } from './application-confirmations.js';
 import type { AgentDeps } from './deps.js';
+import { matchEmailWatches } from './watches.js';
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const HISTORY_PAGE_SIZE = 25;
@@ -278,6 +279,18 @@ export async function processMessage(
     authenticated,
   });
   if (application.kind !== 'ignored') return 'triaged';
+
+  // Anticipation layer: fire any owner-defined inbox watchers this message
+  // matches. Side-effect only (a notice + owner ping) — a watched message is
+  // still an ordinary email, so this never short-circuits normal triage.
+  await matchEmailWatches(deps, {
+    agentId,
+    messageId: msg.id,
+    from,
+    subject,
+    body: text,
+    authenticated,
+  }).catch((err) => console.error('watch matching failed', err));
 
   // Recover the narrow crash window after message persistence but before task
   // creation without paying for sender classification again.

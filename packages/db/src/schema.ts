@@ -858,6 +858,69 @@ export const schedules = pgTable(
   ],
 );
 
+// ── Watchers (anticipation layer) ────────────────────────────────────────────
+
+/**
+ * An owner-defined condition the assistant waits on ("tell me if X emails").
+ * See docs/anticipation-layer.md. Phase 1 is deliberately narrow — enforced by
+ * the CHECKs below, not by prompt: kind='email' and tier='notify', so a match
+ * only *informs* the owner and takes no outward action. Untrusted trigger
+ * content selects a watch; it never authors an action. Later phases widen the
+ * enums by migration.
+ */
+export const watches = pgTable(
+  'watches',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    /** Where notices for this watch are posted (a chat the owner can see). */
+    conversationId: uuid('conversation_id').references(() => conversations.id),
+    kind: text('kind').notNull().default('email'),
+    tier: text('tier').notNull().default('notify'),
+    name: text('name').notNull(),
+    /** Match spec. email: { expectedSenderEmails: string[], keywords?: string[] }. */
+    match: jsonb('match').notNull().default({}),
+    status: text('status').notNull().default('active'),
+    fireCount: integer('fire_count').notNull().default(0),
+    /** Stop after this many fires; null = fire on every match until expiry. */
+    maxFires: integer('max_fires'),
+    lastFiredAt: timestamp('last_fired_at', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    check('watches_kind_check', sql`${t.kind} IN ('email')`),
+    check('watches_tier_check', sql`${t.tier} IN ('notify')`),
+    check('watches_status_check', sql`${t.status} IN ('active','fired','expired','cancelled')`),
+    index('watches_active_idx').on(t.agentId, t.status, t.kind, t.expiresAt),
+  ],
+);
+
+/**
+ * One recorded firing of a watch. Unique per (watch, trigger) so at-least-once
+ * delivery and Gmail history replays never double-notify — the same
+ * message-level idempotency the confirmation ledger relies on.
+ */
+export const watchFires = pgTable(
+  'watch_fires',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    watchId: uuid('watch_id')
+      .notNull()
+      .references(() => watches.id),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    /** Dedupe key for the triggering event, e.g. 'gmail:<messageId>'. */
+    triggerRef: text('trigger_ref').notNull(),
+    summary: text('summary').notNull().default(''),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('watch_fires_watch_trigger_idx').on(t.watchId, t.triggerRef)],
+);
+
 /** Durable, machine-readable health checks for deployed channel integrations. */
 export const canaryRuns = pgTable(
   'canary_runs',
@@ -924,4 +987,6 @@ export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;
 export type ScheduleRow = typeof schedules.$inferSelect;
+export type WatchRow = typeof watches.$inferSelect;
+export type WatchFireRow = typeof watchFires.$inferSelect;
 export type CanaryRunRow = typeof canaryRuns.$inferSelect;
