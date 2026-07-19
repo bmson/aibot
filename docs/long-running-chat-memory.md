@@ -182,11 +182,15 @@ titled `"Work: {goal.title}"` with `metadata.goalId` (`apps/web/app/goals/action
 mission reports progress into *that* conversation (`packages/core/src/workflow/missions.ts:240-251`),
 not the primary chat. Two ways to reconcile with "one discussion":
 
-- **A (recommended).** Keep work threads separate but reachable. The primary thread's auto-recall
-  spans all threads (embeddings are channel/thread-agnostic), so asking about a goal in the primary
-  thread surfaces the mission's latest update — without a chatty mission flooding the main feed.
-- **B.** Route mission `report()` into the primary thread so background progress appears inline. More
-  "single feed," but a noisy mission spams the main conversation. Layer on later as opt-in per goal.
+- **A (default).** Keep work threads separate but reachable. The primary thread's auto-recall spans
+  all threads (embeddings are channel/thread-agnostic), so asking about a goal in the primary thread
+  surfaces the mission's latest update — without a chatty mission flooding the main feed.
+- **B (implemented, per-goal opt-in).** A goal with `goals.mirror_to_primary` set also has its
+  mission `report()` updates mirrored — as a short labeled copy — into the primary thread, so
+  background progress appears inline. `mirrorGoalUpdateToPrimary` (`chat.ts`) is called from mission
+  `report()` (`missions.ts`); it no-ops unless the goal opted in and a primary thread already exists,
+  and the work chat still keeps the full record. Toggled from the goal create/edit forms. Off by
+  default so a noisy mission never spams the main conversation uninvited.
 
 Identity is already unified independent of this — one agent, one owner card (`chat.ts:73-79`), one
 voice profile — so it already *talks* like one person. Single-thread + recall adds the continuous
@@ -257,5 +261,6 @@ grow-the-prompt approach.
    recent non-goal chat to primary (so an existing owner keeps their real main thread), or creates a
    fresh one; the primary is then sticky.
 3. τ and K defaults — still guessed (τ = 0.75, K = 4). Tune from a measurement pass with the flag on.
-4. Autonomous-work threads — recall-only (option A) is what ships (recall spans all owner threads).
-   Routing mission updates into the primary thread (option B) is still a later per-goal opt-in.
+4. ~~Autonomous-work threads — recall-only vs route-into-primary.~~ **Resolved:** option A is the
+   default (recall spans all owner threads); option B ships as a per-goal `mirror_to_primary` opt-in
+   that mirrors mission updates into the primary thread. Off by default.

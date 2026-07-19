@@ -1,7 +1,7 @@
 import { type AgentRow, type Db, type TaskRow, tasks } from '@assistant/db';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { persistMessage } from '../chat.js';
+import { mirrorGoalUpdateToPrimary, persistMessage } from '../chat.js';
 import { InboundEventSchema, type Plan, type TaskState } from '../events.js';
 import type { ModelRouter } from '../model-router/router.js';
 import {
@@ -237,17 +237,23 @@ async function reflect(
   }
 }
 
-/** Post a mission update where the owner will see it (its conversation, if any). */
+/** Post a mission update where the owner will see it (its work chat), and, for
+ * opted-in goals, mirror a labeled copy into the primary thread so background
+ * work shows up in the one discussion (long-running-chat design, option B). */
 async function report(db: Db, mission: TaskRow, text: string): Promise<void> {
-  if (!mission.conversationId) return;
-  await persistMessage(db, {
-    conversationId: mission.conversationId,
-    taskId: mission.id,
-    role: 'assistant',
-    origin: 'assistant',
-    parts: [{ type: 'text', text }],
-    text,
-  });
+  if (mission.conversationId) {
+    await persistMessage(db, {
+      conversationId: mission.conversationId,
+      taskId: mission.id,
+      role: 'assistant',
+      origin: 'assistant',
+      parts: [{ type: 'text', text }],
+      text,
+    });
+  }
+  await mirrorGoalUpdateToPrimary(db, mission, text).catch((err) =>
+    console.error('goal update mirror to primary thread failed', err),
+  );
 }
 
 /** Postgres interval → ms (supports the shapes we write: 'N days', 'HH:MM:SS'). */

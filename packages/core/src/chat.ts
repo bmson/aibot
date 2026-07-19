@@ -5,6 +5,7 @@ import {
   type ConversationRow,
   conversations,
   type Db,
+  goals,
   messages,
   tasks,
 } from '@assistant/db';
@@ -187,6 +188,58 @@ export async function getOrCreatePrimaryConversation(
     if (!created) throw new Error('failed to create primary conversation');
     return created;
   });
+}
+
+/**
+ * Mirror an opted-in goal's mission update into the owner's primary chat thread
+ * (long-running-chat design, option B), so background work shows up in the one
+ * discussion. No-op unless the goal has `mirrorToPrimary` set and a primary
+ * thread already exists. The work chat remains the full record; this posts a
+ * short labeled copy. Best-effort — callers swallow errors.
+ */
+export async function mirrorGoalUpdateToPrimary(
+  db: Db,
+  mission: { id: string; agentId: string; goalId: string | null; conversationId: string | null },
+  text: string,
+): Promise<void> {
+  if (!mission.goalId) return;
+  const [goal] = await db
+    .select({ title: goals.title, mirror: goals.mirrorToPrimary })
+    .from(goals)
+    .where(eq(goals.id, mission.goalId))
+    .limit(1);
+  if (!goal?.mirror) return;
+  const primary = await findPrimaryConversation(db, mission.agentId);
+  // Skip when there's no primary yet, or the mission already reports into it.
+  if (!primary || primary.id === mission.conversationId) return;
+  const labeled = `On your goal “${goal.title}”: ${text}`;
+  await persistMessage(db, {
+    conversationId: primary.id,
+    taskId: mission.id,
+    role: 'assistant',
+    origin: 'assistant',
+    parts: [{ type: 'text', text: labeled }],
+    text: labeled,
+  });
+}
+
+/** The existing primary chat thread, or null — never creates one (for background writers). */
+export async function findPrimaryConversation(
+  db: Db,
+  agentId: string,
+): Promise<ConversationRow | null> {
+  const [primary] = await db
+    .select()
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.agentId, agentId),
+        eq(conversations.isPrimary, true),
+        isNull(conversations.archivedAt),
+      ),
+    )
+    .limit(1);
+  return primary ?? null;
 }
 
 /** List current chats by default; archived history is opt-in in the interface. */

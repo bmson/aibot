@@ -42,6 +42,7 @@ interface ParsedGoalForm {
   targetDate: Date | null;
   progress: string;
   nextAction: string;
+  mirrorToPrimary: boolean;
 }
 
 function parseGoalForm(formData: FormData): { form: ParsedGoalForm } | { error: string } {
@@ -69,6 +70,7 @@ function parseGoalForm(formData: FormData): { form: ParsedGoalForm } | { error: 
       targetDate,
       progress: field(formData, 'progress'),
       nextAction: field(formData, 'nextAction'),
+      mirrorToPrimary: formData.get('mirrorToPrimary') != null,
     },
   };
 }

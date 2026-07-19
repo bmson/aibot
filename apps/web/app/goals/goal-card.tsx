@@ -37,6 +37,8 @@ export interface GoalView {
   automationLabel: string;
   /** e.g. 'next in 4h', empty if automation is not running. */
   automationNextLabel: string;
+  /** Mirror this goal's autonomous updates into the primary chat thread. */
+  mirrorToPrimary: boolean;
 }
 
 const outlineButton = btn.outline;
@@ -114,6 +116,11 @@ export function GoalCard({ goal }: { goal: GoalView }) {
         {goal.automationLabel}
         {goal.automationNextLabel ? ` · ${goal.automationNextLabel}` : ''}
       </p>
+      {goal.mirrorToPrimary ? (
+        <p className="mt-0.5 text-xs text-indigo-700 dark:text-indigo-300">
+          ↩ Updates mirrored to your main chat thread
+        </p>
+      ) : null}
 
       <div className="mt-3 flex flex-wrap gap-2">
         {goal.conversationId ? (
@@ -274,6 +281,15 @@ export function GoalCard({ goal }: { goal: GoalView }) {
               defaultValue={value('nextAction', goal.nextAction)}
               className={inputClass}
             />
+          </label>
+          <label className="flex items-start gap-2 text-xs font-normal text-zinc-600 dark:text-zinc-400">
+            <input
+              type="checkbox"
+              name="mirrorToPrimary"
+              defaultChecked={goal.mirrorToPrimary}
+              className="mt-0.5"
+            />
+            <span>Show this goal’s background updates in my main chat thread</span>
           </label>
           {editState.error ? (
             <p className="text-xs text-red-600 dark:text-red-400">{editState.error}</p>

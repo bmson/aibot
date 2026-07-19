@@ -60,6 +60,12 @@ export const goals = pgTable(
     progress: text('progress').notNull().default(''),
     nextAction: text('next_action').notNull().default(''),
     targetDate: timestamp('target_date', { withTimezone: true }),
+    /**
+     * Opt-in: also post this goal's autonomous mission updates into the owner's
+     * primary chat thread, so background work shows up in the one discussion
+     * (long-running-chat design, option B). Off by default to avoid noise.
+     */
+    mirrorToPrimary: boolean('mirror_to_primary').notNull().default(false),
     /** Owner-hidden goal history. Linked chats, tasks, and evidence stay intact. */
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     ...timestamps,
