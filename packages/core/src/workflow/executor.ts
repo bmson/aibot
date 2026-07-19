@@ -5,6 +5,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { ZodType } from 'zod';
 import { type BrowserJobPendingResult, isBrowserJobPending } from '../browse.js';
 import {
+  assistantMessageParts,
   buildSystemPrompt,
   getAgent,
   listMessages,
@@ -23,7 +24,7 @@ import { type PendingFinal, PlanSchema, type TaskState, type Trust } from '../ev
 import { getOwnerCard } from '../memory/consolidation.js';
 import type { WorkspaceReader } from '../memory/import.js';
 import { codeJobName, runCodeJob } from '../memory/jobs.js';
-import { recallRelevantContext, recentWindowStart } from '../memory/recall.js';
+import { type RecallSource, recallRelevantContext, recentWindowStart } from '../memory/recall.js';
 import type { ModelRole, ModelRouter, ProposedToolCall } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import {
@@ -323,7 +324,12 @@ async function postConversationNotice(db: Db, task: TaskRow, text: string): Prom
 }
 
 /** A retry must not duplicate the dashboard/chat copy of a final response. */
-async function persistFinalConversationOnce(db: Db, task: TaskRow, text: string): Promise<void> {
+async function persistFinalConversationOnce(
+  db: Db,
+  task: TaskRow,
+  text: string,
+  recall?: RecallSource[],
+): Promise<void> {
   if (!task.conversationId) return;
   const [existing] = await db
     .select({ id: messages.id })
@@ -343,7 +349,7 @@ async function persistFinalConversationOnce(db: Db, task: TaskRow, text: string)
     taskId: task.id,
     role: 'assistant',
     origin: 'assistant',
-    parts: [{ type: 'text', text }],
+    parts: assistantMessageParts(text, recall),
     text,
   });
 }
@@ -356,7 +362,8 @@ async function finalizePendingResponse(
   checkpointState?: TaskState,
 ): Promise<ExecuteResult> {
   if (!(await renewTaskLease(deps.db, task))) return LOST_LEASE;
-  await persistFinalConversationOnce(deps.db, task, pending.text);
+  const recallSources = (checkpointState ?? taskState(task)).recall ?? undefined;
+  await persistFinalConversationOnce(deps.db, task, pending.text, recallSources);
 
   // Check cancellation/reclaim immediately before the external side effect.
   if (deps.deliverFinal && !pending.deliveryAttempted) {
@@ -1091,6 +1098,9 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
           { taskId: task.id },
         );
         recallBlock = recall.block || undefined;
+        // Provenance for the chat UI affordance; checkpointed so it survives to
+        // the (possibly resumed) final-response persist.
+        state.recall = recall.sources.length > 0 ? recall.sources : undefined;
       } catch (err) {
         console.error('executor recall failed — continuing without it', err);
       }

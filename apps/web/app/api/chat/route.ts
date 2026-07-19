@@ -10,6 +10,7 @@ import {
   listMessages,
   loadConfig,
   persistMessage,
+  type RecallSource,
   recallRelevantContext,
   type StreamOutcome,
 } from '@assistant/core';
@@ -33,6 +34,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
+}
+
+/** Compact, ASCII-safe recall provenance for the x-recall response header. */
+function encodeRecallHeader(sources: RecallSource[]): string {
+  const trimmed = sources.slice(0, 3).map((s) => ({ date: s.date, label: s.label.slice(0, 60) }));
+  return encodeURIComponent(JSON.stringify(trimmed));
 }
 
 async function readBoundedBody(
@@ -287,6 +294,7 @@ export async function POST(req: Request) {
   // earlier discussion that is relevant to this turn but has scrolled out of
   // the live window. Best-effort — a recall failure must never fail the chat.
   let recallBlock: string | undefined;
+  let recallSources: RecallSource[] = [];
   if (config.CHAT_RECALL_ENABLED) {
     try {
       const recall = await recallRelevantContext(db, {
@@ -299,6 +307,7 @@ export async function POST(req: Request) {
         },
       });
       recallBlock = recall.block || undefined;
+      recallSources = recall.sources;
     } catch (err) {
       console.error('chat recall failed — continuing without it', err);
     }
@@ -326,6 +335,7 @@ export async function POST(req: Request) {
         await finishTask(db, task, {
           status: 'done',
           responseText: text,
+          recall: recallSources,
         });
       },
       onError: async (error) => {
@@ -357,6 +367,9 @@ export async function POST(req: Request) {
       'x-model-degraded': String(outcome.degraded),
       'x-conversation-id': conversation.id,
       'x-message-cursor': messageCursor,
+      // Live transparency for this streaming turn; the persisted `recall`
+      // message part carries the same provenance across reloads.
+      ...(recallSources.length > 0 ? { 'x-recall': encodeRecallHeader(recallSources) } : {}),
     },
   });
 }

@@ -9,7 +9,20 @@ import {
   tasks,
 } from '@assistant/db';
 import { and, asc, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import type { RecallSource } from './memory/recall.js';
 import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
+
+/**
+ * Parts for a persisted assistant message. Beyond the text, an optional
+ * `recall` part records which earlier discussions auto-recall drew on, so the
+ * chat UI can show a "recalled from earlier" affordance (Phase 4). The recall
+ * part is UI-only: model history is rebuilt from `messages.text`, never parts.
+ */
+export function assistantMessageParts(text: string, recall?: RecallSource[]): unknown[] {
+  const parts: unknown[] = [{ type: 'text', text }];
+  if (recall && recall.length > 0) parts.push({ type: 'recall', sources: recall });
+  return parts;
+}
 
 const DEFAULT_MESSAGE_LIMIT = 100;
 const MAX_MESSAGE_LIMIT = 200;
@@ -302,7 +315,12 @@ export async function createChatTask(
 export async function finishTask(
   db: Db,
   task: TaskLease,
-  outcome: { status: 'done' | 'failed'; progress?: string; responseText?: string },
+  outcome: {
+    status: 'done' | 'failed';
+    progress?: string;
+    responseText?: string;
+    recall?: RecallSource[];
+  },
 ): Promise<boolean> {
   return db.transaction(async (tx) => {
     // Fence first, then persist the reply in the same transaction. If an owner
@@ -320,7 +338,7 @@ export async function finishTask(
         taskId: task.id,
         role: 'assistant',
         origin: 'assistant',
-        parts: [{ type: 'text', text: outcome.responseText }],
+        parts: assistantMessageParts(outcome.responseText, outcome.recall),
         text: outcome.responseText,
       });
     }

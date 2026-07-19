@@ -5,8 +5,9 @@ bound. The live prompt stays a bounded recent window; older discussion is reache
 demand through the pgvector store we already populate. "Topics" are a soft, derived label over the
 one thread — **not** separate hidden conversations behind a router.
 
-Status: **Phases 1–3 are implemented** — auto-recall, topic segments, and the single-thread UI. See
-the rollout section for what shipped where. Phase 4 (a UI transparency affordance) remains optional.
+Status: **All phases (1–4) are implemented** — auto-recall, topic segments, the single-thread UI,
+and the "recalled from earlier" transparency affordance. See the rollout section for what shipped
+where.
 
 ## Goal / non-goals
 
@@ -160,8 +161,8 @@ else a fresh thread is created. The flag lives on `conversations.is_primary` wit
 index (one primary per agent). The full list of threads stays reachable at `/chat/all` (a new
 "All chats" nav item); "New chat" still spawns separate threads that recall stitches back in. The
 main thread can't be archived (guarded in `apps/web/app/chat/actions.ts`); archive/restore of other
-threads is unchanged. Phase 4 could still surface a "pulled in an earlier discussion from {date}"
-affordance when recall fires.
+threads is unchanged. When recall fires, the assistant turn shows a "↩ Recalled from earlier"
+affordance (Phase 4).
 
 ## Integration with goals, tasks, retries, approvals
 
@@ -230,8 +231,14 @@ grow-the-prompt approach.
 - **Phase 3 — single-thread UX. ✅ Implemented.** `/chat` → sticky primary thread; the list moved to
   `/chat/all`. `conversations.is_primary` + `getOrCreatePrimaryConversation()`; the main thread is
   archive-protected. Covered by `primary-conversation.test.ts` (create/sticky/un-archive/promote).
-- **Phase 4 (optional) — transparency affordance** in the UI ("pulled in an earlier discussion from
-  {date}").
+- **Phase 4 — transparency affordance. ✅ Implemented.** `recallRelevantContext` returns `sources`
+  ({date, label}); the assistant reply persists them as a custom `recall` message part
+  (`assistantMessageParts` in `chat.ts`) — no migration, and model history still rebuilds from
+  `messages.text`, never parts. Wired on both paths: the streaming route (`finishTask`, plus an
+  `x-recall` response header for the live turn) and the executor (`state.recall`, checkpointed, into
+  `persistFinalConversationOnce`). The chat client renders a "↩ Recalled from earlier: {date} ·
+  {label}" chip on assistant turns and a live note from the header. Covered by `chat-parts.test.ts`
+  and `sources` assertions in the recall tests.
 
 ## Test plan
 

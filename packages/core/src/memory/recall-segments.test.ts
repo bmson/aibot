@@ -105,6 +105,10 @@ describe('recall — segment tier', () => {
     expect(result.block).toContain('SEGMENT_SUMMARY');
     expect(result.block).toContain('KEY_LINE');
     expect(result.used).toBe(1);
+    // Phase 4: provenance for the UI affordance.
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0]?.date).toBe('2025-01-10');
+    expect(result.sources[0]?.label).toContain('apartment lease');
   });
 
   it('excludes a segment that overlaps the live window', async (ctx) => {

@@ -159,6 +159,10 @@ describe('recallRelevantContext (integration)', () => {
     expect(result.block).toContain('NEIGHBOR_MARKER');
     expect(result.used).toBeGreaterThanOrEqual(2);
     expect(result.candidates).toBeGreaterThanOrEqual(2);
+    // Phase 4: message-tier provenance is populated for the UI affordance.
+    expect(result.tier).toBe('message');
+    expect(result.sources.length).toBeGreaterThanOrEqual(2);
+    expect(result.sources.every((s) => /^\d{4}-\d{2}-\d{2}$/.test(s.date))).toBe(true);
   });
 
   it('excludes the live window, untrusted threads, and below-threshold matches', async (ctx) => {

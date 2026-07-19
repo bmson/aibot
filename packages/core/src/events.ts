@@ -102,6 +102,8 @@ export const TaskStateSchema = z.object({
   pendingFinal: PendingFinalSchema.nullish(),
   /** External/tool content has entered the model context; privileged calls are constrained. */
   untrustedContext: z.boolean().default(false),
+  /** Earlier discussions auto-recall drew on this turn, for the chat UI affordance (Phase 4). */
+  recall: z.array(z.object({ date: z.string(), label: z.string() })).nullish(),
   plannerState: z.record(z.string(), z.unknown()).default({}),
   scratchpad: z.string().default(''),
   contextWindow: z.array(z.record(z.string(), z.unknown())).default([]),
