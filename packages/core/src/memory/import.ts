@@ -12,7 +12,7 @@ import {
 } from '@assistant/db';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import type { ModelRouter } from '../model-router/router.js';
+import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import { getQueueNotifier } from '../queue.js';
 import { enqueueTask } from '../workflow/machine.js';
@@ -421,13 +421,32 @@ export async function runImportJob(
       const windowDate = window.date ? new Date(window.date) : null;
       const period = windowDate ? windowDate.toISOString().slice(0, 10) : 'unknown';
 
-      const outcome = await router.object<z.infer<typeof ImportFactsSchema>>('extract', {
-        taskId: task.id,
-        schema: ImportFactsSchema,
-        system: importSystem(payload.source, period),
-        prompt: window.text,
-      });
+      // A single window the model can't structure (even on the fallback) must
+      // not fail the whole import into a dead-letter — record it as progress and
+      // move on. Budget stops still park/throw below; other errors still surface.
+      const outcome = await router
+        .object<z.infer<typeof ImportFactsSchema>>('extract', {
+          taskId: task.id,
+          schema: ImportFactsSchema,
+          system: importSystem(payload.source, period),
+          prompt: window.text,
+        })
+        .catch((err) => {
+          if (!isUnparseableObjectError(err)) throw err;
+          console.error(
+            `import ${payload.source}: skipping window ${cursor.windowIndex} the model could not structure`,
+            err,
+          );
+          return null;
+        });
       await deps.heartbeat?.();
+      if (outcome === null) {
+        // Advance past the unstructurable window and checkpoint so a resume
+        // never re-blocks on it; its facts are simply not learned.
+        cursor.windowIndex += 1;
+        await checkpoint();
+        continue;
+      }
       if (!outcome.ok) {
         // A daily/monthly cap (mode 'block') frees itself when the period
         // resets, so checkpoint and come back later — never lose progress.

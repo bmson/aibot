@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createChatTask, ensureChatConversation, getAgent } from '../chat.js';
 import { BudgetReservationError } from '../cost.js';
-import { ModelRouter } from './router.js';
+import { isUnparseableObjectError, ModelRouter } from './router.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -24,6 +24,26 @@ beforeAll(async () => {
 afterAll(async () => {
   // postgres.js keeps the process alive otherwise
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
+});
+
+describe('isUnparseableObjectError', () => {
+  it('detects the AI SDK no-object error by name (either spelling)', () => {
+    const sdk = new Error('No object generated: could not parse the response.');
+    sdk.name = 'AI_NoObjectGeneratedError';
+    expect(isUnparseableObjectError(sdk)).toBe(true);
+    const alt = new Error('no object');
+    alt.name = 'NoObjectGeneratedError';
+    expect(isUnparseableObjectError(alt)).toBe(true);
+  });
+
+  it('is false for transient/provider errors and non-errors (they stay retryable)', () => {
+    expect(isUnparseableObjectError(new Error('fetch failed'))).toBe(false);
+    expect(isUnparseableObjectError(new BudgetReservationError('daily budget', new Date()))).toBe(
+      false,
+    );
+    expect(isUnparseableObjectError('AI_NoObjectGeneratedError')).toBe(false);
+    expect(isUnparseableObjectError(null)).toBe(false);
+  });
 });
 
 describe('ModelRouter.route (integration)', () => {

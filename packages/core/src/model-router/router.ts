@@ -177,6 +177,21 @@ function reservationDecision(reason: string): Extract<BudgetDecision, { mode: 'p
   return { mode: reason.startsWith('task budget') ? 'park' : 'block', reason };
 }
 
+/**
+ * True when generateObject failed because the model's response could not be
+ * parsed into the schema (the AI SDK's AI_NoObjectGeneratedError) — a *quality*
+ * failure of a weak model, not a transient/provider one. Detected by name so it
+ * does not depend on the SDK re-exporting the error class. Callers use this to
+ * retry on a stronger model and, failing that, skip the single item rather than
+ * fail (and eventually dead-letter) an entire durable job.
+ */
+export function isUnparseableObjectError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === 'AI_NoObjectGeneratedError' || err.name === 'NoObjectGeneratedError')
+  );
+}
+
 export class ModelRouter {
   private provider: OpenRouterProvider;
 
@@ -584,49 +599,75 @@ export class ModelRouter {
     role: ModelRole,
     opts: CallOptions & { schema: ZodType<T> },
   ): Promise<ObjectOutcome<T>> {
-    const route = await this.route(role, opts);
-    if (!route.ok) return { ok: false, decision: route.decision };
     if (role === 'embed') throw new Error('object() cannot use the embed role');
-    const { reservation, maxOutputTokens, providerOptions } = await this.reserveModelCall(
-      role,
-      route,
-      opts,
-    );
-    if (!reservation.ok) return { ok: false, decision: reservationDecision(reservation.reason) };
 
-    const started = Date.now();
-    try {
-      return await withSpan('model.object', { role, model: route.modelId }, async () => {
-        const result = await generateObject({
-          model: route.model,
-          system: opts.system,
-          ...promptArgs(opts),
-          schema: opts.schema,
-          temperature: opts.temperature ?? (route.params.temperature as number | undefined),
-          maxOutputTokens,
-          providerOptions,
-          abortSignal: modelCallSignal(opts.abortSignal),
-        });
-        await this.meterWithoutRepeatingProviderWork({
-          taskId: opts.taskId,
-          role,
-          modelId: route.modelId,
-          latencyMs: Date.now() - started,
-          event: result as unknown as FinishEventLike,
-          reservationId: reservation.reservationId,
-          promptCostPerMTok: route.promptCostPerMTok,
-          completionCostPerMTok: route.completionCostPerMTok,
-        });
-        return {
-          ok: true as const,
-          modelId: route.modelId,
-          degraded: route.degraded,
-          object: result.object as T,
-        };
+    const runOnce = async (forceFallback: boolean): Promise<ObjectOutcome<T>> => {
+      const route = await this.route(role, {
+        taskId: opts.taskId,
+        modelOverride: opts.modelOverride,
+        critical: opts.critical,
+        forceFallback: forceFallback || opts.forceFallback,
       });
+      if (!route.ok) return { ok: false, decision: route.decision };
+      const { reservation, maxOutputTokens, providerOptions } = await this.reserveModelCall(
+        role,
+        route,
+        opts,
+      );
+      if (!reservation.ok) return { ok: false, decision: reservationDecision(reservation.reason) };
+
+      const started = Date.now();
+      try {
+        return await withSpan('model.object', { role, model: route.modelId }, async () => {
+          const result = await generateObject({
+            model: route.model,
+            system: opts.system,
+            ...promptArgs(opts),
+            schema: opts.schema,
+            temperature: opts.temperature ?? (route.params.temperature as number | undefined),
+            maxOutputTokens,
+            providerOptions,
+            abortSignal: modelCallSignal(opts.abortSignal),
+          });
+          await this.meterWithoutRepeatingProviderWork({
+            taskId: opts.taskId,
+            role,
+            modelId: route.modelId,
+            latencyMs: Date.now() - started,
+            event: result as unknown as FinishEventLike,
+            reservationId: reservation.reservationId,
+            promptCostPerMTok: route.promptCostPerMTok,
+            completionCostPerMTok: route.completionCostPerMTok,
+          });
+          return {
+            ok: true as const,
+            modelId: route.modelId,
+            degraded: route.degraded,
+            object: result.object as T,
+          };
+        });
+      } catch (err) {
+        await releaseReservation(this.db, reservation.reservationId).catch(() => {});
+        throw err;
+      }
+    };
+
+    try {
+      return await runOnce(false);
     } catch (err) {
-      await releaseReservation(this.db, reservation.reservationId).catch(() => {});
-      throw err;
+      // A weak primary model routinely returns JSON that fails schema parsing
+      // (AI_NoObjectGeneratedError). Give the role's (stronger) fallback model
+      // one shot before surfacing it — otherwise a durable job retries the same
+      // primary on every attempt and dead-letters. Any other error (transport,
+      // timeout) is genuinely transient and is left to the caller's retry.
+      if (opts.forceFallback || !isUnparseableObjectError(err)) throw err;
+      try {
+        return await runOnce(true);
+      } catch {
+        // No usable fallback, or it also could not produce parseable output:
+        // surface the original parse failure so the caller can skip this item.
+        throw err;
+      }
     }
   }
 
