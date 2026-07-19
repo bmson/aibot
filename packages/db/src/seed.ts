@@ -116,9 +116,13 @@ const roleSeed = [
     fallbackModel: 'openai/gpt-oss-120b',
   },
   {
+    // Structured extraction (memory extraction/consolidation/import). qwen3-30b
+    // too often returns JSON that fails schema parsing, so the stronger
+    // deepseek-chat is primary with a distinct capable fallback. Migration 0019
+    // applies the same change to existing databases (seed is onConflictDoNothing).
     role: 'extract',
-    primaryModel: 'qwen/qwen3-30b-a3b-instruct-2507',
-    fallbackModel: 'deepseek/deepseek-chat',
+    primaryModel: 'deepseek/deepseek-chat',
+    fallbackModel: 'openai/gpt-oss-120b',
   },
   { role: 'draft', primaryModel: 'deepseek/deepseek-chat', fallbackModel: 'openai/gpt-oss-120b' },
   {
