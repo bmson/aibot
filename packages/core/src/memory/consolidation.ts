@@ -3,7 +3,7 @@ import { contacts, type Db, isTombstoned, memories, ownerCard } from '@assistant
 import { and, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
-import type { ModelRouter } from '../model-router/router.js';
+import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import { MEMORY_DOMAINS } from './extraction.js';
 
@@ -171,22 +171,35 @@ export async function runMemoryConsolidation(
         )
         .join('\n');
 
-      const outcome = await router.object<ConsolidationFindings>('extract', {
-        taskId: opts.taskId,
-        schema: ConsolidationFindingsSchema,
-        system: [
-          "You review one person's memory facts for a personal assistant.",
-          'Find exact-or-paraphrase duplicates, direct contradictions, missing/wrong life domains,',
-          'explicitly stated temporal validity, and same-topic groups worth merging into one',
-          'unified sentence. Refer to facts ONLY by their id.',
-          'Do NOT invent contradictions — different facts about the same topic are fine unless they cannot both be true.',
-          'Merging: only group fragmented facts about the SAME topic or attribute whose combined',
-          'sentence loses nothing ("drinks coffee black" + "prefers espresso after lunch" →',
-          '"Drinks coffee black; espresso after lunch"). Keep every specific, invent nothing,',
-          'and leave facts marked [curated] alone.',
-        ].join('\n'),
-        prompt: listing,
-      });
+      // One entity whose facts the model can't structure (even on the fallback)
+      // must not fail the whole nightly consolidation into a dead-letter — skip
+      // it and carry on. Budget stops still park; other errors still surface.
+      const outcome = await router
+        .object<ConsolidationFindings>('extract', {
+          taskId: opts.taskId,
+          schema: ConsolidationFindingsSchema,
+          system: [
+            "You review one person's memory facts for a personal assistant.",
+            'Find exact-or-paraphrase duplicates, direct contradictions, missing/wrong life domains,',
+            'explicitly stated temporal validity, and same-topic groups worth merging into one',
+            'unified sentence. Refer to facts ONLY by their id.',
+            'Do NOT invent contradictions — different facts about the same topic are fine unless they cannot both be true.',
+            'Merging: only group fragmented facts about the SAME topic or attribute whose combined',
+            'sentence loses nothing ("drinks coffee black" + "prefers espresso after lunch" →',
+            '"Drinks coffee black; espresso after lunch"). Keep every specific, invent nothing,',
+            'and leave facts marked [curated] alone.',
+          ].join('\n'),
+          prompt: listing,
+        })
+        .catch((err) => {
+          if (!isUnparseableObjectError(err)) throw err;
+          console.error(
+            `memory consolidation: skipping entity ${entity.subjectContactId} the model could not structure`,
+            err,
+          );
+          return null;
+        });
+      if (outcome === null) continue;
       await deps.heartbeat?.();
       if (!outcome.ok) {
         throw new BudgetReservationError(

@@ -7,7 +7,7 @@ import {
   reserveCost,
 } from '@assistant/core';
 import type { Db, TaskRow } from '@assistant/db';
-import { approvals, rateLimits, tasks, toolCache, toolCalls } from '@assistant/db';
+import { approvals, conversations, rateLimits, tasks, toolCache, toolCalls } from '@assistant/db';
 import { and, eq, gte, sql } from 'drizzle-orm';
 import { isAmbiguousGoogleMutationError } from './google/client.js';
 import { matchPolicies } from './policies.js';
@@ -330,6 +330,34 @@ export class ToolDispatcher {
         };
       }
     }
+    // goals.update_progress writes an owner-owned goal row and is intentionally
+    // kept available under taint (see builtin/index.ts) so a research-then-report
+    // goal loop can record progress without an approval on every step. Because it
+    // slips the taint-approval gate, bind the write to the goal this task is
+    // actually working: it may only update the task's own goal (scheduled goal
+    // automation / goal work task) or the goal its work chat belongs to. Untrusted
+    // content that entered the session therefore cannot redirect the write to a
+    // different goal or drive one from a task that owns no goal at all.
+    if (input.toolName === 'goals.update_progress') {
+      const argGoalId =
+        typeof input.args.goalId === 'string' ? (input.args.goalId as string) : null;
+      let boundGoalId = input.task.goalId ?? null;
+      if (!boundGoalId && input.task.conversationId) {
+        const [conversation] = await this.db
+          .select({ metadata: conversations.metadata })
+          .from(conversations)
+          .where(eq(conversations.id, input.task.conversationId));
+        const metaGoalId = (conversation?.metadata as { goalId?: unknown } | null)?.goalId;
+        if (typeof metaGoalId === 'string') boundGoalId = metaGoalId;
+      }
+      if (!argGoalId || !boundGoalId || argGoalId !== boundGoalId) {
+        return {
+          kind: 'rejected',
+          reason:
+            'goals.update_progress may only update the goal this task or its work chat is bound to',
+        };
+      }
+    }
     const { tool } = registered;
 
     // Taint: reject tools that explicitly cannot consume externally-derived
@@ -351,9 +379,20 @@ export class ToolDispatcher {
     let args = parsed.data as Record<string, unknown>;
 
     // Prepare hook (e.g. voice rewrite) — runs BEFORE the approval card is
-    // built so what the owner approves is exactly what executes.
+    // built so what the owner approves is exactly what executes. It is
+    // best-effort: today's only hook is the voice rewrite, which is explicitly
+    // documented to fail safe to the original draft. A rewrite/embed error (or
+    // its budget reservation) must therefore never propagate — that would park
+    // or dead-letter the owner's outbound message itself instead of sending it.
     if (tool.prepare) {
-      args = (await tool.prepare(args, input.ctx)) as Record<string, unknown>;
+      try {
+        args = (await tool.prepare(args, input.ctx)) as Record<string, unknown>;
+      } catch (err) {
+        console.error(
+          `tool ${input.toolName} prepare hook failed; dispatching with un-prepared args`,
+          err,
+        );
+      }
     }
 
     // Policy match (templates only; unknown templates fail closed)

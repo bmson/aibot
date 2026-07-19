@@ -721,9 +721,11 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     // Like mission.update: a goal work session taints itself with ordinary
     // research reads before it can record progress, so gating this on taint
     // stalls the goal loop. It writes bounded model-authored text to the
-    // owner's own goal row. Allowed under taint, but the execute below
-    // fails closed for any non-owner/assistant trust so flipping the flag
-    // never exposes goal writes to an external sender's task.
+    // owner's own goal row and stays available under taint. Two controls keep
+    // that carve-out safe: the dispatcher binds the write to the goal this task
+    // (or its work chat) owns — so injected content cannot redirect it to
+    // another goal or drive it from a task that owns no goal — and the execute
+    // below fails closed for any non-owner/assistant trust.
     acceptsUntrustedInput: true,
     execute: async (args, ctx) => {
       if (ctx.trust !== 'owner' && ctx.trust !== 'assistant') {

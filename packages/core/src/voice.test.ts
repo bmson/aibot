@@ -146,4 +146,30 @@ describe('voice pipeline', () => {
         'voice rewrite could not be fact-checked (verifier unavailable); using the original draft',
     });
   });
+
+  it('fails safe to the original when the rewrite model call throws', async () => {
+    // A provider error/timeout on the rewrite (generate) must not escape
+    // rewriteInVoice — otherwise the throw propagates through the tool prepare
+    // hook and fails/parks the whole outbound task instead of just skipping the
+    // cosmetic rewrite.
+    const router = {
+      generate: async () => {
+        throw new Error('provider timeout');
+      },
+      object: async () => ({
+        ok: true as const,
+        modelId: 'fake',
+        degraded: false,
+        object: { intact: true, problems: [] },
+      }),
+    } as unknown as ModelRouter;
+
+    const result = await rewriteInVoice(router, {
+      draft: DRAFT,
+      register: 'email_casual',
+      context,
+    });
+
+    expect(result).toEqual({ text: DRAFT, rewritten: false });
+  });
 });

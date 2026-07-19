@@ -12,7 +12,7 @@ import { and, eq, gte, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getAgent } from '../chat.js';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
-import type { ModelRouter } from '../model-router/router.js';
+import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 
 export const MEMORY_DOMAINS = [
@@ -196,12 +196,25 @@ export async function runMemoryExtraction(
       if (transcript.length < 40) continue;
       result.conversationsScanned += 1;
 
-      const outcome = await router.object<z.infer<typeof ExtractionOutputSchema>>('extract', {
-        taskId: opts.taskId,
-        schema: ExtractionOutputSchema,
-        system: extractionSystem(knownNames),
-        prompt: `Conversation (source trust: ${trust}):\n${transcript}`,
-      });
+      // A single conversation the model can't structure (even on the fallback)
+      // must not fail the whole nightly extraction into a dead-letter — skip it
+      // and carry on. Budget stops still park; other errors still surface.
+      const outcome = await router
+        .object<z.infer<typeof ExtractionOutputSchema>>('extract', {
+          taskId: opts.taskId,
+          schema: ExtractionOutputSchema,
+          system: extractionSystem(knownNames),
+          prompt: `Conversation (source trust: ${trust}):\n${transcript}`,
+        })
+        .catch((err) => {
+          if (!isUnparseableObjectError(err)) throw err;
+          console.error(
+            `memory extraction: skipping unstructurable conversation ${conversationId}`,
+            err,
+          );
+          return null;
+        });
+      if (outcome === null) continue;
       await deps.heartbeat?.();
       if (!outcome.ok) {
         throw new BudgetReservationError(

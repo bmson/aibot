@@ -12,7 +12,7 @@ import {
 } from '@assistant/db';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import type { ModelRouter } from '../model-router/router.js';
+import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import { getQueueNotifier } from '../queue.js';
 import { enqueueTask } from '../workflow/machine.js';
@@ -380,6 +380,11 @@ export async function runImportJob(
           progressPercent: manifest.windowCount
             ? Math.min(100, Math.round((cursor.windowIndex / manifest.windowCount) * 100))
             : 100,
+          // Each window is proof of progress: clear the poison-pill reclaim
+          // counter so a multi-hour import that survives a few mid-run worker
+          // deaths is not falsely dead-lettered (matches checkpointTask, which
+          // this raw update stands in for on the code-job path).
+          reclaimCount: 0,
           updatedAt: sql`now()`,
         })
         .where(eq(tasks.id, task.id));
@@ -416,14 +421,54 @@ export async function runImportJob(
       const windowDate = window.date ? new Date(window.date) : null;
       const period = windowDate ? windowDate.toISOString().slice(0, 10) : 'unknown';
 
-      const outcome = await router.object<z.infer<typeof ImportFactsSchema>>('extract', {
-        taskId: task.id,
-        schema: ImportFactsSchema,
-        system: importSystem(payload.source, period),
-        prompt: window.text,
-      });
+      // A single window the model can't structure (even on the fallback) must
+      // not fail the whole import into a dead-letter — record it as progress and
+      // move on. Budget stops still park/throw below; other errors still surface.
+      const outcome = await router
+        .object<z.infer<typeof ImportFactsSchema>>('extract', {
+          taskId: task.id,
+          schema: ImportFactsSchema,
+          system: importSystem(payload.source, period),
+          prompt: window.text,
+        })
+        .catch((err) => {
+          if (!isUnparseableObjectError(err)) throw err;
+          console.error(
+            `import ${payload.source}: skipping window ${cursor.windowIndex} the model could not structure`,
+            err,
+          );
+          return null;
+        });
       await deps.heartbeat?.();
+      if (outcome === null) {
+        // Advance past the unstructurable window and checkpoint so a resume
+        // never re-blocks on it; its facts are simply not learned.
+        cursor.windowIndex += 1;
+        await checkpoint();
+        continue;
+      }
       if (!outcome.ok) {
+        // A daily/monthly cap (mode 'block') frees itself when the period
+        // resets, so checkpoint and come back later — never lose progress.
+        // A task-budget stop (mode 'park') is a cumulative spent-vs-limit cap
+        // that NEVER resets on its own: yielding on it would re-block on the
+        // next wake and re-fire this job every 6h forever, with import_sources
+        // stuck 'running' so the owner can't even restart it. Mark the source
+        // failed (re-runnable) and throw, so the task reaches needs_attention —
+        // exactly how the model step loop treats task-budget exhaustion.
+        if (outcome.decision.mode === 'park') {
+          await db
+            .update(importSources)
+            .set({
+              status: 'failed',
+              error: outcome.decision.reason.slice(0, 2000),
+              updatedAt: sql`now()`,
+            })
+            .where(eq(importSources.id, sourceRow.id));
+          throw new Error(
+            `import ${payload.source} exceeded its task budget and cannot continue (${outcome.decision.reason})`,
+          );
+        }
         // budget guard said stop — checkpoint and come back later, never lose progress
         await checkpoint();
         return {

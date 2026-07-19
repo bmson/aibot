@@ -34,17 +34,23 @@ export interface BudgetEvalOptions {
 const CARVE_OUT_FACTOR = 1.1;
 
 export function evaluateBudget(s: BudgetSnapshot, opts: BudgetEvalOptions = {}): BudgetDecision {
-  if (s.taskLimitUsd !== undefined && (s.taskSpentUsd ?? 0) >= s.taskLimitUsd) {
-    return {
-      mode: 'park',
-      reason: `task budget exhausted ($${(s.taskSpentUsd ?? 0).toFixed(4)} of $${s.taskLimitUsd.toFixed(4)})`,
-    };
-  }
   const hard = (spent: number, limit: number): boolean => {
     if (spent < limit) return false;
     // critical work keeps running (degraded) inside the carve-out margin
     return !(opts.critical && spent < limit * CARVE_OUT_FACTOR);
   };
+  // Hard per-task cap → park (the owner can grant more). Critical owner replies
+  // get the same 1.1x carve-out here that reserveCost already grants on the task
+  // cap and that the daily/monthly branches grant below — otherwise a chat/SMS
+  // answer that nudged just over its own task budget is stranded in
+  // needs_attention with the reply never delivered, instead of degrading to the
+  // fallback model to finish.
+  if (s.taskLimitUsd !== undefined && hard(s.taskSpentUsd ?? 0, s.taskLimitUsd)) {
+    return {
+      mode: 'park',
+      reason: `task budget exhausted ($${(s.taskSpentUsd ?? 0).toFixed(4)} of $${s.taskLimitUsd.toFixed(4)})`,
+    };
+  }
   if (hard(s.monthlySpentUsd, s.monthlyLimitUsd)) {
     return {
       mode: 'block',

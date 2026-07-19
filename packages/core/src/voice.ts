@@ -34,14 +34,21 @@ export async function loadVoiceContext(
     .from(writingSamples)
     .where(eq(writingSamples.register, register));
   if (Number(count?.n ?? 0) > 0) {
-    const [embedding] = await router.embed([draft.slice(0, 2000)]);
-    const rows = await db
-      .select({ text: writingSamples.text })
-      .from(writingSamples)
-      .where(eq(writingSamples.register, register))
-      .orderBy(sql`${writingSamples.embedding} <=> ${JSON.stringify(embedding)}::vector`)
-      .limit(5);
-    samples = rows.map((r) => r.text);
+    // Best-effort: sample retrieval must never fail the outbound message. A
+    // budget-blocked or erroring embed (router.embed throws) simply means no
+    // nearest-sample context — the profile text alone still guides the rewrite.
+    try {
+      const [embedding] = await router.embed([draft.slice(0, 2000)]);
+      const rows = await db
+        .select({ text: writingSamples.text })
+        .from(writingSamples)
+        .where(eq(writingSamples.register, register))
+        .orderBy(sql`${writingSamples.embedding} <=> ${JSON.stringify(embedding)}::vector`)
+        .limit(5);
+      samples = rows.map((r) => r.text);
+    } catch (err) {
+      console.error('voice sample retrieval failed — continuing without samples', err);
+    }
   }
   return {
     description: profile?.description ?? '',
@@ -110,12 +117,19 @@ export async function rewriteInVoice(
   };
 
   const attempt = async (extra?: string) => {
-    const result = await router.generate('rewrite', {
-      taskId: input.taskId,
-      system: extra ? `${system}\n\nPrevious attempt broke these facts — fix: ${extra}` : system,
-      prompt: draft,
-    });
-    return result.ok ? result.text.trim() : null;
+    // Fail safe like check() below: a budget block returns {ok:false}, and a
+    // provider error/timeout throws — either way fall back to the original draft
+    // rather than failing the whole outbound task the rewrite is decorating.
+    try {
+      const result = await router.generate('rewrite', {
+        taskId: input.taskId,
+        system: extra ? `${system}\n\nPrevious attempt broke these facts — fix: ${extra}` : system,
+        prompt: draft,
+      });
+      return result.ok ? result.text.trim() : null;
+    } catch {
+      return null;
+    }
   };
 
   const first = await attempt();

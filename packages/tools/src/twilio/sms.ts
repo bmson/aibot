@@ -42,22 +42,28 @@ export function registerSmsTools(registry: ToolRegistry, deps: SmsToolDeps): Too
           : 'approval',
       acceptsUntrustedInput: false,
       prepare: async (args) => {
-        if (!deps.prepareOutbound) return args;
-        const result = await deps.prepareOutbound((args as z.infer<typeof schema>).body);
-        return { ...args, body: result.text, voiceFlag: result.flagged };
+        const sourceBody = (args as z.infer<typeof schema>).body;
+        if (!deps.prepareOutbound) return { ...args, sourceBody };
+        const result = await deps.prepareOutbound(sourceBody);
+        // Preserve the pre-rewrite body so the idempotency key stays stable
+        // across a crash-retry (which re-runs the nondeterministic rewrite).
+        return { ...args, body: result.text, voiceFlag: result.flagged, sourceBody };
       },
       approvalSummary: (args) => {
         const a = args as z.infer<typeof schema>;
         return `Send SMS to ${a.to}: "${a.body.slice(0, 80)}${a.body.length > 80 ? '…' : ''}"`;
       },
       idempotencyKey: (args, ctx) => {
-        // Key on the FULL message, not the first 40 chars: two genuinely
-        // different owner updates in the same task whose openings match (very
-        // common — "Update on ...", "Confirmed: ...") must not collide, or the
-        // second send is silently suppressed and reported as a false success.
-        const a = args as z.infer<typeof schema>;
+        // Key on the ORIGINAL (pre-voice-rewrite) message body, not the rewritten
+        // one. The rewrite is a nondeterministic model call, so keying on its
+        // output would produce a different key on a crash-retry and let the guard
+        // miss — sending the SMS twice. The full body (not a prefix) still keeps
+        // two genuinely different owner updates in the same task from colliding
+        // ("Update on ...", "Confirmed: ..."), which would silently suppress the
+        // second send and report a false success.
+        const a = args as z.infer<typeof schema> & { sourceBody?: string };
         const digest = createHash('sha256')
-          .update(`${a.to}\n${a.voiceFlag ?? ''}\n${a.body}`)
+          .update(`${a.to}\n${a.sourceBody ?? a.body}`)
           .digest('hex');
         return `sms-send-${ctx.taskId}-${digest}`;
       },
