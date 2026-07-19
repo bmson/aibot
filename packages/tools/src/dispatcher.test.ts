@@ -262,6 +262,25 @@ describe('ToolDispatcher (integration)', () => {
     await db.delete(toolCalls).where(eq(toolCalls.toolName, 'goals.update_progress'));
   });
 
+  it('an outward-facing tool needs approval under taint even without networkEgress', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // acceptsUntrustedInput:true so it passes the taint reject, outwardFacing but
+    // NOT networkEgress. Before the taint gate covered outwardFacing this would
+    // have executed autonomously once untrusted content entered the owner task.
+    const registry = new ToolRegistry().register(makeTool('test.outward'), { outwardFacing: true });
+    const dispatcher = new ToolDispatcher(db, registry);
+    const task = await makeTask('owner');
+    const outcome = await dispatcher.dispatch({
+      task,
+      step: 1,
+      toolName: 'test.outward',
+      args: { value: 'x' },
+      ctx: { ...ctxFor(task), tainted: true },
+      provenance,
+    });
+    expect(outcome.kind).toBe('awaiting_approval');
+  });
+
   it('rejects taint-sensitive tools after untrusted output enters an owner task', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const registry = new ToolRegistry().register(
