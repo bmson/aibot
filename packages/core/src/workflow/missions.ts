@@ -1,5 +1,5 @@
 import { type AgentRow, type Db, type TaskRow, tasks } from '@assistant/db';
-import { and, eq, notInArray, sql } from 'drizzle-orm';
+import { and, desc, eq, notInArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { mirrorGoalUpdateToPrimary, persistMessage } from '../chat.js';
 import { InboundEventSchema, type Plan, type TaskState } from '../events.js';
@@ -160,13 +160,36 @@ export async function wakeMission(
   // repeat the same real-world side effect (a second form submission, a second
   // email). One work session per mission at a time.
   const [activeSession] = await db
-    .select({ id: tasks.id })
+    .select({ id: tasks.id, status: tasks.status })
     .from(tasks)
     .where(
       and(eq(tasks.parentTaskId, mission.id), notInArray(tasks.status, [...TERMINAL_STATUSES])),
     )
+    .orderBy(desc(tasks.updatedAt))
     .limit(1);
   if (activeSession) {
+    // A child stuck in needs_attention will not resume on its own (task-budget
+    // exhaustion or a dead-letter). Silently re-sleeping would leave the mission
+    // waking every 24h with no progress until its deadline, invisible to the
+    // owner. Surface it instead, exactly like a reflection escalation.
+    if (activeSession.status === 'needs_attention') {
+      if (!(await renewTaskLease(db, mission))) return { action: 'lease_lost' };
+      if (
+        !(await markTaskNeedsAttention(
+          db,
+          mission,
+          'a mission work session stopped and needs attention',
+        ))
+      ) {
+        return { action: 'lease_lost' };
+      }
+      await report(
+        deps,
+        mission,
+        "A work session for this mission stopped and needs your attention — it won't resume on its own. Review it on the Tasks page, then wake the mission from the dashboard to try another session.",
+      );
+      return { action: 'reflected', decision: 'escalate' };
+    }
     const wakeAt = new Date(Date.now() + DEFAULT_WAKE_HOURS * 3600e3);
     if (!(await renewTaskLease(db, mission))) return { action: 'lease_lost' };
     if (!(await sleepTask(db, mission, state, wakeAt))) return { action: 'lease_lost' };

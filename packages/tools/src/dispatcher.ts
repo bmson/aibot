@@ -416,10 +416,15 @@ export class ToolDispatcher {
       return { kind: 'rejected', reason: `tool ${input.toolName} is forbidden` };
     }
     // Once attacker-controlled content enters a privileged owner/assistant
-    // workflow, private reads/writes and network egress need exact-argument
-    // owner approval. This prevents a fetched page or email from chaining a
-    // private read into an autonomous exfiltration request. Policy allow rules
-    // deliberately cannot override this provenance boundary.
+    // workflow, private reads/writes, network egress, and any outward-facing
+    // action need exact-argument owner approval. This prevents a fetched page or
+    // email from chaining a private read into an autonomous exfiltration request.
+    // Policy allow rules deliberately cannot override this provenance boundary.
+    // outwardFacing is listed explicitly so a future outward tool that accepts
+    // untrusted input but is NOT marked networkEgress still cannot act
+    // autonomously under taint (today every such tool also carries networkEgress,
+    // so this is defense-in-depth that makes the invariant enforced, not merely
+    // conventional).
     const privilegedTaint =
       input.ctx.tainted && (input.ctx.trust === 'owner' || input.ctx.trust === 'assistant');
     const taintNeedsApproval =
@@ -428,7 +433,8 @@ export class ToolDispatcher {
         registered.flags.writesMemory === true ||
         registered.flags.writesWorkspace === true ||
         registered.flags.privateWrite === true ||
-        registered.flags.networkEgress === true);
+        registered.flags.networkEgress === true ||
+        registered.flags.outwardFacing === true);
     const tier: RiskTier = taintNeedsApproval
       ? 'approval'
       : policyMatch?.effect === 'allow'

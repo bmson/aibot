@@ -130,6 +130,39 @@ describe('missions (integration, scripted model)', () => {
     expect(taskState(after as NonNullable<typeof after>).step).toBe(1);
   });
 
+  it('a session child stuck in needs_attention escalates the mission instead of stalling', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const agent = await getAgent(db);
+    const source = await makeSourceTask();
+    const mission = await startMission(db, source, basePlan, 'Watch rates with a stuck session');
+    cleanupTaskIds.push(mission.id);
+
+    // A prior work session that dead-lettered / exhausted its budget: not
+    // terminal, but it will not resume on its own.
+    const { task: child } = await enqueueTask(db, {
+      event: { source: 'internal', agentId, trust: 'owner', payload: {} },
+      type: 'adhoc',
+      parentTaskId: mission.id,
+    });
+    await db.update(tasks).set({ status: 'needs_attention' }).where(eq(tasks.id, child.id));
+
+    const claimed = await claimTask(db, mission.id);
+    expect(claimed).not.toBeNull();
+    const wake = await wakeMission(
+      { db, router: reflectingRouter({ decision: 'continue', reasoning: '' }) },
+      claimed as NonNullable<typeof claimed>,
+      agent,
+    );
+    expect(wake.action).toBe('reflected');
+    if (wake.action === 'reflected') expect(wake.decision).toBe('escalate');
+
+    const [after] = await db.select().from(tasks).where(eq(tasks.id, mission.id));
+    expect(after?.status).toBe('needs_attention');
+    // No new session was spawned on top of the stuck one.
+    const children = await db.select().from(tasks).where(eq(tasks.parentTaskId, mission.id));
+    expect(children).toHaveLength(1);
+  });
+
   it('deadline reached → final report and done', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const source = await makeSourceTask();
