@@ -24,6 +24,13 @@ import { notifyOwnerBySms } from './sms-channel.js';
 
 const MAX_TOKEN_CANDIDATES = 1_000;
 const TOKEN_PATTERN = /[a-zA-Z0-9][a-zA-Z0-9_-]{5,99}/g;
+// Invisible word-break characters and their HTML entity forms. HTML-only mail
+// frequently renders a reference like REQ-12345 as REQ-&shy;12345 or with a
+// zero-width space, and the crude HTML→text extractor neither decodes entities
+// nor removes these characters — so the token fragments below the 6-char
+// minimum and never matches. Stripping them yields a second candidate variant.
+const INVISIBLE_TOKEN_BREAK =
+  /\u00AD|\u200B|\u200C|\u200D|\u2060|\uFEFF|&(?:shy|zwnj|zwj|#0*(?:173|8203|8204|8205|8288|65279)|#x0*(?:ad|200b|200c|200d|2060|feff));?/gi;
 
 export type ApplicationConfirmationResult =
   | { kind: 'ignored' }
@@ -45,11 +52,18 @@ export interface ApplicationConfirmationInput {
 /** Hash bounded opaque-token candidates without exposing raw email to a privileged task. */
 export function confirmationTokenHashes(text: string): Set<string> {
   const result = new Set<string>();
-  for (const match of text.matchAll(TOKEN_PATTERN)) {
-    const token = match[0];
-    result.add(hashConfirmationToken(token));
-    if (result.size >= MAX_TOKEN_CANDIDATES) break;
-  }
+  const addFrom = (source: string) => {
+    for (const match of source.matchAll(TOKEN_PATTERN)) {
+      if (result.size >= MAX_TOKEN_CANDIDATES) return;
+      result.add(hashConfirmationToken(match[0]));
+    }
+  };
+  addFrom(text);
+  // Also try a variant with invisible word-break characters/entities removed,
+  // so a reference token split by soft hyphens or zero-width spaces (common in
+  // HTML-only mail) still reproduces the stored token.
+  const dejoined = text.replace(INVISIBLE_TOKEN_BREAK, '');
+  if (dejoined !== text) addFrom(dejoined);
   return result;
 }
 
