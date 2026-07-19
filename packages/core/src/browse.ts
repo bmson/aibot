@@ -1,5 +1,17 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { ModelRouter } from './model-router/router.js';
+
+/**
+ * Hash a browser-job callback token for at-rest storage and comparison. The raw
+ * token travels only to the job (via the launcher) and back on its one-shot
+ * callback; only its SHA-256 is ever persisted in the task checkpoint, so DB
+ * read access cannot recover a still-valid callback credential. Mirrors the
+ * canary path, which already stores only the hash.
+ */
+export function hashCallbackToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
 
 /** The browser worker may read only this narrow, attachment-only Workspace area. */
 export const BROWSER_ATTACHMENT_PREFIX = 'browser/attachments/';

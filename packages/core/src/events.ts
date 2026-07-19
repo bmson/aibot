@@ -69,7 +69,8 @@ export const PendingJobSchema = z.object({
   dbToolCallId: z.string(),
   toolCallId: z.string(),
   toolName: z.string(),
-  callbackToken: z.string(),
+  /** SHA-256 of the one-shot callback token — never the raw token (see hashCallbackToken). */
+  callbackTokenHash: z.string(),
   timeoutAt: z.string(),
 });
 export type PendingJob = z.infer<typeof PendingJobSchema>;

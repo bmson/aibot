@@ -20,9 +20,17 @@ import {
 } from '@assistant/tools';
 import { and, eq, gt, lte, sql } from 'drizzle-orm';
 import type { AgentDeps } from './deps.js';
+import { notifyOwnerBySms } from './sms-channel.js';
 
 const MAX_TOKEN_CANDIDATES = 1_000;
 const TOKEN_PATTERN = /[a-zA-Z0-9][a-zA-Z0-9_-]{5,99}/g;
+// Invisible word-break characters and their HTML entity forms. HTML-only mail
+// frequently renders a reference like REQ-12345 as REQ-&shy;12345 or with a
+// zero-width space, and the crude HTML→text extractor neither decodes entities
+// nor removes these characters — so the token fragments below the 6-char
+// minimum and never matches. Stripping them yields a second candidate variant.
+const INVISIBLE_TOKEN_BREAK =
+  /\u00AD|\u200B|\u200C|\u200D|\u2060|\uFEFF|&(?:shy|zwnj|zwj|#0*(?:173|8203|8204|8205|8288|65279)|#x0*(?:ad|200b|200c|200d|2060|feff));?/gi;
 
 export type ApplicationConfirmationResult =
   | { kind: 'ignored' }
@@ -44,11 +52,18 @@ export interface ApplicationConfirmationInput {
 /** Hash bounded opaque-token candidates without exposing raw email to a privileged task. */
 export function confirmationTokenHashes(text: string): Set<string> {
   const result = new Set<string>();
-  for (const match of text.matchAll(TOKEN_PATTERN)) {
-    const token = match[0];
-    result.add(hashConfirmationToken(token));
-    if (result.size >= MAX_TOKEN_CANDIDATES) break;
-  }
+  const addFrom = (source: string) => {
+    for (const match of source.matchAll(TOKEN_PATTERN)) {
+      if (result.size >= MAX_TOKEN_CANDIDATES) return;
+      result.add(hashConfirmationToken(match[0]));
+    }
+  };
+  addFrom(text);
+  // Also try a variant with invisible word-break characters/entities removed,
+  // so a reference token split by soft hyphens or zero-width spaces (common in
+  // HTML-only mail) still reproduces the stored token.
+  const dejoined = text.replace(INVISIBLE_TOKEN_BREAK, '');
+  if (dejoined !== text) addFrom(dejoined);
   return result;
 }
 
@@ -117,6 +132,10 @@ async function reportAmbiguous(
       `ambiguous:${record.id}`,
     );
   }
+  await notifyOwnerBySms(deps, {
+    taskId: task.id,
+    text: `An authenticated confirmation from ${input.from.toLowerCase()} matched ${matches.length} application watches; I changed nothing and it needs your review.`,
+  }).catch((err) => console.error('ambiguous confirmation owner notification failed', err));
 }
 
 async function enqueueAuthorizedUpdate(
@@ -479,12 +498,62 @@ export async function executeApplicationConfirmationTask(
 
   const copy = resultCopy(record, state);
   await postNotice(deps, record, claimed.id, copy.notice, status);
+  // The confirmation-email -> Sheet/Doc update is the flagship "send me
+  // updates" milestone and it completes long after the owner's original
+  // message, on an internal task that never routes through the channel
+  // deliverers. Push the outcome to the owner's channel so an SMS/email-
+  // originated flow is not silently finished on the dashboard alone.
+  await notifyOwnerBySms(deps, { taskId: claimed.id, text: copy.notice }).catch((err) =>
+    console.error('application confirmation owner notification failed', err),
+  );
   if (status === 'updated') {
     await completeTask(deps.db, claimed, { status: 'done', progress: copy.progress });
     return { outcome: 'done', applicationId };
   }
   await markTaskNeedsAttention(deps.db, claimed, copy.progress);
   return { outcome: 'needs_attention', applicationId };
+}
+
+/**
+ * Proactively expire application watches whose window has closed with no
+ * matching confirmation, and tell the owner. Without this, a watch only expires
+ * lazily when some other authenticated mail happens to arrive, and it does so
+ * silently — the owner's owner-approved follow-up just ends with no signal.
+ * Idempotent: the status-guarded UPDATE transitions each row once, and the
+ * notice channelMessageId dedupes the dashboard message.
+ */
+export async function reapExpiredApplicationWatches(
+  deps: AgentDeps,
+  now = new Date(),
+): Promise<number> {
+  const expired = await deps.db
+    .update(applicationConfirmations)
+    .set({ status: 'expired', updatedAt: now })
+    .where(
+      and(
+        eq(applicationConfirmations.status, 'awaiting_confirmation'),
+        lte(applicationConfirmations.expiresAt, now),
+      ),
+    )
+    .returning();
+
+  for (const record of expired) {
+    const text = `I watched ${record.expectedSenderEmails.join(', ')} for the ${record.company} — ${record.role} confirmation until ${record.expiresAt.toISOString().slice(0, 10)} and it never arrived. I made no Sheet or Doc update.`;
+    if (record.conversationId) {
+      await persistMessage(deps.db, {
+        conversationId: record.conversationId,
+        role: 'assistant',
+        origin: 'assistant',
+        parts: [{ type: 'text', text }],
+        text,
+        channelMessageId: `application-watch-expired:${record.id}`,
+      }).catch((err) => console.error('watch expiry notice failed', err));
+    }
+    await notifyOwnerBySms(deps, { text }).catch((err) =>
+      console.error('watch expiry owner notification failed', err),
+    );
+  }
+  return expired.length;
 }
 
 /**

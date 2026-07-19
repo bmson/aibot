@@ -1,8 +1,11 @@
 import { timingSafeEqual } from 'node:crypto';
 import { type Db, files, tasks, toolCalls } from '@assistant/db';
 import { and, eq, inArray, sql } from 'drizzle-orm';
+import { hashCallbackToken } from '../browse.js';
 import { TaskStateSchema } from '../events.js';
 import { getQueueNotifier } from '../queue.js';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function tokensMatch(expected: string, given: string): boolean {
   const a = Buffer.from(expected);
@@ -25,6 +28,11 @@ export async function recordBrowserJobResult(
   input: { taskId: string; token: string; result: Record<string, unknown> },
 ): Promise<BrowserCallbackOutcome> {
   if (!input.taskId || !input.token) return { ok: false, status: 400, error: 'bad request' };
+  // The tasks primary key is a uuid column. A malformed, unauthenticated
+  // taskId would otherwise raise a Postgres 22P02 cast error inside the
+  // transaction (before the token check), surfacing as an uncaught 500 and a
+  // free DB/log amplification vector. Reject it structurally first.
+  if (!UUID_RE.test(input.taskId)) return { ok: false, status: 400, error: 'bad request' };
 
   const outcome = await db.transaction(async (tx): Promise<BrowserCallbackOutcome> => {
     // Serialize callback vs. administrative cancellation and executor claim.
@@ -34,7 +42,9 @@ export async function recordBrowserJobResult(
     const state = TaskStateSchema.parse(task.state ?? {});
     const pending = state.pendingJob;
     if (!pending) return { ok: false, status: 409, error: 'no pending browser job' };
-    if (!tokensMatch(pending.callbackToken, input.token)) {
+    // Compare hashes: only the hash is stored, and the incoming raw token is
+    // hashed here. timingSafeEqual over equal-length hex strings.
+    if (!tokensMatch(pending.callbackTokenHash, hashCallbackToken(input.token))) {
       return { ok: false, status: 403, error: 'invalid token' };
     }
     // The token is durably checkpointed BEFORE launch, so a fast callback may

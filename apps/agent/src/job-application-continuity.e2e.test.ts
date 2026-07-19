@@ -355,6 +355,8 @@ describe('continuous job-application context across delayed external events', ()
       result: {
         ok: true,
         outputs: [
+          // the submit interaction a real worker emits before the confirmation
+          { index: 4, action: 'click', ok: true },
           {
             index: 5,
             action: 'extract',
@@ -554,6 +556,7 @@ describe('continuous job-application context across delayed external events', ()
       result: {
         ok: true,
         outputs: [
+          { index: 4, action: 'click', ok: true },
           {
             index: 5,
             action: 'extract',

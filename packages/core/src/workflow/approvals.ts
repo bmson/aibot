@@ -1,6 +1,7 @@
 import { approvalPolicies, approvals, type Db, tasks, toolCalls } from '@assistant/db';
 import { and, eq, inArray, lte, sql } from 'drizzle-orm';
 import { getQueueNotifier } from '../queue.js';
+import { wakeTask } from './machine.js';
 
 export interface ResolveApprovalInput {
   approvalId?: string;
@@ -107,6 +108,43 @@ export async function resolveApproval(
     toolCallId: resolved.toolCallId,
     approvalId: resolved.id,
   };
+}
+
+/**
+ * Backstop for the pre-park race: an approval resolved in the narrow window
+ * between its row being created and the task transitioning to waiting_approval
+ * fires a wake that finds the task still 'running' and no-ops, stranding it in
+ * waiting_approval forever. Resume any waiting_approval task whose parked
+ * approvals are ALL resolved (nothing still pending) — so a task genuinely
+ * waiting on a human is never woken early, but a stranded one recovers on the
+ * next sweep. Idempotent via wakeTask's status-guarded CAS.
+ */
+export async function resumeResolvedApprovalTasks(db: Db, batch = 200): Promise<string[]> {
+  const parked = await db
+    .select({ id: tasks.id, state: tasks.state })
+    .from(tasks)
+    .where(eq(tasks.status, 'waiting_approval'))
+    .limit(batch);
+
+  const woken: string[] = [];
+  for (const task of parked) {
+    const pendingApprovals =
+      (task.state as { pendingApprovals?: Array<{ approvalId?: unknown }> } | null)
+        ?.pendingApprovals ?? [];
+    const ids = pendingApprovals
+      .map((entry) => entry.approvalId)
+      .filter((id): id is string => typeof id === 'string');
+    if (ids.length === 0) continue;
+    const rows = await db
+      .select({ status: approvals.status })
+      .from(approvals)
+      .where(inArray(approvals.id, ids));
+    // Only resume when every parked approval is decided; a still-pending one
+    // means the task is legitimately waiting and must not be churned.
+    if (rows.length < ids.length || rows.some((row) => row.status === 'pending')) continue;
+    if (await wakeTask(db, task.id)) woken.push(task.id);
+  }
+  return woken;
 }
 
 /**

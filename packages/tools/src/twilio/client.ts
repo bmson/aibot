@@ -258,7 +258,10 @@ export function validateTwilioSignature(input: {
 export function parseApprovalReply(
   body: string,
 ): { decision: 'approved' | 'denied'; shortCode: string } | null {
-  const match = body.trim().match(/^(yes|no|approve|deny)\s+(A\d{1,4})$/i);
+  // Short codes are minted monotonically with no digit ceiling (nextShortCode),
+  // so this pattern must keep pace or "YES A10000" would be misread as a new
+  // task and the approval would never resolve by SMS.
+  const match = body.trim().match(/^(yes|no|approve|deny)\s+(A\d{1,9})$/i);
   if (!match) return null;
   const word = (match[1] as string).toLowerCase();
   return {

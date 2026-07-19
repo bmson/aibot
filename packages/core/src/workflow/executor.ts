@@ -3,7 +3,7 @@ import { approvals, messages, tasks, toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { ZodType } from 'zod';
-import { type BrowserJobPendingResult, isBrowserJobPending } from '../browse.js';
+import { type BrowserJobPendingResult, hashCallbackToken, isBrowserJobPending } from '../browse.js';
 import {
   assistantMessageParts,
   buildSystemPrompt,
@@ -132,6 +132,18 @@ export interface ExecutorDeps {
   notifyApproval?: (
     approvals: Array<{ taskId: string; shortCode: string; summary: string }>,
   ) => Promise<void>;
+  /**
+   * Out-of-band owner ping for async events the owner would otherwise only see
+   * by opening the dashboard: a task that permanently failed (dead-letter), a
+   * task stalled on its own budget cap, or a mission that needs a decision.
+   * Delivered to the owner's channel (e.g. SMS) in addition to the dashboard
+   * conversation notice. Best-effort — callers swallow its errors.
+   */
+  notifyOwner?: (input: {
+    taskId: string;
+    conversationId: string | null;
+    text: string;
+  }) => Promise<void>;
 }
 
 export type ExecuteResult = {
@@ -321,6 +333,25 @@ async function postConversationNotice(db: Db, task: TaskRow, text: string): Prom
     parts: [{ type: 'text', text }],
     text,
   }).catch((err) => console.error('conversation notice failed', err));
+}
+
+/**
+ * Post the dashboard notice AND push it to the owner's channel for events that
+ * would otherwise only be visible by opening the dashboard (permanent failure,
+ * budget stall). Owner ping is best-effort: a delivery failure must never mask
+ * the underlying task outcome.
+ */
+async function notifyOwnerAndConversation(
+  deps: ExecutorDeps,
+  task: TaskRow,
+  text: string,
+): Promise<void> {
+  await postConversationNotice(deps.db, task, text);
+  if (deps.notifyOwner) {
+    await deps
+      .notifyOwner({ taskId: task.id, conversationId: task.conversationId, text })
+      .catch((err) => console.error('owner notification failed', err));
+  }
 }
 
 /** A retry must not duplicate the dashboard/chat copy of a final response. */
@@ -545,8 +576,8 @@ export async function executeTask(deps: ExecutorDeps, taskId: string): Promise<E
         if (err.message.startsWith('task budget')) {
           const marked = await markTaskNeedsAttention(db, task, `budget: ${err.message}`);
           if (!marked) return LOST_LEASE;
-          await postConversationNotice(
-            db,
+          await notifyOwnerAndConversation(
+            deps,
             task,
             `I hit this task's own budget cap (${err.message}) and stopped. Raise the task budget on the Tasks page if you want it retried.`,
           );
@@ -564,6 +595,16 @@ export async function executeTask(deps: ExecutorDeps, taskId: string): Promise<E
       }
       const disposition = await recordFailedAttempt(db, task, String(err));
       if (disposition === 'lost_lease') return LOST_LEASE;
+      if (disposition === 'dead_letter') {
+        // Retry budget exhausted: the task is now needs_attention and will not
+        // self-resume. Every other terminal/park branch notifies the owner, so
+        // this one must too — otherwise the request dies silently in its thread.
+        await notifyOwnerAndConversation(
+          deps,
+          task,
+          `I couldn't complete this after repeated attempts and stopped. It's marked needs-attention on the Tasks page. Last error: ${String(err).slice(0, 300)}`,
+        );
+      }
       return {
         outcome: disposition === 'dead_letter' ? 'dead_letter' : 'failed',
         detail: String(err).slice(0, 500),
@@ -627,7 +668,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   // Missions never run the step loop themselves: each wake is a deadline
   // check, a reflection, or a fresh bounded session child.
   if (task.type === 'mission') {
-    const wake = await wakeMission({ db, router }, task, agent);
+    const wake = await wakeMission({ db, router, notifyOwner: deps.notifyOwner }, task, agent);
     if (wake.action === 'lease_lost') return LOST_LEASE;
     return {
       outcome: wake.action === 'deadline_reached' ? 'done' : 'sleeping',
@@ -665,11 +706,16 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     signal: abort.signal,
     log: async () => {},
     stageBrowserJob: async (job) => {
+      // The raw callback token has already been handed to the job at launch;
+      // only its hash is persisted anywhere (task checkpoint AND the tool_calls
+      // sentinel), so a DB read never yields a usable callback credential.
+      const callbackTokenHash = hashCallbackToken(job.pending.callbackToken);
+      const stagedSentinel = { ...job.pending, callbackToken: callbackTokenHash };
       const pendingJob = {
         dbToolCallId: job.dbToolCallId,
         toolCallId: job.modelToolCallId,
         toolName: job.toolName,
-        callbackToken: job.pending.callbackToken,
+        callbackTokenHash,
         timeoutAt: job.pending.timeoutAt,
       };
       // The model may have proposed several calls in one assistant message. A
@@ -704,7 +750,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       await db.transaction(async (tx) => {
         const [staged] = await tx
           .update(toolCalls)
-          .set({ result: job.pending })
+          .set({ result: stagedSentinel })
           .where(
             and(
               eq(toolCalls.id, job.dbToolCallId),
@@ -759,38 +805,49 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   // check below puts the task back to sleep until the job's timeout.
   if (state.pendingJob) {
     const pending = state.pendingJob;
-    const [row] = await db.select().from(toolCalls).where(eq(toolCalls.id, pending.dbToolCallId));
-    const timedOut = Date.now() >= new Date(pending.timeoutAt).getTime();
-    if (row && !isBrowserJobPending(row.result)) {
-      window.push(toolResultMessage(pending.toolCallId, pending.toolName, row.result));
+    // Settle under a task-row lock. recordBrowserJobResult also locks the task
+    // FOR UPDATE before replacing the sentinel, so serializing here closes the
+    // window where a late callback commits the real result between our read and
+    // a timeout write that would otherwise clobber it. The timeout failure is
+    // written only while the sentinel is still present; a real result wins.
+    const settled = await db.transaction(async (tx) => {
+      await tx.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, task.id)).for('update');
+      const [row] = await tx.select().from(toolCalls).where(eq(toolCalls.id, pending.dbToolCallId));
+      if (row && !isBrowserJobPending(row.result)) {
+        return { kind: 'result' as const, row };
+      }
+      const timedOut = Date.now() >= new Date(pending.timeoutAt).getTime();
+      if (row && !timedOut) return { kind: 'still_pending' as const };
+      const failure = {
+        ok: false,
+        error: 'the browser job never reported back (timed out) — treat this attempt as failed',
+      };
+      if (row) {
+        await tx
+          .update(toolCalls)
+          .set({ status: 'failed', result: failure, error: failure.error, finishedAt: new Date() })
+          .where(eq(toolCalls.id, row.id));
+      }
+      return { kind: 'timeout' as const, row: row ?? null, failure };
+    });
+
+    if (settled.kind === 'result') {
+      window.push(toolResultMessage(pending.toolCallId, pending.toolName, settled.row.result));
       if (dispatcher.resultIsUntrusted(pending.toolName)) {
         state.untrustedContext = true;
         ctx.tainted = true;
       }
       state.completedToolCallIds.push(pending.dbToolCallId);
       state.pendingJob = null;
-      await settleJobReservation(db, row);
-    } else if (timedOut || !row) {
-      const settled = {
-        ok: false,
-        error: 'the browser job never reported back (timed out) — treat this attempt as failed',
-      };
-      if (row) {
-        await db
-          .update(toolCalls)
-          .set({
-            status: 'failed',
-            result: settled,
-            error: settled.error,
-            finishedAt: new Date(),
-          })
-          .where(eq(toolCalls.id, row.id));
-        await settleJobReservation(db, row);
-      }
-      window.push(toolResultMessage(pending.toolCallId, pending.toolName, settled));
+      await settleJobReservation(db, settled.row);
+    } else if (settled.kind === 'timeout') {
+      if (settled.row) await settleJobReservation(db, settled.row);
+      window.push(toolResultMessage(pending.toolCallId, pending.toolName, settled.failure));
       state.completedToolCallIds.push(pending.dbToolCallId);
       state.pendingJob = null;
     }
+    // 'still_pending' (row present, sentinel intact, not yet timed out): leave
+    // pendingJob set — the sleep-until-timeout below handles it, as before.
   }
 
   // ── Resume: settle pending approvals first ────────────────────────────────
@@ -849,7 +906,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
             dbToolCallId: pending.dbToolCallId,
             toolCallId: pending.toolCallId,
             toolName: pending.toolName,
-            callbackToken: outcome.result.callbackToken,
+            callbackTokenHash: hashCallbackToken(outcome.result.callbackToken),
             timeoutAt: outcome.result.timeoutAt,
           };
         } else {
@@ -930,6 +987,13 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         },
       ]);
       if (!parked) return LOST_LEASE;
+      if (deps.notifyApproval) {
+        await deps
+          .notifyApproval([
+            { taskId: task.id, shortCode: outcome.shortCode, summary: outcome.summary },
+          ])
+          .catch((err) => console.error('approval notification failed', err));
+      }
       await postConversationNotice(
         db,
         task,
@@ -986,6 +1050,13 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         },
       ]);
       if (!parked) return LOST_LEASE;
+      if (deps.notifyApproval) {
+        await deps
+          .notifyApproval([
+            { taskId: task.id, shortCode: outcome.shortCode, summary: outcome.summary },
+          ])
+          .catch((err) => console.error('approval notification failed', err));
+      }
       await postConversationNotice(
         db,
         task,
@@ -1231,8 +1302,8 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         `budget: ${stepResult.decision.reason}`,
       );
       if (!marked) return LOST_LEASE;
-      await postConversationNotice(
-        db,
+      await notifyOwnerAndConversation(
+        deps,
         task,
         `I hit this task's own budget cap (${stepResult.decision.reason}) and stopped. It's marked needs-attention on the Tasks page — raise the task budget there if you want me to finish.`,
       );
@@ -1327,7 +1398,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
               dbToolCallId: outcome.toolCallId,
               toolCallId: tc.toolCallId,
               toolName: tc.toolName,
-              callbackToken: outcome.result.callbackToken,
+              callbackTokenHash: hashCallbackToken(outcome.result.callbackToken),
               timeoutAt: outcome.result.timeoutAt,
             };
           } else {

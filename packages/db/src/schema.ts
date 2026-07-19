@@ -248,6 +248,14 @@ export const tasks = pgTable(
     /** Monotonic delivery generation used to deduplicate queue pokes per runnable transition. */
     queueGeneration: integer('queue_generation').notNull().default(0),
     attempt: integer('attempt').notNull().default(0),
+    /**
+     * Times this task's lease was reclaimed after expiring while 'running'
+     * (a worker that hung or was killed without throwing, so it never recorded
+     * a failed attempt). Reset to 0 whenever a step checkpoints. Bounds the
+     * poison-pill loop: a task reclaimed this many times without progress
+     * dead-letters to needs_attention instead of churning forever.
+     */
+    reclaimCount: integer('reclaim_count').notNull().default(0),
     maxSteps: integer('max_steps').notNull().default(12),
     budgetUsdLimit: numeric('budget_usd_limit', { precision: 8, scale: 4 })
       .notNull()

@@ -5,8 +5,10 @@ import {
   findDueTasks,
   getAgent,
   purgeExpired,
+  resumeResolvedApprovalTasks,
   runDueSchedules,
 } from '@assistant/core';
+import { reapExpiredApplicationWatches } from './application-confirmations.js';
 import type { AgentDeps } from './deps.js';
 import { syncMailbox } from './email-sync.js';
 import { executeAgentTask } from './task-runner.js';
@@ -32,6 +34,9 @@ export function startPoller(deps: AgentDeps): () => void {
       if (tick % SWEEP_EVERY_TICKS === 0) {
         const woken = await expireStaleApprovals(deps.db);
         if (woken.length) console.log(`sweep: expired approvals woke ${woken.length} task(s)`);
+        const resumed = await resumeResolvedApprovalTasks(deps.db);
+        if (resumed.length)
+          console.log(`sweep: resumed ${resumed.length} stranded approval task(s)`);
         const agent = await getAgent(deps.db);
         const fired = await runDueSchedules(deps.db, agent.timezone);
         for (const f of fired)
@@ -42,6 +47,9 @@ export function startPoller(deps: AgentDeps): () => void {
         );
         await emitBudgetNotices(deps.db, agent.id).catch((err) =>
           console.error('budget notices failed', err),
+        );
+        await reapExpiredApplicationWatches(deps).catch((err) =>
+          console.error('application watch reaper failed', err),
         );
       }
       if (tick % EMAIL_SYNC_EVERY_TICKS === 0 && deps.googleClient.configured()) {

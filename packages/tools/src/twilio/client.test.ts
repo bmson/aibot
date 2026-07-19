@@ -209,6 +209,13 @@ describe('parseApprovalReply', () => {
     expect(parseApprovalReply('deny A3')).toEqual({ decision: 'denied', shortCode: 'A3' });
   });
 
+  it('parses large short codes past the old 4-digit ceiling', () => {
+    // nextShortCode mints codes with no digit ceiling; the parser must keep up
+    // or a high-numbered "YES A10000" would be misread as a new task.
+    expect(parseApprovalReply('YES A10000')).toEqual({ decision: 'approved', shortCode: 'A10000' });
+    expect(parseApprovalReply('no a123456')).toEqual({ decision: 'denied', shortCode: 'A123456' });
+  });
+
   it('returns null for normal conversation', () => {
     expect(parseApprovalReply('yes please book the lunch')).toBeNull();
     expect(parseApprovalReply('what is on my calendar?')).toBeNull();

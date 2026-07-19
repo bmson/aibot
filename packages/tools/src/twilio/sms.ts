@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolFlags } from '../types.js';
@@ -50,8 +51,15 @@ export function registerSmsTools(registry: ToolRegistry, deps: SmsToolDeps): Too
         return `Send SMS to ${a.to}: "${a.body.slice(0, 80)}${a.body.length > 80 ? '…' : ''}"`;
       },
       idempotencyKey: (args, ctx) => {
+        // Key on the FULL message, not the first 40 chars: two genuinely
+        // different owner updates in the same task whose openings match (very
+        // common — "Update on ...", "Confirmed: ...") must not collide, or the
+        // second send is silently suppressed and reported as a false success.
         const a = args as z.infer<typeof schema>;
-        return `sms-send-${ctx.taskId}-${a.to}-${a.body.slice(0, 40)}`;
+        const digest = createHash('sha256')
+          .update(`${a.to}\n${a.voiceFlag ?? ''}\n${a.body}`)
+          .digest('hex');
+        return `sms-send-${ctx.taskId}-${digest}`;
       },
       estimateCost: () => ({
         source: 'twilio_sms',

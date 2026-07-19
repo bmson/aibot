@@ -206,4 +206,19 @@ describe('builtin trust capabilities', () => {
     expect(unknown).not.toContain('owner.notify');
     expect(unknown).toContain('web.fetch');
   });
+
+  it('keeps mission/goal progress writers available once a session is tainted', () => {
+    // Regression: a mission/goal work session almost always reads untrusted
+    // content before it can summarise progress. If mission.update /
+    // goals.update_progress were stripped under taint, the loop could never
+    // record progress and would silently repeat step one forever.
+    const registry = registerBuiltinTools(new ToolRegistry(), {
+      embed: async () => [],
+      workspace: {} as Parameters<typeof registerBuiltinTools>[1]['workspace'],
+    });
+    const taintedOwner = registry.toolsForTask('owner', true).map((tool) => tool.name);
+
+    expect(taintedOwner).toContain('mission.update');
+    expect(taintedOwner).toContain('goals.update_progress');
+  });
 });

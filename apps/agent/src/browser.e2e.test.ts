@@ -4,6 +4,7 @@ import {
   enqueueTask,
   executeTask,
   getAgent,
+  hashCallbackToken,
   recordBrowserJobResult,
   resolveApproval,
 } from '@assistant/core';
@@ -169,9 +170,9 @@ describe('browser job end-to-end (integration, scripted model)', () => {
 
     let [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(row?.status).toBe('sleeping');
-    const pendingJob = (row?.state as { pendingJob?: { callbackToken: string } } | undefined)
+    const pendingJob = (row?.state as { pendingJob?: { callbackTokenHash: string } } | undefined)
       ?.pendingJob;
-    expect(pendingJob?.callbackToken).toBe(launches[0]?.callbackToken);
+    expect(pendingJob?.callbackTokenHash).toBe(hashCallbackToken(launches[0]?.callbackToken ?? ''));
 
     // Wrong token → 403, task untouched
     const bad = await recordBrowserJobResult(db, {
@@ -329,10 +330,12 @@ describe('browser job end-to-end (integration, scripted model)', () => {
 
     const [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     const state = row?.state as {
-      pendingJob?: { callbackToken: string };
+      pendingJob?: { callbackTokenHash: string };
       contextWindow: unknown[];
     };
-    expect(state.pendingJob?.callbackToken).toBe(launches[0]?.callbackToken);
+    expect(state.pendingJob?.callbackTokenHash).toBe(
+      hashCallbackToken(launches[0]?.callbackToken ?? ''),
+    );
     // the refused call got an explanatory error result in the window
     expect(JSON.stringify(state.contextWindow)).toContain('already running');
   });
@@ -396,13 +399,15 @@ describe('browser job end-to-end (integration, scripted model)', () => {
     expect(launches).toHaveLength(1);
 
     const [sleeping] = await db.select().from(tasks).where(eq(tasks.id, task.id));
-    const pending = (sleeping?.state as { pendingJob?: { callbackToken?: string } } | undefined)
+    const pending = (sleeping?.state as { pendingJob?: { callbackTokenHash?: string } } | undefined)
       ?.pendingJob;
-    expect(pending?.callbackToken).toBe(launches[0]?.callbackToken);
+    const expectedHash = hashCallbackToken(launches[0]?.callbackToken ?? '');
+    expect(pending?.callbackTokenHash).toBe(expectedHash);
     const [call] = await db.select().from(toolCalls).where(eq(toolCalls.taskId, task.id));
+    // The stored sentinel carries only the hashed token, never the raw one.
     expect(call?.result).toMatchObject({
       pending: 'browser_job_pending',
-      callbackToken: launches[0]?.callbackToken,
+      callbackToken: expectedHash,
     });
 
     // Simulate an early retry poke. The durable pending state is re-slept; the

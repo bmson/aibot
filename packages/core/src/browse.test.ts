@@ -2,11 +2,26 @@ import { describe, expect, it } from 'vitest';
 import {
   BROWSER_JOB_PENDING,
   BrowserPlanSchema,
+  hashCallbackToken,
   isBrowserJobPending,
   isReadOnlyPlan,
   planBrowse,
 } from './browse.js';
 import type { ModelRouter } from './model-router/router.js';
+
+describe('hashCallbackToken', () => {
+  it('is a deterministic 64-char hex digest that never echoes the raw token', () => {
+    const token = 'a'.repeat(48);
+    const hash = hashCallbackToken(token);
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(hash).toBe(hashCallbackToken(token));
+    expect(hash).not.toContain(token);
+  });
+
+  it('separates distinct tokens', () => {
+    expect(hashCallbackToken('token-one')).not.toBe(hashCallbackToken('token-two'));
+  });
+});
 
 const readOnlyPlan = {
   goal: 'Find the top story on Hacker News',

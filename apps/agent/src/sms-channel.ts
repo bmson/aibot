@@ -207,6 +207,29 @@ export async function deliverSmsFinal(
   });
 }
 
+/**
+ * Executor/mission hook: push a one-off owner update to OWNER_PHONE for async
+ * events the owner would otherwise only see on the dashboard (a task that
+ * permanently failed, a budget stall, a mission escalation/deadline, or a
+ * completed application-confirmation follow-up). Mirrors notifyApprovalsBySms:
+ * always to the owner's own number, metered, and best-effort at the call site.
+ */
+export async function notifyOwnerBySms(
+  deps: AgentDeps,
+  input: { taskId?: string; text: string },
+): Promise<void> {
+  // Optional chaining: some internal/test call paths build a partial deps
+  // without a Twilio client or config. A missing notifier is a silent no-op,
+  // never an error — owner pings are best-effort.
+  if (!deps.twilio?.configured() || !deps.config?.OWNER_PHONE) return;
+  await sendMeteredSms(deps, {
+    to: deps.config.OWNER_PHONE,
+    text: input.text.slice(0, 480),
+    taskId: input.taskId,
+    description: 'owner async update',
+  });
+}
+
 /** Executor hook: SMS the owner when approvals park a task. */
 export async function notifyApprovalsBySms(
   deps: AgentDeps,

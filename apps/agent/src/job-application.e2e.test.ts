@@ -312,6 +312,8 @@ describe('complex job application workflow (integration, scripted model)', () =>
       result: {
         ok: true,
         outputs: [
+          // the submit interaction a real worker emits before the confirmation
+          { index: 4, action: 'click', ok: true },
           {
             index: 5,
             action: 'extract',
@@ -469,6 +471,7 @@ describe('complex job application workflow (integration, scripted model)', () =>
       result: {
         ok: true,
         outputs: [
+          { index: 4, action: 'click', ok: true },
           {
             index: 5,
             action: 'extract',
