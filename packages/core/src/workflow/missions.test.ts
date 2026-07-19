@@ -163,6 +163,35 @@ describe('missions (integration, scripted model)', () => {
     expect(children).toHaveLength(1);
   });
 
+  it('a mission that has spent its whole budget escalates instead of spawning another session', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const agent = await getAgent(db);
+    const source = await makeSourceTask();
+    const mission = await startMission(db, source, basePlan, 'Watch rates on a spent budget');
+    cleanupTaskIds.push(mission.id);
+    // Drive cumulative spend up to the mission's own cap.
+    const cap = Number(mission.budgetUsdLimit);
+    await db
+      .update(tasks)
+      .set({ spentUsd: cap.toFixed(4) })
+      .where(eq(tasks.id, mission.id));
+
+    const claimed = await claimTask(db, mission.id);
+    expect(claimed).not.toBeNull();
+    const wake = await wakeMission(
+      { db, router: reflectingRouter({ decision: 'continue', reasoning: '' }) },
+      claimed as NonNullable<typeof claimed>,
+      agent,
+    );
+    expect(wake.action).toBe('reflected');
+    if (wake.action === 'reflected') expect(wake.decision).toBe('escalate');
+    const [after] = await db.select().from(tasks).where(eq(tasks.id, mission.id));
+    expect(after?.status).toBe('needs_attention');
+    // No session child was spawned once the budget was gone.
+    const children = await db.select().from(tasks).where(eq(tasks.parentTaskId, mission.id));
+    expect(children).toHaveLength(0);
+  });
+
   it('deadline reached → final report and done', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const source = await makeSourceTask();

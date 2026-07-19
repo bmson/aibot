@@ -1,5 +1,5 @@
 import { type AgentRow, type Db, type TaskRow, tasks } from '@assistant/db';
-import { and, desc, eq, notInArray, sql } from 'drizzle-orm';
+import { and, desc, eq, notInArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { mirrorGoalUpdateToPrimary, persistMessage } from '../chat.js';
 import { InboundEventSchema, type Plan, type TaskState } from '../events.js';
@@ -194,6 +194,38 @@ export async function wakeMission(
     if (!(await renewTaskLease(db, mission))) return { action: 'lease_lost' };
     if (!(await sleepTask(db, mission, state, wakeAt))) return { action: 'lease_lost' };
     return { action: 'sessioned', sessionTaskId: activeSession.id, sleptUntil: wakeAt };
+  }
+
+  // Enforce the mission's overall budget across all its sessions. Each session
+  // is individually capped (0.25 below), but nothing otherwise bounds the whole
+  // effort — a long mission would quietly spend many multiples of its own cap
+  // over dozens of daily sessions. Sum the model spend charged to the mission
+  // and its session children; at the cap, surface it instead of spawning more.
+  const missionCap = Number(mission.budgetUsdLimit);
+  if (Number.isFinite(missionCap) && missionCap > 0) {
+    const [spend] = await db
+      .select({ total: sql<number>`coalesce(sum(${tasks.spentUsd}), 0)` })
+      .from(tasks)
+      .where(or(eq(tasks.id, mission.id), eq(tasks.parentTaskId, mission.id)));
+    const spent = Number(spend?.total ?? 0);
+    if (spent >= missionCap) {
+      if (!(await renewTaskLease(db, mission))) return { action: 'lease_lost' };
+      if (
+        !(await markTaskNeedsAttention(
+          db,
+          mission,
+          `mission budget exhausted ($${spent.toFixed(2)} of $${missionCap.toFixed(2)})`,
+        ))
+      ) {
+        return { action: 'lease_lost' };
+      }
+      await report(
+        deps,
+        mission,
+        `This mission has used its full budget ($${spent.toFixed(2)} of $${missionCap.toFixed(2)}). I've paused it — raise its budget or wake it from the dashboard to keep going.`,
+      );
+      return { action: 'reflected', decision: 'escalate' };
+    }
   }
 
   // Fence immediately before creating the child. An old worker must not
