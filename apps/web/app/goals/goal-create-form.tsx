@@ -67,6 +67,13 @@ export function GoalCreateForm() {
             />
           </label>
         </div>
+        <label className="flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+          <input type="checkbox" name="mirrorToPrimary" className="mt-0.5" />
+          <span>
+            Show this goal’s background updates in my main chat thread. Off by default; the work
+            chat always keeps the full record.
+          </span>
+        </label>
       </div>
       {state.error ? (
         <p className="mt-2 text-xs text-red-600 dark:text-red-400">{state.error}</p>

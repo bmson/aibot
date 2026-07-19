@@ -5,12 +5,14 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { ZodType } from 'zod';
 import { type BrowserJobPendingResult, hashCallbackToken, isBrowserJobPending } from '../browse.js';
 import {
+  assistantMessageParts,
   buildSystemPrompt,
   getAgent,
   listMessages,
   PROMPT_VERSION,
   persistMessage,
 } from '../chat.js';
+import { loadConfig } from '../config.js';
 import {
   BudgetReservationError,
   getRate,
@@ -22,6 +24,7 @@ import { type PendingFinal, PlanSchema, type TaskState, type Trust } from '../ev
 import { getOwnerCard } from '../memory/consolidation.js';
 import type { WorkspaceReader } from '../memory/import.js';
 import { codeJobName, runCodeJob } from '../memory/jobs.js';
+import { type RecallSource, recallRelevantContext, recentWindowStart } from '../memory/recall.js';
 import type { ModelRole, ModelRouter, ProposedToolCall } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import {
@@ -352,7 +355,12 @@ async function notifyOwnerAndConversation(
 }
 
 /** A retry must not duplicate the dashboard/chat copy of a final response. */
-async function persistFinalConversationOnce(db: Db, task: TaskRow, text: string): Promise<void> {
+async function persistFinalConversationOnce(
+  db: Db,
+  task: TaskRow,
+  text: string,
+  recall?: RecallSource[],
+): Promise<void> {
   if (!task.conversationId) return;
   const [existing] = await db
     .select({ id: messages.id })
@@ -372,7 +380,7 @@ async function persistFinalConversationOnce(db: Db, task: TaskRow, text: string)
     taskId: task.id,
     role: 'assistant',
     origin: 'assistant',
-    parts: [{ type: 'text', text }],
+    parts: assistantMessageParts(text, recall),
     text,
   });
 }
@@ -385,7 +393,8 @@ async function finalizePendingResponse(
   checkpointState?: TaskState,
 ): Promise<ExecuteResult> {
   if (!(await renewTaskLease(deps.db, task))) return LOST_LEASE;
-  await persistFinalConversationOnce(deps.db, task, pending.text);
+  const recallSources = (checkpointState ?? taskState(task)).recall ?? undefined;
+  await persistFinalConversationOnce(deps.db, task, pending.text, recallSources);
 
   // Check cancellation/reclaim immediately before the external side effect.
   if (deps.deliverFinal && !pending.deliveryAttempted) {
@@ -1128,6 +1137,47 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   const privilegedTask = task.trust === 'owner' || task.trust === 'assistant';
   const ownerCard = privilegedTask && !state.untrustedContext ? await getOwnerCard(db) : undefined;
 
+  // Long-running-chat auto-recall (Phase 1). Action-routed chat turns run here
+  // instead of the streaming route, so recall is wired at both entry points.
+  // Owner-private, so it mirrors the owner-card gate; best-effort by design.
+  let recallBlock: string | undefined;
+  if (
+    loadConfig().CHAT_RECALL_ENABLED &&
+    privilegedTask &&
+    !state.untrustedContext &&
+    task.type === 'chat_turn' &&
+    task.conversationId
+  ) {
+    const conversationId = task.conversationId;
+    const lastUser = [...window].reverse().find((m) => m.role === 'user');
+    const trigger = task.trigger as { payload?: { text?: unknown } } | null;
+    const queryText =
+      (typeof lastUser?.content === 'string' && lastUser.content) ||
+      (typeof trigger?.payload?.text === 'string' ? trigger.payload.text : '');
+    if (queryText) {
+      try {
+        const since = (await recentWindowStart(db, conversationId, 20)) ?? new Date();
+        const recall = await recallRelevantContext(
+          db,
+          {
+            agentId: agent.id,
+            queryText,
+            embed: (values, embedOpts) =>
+              router.embed(values, { taskId: task.id, ...(embedOpts ?? {}) }),
+            exclude: { conversationId, sinceCreatedAt: since },
+          },
+          { taskId: task.id },
+        );
+        recallBlock = recall.block || undefined;
+        // Provenance for the chat UI affordance; checkpointed so it survives to
+        // the (possibly resumed) final-response persist.
+        state.recall = recall.sources.length > 0 ? recall.sources : undefined;
+      } catch (err) {
+        console.error('executor recall failed — continuing without it', err);
+      }
+    }
+  }
+
   // Owner chat/SMS replies are the critical carve-out: hard caps degrade
   // them to the fallback model instead of blocking (evaluateBudget).
   const critical =
@@ -1141,6 +1191,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     const system = [
       buildSystemPrompt(agent, {
         ownerCard: !state.untrustedContext ? ownerCard : undefined,
+        recall: !state.untrustedContext ? recallBlock : undefined,
       }),
       channelContext(task),
       plan

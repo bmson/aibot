@@ -1,0 +1,1 @@
+ALTER TABLE "goals" ADD COLUMN "mirror_to_primary" boolean DEFAULT false NOT NULL;

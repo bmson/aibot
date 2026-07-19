@@ -1,7 +1,7 @@
 import { type AgentRow, type Db, type TaskRow, tasks } from '@assistant/db';
 import { and, eq, notInArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { persistMessage } from '../chat.js';
+import { mirrorGoalUpdateToPrimary, persistMessage } from '../chat.js';
 import { InboundEventSchema, type Plan, type TaskState } from '../events.js';
 import type { ModelRouter } from '../model-router/router.js';
 import {
@@ -281,27 +281,32 @@ async function reflect(
 }
 
 /**
- * Post a mission update where the owner will see it: always into its
- * conversation (dashboard), and — because missions are long-horizon and the
- * owner is rarely watching — also pushed to the owner's channel when a
- * notifier is wired. These reports are terminal/decision events, never chatty
- * progress, so an owner ping is warranted. Owner push is best-effort.
+ * Post a mission update where the owner will see it: into its work chat
+ * (dashboard) and — because missions are long-horizon and the owner is rarely
+ * watching — pushed to the owner's channel when a notifier is wired. For
+ * opted-in goals, also mirror a labeled copy into the primary thread so
+ * background work shows up in the one discussion (long-running-chat, option B).
+ * Terminal/decision events only; owner push and mirror are best-effort.
  */
 async function report(deps: MissionDeps, mission: TaskRow, text: string): Promise<void> {
-  if (!mission.conversationId) return;
-  await persistMessage(deps.db, {
-    conversationId: mission.conversationId,
-    taskId: mission.id,
-    role: 'assistant',
-    origin: 'assistant',
-    parts: [{ type: 'text', text }],
-    text,
-  });
-  if (deps.notifyOwner) {
-    await deps
-      .notifyOwner({ taskId: mission.id, conversationId: mission.conversationId, text })
-      .catch((err) => console.error('mission owner notification failed', err));
+  if (mission.conversationId) {
+    await persistMessage(deps.db, {
+      conversationId: mission.conversationId,
+      taskId: mission.id,
+      role: 'assistant',
+      origin: 'assistant',
+      parts: [{ type: 'text', text }],
+      text,
+    });
+    if (deps.notifyOwner) {
+      await deps
+        .notifyOwner({ taskId: mission.id, conversationId: mission.conversationId, text })
+        .catch((err) => console.error('mission owner notification failed', err));
+    }
   }
+  await mirrorGoalUpdateToPrimary(deps.db, mission, text).catch((err) =>
+    console.error('goal update mirror to primary thread failed', err),
+  );
 }
 
 /** Postgres interval → ms (supports the shapes we write: 'N days', 'HH:MM:SS'). */

@@ -71,6 +71,16 @@ const ConfigSchema = z.object({
     .transform((value) => value === 'true'),
   /** Structural ceiling across one full canary run (SMS + browser + bounded chat). */
   CANARY_MAX_COST_USD: z.coerce.number().min(0.01).max(0.1).default(0.03),
+  /**
+   * Long-running chat auto-recall (Phase 1). When on, each owner chat turn
+   * embeds the incoming message and injects a bounded block of semantically
+   * relevant earlier discussion from the owner's own past chats — the "one
+   * forever thread" experience. Off by default: opt in and measure.
+   */
+  CHAT_RECALL_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

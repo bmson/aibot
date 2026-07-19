@@ -23,6 +23,7 @@ export const dynamic = 'force-dynamic';
 const navItems = [
   { href: '/', label: 'Home' },
   { href: '/chat', label: 'Chat' },
+  { href: '/chat/all', label: 'All chats', utility: true },
   { href: '/approvals', label: 'Approvals' },
   { href: '/tasks', label: 'Activity' },
   { href: '/goals', label: 'Goals' },

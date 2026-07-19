@@ -1,6 +1,6 @@
 {
-  "id": "9f6b286a-ee65-49ca-b1f2-8e4c020ef7f8",
-  "prevId": "97d71f1f-0552-4d06-918a-7ce277f44255",
+  "id": "2530bb97-a821-494f-9da0-d95f519622d4",
+  "prevId": "9f6b286a-ee65-49ca-b1f2-8e4c020ef7f8",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1984,6 +1984,13 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "mirror_to_primary": {
+          "name": "mirror_to_primary",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "archived_at": {
           "name": "archived_at",

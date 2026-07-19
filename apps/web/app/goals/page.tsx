@@ -58,6 +58,7 @@ function toGoalView(
       goal.status === 'active' && !goal.archivedAt && automation?.enabled && automation.nextRunAt
         ? `next ${relativeTime(automation.nextRunAt, now)}`
         : '',
+    mirrorToPrimary: goal.mirrorToPrimary,
   };
 }
 

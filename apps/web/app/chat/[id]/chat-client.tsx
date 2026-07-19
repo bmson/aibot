@@ -22,6 +22,11 @@ interface ChatClientProps {
 
 const ASYNC_ACK_TEXT = 'Got it — I’m working on this now. I’ll post the result here.';
 
+interface RecallSource {
+  date: string;
+  label: string;
+}
+
 function messageText(message: UIMessage): string {
   return message.parts
     .filter(
@@ -29,6 +34,54 @@ function messageText(message: UIMessage): string {
     )
     .map((part) => part.text)
     .join('');
+}
+
+/** Auto-recall provenance carried on an assistant message's custom `recall` part. */
+function recallSourcesOf(message: UIMessage): RecallSource[] {
+  for (const part of message.parts as Array<{ type?: string; sources?: unknown }>) {
+    if (part?.type === 'recall' && Array.isArray(part.sources)) {
+      return (part.sources as RecallSource[]).filter(
+        (s) => s && typeof s.date === 'string' && typeof s.label === 'string',
+      );
+    }
+  }
+  return [];
+}
+
+/** The "recalled from earlier" affordance: what auto-recall drew on for a turn. */
+function RecallChip({ sources }: { sources: RecallSource[] }) {
+  if (sources.length === 0) return null;
+  return (
+    <div className="mb-1.5 flex flex-wrap items-center gap-1 text-[11px] text-slate-500 dark:text-zinc-400">
+      <span className="font-medium">↩ Recalled from earlier:</span>
+      {sources.map((source, index) => (
+        <span
+          key={`${source.date}-${index.toString()}`}
+          className="rounded bg-slate-100 px-1.5 py-0.5 dark:bg-zinc-800"
+          title={source.label}
+        >
+          {source.date} · {source.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function decodeRecallHeader(value: string | null): RecallSource[] | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(decodeURIComponent(value)) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const sources = parsed.filter(
+      (s): s is RecallSource =>
+        Boolean(s) &&
+        typeof (s as RecallSource).date === 'string' &&
+        typeof (s as RecallSource).label === 'string',
+    );
+    return sources.length > 0 ? sources : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -67,6 +120,8 @@ export function ChatClient({
     initialAsyncTurn ?? null,
   );
   const [asyncNote, setAsyncNote] = useState<string | null>(null);
+  /** Live provenance for the current streaming turn (the persisted part covers reloads). */
+  const [liveRecall, setLiveRecall] = useState<RecallSource[] | null>(null);
 
   const transport = useMemo(
     () =>
@@ -85,6 +140,7 @@ export function ChatClient({
           const modelId = response.headers.get('x-model-id');
           const degraded = response.headers.get('x-model-degraded') === 'true';
           setFallbackNote(degraded && modelId ? `responded with ${modelId} (fallback)` : null);
+          setLiveRecall(decodeRecallHeader(response.headers.get('x-recall')));
           const taskId = response.headers.get('x-async-task');
           const cursor = response.headers.get('x-message-cursor');
           setAsyncTurn(taskId && cursor ? { taskId, cursor } : null);
@@ -292,6 +348,9 @@ export function ChatClient({
                       : 'max-w-[88%] rounded-2xl rounded-bl-md border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm sm:max-w-[80%] dark:border-zinc-800 dark:bg-zinc-900'
                   }
                 >
+                  {message.role === 'assistant' ? (
+                    <RecallChip sources={recallSourcesOf(message)} />
+                  ) : null}
                   {message.parts.map((part, index) =>
                     part.type === 'text' ? (
                       message.role === 'assistant' ? (
@@ -323,6 +382,7 @@ export function ChatClient({
             {asyncNote ? (
               <p className="text-xs text-zinc-500 dark:text-zinc-500">{asyncNote}</p>
             ) : null}
+            {liveRecall ? <RecallChip sources={liveRecall} /> : null}
           </div>
         )}
       </div>
@@ -346,6 +406,7 @@ export function ChatClient({
           const text = input.trim();
           if (!text || busy) return;
           setInput('');
+          setLiveRecall(null);
           void sendMessage({ text });
         }}
         className="mobile-safe-bottom flex gap-2 border-t border-slate-200 pt-4 dark:border-zinc-800"

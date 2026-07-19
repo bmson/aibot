@@ -5,11 +5,25 @@ import {
   type ConversationRow,
   conversations,
   type Db,
+  goals,
   messages,
   tasks,
 } from '@assistant/db';
 import { and, asc, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import type { RecallSource } from './memory/recall.js';
 import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
+
+/**
+ * Parts for a persisted assistant message. Beyond the text, an optional
+ * `recall` part records which earlier discussions auto-recall drew on, so the
+ * chat UI can show a "recalled from earlier" affordance (Phase 4). The recall
+ * part is UI-only: model history is rebuilt from `messages.text`, never parts.
+ */
+export function assistantMessageParts(text: string, recall?: RecallSource[]): unknown[] {
+  const parts: unknown[] = [{ type: 'text', text }];
+  if (recall && recall.length > 0) parts.push({ type: 'recall', sources: recall });
+  return parts;
+}
 
 const DEFAULT_MESSAGE_LIMIT = 100;
 const MAX_MESSAGE_LIMIT = 200;
@@ -48,7 +62,10 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  */
 export const PROMPT_VERSION = 8;
 
-export function buildSystemPrompt(agent: AgentRow, extras: { ownerCard?: string } = {}): string {
+export function buildSystemPrompt(
+  agent: AgentRow,
+  extras: { ownerCard?: string; recall?: string } = {},
+): string {
   const now = new Intl.DateTimeFormat('en-US', {
     timeZone: agent.timezone,
     dateStyle: 'full',
@@ -77,6 +94,7 @@ export function buildSystemPrompt(agent: AgentRow, extras: { ownerCard?: string 
           extras.ownerCard,
         ]
       : []),
+    ...(extras.recall ? ['', extras.recall] : []),
   ].join('\n');
 }
 
@@ -111,6 +129,117 @@ export async function ensureChatConversation(
     .returning();
   if (!created) throw new Error('failed to create conversation');
   return created;
+}
+
+/**
+ * Resolve the single canonical chat thread the UI opens by default (Phase 3 of
+ * the long-running-chat design). The primary is sticky and always live: if one
+ * exists it is un-archived and returned, so the "one forever thread" never
+ * disappears. Otherwise the most recent non-goal chat is promoted (giving an
+ * existing owner their real main thread), or a fresh thread is created.
+ * Serialized in a transaction; the partial unique index guarantees one primary.
+ */
+export async function getOrCreatePrimaryConversation(
+  db: Db,
+  agentId: string,
+): Promise<ConversationRow> {
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.agentId, agentId), eq(conversations.isPrimary, true)))
+      .limit(1);
+    if (existing) {
+      if (!existing.archivedAt) return existing;
+      const [restored] = await tx
+        .update(conversations)
+        .set({ archivedAt: null, updatedAt: sql`now()` })
+        .where(eq(conversations.id, existing.id))
+        .returning();
+      return restored ?? existing;
+    }
+
+    const [recent] = await tx
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.agentId, agentId),
+          eq(conversations.channel, 'chat'),
+          isNull(conversations.archivedAt),
+          sql`${conversations.metadata}->>'goalId' IS NULL`,
+        ),
+      )
+      .orderBy(desc(conversations.updatedAt))
+      .limit(1);
+    if (recent) {
+      const [promoted] = await tx
+        .update(conversations)
+        .set({ isPrimary: true, updatedAt: sql`now()` })
+        .where(eq(conversations.id, recent.id))
+        .returning();
+      if (promoted) return promoted;
+    }
+
+    const [created] = await tx
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner', isPrimary: true })
+      .returning();
+    if (!created) throw new Error('failed to create primary conversation');
+    return created;
+  });
+}
+
+/**
+ * Mirror an opted-in goal's mission update into the owner's primary chat thread
+ * (long-running-chat design, option B), so background work shows up in the one
+ * discussion. No-op unless the goal has `mirrorToPrimary` set and a primary
+ * thread already exists. The work chat remains the full record; this posts a
+ * short labeled copy. Best-effort — callers swallow errors.
+ */
+export async function mirrorGoalUpdateToPrimary(
+  db: Db,
+  mission: { id: string; agentId: string; goalId: string | null; conversationId: string | null },
+  text: string,
+): Promise<void> {
+  if (!mission.goalId) return;
+  const [goal] = await db
+    .select({ title: goals.title, mirror: goals.mirrorToPrimary })
+    .from(goals)
+    .where(eq(goals.id, mission.goalId))
+    .limit(1);
+  if (!goal?.mirror) return;
+  const primary = await findPrimaryConversation(db, mission.agentId);
+  // Skip when there's no primary yet, or the mission already reports into it.
+  if (!primary || primary.id === mission.conversationId) return;
+  const labeled = `On your goal “${goal.title}”: ${text}`;
+  await persistMessage(db, {
+    conversationId: primary.id,
+    taskId: mission.id,
+    role: 'assistant',
+    origin: 'assistant',
+    parts: [{ type: 'text', text: labeled }],
+    text: labeled,
+  });
+}
+
+/** The existing primary chat thread, or null — never creates one (for background writers). */
+export async function findPrimaryConversation(
+  db: Db,
+  agentId: string,
+): Promise<ConversationRow | null> {
+  const [primary] = await db
+    .select()
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.agentId, agentId),
+        eq(conversations.isPrimary, true),
+        isNull(conversations.archivedAt),
+      ),
+    )
+    .limit(1);
+  return primary ?? null;
 }
 
 /** List current chats by default; archived history is opt-in in the interface. */
@@ -239,7 +368,12 @@ export async function createChatTask(
 export async function finishTask(
   db: Db,
   task: TaskLease,
-  outcome: { status: 'done' | 'failed'; progress?: string; responseText?: string },
+  outcome: {
+    status: 'done' | 'failed';
+    progress?: string;
+    responseText?: string;
+    recall?: RecallSource[];
+  },
 ): Promise<boolean> {
   return db.transaction(async (tx) => {
     // Fence first, then persist the reply in the same transaction. If an owner
@@ -257,7 +391,7 @@ export async function finishTask(
         taskId: task.id,
         role: 'assistant',
         origin: 'assistant',
-        parts: [{ type: 'text', text: outcome.responseText }],
+        parts: assistantMessageParts(outcome.responseText, outcome.recall),
         text: outcome.responseText,
       });
     }

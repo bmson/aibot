@@ -3,6 +3,7 @@ import type { ModelRouter } from '../model-router/router.js';
 import { runMemoryConsolidation } from './consolidation.js';
 import { runMemoryExtraction } from './extraction.js';
 import { runImportJob, type WorkspaceReader } from './import.js';
+import { segmentConversations } from './segmentation.js';
 
 /**
  * Code jobs: tasks whose trigger payload carries { job: '<name>' } run a
@@ -11,11 +12,12 @@ import { runImportJob, type WorkspaceReader } from './import.js';
  * retry/dead-letter machinery, and a job may yield (done: false) to sleep
  * and resume from its checkpoint — that's how imports survive interruption.
  */
-export type CodeJobName = 'memory.extract' | 'memory.consolidate' | 'import.run';
+export type CodeJobName = 'memory.extract' | 'memory.consolidate' | 'chat.segment' | 'import.run';
 
 const CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.extract',
   'memory.consolidate',
+  'chat.segment',
   'import.run',
 ]);
 
@@ -56,6 +58,14 @@ export async function runCodeJob(
       return {
         done: true,
         summary: `consolidation: ${r.entities} entities, ${r.duplicatesExpired} duplicates expired, ${r.contradictionsResolved} contradictions resolved, ${r.factsUnified} facts unified, ${r.domainsAssigned} domains assigned, owner card recompiled`,
+      };
+    }
+    case 'chat.segment': {
+      await deps.heartbeat?.();
+      const r = await segmentConversations(deps, { taskId: task.id, agentId: task.agentId });
+      return {
+        done: true,
+        summary: `segmentation: ${r.segmentsCreated} new segment(s) across ${r.conversationsScanned} conversation(s)`,
       };
     }
     case 'import.run':
