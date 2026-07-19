@@ -380,6 +380,11 @@ export async function runImportJob(
           progressPercent: manifest.windowCount
             ? Math.min(100, Math.round((cursor.windowIndex / manifest.windowCount) * 100))
             : 100,
+          // Each window is proof of progress: clear the poison-pill reclaim
+          // counter so a multi-hour import that survives a few mid-run worker
+          // deaths is not falsely dead-lettered (matches checkpointTask, which
+          // this raw update stands in for on the code-job path).
+          reclaimCount: 0,
           updatedAt: sql`now()`,
         })
         .where(eq(tasks.id, task.id));
@@ -424,6 +429,27 @@ export async function runImportJob(
       });
       await deps.heartbeat?.();
       if (!outcome.ok) {
+        // A daily/monthly cap (mode 'block') frees itself when the period
+        // resets, so checkpoint and come back later — never lose progress.
+        // A task-budget stop (mode 'park') is a cumulative spent-vs-limit cap
+        // that NEVER resets on its own: yielding on it would re-block on the
+        // next wake and re-fire this job every 6h forever, with import_sources
+        // stuck 'running' so the owner can't even restart it. Mark the source
+        // failed (re-runnable) and throw, so the task reaches needs_attention —
+        // exactly how the model step loop treats task-budget exhaustion.
+        if (outcome.decision.mode === 'park') {
+          await db
+            .update(importSources)
+            .set({
+              status: 'failed',
+              error: outcome.decision.reason.slice(0, 2000),
+              updatedAt: sql`now()`,
+            })
+            .where(eq(importSources.id, sourceRow.id));
+          throw new Error(
+            `import ${payload.source} exceeded its task budget and cannot continue (${outcome.decision.reason})`,
+          );
+        }
         // budget guard said stop — checkpoint and come back later, never lose progress
         await checkpoint();
         return {

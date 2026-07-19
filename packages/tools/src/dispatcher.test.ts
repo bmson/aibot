@@ -6,6 +6,7 @@ import {
   costReservations,
   createDb,
   type Db,
+  goals,
   rateLimits,
   type TaskRow,
   tasks,
@@ -27,6 +28,7 @@ let db: Db;
 let dbUp = false;
 let agentId: string;
 const cleanupTaskIds: string[] = [];
+const cleanupGoalIds: string[] = [];
 let executions: Record<string, number> = {};
 
 function makeTool(name: string, overrides: Partial<AssistantTool> = {}): AssistantTool {
@@ -122,6 +124,9 @@ afterAll(async () => {
     if (cleanupTaskIds.length) {
       await db.delete(tasks).where(inArray(tasks.id, cleanupTaskIds));
     }
+    if (cleanupGoalIds.length) {
+      await db.delete(goals).where(inArray(goals.id, cleanupGoalIds));
+    }
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
 });
@@ -180,6 +185,81 @@ describe('ToolDispatcher (integration)', () => {
       provenance,
     });
     expect(outcome.kind).toBe('rejected');
+  });
+
+  it('binds goals.update_progress to the goal its task owns (blocks injected cross-goal writes)', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // goals.update_progress stays available under taint (the goal loop needs it),
+    // so it slips the taint-approval gate. The dispatcher instead binds the write
+    // to the goal this task owns — injected content in a tainted session cannot
+    // redirect it to another goal or drive it from a task that owns no goal.
+    const registry = new ToolRegistry().register({
+      name: 'goals.update_progress',
+      description: 'test goals.update_progress',
+      inputSchema: z.object({ goalId: z.string(), progress: z.string() }),
+      risk: 'autonomous',
+      acceptsUntrustedInput: true,
+      execute: async () => ({ updated: true }),
+    } as unknown as AssistantTool);
+    const dispatcher = new ToolDispatcher(db, registry);
+
+    const [goal] = await db
+      .insert(goals)
+      .values({ agentId, title: 'gate test goal' })
+      .returning({ id: goals.id });
+    const goalId = (goal as { id: string }).id;
+    cleanupGoalIds.push(goalId);
+    const [otherGoal] = await db
+      .insert(goals)
+      .values({ agentId, title: 'gate test other goal' })
+      .returning({ id: goals.id });
+    const otherGoalId = (otherGoal as { id: string }).id;
+    cleanupGoalIds.push(otherGoalId);
+
+    const [boundTaskRow] = await db
+      .insert(tasks)
+      .values({ agentId, type: 'adhoc', status: 'running', trust: 'owner', goalId })
+      .returning();
+    const boundTask = boundTaskRow as TaskRow;
+    cleanupTaskIds.push(boundTask.id);
+
+    // Bound to its own goal → allowed even under taint.
+    const owned = await dispatcher.dispatch({
+      task: boundTask,
+      step: 1,
+      toolName: 'goals.update_progress',
+      args: { goalId, progress: 'verified a step' },
+      ctx: { ...ctxFor(boundTask), tainted: true },
+      provenance,
+    });
+    expect(owned.kind).toBe('executed');
+
+    // Same task, but the (injected) args target a DIFFERENT goal → rejected.
+    const crossGoal = await dispatcher.dispatch({
+      task: boundTask,
+      step: 1,
+      toolName: 'goals.update_progress',
+      args: { goalId: otherGoalId, progress: 'redirected by injection' },
+      ctx: { ...ctxFor(boundTask), tainted: true },
+      provenance,
+    });
+    expect(crossGoal.kind).toBe('rejected');
+
+    // A task that owns no goal cannot write any goal.
+    const freeTask = await makeTask('owner');
+    const unbound = await dispatcher.dispatch({
+      task: freeTask,
+      step: 1,
+      toolName: 'goals.update_progress',
+      args: { goalId, progress: 'from a non-goal task' },
+      ctx: ctxFor(freeTask),
+      provenance,
+    });
+    expect(unbound.kind).toBe('rejected');
+
+    // The one executed call would otherwise block task teardown (FK), and
+    // purgeTestResidue only sweeps test.* — remove it here.
+    await db.delete(toolCalls).where(eq(toolCalls.toolName, 'goals.update_progress'));
   });
 
   it('rejects taint-sensitive tools after untrusted output enters an owner task', async (ctx) => {

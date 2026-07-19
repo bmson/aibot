@@ -56,4 +56,21 @@ describe('evaluateBudget', () => {
   it('a zero task cap parks immediately (nothing is free)', () => {
     expect(evaluateBudget({ ...base, taskLimitUsd: 0 }).mode).toBe('park');
   });
+
+  it('degrades (not parks) a critical reply just over the task cap, within the carve-out', () => {
+    // 0.25 < 0.26 < 0.275 (1.1x). Without the carve-out this parked and the
+    // owner reply stranded in needs_attention; critical work degrades instead,
+    // matching reserveCost's task-cap carve-out for critical deliveries.
+    const d = evaluateBudget({ ...base, taskSpentUsd: 0.26 }, { critical: true });
+    expect(d.mode).toBe('fallback');
+  });
+
+  it('still parks a non-critical task at its cap (the carve-out is critical-only)', () => {
+    expect(evaluateBudget({ ...base, taskSpentUsd: 0.26 }).mode).toBe('park');
+  });
+
+  it('parks a critical reply once it passes the task-cap carve-out margin', () => {
+    // 0.3 > 0.275 (1.1x of 0.25): even critical work must stop.
+    expect(evaluateBudget({ ...base, taskSpentUsd: 0.3 }, { critical: true }).mode).toBe('park');
+  });
 });

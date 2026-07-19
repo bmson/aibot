@@ -1327,11 +1327,21 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     // stays a hard failure.
     const cutOffWithText =
       stepResult.finishReason === 'length' && stepResult.toolCalls.length === 0;
+    // A completed answer with no tool calls is safe to deliver whatever label the
+    // provider attaches to the finish. Some providers surface 'other'/'unknown'/
+    // 'content-filter' even when the model returned a usable message. Discarding
+    // it throws, and because the finish reason is deterministic for that provider
+    // the whole task retries into the same failure and dead-letters — the turn
+    // "keeps failing" with nothing delivered. Only an empty response or a finish
+    // that left tool calls in an unknown (truncated) state is a hard failure.
+    const completedTextAnswer =
+      stepResult.toolCalls.length === 0 && stepResult.text.trim().length > 0;
     const successfulFinish =
       stepResult.finishReason === undefined ||
       stepResult.finishReason === 'stop' ||
       (stepResult.toolCalls.length > 0 && stepResult.finishReason === 'tool-calls') ||
-      cutOffWithText;
+      cutOffWithText ||
+      completedTextAnswer;
     if (!successfulFinish) {
       throw new Error(`model step ended with finish reason ${stepResult.finishReason}`);
     }

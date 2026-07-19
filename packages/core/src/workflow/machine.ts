@@ -267,6 +267,13 @@ export async function sleepTask(
       lockedUntil: null,
       queueGeneration: sql`${tasks.queueGeneration} + 1`,
       attempt: 0,
+      // A deliberate yield to sleep (code-job checkpoint, mission wake, browser-job
+      // wait) is proof of forward progress, so clear the poison-pill reclaim
+      // counter too. A genuinely hung worker never reaches here — its running
+      // lease simply expires and findDueTasks reclaims it. Without this, a
+      // long-running import/mission that survives a few mid-run worker deaths
+      // accrues reclaimCount and falsely dead-letters as a poison pill.
+      reclaimCount: 0,
       updatedAt: sql`now()`,
     })
     .where(activeLease(task))
