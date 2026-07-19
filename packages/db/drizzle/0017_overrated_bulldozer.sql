@@ -1,0 +1,1 @@
+ALTER TABLE "tasks" ADD COLUMN "reclaim_count" integer DEFAULT 0 NOT NULL;
