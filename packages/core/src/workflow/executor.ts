@@ -3,7 +3,7 @@ import { approvals, messages, tasks, toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { ZodType } from 'zod';
-import { type BrowserJobPendingResult, isBrowserJobPending } from '../browse.js';
+import { type BrowserJobPendingResult, hashCallbackToken, isBrowserJobPending } from '../browse.js';
 import {
   buildSystemPrompt,
   getAgent,
@@ -697,11 +697,16 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     signal: abort.signal,
     log: async () => {},
     stageBrowserJob: async (job) => {
+      // The raw callback token has already been handed to the job at launch;
+      // only its hash is persisted anywhere (task checkpoint AND the tool_calls
+      // sentinel), so a DB read never yields a usable callback credential.
+      const callbackTokenHash = hashCallbackToken(job.pending.callbackToken);
+      const stagedSentinel = { ...job.pending, callbackToken: callbackTokenHash };
       const pendingJob = {
         dbToolCallId: job.dbToolCallId,
         toolCallId: job.modelToolCallId,
         toolName: job.toolName,
-        callbackToken: job.pending.callbackToken,
+        callbackTokenHash,
         timeoutAt: job.pending.timeoutAt,
       };
       // The model may have proposed several calls in one assistant message. A
@@ -736,7 +741,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       await db.transaction(async (tx) => {
         const [staged] = await tx
           .update(toolCalls)
-          .set({ result: job.pending })
+          .set({ result: stagedSentinel })
           .where(
             and(
               eq(toolCalls.id, job.dbToolCallId),
@@ -892,7 +897,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
             dbToolCallId: pending.dbToolCallId,
             toolCallId: pending.toolCallId,
             toolName: pending.toolName,
-            callbackToken: outcome.result.callbackToken,
+            callbackTokenHash: hashCallbackToken(outcome.result.callbackToken),
             timeoutAt: outcome.result.timeoutAt,
           };
         } else {
@@ -1342,7 +1347,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
               dbToolCallId: outcome.toolCallId,
               toolCallId: tc.toolCallId,
               toolName: tc.toolName,
-              callbackToken: outcome.result.callbackToken,
+              callbackTokenHash: hashCallbackToken(outcome.result.callbackToken),
               timeoutAt: outcome.result.timeoutAt,
             };
           } else {

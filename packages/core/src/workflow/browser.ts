@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { type Db, files, tasks, toolCalls } from '@assistant/db';
 import { and, eq, inArray, sql } from 'drizzle-orm';
+import { hashCallbackToken } from '../browse.js';
 import { TaskStateSchema } from '../events.js';
 import { getQueueNotifier } from '../queue.js';
 
@@ -41,7 +42,9 @@ export async function recordBrowserJobResult(
     const state = TaskStateSchema.parse(task.state ?? {});
     const pending = state.pendingJob;
     if (!pending) return { ok: false, status: 409, error: 'no pending browser job' };
-    if (!tokensMatch(pending.callbackToken, input.token)) {
+    // Compare hashes: only the hash is stored, and the incoming raw token is
+    // hashed here. timingSafeEqual over equal-length hex strings.
+    if (!tokensMatch(pending.callbackTokenHash, hashCallbackToken(input.token))) {
       return { ok: false, status: 403, error: 'invalid token' };
     }
     // The token is durably checkpointed BEFORE launch, so a fast callback may
