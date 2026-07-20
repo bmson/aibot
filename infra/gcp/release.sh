@@ -54,6 +54,39 @@ else
 fi
 gcloud run jobs execute assistant-migrate --project "$PROJECT" --region "$REGION" --wait --quiet
 
+# This script rolls images only; deploy.sh owns environment and provisioning.
+# That split is silent by default: a commit that starts depending on a new env
+# var, or on a Scheduler job deploy.sh creates, ships green here and fails in
+# production. It has happened — the agent served every Gmail push a 403 for days
+# because GMAIL_PUSH_SERVICE_ACCOUNT was only ever set by deploy.sh, while the
+# gmail-sync job that would have masked it was silently skipped below. Fail the
+# release instead, and say which script to run.
+echo "Verifying agent configuration"
+REQUIRED_AGENT_ENV=(
+  GMAIL_PUBSUB_TOPIC
+  GMAIL_PUSH_SERVICE_ACCOUNT
+  INTERNAL_AUTH_MODE
+  INTERNAL_OIDC_SERVICE_ACCOUNT
+  OWNER_EMAIL
+  PUBLIC_URL
+  QUEUE_DRIVER
+)
+# env[].name yields names only, semicolon separated — never the values, so this
+# stays safe to run with the release log attached to a public build.
+AGENT_ENV_NAMES="$(gcloud run services describe assistant-agent \
+  --project "$PROJECT" --region "$REGION" \
+  --format='value(spec.template.spec.containers[0].env[].name)' | tr ';' '\n')"
+MISSING_ENV=()
+for REQUIRED in "${REQUIRED_AGENT_ENV[@]}"; do
+  grep -Fxq -- "$REQUIRED" <<<"$AGENT_ENV_NAMES" || MISSING_ENV+=("$REQUIRED")
+done
+if (( ${#MISSING_ENV[@]} )); then
+  echo "Refusing to release: assistant-agent is missing required environment variables:" >&2
+  printf '  - %s\n' "${MISSING_ENV[@]}" >&2
+  echo "These are provisioned by infra/gcp/deploy.sh. Run it, then re-run this release." >&2
+  exit 1
+fi
+
 echo "Rolling out agent"
 gcloud run services update assistant-agent \
   --project "$PROJECT" --region "$REGION" \
@@ -64,6 +97,7 @@ gcloud run services update assistant-agent \
 # strand retries or silently weaken the boundary after an infrastructure change.
 AGENT_URL="$(gcloud run services describe assistant-agent --project "$PROJECT" --region "$REGION" --format='value(status.url)')"
 echo "Refreshing internal scheduler OIDC"
+MISSING_JOBS=()
 for JOB_SPEC in \
   'assistant-sweep:/internal/sweep' \
   'assistant-gmail-sync:/internal/gmail/sync' \
@@ -72,14 +106,25 @@ for JOB_SPEC in \
   'assistant-canary-health:/internal/canaries/health'; do
   JOB_NAME="${JOB_SPEC%%:*}"
   JOB_PATH="${JOB_SPEC#*:}"
-  if gcloud scheduler jobs describe "$JOB_NAME" --project "$PROJECT" --location "$REGION" >/dev/null 2>&1; then
-    gcloud scheduler jobs update http "$JOB_NAME" --project "$PROJECT" --location "$REGION" \
-      --uri="${AGENT_URL}${JOB_PATH}" --http-method=POST --attempt-deadline=300s \
-      --max-retry-attempts=0 --clear-headers \
-      --oidc-service-account-email="$INTERNAL_INVOKER_SERVICE_ACCOUNT" \
-      --oidc-token-audience="${AGENT_URL}${JOB_PATH}" --quiet
+  # A job that does not exist is drift, not a no-op to skip past: these carry the
+  # mailbox poll and the canaries, so a missing one removes the very signal that
+  # would report it missing.
+  if ! gcloud scheduler jobs describe "$JOB_NAME" --project "$PROJECT" --location "$REGION" >/dev/null 2>&1; then
+    MISSING_JOBS+=("$JOB_NAME")
+    continue
   fi
+  gcloud scheduler jobs update http "$JOB_NAME" --project "$PROJECT" --location "$REGION" \
+    --uri="${AGENT_URL}${JOB_PATH}" --http-method=POST --attempt-deadline=300s \
+    --max-retry-attempts=0 --clear-headers \
+    --oidc-service-account-email="$INTERNAL_INVOKER_SERVICE_ACCOUNT" \
+    --oidc-token-audience="${AGENT_URL}${JOB_PATH}" --quiet
 done
+if (( ${#MISSING_JOBS[@]} )); then
+  echo "Refusing to finish release: expected Cloud Scheduler jobs are absent:" >&2
+  printf '  - %s\n' "${MISSING_JOBS[@]}" >&2
+  echo "These are created by infra/gcp/deploy.sh. Run it, then re-run this release." >&2
+  exit 1
+fi
 
 echo "Rolling out browser job"
 gcloud run jobs update assistant-browser \

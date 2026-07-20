@@ -13,6 +13,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { processApplicationConfirmation } from './application-confirmations.js';
 import type { AgentDeps } from './deps.js';
+import { notifyOwnerBySms } from './sms-channel.js';
 import { matchEmailWatches } from './watches.js';
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -135,6 +136,28 @@ function authDomainAligned(fromDomain: string, propertyDomain: string, relaxed: 
 }
 
 /**
+ * A Workspace domain with no custom DKIM key still gets every outbound message
+ * signed by Google, using a per-tenant default key under gappssmtp.com whose
+ * first label is the domain with dots rewritten as hyphens
+ * (bmson.com → bmson-com.20251104.gappssmtp.com). Plain domain alignment can
+ * never match that, so without this a domain that has not published its own
+ * DKIM/SPF/DMARC records is permanently unauthenticatable.
+ *
+ * Accepting it is not a weakening: only Google can sign under gappssmtp.com,
+ * the tenant label is derived from the domain rather than chosen by the sender,
+ * and the shape is pinned to exactly <domain-as-hyphens>.<selector>.gappssmtp.com
+ * so an attacker cannot smuggle a victim's domain in as a deeper subdomain.
+ * Publishing real SPF/DKIM/DMARC records remains strictly better.
+ */
+function googleDefaultDkimAligned(fromDomain: string, propertyDomain: string): boolean {
+  const suffix = '.gappssmtp.com';
+  if (!fromDomain || !propertyDomain.endsWith(suffix)) return false;
+  const labels = propertyDomain.slice(0, -suffix.length).split('.');
+  if (labels.length !== 2 || !labels[1]) return false;
+  return labels[0] === fromDomain.replaceAll('.', '-');
+}
+
+/**
  * A matching From header is identity only when Gmail's own receiver reports
  * aligned SPF, DKIM, or DMARC. Sender-supplied Authentication-Results headers
  * are ignored by requiring Google's authserv-id.
@@ -161,9 +184,11 @@ export function gmailSenderAuthenticated(
           : method === 'dkim'
             ? clause.match(/\bheader\.(?:d|i)=([^\s;]+)/i)?.[1]
             : clause.match(/\bsmtp\.mailfrom=([^\s;]+)/i)?.[1];
+      const propertyDomain = property ? normalizedAuthDomain(property) : '';
+      if (!propertyDomain) continue;
       if (
-        property &&
-        authDomainAligned(fromDomain, normalizedAuthDomain(property), method !== 'dmarc')
+        authDomainAligned(fromDomain, propertyDomain, method !== 'dmarc') ||
+        (method === 'dkim' && googleDefaultDkimAligned(fromDomain, propertyDomain))
       ) {
         return true;
       }
@@ -174,6 +199,15 @@ export function gmailSenderAuthenticated(
 
 type ContactTrustByEmail = ReadonlyMap<string, 'owner' | 'known'>;
 
+/**
+ * Why a message is not worth triaging. These are deliberately distinct: an
+ * unauthenticated message was never identified, whereas an automated one was
+ * identified and judged uninteresting. Collapsing them into one "automated"
+ * outcome once hid a domain-wide authentication misconfiguration behind a log
+ * line claiming the owner's own mail was a newsletter.
+ */
+type SenderDrop = 'automated' | 'unauthenticated';
+
 /** owner → known → (model: automated?) → unknown */
 async function classifySender(
   deps: AgentDeps,
@@ -182,16 +216,16 @@ async function classifySender(
   subject: string,
   snippet: string,
   authenticated: boolean,
-): Promise<{ trust: Trust; automated: boolean }> {
+): Promise<{ trust: Trust; drop?: SenderDrop }> {
   const contactTrust = contactTrustByEmail.get(fromEmail);
-  if (authenticated && contactTrust === 'owner') return { trust: 'owner', automated: false };
-  if (authenticated && contactTrust === 'known') return { trust: 'known', automated: false };
+  if (authenticated && contactTrust === 'owner') return { trust: 'owner' };
+  if (authenticated && contactTrust === 'known') return { trust: 'known' };
   // A spoofable From value is not a usable identity and must not be allowed to
   // spend classification/model budget merely by reaching the inbox.
-  if (!authenticated) return { trust: 'unknown', automated: true };
+  if (!authenticated) return { trust: 'unknown', drop: 'unauthenticated' };
 
   if (/no-?reply|notifications?@|newsletter|mailer|donotreply/i.test(fromEmail)) {
-    return { trust: 'unknown', automated: true };
+    return { trust: 'unknown', drop: 'automated' };
   }
   const triage = await deps.router.object<z.infer<typeof AutomatedSchema>>('classify', {
     schema: AutomatedSchema,
@@ -200,8 +234,35 @@ async function classifySender(
     prompt: `From: ${fromEmail}\nSubject: ${subject}\nSnippet: ${snippet}`,
     abortSignal: AbortSignal.timeout(CLASSIFY_TIMEOUT_MS),
   });
-  const automated = triage.ok ? triage.object.automated : false;
-  return { trust: 'unknown', automated };
+  if (triage.ok && triage.object.automated) return { trust: 'unknown', drop: 'automated' };
+  return { trust: 'unknown' };
+}
+
+/**
+ * Dropping mail that claims a trusted identity is the signal that the domain's
+ * SPF/DKIM/DMARC records are wrong — the failure mode this exists to surface.
+ * The From value is spoofable, so anyone can provoke this: the notice is
+ * throttled per address to keep it a signal rather than an amplifier, and the
+ * log line always stands on its own for alerting.
+ */
+const OWNER_SPOOF_NOTICE_INTERVAL_MS = 60 * 60 * 1000;
+const lastUnauthenticatedNoticeAt = new Map<string, number>();
+
+async function reportUnauthenticatedTrustedSender(
+  deps: AgentDeps,
+  fromEmail: string,
+  subject: string,
+): Promise<void> {
+  const now = Date.now();
+  const previous = lastUnauthenticatedNoticeAt.get(fromEmail);
+  if (previous !== undefined && now - previous < OWNER_SPOOF_NOTICE_INTERVAL_MS) return;
+  lastUnauthenticatedNoticeAt.set(fromEmail, now);
+  await notifyOwnerBySms(deps, {
+    text:
+      `Dropped an email claiming to be from ${fromEmail} ("${subject.slice(0, 60)}") — ` +
+      'it failed SPF/DKIM/DMARC checks. If you sent it, that domain is missing email ' +
+      'authentication records and the assistant cannot accept its mail.',
+  }).catch((err) => console.error('unauthenticated-sender notice failed', err));
 }
 
 async function conversationForThread(
@@ -315,7 +376,7 @@ export async function processMessage(
     return created ? 'triaged' : 'skipped';
   }
 
-  const { trust, automated } = await classifySender(
+  const { trust, drop } = await classifySender(
     deps,
     contactTrustByEmail,
     from,
@@ -323,7 +384,17 @@ export async function processMessage(
     msg.snippet ?? '',
     authenticated,
   );
-  if (automated) {
+  if (drop === 'unauthenticated') {
+    console.warn(
+      `email-sync: dropping unauthenticated mail from ${from} ("${subject.slice(0, 40)}") — ` +
+        'no aligned SPF/DKIM/DMARC pass from mx.google.com',
+    );
+    if (contactTrustByEmail.has(from)) {
+      await reportUnauthenticatedTrustedSender(deps, from, subject);
+    }
+    return 'skipped';
+  }
+  if (drop === 'automated') {
     console.log(`email-sync: skipping automated mail from ${from} ("${subject.slice(0, 40)}")`);
     return 'skipped';
   }

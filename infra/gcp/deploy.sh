@@ -75,10 +75,15 @@ grant_service_account_role() {
     --member="serviceAccount:${member}" --role="$role" --quiet >/dev/null
 }
 
+# --condition=None is required, not optional: this script also installs
+# condition-scoped bindings (browser objects, traces), and gcloud refuses to add
+# an unconditional binding to a policy containing conditions in non-interactive
+# mode unless the empty condition is stated explicitly. Without it every run
+# after the first aborts here.
 grant_bucket_role() {
   local bucket="$1" member="$2" role="$3"
   gcloud storage buckets add-iam-policy-binding "gs://${bucket}" \
-    --member="serviceAccount:${member}" --role="$role" --quiet >/dev/null
+    --member="serviceAccount:${member}" --role="$role" --condition=None --quiet >/dev/null
 }
 
 echo "── service accounts"

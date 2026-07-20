@@ -80,6 +80,45 @@ describe('Gmail sender authentication', () => {
     ).toBe(true);
   });
 
+  it('accepts the Google Workspace default DKIM key for a domain with no custom key', () => {
+    // Verbatim header from bot@bmson.com: a Workspace domain that publishes no
+    // SPF/DKIM/DMARC still gets a Google-signed per-tenant gappssmtp key. Before
+    // this was accepted, every message from the owner's own domain was dropped.
+    expect(
+      gmailSenderAuthenticated(
+        payload(
+          'mx.google.com;       dkim=pass header.i=@bmson-com.20251104.gappssmtp.com header.s=20251104 header.b=qLVdIQJT;       arc=pass (i=1);       spf=none (google.com: bmson@bmson.com does not designate permitted sender hosts) smtp.mailfrom=bmson@bmson.com;       dara=neutral header.i=@bmson.com',
+        ),
+        'bmson@bmson.com',
+      ),
+    ).toBe(true);
+  });
+
+  it('does not let the gappssmtp exemption authenticate a domain it was not issued for', () => {
+    // The tenant label is derived from the domain, so a key issued to one
+    // Workspace tenant must never authenticate another domain, and a victim
+    // domain smuggled in as a deeper subdomain must not match either.
+    expect(
+      gmailSenderAuthenticated(
+        payload('mx.google.com; dkim=pass header.i=@attacker-example.20251104.gappssmtp.com'),
+        'owner@example.com',
+      ),
+    ).toBe(false);
+    expect(
+      gmailSenderAuthenticated(
+        payload('mx.google.com; dkim=pass header.i=@example-com.evil.20251104.gappssmtp.com'),
+        'owner@example.com',
+      ),
+    ).toBe(false);
+    // SPF/DMARC clauses get no such exemption — only Google signs DKIM keys.
+    expect(
+      gmailSenderAuthenticated(
+        payload('mx.google.com; spf=pass smtp.mailfrom=example-com.20251104.gappssmtp.com'),
+        'owner@example.com',
+      ),
+    ).toBe(false);
+  });
+
   it('rejects unverified, misaligned, and sender-supplied authentication claims', () => {
     expect(gmailSenderAuthenticated(undefined, 'owner@example.com')).toBe(false);
     expect(
