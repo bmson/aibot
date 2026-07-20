@@ -112,15 +112,18 @@ export class ToolDispatcher {
     private registry: ToolRegistry,
   ) {}
 
-  /** Model-facing tool definitions for a task's trust level (no execute functions). */
+  /**
+   * Model-facing tool definitions for a task's trust level (no execute
+   * functions). Taint deliberately does not narrow this set for a privileged
+   * task — it changes the risk tier at dispatch instead. See `toolsForTask`.
+   */
   toolDefs(
     trust: ToolContext['trust'],
-    tainted = false,
     scope: { isMissionSession: boolean } = { isMissionSession: false },
   ) {
     return (
       this.registry
-        .toolsForTask(trust, tainted)
+        .toolsForTask(trust)
         // mission.update writes the parent mission. A normal chat task has no
         // parent, so exposing it lets the model manufacture a progress update
         // that can only fail after it has already narrated the work.
@@ -360,11 +363,18 @@ export class ToolDispatcher {
     }
     const { tool } = registered;
 
-    // Taint: reject tools that explicitly cannot consume externally-derived
-    // arguments. The workflow also propagates taint from marked tool results.
+    // Taint: an external sender may never reach a tool that declares it cannot
+    // consume externally-derived arguments. There is no owner in the loop to
+    // adjudicate, so this stays a hard rejection.
+    //
+    // A privileged owner/assistant task is the case with a human present. The
+    // call is NOT rejected here — it falls through to `taintNeedsApproval`
+    // below, which pins it to the approval path so the owner confirms the exact
+    // arguments before anything executes. The workflow also propagates taint
+    // from marked tool results.
     if (
       !tool.acceptsUntrustedInput &&
-      (input.ctx.trust === 'unknown' || input.ctx.trust === 'known' || input.ctx.tainted)
+      (input.ctx.trust === 'unknown' || input.ctx.trust === 'known')
     ) {
       return {
         kind: 'rejected',
@@ -416,9 +426,14 @@ export class ToolDispatcher {
       return { kind: 'rejected', reason: `tool ${input.toolName} is forbidden` };
     }
     // Once attacker-controlled content enters a privileged owner/assistant
-    // workflow, private reads/writes, network egress, and any outward-facing
-    // action need exact-argument owner approval. This prevents a fetched page or
-    // email from chaining a private read into an autonomous exfiltration request.
+    // workflow, private reads/writes, network egress, any outward-facing action,
+    // and anything declaring acceptsUntrustedInput: false need exact-argument
+    // owner approval. This prevents a fetched page or email from chaining a
+    // private read into an autonomous exfiltration request.
+    // acceptsUntrustedInput is included because the registry now keeps those
+    // tools visible under privileged taint (see toolsForTask): this gate is what
+    // makes that safe, and without it such a tool could run autonomously on
+    // arguments lifted straight out of a forwarded email.
     // Policy allow rules deliberately cannot override this provenance boundary.
     // outwardFacing is listed explicitly so a future outward tool that accepts
     // untrusted input but is NOT marked networkEgress still cannot act
@@ -429,7 +444,8 @@ export class ToolDispatcher {
       input.ctx.tainted && (input.ctx.trust === 'owner' || input.ctx.trust === 'assistant');
     const taintNeedsApproval =
       privilegedTaint &&
-      (registered.flags.confidentialRead === true ||
+      (tool.acceptsUntrustedInput === false ||
+        registered.flags.confidentialRead === true ||
         registered.flags.writesMemory === true ||
         registered.flags.writesWorkspace === true ||
         registered.flags.privateWrite === true ||

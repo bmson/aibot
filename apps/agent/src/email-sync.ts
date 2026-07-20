@@ -1,5 +1,5 @@
 import type { Trust } from '@assistant/core';
-import { enqueueTask, getAgent, persistMessage } from '@assistant/core';
+import { enqueueTask, getAgent, persistMessage, quotesExternalContent } from '@assistant/core';
 import {
   channelBindings,
   contacts,
@@ -370,7 +370,13 @@ export async function processMessage(
         agentId,
         conversationId: existing.conversationId,
         trust: persistedTrust,
-        payload: { threadId: msg.threadId, messageId: msg.id, from, subject },
+        payload: {
+          threadId: msg.threadId,
+          messageId: msg.id,
+          from,
+          subject,
+          quotesExternalContent: quotesExternalContent({ subject, body: text }),
+        },
       },
     });
     return created ? 'triaged' : 'skipped';
@@ -418,7 +424,13 @@ export async function processMessage(
       agentId,
       conversationId,
       trust,
-      payload: { threadId: msg.threadId, messageId: msg.id, from, subject },
+      payload: {
+        threadId: msg.threadId,
+        messageId: msg.id,
+        from,
+        subject,
+        quotesExternalContent: quotesExternalContent({ subject, body: text }),
+      },
     },
   });
   if (created) console.log(`email-sync: triage task for ${from} ("${subject.slice(0, 40)}")`);

@@ -17,6 +17,7 @@ import { eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ToolDispatcher } from './dispatcher.js';
+import { registerCalendarTools } from './google/calendar.js';
 import { ToolRegistry } from './registry.js';
 import { AmbiguousTwilioDeliveryError } from './twilio/client.js';
 import type { AssistantTool, ToolContext } from './types.js';
@@ -52,7 +53,7 @@ function makeTool(name: string, overrides: Partial<AssistantTool> = {}): Assista
 async function makeTask(trust: 'owner' | 'known' | 'unknown' | 'assistant'): Promise<TaskRow> {
   const [task] = await db
     .insert(tasks)
-    .values({ agentId, type: 'adhoc', status: 'running', trust })
+    .values({ agentId, type: 'adhoc', status: 'running', trust, progress: FIXTURE_MARKER })
     .returning();
   if (!task) throw new Error('task insert failed');
   cleanupTaskIds.push(task.id);
@@ -74,8 +75,25 @@ function ctxFor(task: TaskRow): ToolContext {
 
 const provenance = { plannerVersion: 1, promptVersion: 1, model: 'test/model' };
 
+/**
+ * Stamped on every task this suite creates. Tool-name matching alone cannot
+ * clean up after a test that exercises a REAL tool (the calendar regression
+ * below), so residue is purged by the provenance of the task it hangs off.
+ */
+const FIXTURE_MARKER = 'dispatcher.test fixture';
+
 /** Remove all rows from previous (possibly crashed) runs of this suite. */
 async function purgeTestResidue() {
+  const fixtures = sql`(select id from ${tasks} where ${tasks.progress} = ${FIXTURE_MARKER})`;
+  await db.delete(costEvents).where(sql`${costEvents.taskId} IN ${fixtures}`);
+  await db.delete(costReservations).where(sql`${costReservations.taskId} IN ${fixtures}`);
+  await db
+    .update(toolCalls)
+    .set({ approvalId: null })
+    .where(sql`${toolCalls.taskId} IN ${fixtures}`);
+  await db.delete(approvals).where(sql`${approvals.taskId} IN ${fixtures}`);
+  await db.delete(toolCalls).where(sql`${toolCalls.taskId} IN ${fixtures}`);
+
   await db
     .delete(costEvents)
     .where(
@@ -149,7 +167,7 @@ describe('ToolDispatcher (integration)', () => {
     expect(outcome.kind).toBe('rejected');
   });
 
-  it('rejects tainted input for acceptsUntrustedInput: false tools', async (ctx) => {
+  it('routes tainted acceptsUntrustedInput: false tools to owner approval, not rejection', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const registry = new ToolRegistry().register(
       makeTool('test.sensitive', { acceptsUntrustedInput: false }),
@@ -165,8 +183,50 @@ describe('ToolDispatcher (integration)', () => {
       ctx: { ...ctxFor(task), tainted: true },
       provenance,
     });
-    expect(outcome.kind).toBe('rejected');
-    expect(outcome.kind === 'rejected' && outcome.reason).toMatch(/externally sourced/);
+    // The owner is present, so the exact arguments go to them for confirmation
+    // instead of the capability disappearing.
+    expect(outcome.kind).toBe('awaiting_approval');
+  });
+
+  it('never executes a tainted acceptsUntrustedInput: false tool autonomously', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // The tool carries no confidentialRead/outwardFacing/networkEgress flag, so
+    // acceptsUntrustedInput: false is the only thing standing between untrusted
+    // arguments and an autonomous execution.
+    const registry = new ToolRegistry().register(
+      makeTool('test.unflagged', { acceptsUntrustedInput: false }),
+    );
+    const dispatcher = new ToolDispatcher(db, registry);
+    const task = await makeTask('owner');
+
+    const outcome = await dispatcher.dispatch({
+      task,
+      step: 1,
+      toolName: 'test.unflagged',
+      args: { value: 'x' },
+      ctx: { ...ctxFor(task), tainted: true },
+      provenance,
+    });
+    expect(outcome.kind).toBe('awaiting_approval');
+  });
+
+  it('still executes acceptsUntrustedInput: false tools autonomously when untainted', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const registry = new ToolRegistry().register(
+      makeTool('test.clean', { acceptsUntrustedInput: false }),
+    );
+    const dispatcher = new ToolDispatcher(db, registry);
+    const task = await makeTask('owner');
+
+    const outcome = await dispatcher.dispatch({
+      task,
+      step: 1,
+      toolName: 'test.clean',
+      args: { value: 'x' },
+      ctx: ctxFor(task),
+      provenance,
+    });
+    expect(outcome.kind).toBe('executed');
   });
 
   it('treats known-contact content as external for taint-sensitive tools', async (ctx) => {
@@ -281,8 +341,10 @@ describe('ToolDispatcher (integration)', () => {
     expect(outcome.kind).toBe('awaiting_approval');
   });
 
-  it('rejects taint-sensitive tools after untrusted output enters an owner task', async (ctx) => {
+  it('gates taint-sensitive tools on approval after untrusted output enters an owner task', async (ctx) => {
     if (!dbUp) return ctx.skip();
+    // Taint reaching the context via a tool result (a fetched page) rather than
+    // the trigger lands on the same path: the owner adjudicates exact arguments.
     const registry = new ToolRegistry().register(
       makeTool('test.owner-sensitive', { acceptsUntrustedInput: false }),
     );
@@ -297,7 +359,7 @@ describe('ToolDispatcher (integration)', () => {
       ctx: { ...ctxFor(task), tainted: true },
       provenance,
     });
-    expect(outcome.kind).toBe('rejected');
+    expect(outcome.kind).toBe('awaiting_approval');
   });
 
   it('requires approval for privileged reads and network egress in a tainted owner task', async (ctx) => {
@@ -333,6 +395,47 @@ describe('ToolDispatcher (integration)', () => {
     expect(networkRead.kind).toBe('awaiting_approval');
     expect(executions['test.private-read']).toBeUndefined();
     expect(executions['test.network-read']).toBeUndefined();
+  });
+
+  it('offers the real calendar.create_event to a tainted owner task as an approval', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // Regression, task d5f3757a: the owner forwarded a ticket confirmation and
+    // asked five times for a calendar event. calendar.create_event declares
+    // acceptsUntrustedInput: false, so the email taint stripped it from the
+    // registry entirely — the model never saw it, invented an explanation for
+    // its absence, told the owner to add the event by hand, and finally claimed
+    // it had done the work. Zero tool_calls rows for the whole task. The tool
+    // must now be visible and land on the approval path instead.
+    const registry = registerCalendarTools(new ToolRegistry(), {
+      client: {} as Parameters<typeof registerCalendarTools>[1]['client'],
+      botEmail: 'bot@example.com',
+      ownerEmail: 'owner@example.com',
+    });
+    const dispatcher = new ToolDispatcher(db, registry);
+    const task = await makeTask('owner');
+
+    expect(dispatcher.toolDefs('owner').map((tool) => tool.name)).toContain(
+      'calendar.create_event',
+    );
+
+    const outcome = await dispatcher.dispatch({
+      task,
+      step: 1,
+      toolName: 'calendar.create_event',
+      args: {
+        summary: 'The Odyssey - The IMAX 2D Experience (2026)',
+        start: '2026-07-23T18:00:00-07:00',
+        end: '2026-07-23T20:52:00-07:00',
+        location: 'Apple Cinemas Van Ness, 1000 Van Ness Ave, San Francisco, CA 94109',
+        attendees: ['owner@example.com'],
+      },
+      ctx: { ...ctxFor(task), tainted: true },
+      provenance,
+    });
+
+    expect(outcome.kind).toBe('awaiting_approval');
+    // The owner sees the literal arguments, not a model summary of them.
+    expect(outcome.kind === 'awaiting_approval' && outcome.summary).toContain('The Odyssey');
   });
 
   it('executes autonomous tools and records decision provenance', async (ctx) => {

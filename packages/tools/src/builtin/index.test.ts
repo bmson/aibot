@@ -207,18 +207,23 @@ describe('builtin trust capabilities', () => {
     expect(unknown).toContain('web.fetch');
   });
 
-  it('keeps mission/goal progress writers available once a session is tainted', () => {
+  it('lets mission/goal progress writers run under taint without an approval', () => {
     // Regression: a mission/goal work session almost always reads untrusted
-    // content before it can summarise progress. If mission.update /
-    // goals.update_progress were stripped under taint, the loop could never
-    // record progress and would silently repeat step one forever.
+    // content before it can summarise progress. Taint no longer strips tools
+    // from a privileged registry, so availability alone is not the property
+    // worth pinning — acceptsUntrustedInput is. It is what keeps these two off
+    // the dispatcher's taintNeedsApproval path, so the loop can record progress
+    // without prompting the owner on every step instead of silently repeating
+    // step one forever.
     const registry = registerBuiltinTools(new ToolRegistry(), {
       embed: async () => [],
       workspace: {} as Parameters<typeof registerBuiltinTools>[1]['workspace'],
     });
-    const taintedOwner = registry.toolsForTask('owner', true).map((tool) => tool.name);
+    const owner = registry.toolsForTask('owner').map((tool) => tool.name);
 
-    expect(taintedOwner).toContain('mission.update');
-    expect(taintedOwner).toContain('goals.update_progress');
+    expect(owner).toContain('mission.update');
+    expect(owner).toContain('goals.update_progress');
+    expect(registry.get('mission.update')?.tool.acceptsUntrustedInput).toBe(true);
+    expect(registry.get('goals.update_progress')?.tool.acceptsUntrustedInput).toBe(true);
   });
 });

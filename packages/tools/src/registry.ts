@@ -21,8 +21,22 @@ export class ToolRegistry {
     return this.tools.get(name);
   }
 
-  /** The tool set exposed to the model for a task with the given trust. */
-  toolsForTask(trust: Trust, tainted = false): AssistantTool[] {
+  /**
+   * The tool set exposed to the model for a task with the given trust.
+   *
+   * Externally triggered tasks (known/unknown) lose `acceptsUntrustedInput:
+   * false` tools outright — for them it is a forbidden-by-construction boundary.
+   *
+   * A privileged owner/assistant task whose context has been tainted keeps them.
+   * Removing a capability the owner is standing right there asking for does not
+   * make the action safer; it makes it invisible. The model cannot see why the
+   * tool vanished, so it invents a reason, refuses, and offers the owner a
+   * copy-paste workaround — while the dispatcher's `taintNeedsApproval` gate
+   * would have produced an approval card showing the exact arguments. Taint
+   * therefore constrains *how* these tools run (approval, never autonomous),
+   * not *whether* the model can see them.
+   */
+  toolsForTask(trust: Trust): AssistantTool[] {
     const untrusted = trust === 'unknown';
     const external = untrusted || trust === 'known';
     return [...this.tools.values()]
@@ -36,8 +50,7 @@ export class ToolRegistry {
               !flags.writesWorkspace &&
               !flags.privateWrite)),
       )
-      .map(({ tool }) => tool)
-      .filter((tool) => !tainted || tool.acceptsUntrustedInput);
+      .map(({ tool }) => tool);
   }
 
   all(): RegisteredTool[] {

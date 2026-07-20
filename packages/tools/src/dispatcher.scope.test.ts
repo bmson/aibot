@@ -27,7 +27,7 @@ describe('ToolDispatcher task scope', () => {
 
     expect(dispatcher.toolDefs('owner').map((tool) => tool.name)).toEqual(['web.fetch']);
     expect(
-      dispatcher.toolDefs('owner', false, { isMissionSession: true }).map((tool) => tool.name),
+      dispatcher.toolDefs('owner', { isMissionSession: true }).map((tool) => tool.name),
     ).toEqual(['mission.update', 'web.fetch']);
   });
 });

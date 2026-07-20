@@ -38,10 +38,8 @@ describe('Gmail outbound security', () => {
       networkEgress: true,
       blanketAllowIneligible: true,
     });
-    expect(registry.toolsForTask('unknown', true).map((tool) => tool.name)).not.toContain(
-      'gmail.send',
-    );
-    expect(registry.toolsForTask('owner', true).map((tool) => tool.name)).toContain('gmail.send');
+    expect(registry.toolsForTask('unknown').map((tool) => tool.name)).not.toContain('gmail.send');
+    expect(registry.toolsForTask('owner').map((tool) => tool.name)).toContain('gmail.send');
   });
 
   it('never sends tainted content through the private voice-rewrite context', async () => {

@@ -127,8 +127,16 @@ export interface ExecutorDeps {
   workspace?: WorkspaceReader;
   /** Channel delivery for a task's final text (e.g. SMS reply). Errors are retried by the workflow. */
   deliverFinal?: (task: TaskRow, text: string) => Promise<void>;
-  /** Out-of-band owner notification when approvals park a task (e.g. SMS "Reply YES A7"). */
+  /**
+   * Owner notification when approvals park a task (e.g. SMS "Reply YES A7").
+   *
+   * Receives the task so the deliverer can also answer on the channel the
+   * request arrived on. That matters for email: parking otherwise leaves the
+   * thread the owner is watching completely silent, because
+   * postConversationNotice only writes a dashboard row.
+   */
   notifyApproval?: (
+    task: TaskRow,
     approvals: Array<{ taskId: string; shortCode: string; summary: string }>,
   ) => Promise<void>;
   /**
@@ -529,9 +537,7 @@ async function stageModelFinalResponse(
         .select(EVIDENCE_COLUMNS)
         .from(toolCalls)
         .innerJoin(tasks, eq(toolCalls.taskId, tasks.id))
-        .where(
-          and(eq(tasks.conversationId, task.conversationId), ne(toolCalls.taskId, task.id)),
-        )
+        .where(and(eq(tasks.conversationId, task.conversationId), ne(toolCalls.taskId, task.id)))
     : [];
   const evidence: ActionEvidence[] = [
     ...priorRows.map((row) => ({ ...row, fromCurrentTask: false })),
@@ -705,35 +711,44 @@ export async function executeTask(deps: ExecutorDeps, taskId: string): Promise<E
   });
 }
 
+/**
+ * Does this task start with externally controlled content in its context?
+ *
+ * Any non-privileged sender does. Email additionally carries the presumption
+ * even from the owner, because forwarded threads and quoted replies are exactly
+ * how attacker-controlled text gets inside an authenticated message — that is
+ * the provenance boundary the taint gate exists to hold.
+ *
+ * The presumption is dropped in one case only: a DKIM-verified owner sender
+ * (see classifySender — owner trust is unreachable without aligned
+ * SPF/DKIM/DMARC) whose body ingestion positively determined carries no forward
+ * separator and no quoted block. Every word is then the owner's own, which is
+ * no more untrusted than the same words typed into the web chat — a channel
+ * that is never tainted. Treating those differently was an unjustified
+ * asymmetry that cost the owner an approval on requests they typed themselves.
+ *
+ * Everything else stays tainted, including a `quotesExternalContent` flag that
+ * is absent (tasks enqueued before the check existed) or non-boolean. Only an
+ * explicit `false` relaxes anything.
+ */
+export function shouldTaintContext(task: Pick<TaskRow, 'trust' | 'trigger'>): boolean {
+  if (task.trust === 'known' || task.trust === 'unknown') return true;
+  const trigger = task.trigger as {
+    source?: unknown;
+    payload?: { quotesExternalContent?: unknown };
+  } | null;
+  if (trigger?.source !== 'email') return false;
+  const ownerAuthored = task.trust === 'owner' && trigger.payload?.quotesExternalContent === false;
+  return !ownerAuthored;
+}
+
 async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteResult> {
   const { db, router, dispatcher } = deps;
   const lease = task;
   const state = taskState(task);
   if (state.pendingFinal) return finalizePendingResponse(deps, lease, state.pendingFinal, state);
 
-  const trigger = task.trigger as
-    | { source?: unknown; payload?: { quotesExternalContent?: unknown } }
-    | null;
-  const triggerSource = trigger?.source;
-  // Email is presumed to carry third-party content, because forwarded threads
-  // and quoted replies are exactly how attacker-controlled text gets inside an
-  // owner-authenticated message. The presumption is dropped only when ingestion
-  // positively determined otherwise: a DKIM-verified owner sender (see
-  // classifySender — owner trust cannot be reached without aligned
-  // SPF/DKIM/DMARC) whose body carries no forward separator or quoted block. In
-  // that case every word is the owner's own, which is no more untrusted than the
-  // same words typed into the web chat — a channel that is never tainted.
-  // Anything else stays tainted, including a missing flag on tasks enqueued
-  // before this check existed.
-  const ownerAuthoredEmail =
-    triggerSource === 'email' &&
-    task.trust === 'owner' &&
-    trigger?.payload?.quotesExternalContent === false;
-  if (
-    task.trust === 'known' ||
-    task.trust === 'unknown' ||
-    (triggerSource === 'email' && !ownerAuthoredEmail)
-  ) {
+  if (shouldTaintContext(task)) {
     state.untrustedContext = true;
   }
 
@@ -1102,7 +1117,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       if (!parked) return LOST_LEASE;
       if (deps.notifyApproval) {
         await deps
-          .notifyApproval([
+          .notifyApproval(task, [
             { taskId: task.id, shortCode: outcome.shortCode, summary: outcome.summary },
           ])
           .catch((err) => console.error('approval notification failed', err));
@@ -1165,7 +1180,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       if (!parked) return LOST_LEASE;
       if (deps.notifyApproval) {
         await deps
-          .notifyApproval([
+          .notifyApproval(task, [
             { taskId: task.id, shortCode: outcome.shortCode, summary: outcome.summary },
           ])
           .catch((err) => console.error('approval notification failed', err));
@@ -1619,7 +1634,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         if (!parked) return LOST_LEASE;
         if (deps.notifyApproval && approvalNotices.length > 0) {
           await deps
-            .notifyApproval(approvalNotices)
+            .notifyApproval(task, approvalNotices)
             .catch((err) => console.error('approval notification failed', err));
         }
         // The conversation must not go silent while parked — tell the owner

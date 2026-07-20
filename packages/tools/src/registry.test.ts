@@ -57,10 +57,23 @@ describe('ToolRegistry', () => {
     expect(registry.toolsForTask('known').map((tool) => tool.name)).toEqual([]);
   });
 
-  it('hides tools that reject untrusted-derived arguments after context taint', () => {
+  it('keeps tools that reject untrusted-derived arguments visible to a privileged task', () => {
+    // Taint constrains how these run (the dispatcher pins them to approval), not
+    // whether the model can see them. Hiding one from an owner who is asking for
+    // it produced an invented refusal rather than an approval card.
     const sensitive = { ...fakeTool('sensitive.action'), acceptsUntrustedInput: false };
     const registry = new ToolRegistry().register(sensitive).register(fakeTool('web.fetch'));
-    expect(registry.toolsForTask('owner', true).map((tool) => tool.name)).toEqual(['web.fetch']);
+    expect(registry.toolsForTask('owner').map((tool) => tool.name)).toEqual([
+      'sensitive.action',
+      'web.fetch',
+    ]);
+  });
+
+  it('still strips them for external senders, who have no owner in the loop', () => {
+    const sensitive = { ...fakeTool('sensitive.action'), acceptsUntrustedInput: false };
+    const registry = new ToolRegistry().register(sensitive).register(fakeTool('web.fetch'));
+    expect(registry.toolsForTask('known').map((tool) => tool.name)).toEqual(['web.fetch']);
+    expect(registry.toolsForTask('unknown').map((tool) => tool.name)).toEqual(['web.fetch']);
   });
 
   it('marks Gmail and calendar reads as confidential capabilities', () => {
