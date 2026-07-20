@@ -109,9 +109,15 @@ for JOB_SPEC in \
   # A job that does not exist is drift, not a no-op to skip past: these carry the
   # mailbox poll and the canaries, so a missing one removes the very signal that
   # would report it missing.
-  if ! gcloud scheduler jobs describe "$JOB_NAME" --project "$PROJECT" --location "$REGION" >/dev/null 2>&1; then
-    MISSING_JOBS+=("$JOB_NAME")
-    continue
+  if ! JOB_DESCRIBE_OUTPUT="$(gcloud scheduler jobs describe "$JOB_NAME" \
+    --project "$PROJECT" --location "$REGION" 2>&1)"; then
+    if grep -Eqi 'NOT_FOUND|not found|does not exist' <<<"$JOB_DESCRIBE_OUTPUT"; then
+      MISSING_JOBS+=("$JOB_NAME")
+      continue
+    fi
+    echo "Unable to inspect Cloud Scheduler job ${JOB_NAME}:" >&2
+    printf '%s\n' "$JOB_DESCRIBE_OUTPUT" >&2
+    exit 1
   fi
   gcloud scheduler jobs update http "$JOB_NAME" --project "$PROJECT" --location "$REGION" \
     --uri="${AGENT_URL}${JOB_PATH}" --http-method=POST --attempt-deadline=300s \

@@ -42,7 +42,7 @@ gcloud iam service-accounts add-iam-policy-binding "$DEPLOY_SA" \
   --project="$PROJECT_ID" --role=roles/iam.workloadIdentityUser \
   --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}/attribute.repository/${REPOSITORY}"
 
-for ROLE in roles/artifactregistry.writer roles/run.admin; do
+for ROLE in roles/artifactregistry.writer roles/run.admin roles/cloudscheduler.admin; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:${DEPLOY_SA}" --role="$ROLE"
 done
