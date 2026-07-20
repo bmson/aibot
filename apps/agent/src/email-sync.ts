@@ -621,7 +621,10 @@ async function syncMailboxWithDistributedLock(deps: AgentDeps): Promise<MailboxS
       select pg_try_advisory_lock(hashtext('assistant:gmail-sync')) as acquired
     `;
     acquired = row?.acquired === true;
-    if (!acquired) throw new Error('mailbox sync already running on another instance');
+    // Another instance is already draining the same durable cursor. That is
+    // expected single-flight behavior, not a failed Scheduler execution; the
+    // next push or minute tick will pick up anything still pending.
+    if (!acquired) return { processed: 0, morePending: true };
     return await syncMailboxOnce(deps);
   } finally {
     if (acquired) {

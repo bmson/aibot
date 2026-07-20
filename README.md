@@ -48,8 +48,10 @@ bypass is rejected when `NODE_ENV=production`. To call `/internal/*` by hand, ge
 
 ## Deployment canaries
 
-`POST /internal/canaries/run` performs real, uniquely marked Gmail, SMS, sandboxed browser,
-approval, and chat checks. `GET /internal/canaries/status` returns the latest durable JSON result;
+`POST /internal/canaries/run` performs real, uniquely marked Gmail, sandboxed browser, approval,
+and chat checks, plus SMS when Twilio and `OWNER_PHONE` are configured. An unavailable optional
+SMS integration is explicitly reported as skipped. `GET /internal/canaries/status` returns the
+latest durable JSON result;
 `GET /internal/canaries/health` returns 503 for failed, stuck, missing, or >26-hour-old results.
 Both endpoints use the same OIDC/shared-secret protection as every other internal route.
 

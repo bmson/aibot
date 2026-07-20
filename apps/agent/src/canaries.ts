@@ -48,6 +48,7 @@ export interface CanaryCheckResult {
   ok: boolean;
   latencyMs: number;
   detail: string;
+  skipped?: boolean;
 }
 
 export type CanaryChecks = Record<CanaryCheckName, CanaryCheckResult>;
@@ -66,7 +67,15 @@ export type CanaryRunOutcome =
   | CanaryRunResult
   | { skipped: true; reason: 'already_running'; latest: CanaryRunResult | null };
 
-type CanaryOperations = Record<CanaryCheckName, (signal: AbortSignal) => Promise<string>>;
+interface CanaryOperationResult {
+  detail: string;
+  skipped?: boolean;
+}
+
+type CanaryOperations = Record<
+  CanaryCheckName,
+  (signal: AbortSignal) => Promise<string | CanaryOperationResult>
+>;
 
 function safeError(error: unknown): string {
   const value = error instanceof Error ? error.message : String(error);
@@ -76,7 +85,7 @@ function safeError(error: unknown): string {
 /** A check deadline aborts provider calls as well as bounding the route response. */
 export async function runBoundedCanaryCheck(
   timeoutMs: number,
-  operation: (signal: AbortSignal) => Promise<string>,
+  operation: (signal: AbortSignal) => Promise<string | CanaryOperationResult>,
 ): Promise<CanaryCheckResult> {
   const started = Date.now();
   const controller = new AbortController();
@@ -103,10 +112,12 @@ export async function runBoundedCanaryCheck(
     if (result.kind === 'failure') {
       return { ok: false, latencyMs: Date.now() - started, detail: safeError(result.error) };
     }
+    const outcome = typeof result.detail === 'string' ? { detail: result.detail } : result.detail;
     return {
       ok: true,
       latencyMs: Date.now() - started,
-      detail: result.detail.slice(0, 500),
+      detail: outcome.detail.slice(0, 500),
+      ...(outcome.skipped ? { skipped: true } : {}),
     };
   } finally {
     if (timer) clearTimeout(timer);
@@ -157,8 +168,6 @@ async function assertRunCostCeiling(deps: AgentDeps): Promise<void> {
 function assertCanaryConfiguration(deps: AgentDeps): void {
   const missing: string[] = [];
   if (!deps.googleClient.configured()) missing.push('Google OAuth');
-  if (!deps.twilio.configured()) missing.push('Twilio');
-  if (!/^\+\d{7,15}$/.test(deps.config.OWNER_PHONE)) missing.push('OWNER_PHONE');
   if (!deps.config.OPENROUTER_API_KEY) missing.push('OPENROUTER_API_KEY');
   if (deps.config.BROWSER_DRIVER === 'cloudrun') {
     if (!deps.config.GCP_PROJECT) missing.push('GCP_PROJECT');
@@ -601,9 +610,15 @@ async function browserCanary(deps: AgentDeps, runId: string, signal: AbortSignal
 }
 
 function canaryOperations(deps: AgentDeps, runId: string): CanaryOperations {
+  const smsConfigured = deps.twilio.configured() && /^\+\d{7,15}$/.test(deps.config.OWNER_PHONE);
   return {
     gmail: (signal) => gmailCanary(deps, runId, signal),
-    sms: (signal) => smsCanary(deps, runId, signal),
+    sms: smsConfigured
+      ? (signal) => smsCanary(deps, runId, signal)
+      : async () => ({
+          detail: 'SMS integration is not configured; optional check skipped',
+          skipped: true,
+        }),
     browser: (signal) => browserCanary(deps, runId, signal),
     approval: () => approvalCanary(deps, runId),
     chat: (signal) => chatCanary(deps, runId, signal),

@@ -48,5 +48,10 @@ export function evaluateCanaryHealth(
       ageMs,
     };
   }
-  return { ok: true, state: 'healthy', detail: 'All integration canaries are healthy.', ageMs };
+  return {
+    ok: true,
+    state: 'healthy',
+    detail: 'All configured integration canaries are healthy.',
+    ageMs,
+  };
 }

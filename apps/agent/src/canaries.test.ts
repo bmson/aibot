@@ -67,6 +67,15 @@ describe('canary orchestration', () => {
     expect(result.detail).not.toContain('\n');
     expect(result.detail.length).toBeLessThanOrEqual(300);
   });
+
+  it('reports an unavailable optional integration as skipped without failing the run', async () => {
+    const result = await runBoundedCanaryCheck(100, async () => ({
+      detail: 'SMS integration is not configured; optional check skipped',
+      skipped: true,
+    }));
+
+    expect(result).toMatchObject({ ok: true, skipped: true });
+  });
 });
 
 const DATABASE_URL =
