@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   getRate,
   isBrowserJobPending,
+  isGoalWorkEvidenceTool,
   reconcileReservation,
   releaseReservation,
   reserveCost,
@@ -41,6 +42,68 @@ export type DispatchOutcome =
   | { kind: 'budget_blocked'; reason: string; resumeAt: Date };
 
 const APPROVAL_TTL_HOURS = 24;
+
+function quoted(value: unknown, fallback: string): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text ? `“${text.slice(0, 120)}”` : fallback;
+}
+
+/** Human fallback for tools that are normally autonomous but were escalated. */
+export function approvalFallbackSummary(toolName: string, args: Record<string, unknown>): string {
+  switch (toolName) {
+    case 'gmail.search':
+      return `Search the assistant’s inbox for ${quoted(args.query, 'matching messages')}`;
+    case 'gmail.read_thread':
+      return 'Read the selected email conversation';
+    case 'gmail.create_draft':
+      return `Create an email draft to ${Array.isArray(args.to) ? args.to.join(', ') : 'the selected recipient'}`;
+    case 'calendar.availability':
+      return 'Check calendar availability for the requested time';
+    case 'calendar.list_events':
+      return 'Review events on the assistant’s calendar';
+    case 'docs.create':
+      return `Create the Google Doc ${quoted(args.title, '')}`.trim();
+    case 'docs.append':
+      return 'Add content to the selected Google Doc';
+    case 'docs.get':
+      return 'Read the selected Google Doc';
+    case 'sheets.create':
+      return `Create the Google Sheet ${quoted(args.title, '')}`.trim();
+    case 'sheets.append_rows':
+    case 'sheets.write_rows':
+      return 'Update the selected Google Sheet';
+    case 'sheets.get_rows':
+      return 'Read rows from the selected Google Sheet';
+    case 'slides.create':
+      return `Create the presentation ${quoted(args.title, '')}`.trim();
+    case 'slides.append':
+      return 'Add slides to the selected presentation';
+    case 'workspace.write':
+      return `Save ${quoted(args.path, 'a file')} in the assistant’s workspace`;
+    case 'workspace.read':
+      return `Read ${quoted(args.path, 'a workspace file')}`;
+    case 'workspace.list':
+      return `List files in ${quoted(args.path, 'the assistant’s workspace')}`;
+    case 'goals.list':
+      return 'Review your current goals';
+    case 'goals.update_progress':
+      return 'Update progress on the current goal';
+    case 'memory.save':
+      return 'Remember this information for future conversations';
+    case 'memory.recall':
+      return `Recall saved information about ${quoted(args.query, 'this topic')}`;
+    case 'conversations.search':
+      return `Search earlier conversations for ${quoted(args.query, 'this topic')}`;
+    case 'web.fetch':
+      return `Open ${quoted(args.url, 'the requested public webpage')}`;
+    case 'owner.notify':
+      return 'Send you an assistant update';
+    case 'task.schedule':
+      return 'Schedule the requested follow-up work';
+    default:
+      return `Allow the assistant to ${toolName.replaceAll('.', ' ').replaceAll('_', ' ')}`;
+  }
+}
 
 type ToolReservation =
   | {
@@ -360,6 +423,19 @@ export class ToolDispatcher {
             'goals.update_progress may only update the goal this task or its work chat is bound to',
         };
       }
+      const unattended = input.task.type !== 'chat_turn' && input.task.type !== 'sms_turn';
+      if (unattended) {
+        const prior = await this.db
+          .select({ toolName: toolCalls.toolName })
+          .from(toolCalls)
+          .where(and(eq(toolCalls.taskId, input.task.id), eq(toolCalls.status, 'succeeded')));
+        if (!prior.some((row) => isGoalWorkEvidenceTool(row.toolName))) {
+          return {
+            kind: 'rejected',
+            reason: 'record progress only after this goal session completes a verified work step',
+          };
+        }
+      }
     }
     const { tool } = registered;
 
@@ -426,10 +502,11 @@ export class ToolDispatcher {
       return { kind: 'rejected', reason: `tool ${input.toolName} is forbidden` };
     }
     // Once attacker-controlled content enters a privileged owner/assistant
-    // workflow, private reads/writes, network egress, any outward-facing action,
-    // and anything declaring acceptsUntrustedInput: false need exact-argument
-    // owner approval. This prevents a fetched page or email from chaining a
-    // private read into an autonomous exfiltration request.
+    // workflow, persistence into durable memory, network egress, any
+    // outward-facing action, and anything declaring acceptsUntrustedInput:false
+    // need exact-argument owner approval. Private reads and writes to the
+    // assistant's own workspace remain autonomous: they cannot disclose data by
+    // themselves, and the eventual outward/network sink is still gated here.
     // acceptsUntrustedInput is included because the registry now keeps those
     // tools visible under privileged taint (see toolsForTask): this gate is what
     // makes that safe, and without it such a tool could run autonomously on
@@ -445,10 +522,7 @@ export class ToolDispatcher {
     const taintNeedsApproval =
       privilegedTaint &&
       (tool.acceptsUntrustedInput === false ||
-        registered.flags.confidentialRead === true ||
         registered.flags.writesMemory === true ||
-        registered.flags.writesWorkspace === true ||
-        registered.flags.privateWrite === true ||
         registered.flags.networkEgress === true ||
         registered.flags.outwardFacing === true);
     const tier: RiskTier = taintNeedsApproval
@@ -553,7 +627,7 @@ export class ToolDispatcher {
   }): Promise<DispatchOutcome> {
     const { input, args, decision, registered } = opts;
     const summary =
-      registered.tool.approvalSummary?.(args) ?? `${input.toolName}(${JSON.stringify(args)})`;
+      registered.tool.approvalSummary?.(args) ?? approvalFallbackSummary(input.toolName, args);
 
     const parked = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('assistant:approval-codes'))`);

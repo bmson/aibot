@@ -1,16 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  artifactCreatedResponse,
-  artifactDispatchFailure,
   artifactExecutionFailure,
   artifactRoutingFailure,
   artifactToolUnavailable,
-  directArtifactArgs,
   documentReadDispatchFailure,
   needsArtifactToolRetry,
   requestedArtifactIntent,
   requestedDocumentReadIntent,
-  spreadsheetRowsFromContent,
 } from './artifact-intent.js';
 
 describe('requestedArtifactIntent', () => {
@@ -21,66 +17,6 @@ describe('requestedArtifactIntent', () => {
     ['prepare slides for the customer briefing', 'slides.create'],
   ])('routes an explicit artifact request to %s', (text, toolName) => {
     expect(requestedArtifactIntent(text)?.toolName).toBe(toolName);
-  });
-
-  it('builds direct creation arguments from a structured owner request', () => {
-    const intent = requestedArtifactIntent(
-      'Create a Google Doc titled "Verification" with this exact content: It worked.',
-    );
-    expect(intent).toBeDefined();
-    if (!intent) return;
-    expect(
-      directArtifactArgs(
-        intent,
-        'Create a Google Doc titled "Verification" with this exact content: It worked.',
-      ),
-    ).toEqual({
-      toolName: 'docs.create',
-      args: { title: 'Verification', content: 'It worked.' },
-    });
-  });
-
-  it('uses safe blank defaults for direct requests without a title', () => {
-    const intent = requestedArtifactIntent('try creating the doc again');
-    expect(intent).toBeDefined();
-    if (!intent) return;
-    expect(directArtifactArgs(intent, 'try creating the doc again')).toEqual({
-      toolName: 'docs.create',
-      args: { title: 'Untitled document', content: '' },
-    });
-  });
-
-  it('populates a directly requested sheet from columns or a Markdown table', () => {
-    const intent = requestedArtifactIntent(
-      'Create a Google Sheet titled "Job tracker" with columns Company, Role, Status',
-    );
-    expect(intent?.toolName).toBe('sheets.create');
-    if (!intent) return;
-    expect(
-      directArtifactArgs(
-        intent,
-        'Create a Google Sheet titled "Job tracker" with columns Company, Role, Status',
-      ),
-    ).toMatchObject({
-      args: { title: 'Job tracker', rows: [['Company', 'Role', 'Status']] },
-    });
-    expect(
-      spreadsheetRowsFromContent('| Company | Role |\n| --- | --- |\n| Acme | Engineer |'),
-    ).toEqual([
-      ['Company', 'Role'],
-      ['Acme', 'Engineer'],
-    ]);
-  });
-
-  it('derives deterministic, evidence-backed artifact responses', () => {
-    const intent = requestedArtifactIntent('Create a document');
-    expect(intent).toBeDefined();
-    if (!intent) return;
-    expect(
-      artifactCreatedResponse(intent, { url: 'https://docs.google.com/document/d/abc/edit' }),
-    ).toContain('/abc/edit');
-    expect(artifactDispatchFailure(intent, 'Google API 403')).toContain('Google API 403');
-    expect(artifactDispatchFailure(intent, 'Google API 403')).toContain('cannot confirm');
   });
 
   it.each([

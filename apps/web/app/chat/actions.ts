@@ -57,7 +57,9 @@ export async function archiveConversation(conversationId: string): Promise<void>
   if (!(await isAuthed())) throw new Error('unauthorized');
   const { db, agent, conversation } = await requireOwnedChat(conversationId);
   if (conversation.isPrimary) {
-    throw new Error('the main thread cannot be archived');
+    // The primary thread is intentionally permanent. Treat a stale form
+    // submission as an idempotent no-op instead of surfacing a generic RSC 500.
+    redirect(`/chat/${conversation.id}`);
   }
   const [activeTask] = await db
     .select({ id: tasks.id })

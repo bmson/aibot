@@ -71,23 +71,17 @@ export default async function CostsPage() {
     <div className="mx-auto max-w-4xl">
       <PageHeader
         title="Costs"
-        intro={
-          <>
-            Every billable event in one ledger — model calls, embeddings, SMS, job runtime. Hard
-            caps park new work as{' '}
-            <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">waiting_budget</code> (owner
-            chat keeps a carve-out); parked work resumes when the period resets.
-          </>
-        }
+        intro="See what the assistant has spent and set limits that keep costs under control."
       />
 
       {parked > 0 ? (
         <p className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          {parked} task(s) parked waiting for budget —{' '}
+          {parked} {parked === 1 ? 'task is' : 'tasks are'} paused because a spending limit was
+          reached —{' '}
           <Link href="/tasks" className="underline">
             see tasks
           </Link>{' '}
-          or raise the caps below.
+          or adjust the limits below.
         </p>
       ) : null}
 
@@ -144,121 +138,124 @@ export default async function CostsPage() {
         </form>
       </section>
 
-      {/* Held reservations */}
-      {held.length > 0 ? (
-        <section className="mt-8">
-          <h2 className="text-sm font-medium">Held reservations</h2>
-          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-            Pre-flight holds for in-flight work — released or reconciled to actuals when it settles.
-          </p>
-          <div className="mt-3 flex flex-col gap-2">
-            {held.map((r) => (
-              <div
-                key={r.id}
-                className="flex items-center justify-between gap-3 rounded-md border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800"
-              >
-                <span className="min-w-0 truncate">
-                  {r.source} — {r.description || 'no description'}
-                </span>
-                <span className="shrink-0 text-xs text-zinc-500">
-                  {formatUsd(r.estimatedUsd)} held
-                </span>
+      <details className="mt-8 rounded-lg border border-zinc-200 dark:border-zinc-800">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Detailed usage</summary>
+        <div className="border-t border-zinc-200 px-4 pb-5 dark:border-zinc-800">
+          {held.length > 0 ? (
+            <section className="mt-5">
+              <h2 className="text-sm font-medium">In-progress work</h2>
+              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+                Estimated costs reserved for work that has not finished yet.
+              </p>
+              <div className="mt-3 flex flex-col gap-2">
+                {held.map((r) => (
+                  <div
+                    key={r.id}
+                    className="flex items-center justify-between gap-3 rounded-md border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800"
+                  >
+                    <span className="min-w-0 truncate">
+                      {r.source} — {r.description || 'No description'}
+                    </span>
+                    <span className="shrink-0 text-xs text-zinc-500">
+                      {formatUsd(r.estimatedUsd)} estimated
+                    </span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {/* Attribution */}
-      <section className="mt-8 grid gap-6 sm:grid-cols-2">
-        <div>
-          <h2 className="text-sm font-medium">By source (month)</h2>
-          <table className="mt-3 w-full text-sm">
-            <tbody>
-              {bySource.map((row) => (
-                <tr key={row.source} className="border-t border-zinc-100 dark:border-zinc-900">
-                  <td className="py-1.5">{row.source}</td>
-                  <td className="py-1.5 text-right text-xs text-zinc-500">{row.n}×</td>
-                  <td className="py-1.5 text-right">{formatUsd(String(row.usd ?? '0'))}</td>
-                </tr>
-              ))}
-              {bySource.length === 0 ? (
-                <tr>
-                  <td className="py-1.5 text-zinc-500">no spend yet this month</td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-        <div>
-          <h2 className="text-sm font-medium">By model (month)</h2>
-          <table className="mt-3 w-full text-sm">
-            <tbody>
-              {byModel.map((row) => (
-                <tr key={row.model} className="border-t border-zinc-100 dark:border-zinc-900">
-                  <td className="max-w-0 truncate py-1.5">{row.model}</td>
-                  <td className="py-1.5 text-right text-xs text-zinc-500">{row.n}×</td>
-                  <td className="py-1.5 text-right">{formatUsd(String(row.usd ?? '0'))}</td>
-                </tr>
-              ))}
-              {byModel.length === 0 ? (
-                <tr>
-                  <td className="py-1.5 text-zinc-500">no model calls this month</td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {/* Top tasks */}
-      <section className="mt-8">
-        <h2 className="text-sm font-medium">Top tasks (month)</h2>
-        <div className="mt-3 flex flex-col gap-2">
-          {topTasks.map((row) => (
-            <Link
-              key={row.taskId}
-              href={`/tasks/${row.taskId}`}
-              className="flex items-center justify-between gap-3 rounded-md border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
-            >
-              <span className="min-w-0 truncate">
-                <span className="text-xs text-zinc-500">[{taskTypeLabel(row.type)}]</span>{' '}
-                {truncate(row.progress || row.taskId || '', 80)}
-              </span>
-              <span className="shrink-0">{formatUsd(String(row.usd ?? '0'))}</span>
-            </Link>
-          ))}
-          {topTasks.length === 0 ? (
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">no attributed spend yet</p>
+            </section>
           ) : null}
-        </div>
-      </section>
 
-      {/* Recent events */}
-      <section className="mt-8">
-        <h2 className="text-sm font-medium">Recent events</h2>
-        <table className="mt-3 w-full text-sm">
-          <tbody>
-            {recent.map((e) => (
-              <tr key={e.id} className="border-t border-zinc-100 dark:border-zinc-900">
-                <td className="py-1.5 text-xs text-zinc-500 whitespace-nowrap">
-                  {formatDateTime(e.createdAt)}
-                </td>
-                <td className="px-2 py-1.5">{e.source}</td>
-                <td className="max-w-0 truncate px-2 py-1.5 text-xs text-zinc-500">
-                  {e.description}
-                </td>
-                <td className="py-1.5 text-right">{formatUsd(e.usd)}</td>
-              </tr>
-            ))}
-            {recent.length === 0 ? (
-              <tr>
-                <td className="py-1.5 text-zinc-500">the ledger is empty</td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </section>
+          <section className="mt-5 grid gap-6 sm:grid-cols-2">
+            <div>
+              <h2 className="text-sm font-medium">By source this month</h2>
+              <table className="mt-3 w-full text-sm">
+                <tbody>
+                  {bySource.map((row) => (
+                    <tr key={row.source} className="border-t border-zinc-100 dark:border-zinc-900">
+                      <td className="py-1.5">{row.source}</td>
+                      <td className="py-1.5 text-right text-xs text-zinc-500">{row.n}×</td>
+                      <td className="py-1.5 text-right">{formatUsd(String(row.usd ?? '0'))}</td>
+                    </tr>
+                  ))}
+                  {bySource.length === 0 ? (
+                    <tr>
+                      <td className="py-1.5 text-zinc-500">No spending yet this month</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+            <div>
+              <h2 className="text-sm font-medium">By model this month</h2>
+              <table className="mt-3 w-full text-sm">
+                <tbody>
+                  {byModel.map((row) => (
+                    <tr key={row.model} className="border-t border-zinc-100 dark:border-zinc-900">
+                      <td className="max-w-0 truncate py-1.5">{row.model}</td>
+                      <td className="py-1.5 text-right text-xs text-zinc-500">{row.n}×</td>
+                      <td className="py-1.5 text-right">{formatUsd(String(row.usd ?? '0'))}</td>
+                    </tr>
+                  ))}
+                  {byModel.length === 0 ? (
+                    <tr>
+                      <td className="py-1.5 text-zinc-500">No model calls this month</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="mt-6">
+            <h2 className="text-sm font-medium">Most expensive tasks this month</h2>
+            <div className="mt-3 flex flex-col gap-2">
+              {topTasks.map((row) => (
+                <Link
+                  key={row.taskId}
+                  href={`/tasks/${row.taskId}`}
+                  className="flex items-center justify-between gap-3 rounded-md border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                >
+                  <span className="min-w-0 truncate">
+                    <span className="text-xs text-zinc-500">[{taskTypeLabel(row.type)}]</span>{' '}
+                    {truncate(row.progress || row.taskId || '', 80)}
+                  </span>
+                  <span className="shrink-0">{formatUsd(String(row.usd ?? '0'))}</span>
+                </Link>
+              ))}
+              {topTasks.length === 0 ? (
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                  No task spending yet this month
+                </p>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="mt-6 overflow-x-auto">
+            <h2 className="text-sm font-medium">Recent charges</h2>
+            <table className="mt-3 w-full text-sm">
+              <tbody>
+                {recent.map((e) => (
+                  <tr key={e.id} className="border-t border-zinc-100 dark:border-zinc-900">
+                    <td className="py-1.5 text-xs text-zinc-500 whitespace-nowrap">
+                      {formatDateTime(e.createdAt)}
+                    </td>
+                    <td className="px-2 py-1.5">{e.source}</td>
+                    <td className="max-w-0 truncate px-2 py-1.5 text-xs text-zinc-500">
+                      {e.description}
+                    </td>
+                    <td className="py-1.5 text-right">{formatUsd(e.usd)}</td>
+                  </tr>
+                ))}
+                {recent.length === 0 ? (
+                  <tr>
+                    <td className="py-1.5 text-zinc-500">No charges yet</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </section>
+        </div>
+      </details>
     </div>
   );
 }

@@ -170,11 +170,11 @@ export function registerDocsTools(registry: ToolRegistry, deps: DocsToolDeps): T
       description:
         "Create a Google Doc in the assistant's Drive and share it with the owner so they can open it immediately. Returns the document id and a link. Use this whenever the owner wants a document, write-up, notes, or draft they can keep — do not paste a long document into chat instead.",
       inputSchema: createSchema,
-      // Autonomous by default; the dispatcher escalates to approval on its own if
-      // untrusted content has entered the workflow (privateWrite + tainted).
+      // Autonomous because this only creates a private artifact in the
+      // assistant's own Drive and silently grants its owner access.
       risk: 'autonomous',
       // Owner requests routinely fold in external material ("summarize this email
-      // into a doc"); the taint gate above handles the untrusted-trigger case.
+      // into a doc"). A later outward/network action remains approval-gated.
       acceptsUntrustedInput: true,
       idempotencyKey: (args, ctx) => {
         const a = args as z.infer<typeof createSchema>;

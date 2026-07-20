@@ -10,6 +10,7 @@
   "scripts": {
     "generate": "drizzle-kit generate",
     "migrate": "drizzle-kit migrate",
+    "reconcile": "pnpm migrate && pnpm seed",
     "seed": "tsx src/seed.ts",
     "typecheck": "tsc --noEmit"
   },

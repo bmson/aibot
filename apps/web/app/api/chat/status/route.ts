@@ -3,6 +3,7 @@ import { tasks } from '@assistant/db';
 import type { UIMessage } from 'ai';
 import { eq } from 'drizzle-orm';
 import { isAuthed } from '@/auth';
+import { withApprovalStatuses } from '@/lib/chat-approval-parts';
 import { getDb } from '@/lib/server';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -44,13 +45,16 @@ export async function GET(req: Request) {
   });
   const hasMore = Boolean(cursor && rows.length > PAGE_SIZE);
   const page = rows.slice(0, PAGE_SIZE);
-  const messages: UIMessage[] = page
-    .filter((row) => row.role === 'user' || row.role === 'assistant')
-    .map((row) => ({
-      id: row.id,
-      role: row.role as 'user' | 'assistant',
-      parts: row.parts as UIMessage['parts'],
-    }));
+  const messages = await withApprovalStatuses(
+    db,
+    page
+      .filter((row) => row.role === 'user' || row.role === 'assistant')
+      .map((row) => ({
+        id: row.id,
+        role: row.role as 'user' | 'assistant',
+        parts: row.parts as UIMessage['parts'],
+      })),
+  );
 
   const last = page.at(-1);
   const nextCursor = last ? encodeMessageCursor(last) : cursor ? encodeMessageCursor(cursor) : null;

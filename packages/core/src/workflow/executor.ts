@@ -29,17 +29,15 @@ import type { ModelRole, ModelRouter, ProposedToolCall } from '../model-router/r
 import { withSpan } from '../otel.js';
 import {
   type ArtifactIntent,
-  artifactCreatedResponse,
-  artifactDispatchFailure,
   artifactExecutionFailure,
   artifactRoutingFailure,
   artifactToolUnavailable,
-  directArtifactArgs,
   documentReadDispatchFailure,
   needsArtifactToolRetry,
   requestedArtifactIntent,
   requestedDocumentReadIntent,
 } from './artifact-intent.js';
+import { isGoalWorkEvidenceTool } from './goal-evidence.js';
 import {
   checkpointTask,
   claimTask,
@@ -345,14 +343,19 @@ function channelContext(task: TaskRow): string {
 }
 
 /** Parked/paused tasks with a conversation must say so in the thread, not go silent. */
-async function postConversationNotice(db: Db, task: TaskRow, text: string): Promise<void> {
+async function postConversationNotice(
+  db: Db,
+  task: TaskRow,
+  text: string,
+  extraParts: unknown[] = [],
+): Promise<void> {
   if (!task.conversationId) return;
   await persistMessage(db, {
     conversationId: task.conversationId,
     taskId: task.id,
     role: 'assistant',
     origin: 'assistant',
-    parts: [{ type: 'text', text }],
+    parts: [{ type: 'text', text }, ...extraParts],
     text,
   }).catch((err) => console.error('conversation notice failed', err));
 }
@@ -567,7 +570,10 @@ async function stageModelFinalResponse(
   // An automatic goal session that produced no verified tool result did no
   // work, whatever its prose says. Surfacing it as needs_attention is what
   // turns a goal that is quietly spinning into one the owner can see is stuck.
-  if (isUnattendedGoalSession(task) && !rows.some((row) => row.status === 'succeeded')) {
+  if (
+    isUnattendedGoalSession(task) &&
+    !rows.some((row) => row.status === 'succeeded' && isGoalWorkEvidenceTool(row.toolName))
+  ) {
     if (task.goalId) await recordGoalBlocked(deps.db, task.goalId, text);
     await notifyOwnerAndConversation(
       deps,
@@ -808,9 +814,9 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   if (window.length === 0) {
     window = await seedContext(db, task);
   }
-  // A direct document/sheet/slides request is executable without a separate
-  // planning turn. The model still supplies title/content, but it must do so
-  // through the matching creation tool.
+  // A direct document/sheet/slides request skips the generic planner, then
+  // forces the matching creation tool. The model still authors the actual
+  // title and content; deterministic blank placeholders are never dispatched.
   const artifactIntent =
     state.step === 0 ? requestedArtifactIntent(latestUserText(window) ?? '') : undefined;
   const documentReadIntent =
@@ -1081,68 +1087,6 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     return { outcome: 'sleeping', detail: 'browser job running' };
   }
 
-  // ── Plan (decide, don't execute) ──────────────────────────────────────────
-  if (artifactIntent && state.step === 0) {
-    const direct = directArtifactArgs(artifactIntent, latestUserText(window) ?? '');
-    const outcome = await dispatcher.dispatch({
-      task,
-      step: state.step,
-      modelToolCallId: `direct-artifact-${task.id}`,
-      toolName: direct.toolName,
-      args: direct.args,
-      ctx,
-      provenance: {
-        plannerVersion: PLANNER_VERSION,
-        promptVersion: PROMPT_VERSION,
-        model: 'direct-artifact-router',
-      },
-    });
-    if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
-
-    if (outcome.kind === 'budget_blocked') {
-      state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-      const parked = await parkForBudget(db, lease, state, outcome.resumeAt);
-      if (!parked) return LOST_LEASE;
-      return { outcome: 'parked', detail: outcome.reason };
-    }
-    if (outcome.kind === 'awaiting_approval') {
-      const parked = await parkForApproval(db, lease, state, [
-        {
-          approvalId: outcome.approvalId,
-          dbToolCallId: outcome.toolCallId,
-          toolCallId: `direct-artifact-${task.id}`,
-          toolName: direct.toolName,
-        },
-      ]);
-      if (!parked) return LOST_LEASE;
-      if (deps.notifyApproval) {
-        await deps
-          .notifyApproval(task, [
-            { taskId: task.id, shortCode: outcome.shortCode, summary: outcome.summary },
-          ])
-          .catch((err) => console.error('approval notification failed', err));
-      }
-      await postConversationNotice(
-        db,
-        task,
-        `I need your approval before creating the requested ${artifactIntent.label}: ${outcome.summary}`,
-      );
-      return { outcome: 'parked', detail: 'artifact creation awaiting approval' };
-    }
-
-    const text =
-      outcome.kind === 'executed'
-        ? artifactCreatedResponse(artifactIntent, outcome.result)
-        : artifactDispatchFailure(artifactIntent, outcome.reason);
-    window.push({ role: 'assistant', content: text } as ModelMessage);
-    return stageFinalResponse(deps, lease, state, window, {
-      text,
-      progress: text.slice(0, 200),
-      terminalStatus: outcome.kind === 'executed' ? 'done' : 'failed',
-      outcome: outcome.kind === 'executed' ? 'done' : 'failed',
-    });
-  }
-
   // The owner supplied a real Google Doc URL (commonly a CV). Read it before
   // asking the model to continue, so the assistant has durable evidence of
   // whether it could access the document instead of merely promising to do so.
@@ -1189,6 +1133,14 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         db,
         task,
         `I need your approval before reading the shared Google Doc: ${outcome.summary}`,
+        [
+          {
+            type: 'approval',
+            approvalId: outcome.approvalId,
+            shortCode: outcome.shortCode,
+            summary: outcome.summary,
+          },
+        ],
       );
       return { outcome: 'parked', detail: 'document read awaiting approval' };
     }
@@ -1336,6 +1288,15 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
 
   // ── Step loop ─────────────────────────────────────────────────────────────
   while (state.step < task.maxSteps) {
+    const successfulGoalTools = isUnattendedGoalSession(task)
+      ? await db
+          .select({ toolName: toolCalls.toolName })
+          .from(toolCalls)
+          .where(and(eq(toolCalls.taskId, task.id), eq(toolCalls.status, 'succeeded')))
+      : [];
+    const mustRecordGoalProgress =
+      successfulGoalTools.some((row) => isGoalWorkEvidenceTool(row.toolName)) &&
+      !successfulGoalTools.some((row) => row.toolName === 'goals.update_progress');
     // Rebuild the system prompt after each tool turn. Once an external result
     // taints the context, the private owner card is removed from every later
     // model call instead of lingering in a constant system prompt.
@@ -1350,6 +1311,9 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         ? `\nCurrent plan (follow it; deviate only with good reason):\n${JSON.stringify(plan)}`
         : '',
       plan?.action === 'schedule' ? SCHEDULE_DIRECTIVE : '',
+      mustRecordGoalProgress
+        ? '\nYou completed a verified goal step. Call goals.update_progress now with only what the tool evidence proves and the best concrete next action. Do not finish in prose first.'
+        : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -1387,14 +1351,17 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       tools: toolSet as never,
       toolChoice: forcedArtifact
         ? { type: 'tool', toolName: forcedArtifact.toolName }
-        : mustAct
-          ? 'required'
-          : undefined,
+        : mustRecordGoalProgress
+          ? { type: 'tool', toolName: 'goals.update_progress' }
+          : mustAct
+            ? 'required'
+            : undefined,
       // The primary chat model has intermittently timed out when a named tool
-      // is mandatory. Use the role's configured tool-capable fallback for this
-      // narrow, deterministic request.
-      forceFallback: Boolean(forcedArtifact),
-      maxOutputTokens: forcedArtifact ? 256 : undefined,
+      // is mandatory. Use the role's configured tool-capable fallback. Goal
+      // bookkeeping stays tightly bounded; artifact arguments may contain the
+      // full document, sheet, or presentation and must not be truncated.
+      forceFallback: Boolean(forcedArtifact || mustRecordGoalProgress),
+      maxOutputTokens: mustRecordGoalProgress ? 256 : undefined,
       critical,
     });
     if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
@@ -1418,7 +1385,6 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         tools: toolSet as never,
         toolChoice: { type: 'tool', toolName: forcedArtifact.toolName },
         forceFallback: true,
-        maxOutputTokens: 256,
         critical,
       });
       if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
@@ -1527,7 +1493,12 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       } as ModelMessage);
 
       const pendingApprovals: TaskState['pendingApprovals'] = [];
-      const approvalNotices: Array<{ taskId: string; shortCode: string; summary: string }> = [];
+      const approvalNotices: Array<{
+        taskId: string;
+        approvalId: string;
+        shortCode: string;
+        summary: string;
+      }> = [];
       for (let toolIndex = 0; toolIndex < stepResult.toolCalls.length; toolIndex += 1) {
         const tc = stepResult.toolCalls[toolIndex] as (typeof stepResult.toolCalls)[number];
         // One browser job at a time: once a call in this batch launched a job,
@@ -1618,6 +1589,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
           });
           approvalNotices.push({
             taskId: task.id,
+            approvalId: outcome.approvalId,
             shortCode: outcome.shortCode,
             summary: outcome.summary,
           });
@@ -1647,6 +1619,12 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
             ...approvalNotices.map((n) => `- **[${n.shortCode}]** ${n.summary}`),
             "Approve or deny it on the Approvals page — I'll pick up from there.",
           ].join('\n'),
+          approvalNotices.map((notice) => ({
+            type: 'approval',
+            approvalId: notice.approvalId,
+            shortCode: notice.shortCode,
+            summary: notice.summary,
+          })),
         );
         return { outcome: 'parked', detail: `${pendingApprovals.length} approval(s) pending` };
       }

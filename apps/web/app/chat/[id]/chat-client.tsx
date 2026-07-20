@@ -2,9 +2,10 @@
 
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
-import { useEffect, useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { btn } from '@/lib/ui';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
+import { InlineApproval, type InlineApprovalPart } from './inline-approval';
 import { MessageMarkdown } from './markdown';
 
 interface ChatClientProps {
@@ -122,6 +123,9 @@ export function ChatClient({
   const [asyncNote, setAsyncNote] = useState<string | null>(null);
   /** Live provenance for the current streaming turn (the persisted part covers reloads). */
   const [liveRecall, setLiveRecall] = useState<RecallSource[] | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const messageScrollerRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
 
   const transport = useMemo(
     () =>
@@ -259,6 +263,24 @@ export function ChatClient({
 
   const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
 
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const scroller = messageScrollerRef.current;
+      if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  });
+
+  const submitCurrentMessage = () => {
+    const text = input.trim();
+    if (!text || busy) return;
+    stickToBottomRef.current = true;
+    setInput('');
+    setLiveRecall(null);
+    void sendMessage({ text });
+  };
+
   return (
     <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-4xl flex-col lg:h-[calc(100vh-4rem)]">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4 dark:border-zinc-800">
@@ -329,7 +351,15 @@ export function ChatClient({
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto py-4">
+      <div
+        ref={messageScrollerRef}
+        onScroll={(event) => {
+          const element = event.currentTarget;
+          stickToBottomRef.current =
+            element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+        }}
+        className="flex-1 overflow-y-auto py-4"
+      >
         {messages.length === 0 ? (
           <p className="mt-8 text-sm leading-6 text-slate-500 dark:text-zinc-400">
             Ask for a plan, a document, a summary, or help with something you need to get done.
@@ -351,22 +381,25 @@ export function ChatClient({
                   {message.role === 'assistant' ? (
                     <RecallChip sources={recallSourcesOf(message)} />
                   ) : null}
-                  {message.parts.map((part, index) =>
-                    part.type === 'text' ? (
-                      message.role === 'assistant' ? (
-                        <MessageMarkdown
-                          key={`${message.id}-${index.toString()}`}
-                          text={part.text}
-                        />
-                      ) : (
-                        <p
-                          key={`${message.id}-${index.toString()}`}
-                          className="whitespace-pre-wrap"
-                        >
-                          {part.text}
-                        </p>
-                      )
-                    ) : null,
+                  {(message.parts as Array<UIMessage['parts'][number] | InlineApprovalPart>).map(
+                    (part, index) =>
+                      part.type === 'text' ? (
+                        message.role === 'assistant' ? (
+                          <MessageMarkdown
+                            key={`${message.id}-${index.toString()}`}
+                            text={part.text}
+                          />
+                        ) : (
+                          <p
+                            key={`${message.id}-${index.toString()}`}
+                            className="whitespace-pre-wrap"
+                          >
+                            {part.text}
+                          </p>
+                        )
+                      ) : part.type === 'approval' ? (
+                        <InlineApproval key={part.approvalId} part={part} />
+                      ) : null,
                   )}
                 </div>
               </div>
@@ -401,22 +434,26 @@ export function ChatClient({
       ) : null}
 
       <form
+        ref={formRef}
         onSubmit={(event) => {
           event.preventDefault();
-          const text = input.trim();
-          if (!text || busy) return;
-          setInput('');
-          setLiveRecall(null);
-          void sendMessage({ text });
+          submitCurrentMessage();
         }}
         className="mobile-safe-bottom flex gap-2 border-t border-slate-200 pt-4 dark:border-zinc-800"
       >
-        <input
+        <textarea
           aria-label="Message"
           value={input}
           onChange={(event) => setInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              formRef.current?.requestSubmit();
+            }
+          }}
           placeholder="Ask anything…"
-          className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-base outline-none transition-shadow placeholder:text-slate-400 focus:border-indigo-400 focus:ring-3 focus:ring-indigo-100 sm:text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          rows={2}
+          className="max-h-40 flex-1 resize-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-base outline-none transition-shadow placeholder:text-slate-400 focus:border-indigo-400 focus:ring-3 focus:ring-indigo-100 sm:text-sm dark:border-zinc-700 dark:bg-zinc-900"
         />
         <button
           type="submit"

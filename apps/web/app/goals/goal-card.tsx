@@ -99,20 +99,18 @@ export function GoalCard({ goal }: { goal: GoalView }) {
         <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{goal.description}</p>
       ) : null}
       {goal.progress ? (
-        <p className="mt-1 truncate text-xs text-zinc-500 dark:text-zinc-500">
-          progress: {goal.progress}
-        </p>
+        <p className="mt-2 text-sm leading-5 text-slate-700 dark:text-zinc-300">{goal.progress}</p>
       ) : null}
       {goal.nextAction ? (
-        <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-500">
-          next: {goal.nextAction}
+        <p className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+          <span className="font-medium">Next:</span> {goal.nextAction}
         </p>
       ) : null}
       <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
         {goal.targetLabel ? `${goal.targetLabel} · ` : ''}
         {goal.updatedLabel}
       </p>
-      <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
         {goal.automationLabel}
         {goal.automationNextLabel ? ` · ${goal.automationNextLabel}` : ''}
       </p>
@@ -122,7 +120,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
         </p>
       ) : null}
 
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         {goal.conversationId ? (
           <Link href={`/chat/${goal.conversationId}`} className={outlineButton}>
             Open work chat
@@ -143,9 +141,6 @@ export function GoalCard({ goal }: { goal: GoalView }) {
                 </button>
               </form>
             ) : null}
-            <button type="button" onClick={() => setEditing((v) => !v)} className={outlineButton}>
-              {editing ? 'Close' : 'Edit'}
-            </button>
             {goal.status === 'active' ? (
               <form action={setGoalStatus.bind(null, goal.id, 'paused')}>
                 <button type="submit" className={outlineButton}>
@@ -160,56 +155,72 @@ export function GoalCard({ goal }: { goal: GoalView }) {
                 </button>
               </form>
             ) : null}
-            {open ? (
-              <form action={setGoalStatus.bind(null, goal.id, 'done')}>
-                <button type="submit" className={outlineButton}>
-                  Mark done
-                </button>
-              </form>
-            ) : (
-              <form action={setGoalStatus.bind(null, goal.id, 'active')}>
-                <button type="submit" className={outlineButton}>
-                  Reactivate
-                </button>
-              </form>
-            )}
-            {goal.status !== 'abandoned' ? (
-              confirmingAbandon ? (
-                <>
-                  <form action={setGoalStatus.bind(null, goal.id, 'abandoned')}>
-                    <button type="submit" className={dangerButton}>
-                      Confirm abandon
-                    </button>
-                  </form>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmingAbandon(false)}
-                    className={outlineButton}
-                  >
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmingAbandon(true)}
-                  className={dangerOutlineButton}
-                >
-                  Abandon
-                </button>
-              )
-            ) : null}
             {goal.workActive ? (
               <span className="self-center text-xs text-zinc-500 dark:text-zinc-500">
                 Work active
               </span>
-            ) : (
-              <form action={archiveGoal.bind(null, goal.id)}>
-                <button type="submit" className={outlineButton}>
-                  Archive
+            ) : null}
+            <details className="relative">
+              <summary className={`${outlineButton} cursor-pointer list-none`}>More</summary>
+              <div className="absolute top-full right-0 z-10 mt-2 flex w-52 flex-col gap-2 rounded-xl border border-zinc-200 bg-white p-3 shadow-lg dark:border-zinc-700 dark:bg-zinc-950">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    setEditing((value) => !value);
+                    event.currentTarget.closest('details')?.removeAttribute('open');
+                  }}
+                  className={outlineButton}
+                >
+                  {editing ? 'Close editor' : 'Edit goal'}
                 </button>
-              </form>
-            )}
+                {open ? (
+                  <form action={setGoalStatus.bind(null, goal.id, 'done')}>
+                    <button type="submit" className={`${outlineButton} w-full`}>
+                      Mark done
+                    </button>
+                  </form>
+                ) : (
+                  <form action={setGoalStatus.bind(null, goal.id, 'active')}>
+                    <button type="submit" className={`${outlineButton} w-full`}>
+                      Reactivate
+                    </button>
+                  </form>
+                )}
+                {!goal.workActive ? (
+                  <form action={archiveGoal.bind(null, goal.id)}>
+                    <button type="submit" className={`${outlineButton} w-full`}>
+                      Archive
+                    </button>
+                  </form>
+                ) : null}
+                {goal.status !== 'abandoned' ? (
+                  confirmingAbandon ? (
+                    <div className="flex flex-col gap-2">
+                      <form action={setGoalStatus.bind(null, goal.id, 'abandoned')}>
+                        <button type="submit" className={`${dangerButton} w-full`}>
+                          Confirm stop
+                        </button>
+                      </form>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmingAbandon(false)}
+                        className={outlineButton}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingAbandon(true)}
+                      className={dangerOutlineButton}
+                    >
+                      Stop goal
+                    </button>
+                  )
+                ) : null}
+              </div>
+            </details>
           </>
         )}
       </div>

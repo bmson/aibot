@@ -1,4 +1,4 @@
-import { approvals, tasks } from '@assistant/db';
+import { approvals, tasks, toolCalls } from '@assistant/db';
 import { asc, desc, eq, inArray } from 'drizzle-orm';
 import Link from 'next/link';
 import { requireOwner } from '@/auth';
@@ -17,9 +17,16 @@ export default async function ApprovalsPage() {
 
   const [pending, resolved] = await Promise.all([
     db
-      .select({ approval: approvals, taskType: tasks.type, taskTrust: tasks.trust })
+      .select({
+        approval: approvals,
+        taskType: tasks.type,
+        taskTrust: tasks.trust,
+        toolName: toolCalls.toolName,
+        decision: toolCalls.decision,
+      })
       .from(approvals)
       .innerJoin(tasks, eq(approvals.taskId, tasks.id))
+      .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
       .where(eq(approvals.status, 'pending'))
       .orderBy(asc(approvals.requestedAt)),
     db
@@ -47,10 +54,15 @@ export default async function ApprovalsPage() {
         </EmptyState>
       ) : (
         <div className="mt-3 flex flex-col gap-3">
-          {pending.map(({ approval, taskType, taskTrust }) => (
+          {pending.map(({ approval, taskType, taskTrust, toolName, decision }) => (
             <ApprovalCard
               key={approval.id}
-              approval={toPendingApprovalView(approval, { type: taskType, trust: taskTrust }, now)}
+              approval={toPendingApprovalView(
+                approval,
+                { type: taskType, trust: taskTrust },
+                { toolName, decision },
+                now,
+              )}
             />
           ))}
         </div>

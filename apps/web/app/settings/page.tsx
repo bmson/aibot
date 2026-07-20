@@ -1,33 +1,28 @@
 import { getAgent } from '@assistant/core';
-import { approvalPolicies, budgets, schedules } from '@assistant/db';
+import { approvalPolicies, schedules } from '@assistant/db';
 import { asc } from 'drizzle-orm';
-import {
-  deletePolicy,
-  setPolicyEnabled,
-  setScheduleEnabled,
-  updateBudgets,
-} from '@/app/settings/actions';
+import Link from 'next/link';
+import { deletePolicy, setPolicyEnabled, setScheduleEnabled } from '@/app/settings/actions';
 import { AgentForm } from '@/app/settings/agent-form';
 import { requireOwner } from '@/auth';
-import { formatDateTime, formatUsd, relativeTime } from '@/lib/format';
+import { formatDateTime, relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import {
-  btn,
-  Card,
-  CountBadge,
-  EmptyState,
-  inputClass,
-  labelClass,
-  PageHeader,
-  SectionHeading,
-} from '@/lib/ui';
+import { btn, Card, CountBadge, EmptyState, PageHeader, SectionHeading } from '@/lib/ui';
 
 export const dynamic = 'force-dynamic';
 
-const BUDGET_LABELS: Record<string, string> = {
-  task_default: 'Per task (default)',
-  daily: 'Per day',
-  monthly: 'Per month',
+const scheduleLabels: Record<string, string> = {
+  'morning-brief': 'Morning brief',
+  'memory-extraction': 'Remember useful details from today',
+  'memory-consolidation': 'Organize saved memory',
+  'chat-segmentation': 'Organize conversation history',
+};
+
+const policyLabels: Record<string, string> = {
+  'calendar.owner_attendee_only': 'Create calendar invitations for you',
+  'calendar.self_only_events': 'Create private events on the assistant calendar',
+  'gmail.send.to_recipient': 'Send email to an approved recipient',
+  'sms.reply_to_owner': 'Reply to your text messages',
 };
 
 export default async function SettingsPage() {
@@ -35,13 +30,11 @@ export default async function SettingsPage() {
   const db = getDb();
   const now = new Date();
 
-  const [agent, scheduleRows, budgetRows, policyRows] = await Promise.all([
+  const [agent, scheduleRows, policyRows] = await Promise.all([
     getAgent(db),
     db.select().from(schedules).orderBy(asc(schedules.name)),
-    db.select().from(budgets),
     db.select().from(approvalPolicies).orderBy(asc(approvalPolicies.toolName)),
   ]);
-  const budgetByScope = new Map(budgetRows.map((b) => [b.scope, b]));
   // Goal-owned schedules are explained and controlled on Goals, where their
   // title, urgency, deadline, and work chat are visible together.
   const directScheduleRows = scheduleRows.filter((schedule) => !schedule.name.startsWith('goal:'));
@@ -91,16 +84,19 @@ export default async function SettingsPage() {
               <Card key={s.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                 <div className="min-w-0">
                   <p className="flex items-center gap-2 text-sm font-medium">
-                    {s.name}
+                    {scheduleLabels[s.name] ?? s.name.replaceAll('-', ' ')}
                     {s.enabled ? null : <CountBadge tone="amber">paused</CountBadge>}
                   </p>
                   <p className="text-xs text-zinc-500 dark:text-zinc-500">
-                    <code>{s.cron}</code>
                     {s.nextRunAt && s.enabled
-                      ? ` · next ${relativeTime(s.nextRunAt, now)} (${formatDateTime(s.nextRunAt)})`
-                      : ''}
+                      ? `Next ${relativeTime(s.nextRunAt, now)} (${formatDateTime(s.nextRunAt)})`
+                      : 'Not currently scheduled'}
                     {s.lastRunAt ? ` · last ${relativeTime(s.lastRunAt, now)}` : ''}
                   </p>
+                  <details className="mt-1 text-[11px] text-zinc-500">
+                    <summary className="cursor-pointer">Technical schedule</summary>
+                    <code>{s.cron}</code>
+                  </details>
                 </div>
                 <form action={setScheduleEnabled.bind(null, s.id, !s.enabled)}>
                   <button type="submit" className={btn.outline}>
@@ -113,53 +109,30 @@ export default async function SettingsPage() {
         )}
       </section>
 
-      {/* Budgets */}
+      {/* Costs */}
       <section>
-        <SectionHeading title="Spend caps" hint="hard limits; tasks park when exhausted" />
-        <Card className="mt-3">
-          <form action={updateBudgets} className="flex flex-wrap items-end gap-4">
-            {(['task_default', 'daily', 'monthly'] as const).map((scope) => {
-              const row = budgetByScope.get(scope);
-              return (
-                <label key={scope} className="flex flex-col gap-1">
-                  <span className={labelClass}>{BUDGET_LABELS[scope]}</span>
-                  <div className="flex items-center gap-1">
-                    <span className="text-sm text-zinc-500">$</span>
-                    <input
-                      type="number"
-                      name={scope}
-                      step="0.01"
-                      min="0.01"
-                      defaultValue={row ? Number.parseFloat(row.limitUsd).toFixed(2) : ''}
-                      className={`${inputClass} w-24`}
-                    />
-                  </div>
-                </label>
-              );
-            })}
-            <button type="submit" className={btn.outline}>
-              Save caps
-            </button>
-          </form>
-          <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">
-            Current:{' '}
-            {['task_default', 'daily', 'monthly']
-              .map((s) => `${BUDGET_LABELS[s]} ${formatUsd(budgetByScope.get(s)?.limitUsd)}`)
-              .join(' · ')}
+        <SectionHeading title="Spending" hint="usage and limits live in one place" />
+        <Card className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-slate-700 dark:text-zinc-300">
+            Review today’s usage, the monthly total, and adjust spending limits.
           </p>
+          <Link href="/costs" className={btn.outline}>
+            Open costs
+          </Link>
         </Card>
       </section>
 
       {/* Approval rules */}
       <section>
         <SectionHeading
-          title="Approval rules"
+          title="Standing approval choices"
           count={policyRows.length}
-          hint='standing "always allow / always deny" decisions'
+          hint="actions the assistant can remember how to handle"
         />
         {policyRows.length === 0 ? (
           <EmptyState>
-            No standing rules — when you tick "always allow" on an approval, the rule shows up here.
+            No standing rules. Recipient-specific choices you save from an approval will appear
+            here.
           </EmptyState>
         ) : (
           <div className="mt-3 flex flex-col gap-2">
@@ -167,31 +140,34 @@ export default async function SettingsPage() {
               <Card key={p.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                 <div className="min-w-0">
                   <p className="flex items-center gap-2 text-sm font-medium">
-                    <code>{p.toolName}</code>
+                    {policyLabels[p.templateKey] ?? 'Custom approval rule'}
                     <CountBadge tone={p.effect === 'allow' ? 'green' : 'amber'}>
-                      {p.effect}
+                      {p.effect === 'allow' ? 'Allowed' : 'Blocked'}
                     </CountBadge>
-                    {p.enabled ? null : <CountBadge>disabled</CountBadge>}
+                    {p.enabled ? null : <CountBadge>Paused</CountBadge>}
                   </p>
-                  <p className="text-xs text-zinc-500 dark:text-zinc-500">
-                    {p.templateKey} · created via {p.createdVia.replaceAll('_', ' ')}
-                  </p>
+                  <details className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+                    <summary className="cursor-pointer">Technical details</summary>
+                    <code>{p.toolName}</code> · {p.templateKey}
+                  </details>
                 </div>
                 <div className="flex shrink-0 gap-1.5">
                   <form action={setPolicyEnabled.bind(null, p.id, !p.enabled)}>
                     <button type="submit" className={btn.outline}>
-                      {p.enabled ? 'Disable' : 'Enable'}
+                      {p.enabled ? 'Pause rule' : 'Use rule'}
                     </button>
                   </form>
-                  <form action={deletePolicy.bind(null, p.id)}>
-                    <button
-                      type="submit"
-                      className={btn.dangerOutline}
-                      title="Remove the rule — this tool goes back to asking for approval"
-                    >
-                      Delete
-                    </button>
-                  </form>
+                  {p.createdVia !== 'seed' ? (
+                    <form action={deletePolicy.bind(null, p.id)}>
+                      <button
+                        type="submit"
+                        className={btn.dangerOutline}
+                        title="Remove the rule — this tool goes back to asking for approval"
+                      >
+                        Delete
+                      </button>
+                    </form>
+                  ) : null}
                 </div>
               </Card>
             ))}

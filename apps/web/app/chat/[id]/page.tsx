@@ -4,6 +4,7 @@ import type { UIMessage } from 'ai';
 import { and, count, eq, notInArray, sql } from 'drizzle-orm';
 import { notFound } from 'next/navigation';
 import { requireOwner } from '@/auth';
+import { withApprovalStatuses } from '@/lib/chat-approval-parts';
 import { getDb } from '@/lib/server';
 import { ChatClient } from './chat-client';
 
@@ -73,13 +74,16 @@ export default async function ChatConversationPage({
         ),
       ),
   ]);
-  const initialMessages: UIMessage[] = rows
-    .filter((row) => row.role === 'user' || row.role === 'assistant')
-    .map((row) => ({
-      id: row.id,
-      role: row.role as 'user' | 'assistant',
-      parts: row.parts as UIMessage['parts'],
-    }));
+  const initialMessages = await withApprovalStatuses(
+    db,
+    rows
+      .filter((row) => row.role === 'user' || row.role === 'assistant')
+      .map((row) => ({
+        id: row.id,
+        role: row.role as 'user' | 'assistant',
+        parts: row.parts as UIMessage['parts'],
+      })),
+  );
 
   // Embedding-only models can't chat — keep them out of the switcher.
   const enabledModels = await db
@@ -102,7 +106,7 @@ export default async function ChatConversationPage({
       modelOverride={conversation.modelOverride}
       goalTitle={linkedGoal?.title}
       archived={conversation.archivedAt !== null}
-      canArchive={(activeTasks[0]?.value ?? 0) === 0}
+      canArchive={!conversation.isPrimary && (activeTasks[0]?.value ?? 0) === 0}
       initialAsyncTurn={
         requestedTask && requestedCursor
           ? { taskId: requestedTask.id, cursor: query.cursor as string }

@@ -16,7 +16,7 @@ import {
 import { eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { ToolDispatcher } from './dispatcher.js';
+import { approvalFallbackSummary, ToolDispatcher } from './dispatcher.js';
 import { registerCalendarTools } from './google/calendar.js';
 import { ToolRegistry } from './registry.js';
 import { AmbiguousTwilioDeliveryError } from './twilio/client.js';
@@ -147,6 +147,18 @@ afterAll(async () => {
     }
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
+});
+
+describe('approvalFallbackSummary', () => {
+  it('turns escalated internal tools into owner-readable actions', () => {
+    expect(approvalFallbackSummary('gmail.search', { query: 'newer_than:1d' })).toBe(
+      'Search the assistant’s inbox for “newer_than:1d”',
+    );
+    expect(approvalFallbackSummary('goals.list', {})).toBe('Review your current goals');
+    expect(approvalFallbackSummary('workspace.list', { path: 'progress_notes' })).toBe(
+      'List files in “progress_notes”',
+    );
+  });
 });
 
 describe('ToolDispatcher (integration)', () => {
@@ -283,6 +295,26 @@ describe('ToolDispatcher (integration)', () => {
     const boundTask = boundTaskRow as TaskRow;
     cleanupTaskIds.push(boundTask.id);
 
+    const premature = await dispatcher.dispatch({
+      task: boundTask,
+      step: 0,
+      toolName: 'goals.update_progress',
+      args: { goalId, progress: 'claimed before doing work' },
+      ctx: { ...ctxFor(boundTask), tainted: true },
+      provenance,
+    });
+    expect(premature.kind).toBe('rejected');
+
+    await db.insert(toolCalls).values({
+      taskId: boundTask.id,
+      step: 1,
+      toolName: 'test.goal-action',
+      args: {},
+      risk: 'autonomous',
+      status: 'succeeded',
+      result: { verified: true },
+    });
+
     // Bound to its own goal → allowed even under taint.
     const owned = await dispatcher.dispatch({
       task: boundTask,
@@ -362,10 +394,13 @@ describe('ToolDispatcher (integration)', () => {
     expect(outcome.kind).toBe('awaiting_approval');
   });
 
-  it('requires approval for privileged reads and network egress in a tainted owner task', async (ctx) => {
+  it('keeps private workspace work autonomous but gates memory and network sinks under taint', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const registry = new ToolRegistry()
       .register(makeTool('test.private-read'), { confidentialRead: true })
+      .register(makeTool('test.workspace-write'), { writesWorkspace: true })
+      .register(makeTool('test.private-write'), { privateWrite: true })
+      .register(makeTool('test.memory-write'), { writesMemory: true })
       .register(makeTool('test.network-read'), {
         networkEgress: true,
         blanketAllowIneligible: true,
@@ -390,10 +425,40 @@ describe('ToolDispatcher (integration)', () => {
       ctx: tainted,
       provenance,
     });
+    const workspaceWrite = await dispatcher.dispatch({
+      task,
+      step: 3,
+      toolName: 'test.workspace-write',
+      args: {},
+      ctx: tainted,
+      provenance,
+    });
+    const privateWrite = await dispatcher.dispatch({
+      task,
+      step: 4,
+      toolName: 'test.private-write',
+      args: {},
+      ctx: tainted,
+      provenance,
+    });
+    const memoryWrite = await dispatcher.dispatch({
+      task,
+      step: 5,
+      toolName: 'test.memory-write',
+      args: {},
+      ctx: tainted,
+      provenance,
+    });
 
-    expect(privateRead.kind).toBe('awaiting_approval');
+    expect(privateRead.kind).toBe('executed');
+    expect(workspaceWrite.kind).toBe('executed');
+    expect(privateWrite.kind).toBe('executed');
+    expect(memoryWrite.kind).toBe('awaiting_approval');
     expect(networkRead.kind).toBe('awaiting_approval');
-    expect(executions['test.private-read']).toBeUndefined();
+    expect(executions['test.private-read']).toBe(1);
+    expect(executions['test.workspace-write']).toBe(1);
+    expect(executions['test.private-write']).toBe(1);
+    expect(executions['test.memory-write']).toBeUndefined();
     expect(executions['test.network-read']).toBeUndefined();
   });
 

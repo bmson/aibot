@@ -1,7 +1,13 @@
 'use client';
 
+import Link from 'next/link';
 import { useActionState, useState } from 'react';
-import { approveApproval, denyApproval, editAndApprove } from '@/app/approvals/actions';
+import {
+  approveAndRemember,
+  approveApproval,
+  denyApproval,
+  editAndApprove,
+} from '@/app/approvals/actions';
 import { btn } from '@/lib/ui';
 import type { PendingApprovalView } from '@/lib/views';
 
@@ -17,7 +23,15 @@ export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
           {approval.shortCode}
         </span>
       </div>
-      <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{approval.provenance}</p>
+      <p className="mt-2 text-xs leading-5 text-slate-700 dark:text-zinc-300">
+        <span className="font-medium">Why I’m asking:</span> {approval.reason}
+      </p>
+      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+        {approval.provenance} ·{' '}
+        <Link href={`/tasks/${approval.taskId}`} className="underline hover:no-underline">
+          view activity
+        </Link>
+      </p>
       <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-500">
         {approval.requestedLabel} · {approval.expiresLabel}
       </p>
@@ -31,7 +45,7 @@ export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
       ) : null}
       <details className="mt-2">
         <summary className="cursor-pointer text-xs text-zinc-600 select-none dark:text-zinc-400">
-          Payload
+          Review exact details
         </summary>
         <pre className="mt-1 overflow-x-auto rounded bg-zinc-100 p-2 font-mono text-xs dark:bg-zinc-900">
           {approval.payloadJson}
@@ -61,7 +75,7 @@ export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
           </div>
         </form>
       ) : (
-        <div className="mt-3 flex gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
           <form action={approveApproval.bind(null, approval.id)}>
             <button type="submit" className={btn.success}>
               Approve
@@ -73,8 +87,15 @@ export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
             </button>
           </form>
           <button type="button" onClick={() => setEditing(true)} className={btn.outline}>
-            Edit &amp; approve
+            Edit details
           </button>
+          {approval.rememberLabel ? (
+            <form action={approveAndRemember.bind(null, approval.id)}>
+              <button type="submit" className={btn.outline}>
+                {approval.rememberLabel}
+              </button>
+            </form>
+          ) : null}
         </div>
       )}
     </div>

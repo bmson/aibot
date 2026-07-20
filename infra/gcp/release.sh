@@ -34,13 +34,13 @@ fi
 # database-secret access. The GitHub deployer never receives the database URL,
 # and a failed migration stops the release before any new service revision is
 # made live.
-echo "Migrating database"
+echo "Migrating and reconciling database defaults"
 if gcloud run jobs describe assistant-migrate --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
   gcloud run jobs update assistant-migrate \
     --project "$PROJECT" --region "$REGION" \
     --image "${IMAGE_ROOT}/agent:${TAG}" \
     --service-account "$AGENT_SERVICE_ACCOUNT" \
-    --command pnpm --args=--filter,@assistant/db,migrate \
+    --command pnpm --args=--filter,@assistant/db,reconcile \
     --set-secrets "DATABASE_URL=database-url:latest" \
     --memory 512Mi --cpu 1 --task-timeout 600 --max-retries 0 --quiet
 else
@@ -48,7 +48,7 @@ else
     --project "$PROJECT" --region "$REGION" \
     --image "${IMAGE_ROOT}/agent:${TAG}" \
     --service-account "$AGENT_SERVICE_ACCOUNT" \
-    --command pnpm --args=--filter,@assistant/db,migrate \
+    --command pnpm --args=--filter,@assistant/db,reconcile \
     --set-secrets "DATABASE_URL=database-url:latest" \
     --memory 512Mi --cpu 1 --task-timeout 600 --max-retries 0 --quiet
 fi

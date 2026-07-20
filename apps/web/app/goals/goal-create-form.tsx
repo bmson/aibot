@@ -17,8 +17,7 @@ export function GoalCreateForm() {
     >
       <h2 className="text-sm font-medium">Create a goal</h2>
       <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-400">
-        This opens a work chat, starts one task now, and keeps the goal moving automatically. Use
-        the work chat to steer what happens next.
+        Tell the assistant what outcome you want. It will start now and keep the work moving.
       </p>
       <div className="mt-3 flex flex-col gap-3">
         <label className={labelClass}>
@@ -42,38 +41,42 @@ export function GoalCreateForm() {
             className={inputClass}
           />
         </label>
-        <div className="flex flex-wrap gap-3">
-          <label className={labelClass}>
-            Automation pace
-            <select
-              name="priority"
-              defaultValue={state.values?.priority || '3'}
-              className={inputClass}
-            >
-              <option value="1">Urgent — every 6 hours</option>
-              <option value="2">High — daily</option>
-              <option value="3">Normal — twice a week</option>
-              <option value="4">Low — weekly</option>
-              <option value="5">Later — monthly</option>
-            </select>
-          </label>
-          <label className={labelClass}>
-            Target date (optional; speeds up near the deadline)
-            <input
-              type="date"
-              name="targetDate"
-              defaultValue={state.values?.targetDate ?? ''}
-              className={inputClass}
-            />
-          </label>
-        </div>
-        <label className="flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-400">
-          <input type="checkbox" name="mirrorToPrimary" className="mt-0.5" />
-          <span>
-            Show this goal’s background updates in my main chat thread. Off by default; the work
-            chat always keeps the full record.
-          </span>
-        </label>
+        <details className="rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+          <summary className="cursor-pointer text-xs font-medium text-zinc-600 dark:text-zinc-400">
+            Schedule and notification options
+          </summary>
+          <div className="mt-3 flex flex-col gap-3">
+            <div className="flex flex-wrap gap-3">
+              <label className={labelClass}>
+                How often should it work?
+                <select
+                  name="priority"
+                  defaultValue={state.values?.priority || '3'}
+                  className={inputClass}
+                >
+                  <option value="1">Every 6 hours</option>
+                  <option value="2">Daily</option>
+                  <option value="3">Twice a week</option>
+                  <option value="4">Weekly</option>
+                  <option value="5">Monthly</option>
+                </select>
+              </label>
+              <label className={labelClass}>
+                Target date (optional)
+                <input
+                  type="date"
+                  name="targetDate"
+                  defaultValue={state.values?.targetDate ?? ''}
+                  className={inputClass}
+                />
+              </label>
+            </div>
+            <label className="flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+              <input type="checkbox" name="mirrorToPrimary" className="mt-0.5" />
+              <span>Also show background updates in my main chat.</span>
+            </label>
+          </div>
+        </details>
       </div>
       {state.error ? (
         <p className="mt-2 text-xs text-red-600 dark:text-red-400">{state.error}</p>

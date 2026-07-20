@@ -37,6 +37,14 @@ const statusChipClasses: Record<string, string> = {
   purged: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
 };
 
+const statusLabels: Record<string, string> = {
+  pending: 'Queued',
+  running: 'Importing',
+  done: 'Complete',
+  failed: 'Needs attention',
+  purged: 'Removed',
+};
+
 export function SourceCard({ view }: { view: SourceView }) {
   const [confirming, setConfirming] = useState<'purge' | 'delete' | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -55,29 +63,16 @@ export function SourceCard({ view }: { view: SourceView }) {
         <span
           className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusChipClasses[view.status] ?? statusChipClasses.pending}`}
         >
-          {view.status}
+          {statusLabels[view.status] ?? 'Queued'}
         </span>
       </div>
-      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-        {view.workspacePath} · {view.kind} · {view.updatedLabel}
-        {view.taskId ? (
-          <>
-            {' · '}
-            <Link
-              href={`/tasks/${view.taskId}`}
-              className="underline hover:text-zinc-800 dark:hover:text-zinc-200"
-            >
-              task
-            </Link>
-          </>
-        ) : null}
-      </p>
+      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">{view.updatedLabel}</p>
 
       <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
         {pct !== null
-          ? `${view.itemsProcessed}/${view.itemsTotal} windows (${pct}%)`
-          : 'not started'}
-        {` · ${view.memoriesSaved} memories`}
+          ? `${view.itemsProcessed} of ${view.itemsTotal} sections processed (${pct}%)`
+          : 'Waiting to start'}
+        {` · ${view.memoriesSaved} ${view.memoriesSaved === 1 ? 'memory' : 'memories'} saved`}
         {view.quarantinedNow > 0 ? ` · ${view.quarantinedNow} awaiting review` : ''}
       </p>
       {pct !== null && view.status === 'running' ? (
@@ -89,92 +84,110 @@ export function SourceCard({ view }: { view: SourceView }) {
         <p className="mt-1 text-xs text-red-600 dark:text-red-400">{view.error}</p>
       ) : null}
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        {view.quarantinedNow > 0 ? (
-          <>
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => startTransition(() => reviewSourceAction(view.source, 'approve'))}
-              className={outlineButton}
-              title="Release every quarantined fact from this source into normal memory"
-            >
-              Approve all ({view.quarantinedNow})
-            </button>
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => startTransition(() => reviewSourceAction(view.source, 'reject'))}
-              className={dangerOutlineButton}
-              title="Delete and tombstone every quarantined fact from this source"
-            >
-              Reject all
-            </button>
-          </>
-        ) : null}
-        {rerunnable ? (
+      {view.quarantinedNow > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
           <button
             type="button"
             disabled={pending}
-            onClick={() =>
-              startTransition(async () => {
-                const result = await startImportAction(view.workspacePath, view.source);
-                if (result.error) setError(result.error);
-              })
-            }
+            onClick={() => startTransition(() => reviewSourceAction(view.source, 'approve'))}
             className={outlineButton}
-            title="Re-run this source (already-saved memories are skipped by hash)"
+            title="Release every quarantined fact from this source into normal memory"
           >
-            Re-run
+            Approve all ({view.quarantinedNow})
           </button>
-        ) : null}
-        {confirming ? (
-          <>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => startTransition(() => reviewSourceAction(view.source, 'reject'))}
+            className={dangerOutlineButton}
+            title="Delete and tombstone every quarantined fact from this source"
+          >
+            Reject all
+          </button>
+        </div>
+      ) : null}
+
+      <details className="mt-3 border-t border-zinc-100 pt-3 text-xs dark:border-zinc-900">
+        <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">More actions</summary>
+        <p className="mt-2 text-zinc-500 dark:text-zinc-500">
+          {view.workspacePath} · {view.kind}
+          {view.taskId ? (
+            <>
+              {' · '}
+              <Link
+                href={`/tasks/${view.taskId}`}
+                className="underline hover:text-zinc-800 dark:hover:text-zinc-200"
+              >
+                View task
+              </Link>
+            </>
+          ) : null}
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {rerunnable ? (
             <button
               type="button"
               disabled={pending}
               onClick={() =>
-                startTransition(() =>
-                  confirming === 'purge'
-                    ? purgeSourceAction(view.source)
-                    : deleteSourceAction(view.source),
-                )
+                startTransition(async () => {
+                  const result = await startImportAction(view.workspacePath, view.source);
+                  if (result.error) setError(result.error);
+                })
               }
-              className={dangerButton}
+              className={outlineButton}
+              title="Import this file again; memories already saved are skipped"
             >
-              {confirming === 'purge'
-                ? `Really purge ${view.memoriesSaved} memories`
-                : `Really delete source${view.memoriesSaved > 0 ? ` + ${view.memoriesSaved} memories` : ''}`}
+              Import again
             </button>
-            <button type="button" onClick={() => setConfirming(null)} className={outlineButton}>
-              Cancel
-            </button>
-          </>
-        ) : (
-          <>
-            {view.status !== 'purged' && view.memoriesSaved > 0 ? (
+          ) : null}
+          {confirming ? (
+            <>
               <button
                 type="button"
                 disabled={pending}
-                onClick={() => setConfirming('purge')}
-                className={dangerOutlineButton}
-                title="Remove every memory this source produced, keep the source for re-running"
+                onClick={() =>
+                  startTransition(() =>
+                    confirming === 'purge'
+                      ? purgeSourceAction(view.source)
+                      : deleteSourceAction(view.source),
+                  )
+                }
+                className={dangerButton}
               >
-                Purge
+                {confirming === 'purge'
+                  ? `Remove ${view.memoriesSaved} memories`
+                  : `Delete import${view.memoriesSaved > 0 ? ` and ${view.memoriesSaved} memories` : ''}`}
               </button>
-            ) : null}
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => setConfirming('delete')}
-              className={dangerOutlineButton}
-              title="Remove the source entirely: its memories, the uploaded file, and this entry"
-            >
-              Delete
-            </button>
-          </>
-        )}
-      </div>
+              <button type="button" onClick={() => setConfirming(null)} className={outlineButton}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              {view.status !== 'purged' && view.memoriesSaved > 0 ? (
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => setConfirming('purge')}
+                  className={dangerOutlineButton}
+                  title="Remove the memories from this import but keep its file"
+                >
+                  Remove memories
+                </button>
+              ) : null}
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => setConfirming('delete')}
+                className={dangerOutlineButton}
+                title="Remove this import, its memories, and the uploaded file"
+              >
+                Delete import
+              </button>
+            </>
+          )}
+        </div>
+      </details>
       {error ? <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p> : null}
     </div>
   );

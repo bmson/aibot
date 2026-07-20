@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { createDb } from './client.js';
 import {
   agents,
@@ -30,8 +30,9 @@ const db = createDb(DATABASE_URL);
 
 // ── Agent identity ───────────────────────────────────────────────────────────
 
-// Display identity is seed-owned: renames here propagate to existing rows on
-// re-seed (deploy). The workspace prefix is storage identity — never renamed.
+// The display name is seed-owned, while timezone, locale, and signature are
+// owner-editable settings and must survive the reconciliation run on deploy.
+// The workspace prefix is storage identity — never renamed.
 const AGENT_NAME = 'AI Bot';
 const AGENT_SIGNATURE = "— AI Bot (Baldvin's assistant)";
 
@@ -47,7 +48,7 @@ const [agent] = await db
   })
   .onConflictDoUpdate({
     target: agents.email,
-    set: { name: AGENT_NAME, signature: AGENT_SIGNATURE, updatedAt: sql`now()` },
+    set: { name: AGENT_NAME, updatedAt: sql`now()` },
   })
   .returning();
 
@@ -231,9 +232,18 @@ for (const p of policySeed) {
   const existing = await db
     .select()
     .from(approvalPolicies)
-    .where(eq(approvalPolicies.templateKey, p.templateKey));
+    .where(
+      and(eq(approvalPolicies.agentId, agent.id), eq(approvalPolicies.templateKey, p.templateKey)),
+    );
   if (existing.length === 0) {
     await db.insert(approvalPolicies).values({ ...p, agentId: agent.id, createdVia: 'seed' });
+  } else if (existing[0]?.createdVia === 'seed') {
+    // Seed-owned rules carry environment-derived owner addresses. Reconcile
+    // those values on release without re-enabling a rule the owner paused.
+    await db
+      .update(approvalPolicies)
+      .set({ toolName: p.toolName, match: p.match, effect: p.effect, updatedAt: sql`now()` })
+      .where(eq(approvalPolicies.id, existing[0].id));
   }
 }
 

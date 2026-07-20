@@ -1,5 +1,5 @@
 import { evaluateCanaryHealth } from '@assistant/core';
-import { approvals, canaryRuns, goals, tasks } from '@assistant/db';
+import { approvals, canaryRuns, goals, tasks, toolCalls } from '@assistant/db';
 import { and, asc, desc, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
@@ -43,6 +43,14 @@ const waitingLine: Record<string, string> = {
   waiting_budget: 'Paused until the relevant spending limit resets.',
 };
 
+const canaryLabels: Record<string, string> = {
+  gmail: 'Email',
+  sms: 'Text messaging',
+  browser: 'Browser',
+  approval: 'Approvals',
+  chat: 'Chat',
+};
+
 export default async function DashboardPage() {
   await requireOwner();
   const db = getDb();
@@ -50,9 +58,16 @@ export default async function DashboardPage() {
 
   const dashboardData = await Promise.all([
     db
-      .select({ approval: approvals, taskType: tasks.type, taskTrust: tasks.trust })
+      .select({
+        approval: approvals,
+        taskType: tasks.type,
+        taskTrust: tasks.trust,
+        toolName: toolCalls.toolName,
+        decision: toolCalls.decision,
+      })
       .from(approvals)
       .innerJoin(tasks, eq(approvals.taskId, tasks.id))
+      .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
       .where(eq(approvals.status, 'pending'))
       .orderBy(asc(approvals.requestedAt)),
     db
@@ -113,7 +128,8 @@ export default async function DashboardPage() {
     (latestCanary?.checks ?? {}) as Record<string, { ok?: boolean }>,
   )
     .filter(([, check]) => check.ok === false)
-    .map(([name]) => name);
+    .map(([name]) => canaryLabels[name] ?? name.replaceAll('_', ' '));
+  const showServiceWarning = canaryHealth.state === 'failed' || canaryHealth.state === 'stale';
 
   const needsYou = pendingApprovals.length + attention.length;
 
@@ -144,12 +160,12 @@ export default async function DashboardPage() {
           Ask assistant
         </Link>
       </div>
-      {!canaryHealth.ok ? (
-        <section className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900/60 dark:bg-red-950/20">
-          <h2 className="text-sm font-medium text-red-900 dark:text-red-200">
-            A connection needs attention
+      {showServiceWarning ? (
+        <section className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/20">
+          <h2 className="text-sm font-medium text-amber-950 dark:text-amber-200">
+            An assistant service check needs attention
           </h2>
-          <p className="mt-1 text-xs leading-5 text-red-800 dark:text-red-300">
+          <p className="mt-1 text-xs leading-5 text-amber-900 dark:text-amber-300">
             {canaryHealth.detail}
             {latestCanary?.finishedAt
               ? ` Last checked ${relativeTime(latestCanary.finishedAt, now)}.`
@@ -157,6 +173,7 @@ export default async function DashboardPage() {
             {failedCanaryChecks.length > 0
               ? ` Problem area: ${failedCanaryChecks.join(', ')}.`
               : ''}
+            {' The assistant retries these checks automatically; open Activity if work is failing.'}
           </p>
         </section>
       ) : null}
@@ -166,10 +183,15 @@ export default async function DashboardPage() {
           subtitle="Actions awaiting your sign-off"
           count={pendingApprovals.length}
         >
-          {pendingApprovals.map(({ approval, taskType, taskTrust }) => (
+          {pendingApprovals.map(({ approval, taskType, taskTrust, toolName, decision }) => (
             <ApprovalCard
               key={approval.id}
-              approval={toPendingApprovalView(approval, { type: taskType, trust: taskTrust }, now)}
+              approval={toPendingApprovalView(
+                approval,
+                { type: taskType, trust: taskTrust },
+                { toolName, decision },
+                now,
+              )}
             />
           ))}
         </Section>

@@ -12,9 +12,37 @@ export interface PendingApprovalView {
   requestedLabel: string;
   expiresLabel: string;
   provenance: string;
+  reason: string;
+  rememberLabel: string | null;
   taskId: string;
   /** Set when the voice-rewrite pipeline failed its fact-preservation check. */
   voiceFlag: string | null;
+}
+
+function approvalReason(decision: unknown): string {
+  const reason =
+    decision && typeof decision === 'object' && !Array.isArray(decision)
+      ? (decision as { reason?: unknown }).reason
+      : undefined;
+  if (typeof reason === 'string' && reason.includes('untrusted content')) {
+    return 'This request used information from outside the assistant. Confirm the final action before it crosses a trust boundary.';
+  }
+  if (typeof reason === 'string' && reason.includes('policy')) {
+    return 'A standing approval rule applies to this action.';
+  }
+  return 'This action can affect someone or something outside the assistant’s private workspace.';
+}
+
+function rememberLabel(toolName: string, payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  if (toolName === 'gmail.send') {
+    const to = (payload as { to?: unknown }).to;
+    const recipients = Array.isArray(to)
+      ? to.filter((item): item is string => typeof item === 'string')
+      : [];
+    if (recipients.length === 1) return `Approve and always allow email to ${recipients[0]}`;
+  }
+  return null;
 }
 
 /** Internal workflow names are useful to engineers, not to the person using the assistant. */
@@ -76,6 +104,7 @@ function extractVoiceFlag(payload: unknown): string | null {
 export function toPendingApprovalView(
   approval: ApprovalRow,
   task: Pick<TaskRow, 'type' | 'trust'>,
+  toolCall: { toolName: string; decision: unknown },
   now: Date = new Date(),
 ): PendingApprovalView {
   return {
@@ -86,6 +115,8 @@ export function toPendingApprovalView(
     requestedLabel: `requested ${relativeTime(approval.requestedAt, now)} (${formatDateTime(approval.requestedAt)})`,
     expiresLabel: `expires ${relativeTime(approval.expiresAt, now)} (${formatDateTime(approval.expiresAt)})`,
     provenance: `${taskTypeLabel(task.type)} · requested by ${trustLabel(task.trust)}`,
+    reason: approvalReason(toolCall.decision),
+    rememberLabel: rememberLabel(toolCall.toolName, approval.payload),
     taskId: approval.taskId,
     voiceFlag: extractVoiceFlag(approval.payload),
   };

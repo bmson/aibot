@@ -138,7 +138,7 @@ export default async function GoalsPage({
           intro={
             archived
               ? 'Archived goals keep their work chats, tasks, and evidence. Restore one whenever you want to continue.'
-              : 'A goal is an outcome you want to move forward. It starts work now, then continues automatically on the pace you choose. Use its work chat to guide each run.'
+              : 'Give the assistant an outcome to keep moving forward. Each goal has its own chat for updates and direction.'
           }
         />
         <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -153,11 +153,20 @@ export default async function GoalsPage({
                   Archived ({archivedCount})
                 </Link>
               ) : null}
-              <form action={archiveInactiveGoals}>
-                <button type="submit" className={btn.outline}>
-                  Archive finished goals (30+ days)
-                </button>
-              </form>
+              <details className="relative">
+                <summary className={`${btn.outline} cursor-pointer list-none`}>More</summary>
+                <form
+                  action={archiveInactiveGoals}
+                  className="absolute top-full right-0 z-10 mt-2 w-64 rounded-lg border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-800 dark:bg-zinc-950"
+                >
+                  <button type="submit" className={`${btn.outline} w-full`}>
+                    Archive old finished goals
+                  </button>
+                  <p className="mt-2 px-1 text-xs text-zinc-500">
+                    Hides goals finished more than 30 days ago. Their history is kept.
+                  </p>
+                </form>
+              </details>
             </>
           )}
         </div>

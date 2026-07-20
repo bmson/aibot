@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { consolidateNow, recompileCard } from '@/app/profile/actions';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { requireOwner } from '@/auth';
-import { formatDateTime, relativeTime } from '@/lib/format';
+import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import { btn, countBadgeClass, PageHeader, summaryClass } from '@/lib/ui';
 
@@ -150,14 +150,14 @@ export default async function ProfilePage() {
         </section>
       ) : null}
 
-      {/* Owner card — open by default: it IS the pre-context, and it's small now */}
+      {/* The compiled chat context is useful for auditing, but secondary to the facts themselves. */}
       <section className="mt-8">
-        <details open>
+        <details>
           <summary className={summaryClass}>
-            Used to help in chat
+            Quick context used in chat
             <span className={countBadge}>{pinnedCount} pinned</span>
             <span className="text-xs font-normal text-zinc-500 dark:text-zinc-500">
-              {card ? `updated ${formatDateTime(card.compiledAt)} UTC` : 'not prepared yet'}
+              {card ? `refreshed ${relativeTime(card.compiledAt, now)}` : 'not prepared yet'}
             </span>
           </summary>
           {card?.content ? (
@@ -195,7 +195,7 @@ export default async function ProfilePage() {
       <section className="mt-8">
         <details>
           <summary className={summaryClass}>
-            All saved details about {owner?.name ?? 'you'}
+            Details about {owner?.name ?? 'you'}
             <span className={countBadge}>{ownerFacts.length} facts</span>
             <span className="text-xs font-normal text-zinc-500 dark:text-zinc-500">
               Open when you need to edit or verify something.
