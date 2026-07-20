@@ -151,7 +151,7 @@ function router(options: { updateTracker: boolean; finalText: string }): ModelRo
         };
       }
       if (options.updateTracker && !transcript.includes('"writtenRows":1')) {
-        if (transcript.includes('"denied":true')) {
+        if (transcript.includes('"denied":true') || transcript.includes('tracker unavailable')) {
           return {
             ok: true,
             modelId: 'fake/model',
@@ -174,7 +174,7 @@ function router(options: { updateTracker: boolean; finalText: string }): ModelRo
   return fake as unknown as ModelRouter;
 }
 
-function workflowHarness() {
+function workflowHarness(options: { trackerError?: string } = {}) {
   const launches: BrowserJobLaunchInput[] = [];
   const writes: Array<{ path: string; bytes: Buffer; contentType: string }> = [];
   const googleApi = vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -188,6 +188,7 @@ function workflowHarness() {
     }
     if (url.includes('/spreadsheets/tracker_1234567890/values/')) {
       if (init.method !== 'PUT') throw new Error('tracker update must use PUT');
+      if (options.trackerError) throw new Error(options.trackerError);
       return {};
     }
     throw new Error(`unexpected Google API call: ${url}`);
@@ -257,7 +258,7 @@ afterAll(async () => {
 });
 
 describe('complex job application workflow (integration, scripted model)', () => {
-  it('carries context through Drive, two approvals, a browser callback, and a tracker update', async (ctx) => {
+  it('carries context through Drive, browser approval, callback, and autonomous tracker update', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const harness = workflowHarness();
     const { task } = await enqueueTask(db, { event: event(), type: 'adhoc', maxSteps: 12 });
@@ -326,31 +327,6 @@ describe('complex job application workflow (integration, scripted model)', () =>
     });
     expect(callback.ok).toBe(true);
 
-    const trackerPark = await executeTask(
-      {
-        db,
-        router: router({
-          updateTracker: true,
-          finalText:
-            'I submitted the application after the portal confirmed it, and updated the Google Sheet.',
-        }),
-        dispatcher: harness.dispatcher,
-      },
-      task.id,
-    );
-    expect(trackerPark.outcome).toBe('parked');
-    const trackerApproval = await pendingApproval(task.id);
-    expect(trackerApproval?.toolName).toBe('sheets.write_rows');
-    expect(trackerApproval?.approval.payload).toMatchObject({
-      spreadsheetId: 'tracker_1234567890',
-      startCell: 'A7',
-    });
-    await resolveApproval(db, {
-      approvalId: trackerApproval?.approval.id,
-      decision: 'approved',
-      via: 'web',
-    });
-
     const finished = await executeTask(
       {
         db,
@@ -364,6 +340,7 @@ describe('complex job application workflow (integration, scripted model)', () =>
       task.id,
     );
     expect(finished.outcome).toBe('done');
+    expect(await pendingApproval(task.id)).toBeUndefined();
 
     const [finalTask] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(finalTask?.progress).toContain('submitted the application');
@@ -440,13 +417,13 @@ describe('complex job application workflow (integration, scripted model)', () =>
     expect(finalTask?.progress).not.toContain('successfully');
   });
 
-  it('reports partial success when submission is confirmed but the tracker update is denied', async (ctx) => {
+  it('reports partial success when submission is confirmed but the tracker update fails', async (ctx) => {
     if (!dbUp) return ctx.skip();
-    const harness = workflowHarness();
+    const harness = workflowHarness({ trackerError: 'tracker unavailable' });
     const scriptedRouter = router({
       updateTracker: true,
       finalText:
-        'The portal confirmed the application submission. I did not update the Google Sheet because you denied that action.',
+        'The portal confirmed the application submission. I could not update the Google Sheet because the tracker was unavailable.',
     });
     const { task } = await enqueueTask(db, { event: event(), type: 'adhoc', maxSteps: 12 });
     createdTaskIds.push(task.id);
@@ -486,29 +463,17 @@ describe('complex job application workflow (integration, scripted model)', () =>
     expect(
       (await executeTask({ db, router: scriptedRouter, dispatcher: harness.dispatcher }, task.id))
         .outcome,
-    ).toBe('parked');
-    const trackerApproval = await pendingApproval(task.id);
-    expect(trackerApproval?.toolName).toBe('sheets.write_rows');
-    await resolveApproval(db, {
-      approvalId: trackerApproval?.approval.id,
-      decision: 'denied',
-      via: 'web',
-    });
-
-    expect(
-      (await executeTask({ db, router: scriptedRouter, dispatcher: harness.dispatcher }, task.id))
-        .outcome,
     ).toBe('done');
     const [finalTask] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(finalTask?.progress).toContain('portal confirmed');
-    expect(finalTask?.progress).toContain('denied that action');
+    expect(finalTask?.progress).toContain('tracker was unavailable');
     const calls = await db.select().from(toolCalls).where(eq(toolCalls.taskId, task.id));
     expect(calls.find((call) => call.toolName === 'browser.execute')?.status).toBe('succeeded');
-    expect(calls.find((call) => call.toolName === 'sheets.write_rows')?.status).toBe('denied');
+    expect(calls.find((call) => call.toolName === 'sheets.write_rows')?.status).toBe('failed');
     expect(
       harness.googleApi.mock.calls.some(([url]) =>
         String(url).includes('/spreadsheets/tracker_1234567890/values/'),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
