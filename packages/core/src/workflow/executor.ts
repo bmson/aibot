@@ -1,7 +1,7 @@
 import type { Db, TaskRow } from '@assistant/db';
 import { approvals, goals, messages, tasks, toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { ZodType } from 'zod';
 import { type BrowserJobPendingResult, hashCallbackToken, isBrowserJobPending } from '../browse.js';
 import {
@@ -61,7 +61,6 @@ import { type ActionEvidence, enforceResponseContract } from './response-contrac
 export interface DispatcherPort {
   toolDefs(
     trust: Trust,
-    tainted?: boolean,
     scope?: { isMissionSession: boolean },
   ): Array<{ name: string; description: string; inputSchema: ZodType }>;
   resultIsUntrusted(toolName: string): boolean;
@@ -318,6 +317,21 @@ function channelContext(task: TaskRow): string {
     case 'chat_turn':
       return "\nThis task came from the owner's dashboard chat; your final text appears there as your reply.";
     default:
+      if (task.goalId) {
+        // Nobody is reading this live, so a message describing what you intend
+        // to do reaches no one and changes nothing. Only a tool result does.
+        return [
+          "\nThis is a goal's automatic work session. The owner is NOT present and will not answer during this run.",
+          'Do the work now with your tools — do not describe a plan, promise to report back, or ask a question you could answer yourself by looking.',
+          'Everything you know about this goal is already in this prompt. Do NOT re-read your own state: goals.list, memory.recall, conversations.search and workspace.* tell you nothing new here.',
+          // Not a style preference — the provenance rule below makes call order
+          // decide whether this session can act at all.
+          'ORDER MATTERS. Reading anything marks this session as carrying untrusted content, and from that point on every outward call needs the owner to approve it by hand — which, with nobody present, means the session stops. So spend your FIRST tool call on the outward step that moves the goal: browser.plan, then browser.execute (or web.fetch for a plain page). Any lookup you do first permanently costs you the ability to browse this run.',
+          'You get one autonomous outward action, so make it count. browser.plan is free — it only plans. Your ONE outward call comes after it, and it must do the entire job: a single read-only browser.execute plan that searches, opens the promising results, and extracts everything you need. Do not spend that one action on a preliminary web.fetch to see what is there; if you would need several pages, ask browser.plan for a headless plan covering all of them.',
+          'Not knowing a URL is not a blocker: start from a search results page and navigate from there.',
+          'Finish by calling goals.update_progress with what you verified and the concrete next step.',
+        ].join('\n');
+      }
       return '';
   }
 }
@@ -471,9 +485,32 @@ async function stageFinalResponse(
 }
 
 /**
+ * Deferred work is only real once a durable row exists. Left to prose the
+ * model answers "I'll keep updating it as I go" — a promise nothing in the
+ * system will keep, and which the response contract then has to blank out.
+ */
+const SCHEDULE_DIRECTIVE =
+  '\nThis turn defers work to the future. Before you finish, call task.schedule with a concrete time and a self-contained instruction (or mission.update if this belongs to a mission). Do not promise to continue, watch, or keep updating anything unless that call succeeded — if you cannot schedule it, say so plainly and do the part you can do now.';
+
+const EVIDENCE_COLUMNS = {
+  toolName: toolCalls.toolName,
+  status: toolCalls.status,
+  result: toolCalls.result,
+  error: toolCalls.error,
+} as const;
+
+/**
  * The prose model is never the evidence source for an external action. Query
  * the durable ledger immediately before publishing a free-form final answer;
  * this also covers tool failures that were visible to the model but ignored.
+ *
+ * Two scopes: this task's rows decide whether *this* attempt succeeded, and
+ * earlier rows from the same conversation let the contract recognise
+ * artifacts that genuinely exist. Without the second scope, referring back to
+ * a doc built two turns ago was answered with "I have not created anything
+ * outside this chat" — a flat falsehood with the doc sitting in Drive. The
+ * response contract still refuses to let prior-turn rows authorise a new
+ * send, submission, or booking.
  */
 async function stageModelFinalResponse(
   deps: ExecutorDeps,
@@ -484,15 +521,22 @@ async function stageModelFinalResponse(
   expectedArtifact?: ArtifactIntent,
 ): Promise<ExecuteResult> {
   const rows = await deps.db
-    .select({
-      toolName: toolCalls.toolName,
-      status: toolCalls.status,
-      result: toolCalls.result,
-      error: toolCalls.error,
-    })
+    .select(EVIDENCE_COLUMNS)
     .from(toolCalls)
     .where(eq(toolCalls.taskId, task.id));
-  const evidence: ActionEvidence[] = rows;
+  const priorRows = task.conversationId
+    ? await deps.db
+        .select(EVIDENCE_COLUMNS)
+        .from(toolCalls)
+        .innerJoin(tasks, eq(toolCalls.taskId, tasks.id))
+        .where(
+          and(eq(tasks.conversationId, task.conversationId), ne(toolCalls.taskId, task.id)),
+        )
+    : [];
+  const evidence: ActionEvidence[] = [
+    ...priorRows.map((row) => ({ ...row, fromCurrentTask: false })),
+    ...rows,
+  ];
   const explicitFailure = expectedArtifact
     ? artifactExecutionFailure(expectedArtifact, rows)
     : undefined;
@@ -667,8 +711,29 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   const state = taskState(task);
   if (state.pendingFinal) return finalizePendingResponse(deps, lease, state.pendingFinal, state);
 
-  const triggerSource = (task.trigger as { source?: unknown } | null)?.source;
-  if (task.trust === 'known' || task.trust === 'unknown' || triggerSource === 'email') {
+  const trigger = task.trigger as
+    | { source?: unknown; payload?: { quotesExternalContent?: unknown } }
+    | null;
+  const triggerSource = trigger?.source;
+  // Email is presumed to carry third-party content, because forwarded threads
+  // and quoted replies are exactly how attacker-controlled text gets inside an
+  // owner-authenticated message. The presumption is dropped only when ingestion
+  // positively determined otherwise: a DKIM-verified owner sender (see
+  // classifySender — owner trust cannot be reached without aligned
+  // SPF/DKIM/DMARC) whose body carries no forward separator or quoted block. In
+  // that case every word is the owner's own, which is no more untrusted than the
+  // same words typed into the web chat — a channel that is never tainted.
+  // Anything else stays tainted, including a missing flag on tasks enqueued
+  // before this check existed.
+  const ownerAuthoredEmail =
+    triggerSource === 'email' &&
+    task.trust === 'owner' &&
+    trigger?.payload?.quotesExternalContent === false;
+  if (
+    task.trust === 'known' ||
+    task.trust === 'unknown' ||
+    (triggerSource === 'email' && !ownerAuthoredEmail)
+  ) {
     state.untrustedContext = true;
   }
 
@@ -1200,7 +1265,11 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     }
   }
 
-  const role = ROLE_FOR_TYPE[task.type] ?? 'draft';
+  // A goal's automatic session is the same class of work as a mission:
+  // unattended, multi-step, and worthless unless it actually drives tools.
+  // The draft model answers these with plausible prose and no tool calls,
+  // which is how a goal can report progress for days while doing nothing.
+  const role = isUnattendedGoalSession(task) ? 'reason' : (ROLE_FOR_TYPE[task.type] ?? 'draft');
   const privilegedTask = task.trust === 'owner' || task.trust === 'assistant';
   const ownerCard = privilegedTask && !state.untrustedContext ? await getOwnerCard(db) : undefined;
 
@@ -1259,15 +1328,17 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       buildSystemPrompt(agent, {
         ownerCard: !state.untrustedContext ? ownerCard : undefined,
         recall: !state.untrustedContext ? recallBlock : undefined,
+        tainted: state.untrustedContext,
       }),
       channelContext(task),
       plan
         ? `\nCurrent plan (follow it; deviate only with good reason):\n${JSON.stringify(plan)}`
         : '',
+      plan?.action === 'schedule' ? SCHEDULE_DIRECTIVE : '',
     ]
       .filter(Boolean)
       .join('\n');
-    const toolDefs = dispatcher.toolDefs(task.trust as Trust, state.untrustedContext, {
+    const toolDefs = dispatcher.toolDefs(task.trust as Trust, {
       isMissionSession: task.type === 'adhoc' && task.parentTaskId !== null,
     });
     const toolSet = Object.fromEntries(
@@ -1288,12 +1359,22 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       });
     }
 
+    // An unattended goal session opens by acting, not by talking. Prose on the
+    // first step is how these runs end up with nothing done, so the first step
+    // must produce a tool call; later steps are free to conclude in prose once
+    // there is a real result to report.
+    const mustAct = !forcedArtifact && isUnattendedGoalSession(task) && state.step === 0;
+
     let stepResult = await router.step(role, {
       taskId: task.id,
       system,
       messages: window,
       tools: toolSet as never,
-      toolChoice: forcedArtifact ? { type: 'tool', toolName: forcedArtifact.toolName } : undefined,
+      toolChoice: forcedArtifact
+        ? { type: 'tool', toolName: forcedArtifact.toolName }
+        : mustAct
+          ? 'required'
+          : undefined,
       // The primary chat model has intermittently timed out when a named tool
       // is mandatory. Use the role's configured tool-capable fallback for this
       // narrow, deterministic request.

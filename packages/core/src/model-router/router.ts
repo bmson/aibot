@@ -67,6 +67,52 @@ export interface CallOptions {
 /** The small tool-choice surface the workflow needs from the AI SDK. */
 export type StepToolChoice = 'auto' | 'none' | 'required' | { type: 'tool'; toolName: string };
 
+/**
+ * Providers that enforce OpenAI's function-name pattern (^[a-zA-Z0-9_-]{1,128}$)
+ * reject this project's dotted tool names outright — the request fails before
+ * the model ever sees the tools, which looks identical to a model that simply
+ * declined to call anything. Swap dots for underscores on the wire and undo it
+ * on the way back, so only the provider sees the encoded form.
+ */
+export function encodeToolNames(tools: ToolSet): {
+  encoded: ToolSet;
+  decode: (name: string) => string;
+} {
+  const canonical = new Map<string, string>();
+  const encoded: ToolSet = {};
+  for (const [name, definition] of Object.entries(tools)) {
+    const wireName = name.replace(/\./g, '_');
+    const collision = canonical.get(wireName);
+    if (collision && collision !== name) {
+      throw new Error(`tool names "${collision}" and "${name}" both encode to "${wireName}"`);
+    }
+    canonical.set(wireName, name);
+    encoded[wireName] = definition;
+  }
+  return { encoded, decode: (name) => canonical.get(name) ?? name };
+}
+
+/**
+ * The checkpointed context window records canonical tool names in its
+ * tool-call/tool-result parts. Those names are replayed to the provider on
+ * every later step, so they need the same wire encoding as the tool defs —
+ * otherwise a task calls a tool successfully on step 0 and then fails on
+ * step 1 when its own history is rejected.
+ */
+function encodeMessageToolNames(messages: ModelMessage[]): ModelMessage[] {
+  return messages.map((message) => {
+    if (!Array.isArray(message.content)) return message;
+    return {
+      ...message,
+      content: message.content.map((part) =>
+        part && typeof part === 'object' && 'toolName' in part && typeof part.toolName === 'string'
+          ? { ...part, toolName: part.toolName.replace(/\./g, '_') }
+          : part,
+      ),
+    } as ModelMessage;
+  });
+}
+
 export type GenerateOutcome =
   | { ok: false; decision: Extract<BudgetDecision, { mode: 'park' | 'block' }> }
   | { ok: true; modelId: string; degraded: boolean; text: string; finishReason?: string };
@@ -535,6 +581,13 @@ export class ModelRouter {
   /**
    * One executor step: tools are passed WITHOUT execute functions, so the SDK
    * returns unexecuted tool calls — exactly what the risk gate needs.
+   *
+   * Tool names are wire-encoded here (see encodeToolNames): this project names
+   * tools 'web.fetch', but several providers enforce the OpenAI function-name
+   * pattern, which forbids dots and rejects the whole request. Encoding at the
+   * model boundary keeps canonical dotted names everywhere else — the risk
+   * gate, approvals, tool_calls rows and the response contract all still see
+   * 'web.fetch'.
    */
   async step(
     role: ModelRole,
@@ -550,15 +603,24 @@ export class ModelRouter {
     );
     if (!reservation.ok) return { ok: false, decision: reservationDecision(reservation.reason) };
 
+    const { encoded, decode } = encodeToolNames(opts.tools);
+    const toolChoice =
+      opts.toolChoice && typeof opts.toolChoice === 'object'
+        ? { ...opts.toolChoice, toolName: opts.toolChoice.toolName.replace(/\./g, '_') }
+        : opts.toolChoice;
+
     const started = Date.now();
     try {
       return await withSpan('model.step', { role, model: route.modelId }, async () => {
         const result = await generateText({
           model: route.model,
           system: opts.system,
-          ...promptArgs(opts),
-          tools: opts.tools,
-          toolChoice: opts.toolChoice as never,
+          ...promptArgs({
+            ...opts,
+            messages: opts.messages ? encodeMessageToolNames(opts.messages) : undefined,
+          }),
+          tools: encoded,
+          toolChoice: toolChoice as never,
           temperature: opts.temperature ?? (route.params.temperature as number | undefined),
           maxOutputTokens,
           providerOptions,
@@ -576,7 +638,7 @@ export class ModelRouter {
         });
         const toolCalls: ProposedToolCall[] = result.toolCalls.map((tc) => ({
           toolCallId: tc.toolCallId,
-          toolName: tc.toolName,
+          toolName: decode(tc.toolName),
           input: (tc.input ?? {}) as Record<string, unknown>,
         }));
         return {

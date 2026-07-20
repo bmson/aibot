@@ -18,6 +18,15 @@ import { enqueueTask, type TaskType } from './machine.js';
 const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'];
 const GOAL_SCHEDULE_PREFIX = 'goal:';
 
+/**
+ * A goal session is not a chat turn and cannot live on the chat-turn default.
+ * It runs the reasoning model over several steps and often launches a browser
+ * job, whose worst-case runtime alone reserves ~$0.17 up front — under the old
+ * $0.25 the session reliably died at the moment it first tried to do real work.
+ * The daily and monthly ceilings still bound total spend.
+ */
+const GOAL_SESSION_BUDGET_USD = '0.75';
+
 export interface GoalAutomationCadence {
   cron: string;
   label: string;
@@ -245,7 +254,7 @@ export async function ensureGoalAutomation(
     type: 'scheduled',
     goalId: goal.id,
     conversationId,
-    budgetUsdLimit: '0.25',
+    budgetUsdLimit: GOAL_SESSION_BUDGET_USD,
     maxSteps: 12,
     instruction: goalInstruction(goal),
   };

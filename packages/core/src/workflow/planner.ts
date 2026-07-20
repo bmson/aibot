@@ -7,7 +7,7 @@ import { type Plan, PlanSchema } from '../events.js';
 import type { ModelRouter } from '../model-router/router.js';
 
 /** Bump whenever planner prompting changes behavior — recorded in tool_calls.decision. */
-export const PLANNER_VERSION = 2;
+export const PLANNER_VERSION = 3;
 
 const PLANNER_CONTEXT_LIMIT = 6000;
 
@@ -52,7 +52,15 @@ function plannerSystem(agent: AgentRow): string {
     "- 'clarify': you cannot act without more information from the owner — list missingInfo",
     'Never ask for something the owner already answered earlier in the context, and never re-ask a question you already asked. Re-read the conversation for the answer before choosing clarify.',
     'Prefer acting on a reasonable default over asking. Choose clarify only when a wrong guess would be costly or irreversible.',
-    'Keep steps short and concrete. Note what information is missing. Do not invent goals.',
+    'Keep steps short and concrete. Do not invent goals.',
+    // A "keep doing X as you go" request has no executable step *now*, so
+    // planning it as a workflow produced steps that were really intentions
+    // ("populate the doc as information becomes available"). Nothing ran, the
+    // model narrated the intention as if it were in motion, and the response
+    // contract had to blank the reply. Deferred work needs a durable carrier.
+    "Every step must be executable NOW with an available tool. A step that waits for something, runs 'as information becomes available', or promises to notify later is not executable — it is deferred work.",
+    "If the request is to keep doing something as you go, continue later, watch for something, or update something over time, choose 'schedule' for a bounded follow-up or 'mission' for open-ended work. Never express deferred work as 'workflow' steps.",
+    'Note what information is missing.',
   ].join('\n');
 }
 

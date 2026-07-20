@@ -150,6 +150,13 @@ Escalation ladder — always pick the CHEAPEST rung that can do the job:
 4. "headless" — the page needs JavaScript rendering or multi-step navigation; produce explicit steps.
 5. "visual" — DOM extraction won't work (canvas, anti-bot layouts); steps ending in screenshots. Last resort.
 
+Not knowing the target URL is never a reason to refuse. When the goal names what to find but not where,
+start from a search engine results page (e.g. https://duckduckgo.com/html/?q=<url-encoded query>) and follow
+it to the real source; prefer a site's own listing/API page once you know which site it is.
+Put the query in the URL rather than typing into a search box: an interactive step (click/type/select/press)
+turns the whole plan into something the owner must approve by hand, so a plan that only navigates and extracts
+is the difference between work that happens now and work that waits. Chain several goto/extract pairs in one
+read-only plan instead of reaching for a click.
 For rungs 1–3: set fetchSuggestion and leave steps empty — the caller will use its web.fetch tool.
 For rungs 4–5: write the complete, explicit step list. Selectors should be robust (prefer text= or aria labels
 over brittle CSS chains). Every step gets a short "note" saying why. Never include credentials or payment data
@@ -160,8 +167,17 @@ For a file upload, first obtain the exact Workspace path with drive.download, th
 in an upload step with a file-input selector. Uploads always require owner approval and must be followed by a clear
 confirmation extract; never guess that a form was submitted.
 Set useProfile=true only when the goal explicitly requires an existing authenticated session; otherwise keep it false.
+For research and discovery, prefer sources that are readable signed-out, and avoid sites that gate content behind a
+login or whose terms forbid automated access (LinkedIn in particular). There is almost always a public equivalent —
+a company's own careers page, a public job board, an RSS feed, a documented JSON endpoint — and it is both more
+reliable to parse and cheaper to reach. Needing useProfile for a research goal is a sign the wrong source was chosen.
 Keep plans short: one goto, a waitFor, then extract what's needed.`;
 
+// NOTE: authoring these with the 'reason' role produces better (read-only,
+// query-in-URL) plans, but that role's provider rejects this schema —
+// "For 'array' type, property 'maxItems' is not supported" — so it stays on
+// 'plan' until the schema emits without maxItems. See LADDER_PROMPT above,
+// which carries the read-only guidance the cheaper model needs spelled out.
 export async function planBrowse(
   router: ModelRouter,
   input: { goal: string; context?: string; taskId?: string },
