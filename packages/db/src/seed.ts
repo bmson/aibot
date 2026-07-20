@@ -16,6 +16,7 @@ import {
   schedules,
   voiceProfile,
 } from './schema.js';
+import { resolveOwnerPolicyValues } from './seed-values.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const envFile = path.join(repoRoot, '.env');
@@ -188,16 +189,23 @@ for (const r of rateLimitSeed) {
 
 // ── Owner contact ────────────────────────────────────────────────────────────
 
-const existingOwner = await db.select().from(contacts).where(eq(contacts.trust, 'owner'));
-if (existingOwner.length === 0) {
-  await db.insert(contacts).values({
-    name: 'Baldvin',
-    emails: [OWNER_EMAIL],
-    phones: OWNER_PHONE ? [OWNER_PHONE] : [],
-    relationship: 'owner',
-    trust: 'owner',
-  });
+let [ownerContact] = await db.select().from(contacts).where(eq(contacts.trust, 'owner')).limit(1);
+if (!ownerContact) {
+  [ownerContact] = await db
+    .insert(contacts)
+    .values({
+      name: 'Baldvin',
+      emails: [OWNER_EMAIL],
+      phones: OWNER_PHONE ? [OWNER_PHONE] : [],
+      relationship: 'owner',
+      trust: 'owner',
+    })
+    .returning();
 }
+const ownerPolicyValues = resolveOwnerPolicyValues(ownerContact, {
+  email: OWNER_EMAIL,
+  phone: OWNER_PHONE,
+});
 
 // ── Voice profile singleton ──────────────────────────────────────────────────
 
@@ -209,7 +217,7 @@ const policySeed = [
   {
     toolName: 'sms.send',
     templateKey: 'sms.reply_to_owner',
-    match: { phone: OWNER_PHONE },
+    match: { phone: ownerPolicyValues.phone },
     effect: 'allow',
   },
   {
@@ -223,7 +231,7 @@ const policySeed = [
   {
     toolName: 'calendar.create_event',
     templateKey: 'calendar.owner_attendee_only',
-    match: { emails: [OWNER_EMAIL] },
+    match: { emails: ownerPolicyValues.emails },
     effect: 'allow',
   },
 ] as const;

@@ -18,3 +18,25 @@ const GOAL_BOOKKEEPING_TOOLS = new Set([
 export function isGoalWorkEvidenceTool(toolName: string): boolean {
   return !GOAL_BOOKKEEPING_TOOLS.has(toolName);
 }
+
+export interface GoalToolEvidence {
+  toolName: string;
+  status: string;
+  result: unknown;
+}
+
+/** Database success is not enough when a tool reports failure in its result payload. */
+export function isGoalWorkEvidence(evidence: GoalToolEvidence): boolean {
+  if (evidence.status !== 'succeeded' || !isGoalWorkEvidenceTool(evidence.toolName)) return false;
+  if (!evidence.result || typeof evidence.result !== 'object') return true;
+  const result = evidence.result as Record<string, unknown>;
+  return (
+    result.ok !== false &&
+    !(typeof result.status === 'number' && result.status >= 400) &&
+    result.deliveryStatus !== 'unknown'
+  );
+}
+
+export function needsGoalProgressToolRetry(toolCalls: Array<{ toolName: string }>): boolean {
+  return !toolCalls.some((toolCall) => toolCall.toolName === 'goals.update_progress');
+}

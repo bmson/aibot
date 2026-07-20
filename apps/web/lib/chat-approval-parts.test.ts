@@ -5,9 +5,17 @@ import { withApprovalStatuses } from './chat-approval-parts';
 
 describe('withApprovalStatuses', () => {
   it('hydrates custom approval parts with one batched status query', async () => {
-    const where = vi
-      .fn()
-      .mockResolvedValue([{ id: '11111111-1111-4111-8111-111111111111', status: 'approved' }]);
+    const where = vi.fn().mockResolvedValue([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        status: 'approved',
+        payload: {
+          to: ['owner@example.com'],
+          subject: 'Trip details',
+          body: 'The exact message body.',
+        },
+      },
+    ]);
     const from = vi.fn(() => ({ where }));
     const select = vi.fn(() => ({ from }));
     const db = { select } as unknown as Db;
@@ -38,7 +46,15 @@ describe('withApprovalStatuses', () => {
     expect(select).toHaveBeenCalledTimes(1);
     expect(hydrated[0]?.parts).toMatchObject([
       { type: 'text', text: 'Please review this.' },
-      { type: 'approval', status: 'approved' },
+      {
+        type: 'approval',
+        status: 'approved',
+        details: [
+          { label: 'To', value: 'owner@example.com' },
+          { label: 'Subject', value: 'Trip details' },
+          { label: 'Body', value: 'The exact message body.' },
+        ],
+      },
       { type: 'approval', status: 'missing' },
     ]);
   });

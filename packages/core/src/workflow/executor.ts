@@ -37,7 +37,7 @@ import {
   requestedArtifactIntent,
   requestedDocumentReadIntent,
 } from './artifact-intent.js';
-import { isGoalWorkEvidenceTool } from './goal-evidence.js';
+import { isGoalWorkEvidence, needsGoalProgressToolRetry } from './goal-evidence.js';
 import {
   checkpointTask,
   claimTask,
@@ -570,10 +570,7 @@ async function stageModelFinalResponse(
   // An automatic goal session that produced no verified tool result did no
   // work, whatever its prose says. Surfacing it as needs_attention is what
   // turns a goal that is quietly spinning into one the owner can see is stuck.
-  if (
-    isUnattendedGoalSession(task) &&
-    !rows.some((row) => row.status === 'succeeded' && isGoalWorkEvidenceTool(row.toolName))
-  ) {
+  if (isUnattendedGoalSession(task) && !rows.some(isGoalWorkEvidence)) {
     if (task.goalId) await recordGoalBlocked(deps.db, task.goalId, text);
     await notifyOwnerAndConversation(
       deps,
@@ -1288,15 +1285,21 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
 
   // ── Step loop ─────────────────────────────────────────────────────────────
   while (state.step < task.maxSteps) {
-    const successfulGoalTools = isUnattendedGoalSession(task)
+    const goalToolEvidence = isUnattendedGoalSession(task)
       ? await db
-          .select({ toolName: toolCalls.toolName })
+          .select({
+            toolName: toolCalls.toolName,
+            status: toolCalls.status,
+            result: toolCalls.result,
+          })
           .from(toolCalls)
-          .where(and(eq(toolCalls.taskId, task.id), eq(toolCalls.status, 'succeeded')))
+          .where(eq(toolCalls.taskId, task.id))
       : [];
     const mustRecordGoalProgress =
-      successfulGoalTools.some((row) => isGoalWorkEvidenceTool(row.toolName)) &&
-      !successfulGoalTools.some((row) => row.toolName === 'goals.update_progress');
+      goalToolEvidence.some(isGoalWorkEvidence) &&
+      !goalToolEvidence.some(
+        (row) => row.toolName === 'goals.update_progress' && row.status === 'succeeded',
+      );
     // Rebuild the system prompt after each tool turn. Once an external result
     // taints the context, the private owner card is removed from every later
     // model call instead of lingering in a constant system prompt.
@@ -1401,6 +1404,45 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
           progress: text.slice(0, 200),
           terminalStatus: 'failed',
           outcome: 'failed',
+        });
+      }
+    }
+
+    // Named tool choice is advisory for some providers. A verified goal step
+    // must not finish in prose while leaving the goal's durable progress stale.
+    if (
+      stepResult.ok &&
+      mustRecordGoalProgress &&
+      needsGoalProgressToolRetry(stepResult.toolCalls)
+    ) {
+      console.warn('retrying missing required goal progress tool call', { taskId: task.id });
+      stepResult = await router.step(role, {
+        taskId: task.id,
+        system: `${system}\n\nCall goals.update_progress now. Use only the completed tool evidence, and do not answer with prose until that tool call has been emitted.`,
+        messages: window,
+        tools: toolSet as never,
+        toolChoice: { type: 'tool', toolName: 'goals.update_progress' },
+        forceFallback: true,
+        maxOutputTokens: 256,
+        critical,
+      });
+      if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+
+      if (stepResult.ok && needsGoalProgressToolRetry(stepResult.toolCalls)) {
+        const text =
+          "I completed a verified goal step, but I couldn't save the progress update. Open Activity and retry this task so the goal does not continue from stale information.";
+        if (task.goalId) await recordGoalBlocked(db, task.goalId, text);
+        await notifyOwnerAndConversation(
+          deps,
+          task,
+          'A goal completed work but could not save its progress update. The task needs to be retried from Activity.',
+        );
+        window.push({ role: 'assistant', content: text } as ModelMessage);
+        return stageFinalResponse(deps, lease, state, window, {
+          text,
+          progress: text.slice(0, 200),
+          terminalStatus: 'needs_attention',
+          outcome: 'needs_attention',
         });
       }
     }

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   getRate,
   isBrowserJobPending,
-  isGoalWorkEvidenceTool,
+  isGoalWorkEvidence,
   reconcileReservation,
   releaseReservation,
   reserveCost,
@@ -426,10 +426,14 @@ export class ToolDispatcher {
       const unattended = input.task.type !== 'chat_turn' && input.task.type !== 'sms_turn';
       if (unattended) {
         const prior = await this.db
-          .select({ toolName: toolCalls.toolName })
+          .select({
+            toolName: toolCalls.toolName,
+            status: toolCalls.status,
+            result: toolCalls.result,
+          })
           .from(toolCalls)
-          .where(and(eq(toolCalls.taskId, input.task.id), eq(toolCalls.status, 'succeeded')));
-        if (!prior.some((row) => isGoalWorkEvidenceTool(row.toolName))) {
+          .where(eq(toolCalls.taskId, input.task.id));
+        if (!prior.some(isGoalWorkEvidence)) {
           return {
             kind: 'rejected',
             reason: 'record progress only after this goal session completes a verified work step',

@@ -25,6 +25,27 @@ const policyLabels: Record<string, string> = {
   'sms.reply_to_owner': 'Reply to your text messages',
 };
 
+function policyScope(templateKey: string, match: unknown): string | null {
+  const values =
+    match && typeof match === 'object' && !Array.isArray(match)
+      ? (match as Record<string, unknown>)
+      : {};
+  if (templateKey === 'gmail.send.to_recipient' && typeof values.recipient === 'string') {
+    return `Recipient: ${values.recipient}`;
+  }
+  if (templateKey === 'sms.reply_to_owner' && typeof values.phone === 'string') {
+    return values.phone ? `Phone: ${values.phone}` : 'No owner phone is configured';
+  }
+  if (templateKey === 'calendar.owner_attendee_only' && Array.isArray(values.emails)) {
+    const emails = values.emails.filter((email): email is string => typeof email === 'string');
+    return emails.length > 0
+      ? `Owner emails: ${emails.join(', ')}`
+      : 'No owner email is configured';
+  }
+  if (templateKey === 'calendar.self_only_events') return 'Only events without guests';
+  return null;
+}
+
 export default async function SettingsPage() {
   await requireOwner();
   const db = getDb();
@@ -136,41 +157,47 @@ export default async function SettingsPage() {
           </EmptyState>
         ) : (
           <div className="mt-3 flex flex-col gap-2">
-            {policyRows.map((p) => (
-              <Card key={p.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
-                <div className="min-w-0">
-                  <p className="flex items-center gap-2 text-sm font-medium">
-                    {policyLabels[p.templateKey] ?? 'Custom approval rule'}
-                    <CountBadge tone={p.effect === 'allow' ? 'green' : 'amber'}>
-                      {p.effect === 'allow' ? 'Allowed' : 'Blocked'}
-                    </CountBadge>
-                    {p.enabled ? null : <CountBadge>Paused</CountBadge>}
-                  </p>
-                  <details className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-                    <summary className="cursor-pointer">Technical details</summary>
-                    <code>{p.toolName}</code> · {p.templateKey}
-                  </details>
-                </div>
-                <div className="flex shrink-0 gap-1.5">
-                  <form action={setPolicyEnabled.bind(null, p.id, !p.enabled)}>
-                    <button type="submit" className={btn.outline}>
-                      {p.enabled ? 'Pause rule' : 'Use rule'}
-                    </button>
-                  </form>
-                  {p.createdVia !== 'seed' ? (
-                    <form action={deletePolicy.bind(null, p.id)}>
-                      <button
-                        type="submit"
-                        className={btn.dangerOutline}
-                        title="Remove the rule — this tool goes back to asking for approval"
-                      >
-                        Delete
+            {policyRows.map((p) => {
+              const scope = policyScope(p.templateKey, p.match);
+              return (
+                <Card key={p.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-2 text-sm font-medium">
+                      {policyLabels[p.templateKey] ?? 'Custom approval rule'}
+                      <CountBadge tone={p.effect === 'allow' ? 'green' : 'amber'}>
+                        {p.effect === 'allow' ? 'Allowed' : 'Blocked'}
+                      </CountBadge>
+                      {p.enabled ? null : <CountBadge>Paused</CountBadge>}
+                    </p>
+                    {scope ? (
+                      <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{scope}</p>
+                    ) : null}
+                    <details className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+                      <summary className="cursor-pointer">Technical details</summary>
+                      <code>{p.toolName}</code> · {p.templateKey}
+                    </details>
+                  </div>
+                  <div className="flex shrink-0 gap-1.5">
+                    <form action={setPolicyEnabled.bind(null, p.id, !p.enabled)}>
+                      <button type="submit" className={btn.outline}>
+                        {p.enabled ? 'Pause rule' : 'Use rule'}
                       </button>
                     </form>
-                  ) : null}
-                </div>
-              </Card>
-            ))}
+                    {p.createdVia !== 'seed' ? (
+                      <form action={deletePolicy.bind(null, p.id)}>
+                        <button
+                          type="submit"
+                          className={btn.dangerOutline}
+                          title="Remove the rule — this tool goes back to asking for approval"
+                        >
+                          Delete
+                        </button>
+                      </form>
+                    ) : null}
+                  </div>
+                </Card>
+              );
+            })}
           </div>
         )}
       </section>

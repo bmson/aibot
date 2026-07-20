@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { resolveApprovalInline } from '@/app/approvals/actions';
-import type { InlineApprovalStatus } from '@/lib/chat-approval-parts';
+import type { InlineApprovalDetail, InlineApprovalStatus } from '@/lib/chat-approval-parts';
 import { btn } from '@/lib/ui';
 
 export interface InlineApprovalPart {
@@ -12,6 +12,7 @@ export interface InlineApprovalPart {
   shortCode: string;
   summary: string;
   status?: InlineApprovalStatus;
+  details?: InlineApprovalDetail[];
 }
 
 export function InlineApproval({ part }: { part: InlineApprovalPart }) {
@@ -49,6 +50,28 @@ export function InlineApproval({ part }: { part: InlineApprovalPart }) {
           {part.shortCode}
         </span>
       </div>
+      {part.details && part.details.length > 0 ? (
+        <details
+          open={!currentResolution && part.status !== 'missing'}
+          className="mt-3 rounded-lg border border-amber-200 bg-white/70 p-2.5 dark:border-amber-900 dark:bg-zinc-950/50"
+        >
+          <summary className="cursor-pointer text-[10px] font-semibold tracking-[0.1em] text-slate-500 uppercase dark:text-zinc-400">
+            Exact details
+          </summary>
+          <dl className="mt-2 flex max-h-64 flex-col gap-2 overflow-y-auto">
+            {part.details.map((detail, index) => (
+              <div key={`${detail.label}-${index.toString()}`}>
+                <dt className="text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+                  {detail.label}
+                </dt>
+                <dd className="mt-0.5 break-words whitespace-pre-wrap text-xs text-slate-800 dark:text-zinc-200">
+                  {detail.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+      ) : null}
       {currentResolution ? (
         <p className="mt-2 text-xs font-medium text-slate-600 dark:text-zinc-300">
           {currentResolution === 'approved'

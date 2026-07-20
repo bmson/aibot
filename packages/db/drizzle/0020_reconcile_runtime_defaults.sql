@@ -2,7 +2,8 @@
 -- Normal releases historically ran migrations without seed.ts, so existing
 -- production databases could miss the owner-calendar autonomy rule indefinitely.
 -- Install/repair the safety-scoped policy from durable owner contact data here;
--- release.sh now also runs the idempotent seed after every migration.
+-- release.sh now also runs the idempotent seed after every migration; that
+-- reconciliation likewise prefers these durable contact values over env defaults.
 INSERT INTO "approval_policies" (
   "agent_id",
   "tool_name",

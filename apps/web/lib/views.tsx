@@ -40,7 +40,9 @@ function rememberLabel(toolName: string, payload: unknown): string | null {
     const recipients = Array.isArray(to)
       ? to.filter((item): item is string => typeof item === 'string')
       : [];
-    if (recipients.length === 1) return `Approve and always allow email to ${recipients[0]}`;
+    if (recipients.length === 1) {
+      return `Approve and allow future direct email to ${recipients[0]}`;
+    }
   }
   return null;
 }
