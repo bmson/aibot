@@ -58,7 +58,7 @@ Both endpoints use the same OIDC/shared-secret protection as every other interna
 Canaries are disabled by default because a run sends one SMS to `OWNER_PHONE`. Production deploys
 set `CANARY_ENABLED=true`, enforce a `$0.03` structural run ceiling in addition to the global cost
 ledger, and schedule one run daily. Runs are single-flight across Cloud Run instances, every check
-has a deadline, Gmail artifacts are deleted, browser callbacks use a one-shot token hash, and
+has a deadline, Gmail artifacts are moved to Trash, browser callbacks use a one-shot token hash, and
 synthetic approvals/tasks are always driven to a terminal state.
 An hourly authenticated health probe logs `canary_alert` and fails its Scheduler execution when
 the result needs attention, while the dashboard shows the same health state to the owner.

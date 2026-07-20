@@ -196,8 +196,12 @@ async function cleanupGmailMarker(
   );
   for (const message of list.messages ?? []) ids.add(message.id);
   for (const id of ids) {
-    await deps.googleClient.api(`${GMAIL}/messages/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
+    // gmail.modify deliberately cannot permanently delete mail. Moving the
+    // marker to Trash still removes it from the mailbox under test and lets
+    // Gmail's retention policy clean it up without requiring the broader
+    // full-mailbox scope.
+    await deps.googleClient.api(`${GMAIL}/messages/${encodeURIComponent(id)}/trash`, {
+      method: 'POST',
       signal,
     });
   }
@@ -467,23 +471,33 @@ async function chatCanary(deps: AgentDeps, runId: string, signal: AbortSignal): 
       throw new Error(`model routing blocked: ${outcome.decision.reason}`);
     }
     const text = (await outcome.text).trim();
-    const [[storedTask], storedReplies] = await Promise.all([
-      deps.db.select().from(tasks).where(eq(tasks.id, task.id)),
-      deps.db
-        .select()
-        .from(messages)
-        .where(and(eq(messages.taskId, task.id), eq(messages.role, 'assistant'))),
-    ]);
-    if (text !== 'CANARY_OK')
+    if (text !== 'CANARY_OK') {
       throw new Error('chat model did not return the exact canary response');
-    if (
-      storedTask?.status !== 'done' ||
-      storedReplies.length !== 1 ||
-      storedReplies[0]?.text !== text
-    ) {
-      throw new Error('chat response was not durably persisted with a terminal task');
     }
-    return `model ${outcome.modelId} streamed the exact response and persistence completed`;
+    // AI SDK exposes the completed text just before its async onFinish
+    // persistence callback becomes visible to a separate transaction. Poll
+    // the durable state briefly so the canary checks the callback's result
+    // instead of racing it.
+    const persistenceDeadline = Date.now() + 5_000;
+    while (true) {
+      const [[storedTask], storedReplies] = await Promise.all([
+        deps.db.select().from(tasks).where(eq(tasks.id, task.id)),
+        deps.db
+          .select()
+          .from(messages)
+          .where(and(eq(messages.taskId, task.id), eq(messages.role, 'assistant'))),
+      ]);
+      if (
+        storedTask?.status === 'done' &&
+        storedReplies.length === 1 &&
+        storedReplies[0]?.text === text
+      ) {
+        return `model ${outcome.modelId} streamed the exact response and persistence completed`;
+      }
+      if (Date.now() >= persistenceDeadline) break;
+      await delay(100, undefined, { signal });
+    }
+    throw new Error('chat response was not durably persisted with a terminal task');
   } finally {
     await deps.db
       .update(conversations)
