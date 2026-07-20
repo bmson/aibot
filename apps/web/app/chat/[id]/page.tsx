@@ -5,6 +5,7 @@ import { and, count, eq, notInArray, sql } from 'drizzle-orm';
 import { notFound } from 'next/navigation';
 import { requireOwner } from '@/auth';
 import { withApprovalStatuses } from '@/lib/chat-approval-parts';
+import { chatNoticeMessage } from '@/lib/chat-notices';
 import { getDb } from '@/lib/server';
 import { ChatClient } from './chat-client';
 
@@ -24,7 +25,7 @@ export default async function ChatConversationPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ task?: string; cursor?: string }>;
+  searchParams: Promise<{ task?: string; cursor?: string; notice?: string }>;
 }) {
   await requireOwner();
   const [{ id }, query] = await Promise.all([params, searchParams]);
@@ -107,6 +108,7 @@ export default async function ChatConversationPage({
       goalTitle={linkedGoal?.title}
       archived={conversation.archivedAt !== null}
       canArchive={!conversation.isPrimary && (activeTasks[0]?.value ?? 0) === 0}
+      initialNotice={chatNoticeMessage(query.notice)}
       initialAsyncTurn={
         requestedTask && requestedCursor
           ? { taskId: requestedTask.id, cursor: query.cursor as string }

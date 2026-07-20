@@ -24,6 +24,11 @@ describe('requestedArtifactIntent', () => {
     'how do I create a Google Doc?',
     "don't create a document yet",
     'create a document and a spreadsheet',
+    'write this into the existing Google Doc',
+    'write rows into this sheet',
+    'append this section to the presentation',
+    'prepare the revised copy in this slide deck',
+    'write this into https://docs.google.com/document/d/1SLbcTqOwMMQG3QmD7gj755xzOKwQtVyv5cvaPjSwGSs/edit',
   ])('does not force a tool for %s', (text) => {
     expect(requestedArtifactIntent(text)).toBeUndefined();
   });

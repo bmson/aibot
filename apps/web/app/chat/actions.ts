@@ -73,7 +73,10 @@ export async function archiveConversation(conversationId: string): Promise<void>
     )
     .limit(1);
   if (activeTask) {
-    throw new Error('finish, cancel, or pause active work before archiving this chat');
+    // The archive button can race with work starting after the page rendered.
+    // Redirect with an inline explanation instead of turning that safe refusal
+    // into Next's generic server-action error page.
+    redirect(`/chat/${conversation.id}?notice=archive-active`);
   }
 
   await db

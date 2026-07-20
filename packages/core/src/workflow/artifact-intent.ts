@@ -24,6 +24,14 @@ const SHEET = /\b(?:google\s+)?sheets?\b|\bspreadsheet\b/i;
 const SLIDES = /\b(?:google\s+)?slides?\b|\b(?:slide deck|presentation)\b/i;
 const GOOGLE_DOC_URL =
   /https:\/\/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]{10,200})(?:[/?#][^\s]*)?/i;
+const GOOGLE_ARTIFACT_URL =
+  /https:\/\/docs\.google\.com\/(?:document|spreadsheets|presentation)\/d\//i;
+const UPDATE_VERB =
+  /\b(?:edit|editing|update|updating|revise|revising|append|appending|add|adding|insert|inserting|replace|replacing|fill|filling|populate|populating)\b/i;
+const EXISTING_ARTIFACT =
+  /\b(?:existing|current|shared|linked|attached)\s+(?:google\s+)?(?:doc(?:ument)?|sheet|spreadsheet|slides?|slide deck|presentation)s?\b/i;
+const WRITE_INTO_ARTIFACT =
+  /\b(?:write|writing|draft|drafting|prepare|preparing)\b[\s\S]{0,100}\b(?:into|onto|to|in)\s+(?:(?:the|this|that)\s+(?:(?:existing|current|shared)\s+)?|(?:an?\s+)?(?:existing|current|shared)\s+)(?:google\s+)?(?:doc(?:ument)?|sheet|spreadsheet|slides?|slide deck|presentation)s?\b/i;
 
 /**
  * Finds a direct request to make one durable artifact. Capability questions
@@ -33,6 +41,14 @@ const GOOGLE_DOC_URL =
 export function requestedArtifactIntent(text: string): ArtifactIntent | undefined {
   const normalized = text.trim();
   if (!CREATION_VERB.test(normalized)) return undefined;
+  if (
+    GOOGLE_ARTIFACT_URL.test(normalized) ||
+    UPDATE_VERB.test(normalized) ||
+    EXISTING_ARTIFACT.test(normalized) ||
+    WRITE_INTO_ARTIFACT.test(normalized)
+  ) {
+    return undefined;
+  }
   if (/^\s*(?:how|why)\b/i.test(normalized)) return undefined;
   if (/^\s*can\s+it\b/i.test(normalized)) return undefined;
   if (

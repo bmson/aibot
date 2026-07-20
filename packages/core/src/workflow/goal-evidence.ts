@@ -23,6 +23,7 @@ export interface GoalToolEvidence {
   toolName: string;
   status: string;
   result: unknown;
+  step?: number;
 }
 
 /** Database success is not enough when a tool reports failure in its result payload. */
@@ -39,4 +40,22 @@ export function isGoalWorkEvidence(evidence: GoalToolEvidence): boolean {
 
 export function needsGoalProgressToolRetry(toolCalls: Array<{ toolName: string }>): boolean {
   return !toolCalls.some((toolCall) => toolCall.toolName === 'goals.update_progress');
+}
+
+/**
+ * Progress is fresh only when it was durably written in a later model step than
+ * the latest verified work. A progress call in the same batch cannot know the
+ * result of that work and therefore does not count as its summary.
+ */
+export function needsGoalProgressUpdate(evidence: GoalToolEvidence[]): boolean {
+  let latestWorkStep = -1;
+  let latestProgressStep = -1;
+  for (const row of evidence) {
+    const step = row.step ?? 0;
+    if (isGoalWorkEvidence(row)) latestWorkStep = Math.max(latestWorkStep, step);
+    if (row.toolName === 'goals.update_progress' && row.status === 'succeeded') {
+      latestProgressStep = Math.max(latestProgressStep, step);
+    }
+  }
+  return latestWorkStep >= 0 && latestProgressStep <= latestWorkStep;
 }

@@ -3,6 +3,7 @@ import {
   isGoalWorkEvidence,
   isGoalWorkEvidenceTool,
   needsGoalProgressToolRetry,
+  needsGoalProgressUpdate,
 } from './goal-evidence.js';
 
 describe('isGoalWorkEvidenceTool', () => {
@@ -37,5 +38,25 @@ describe('isGoalWorkEvidenceTool', () => {
   it('detects a provider that ignored the forced goal progress tool', () => {
     expect(needsGoalProgressToolRetry([])).toBe(true);
     expect(needsGoalProgressToolRetry([{ toolName: 'goals.update_progress' }])).toBe(false);
+  });
+
+  it('requires progress after the latest verified work step', () => {
+    const work = (step: number) => ({
+      toolName: 'docs.create',
+      status: 'succeeded',
+      result: { documentId: `doc-${step}` },
+      step,
+    });
+    const progress = (step: number) => ({
+      toolName: 'goals.update_progress',
+      status: 'succeeded',
+      result: { updated: true },
+      step,
+    });
+
+    expect(needsGoalProgressUpdate([work(1)])).toBe(true);
+    expect(needsGoalProgressUpdate([work(1), progress(2)])).toBe(false);
+    expect(needsGoalProgressUpdate([work(1), progress(2), work(3)])).toBe(true);
+    expect(needsGoalProgressUpdate([work(1), progress(1)])).toBe(true);
   });
 });

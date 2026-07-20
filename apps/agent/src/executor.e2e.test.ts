@@ -1,6 +1,7 @@
 import type { DispatcherPort, InboundEvent, ModelRouter, StepCallOutcome } from '@assistant/core';
 import { completeTask, enqueueTask, executeTask, getAgent, resolveApproval } from '@assistant/core';
 import {
+  approvalPolicies,
   approvals,
   conversations,
   createDb,
@@ -136,6 +137,9 @@ beforeAll(async () => {
         sql`${approvals.toolCallId} IN (select id from ${toolCalls} where ${toolCalls.toolName} LIKE 'exec.%')`,
       );
     await db.delete(toolCalls).where(sql`${toolCalls.toolName} LIKE 'exec.%'`);
+    await db
+      .delete(approvalPolicies)
+      .where(eq(approvalPolicies.templateKey, 'test.exec.outbound.recipient'));
   } catch {
     console.warn('executor.test: database unreachable — skipping');
   }
@@ -153,6 +157,9 @@ afterAll(async () => {
         sql`${approvals.toolCallId} IN (select id from ${toolCalls} where ${toolCalls.toolName} LIKE 'exec.%')`,
       );
     await db.delete(toolCalls).where(sql`${toolCalls.toolName} LIKE 'exec.%'`);
+    await db
+      .delete(approvalPolicies)
+      .where(eq(approvalPolicies.templateKey, 'test.exec.outbound.recipient'));
     if (createdConversationIds.length) {
       await db.delete(messages).where(inArray(messages.conversationId, createdConversationIds));
     }
@@ -496,6 +503,55 @@ describe('executor end-to-end (integration, scripted model)', () => {
     expect(resolved.ok).toBe(true);
     const [after] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(after?.status).toBe('cancelled');
+  });
+
+  it('reactivates an identical standing approval policy instead of duplicating it', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const policy = {
+      agentId,
+      toolName: 'exec.outbound',
+      templateKey: 'test.exec.outbound.recipient',
+      match: { recipient: 'repeat@example.com' },
+      effect: 'allow' as const,
+    };
+
+    const resolveWithPolicy = async (suffix: string) => {
+      const key = `policy-${suffix}-${Date.now()}`;
+      const { task } = await enqueueTask(db, { event: event(), type: 'adhoc' });
+      createdTaskIds.push(task.id);
+      await executeTask(
+        { db, router: makeFakeRouter(), dispatcher: new ToolDispatcher(db, makeRegistry(key)) },
+        task.id,
+      );
+      const [approval] = await db.select().from(approvals).where(eq(approvals.taskId, task.id));
+      expect(approval).toBeDefined();
+      const resolved = await resolveApproval(db, {
+        approvalId: approval?.id,
+        decision: 'approved',
+        via: 'web',
+        policy,
+      });
+      expect(resolved.ok).toBe(true);
+    };
+
+    await resolveWithPolicy('first');
+    const [first] = await db
+      .select()
+      .from(approvalPolicies)
+      .where(eq(approvalPolicies.templateKey, policy.templateKey));
+    expect(first).toBeDefined();
+    await db
+      .update(approvalPolicies)
+      .set({ enabled: false })
+      .where(eq(approvalPolicies.id, (first as NonNullable<typeof first>).id));
+
+    await resolveWithPolicy('second');
+    const rows = await db
+      .select()
+      .from(approvalPolicies)
+      .where(eq(approvalPolicies.templateKey, policy.templateKey));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.enabled).toBe(true);
   });
 
   it('delivers a text-only response cut off after model reasoning', async (ctx) => {

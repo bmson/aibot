@@ -68,6 +68,18 @@ export async function resolveApproval(
       const [policy] = await tx
         .insert(approvalPolicies)
         .values({ ...input.policy, createdVia: 'approval_dialog' })
+        .onConflictDoUpdate({
+          target: [
+            approvalPolicies.agentId,
+            approvalPolicies.toolName,
+            approvalPolicies.templateKey,
+            approvalPolicies.match,
+            approvalPolicies.effect,
+          ],
+          // Repeating Always/Never is also an explicit request to reactivate a
+          // matching rule that was paused in Settings.
+          set: { enabled: true, updatedAt: sql`now()` },
+        })
         .returning();
       if (policy) {
         await tx

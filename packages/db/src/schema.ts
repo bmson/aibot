@@ -458,6 +458,13 @@ export const approvalPolicies = pgTable(
       sql`${t.createdVia} IN ('approval_dialog','settings','seed')`,
     ),
     index('approval_policies_tool_idx').on(t.agentId, t.toolName, t.enabled),
+    uniqueIndex('approval_policies_identity_idx').on(
+      t.agentId,
+      t.toolName,
+      t.templateKey,
+      t.match,
+      t.effect,
+    ),
   ],
 );
 

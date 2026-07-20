@@ -1,14 +1,14 @@
 import { detectKind, getAgent, startImport } from '@assistant/core';
-import { safeRelPath } from '@assistant/tools';
 import { redirect } from 'next/navigation';
 import { isAuthed } from '@/auth';
+import { cleanImportFileName, registerStagedImport, stagedImportPath } from '@/lib/import-upload';
 import { getDb, getWorkspace } from '@/lib/server';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // Cloud Run request cap is 32MB — stay under it
 const MAX_MULTIPART_BYTES = MAX_UPLOAD_BYTES + 1024 * 1024; // form fields + MIME boundary overhead
 
 /**
- * Backstory archive upload: multipart form → workspace import/<name> →
+ * Backstory archive upload: multipart form → immutable workspace upload →
  * import source + resumable job task. Bigger archives should be copied into
  * the bucket's import/ prefix directly (gcloud storage cp) and started from
  * the dashboard list instead.
@@ -38,22 +38,23 @@ export async function POST(req: Request) {
     );
   }
 
-  const cleanName = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120) || 'archive.txt';
-  const workspacePath = safeRelPath(`import/${cleanName}`);
+  const cleanName = cleanImportFileName(file.name);
+  const workspacePath = stagedImportPath(cleanName);
   const sourceTag =
     String(form.get('source') ?? '').trim() || cleanName.replace(/\.[a-z0-9]+$/i, '').toLowerCase();
 
   const content = await file.text();
-  await getWorkspace().write(workspacePath, content);
-
+  const workspace = getWorkspace();
   const db = getDb();
   const agent = await getAgent(db);
-  await startImport(db, {
-    agentId: agent.id,
-    source: sourceTag,
-    workspacePath,
-    kind: detectKind(cleanName, content.slice(0, 4000)),
-  });
+  await registerStagedImport(workspace, workspacePath, content, () =>
+    startImport(db, {
+      agentId: agent.id,
+      source: sourceTag,
+      workspacePath,
+      kind: detectKind(cleanName, content.slice(0, 4000)),
+    }),
+  );
 
   redirect('/import');
 }

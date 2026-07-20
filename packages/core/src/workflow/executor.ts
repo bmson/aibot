@@ -37,7 +37,11 @@ import {
   requestedArtifactIntent,
   requestedDocumentReadIntent,
 } from './artifact-intent.js';
-import { isGoalWorkEvidence, needsGoalProgressToolRetry } from './goal-evidence.js';
+import {
+  isGoalWorkEvidence,
+  needsGoalProgressToolRetry,
+  needsGoalProgressUpdate,
+} from './goal-evidence.js';
 import {
   checkpointTask,
   claimTask,
@@ -401,6 +405,31 @@ async function recordGoalBlocked(db: Db, goalId: string, question: string): Prom
     .update(goals)
     .set({ nextAction: `Waiting on the owner: ${question}`.slice(0, 500), updatedAt: sql`now()` })
     .where(eq(goals.id, goalId));
+}
+
+async function stopForUnsavedGoalProgress(
+  deps: ExecutorDeps,
+  task: TaskLease,
+  state: TaskState,
+  window: ModelMessage[],
+  reason: string,
+): Promise<ExecuteResult> {
+  const text =
+    "I completed a verified goal step, but I couldn't save the progress update. Open Activity and retry this task so the goal does not continue from stale information.";
+  console.error('required goal progress was not saved', { taskId: task.id, reason });
+  if (task.goalId) await recordGoalBlocked(deps.db, task.goalId, text);
+  await notifyOwnerAndConversation(
+    deps,
+    task,
+    'A goal completed work but could not save its progress update. The task needs to be retried from Activity.',
+  );
+  window.push({ role: 'assistant', content: text } as ModelMessage);
+  return stageFinalResponse(deps, task, state, window, {
+    text,
+    progress: text.slice(0, 200),
+    terminalStatus: 'needs_attention',
+    outcome: 'needs_attention',
+  });
 }
 
 /** A retry must not duplicate the dashboard/chat copy of a final response. */
@@ -1291,15 +1320,12 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
             toolName: toolCalls.toolName,
             status: toolCalls.status,
             result: toolCalls.result,
+            step: toolCalls.step,
           })
           .from(toolCalls)
           .where(eq(toolCalls.taskId, task.id))
       : [];
-    const mustRecordGoalProgress =
-      goalToolEvidence.some(isGoalWorkEvidence) &&
-      !goalToolEvidence.some(
-        (row) => row.toolName === 'goals.update_progress' && row.status === 'succeeded',
-      );
+    const mustRecordGoalProgress = needsGoalProgressUpdate(goalToolEvidence);
     // Rebuild the system prompt after each tool turn. Once an external result
     // taints the context, the private owner card is removed from every later
     // model call instead of lingering in a constant system prompt.
@@ -1429,21 +1455,13 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
 
       if (stepResult.ok && needsGoalProgressToolRetry(stepResult.toolCalls)) {
-        const text =
-          "I completed a verified goal step, but I couldn't save the progress update. Open Activity and retry this task so the goal does not continue from stale information.";
-        if (task.goalId) await recordGoalBlocked(db, task.goalId, text);
-        await notifyOwnerAndConversation(
+        return stopForUnsavedGoalProgress(
           deps,
-          task,
-          'A goal completed work but could not save its progress update. The task needs to be retried from Activity.',
+          lease,
+          state,
+          window,
+          'the model did not emit goals.update_progress after a constrained retry',
         );
-        window.push({ role: 'assistant', content: text } as ModelMessage);
-        return stageFinalResponse(deps, lease, state, window, {
-          text,
-          progress: text.slice(0, 200),
-          terminalStatus: 'needs_attention',
-          outcome: 'needs_attention',
-        });
       }
     }
 
@@ -1486,6 +1504,15 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       // defense in depth in case a provider emits additional calls anyway.
       const requiredCall = stepResult.toolCalls.find(
         (toolCall) => toolCall.toolName === forcedArtifact.toolName,
+      );
+      if (requiredCall) stepResult = { ...stepResult, toolCalls: [requiredCall] };
+    }
+    if (mustRecordGoalProgress) {
+      // A forced progress turn authorizes only the required bookkeeping write.
+      // Dropping provider-added calls also makes the durable-success check below
+      // unambiguous: this turn either saved progress or stops for owner attention.
+      const requiredCall = stepResult.toolCalls.find(
+        (toolCall) => toolCall.toolName === 'goals.update_progress',
       );
       if (requiredCall) stepResult = { ...stepResult, toolCalls: [requiredCall] };
     }
@@ -1541,6 +1568,8 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         shortCode: string;
         summary: string;
       }> = [];
+      let requiredGoalProgressSaved = !mustRecordGoalProgress;
+      let requiredGoalProgressFailure = 'the progress tool was not dispatched';
       for (let toolIndex = 0; toolIndex < stepResult.toolCalls.length; toolIndex += 1) {
         const tc = stepResult.toolCalls[toolIndex] as (typeof stepResult.toolCalls)[number];
         // One browser job at a time: once a call in this batch launched a job,
@@ -1587,9 +1616,13 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
               callbackTokenHash: hashCallbackToken(outcome.result.callbackToken),
               timeoutAt: outcome.result.timeoutAt,
             };
+            if (tc.toolName === 'goals.update_progress') {
+              requiredGoalProgressFailure = 'the progress write returned an unfinished job';
+            }
           } else {
             window.push(toolResultMessage(tc.toolCallId, tc.toolName, outcome.result));
             state.completedToolCallIds.push(outcome.toolCallId);
+            if (tc.toolName === 'goals.update_progress') requiredGoalProgressSaved = true;
             if (dispatcher.resultIsUntrusted(tc.toolName)) {
               state.untrustedContext = true;
               ctx.tainted = true;
@@ -1635,9 +1668,19 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
             shortCode: outcome.shortCode,
             summary: outcome.summary,
           });
+          if (tc.toolName === 'goals.update_progress') {
+            requiredGoalProgressFailure = 'the progress write unexpectedly required approval';
+          }
         } else {
           window.push(toolResultMessage(tc.toolCallId, tc.toolName, { error: outcome.reason }));
+          if (tc.toolName === 'goals.update_progress') {
+            requiredGoalProgressFailure = outcome.reason;
+          }
         }
+      }
+
+      if (!requiredGoalProgressSaved) {
+        return stopForUnsavedGoalProgress(deps, lease, state, window, requiredGoalProgressFailure);
       }
 
       window = compact(window);
@@ -1702,6 +1745,41 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   // max steps exhausted
   const stuck = `stopped after ${task.maxSteps} steps without finishing`;
   const stuckMessage = `I ${stuck}. Here's where I got: ${state.scratchpad || 'see task log.'}`;
+  if (isUnattendedGoalSession(task)) {
+    const goalToolEvidence = await db
+      .select({
+        toolName: toolCalls.toolName,
+        status: toolCalls.status,
+        result: toolCalls.result,
+        step: toolCalls.step,
+      })
+      .from(toolCalls)
+      .where(eq(toolCalls.taskId, task.id));
+    if (needsGoalProgressUpdate(goalToolEvidence)) {
+      return stopForUnsavedGoalProgress(
+        deps,
+        lease,
+        state,
+        window,
+        'the final work step exhausted the task before a later progress turn',
+      );
+    }
+    if (!goalToolEvidence.some(isGoalWorkEvidence)) {
+      if (task.goalId) await recordGoalBlocked(db, task.goalId, stuckMessage);
+      await notifyOwnerAndConversation(
+        deps,
+        task,
+        `This goal's automatic session exhausted its work limit without a verified result and needs attention: ${stuckMessage}`,
+      );
+      window.push({ role: 'assistant', content: stuckMessage } as ModelMessage);
+      return stageFinalResponse(deps, lease, state, window, {
+        text: stuckMessage,
+        progress: stuck,
+        terminalStatus: 'needs_attention',
+        outcome: 'needs_attention',
+      });
+    }
+  }
   window.push({ role: 'assistant', content: stuckMessage } as ModelMessage);
   return stageFinalResponse(deps, lease, state, window, {
     text: stuckMessage,

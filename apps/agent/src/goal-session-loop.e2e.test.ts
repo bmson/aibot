@@ -14,6 +14,7 @@ import {
 import { ToolDispatcher, ToolRegistry } from '@assistant/tools';
 import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -87,6 +88,55 @@ async function seedGoal(title: string): Promise<{ goalId: string; conversationId
 
 function event(conversationId: string): InboundEvent {
   return { source: 'schedule', agentId, trust: 'assistant', conversationId, payload: {} };
+}
+
+function goalWorkRegistry() {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: 'goal.test_work',
+    description: 'Complete one verified test step.',
+    inputSchema: z.object({ phase: z.number().int() }),
+    risk: 'autonomous',
+    acceptsUntrustedInput: true,
+    execute: async (args) => ({
+      ok: true,
+      phase: (args as { phase: number }).phase,
+    }),
+  });
+  registry.register({
+    name: 'goals.update_progress',
+    description: 'Persist test goal progress.',
+    inputSchema: z.object({
+      goalId: z.string().uuid(),
+      progress: z.string(),
+      nextAction: z.string(),
+    }),
+    risk: 'autonomous',
+    acceptsUntrustedInput: true,
+    execute: async (args, ctx) => {
+      const input = args as { goalId: string; progress: string; nextAction: string };
+      const [updated] = await ctx.db
+        .update(goals)
+        .set({ progress: input.progress, nextAction: input.nextAction })
+        .where(eq(goals.id, input.goalId))
+        .returning({ id: goals.id });
+      if (!updated) throw new Error('goal not found');
+      return { updated: updated.id };
+    },
+  });
+  return registry;
+}
+
+function progressCall(goalId: string, phase: number) {
+  return {
+    toolCallId: `progress-${phase}`,
+    toolName: 'goals.update_progress',
+    input: {
+      goalId,
+      progress: `Finished phase ${phase}`,
+      nextAction: phase === 1 ? 'Complete phase 2' : 'Review the result',
+    },
+  };
 }
 
 beforeAll(async () => {
@@ -191,5 +241,131 @@ describe('unattended goal sessions never report silent success', () => {
     );
 
     expect(outcome.outcome).toBe('done');
+  });
+
+  it('requires a new progress write after later verified work', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { goalId, conversationId } = await seedGoal('Goal progress ordering');
+    const { task } = await enqueueTask(db, {
+      event: event(conversationId),
+      type: 'scheduled',
+      goalId,
+      maxSteps: 8,
+    });
+    createdTaskIds.push(task.id);
+
+    const router = {
+      async object() {
+        return { ok: true, modelId: 'fake/model', degraded: false, object: workflowPlan };
+      },
+      async step(
+        _role: string,
+        opts: { messages?: unknown[]; toolChoice?: { type?: string; toolName?: string } | string },
+      ): Promise<StepCallOutcome> {
+        const transcript = JSON.stringify(opts.messages ?? []);
+        const forcedProgress =
+          typeof opts.toolChoice === 'object' &&
+          opts.toolChoice?.toolName === 'goals.update_progress';
+        if (forcedProgress) {
+          const phase = transcript.includes('"phase":2') ? 2 : 1;
+          return {
+            ok: true,
+            modelId: 'fake/model',
+            degraded: false,
+            text: '',
+            toolCalls: [progressCall(goalId, phase)],
+          };
+        }
+        if (!transcript.includes('"phase":1')) {
+          return {
+            ok: true,
+            modelId: 'fake/model',
+            degraded: false,
+            text: '',
+            toolCalls: [{ toolCallId: 'work-1', toolName: 'goal.test_work', input: { phase: 1 } }],
+          };
+        }
+        if (!transcript.includes('"phase":2')) {
+          return {
+            ok: true,
+            modelId: 'fake/model',
+            degraded: false,
+            text: '',
+            toolCalls: [{ toolCallId: 'work-2', toolName: 'goal.test_work', input: { phase: 2 } }],
+          };
+        }
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: 'Both phases are complete.',
+          toolCalls: [],
+          finishReason: 'stop',
+        };
+      },
+    } as unknown as ModelRouter;
+
+    const outcome = await executeTask(
+      { db, router, dispatcher: new ToolDispatcher(db, goalWorkRegistry()) },
+      task.id,
+    );
+
+    expect(outcome.outcome).toBe('done');
+    const [goal] = await db.select().from(goals).where(eq(goals.id, goalId));
+    expect(goal?.progress).toBe('Finished phase 2');
+    const progressRows = await db.select().from(toolCalls).where(eq(toolCalls.taskId, task.id));
+    expect(progressRows.filter((row) => row.toolName === 'goals.update_progress')).toHaveLength(2);
+  });
+
+  it('stops immediately when the required progress write is rejected', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { goalId, conversationId } = await seedGoal('Rejected goal progress');
+    const { task } = await enqueueTask(db, {
+      event: event(conversationId),
+      type: 'scheduled',
+      goalId,
+      maxSteps: 8,
+    });
+    createdTaskIds.push(task.id);
+    let stepCalls = 0;
+
+    const router = {
+      async object() {
+        return { ok: true, modelId: 'fake/model', degraded: false, object: workflowPlan };
+      },
+      async step(_role: string, opts: { messages?: unknown[] }): Promise<StepCallOutcome> {
+        stepCalls += 1;
+        const transcript = JSON.stringify(opts.messages ?? []);
+        return transcript.includes('goal.test_work')
+          ? {
+              ok: true,
+              modelId: 'fake/model',
+              degraded: false,
+              text: '',
+              toolCalls: [progressCall('00000000-0000-4000-8000-000000000000', 1)],
+            }
+          : {
+              ok: true,
+              modelId: 'fake/model',
+              degraded: false,
+              text: '',
+              toolCalls: [
+                { toolCallId: 'work-rejected', toolName: 'goal.test_work', input: { phase: 1 } },
+              ],
+            };
+      },
+    } as unknown as ModelRouter;
+
+    const outcome = await executeTask(
+      { db, router, dispatcher: new ToolDispatcher(db, goalWorkRegistry()) },
+      task.id,
+    );
+
+    expect(outcome.outcome).toBe('needs_attention');
+    expect(stepCalls).toBe(2);
+    const [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(row?.status).toBe('needs_attention');
+    const [goal] = await db.select().from(goals).where(eq(goals.id, goalId));
+    expect(goal?.nextAction).toContain("couldn't save the progress update");
   });
 });

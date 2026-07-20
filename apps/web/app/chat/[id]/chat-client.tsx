@@ -19,6 +19,7 @@ interface ChatClientProps {
   initialAsyncTurn?: { taskId: string; cursor: string };
   archived: boolean;
   canArchive: boolean;
+  initialNotice?: string;
 }
 
 const ASYNC_ACK_TEXT = 'Got it — I’m working on this now. I’ll post the result here.';
@@ -112,6 +113,7 @@ export function ChatClient({
   initialAsyncTurn,
   archived,
   canArchive,
+  initialNotice,
 }: ChatClientProps) {
   const [input, setInput] = useState('');
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
@@ -350,6 +352,14 @@ export function ChatClient({
           </details>
         </div>
       </header>
+      {initialNotice ? (
+        <p
+          role="alert"
+          className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-100"
+        >
+          {initialNotice}
+        </p>
+      ) : null}
 
       <div
         ref={messageScrollerRef}
