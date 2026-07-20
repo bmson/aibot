@@ -23,6 +23,16 @@ describe('response execution contract', () => {
     );
   });
 
+  it('blocks a fabricated approval notice that has no dispatcher record', () => {
+    const result = enforceResponseContract(
+      'This needs your approval before I act:\n- **[A12]** Browse Indeed\nApprove or deny it on the Approvals page — I will pick up from there.',
+      [],
+    );
+    expect(result).toMatchObject({ blocked: true, unsupported: ['approval'] });
+    expect(result.text).toContain('nothing is waiting on the Approvals page');
+    expect(result.text).not.toContain('A12');
+  });
+
   it('blocks application-submission claims even after a generic browser run', () => {
     const result = enforceResponseContract(
       'I submitted your application and saved the confirmation.',

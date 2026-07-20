@@ -25,7 +25,8 @@ type ActionKind =
   | 'application'
   | 'calendar'
   | 'research'
-  | 'background';
+  | 'background'
+  | 'approval';
 
 export interface ResponseContractResult {
   text: string;
@@ -111,6 +112,19 @@ const countedTracker =
 // it does not fire on ordinary prose.
 const passiveOutbound =
   /\b(?:has|have|was|were)\s+been\s+(?:contacted|emailed|texted|messaged|notified|pinged|reached\s+out\s+to)\b/i;
+
+/**
+ * Approval rows and short codes are created only by the dispatcher. A model
+ * can mimic an earlier notice from conversation history without emitting a
+ * tool call, leaving the owner looking for an approval that does not exist.
+ */
+export function isSimulatedApprovalNotice(text: string): boolean {
+  return (
+    /\bthis needs your approval before i act\b/i.test(text) ||
+    /\bapprove or deny it on the approvals page\b/i.test(text) ||
+    /\*\*\[A\d+\]\*\*/i.test(text)
+  );
+}
 
 function successful(evidence: ActionEvidence): boolean {
   if (evidence.status !== 'succeeded') return false;
@@ -214,6 +228,10 @@ function supports(kind: ActionKind, evidence: ActionEvidence[]): boolean {
           name === 'task.schedule' ||
           name === 'applications.watch_confirmation',
       );
+    case 'approval':
+      // Genuine approval notices are posted by the executor when it parks the
+      // task and do not pass through the model-final response contract.
+      return false;
   }
 }
 
@@ -354,6 +372,7 @@ function claimedKinds(text: string): ActionKind[] {
   ) {
     kinds.add('background');
   }
+  if (isSimulatedApprovalNotice(text)) kinds.add('approval');
 
   return [...kinds];
 }
@@ -390,6 +409,7 @@ const UNSUPPORTED_LABEL: Record<ActionKind, string> = {
   calendar: 'the requested calendar action',
   research: 'the requested research',
   background: 'the promised background work',
+  approval: 'the claimed approval request',
 };
 
 function describeTool(name: string): string | undefined {
@@ -451,6 +471,13 @@ export function enforceResponseContract(
 ): ResponseContractResult {
   const unsupported = claimedKinds(text).filter((kind) => !supports(kind, evidence));
   if (unsupported.length === 0) return { text, blocked: false, unsupported: [] };
+  if (unsupported.includes('approval')) {
+    return {
+      text: 'I did not create a real approval request, so nothing is waiting on the Approvals page. I stopped instead of showing an unverified approval code.',
+      blocked: true,
+      unsupported,
+    };
+  }
   return {
     text: partialFailureResponse(evidence, unsupported) ?? transparentFailureResponse(evidence),
     blocked: true,

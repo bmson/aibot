@@ -330,6 +330,75 @@ describe('executor end-to-end (integration, scripted model)', () => {
     expect(last?.text).toContain(approval?.shortCode ?? '@@missing@@');
   });
 
+  it('turns a model-invented approval notice into a real approval record', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const key = `phantom-approval-${Date.now()}`;
+    const dispatcher = new ToolDispatcher(db, makeRegistry(key));
+    let stepCalls = 0;
+    const router = {
+      async object() {
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          object: { action: 'workflow', reasoning: '', steps: ['send'], missingInfo: [] },
+        };
+      },
+      async step(): Promise<StepCallOutcome> {
+        stepCalls += 1;
+        if (stepCalls === 1) {
+          return {
+            ok: true,
+            modelId: 'fake/model',
+            degraded: false,
+            text: 'This needs your approval before I act:\n- **[A999]** send hello\nApprove or deny it on the Approvals page.',
+            toolCalls: [],
+          };
+        }
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: '',
+          toolCalls: [
+            {
+              toolCallId: 'call_real_approval',
+              toolName: 'exec.outbound',
+              input: { message: 'hello' },
+            },
+          ],
+        };
+      },
+    } as unknown as ModelRouter;
+
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner', title: 'phantom-approval-test' })
+      .returning();
+    const conversationId = (conversation as NonNullable<typeof conversation>).id;
+    createdConversationIds.push(conversationId);
+    await db.insert(messages).values({
+      conversationId,
+      role: 'user',
+      origin: 'owner',
+      parts: [{ type: 'text', text: 'send hello' }],
+      text: 'send hello',
+      embedding: new Array(1536).fill(0.01),
+    });
+    const { task } = await enqueueTask(db, {
+      event: { ...event(), conversationId },
+      type: 'chat_turn',
+    });
+    createdTaskIds.push(task.id);
+
+    const run = await executeTask({ db, router, dispatcher }, task.id);
+    expect(run.outcome).toBe('parked');
+    expect(stepCalls).toBe(2);
+    const [approval] = await db.select().from(approvals).where(eq(approvals.taskId, task.id));
+    expect(approval).toMatchObject({ status: 'pending', summary: 'send "hello"' });
+    expect(approval?.shortCode).not.toBe('A999');
+  });
+
   it('a crash mid-run retries and resumes from the checkpoint without double side effects', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const key = `t3-${Date.now()}`;
