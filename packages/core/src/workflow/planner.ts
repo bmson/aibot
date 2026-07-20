@@ -7,7 +7,33 @@ import { type Plan, PlanSchema } from '../events.js';
 import type { ModelRouter } from '../model-router/router.js';
 
 /** Bump whenever planner prompting changes behavior — recorded in tool_calls.decision. */
-export const PLANNER_VERSION = 1;
+export const PLANNER_VERSION = 2;
+
+const PLANNER_CONTEXT_LIMIT = 6000;
+
+/**
+ * The assistant's own prose is the least informative part of planner context
+ * and by far the longest. A few repeated "before I proceed, I need to know…"
+ * turns fill the whole budget and push the owner's actual answers out of it,
+ * so the planner re-derives 'clarify' from its own questions and the goal
+ * spins. Owner messages survive whole; the assistant's keep only their head.
+ */
+const PLANNER_ASSISTANT_CHAR_LIMIT = 400;
+
+export function plannerContext(window: ModelMessage[]): string {
+  return window
+    .map((message) => {
+      const content =
+        typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
+      const body =
+        message.role === 'assistant' && content.length > PLANNER_ASSISTANT_CHAR_LIMIT
+          ? `${content.slice(0, PLANNER_ASSISTANT_CHAR_LIMIT)}…`
+          : content;
+      return `${message.role}: ${body}`;
+    })
+    .join('\n')
+    .slice(-PLANNER_CONTEXT_LIMIT);
+}
 
 const TrivialSchema = z.object({
   trivial: z
@@ -24,6 +50,8 @@ function plannerSystem(agent: AgentRow): string {
     "- 'mission': long-horizon work spanning days/weeks (watching, waiting, recurring checks)",
     "- 'schedule': a one-off or recurring future action",
     "- 'clarify': you cannot act without more information from the owner — list missingInfo",
+    'Never ask for something the owner already answered earlier in the context, and never re-ask a question you already asked. Re-read the conversation for the answer before choosing clarify.',
+    'Prefer acting on a reasonable default over asking. Choose clarify only when a wrong guess would be costly or irreversible.',
     'Keep steps short and concrete. Note what information is missing. Do not invent goals.',
   ].join('\n');
 }
@@ -40,12 +68,7 @@ export async function planTask(
   agent: AgentRow,
   window: ModelMessage[],
 ): Promise<Plan | null> {
-  const contextText = window
-    .map(
-      (m) => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`,
-    )
-    .join('\n')
-    .slice(-6000);
+  const contextText = plannerContext(window);
 
   if (task.type === 'chat_turn' || task.type === 'sms_turn') {
     const triage = await deps.router.object<z.infer<typeof TrivialSchema>>('classify', {

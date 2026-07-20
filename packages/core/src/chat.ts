@@ -338,7 +338,7 @@ export async function persistMessage(
  */
 export async function createChatTask(
   db: Db,
-  input: { agentId: string; conversationId: string },
+  input: { agentId: string; conversationId: string; goalId?: string },
 ): Promise<TaskLease> {
   // Direct streaming owns this task without queueing it. Insert as pending and
   // claim it in one transaction so no poller can observe a running row without
@@ -353,6 +353,9 @@ export async function createChatTask(
         type: 'chat_turn',
         status: 'pending',
         trust: 'owner',
+        // Attributed to the goal when this is a goal's work chat, so the
+        // goal's history includes the turns the owner had in it.
+        goalId: input.goalId,
         budgetUsdLimit: budgetRow?.limitUsd ?? '0.25',
         trigger: { source: 'chat', conversationId: input.conversationId },
       })

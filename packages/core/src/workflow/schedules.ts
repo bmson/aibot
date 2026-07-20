@@ -89,6 +89,24 @@ function goalIdFromMetadata(metadata: unknown): string | undefined {
   return typeof goalId === 'string' ? goalId : undefined;
 }
 
+/**
+ * The goal a work chat belongs to, if any. Owner replies typed into a goal's
+ * work chat are answers *to that goal*; without this link they become tasks
+ * with no goal_id, the goal never learns it was answered, and its automatic
+ * sessions keep re-asking a question the owner already answered.
+ */
+export async function goalIdForConversation(
+  db: Db,
+  conversationId: string,
+): Promise<string | undefined> {
+  const [conversation] = await db
+    .select({ metadata: conversations.metadata })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId))
+    .limit(1);
+  return conversation ? goalIdFromMetadata(conversation.metadata) : undefined;
+}
+
 /** JSONB does not preserve object-key insertion order, so compare schedules structurally. */
 function sameJson(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;

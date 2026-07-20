@@ -1,5 +1,5 @@
 import type { Db, TaskRow } from '@assistant/db';
-import { approvals, messages, tasks, toolCalls } from '@assistant/db';
+import { approvals, goals, messages, tasks, toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { ZodType } from 'zod';
@@ -354,6 +354,30 @@ async function notifyOwnerAndConversation(
   }
 }
 
+/**
+ * A goal's automatic work session runs with nobody watching it. A run that
+ * ends without a single verified tool result therefore must not complete as
+ * 'done': the owner sees a green task, the goal keeps its old progress line,
+ * and the next session is re-seeded with the same stale state — the goal
+ * silently spins. Chat turns are excluded on purpose; there the owner is
+ * reading the same honesty message in real time.
+ */
+function isUnattendedGoalSession(task: TaskRow): boolean {
+  return task.goalId !== null && task.type !== 'chat_turn' && task.type !== 'sms_turn';
+}
+
+/**
+ * Park the goal itself, not just the task. goalInstruction() re-seeds every
+ * session from these columns, so an unanswered question has to land here or
+ * tomorrow's run starts from the same stale line and asks all over again.
+ */
+async function recordGoalBlocked(db: Db, goalId: string, question: string): Promise<void> {
+  await db
+    .update(goals)
+    .set({ nextAction: `Waiting on the owner: ${question}`.slice(0, 500), updatedAt: sql`now()` })
+    .where(eq(goals.id, goalId));
+}
+
 /** A retry must not duplicate the dashboard/chat copy of a final response. */
 async function persistFinalConversationOnce(
   db: Db,
@@ -418,10 +442,16 @@ async function finalizePendingResponse(
     }
   }
 
-  const completed = await completeTask(deps.db, task, {
-    status: pending.terminalStatus,
-    progress: pending.progress,
-  });
+  // The final text is delivered first either way; only the resting state of
+  // the task differs. needs_attention keeps it re-queueable from the Tasks
+  // page instead of closing it out as a completed run.
+  const completed =
+    pending.terminalStatus === 'needs_attention'
+      ? await markTaskNeedsAttention(deps.db, task, pending.progress)
+      : await completeTask(deps.db, task, {
+          status: pending.terminalStatus,
+          progress: pending.progress,
+        });
   if (!completed) return LOST_LEASE;
   return { outcome: pending.outcome, detail: pending.progress.slice(0, 200) };
 }
@@ -482,6 +512,24 @@ async function stageModelFinalResponse(
       taskId: task.id,
       unsupported: checked.unsupported,
       toolCalls: rows.map((row) => ({ toolName: row.toolName, status: row.status })),
+    });
+  }
+  // An automatic goal session that produced no verified tool result did no
+  // work, whatever its prose says. Surfacing it as needs_attention is what
+  // turns a goal that is quietly spinning into one the owner can see is stuck.
+  if (isUnattendedGoalSession(task) && !rows.some((row) => row.status === 'succeeded')) {
+    if (task.goalId) await recordGoalBlocked(deps.db, task.goalId, text);
+    await notifyOwnerAndConversation(
+      deps,
+      task,
+      `This goal's automatic session finished without completing any verified action. It needs you: ${text}`,
+    );
+    return stageFinalResponse(deps, task, state, window, {
+      ...pending,
+      text,
+      progress: text.slice(0, 200),
+      terminalStatus: 'needs_attention',
+      outcome: 'needs_attention',
     });
   }
   return stageFinalResponse(deps, task, state, window, {
@@ -1124,6 +1172,25 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
           ? `Before I proceed, I need to know: ${plan.missingInfo.join('; ')}`
           : 'I need more detail before I can act on this — what exactly would you like me to do?';
       window.push({ role: 'assistant', content: question } as ModelMessage);
+      // An automatic goal session has no owner present to answer, so a
+      // question is where the goal stops, not a completed run. Record it on
+      // the goal and park the task; otherwise the session closes as 'done',
+      // the goal keeps its previous progress line, and every later session
+      // re-asks the same question into an empty room.
+      if (isUnattendedGoalSession(task)) {
+        if (task.goalId) await recordGoalBlocked(deps.db, task.goalId, question);
+        await notifyOwnerAndConversation(
+          deps,
+          task,
+          `This goal's automatic session is blocked until you answer: ${question}`,
+        );
+        return stageFinalResponse(deps, lease, state, window, {
+          text: question,
+          progress: `blocked on owner input: ${question}`.slice(0, 200),
+          terminalStatus: 'needs_attention',
+          outcome: 'needs_attention',
+        });
+      }
       return stageFinalResponse(deps, lease, state, window, {
         text: question,
         progress: 'asked for clarification',

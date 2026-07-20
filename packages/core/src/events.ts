@@ -84,8 +84,11 @@ export type PendingJob = z.infer<typeof PendingJobSchema>;
 export const PendingFinalSchema = z.object({
   text: z.string(),
   progress: z.string(),
-  terminalStatus: z.enum(['done', 'failed']),
-  outcome: z.enum(['done', 'clarify', 'failed']),
+  // 'needs_attention' is terminal-for-now rather than terminal: an unattended
+  // goal session that verified nothing parks here so the owner can see it,
+  // and the Tasks page can re-queue it once they have acted.
+  terminalStatus: z.enum(['done', 'failed', 'needs_attention']),
+  outcome: z.enum(['done', 'clarify', 'failed', 'needs_attention']),
   /** Persisted before channel send; retries never duplicate an ambiguous accepted delivery. */
   deliveryAttempted: z.boolean().optional(),
 });

@@ -7,6 +7,7 @@ import {
   finishTask,
   getAgent,
   getOwnerCard,
+  goalIdForConversation,
   listMessages,
   loadConfig,
   persistMessage,
@@ -272,6 +273,9 @@ export async function POST(req: Request) {
           payload: { text: userText },
         },
         type: 'chat_turn',
+        // An answer typed into a goal's work chat belongs to that goal, so the
+        // goal's own sessions can see it was answered.
+        goalId: await goalIdForConversation(db, conversation.id),
       });
       return acceptedStreamResponse(task.id, {
         'x-conversation-id': conversation.id,
@@ -316,6 +320,7 @@ export async function POST(req: Request) {
   const task = await createChatTask(db, {
     agentId: agent.id,
     conversationId: conversation.id,
+    goalId: await goalIdForConversation(db, conversation.id),
   });
 
   let outcome: StreamOutcome;
