@@ -246,6 +246,90 @@ describe('response execution contract', () => {
     ).toMatchObject({ blocked: false, text });
   });
 
+  it('treats a bare Workspace link as a reference, not a creation claim', () => {
+    // Regression: linking a doc built in an earlier turn was rewritten into a
+    // flat denial that anything had been created.
+    const text =
+      "Got it! I'll continue adding the itinerary details to the Google Doc as I work on them. You can track updates here:\n[Itinerary Doc](https://docs.google.com/document/d/doc-1/edit)";
+    // The unbacked "I'll continue" is still caught; the link alone is not.
+    expect(enforceResponseContract(text, [])).toMatchObject({ unsupported: ['background'] });
+  });
+
+  it('still catches a mutation claim made alongside a Workspace link', () => {
+    const result = enforceResponseContract(
+      'Created the requested Google Doc: https://docs.google.com/document/d/doc-1/edit',
+      [],
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.unsupported).toContain('workspace');
+  });
+
+  it('types a Workspace link claim by its URL path', () => {
+    const result = enforceResponseContract(
+      'I updated your sheet: https://docs.google.com/spreadsheets/d/sheet-1/edit',
+      [],
+    );
+    expect(result.unsupported).toContain('spreadsheet');
+    expect(result.unsupported).not.toContain('workspace');
+  });
+
+  it('accepts an artifact reference backed by an earlier turn in the conversation', () => {
+    const text = 'I created the itinerary document.';
+    expect(
+      enforceResponseContract(text, [
+        {
+          toolName: 'docs.create',
+          status: 'succeeded',
+          result: { documentId: 'doc-1' },
+          fromCurrentTask: false,
+        },
+      ]),
+    ).toMatchObject({ blocked: false, text });
+  });
+
+  it.each([
+    ['I sent the follow-up email.', 'gmail.send', { deliveryStatus: 'sent' }],
+    ['I submitted the application.', 'application.submit', { confirmationId: 'app-1' }],
+    ['I booked the interview on your calendar.', 'calendar.create', { eventId: 'event-1' }],
+  ])(
+    'does not let an earlier turn authorise a fresh outward-facing action: %s',
+    (text, toolName, result) => {
+      const guarded = enforceResponseContract(text, [
+        { toolName, status: 'succeeded', result, fromCurrentTask: false },
+      ]);
+      expect(guarded.blocked).toBe(true);
+    },
+  );
+
+  it('says when the verified action actually happened', () => {
+    const result = enforceResponseContract('I updated the doc and sent the client an email.', [
+      {
+        toolName: 'docs.create',
+        status: 'succeeded',
+        result: { documentId: 'doc-1' },
+        fromCurrentTask: false,
+      },
+    ]);
+    expect(result.blocked).toBe(true);
+    expect(result.unsupported).toContain('outbound');
+    expect(result.text).toContain('the Google Doc action completed earlier in this conversation');
+    expect(result.text).not.toContain('I have not created');
+  });
+
+  it('does not report an earlier turn failure as this attempt failing', () => {
+    const result = enforceResponseContract('I emailed the client.', [
+      {
+        toolName: 'gmail.send',
+        status: 'failed',
+        result: null,
+        error: 'quota',
+        fromCurrentTask: false,
+      },
+    ]);
+    expect(result.blocked).toBe(true);
+    expect(result.text).not.toContain('quota');
+  });
+
   it('fails closed when a claimed email has a success status but an unknown delivery result', () => {
     const result = enforceResponseContract('The email has been delivered.', [
       { toolName: 'gmail.send', status: 'succeeded', result: { deliveryStatus: 'unknown' } },

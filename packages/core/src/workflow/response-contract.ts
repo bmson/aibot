@@ -10,6 +10,11 @@ export interface ActionEvidence {
   status: string;
   result: unknown;
   error?: string | null;
+  /**
+   * False when the row comes from an earlier task in the same conversation.
+   * Absent means "this task" so existing callers keep the strict behaviour.
+   */
+  fromCurrentTask?: boolean;
 }
 
 type ActionKind =
@@ -160,8 +165,23 @@ function browserApplicationConfirmed(evidence: ActionEvidence): boolean {
   });
 }
 
+/**
+ * Outward-facing, hard-to-reverse actions must be evidenced by THIS task: a
+ * send, submission, or booking from an earlier turn never authorises claiming
+ * a fresh one. Artifact, research, and background kinds accept
+ * conversation-scoped evidence, because the thing they refer to still exists —
+ * truthfully mentioning a doc created two turns ago was being rewritten into
+ * "I have not created anything outside this chat".
+ */
+const CURRENT_TASK_ONLY: ReadonlySet<ActionKind> = new Set(['outbound', 'application', 'calendar']);
+
+function inScope(kind: ActionKind, item: ActionEvidence): boolean {
+  return !CURRENT_TASK_ONLY.has(kind) || item.fromCurrentTask !== false;
+}
+
 function supports(kind: ActionKind, evidence: ActionEvidence[]): boolean {
-  const names = evidence.filter(successful).map((item) => item.toolName);
+  const usable = evidence.filter((item) => successful(item) && inScope(kind, item));
+  const names = usable.map((item) => item.toolName);
   switch (kind) {
     case 'workspace':
       return names.some(
@@ -181,7 +201,7 @@ function supports(kind: ActionKind, evidence: ActionEvidence[]): boolean {
     case 'application':
       return (
         names.some((name) => name === 'application.submit') ||
-        evidence.some(browserApplicationConfirmed)
+        usable.some(browserApplicationConfirmed)
       );
     case 'calendar':
       return names.some((name) => /^calendar\.(create|update|cancel|delete)/.test(name));
@@ -197,6 +217,33 @@ function supports(kind: ActionKind, evidence: ActionEvidence[]): boolean {
   }
 }
 
+/**
+ * A Google Workspace link is a *reference*, not a claim. Treating every
+ * occurrence of the URL as a creation claim meant that linking a doc the
+ * assistant really did build in an earlier turn ("you can track updates
+ * here: <link>") was rewritten into a flat denial that it had created
+ * anything. Require a completed mutation verb alongside the link, and read
+ * the artifact kind off the URL path so a Sheets link is not reported as a
+ * document action.
+ */
+const WORKSPACE_MUTATION =
+  /\b(?:created|shared|uploaded|saved|updated|published|generated|prepared|exported|added|wrote|written|filled|populated)\b/i;
+
+const GOOGLE_ARTIFACT_URL = {
+  workspace: /https:\/\/docs\.google\.com\/document\//i,
+  spreadsheet: /https:\/\/docs\.google\.com\/spreadsheets\//i,
+  presentation: /https:\/\/docs\.google\.com\/presentation\//i,
+} as const;
+
+/**
+ * Line-scoped so the verb has to travel with the link. "I updated the
+ * itinerary. Here it is: <link>" is a claim; a bare link under a future-tense
+ * sentence is not.
+ */
+function googleArtifactMutationClaim(text: string, url: RegExp): boolean {
+  return text.split('\n').some((line) => url.test(line) && WORKSPACE_MUTATION.test(line));
+}
+
 function claimedKinds(text: string): ActionKind[] {
   const kinds = new Set<ActionKind>();
   const lower = text.toLowerCase();
@@ -208,7 +255,7 @@ function claimedKinds(text: string): ActionKind[] {
       'created|shared|uploaded|downloaded|saved|deleted|updated|published|generated|prepared|exported|added',
       'created|shared|uploaded|downloaded|saved|deleted|updated|published|generated|prepared|exported|added|ready|live|active|available',
     ) ||
-    /https:\/\/docs\.google\.com\//.test(text) ||
+    googleArtifactMutationClaim(text, GOOGLE_ARTIFACT_URL.workspace) ||
     (/\b(?:document|doc|file)\b/.test(lower) && artifactStatus.test(text))
   ) {
     kinds.add('workspace');
@@ -220,6 +267,7 @@ function claimedKinds(text: string): ActionKind[] {
       'created|shared|uploaded|downloaded|saved|deleted|updated|published|generated|prepared|exported|added',
       'created|shared|uploaded|downloaded|saved|deleted|updated|published|generated|prepared|exported|added|ready|live|active|available',
     ) ||
+    googleArtifactMutationClaim(text, GOOGLE_ARTIFACT_URL.spreadsheet) ||
     (/\b(?:spreadsheet|sheet)\b/.test(lower) && artifactStatus.test(text)) ||
     countedTracker.test(text)
   ) {
@@ -232,6 +280,7 @@ function claimedKinds(text: string): ActionKind[] {
       'created|shared|uploaded|downloaded|saved|deleted|updated|published|generated|prepared|exported|added',
       'created|shared|uploaded|downloaded|saved|deleted|updated|published|generated|prepared|exported|added|ready|live|active|available',
     ) ||
+    googleArtifactMutationClaim(text, GOOGLE_ARTIFACT_URL.presentation) ||
     (/\b(?:deck|slides|presentation)\b/.test(lower) && artifactStatus.test(text))
   ) {
     kinds.add('presentation');
@@ -309,9 +358,10 @@ function claimedKinds(text: string): ActionKind[] {
   return [...kinds];
 }
 
+/** Only this task's failures — an earlier turn's error is not this attempt. */
 function failureDetails(evidence: ActionEvidence[]): string[] {
   return evidence
-    .filter((item) => !successful(item))
+    .filter((item) => item.fromCurrentTask !== false && !successful(item))
     .slice(-2)
     .map(
       (item) => `${item.toolName}: ${item.error || 'the tool did not return a successful result'}`,
@@ -342,32 +392,39 @@ const UNSUPPORTED_LABEL: Record<ActionKind, string> = {
   background: 'the promised background work',
 };
 
+function describeTool(name: string): string | undefined {
+  if (name === 'drive.download') return 'the requested Drive file was staged';
+  if (/^docs\.(?:create|append|share)$/.test(name)) return 'the Google Doc action completed';
+  if (name === 'workspace.write') return 'the workspace file was written';
+  if (/^sheets\.(?:create|append_rows|write_rows)$/.test(name)) {
+    return 'the Google Sheet action completed';
+  }
+  if (/^slides\.(?:create|append)$/.test(name)) return 'the Google Slides action completed';
+  if (name === 'gmail.send') return 'the email was sent';
+  if (name === 'sms.send' || name === 'email.send') return 'the message was sent';
+  if (/^calendar\.(create|update|cancel|delete)/.test(name)) return 'the calendar action completed';
+  if (name === 'web.fetch') return 'the web request completed';
+  if (name === 'application.submit') return 'the application was submitted';
+  if (name === 'applications.watch_confirmation') return 'the confirmation watch was created';
+  if (name === 'mission.update' || name === 'task.schedule') {
+    return 'the background task was created or updated';
+  }
+  return undefined;
+}
+
+/**
+ * Prior-turn evidence is real, but reporting it unqualified would imply the
+ * work happened in response to *this* request. Say when it happened.
+ */
 function verifiedActionDescriptions(evidence: ActionEvidence[]): string[] {
   const descriptions = new Set<string>();
   for (const item of evidence) {
     if (!successful(item)) continue;
-    const name = item.toolName;
-    if (name === 'drive.download') descriptions.add('the requested Drive file was staged');
-    else if (/^docs\.(?:create|append|share)$/.test(name)) {
-      descriptions.add('the Google Doc action completed');
-    } else if (name === 'workspace.write') descriptions.add('the workspace file was written');
-    else if (/^sheets\.(?:create|append_rows|write_rows)$/.test(name)) {
-      descriptions.add('the Google Sheet action completed');
-    } else if (/^slides\.(?:create|append)$/.test(name)) {
-      descriptions.add('the Google Slides action completed');
-    } else if (name === 'gmail.send') descriptions.add('the email was sent');
-    else if (name === 'sms.send' || name === 'email.send') descriptions.add('the message was sent');
-    else if (/^calendar\.(create|update|cancel|delete)/.test(name)) {
-      descriptions.add('the calendar action completed');
-    } else if (name === 'web.fetch') descriptions.add('the web request completed');
-    else if (name === 'application.submit') descriptions.add('the application was submitted');
-    else if (name === 'applications.watch_confirmation') {
-      descriptions.add('the confirmation watch was created');
-    } else if (name === 'mission.update' || name === 'task.schedule') {
-      descriptions.add('the background task was created or updated');
-    }
+    const when = item.fromCurrentTask === false ? ' earlier in this conversation' : '';
+    const described = describeTool(item.toolName);
+    if (described) descriptions.add(`${described}${when}`);
     if (browserApplicationConfirmed(item)) {
-      descriptions.add('the portal returned an explicit application confirmation');
+      descriptions.add(`the portal returned an explicit application confirmation${when}`);
     }
   }
   return [...descriptions];
