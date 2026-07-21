@@ -12,7 +12,7 @@
     "@assistant/core": "workspace:*",
     "@assistant/db": "workspace:*",
     "@assistant/tools": "workspace:*",
-    "@hono/node-server": "^1.14.0",
+    "@hono/node-server": "^2.0.11",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.220.0",
     "@opentelemetry/sdk-node": "^0.220.0",
