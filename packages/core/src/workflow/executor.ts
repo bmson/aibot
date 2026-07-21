@@ -47,6 +47,7 @@ import {
   checkpointTask,
   claimTask,
   completeTask,
+  enqueueTask,
   markTaskNeedsAttention,
   parkForApproval,
   parkForBudget,
@@ -216,6 +217,18 @@ export function roleForTask(task: Pick<TaskRow, 'type' | 'goalId'>, plan: Plan |
 // the checkpoint stays small because most tool results are far under the cap.
 const RESULT_CHAR_LIMIT = 8000;
 const CONTEXT_WINDOW_LIMIT = 60;
+
+/**
+ * Trigger-payload marker for the D9 known-sender reply child: an assistant-trust
+ * adhoc task whose sole job is to propose a pre-drafted reply back to a known
+ * (authenticated non-owner) email sender, gated by gmail.send's owner approval.
+ */
+const KNOWN_SENDER_REPLY_KIND = 'known_sender_reply';
+
+function isKnownSenderReplyTask(task: Pick<TaskRow, 'trigger'>): boolean {
+  const trigger = task.trigger as { payload?: { kind?: unknown } } | null;
+  return trigger?.payload?.kind === KNOWN_SENDER_REPLY_KIND;
+}
 
 const LOST_LEASE: ExecuteResult = {
   outcome: 'not_claimable',
@@ -653,6 +666,9 @@ async function stageModelFinalResponse(
       outcome: 'needs_attention',
     });
   }
+  // A known contact's plain answer would otherwise dead-end in the dashboard;
+  // propose it back to them (owner-approved) so the thread does not go silent.
+  await maybeEnqueueKnownSenderReply(deps, task, text);
   return stageFinalResponse(deps, task, state, window, {
     ...pending,
     text,
@@ -660,8 +676,118 @@ async function stageModelFinalResponse(
   });
 }
 
+/**
+ * D9 — close the known-sender email dead-end.
+ *
+ * A KNOWN contact (an authenticated, non-owner sender) whose email_triage task
+ * ends in a plain answer or a clarify question gets NOTHING back: deliverEmailFinal
+ * auto-sends only to the owner, so the drafted reply lands solely in the dashboard
+ * and the sender's thread goes silent. When the triage model itself took no
+ * outbound action (no gmail.send / gmail.create_draft row), deterministically
+ * enqueue an assistant-trust adhoc child that PROPOSES exactly that reply via
+ * gmail.send. Because gmail.send is risk:'approval', the owner sees the approval
+ * card and approves or denies — nothing is ever auto-sent to a third party. The
+ * child is stamped taintedOrigin (S1): the draft derives from the sender's own
+ * message, so the child runs tainted and every outward call stays gated.
+ *
+ * Unknown senders are unchanged (dashboard only). Idempotent on externalEventId:
+ * a finalization retry never enqueues a duplicate child.
+ */
+async function maybeEnqueueKnownSenderReply(
+  deps: ExecutorDeps,
+  task: TaskRow,
+  draft: string,
+): Promise<void> {
+  const conversationId = task.conversationId;
+  if (task.type !== 'email_triage' || task.trust !== 'known' || !conversationId) return;
+  const reply = draft.trim();
+  if (!reply) return;
+
+  const payload = (task.trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
+  const asStr = (v: unknown) => (typeof v === 'string' ? v : '');
+  const to = asStr(payload.from);
+  const threadId = asStr(payload.threadId);
+  // Without an authenticated recipient and a thread to reply on there is nothing
+  // to send; leave the answer in the dashboard as before.
+  if (!to || !threadId) return;
+  const subject = asStr(payload.subject);
+  const rfcMessageId = asStr(payload.rfcMessageId);
+
+  // If the triage model already drafted or sent a reply of its own, a reply path
+  // exists — do not propose a second one. (gmail.send parks for approval before
+  // it could reach this finalization, but a resumed-and-sent call leaves a row.)
+  const [outbound] = await deps.db
+    .select({ id: toolCalls.id })
+    .from(toolCalls)
+    .where(
+      and(
+        eq(toolCalls.taskId, task.id),
+        inArray(toolCalls.toolName, ['gmail.send', 'gmail.create_draft']),
+      ),
+    )
+    .limit(1);
+  if (outbound) return;
+
+  const replySubject = /^re:/i.test(subject) ? subject : `Re: ${subject || '(no subject)'}`;
+  const instruction = [
+    `A known contact (${to}) emailed you, and this reply has been drafted for them.`,
+    `Send it now by calling gmail.send exactly once with to: ["${to}"], subject: ${JSON.stringify(
+      replySubject,
+    )}, threadId: "${threadId}", and body set to the draft below VERBATIM.`,
+    'Do not rewrite, shorten, translate, or add to the draft, and do not call any other tool. gmail.send always requires the owner to approve the exact message before anything is sent.',
+    '',
+    'Draft to send:',
+    reply,
+  ].join('\n');
+
+  await enqueueTask(deps.db, {
+    event: {
+      source: 'internal',
+      externalEventId: `known-sender-reply:${task.id}`,
+      agentId: task.agentId,
+      conversationId,
+      trust: 'assistant',
+      payload: {
+        kind: KNOWN_SENDER_REPLY_KIND,
+        to,
+        threadId,
+        subject: replySubject,
+        rfcMessageId,
+        draft: reply,
+        instruction,
+        // External provenance carried forward so the child runs tainted and any
+        // outward call it makes stays approval-gated.
+        taintedOrigin: true,
+      },
+    },
+    type: 'adhoc',
+    parentTaskId: task.id,
+    // Fixed next action: send the drafted reply. A pre-set plan skips planning so
+    // the executor forces the tool call on step 0 (mustAct) rather than leaving
+    // it to the planner.
+    plan: {
+      action: 'workflow',
+      reasoning: 'Propose the drafted reply to the known sender for owner approval',
+      steps: ['Send the drafted reply via gmail.send (owner-approved)'],
+      missingInfo: [],
+    },
+    maxSteps: 4,
+  });
+}
+
 async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]> {
   if (task.conversationId) {
+    // A deterministically-enqueued known-sender reply child (D9) carries its
+    // exact instruction + draft on the trigger. Seed from that, never the shared
+    // (known-trust) email thread, so the child proposes precisely that reply and
+    // reads no other message in the conversation.
+    if (isKnownSenderReplyTask(task)) {
+      const instruction = (task.trigger as { payload?: { instruction?: unknown } } | null)?.payload
+        ?.instruction;
+      if (typeof instruction === 'string' && instruction.length > 0) {
+        return [{ role: 'user', content: instruction } as ModelMessage];
+      }
+    }
     if (task.trust === 'known' || task.trust === 'unknown') {
       const trigger = task.trigger as {
         source?: unknown;
@@ -886,10 +1012,17 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   // A direct document/sheet/slides request skips the generic planner, then
   // forces the matching creation tool. The model still authors the actual
   // title and content; deterministic blank placeholders are never dispatched.
+  //
+  // The D9 known-sender reply child is exempt: its instruction embeds the sender's
+  // own draft, whose free text could otherwise trip the artifact/doc-URL heuristics
+  // and force docs.create/docs.get instead of the intended gmail.send.
+  const isKnownReply = isKnownSenderReplyTask(task);
   const artifactIntent =
-    state.step === 0 ? requestedArtifactIntent(latestUserText(window) ?? '') : undefined;
+    state.step === 0 && !isKnownReply
+      ? requestedArtifactIntent(latestUserText(window) ?? '')
+      : undefined;
   const documentReadIntent =
-    state.step === 0 && !artifactIntent
+    state.step === 0 && !artifactIntent && !isKnownReply
       ? await unreadSharedDocumentIntent(db, task, window)
       : undefined;
   let browserStageRemainder: ProposedToolCall[] = [];
@@ -1309,6 +1442,9 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
           outcome: 'needs_attention',
         });
       }
+      // A known contact's clarify question would otherwise dead-end in the
+      // dashboard; propose it back to them (owner-approved) so the thread lives.
+      await maybeEnqueueKnownSenderReply(deps, task, question);
       return stageFinalResponse(deps, lease, state, window, {
         text: question,
         progress: 'asked for clarification',
