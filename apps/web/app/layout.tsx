@@ -32,6 +32,7 @@ const navItems = [
   { href: '/import', label: 'Import', utility: true },
   { href: '/costs', label: 'Costs', utility: true },
   { href: '/anomalies', label: 'Anomalies', utility: true },
+  { href: '/improvements', label: 'Improvements', utility: true },
   { href: '/settings', label: 'Settings', utility: true },
 ];
 

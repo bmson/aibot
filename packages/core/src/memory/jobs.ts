@@ -1,6 +1,7 @@
 import type { Db, TaskRow } from '@assistant/db';
 import type { ModelRouter } from '../model-router/router.js';
 import { runAnomalyScan } from '../workflow/anomaly.js';
+import { runSelfImprove } from '../workflow/improve.js';
 import { runMemoryConsolidation } from './consolidation.js';
 import { runMemoryExtraction } from './extraction.js';
 import { runImportJob, type WorkspaceReader } from './import.js';
@@ -22,7 +23,8 @@ export type CodeJobName =
   | 'import.run'
   | 'voice.ingest'
   | 'anomaly.scan'
-  | 'skill.reflect';
+  | 'skill.reflect'
+  | 'self.improve';
 
 const CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.extract',
@@ -32,6 +34,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'voice.ingest',
   'anomaly.scan',
   'skill.reflect',
+  'self.improve',
 ]);
 
 export interface CodeJobOutcome {
@@ -102,6 +105,14 @@ export async function runCodeJob(
       return {
         done: true,
         summary: `skill reflection: ${r.skillsDrafted} skill(s) drafted from ${r.tasksReviewed} reviewed task(s)`,
+      };
+    }
+    case 'self.improve': {
+      await deps.heartbeat?.();
+      const r = await runSelfImprove(deps, { taskId: task.id });
+      return {
+        done: true,
+        summary: `self-improve: ${r.proposalsDrafted} proposal(s) from ${r.patterns} failure pattern(s)${r.experienceSaved ? ', experience saved' : ''}`,
       };
     }
   }

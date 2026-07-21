@@ -344,6 +344,13 @@ const scheduleSeed = [
     cron: '30 23 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.15', job: 'skill.reflect' },
   },
+  // Phase 12: nightly self-improvement eval — mine failures/retries/cost outliers
+  // into an experience memory + owner-approved change proposals (never applied).
+  {
+    name: 'self-improve',
+    cron: '0 0 * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.15', job: 'self.improve' },
+  },
 ] as const;
 
 /** Schedules whose definition the seed owns — updated in place on re-seed (prod picks up changes on deploy). */
@@ -353,6 +360,7 @@ const SEED_OWNED_SCHEDULES = new Set([
   'chat-segmentation',
   'anomaly-scan',
   'skill-reflection',
+  'self-improve',
 ]);
 
 for (const s of scheduleSeed) {

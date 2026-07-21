@@ -556,6 +556,41 @@ export const skills = pgTable(
   ],
 );
 
+/**
+ * Self-improvement proposals (Phase 12): a nightly eval mines failures, retries,
+ * dead-letters, and cost outliers into concrete, owner-approved change proposals
+ * — a model-role swap, an approval-policy adjustment, or an advisory prompt/note.
+ * NEVER auto-applied: the owner approves, dismisses, and only then is an
+ * applyable change (model_role, policy) enacted. `change` is kind-specific.
+ */
+export const improvementProposals = pgTable(
+  'improvement_proposals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    kind: text('kind').notNull(),
+    title: text('title').notNull(),
+    rationale: text('rationale').notNull().default(''),
+    /** The concrete change to enact on approval, kind-specific (empty for advisory kinds). */
+    change: jsonb('change').notNull().default({}),
+    /** tool_calls.id / task.id values that evidence the pattern. */
+    evidenceIds: text('evidence_ids').array().notNull().default([]),
+    status: text('status').notNull().default('open'),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      'improvement_proposals_kind_check',
+      sql`${t.kind} IN ('model_role','policy','prompt','note')`,
+    ),
+    check('improvement_proposals_status_check', sql`${t.status} IN ('open','applied','dismissed')`),
+    uniqueIndex('improvement_proposals_dedup_idx').on(t.agentId, t.kind, t.title),
+    index('improvement_proposals_status_idx').on(t.agentId, t.status),
+  ],
+);
+
 // ── Memory ───────────────────────────────────────────────────────────────────
 
 export const memories = pgTable(
@@ -1131,6 +1166,7 @@ export type ContactRow = typeof contacts.$inferSelect;
 export type OccasionRow = typeof occasions.$inferSelect;
 export type AnomalyRow = typeof anomalies.$inferSelect;
 export type SkillRow = typeof skills.$inferSelect;
+export type ImprovementProposalRow = typeof improvementProposals.$inferSelect;
 export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;
