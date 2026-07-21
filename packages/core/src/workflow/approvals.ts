@@ -1,5 +1,13 @@
-import { approvalPolicies, approvals, type Db, tasks, toolCalls } from '@assistant/db';
+import {
+  approvalPolicies,
+  approvals,
+  type Db,
+  type TaskRow,
+  tasks,
+  toolCalls,
+} from '@assistant/db';
 import { and, eq, inArray, lte, sql } from 'drizzle-orm';
+import { persistMessage } from '../chat.js';
 import { getQueueNotifier } from '../queue.js';
 import { wakeTask } from './machine.js';
 
@@ -120,6 +128,114 @@ export async function resolveApproval(
     toolCallId: resolved.toolCallId,
     approvalId: resolved.id,
   };
+}
+
+/**
+ * Record that the park notices for these approvals reached the owner. An
+ * approval whose notified_channels is still empty after a grace period was
+ * parked by a worker that crashed between the park commit and the notices —
+ * renotifyStalledApprovals() re-emits those.
+ */
+export async function markApprovalsNotified(
+  db: Db,
+  approvalIds: string[],
+  channels: string[],
+): Promise<void> {
+  if (approvalIds.length === 0) return;
+  await db
+    .update(approvals)
+    .set({ notifiedChannels: channels })
+    .where(and(inArray(approvals.id, approvalIds), eq(approvals.status, 'pending')));
+}
+
+/**
+ * Sweep backstop for a crash between approval park and notify: the task sits
+ * in waiting_approval with a pending approval row, but no SMS/email/dashboard
+ * notice ever went out — silent until the 24h expiry. Re-emit the notices for
+ * any un-notified pending approval older than the grace window, then stamp it.
+ * At-least-once safe: a concurrent stamp just makes the next sweep skip it.
+ */
+export async function renotifyStalledApprovals(
+  db: Db,
+  notifyApproval?: (
+    task: TaskRow,
+    notices: Array<{ taskId: string; shortCode: string; summary: string }>,
+  ) => Promise<void>,
+  opts: { olderThanMinutes?: number; batch?: number } = {},
+): Promise<number> {
+  const olderThanMinutes = opts.olderThanMinutes ?? 5;
+  const rows = await db
+    .select({ approval: approvals, task: tasks })
+    .from(approvals)
+    .innerJoin(tasks, eq(approvals.taskId, tasks.id))
+    .where(
+      and(
+        eq(approvals.status, 'pending'),
+        sql`cardinality(${approvals.notifiedChannels}) = 0`,
+        lte(approvals.requestedAt, sql`now() - make_interval(mins => ${olderThanMinutes})`),
+        eq(tasks.status, 'waiting_approval'),
+      ),
+    )
+    .limit(opts.batch ?? 50);
+  if (rows.length === 0) return 0;
+
+  const byTask = new Map<string, { task: TaskRow; notices: (typeof rows)[number]['approval'][] }>();
+  for (const row of rows) {
+    const entry = byTask.get(row.task.id) ?? { task: row.task, notices: [] };
+    entry.notices.push(row.approval);
+    byTask.set(row.task.id, entry);
+  }
+
+  let renotified = 0;
+  for (const { task, notices } of byTask.values()) {
+    try {
+      let ownerNotified = false;
+      if (notifyApproval) {
+        await notifyApproval(
+          task,
+          notices.map((approval) => ({
+            taskId: task.id,
+            shortCode: approval.shortCode,
+            summary: approval.summary,
+          })),
+        );
+        ownerNotified = true;
+      }
+      if (task.conversationId) {
+        const text = [
+          'This needs your approval before I act:',
+          ...notices.map((approval) => `- **[${approval.shortCode}]** ${approval.summary}`),
+          "Approve or deny it on the Approvals page — I'll pick up from there.",
+        ].join('\n');
+        await persistMessage(db, {
+          conversationId: task.conversationId,
+          taskId: task.id,
+          role: 'assistant',
+          origin: 'assistant',
+          parts: [
+            { type: 'text', text },
+            ...notices.map((approval) => ({
+              type: 'approval',
+              approvalId: approval.id,
+              shortCode: approval.shortCode,
+              summary: approval.summary,
+            })),
+          ],
+          text,
+        });
+      }
+      await markApprovalsNotified(
+        db,
+        notices.map((approval) => approval.id),
+        ownerNotified ? ['owner', 'conversation'] : ['conversation'],
+      );
+      renotified += notices.length;
+    } catch (err) {
+      // Leave the rows unstamped — the next sweep retries this task's notices.
+      console.error('approval re-notification failed', { taskId: task.id }, err);
+    }
+  }
+  return renotified;
 }
 
 /**

@@ -222,11 +222,14 @@ export async function notifyOwnerBySms(
   // without a Twilio client or config. A missing notifier is a silent no-op,
   // never an error — owner pings are best-effort.
   if (!deps.twilio?.configured() || !deps.config?.OWNER_PHONE) return;
+  // critical: these pings fire exactly when something needs the owner (failure,
+  // stall, escalation) — a budget cap must degrade them last, like final replies.
   await sendMeteredSms(deps, {
     to: deps.config.OWNER_PHONE,
     text: input.text.slice(0, 480),
     taskId: input.taskId,
     description: 'owner async update',
+    critical: true,
   });
 }
 
@@ -237,11 +240,14 @@ export async function notifyApprovalsBySms(
 ): Promise<void> {
   if (!deps.twilio.configured() || !deps.config.OWNER_PHONE) return;
   for (const approval of approvals) {
+    // critical: the out-of-band ping is the whole point of an approval park —
+    // dropping it at a budget cap is exactly when the owner most needs it.
     await sendMeteredSms(deps, {
       to: deps.config.OWNER_PHONE,
       text: `Approval ${approval.shortCode} — ${approval.summary.slice(0, 120)}. Reply YES ${approval.shortCode} or NO ${approval.shortCode} (or use the dashboard).`,
       taskId: approval.taskId,
       description: `approval notification ${approval.shortCode}`,
+      critical: true,
     });
   }
 }

@@ -27,6 +27,7 @@ import { codeJobName, runCodeJob } from '../memory/jobs.js';
 import { type RecallSource, recallRelevantContext, recentWindowStart } from '../memory/recall.js';
 import type { ModelRole, ModelRouter, ProposedToolCall } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
+import { markApprovalsNotified } from './approvals.js';
 import {
   type ArtifactIntent,
   artifactExecutionFailure,
@@ -62,6 +63,7 @@ import {
   enforceResponseContract,
   isSimulatedApprovalNotice,
 } from './response-contract.js';
+import { GOAL_BLOCKED_PREFIX } from './schedules.js';
 
 /** Structural port implemented by @assistant/tools' ToolDispatcher — keeps core free of a package cycle. */
 export interface DispatcherPort {
@@ -407,7 +409,10 @@ function isUnattendedGoalSession(task: TaskRow): boolean {
 async function recordGoalBlocked(db: Db, goalId: string, question: string): Promise<void> {
   await db
     .update(goals)
-    .set({ nextAction: `Waiting on the owner: ${question}`.slice(0, 500), updatedAt: sql`now()` })
+    .set({
+      nextAction: `${GOAL_BLOCKED_PREFIX} ${question}`.slice(0, 500),
+      updatedAt: sql`now()`,
+    })
     .where(eq(goals.id, goalId));
 }
 
@@ -1152,12 +1157,17 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         },
       ]);
       if (!parked) return LOST_LEASE;
+      let ownerNotified = false;
       if (deps.notifyApproval) {
-        await deps
+        ownerNotified = await deps
           .notifyApproval(task, [
             { taskId: task.id, shortCode: outcome.shortCode, summary: outcome.summary },
           ])
-          .catch((err) => console.error('approval notification failed', err));
+          .then(() => true)
+          .catch((err) => {
+            console.error('approval notification failed', err);
+            return false;
+          });
       }
       await postConversationNotice(
         db,
@@ -1171,6 +1181,11 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
             summary: outcome.summary,
           },
         ],
+      );
+      await markApprovalsNotified(
+        db,
+        [outcome.approvalId],
+        ownerNotified ? ['owner', 'conversation'] : ['conversation'],
       );
       return { outcome: 'parked', detail: 'document read awaiting approval' };
     }
@@ -1715,10 +1730,15 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       if (pendingApprovals.length > 0) {
         const parked = await parkForApproval(db, lease, state, pendingApprovals);
         if (!parked) return LOST_LEASE;
+        let ownerNotified = false;
         if (deps.notifyApproval && approvalNotices.length > 0) {
-          await deps
+          ownerNotified = await deps
             .notifyApproval(task, approvalNotices)
-            .catch((err) => console.error('approval notification failed', err));
+            .then(() => true)
+            .catch((err) => {
+              console.error('approval notification failed', err);
+              return false;
+            });
         }
         // The conversation must not go silent while parked — tell the owner
         // exactly what is waiting and where to approve it.
@@ -1736,6 +1756,11 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
             shortCode: notice.shortCode,
             summary: notice.summary,
           })),
+        );
+        await markApprovalsNotified(
+          db,
+          approvalNotices.map((notice) => notice.approvalId),
+          ownerNotified ? ['owner', 'conversation'] : ['conversation'],
         );
         return { outcome: 'parked', detail: `${pendingApprovals.length} approval(s) pending` };
       }

@@ -5,18 +5,38 @@ import {
   type Db,
   type GoalRow,
   goals,
+  messages,
   type ScheduleRow,
   schedules,
   tasks,
 } from '@assistant/db';
 import { Cron } from 'croner';
-import { and, eq, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import { persistMessage } from '../chat.js';
 import { InboundEventSchema } from '../events.js';
-import { enqueueTask, type TaskType } from './machine.js';
+import { completeTask, enqueueTask, type TaskType } from './machine.js';
 
 const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'];
 const GOAL_SCHEDULE_PREFIX = 'goal:';
+
+/**
+ * recordGoalBlocked() writes the owner-facing question behind this prefix on
+ * goals.next_action. The schedule gate reads it back to tell "waiting on an
+ * answer" apart from "stopped for some other reason", and the Goals page uses
+ * it to show a blocked badge instead of a healthy-looking countdown.
+ */
+export const GOAL_BLOCKED_PREFIX = 'Waiting on the owner:';
+
+/**
+ * Progress marker stamped on a stalled session the gate cancels to make room
+ * for its replacement. Distinct from an owner cancellation so the anti-thrash
+ * check can still count the underlying stall.
+ */
+export const GOAL_SESSION_SUPERSEDED = 'superseded by the next automatic session';
+
+/** Task types where the owner is present in the exchange (see executor's isUnattendedGoalSession). */
+const ATTENDED_GOAL_TASK_TYPES = ['chat_turn', 'sms_turn'];
+const STALLED_SESSION_STATUSES = ['needs_attention', 'failed'];
 
 /**
  * A goal session is not a chat turn and cannot live on the chat-turn default.
@@ -311,6 +331,121 @@ export async function syncGoalAutomations(db: Db): Promise<number> {
   return synced;
 }
 
+/** Any owner-authored message in the conversation after `since`? */
+async function ownerRepliedSince(
+  db: Db,
+  conversationId: string | undefined,
+  since: Date,
+): Promise<boolean> {
+  if (!conversationId) return false;
+  const [row] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        eq(messages.origin, 'owner'),
+        gt(messages.createdAt, since),
+      ),
+    )
+    .limit(1);
+  return Boolean(row);
+}
+
+export interface GoalGateVerdict {
+  fire: boolean;
+  /** Stalled needs_attention sessions to supersede before the new one spawns. */
+  cancelTaskIds: string[];
+  reason: string;
+}
+
+/**
+ * Decide whether a goal's recurring session may fire. A needs_attention
+ * session used to be an invisible dead-end: it is non-terminal, so the old
+ * any-non-terminal-task guard skipped every future firing while next_run_at
+ * kept advancing — the goal looked healthy on the dashboard and never ran
+ * again until the owner manually cleared the task. Now automation pauses only
+ * while a session is genuinely in flight or genuinely waiting on the owner,
+ * and a stalled session is superseded the moment work can resume.
+ * Exported for tests; runDueSchedules is the only production caller.
+ */
+export async function goalAutomationGate(
+  db: Db,
+  goalId: string,
+  workChatId: string | undefined,
+): Promise<GoalGateVerdict> {
+  const open = await db
+    .select({ id: tasks.id, type: tasks.type, status: tasks.status, updatedAt: tasks.updatedAt })
+    .from(tasks)
+    .where(and(eq(tasks.goalId, goalId), notInArray(tasks.status, TERMINAL_TASK_STATUSES)));
+
+  const stalled: typeof open = [];
+  for (const task of open) {
+    if (ATTENDED_GOAL_TASK_TYPES.includes(task.type)) {
+      // An owner-attended turn blocks only while actually in flight. One parked
+      // on approval/budget is waiting on the owner anyway and must not suspend
+      // the goal's autonomous cadence with it.
+      if (task.status === 'pending' || task.status === 'running') {
+        return { fire: false, cancelTaskIds: [], reason: 'attended goal turn in flight' };
+      }
+      continue;
+    }
+    if (task.status !== 'needs_attention') {
+      // pending/running/sleeping/waiting_approval/waiting_budget all clear on
+      // their own (executor, approval resolution, budget reset). One session
+      // at a time stays the rule.
+      return { fire: false, cancelTaskIds: [], reason: 'session still in flight' };
+    }
+    stalled.push(task);
+  }
+
+  if (stalled.length > 0) {
+    const [goal] = await db
+      .select({ nextAction: goals.nextAction })
+      .from(goals)
+      .where(eq(goals.id, goalId))
+      .limit(1);
+    const blockedOnOwner = goal?.nextAction?.startsWith(GOAL_BLOCKED_PREFIX) ?? false;
+    const newestStall = stalled.reduce(
+      (latest, task) => (task.updatedAt > latest ? task.updatedAt : latest),
+      new Date(0),
+    );
+    if (blockedOnOwner && !(await ownerRepliedSince(db, workChatId, newestStall))) {
+      return { fire: false, cancelTaskIds: [], reason: 'waiting on the owner' };
+    }
+  }
+
+  // Anti-thrash: three sessions in a row died without any owner input in
+  // between — a fourth would burn budget on the same wall. Stay visibly stuck
+  // (blocked badge) until the owner weighs in. Superseded cancellations count
+  // as the stalls they replaced.
+  const recent = await db
+    .select({ status: tasks.status, progress: tasks.progress, createdAt: tasks.createdAt })
+    .from(tasks)
+    .where(and(eq(tasks.goalId, goalId), notInArray(tasks.type, ATTENDED_GOAL_TASK_TYPES)))
+    .orderBy(desc(tasks.createdAt))
+    .limit(3);
+  const stalledRun =
+    recent.length === 3 &&
+    recent.every(
+      (task) =>
+        STALLED_SESSION_STATUSES.includes(task.status) ||
+        (task.status === 'cancelled' && task.progress === GOAL_SESSION_SUPERSEDED),
+    );
+  const earliest = recent.at(-1)?.createdAt;
+  if (stalledRun && earliest) {
+    if (!(await ownerRepliedSince(db, workChatId, earliest))) {
+      return {
+        fire: false,
+        cancelTaskIds: [],
+        reason: 'three stalled sessions without owner input',
+      };
+    }
+  }
+
+  return { fire: true, cancelTaskIds: stalled.map((task) => task.id), reason: 'clear to run' };
+}
+
 /**
  * Tick due schedules: create one task per firing (idempotent via
  * externalEventId schedule:<id>:<next_run_at>) and advance next_run_at.
@@ -357,14 +492,8 @@ export async function runDueSchedules(
       conversationId?: string;
     };
     if (template.goalId) {
-      const [activeGoalTask] = await db
-        .select({ id: tasks.id })
-        .from(tasks)
-        .where(
-          and(eq(tasks.goalId, template.goalId), notInArray(tasks.status, TERMINAL_TASK_STATUSES)),
-        )
-        .limit(1);
-      if (activeGoalTask) {
+      const verdict = await goalAutomationGate(db, template.goalId, template.conversationId);
+      if (!verdict.fire) {
         await db
           .update(schedules)
           .set({
@@ -374,6 +503,12 @@ export async function runDueSchedules(
           })
           .where(eq(schedules.id, row.id));
         continue;
+      }
+      for (const staleId of verdict.cancelTaskIds) {
+        await completeTask(db, staleId, {
+          status: 'cancelled',
+          progress: GOAL_SESSION_SUPERSEDED,
+        });
       }
     }
     const event = InboundEventSchema.parse({

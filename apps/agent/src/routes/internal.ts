@@ -45,6 +45,15 @@ internal.post('/sweep', async (c) => {
   const deps = buildDeps();
   const woken = await expireStaleApprovals(deps.db);
   const resumedApprovalTasks = await resumeResolvedApprovalTasks(deps.db);
+  const { renotifyStalledApprovals } = await import('@assistant/core');
+  const { executorDeps } = await import('../executor-deps.js');
+  const renotifiedApprovals = await renotifyStalledApprovals(
+    deps.db,
+    executorDeps(deps).notifyApproval,
+  ).catch((err) => {
+    console.error('approval re-notification sweep failed', err);
+    return 0;
+  });
   const {
     backfillMessageEmbeddings,
     emitBudgetNotices,
@@ -82,6 +91,7 @@ internal.post('/sweep', async (c) => {
   return c.json({
     expiredApprovalsWoke: woken.length,
     resumedApprovalTasks: resumedApprovalTasks.length,
+    renotifiedApprovals,
     schedulesFired: fired.length,
     dueTasksNotified: due.length,
     messagesEmbedded: embedded,

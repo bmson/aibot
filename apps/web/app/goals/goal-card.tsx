@@ -37,6 +37,13 @@ export interface GoalView {
   automationLabel: string;
   /** e.g. 'next in 4h', empty if automation is not running. */
   automationNextLabel: string;
+  /**
+   * 'Blocked — needs you: …' when automatic work is stalled on the owner
+   * (unanswered question or a needs_attention session); '' when healthy.
+   * Without this the card shows only the next-run countdown, which looks
+   * healthy while the automation is actually suspended.
+   */
+  blockedLabel: string;
   /** Mirror this goal's autonomous updates into the primary chat thread. */
   mirrorToPrimary: boolean;
 }
@@ -101,7 +108,12 @@ export function GoalCard({ goal }: { goal: GoalView }) {
       {goal.progress ? (
         <p className="mt-2 text-sm leading-5 text-slate-700 dark:text-zinc-300">{goal.progress}</p>
       ) : null}
-      {goal.nextAction ? (
+      {goal.blockedLabel ? (
+        <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs leading-5 font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+          {goal.blockedLabel}
+        </p>
+      ) : null}
+      {goal.nextAction && !goal.blockedLabel ? (
         <p className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
           <span className="font-medium">Next:</span> {goal.nextAction}
         </p>

@@ -1,4 +1,9 @@
-import { getAgent, goalAutomationCadence, goalScheduleName } from '@assistant/core';
+import {
+  GOAL_BLOCKED_PREFIX,
+  getAgent,
+  goalAutomationCadence,
+  goalScheduleName,
+} from '@assistant/core';
 import { conversations, type GoalRow, goals, schedules, tasks } from '@assistant/db';
 import { and, asc, count, desc, eq, isNotNull, isNull, notInArray } from 'drizzle-orm';
 import Link from 'next/link';
@@ -32,8 +37,14 @@ function toGoalView(
   conversationId: string | undefined,
   workActive: boolean,
   automation: { enabled: boolean; nextRunAt: Date | null } | undefined,
+  stalled: boolean,
 ): GoalView {
   const targetDateInput = goal.targetDate ? goal.targetDate.toISOString().slice(0, 10) : '';
+  const blockedQuestion = goal.nextAction.startsWith(GOAL_BLOCKED_PREFIX)
+    ? goal.nextAction.slice(GOAL_BLOCKED_PREFIX.length).trim()
+    : '';
+  const blocked =
+    goal.status === 'active' && !goal.archivedAt && (blockedQuestion !== '' || stalled);
   return {
     id: goal.id,
     title: goal.title,
@@ -58,6 +69,9 @@ function toGoalView(
       goal.status === 'active' && !goal.archivedAt && automation?.enabled && automation.nextRunAt
         ? `next ${relativeTime(automation.nextRunAt, now)}`
         : '',
+    blockedLabel: blocked
+      ? `Blocked — needs you: ${blockedQuestion || 'the last automatic session stopped and needs review (see the work chat)'}`
+      : '',
     mirrorToPrimary: goal.mirrorToPrimary,
   };
 }
@@ -74,41 +88,56 @@ export default async function GoalsPage({
   const now = new Date();
 
   const agent = await getAgent(db);
-  const [rows, chatRows, archivedCountRows, activeTaskRows, automationRows] = await Promise.all([
-    db
-      .select()
-      .from(goals)
-      .where(
-        and(
-          eq(goals.agentId, agent.id),
-          archived ? isNotNull(goals.archivedAt) : isNull(goals.archivedAt),
+  const [rows, chatRows, archivedCountRows, activeTaskRows, automationRows, stalledTaskRows] =
+    await Promise.all([
+      db
+        .select()
+        .from(goals)
+        .where(
+          and(
+            eq(goals.agentId, agent.id),
+            archived ? isNotNull(goals.archivedAt) : isNull(goals.archivedAt),
+          ),
+        )
+        .orderBy(asc(goals.priority), desc(goals.updatedAt)),
+      db
+        .select({ id: conversations.id, metadata: conversations.metadata })
+        .from(conversations)
+        .where(and(eq(conversations.agentId, agent.id), eq(conversations.channel, 'chat')))
+        .orderBy(desc(conversations.updatedAt)),
+      db
+        .select({ value: count() })
+        .from(goals)
+        .where(and(eq(goals.agentId, agent.id), isNotNull(goals.archivedAt))),
+      db
+        .selectDistinct({ goalId: tasks.goalId })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.agentId, agent.id),
+            isNotNull(tasks.goalId),
+            notInArray(tasks.status, ['done', 'failed', 'cancelled']),
+          ),
         ),
-      )
-      .orderBy(asc(goals.priority), desc(goals.updatedAt)),
-    db
-      .select({ id: conversations.id, metadata: conversations.metadata })
-      .from(conversations)
-      .where(and(eq(conversations.agentId, agent.id), eq(conversations.channel, 'chat')))
-      .orderBy(desc(conversations.updatedAt)),
-    db
-      .select({ value: count() })
-      .from(goals)
-      .where(and(eq(goals.agentId, agent.id), isNotNull(goals.archivedAt))),
-    db
-      .selectDistinct({ goalId: tasks.goalId })
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.agentId, agent.id),
-          isNotNull(tasks.goalId),
-          notInArray(tasks.status, ['done', 'failed', 'cancelled']),
+      db
+        .select({
+          name: schedules.name,
+          enabled: schedules.enabled,
+          nextRunAt: schedules.nextRunAt,
+        })
+        .from(schedules)
+        .where(eq(schedules.agentId, agent.id)),
+      db
+        .selectDistinct({ goalId: tasks.goalId })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.agentId, agent.id),
+            isNotNull(tasks.goalId),
+            eq(tasks.status, 'needs_attention'),
+          ),
         ),
-      ),
-    db
-      .select({ name: schedules.name, enabled: schedules.enabled, nextRunAt: schedules.nextRunAt })
-      .from(schedules)
-      .where(eq(schedules.agentId, agent.id)),
-  ]);
+    ]);
   const chatByGoalId = new Map<string, string>();
   for (const chat of chatRows) {
     const goalId = goalIdFromMetadata(chat.metadata);
@@ -116,6 +145,11 @@ export default async function GoalsPage({
   }
   const activeGoalIds = new Set(
     activeTaskRows.map((task) => task.goalId).filter((goalId): goalId is string => goalId !== null),
+  );
+  const stalledGoalIds = new Set(
+    stalledTaskRows
+      .map((task) => task.goalId)
+      .filter((goalId): goalId is string => goalId !== null),
   );
   const archivedCount = archivedCountRows[0]?.value ?? 0;
   const automationByGoalId = new Map<string, { enabled: boolean; nextRunAt: Date | null }>();
@@ -195,6 +229,7 @@ export default async function GoalsPage({
                       chatByGoalId.get(goal.id),
                       activeGoalIds.has(goal.id),
                       automationByGoalId.get(goal.id),
+                      stalledGoalIds.has(goal.id),
                     )}
                   />
                 ))}

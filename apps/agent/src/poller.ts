@@ -5,12 +5,14 @@ import {
   findDueTasks,
   getAgent,
   purgeExpired,
+  renotifyStalledApprovals,
   resumeResolvedApprovalTasks,
   runDueSchedules,
 } from '@assistant/core';
 import { reapExpiredApplicationWatches } from './application-confirmations.js';
 import type { AgentDeps } from './deps.js';
 import { syncMailbox } from './email-sync.js';
+import { executorDeps } from './executor-deps.js';
 import { executeAgentTask } from './task-runner.js';
 import { reapExpiredWatches } from './watches.js';
 
@@ -38,6 +40,14 @@ export function startPoller(deps: AgentDeps): () => void {
         const resumed = await resumeResolvedApprovalTasks(deps.db);
         if (resumed.length)
           console.log(`sweep: resumed ${resumed.length} stranded approval task(s)`);
+        const renotified = await renotifyStalledApprovals(
+          deps.db,
+          executorDeps(deps).notifyApproval,
+        ).catch((err) => {
+          console.error('approval re-notification sweep failed', err);
+          return 0;
+        });
+        if (renotified) console.log(`sweep: re-notified ${renotified} silent approval(s)`);
         const agent = await getAgent(deps.db);
         const fired = await runDueSchedules(deps.db, agent.timezone);
         for (const f of fired)
