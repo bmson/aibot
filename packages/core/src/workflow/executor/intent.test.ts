@@ -50,7 +50,10 @@ describe('unreadSharedDocumentIntent', () => {
   it('returns the latest document URL when it has not been handled yet', async () => {
     const { db } = makeDb();
     const intent = await unreadSharedDocumentIntent(db, task as TaskRow, [
-      { role: 'user', content: 'Please read this: https://docs.google.com/document/d/doc-1234567890/edit' },
+      {
+        role: 'user',
+        content: 'Please read this: https://docs.google.com/document/d/doc-1234567890/edit',
+      },
     ]);
 
     expect(intent).toEqual({
@@ -62,7 +65,10 @@ describe('unreadSharedDocumentIntent', () => {
   it('does not re-trigger a document that was already attempted', async () => {
     const { db } = makeDb([{ id: 'tool-call-1' }]);
     const intent = await unreadSharedDocumentIntent(db, task as TaskRow, [
-      { role: 'user', content: 'Please read this: https://docs.google.com/document/d/doc-1234567890/edit' },
+      {
+        role: 'user',
+        content: 'Please read this: https://docs.google.com/document/d/doc-1234567890/edit',
+      },
     ]);
 
     expect(intent).toBeUndefined();
