@@ -6,6 +6,7 @@ import {
   resumeResolvedApprovalTasks,
 } from '@assistant/core';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { latestCanaryRun, runCanaries } from '../canaries.js';
 import { buildDeps } from '../deps.js';
 import { oidcAudienceForPath, verifyInternalAuthorization } from '../google-oidc.js';
@@ -16,6 +17,17 @@ import { oidcAudienceForPath, verifyInternalAuthorization } from '../google-oidc
  * explicitly opt into a shared secret with INTERNAL_AUTH_MODE=shared-secret.
  */
 export const internal = new Hono();
+
+// Even though every route requires a valid invoker token, cap body size before
+// JSON parsing so a compromised/misbehaving caller cannot make it a memory
+// sink. Mirrors the internet-facing webhooks limit.
+internal.use(
+  '*',
+  bodyLimit({
+    maxSize: 1024 * 1024,
+    onError: (c) => c.json({ error: 'request body too large' }, 413),
+  }),
+);
 
 internal.use('*', async (c, next) => {
   const config = loadConfig();

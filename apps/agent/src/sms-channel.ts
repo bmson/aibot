@@ -9,7 +9,7 @@ import {
   reserveCost,
   resolveApproval,
 } from '@assistant/core';
-import { channelBindings, conversations, type TaskRow } from '@assistant/db';
+import { approvals, channelBindings, conversations, type TaskRow, toolCalls } from '@assistant/db';
 import { isAmbiguousTwilioDeliveryError, parseApprovalReply } from '@assistant/tools';
 import { and, eq } from 'drizzle-orm';
 import type { AgentDeps } from './deps.js';
@@ -138,6 +138,28 @@ export async function handleInboundSms(deps: AgentDeps, sms: InboundSms): Promis
 
   const approvalReply = parseApprovalReply(sms.body);
   if (approvalReply) {
+    // The inbound From is spoofable, so a one-tap SMS may resolve only
+    // low-consequence approvals. Anything that sends, spends, egresses, or
+    // writes durable memory must be reviewed on the authenticated dashboard,
+    // where the exact arguments are visible. Enforced server-side here, not
+    // just in the notification copy.
+    const [pending] = await deps.db
+      .select({ toolName: toolCalls.toolName })
+      .from(approvals)
+      .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
+      .where(and(eq(approvals.shortCode, approvalReply.shortCode), eq(approvals.status, 'pending')))
+      .limit(1);
+    if (pending && !deps.registry.smsApprovable(pending.toolName)) {
+      await notifyOwnerBySms(deps, {
+        text: `Approval ${approvalReply.shortCode} can only be confirmed on the dashboard — it sends, spends, or stores something, so I need you to review the exact details on the Approvals page.`,
+      }).catch((err) => console.error('sms restricted-approval notice failed', err));
+      return {
+        kind: 'approval',
+        resolved: false,
+        shortCode: approvalReply.shortCode,
+        decision: approvalReply.decision,
+      };
+    }
     const result = await resolveApproval(deps.db, {
       shortCode: approvalReply.shortCode,
       decision: approvalReply.decision,
@@ -236,15 +258,24 @@ export async function notifyOwnerBySms(
 /** Executor hook: SMS the owner when approvals park a task. */
 export async function notifyApprovalsBySms(
   deps: AgentDeps,
-  approvals: Array<{ taskId: string; shortCode: string; summary: string }>,
+  approvals: Array<{ taskId: string; shortCode: string; summary: string; toolName?: string }>,
 ): Promise<void> {
   if (!deps.twilio.configured() || !deps.config.OWNER_PHONE) return;
   for (const approval of approvals) {
+    // One-tap SMS resolution is offered only for low-consequence tools (see
+    // ToolRegistry.smsApprovable); anything that sends, spends, egresses, or
+    // stores must be reviewed on the authenticated dashboard. The copy matches
+    // the server-side enforcement so the owner is never told to reply YES to
+    // something that would then be refused.
+    const oneTap = approval.toolName ? deps.registry.smsApprovable(approval.toolName) : false;
+    const action = oneTap
+      ? `Reply YES ${approval.shortCode} or NO ${approval.shortCode} (or use the dashboard).`
+      : 'Review and approve it on the Approvals page of the dashboard.';
     // critical: the out-of-band ping is the whole point of an approval park —
     // dropping it at a budget cap is exactly when the owner most needs it.
     await sendMeteredSms(deps, {
       to: deps.config.OWNER_PHONE,
-      text: `Approval ${approval.shortCode} — ${approval.summary.slice(0, 120)}. Reply YES ${approval.shortCode} or NO ${approval.shortCode} (or use the dashboard).`,
+      text: `Approval ${approval.shortCode} — ${approval.summary.slice(0, 120)}. ${action}`,
       taskId: approval.taskId,
       description: `approval notification ${approval.shortCode}`,
       critical: true,

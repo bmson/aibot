@@ -47,4 +47,14 @@ describe('agent app', () => {
     expect(status.status).toBe(401);
     expect(health.status).toBe(401);
   });
+
+  it('caps oversized bodies on internal routes before parsing (S8)', async () => {
+    const app = createApp();
+    const res = await app.request('/internal/tasks/execute', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'x'.repeat(1024 * 1024 + 1),
+    });
+    expect(res.status).toBe(413);
+  });
 });

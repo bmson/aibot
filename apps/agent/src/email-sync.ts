@@ -161,6 +161,14 @@ function googleDefaultDkimAligned(fromDomain: string, propertyDomain: string): b
  * A matching From header is identity only when Gmail's own receiver reports
  * aligned SPF, DKIM, or DMARC. Sender-supplied Authentication-Results headers
  * are ignored by requiring Google's authserv-id.
+ *
+ * Only the TOP-MOST Authentication-Results header is trusted. Gmail prepends
+ * its own at delivery, so the receiver's verdict is always first; a sender can
+ * inject `Authentication-Results: mx.google.com; dkim=pass ...` deeper in the
+ * list, and scanning every header would accept that forgery the moment the
+ * ingestion path changes (raw-MIME import, an ARC/forwarder hop, or a
+ * non-Gmail receiver that does not strip the sender's copies). Reading only
+ * the first header keeps this pinned to the receiver's own line.
  */
 export function gmailSenderAuthenticated(
   payload: GmailPayload | undefined,
@@ -168,30 +176,32 @@ export function gmailSenderAuthenticated(
 ): boolean {
   const fromDomain = normalizedAuthDomain(fromEmail);
   if (!fromDomain) return false;
-  const values = (payload?.headers ?? [])
-    .filter((header) => header.name.toLowerCase() === 'authentication-results')
-    .map((header) => header.value);
+  const topmost = (payload?.headers ?? []).find(
+    (header) => header.name.toLowerCase() === 'authentication-results',
+  )?.value;
+  if (!topmost) return false;
 
-  for (const value of values) {
-    const clauses = value.split(';').map((clause) => clause.trim());
-    if (clauses.shift()?.toLowerCase() !== 'mx.google.com') continue;
-    for (const clause of clauses) {
-      const method = clause.match(/^(dmarc|dkim|spf)=pass\b/i)?.[1]?.toLowerCase();
-      if (!method) continue;
-      const property =
-        method === 'dmarc'
-          ? clause.match(/\bheader\.from=([^\s;]+)/i)?.[1]
-          : method === 'dkim'
-            ? clause.match(/\bheader\.(?:d|i)=([^\s;]+)/i)?.[1]
-            : clause.match(/\bsmtp\.mailfrom=([^\s;]+)/i)?.[1];
-      const propertyDomain = property ? normalizedAuthDomain(property) : '';
-      if (!propertyDomain) continue;
-      if (
-        authDomainAligned(fromDomain, propertyDomain, method !== 'dmarc') ||
-        (method === 'dkim' && googleDefaultDkimAligned(fromDomain, propertyDomain))
-      ) {
-        return true;
-      }
+  const clauses = topmost.split(';').map((clause) => clause.trim());
+  // The receiver's Authentication-Results must carry Google's authserv-id. If
+  // the top header is a sender-supplied one with a different authserv-id, we do
+  // not fall through to a lower header — that lower header is untrusted too.
+  if (clauses.shift()?.toLowerCase() !== 'mx.google.com') return false;
+  for (const clause of clauses) {
+    const method = clause.match(/^(dmarc|dkim|spf)=pass\b/i)?.[1]?.toLowerCase();
+    if (!method) continue;
+    const property =
+      method === 'dmarc'
+        ? clause.match(/\bheader\.from=([^\s;]+)/i)?.[1]
+        : method === 'dkim'
+          ? clause.match(/\bheader\.(?:d|i)=([^\s;]+)/i)?.[1]
+          : clause.match(/\bsmtp\.mailfrom=([^\s;]+)/i)?.[1];
+    const propertyDomain = property ? normalizedAuthDomain(property) : '';
+    if (!propertyDomain) continue;
+    if (
+      authDomainAligned(fromDomain, propertyDomain, method !== 'dmarc') ||
+      (method === 'dkim' && googleDefaultDkimAligned(fromDomain, propertyDomain))
+    ) {
+      return true;
     }
   }
   return false;
@@ -324,6 +334,10 @@ export async function processMessage(
   );
   const from = parseSenderEmail(gmailHeader(msg.payload, 'From'));
   const subject = gmailHeader(msg.payload, 'Subject');
+  // RFC-822 Message-ID header (distinct from msg.id, the Gmail internal id).
+  // Captured here from the format=full payload so the reply path can thread
+  // (In-Reply-To/References) without a second per-send metadata fetch.
+  const rfcMessageId = gmailHeader(msg.payload, 'Message-ID');
 
   // Never triage the bot's own outbound mail.
   if (from === botEmail.toLowerCase()) return 'skipped';
@@ -373,6 +387,7 @@ export async function processMessage(
         payload: {
           threadId: msg.threadId,
           messageId: msg.id,
+          rfcMessageId,
           from,
           subject,
           quotesExternalContent: quotesExternalContent({ subject, body: text }),
@@ -427,6 +442,7 @@ export async function processMessage(
       payload: {
         threadId: msg.threadId,
         messageId: msg.id,
+        rfcMessageId,
         from,
         subject,
         quotesExternalContent: quotesExternalContent({ subject, body: text }),

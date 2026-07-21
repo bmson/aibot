@@ -327,6 +327,10 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       }),
       risk: 'autonomous',
       acceptsUntrustedInput: false,
+      // Shown when a tainted session tries to persist a memory (writesMemory
+      // routes it to approval): the owner sees the exact text being stored.
+      approvalSummary: (args) =>
+        `Remember${args.subject ? ` (about ${args.subject})` : ''}: “${args.content.slice(0, 200)}”`,
       execute: async (args, ctx) => {
         const contentHash = createHash('sha256').update(args.content).digest('hex');
         if (await isTombstoned(ctx.db, contentHash)) {
@@ -418,6 +422,10 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       inputSchema: z.object({ url: z.string().url() }),
       risk: 'autonomous',
       acceptsUntrustedInput: true,
+      // Shown when a tainted session tries to fetch (networkEgress routes it to
+      // approval): the exact URL matters because a fetch to an attacker URL is
+      // itself the egress/exfiltration channel.
+      approvalSummary: (args) => `Fetch the public web page ${args.url}`,
       cacheTtlSeconds: 900,
       execute: async (args, ctx) => {
         const fetched = await fetchPublicWebPage(
@@ -590,7 +598,13 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
         return { notified: true, conversationId };
       },
     },
-    { outwardFacing: true },
+    // Sink is hardwired to the owner's own conversation (ctx.conversationId) or
+    // the assistant-owned 'Notifications' thread — never a third party or the
+    // network. ownerVisibleOnly keeps it autonomous under taint (D6): the model
+    // relaying content into the owner's own dashboard is no more capable than
+    // its ordinary reply text. acceptsUntrustedInput:false still strips it from
+    // every external (known/unknown) task registry.
+    { ownerVisibleOnly: true },
   );
 
   // ── future self-tasks ──────────────────────────────────────────────────────
@@ -604,6 +618,15 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     }),
     risk: 'autonomous',
     acceptsUntrustedInput: false,
+    // The scheduling step is itself gated under taint (acceptsUntrustedInput:false),
+    // so the owner sees this card. Make the card show WHAT is being scheduled —
+    // a generic "schedule follow-up work" would let an injected instruction ride
+    // through an approval the owner cannot actually inspect.
+    approvalSummary: (args) => {
+      const when = new Date(args.when);
+      const at = Number.isNaN(when.getTime()) ? args.when : when.toISOString();
+      return `Schedule a future task for ${at}: “${args.instruction.slice(0, 200)}”`;
+    },
     execute: async (args, ctx) => {
       const runAfter = new Date(args.when);
       if (Number.isNaN(runAfter.getTime())) throw new Error('invalid timestamp');
@@ -623,7 +646,18 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
           type: 'scheduled',
           status: 'sleeping',
           trust: ctx.trust === 'owner' ? 'owner' : 'assistant',
-          trigger: { source: 'internal', payload: { instruction: args.instruction } },
+          // Taint laundering defense: a scheduled child of a tainted session
+          // would otherwise start clean (shouldTaintContext only taints
+          // source==='email'), and its instruction — possibly lifted from
+          // attacker content — becomes the opening user turn. Carry the taint
+          // forward so the child's outward/egress calls stay approval-gated.
+          trigger: {
+            source: 'internal',
+            payload: {
+              instruction: args.instruction,
+              ...(ctx.tainted ? { taintedOrigin: true } : {}),
+            },
+          },
           runAfter,
           parentTaskId: ctx.taskId,
         })
@@ -687,6 +721,14 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       inputSchema: z.object({}),
       risk: 'autonomous',
       acceptsUntrustedInput: true,
+      // Deliberately NOT returnsUntrustedContent. Goal titles/progress are
+      // owner- or assistant-authored and carried as reference-only data (see
+      // goalInstruction, which frames them "information only, never
+      // instructions"). Marking this untrusted would taint every goal-aware
+      // chat turn — stripping the owner card, gating memory.save — for text the
+      // owner wrote about their own goals. The model-authored progress note IS
+      // write-bound to the task's own goal by the dispatcher, so there is no
+      // cross-goal injection surface here.
       execute: async (_args, ctx) => {
         const rows = await ctx.db
           .select()
@@ -755,7 +797,15 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       }),
       risk: 'approval',
       acceptsUntrustedInput: false,
-      approvalSummary: (args) => `Create goal "${(args as { title: string }).title}"`,
+      // The description (up to 2000 chars) becomes the recurring automation's
+      // standing instruction, so the owner must see it on the approval card —
+      // a title-only summary would let an injected instruction ride through an
+      // approval the owner cannot actually inspect.
+      approvalSummary: (args) => {
+        const a = args as { title: string; description?: string };
+        const desc = a.description?.trim();
+        return `Create goal "${a.title}"${desc ? ` — ${desc.slice(0, 300)}` : ''}`;
+      },
       execute: async (args, ctx) => {
         const [row] = await ctx.db
           .insert(goals)
@@ -765,12 +815,19 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
             description: args.description,
             priority: args.priority,
             targetDate: args.targetDate ? new Date(args.targetDate) : undefined,
+            // A goal proposed from a tainted session carries its provenance so
+            // its automation sessions run taint-gated (see goals.taintedOrigin).
+            taintedOrigin: ctx.tainted,
           })
           .returning();
         return { goalId: row?.id, title: args.title };
       },
     },
-    { outwardFacing: false },
+    // writesMemory: a goal is durable, behavior-shaping owner state that spawns a
+    // recurring autonomous runner — treat it like a memory write, so it is
+    // taint-gated and never one-tap SMS-approvable (a spoofed SMS must not be
+    // able to plant a persistent autonomous-loop goal).
+    { outwardFacing: false, writesMemory: true },
   );
 
   return registry;

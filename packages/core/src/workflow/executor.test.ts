@@ -74,4 +74,21 @@ describe('shouldTaintContext', () => {
     expect(shouldTaintContext(task('owner', { source: 'email' }))).toBe(true);
     expect(shouldTaintContext(task('owner', null))).toBe(false);
   });
+
+  it('taints a task scheduled from a tainted session regardless of source (S1)', () => {
+    // task.schedule stamps taintedOrigin; without honoring it, a laundered
+    // instruction would run in a clean context with autonomous network egress.
+    expect(
+      shouldTaintContext(
+        task('assistant', { source: 'internal', payload: { taintedOrigin: true } }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldTaintContext(task('owner', { source: 'internal', payload: { taintedOrigin: true } })),
+    ).toBe(true);
+    // A clean scheduled child (no taint marker) stays autonomous.
+    expect(
+      shouldTaintContext(task('assistant', { source: 'internal', payload: { instruction: 'ok' } })),
+    ).toBe(false);
+  });
 });

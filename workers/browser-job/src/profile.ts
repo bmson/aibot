@@ -53,6 +53,48 @@ export function decryptProfile(data: Buffer, keyHex: string): Buffer {
 }
 
 /**
+ * Reject a tarball whose members would write outside profileDir (absolute
+ * paths, `..` traversal, or an absolute symlink/hardlink target). `tar -tvzf`
+ * lists members and link targets without extracting; any member that fails the
+ * check aborts the load, which falls back to a fresh profile.
+ */
+function isUnsafeTarPath(candidate: string): boolean {
+  const normalized = candidate.replace(/\/+$/, '');
+  return (
+    path.isAbsolute(normalized) ||
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    normalized.includes('/../')
+  );
+}
+
+export async function assertSafeTarMembers(tarPath: string): Promise<void> {
+  // `-tzf` lists one member name per line with no permission/date columns, so
+  // parsing is identical across GNU tar and bsdtar — check every name for an
+  // absolute path or `..` traversal.
+  const names = await exec('tar', ['-tzf', tarPath]);
+  for (const raw of names.stdout.split('\n')) {
+    const name = raw.trim();
+    if (name && isUnsafeTarPath(name)) throw new Error(`unsafe tar member path: ${name}`);
+  }
+  // The verbose listing additionally reveals link targets: symlinks render as
+  // "<name> -> <target>" and hardlinks as "<name> link to <target>" (both GNU
+  // tar and bsdtar). Split on the LAST occurrence of each marker so a filename
+  // that itself contains the marker cannot hide an escaping target in the tail.
+  const verbose = await exec('tar', ['-tvzf', tarPath]);
+  for (const raw of verbose.stdout.split('\n')) {
+    for (const marker of [' -> ', ' link to ']) {
+      const at = raw.lastIndexOf(marker);
+      if (at === -1) continue;
+      const target = raw.slice(at + marker.length).trim();
+      if (target && isUnsafeTarPath(target)) {
+        throw new Error(`unsafe tar link target: ${target}`);
+      }
+    }
+  }
+}
+
+/**
  * Download + decrypt + unpack the persisted profile into profileDir.
  * Returns false when no profile exists yet (fresh browser). A corrupt or
  * wrong-key profile also starts fresh — a broken tarball must never brick
@@ -71,7 +113,19 @@ export async function loadProfile(
     const tarPath = path.join(path.dirname(profileDir), 'profile-in.tar.gz');
     await writeFile(tarPath, tarball);
     await mkdir(profileDir, { recursive: true });
-    await exec('tar', ['-xzf', tarPath, '-C', profileDir]);
+    // Defense-in-depth (a malicious tarball would first have to be forged under
+    // PROFILE_ENC_KEY and written to the agent's GCS object): reject any member
+    // that would escape profileDir before extracting, and never restore
+    // ownership from the archive.
+    await assertSafeTarMembers(tarPath);
+    await exec('tar', [
+      '--no-same-owner',
+      '--no-same-permissions',
+      '-xzf',
+      tarPath,
+      '-C',
+      profileDir,
+    ]);
     await rm(tarPath, { force: true });
     return true;
   } catch (err) {

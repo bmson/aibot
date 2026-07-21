@@ -254,14 +254,16 @@ export function validateTwilioSignature(input: {
   return expected.length === provided.length && timingSafeEqual(expected, provided);
 }
 
-/** "YES A7" / "no a12" → an approval resolution; anything else → null. */
+/** "YES A7XR" / "no a12" → an approval resolution; anything else → null. */
 export function parseApprovalReply(
   body: string,
 ): { decision: 'approved' | 'denied'; shortCode: string } | null {
-  // Short codes are minted monotonically with no digit ceiling (nextShortCode),
-  // so this pattern must keep pace or "YES A10000" would be misread as a new
-  // task and the approval would never resolve by SMS.
-  const match = body.trim().match(/^(yes|no|approve|deny)\s+(A\d{1,9})$/i);
+  // Short codes are minted monotonically with no digit ceiling (nextShortCode)
+  // and now carry a two-letter random suffix (A7XR). The optional {0,2} letter
+  // group accepts both the new form and legacy suffix-less codes still pending
+  // during the transition; the letters are unambiguous because the numeric part
+  // is unique per code, so "A7" and "A7XR" can never both exist.
+  const match = body.trim().match(/^(yes|no|approve|deny)\s+(A\d{1,9}[A-Z]{0,2})$/i);
   if (!match) return null;
   const word = (match[1] as string).toLowerCase();
   return {

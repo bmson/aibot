@@ -28,7 +28,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: 'jwt' },
   callbacks: {
     signIn({ profile }) {
-      return profile?.email === config.OWNER_EMAIL;
+      // Belt-and-suspenders: with Google as the sole IdP the email namespace is
+      // Google's, but require the verified flag so an unverified-email account
+      // can never match the owner address. The typed claim is a boolean, so an
+      // explicit === true is exact and cannot be spoofed by a string value.
+      return profile?.email === config.OWNER_EMAIL && profile?.email_verified === true;
     },
   },
 });

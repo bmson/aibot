@@ -145,7 +145,7 @@ export interface ExecutorDeps {
    */
   notifyApproval?: (
     task: TaskRow,
-    approvals: Array<{ taskId: string; shortCode: string; summary: string }>,
+    approvals: Array<{ taskId: string; shortCode: string; summary: string; toolName?: string }>,
   ) => Promise<void>;
   /**
    * Out-of-band owner ping for async events the owner would otherwise only see
@@ -776,8 +776,12 @@ export function shouldTaintContext(task: Pick<TaskRow, 'trust' | 'trigger'>): bo
   if (task.trust === 'known' || task.trust === 'unknown') return true;
   const trigger = task.trigger as {
     source?: unknown;
-    payload?: { quotesExternalContent?: unknown };
+    payload?: { quotesExternalContent?: unknown; taintedOrigin?: unknown };
   } | null;
+  // A task scheduled from a tainted session carries its provenance forward
+  // (task.schedule stamps taintedOrigin). Without this a laundered instruction
+  // would run in a clean context with autonomous network egress.
+  if (trigger?.payload?.taintedOrigin === true) return true;
   if (trigger?.source !== 'email') return false;
   const ownerAuthored = task.trust === 'owner' && trigger.payload?.quotesExternalContent === false;
   return !ownerAuthored;
@@ -1161,7 +1165,12 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       if (deps.notifyApproval) {
         ownerNotified = await deps
           .notifyApproval(task, [
-            { taskId: task.id, shortCode: outcome.shortCode, summary: outcome.summary },
+            {
+              taskId: task.id,
+              shortCode: outcome.shortCode,
+              summary: outcome.summary,
+              toolName: documentReadIntent.toolName,
+            },
           ])
           .then(() => true)
           .catch((err) => {
@@ -1608,6 +1617,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         approvalId: string;
         shortCode: string;
         summary: string;
+        toolName: string;
       }> = [];
       let requiredGoalProgressSaved = !mustRecordGoalProgress;
       let requiredGoalProgressFailure = 'the progress tool was not dispatched';
@@ -1708,6 +1718,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
             approvalId: outcome.approvalId,
             shortCode: outcome.shortCode,
             summary: outcome.summary,
+            toolName: tc.toolName,
           });
           if (tc.toolName === 'goals.update_progress') {
             requiredGoalProgressFailure = 'the progress write unexpectedly required approval';

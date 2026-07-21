@@ -94,6 +94,16 @@ export interface ToolFlags {
   networkEgress?: boolean;
   /** Never eligible for a blanket "always allow" policy. */
   blanketAllowIneligible?: boolean;
+  /**
+   * The tool's ONLY sink is the owner's own dashboard/conversation — it cannot
+   * reach a third party or the network. Such a tool stays autonomous even under
+   * taint: gating a message the owner sends to themselves behind the owner's own
+   * approval is pure friction (they would have to approve being told something),
+   * and it conveys no capability the model's normal reply text does not already
+   * have. Use with extreme care — set it ONLY when the recipient is hardwired to
+   * the owner and no argument can redirect it.
+   */
+  ownerVisibleOnly?: boolean;
 }
 
 export type RegisteredTool = { tool: AssistantTool; flags: ToolFlags };

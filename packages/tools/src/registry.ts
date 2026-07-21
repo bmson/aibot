@@ -60,4 +60,38 @@ export class ToolRegistry {
   resultIsUntrusted(name: string): boolean {
     return this.tools.get(name)?.flags.returnsUntrustedContent === true;
   }
+
+  /**
+   * Whether an approval for this tool may be resolved by a one-tap SMS reply
+   * ("YES A7"). SMS sender identity is a spoofable From number, so only
+   * low-consequence tools qualify: nothing that reaches a third party
+   * (outwardFacing), egresses to the network (networkEgress), or writes durable
+   * memory (writesMemory) — and only when the tool defines a payload-bearing
+   * approvalSummary, so the 160-char SMS actually shows what is being approved
+   * rather than a generic fallback. Everything else must be reviewed on the
+   * authenticated dashboard, where the exact arguments are visible.
+   */
+  smsApprovable(toolName: string): boolean {
+    const registered = this.tools.get(toolName);
+    if (!registered) return false;
+    const { tool, flags } = registered;
+    // Reject EVERY privileged capability, mirroring toolsForTask's external
+    // strip set exactly — a tool carrying only an omitted flag (privateWrite,
+    // writesWorkspace, confidentialRead) would otherwise fail open to one-tap
+    // SMS approval despite arming a real private side effect (e.g.
+    // applications.watch_confirmation). blanketAllowIneligible tools are always
+    // consequential enough to demand the dashboard too.
+    if (
+      flags.outwardFacing ||
+      flags.networkEgress ||
+      flags.writesMemory ||
+      flags.writesWorkspace ||
+      flags.privateWrite ||
+      flags.confidentialRead ||
+      flags.blanketAllowIneligible
+    ) {
+      return false;
+    }
+    return typeof tool.approvalSummary === 'function';
+  }
 }

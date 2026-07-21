@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomInt } from 'node:crypto';
 import {
   getRate,
   isBrowserJobPending,
@@ -123,18 +123,31 @@ function cacheKey(toolName: string, args: Record<string, unknown>): string {
     .digest('hex');
 }
 
+/** Confusable-free (no I/O) alphabet for the unguessable code suffix. */
+const CODE_SUFFIX_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+
+/** Two random letters so a monotonic code cannot be enumerated by a spoofed SMS. */
+function randomCodeSuffix(): string {
+  const pick = () => CODE_SUFFIX_ALPHABET.charAt(randomInt(CODE_SUFFIX_ALPHABET.length));
+  return pick() + pick();
+}
+
 /**
- * Monotonic human code across all historical approvals. Call only while
- * holding the approval-code advisory lock so a delayed SMS can never match a
- * later, unrelated approval after its original code was resolved.
+ * Human code across all historical approvals: a monotonic number (unique by
+ * construction, so a delayed SMS can never match a later, unrelated approval
+ * after its original code was resolved) plus two random letters so the code is
+ * not enumerable — a spoofed inbound SMS cannot guess the next pending code.
+ * The numeric part is extracted with a regex capture so codes that already
+ * carry a letter suffix still advance the counter. Call only while holding the
+ * approval-code advisory lock.
  */
 async function nextShortCode(db: Db): Promise<string> {
   const [row] = await db
     .select({
-      next: sql<number>`coalesce(max(case when ${approvals.shortCode} ~ '^A[0-9]+$' then substring(${approvals.shortCode} from 2)::bigint end), 0) + 1`,
+      next: sql<number>`coalesce(max(substring(${approvals.shortCode} from '^A([0-9]+)')::bigint), 0) + 1`,
     })
     .from(approvals);
-  return `A${Number(row?.next ?? 1)}`;
+  return `A${Number(row?.next ?? 1)}${randomCodeSuffix()}`;
 }
 
 async function underRateLimit(db: Db, scope: string): Promise<boolean> {
@@ -525,22 +538,30 @@ export class ToolDispatcher {
       input.ctx.tainted && (input.ctx.trust === 'owner' || input.ctx.trust === 'assistant');
     const taintNeedsApproval =
       privilegedTaint &&
+      // A tool whose only sink is the owner's own dashboard cannot exfiltrate or
+      // reach a third party, so it stays autonomous under taint (D6). Every
+      // other capability that could disclose data or act outward is gated.
+      registered.flags.ownerVisibleOnly !== true &&
       (tool.acceptsUntrustedInput === false ||
         registered.flags.writesMemory === true ||
         registered.flags.networkEgress === true ||
         registered.flags.outwardFacing === true);
-    const tier: RiskTier = taintNeedsApproval
-      ? 'approval'
-      : policyMatch?.effect === 'allow'
-        ? 'autonomous'
-        : baseTier;
+    // A tool flagged blanketAllowIneligible may never be downgraded to
+    // autonomous by a standing "always allow" policy — its risk must always be
+    // decided per-call. Enforced here at match time (not just at policy
+    // creation) so a hand-inserted or legacy allow row for such a tool still
+    // fails closed. The taint gate above already overrides policy allow; this
+    // extends the same closed-fail to the untainted path.
+    const policyAllows =
+      policyMatch?.effect === 'allow' && registered.flags.blanketAllowIneligible !== true;
+    const tier: RiskTier = taintNeedsApproval ? 'approval' : policyAllows ? 'autonomous' : baseTier;
 
     const decision = {
       riskTier: tier,
       reason: taintNeedsApproval
         ? 'owner approval required because untrusted content entered this workflow'
-        : policyMatch?.effect === 'allow'
-          ? `allowed by policy ${policyMatch.policy.templateKey}`
+        : policyAllows
+          ? `allowed by policy ${policyMatch?.policy.templateKey}`
           : `tool default (${baseTier})`,
       policyId: policyMatch?.policy.id,
       policyVersion: policyMatch?.policy.version,

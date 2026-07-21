@@ -1,7 +1,14 @@
+import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseJobInput } from './input.js';
-import { decryptProfile, encryptProfile } from './profile.js';
+import { assertSafeTarMembers, decryptProfile, encryptProfile } from './profile.js';
+
+const exec = promisify(execFile);
 
 describe('profile encryption', () => {
   const key = randomBytes(32).toString('hex');
@@ -23,6 +30,61 @@ describe('profile encryption', () => {
 
   it('rejects short keys', () => {
     expect(() => encryptProfile(Buffer.from('x'), 'abcd')).toThrow(/32 bytes/);
+  });
+});
+
+describe('assertSafeTarMembers (path-traversal guard)', () => {
+  let dir = '';
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'profile-tar-'));
+  });
+  afterAll(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  it('accepts a benign relative-path tarball', async () => {
+    await writeFile(path.join(dir, 'cookies'), 'ok');
+    const tar = path.join(dir, 'safe.tar.gz');
+    await exec('tar', ['-czf', tar, '-C', dir, 'cookies']);
+    await expect(assertSafeTarMembers(tar)).resolves.toBeUndefined();
+  });
+
+  it('rejects an absolute-path member', async () => {
+    await writeFile(path.join(dir, 'evil'), 'x');
+    const tar = path.join(dir, 'abs.tar.gz');
+    // -P/-absolute-names preserves the leading slash as a member name.
+    await exec('tar', ['-czPf', tar, path.join(dir, 'evil')]);
+    await expect(assertSafeTarMembers(tar)).rejects.toThrow(/unsafe tar member/);
+  });
+
+  it('rejects a symlink escaping the profile dir', async () => {
+    const linkDir = await mkdtemp(path.join(tmpdir(), 'profile-link-'));
+    try {
+      await exec('ln', ['-s', '/etc/passwd', path.join(linkDir, 'leak')]);
+      const tar = path.join(dir, 'link.tar.gz');
+      await exec('tar', ['-czf', tar, '-C', linkDir, 'leak']);
+      await expect(assertSafeTarMembers(tar)).rejects.toThrow(/unsafe tar link target/);
+    } finally {
+      await rm(linkDir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts a benign hardlink to an in-archive relative member (no false positive)', async () => {
+    // A real hardlink renders as "<name> link to <target>" — the new marker
+    // scan must parse it without flagging a safe relative target. (A hardlink
+    // whose target escapes requires a forged archive, since real tar only links
+    // to other in-archive members; that path is covered by the code review and
+    // the absolute-member / symlink cases above.)
+    const linkDir = await mkdtemp(path.join(tmpdir(), 'profile-hardlink-'));
+    try {
+      await writeFile(path.join(linkDir, 'a'), 'data');
+      await exec('ln', [path.join(linkDir, 'a'), path.join(linkDir, 'b')]);
+      const tar = path.join(dir, 'hardlink.tar.gz');
+      await exec('tar', ['-czf', tar, '-C', linkDir, 'a', 'b']);
+      await expect(assertSafeTarMembers(tar)).resolves.toBeUndefined();
+    } finally {
+      await rm(linkDir, { recursive: true, force: true });
+    }
   });
 });
 

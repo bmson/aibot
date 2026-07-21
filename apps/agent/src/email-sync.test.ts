@@ -175,4 +175,44 @@ describe('Gmail sender authentication', () => {
       ),
     ).toBe(false);
   });
+
+  it('reads only the topmost Authentication-Results header (S6)', () => {
+    const multi = (values: string[]) => ({
+      headers: values.map((value) => ({ name: 'Authentication-Results', value })),
+    });
+    // Gmail prepends its own verdict at delivery, so the receiver header is
+    // first. A sender-injected forged mx.google.com header lower in the list
+    // must never authenticate.
+    expect(
+      gmailSenderAuthenticated(
+        multi([
+          'mx.google.com; dmarc=fail header.from=example.com',
+          'mx.google.com; dmarc=pass header.from=example.com',
+        ]),
+        'owner@example.com',
+      ),
+    ).toBe(false);
+    // The genuine (top) Gmail header still authenticates even when a stale
+    // sender-supplied header sits beneath it.
+    expect(
+      gmailSenderAuthenticated(
+        multi([
+          'mx.google.com; dmarc=pass header.from=example.com',
+          'mx.google.com; dmarc=fail header.from=example.com',
+        ]),
+        'owner@example.com',
+      ),
+    ).toBe(true);
+    // A non-Google top header is not trusted, and we do NOT fall through to a
+    // lower forged Google header.
+    expect(
+      gmailSenderAuthenticated(
+        multi([
+          'attacker.example; dmarc=pass header.from=example.com',
+          'mx.google.com; dmarc=pass header.from=example.com',
+        ]),
+        'owner@example.com',
+      ),
+    ).toBe(false);
+  });
 });

@@ -44,9 +44,12 @@ export async function deliverEmailFinal(
 
   // RFC threading headers so the reply nests in ANY mail client (Gmail
   // threads by threadId, but Apple Mail etc. need In-Reply-To/References).
+  // The RFC-822 Message-ID is captured at ingest (payload.rfcMessageId); the
+  // per-send metadata fetch is only a fallback for tasks enqueued before that.
+  const rfcMessageId = typeof payload.rfcMessageId === 'string' ? payload.rfcMessageId : '';
   const messageId = typeof payload.messageId === 'string' ? payload.messageId : '';
-  let inReplyTo = '';
-  if (messageId) {
+  let inReplyTo = rfcMessageId;
+  if (!inReplyTo && messageId) {
     const original = await deps.googleClient
       .api<{ payload?: GmailPayload }>(
         `${GMAIL}/messages/${messageId}?format=metadata&metadataHeaders=Message-ID`,

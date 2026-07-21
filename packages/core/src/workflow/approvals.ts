@@ -159,15 +159,16 @@ export async function renotifyStalledApprovals(
   db: Db,
   notifyApproval?: (
     task: TaskRow,
-    notices: Array<{ taskId: string; shortCode: string; summary: string }>,
+    notices: Array<{ taskId: string; shortCode: string; summary: string; toolName?: string }>,
   ) => Promise<void>,
   opts: { olderThanMinutes?: number; batch?: number } = {},
 ): Promise<number> {
   const olderThanMinutes = opts.olderThanMinutes ?? 5;
   const rows = await db
-    .select({ approval: approvals, task: tasks })
+    .select({ approval: approvals, task: tasks, toolName: toolCalls.toolName })
     .from(approvals)
     .innerJoin(tasks, eq(approvals.taskId, tasks.id))
+    .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
     .where(
       and(
         eq(approvals.status, 'pending'),
@@ -179,10 +180,13 @@ export async function renotifyStalledApprovals(
     .limit(opts.batch ?? 50);
   if (rows.length === 0) return 0;
 
-  const byTask = new Map<string, { task: TaskRow; notices: (typeof rows)[number]['approval'][] }>();
+  const byTask = new Map<
+    string,
+    { task: TaskRow; notices: Array<(typeof rows)[number]['approval'] & { toolName: string }> }
+  >();
   for (const row of rows) {
     const entry = byTask.get(row.task.id) ?? { task: row.task, notices: [] };
-    entry.notices.push(row.approval);
+    entry.notices.push({ ...row.approval, toolName: row.toolName });
     byTask.set(row.task.id, entry);
   }
 
@@ -197,6 +201,7 @@ export async function renotifyStalledApprovals(
             taskId: task.id,
             shortCode: approval.shortCode,
             summary: approval.summary,
+            toolName: approval.toolName,
           })),
         );
         ownerNotified = true;

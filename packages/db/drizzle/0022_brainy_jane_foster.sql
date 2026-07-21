@@ -1,0 +1,1 @@
+ALTER TABLE "goals" ADD COLUMN "tainted_origin" boolean DEFAULT false NOT NULL;

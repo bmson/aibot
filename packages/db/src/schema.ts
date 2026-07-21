@@ -66,6 +66,14 @@ export const goals = pgTable(
      * (long-running-chat design, option B). Off by default to avoid noise.
      */
     mirrorToPrimary: boolean('mirror_to_primary').notNull().default(false),
+    /**
+     * True when this goal was created from a tainted (externally-influenced)
+     * session — e.g. the model proposed goals.create while a forwarded email or
+     * fetched page was in context. Its recurring automation sessions then start
+     * tainted, so any web egress or outward action they attempt is owner-gated
+     * instead of autonomous. A goal the owner creates directly is untainted.
+     */
+    taintedOrigin: boolean('tainted_origin').notNull().default(false),
     /** Owner-hidden goal history. Linked chats, tasks, and evidence stay intact. */
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     ...timestamps,

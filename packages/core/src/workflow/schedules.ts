@@ -277,6 +277,10 @@ export async function ensureGoalAutomation(
     budgetUsdLimit: GOAL_SESSION_BUDGET_USD,
     maxSteps: 12,
     instruction: goalInstruction(goal),
+    // Carry the goal's provenance into every automation firing: a goal created
+    // from a tainted session must run its sessions taint-gated, never with
+    // autonomous egress (defends the goal-automation laundering channel).
+    ...(goal.taintedOrigin ? { taintedOrigin: true } : {}),
   };
   if (!existing) {
     const [created] = await db
@@ -490,6 +494,8 @@ export async function runDueSchedules(
       maxSteps?: number;
       goalId?: string;
       conversationId?: string;
+      /** A goal created from a tainted session — its firings must start tainted. */
+      taintedOrigin?: boolean;
     };
     if (template.goalId) {
       const verdict = await goalAutomationGate(db, template.goalId, template.conversationId);
@@ -522,6 +528,7 @@ export async function runDueSchedules(
         instruction: template.instruction ?? row.name,
         ...(template.goalId ? { goalId: template.goalId } : {}),
         ...(template.job ? { job: template.job } : {}),
+        ...(template.taintedOrigin ? { taintedOrigin: true } : {}),
       },
     });
     const { task, created } = await enqueueTask(db, {

@@ -1,10 +1,31 @@
 import { createHmac } from 'node:crypto';
 import { agents, approvals, createDb, type Db, tasks, toolCalls } from '@assistant/db';
+import { ToolRegistry } from '@assistant/tools';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { createApp } from './app.js';
 import type { AgentDeps } from './deps.js';
 import { deliverSmsFinal, handleInboundSms } from './sms-channel.js';
+
+/** Registry with one SMS-approvable and one restricted (outward) approval tool. */
+function fakeRegistry(): ToolRegistry {
+  const base = {
+    description: 'test',
+    inputSchema: z.object({}),
+    risk: 'approval' as const,
+    acceptsUntrustedInput: false,
+    execute: async () => ({}),
+  };
+  return new ToolRegistry()
+    .register({ ...base, name: 'test.sms-ok', approvalSummary: () => 'a low-risk action' })
+    .register(
+      { ...base, name: 'test.sms-restricted', approvalSummary: () => 'send an email' },
+      {
+        outwardFacing: true,
+      },
+    );
+}
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -27,6 +48,7 @@ function fakeDeps(): AgentDeps {
       PUBLIC_URL,
     } as AgentDeps['config'],
     db,
+    registry: fakeRegistry(),
     twilio: {
       configured: () => true,
       send: async (to: string, body: string) => {
@@ -124,7 +146,7 @@ describe('sms channel (integration)', () => {
       .values({
         taskId: (task as NonNullable<typeof task>).id,
         step: 1,
-        toolName: 'exec.outbound',
+        toolName: 'test.sms-ok',
         args: {},
         risk: 'approval',
         status: 'awaiting_approval',
@@ -135,7 +157,7 @@ describe('sms channel (integration)', () => {
       .values({
         taskId: (task as NonNullable<typeof task>).id,
         toolCallId: (call as NonNullable<typeof call>).id,
-        shortCode: 'A99',
+        shortCode: 'A99XR',
         summary: 'test approval',
         payload: {},
         expiresAt: sql`now() + interval '1 hour'`,
@@ -147,16 +169,16 @@ describe('sms channel (integration)', () => {
       messageSid: `SM-x-${Date.now()}`,
       from: '+13105550199',
       to: '+18885550000',
-      body: 'YES A99',
+      body: 'YES A99XR',
     });
     expect(stranger.kind).toBe('ignored');
 
-    // owner reply resolves
+    // owner reply resolves (low-consequence tool with a payload-bearing summary)
     const owner = await handleInboundSms(fakeDeps(), {
       messageSid: `SM-y-${Date.now()}`,
       from: OWNER_PHONE,
       to: '+18885550000',
-      body: 'yes A99',
+      body: 'yes A99XR',
     });
     expect(owner.kind === 'approval' && owner.resolved).toBe(true);
 
@@ -166,6 +188,55 @@ describe('sms channel (integration)', () => {
       .where(eq(approvals.id, (approval as NonNullable<typeof approval>).id));
     expect(after?.status).toBe('approved');
     expect(after?.resolvedVia).toBe('sms');
+  });
+
+  it('refuses to resolve an outward-tool approval by SMS and points to the dashboard (S2/S3)', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [task] = await db
+      .insert(tasks)
+      .values({ agentId, type: 'adhoc', status: 'waiting_approval', trust: 'owner' })
+      .returning();
+    cleanupTaskIds.push((task as NonNullable<typeof task>).id);
+    const [call] = await db
+      .insert(toolCalls)
+      .values({
+        taskId: (task as NonNullable<typeof task>).id,
+        step: 1,
+        toolName: 'test.sms-restricted',
+        args: {},
+        risk: 'approval',
+        status: 'awaiting_approval',
+      })
+      .returning();
+    const [approval] = await db
+      .insert(approvals)
+      .values({
+        taskId: (task as NonNullable<typeof task>).id,
+        toolCallId: (call as NonNullable<typeof call>).id,
+        shortCode: 'A150ZQ',
+        summary: 'send an email to a third party',
+        payload: {},
+        expiresAt: sql`now() + interval '1 hour'`,
+      })
+      .returning();
+
+    sentSms.length = 0;
+    const result = await handleInboundSms(fakeDeps(), {
+      messageSid: `SM-restricted-${Date.now()}`,
+      from: OWNER_PHONE,
+      to: '+18885550000',
+      body: 'YES A150ZQ',
+    });
+    expect(result.kind === 'approval' && result.resolved).toBe(false);
+
+    // The approval must remain pending — a spoofable SMS cannot authorize it.
+    const [after] = await db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.id, (approval as NonNullable<typeof approval>).id));
+    expect(after?.status).toBe('pending');
+    // The owner is told to use the dashboard.
+    expect(sentSms.some((m) => /dashboard/i.test(m.body))).toBe(true);
   });
 });
 

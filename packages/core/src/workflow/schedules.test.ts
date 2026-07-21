@@ -267,6 +267,40 @@ describe('runDueSchedules goal wiring (integration)', () => {
     }
   });
 
+  it('propagates taintedOrigin from a tainted-origin goal into its automation firing (S1)', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const restore = await freezeOtherSchedules();
+    try {
+      // A goal created from a tainted session (goals.create stamps this).
+      await db.update(goals).set({ taintedOrigin: true }).where(eq(goals.id, goalId));
+
+      await runDueSchedules(db, timezone);
+      const name = goalScheduleName(goalId);
+      // The automation template must carry the taint marker forward.
+      const [schedule] = await db.select().from(schedules).where(eq(schedules.name, name));
+      const template = schedule?.taskTemplate as { taintedOrigin?: unknown } | null;
+      expect(template?.taintedOrigin).toBe(true);
+
+      await db
+        .update(schedules)
+        .set({ nextRunAt: new Date(Date.now() - 60e3) })
+        .where(eq(schedules.name, name));
+      const fired = await runDueSchedules(db, timezone);
+      const mine = fired.filter((f) => f.schedule === name);
+      expect(mine).toHaveLength(1);
+      const spawnedId = mine[0]?.taskId as string;
+      createdTaskIds.push(spawnedId);
+
+      // The fired task's trigger carries taintedOrigin, so shouldTaintContext
+      // taints the session and its egress calls are owner-gated.
+      const [spawned] = await db.select().from(tasks).where(eq(tasks.id, spawnedId));
+      const trigger = spawned?.trigger as { payload?: { taintedOrigin?: unknown } } | null;
+      expect(trigger?.payload?.taintedOrigin).toBe(true);
+    } finally {
+      await restore();
+    }
+  });
+
   it('a due goal schedule skips quietly while the goal is blocked on the owner', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const restore = await freezeOtherSchedules();
