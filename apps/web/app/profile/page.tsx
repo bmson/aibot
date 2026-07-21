@@ -1,9 +1,21 @@
-import { CARD_AUTO_FACTS_PER_DOMAIN, CARD_AUTO_MIN_IMPORTANCE } from '@assistant/core';
-import { type ContactRow, contacts, type MemoryRow, memories, ownerCard } from '@assistant/db';
-import { and, count, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
+import {
+  CARD_AUTO_FACTS_PER_DOMAIN,
+  CARD_AUTO_MIN_IMPORTANCE,
+  voiceSampleStats,
+} from '@assistant/core';
+import {
+  type ContactRow,
+  contacts,
+  importSources,
+  type MemoryRow,
+  memories,
+  ownerCard,
+} from '@assistant/db';
+import { and, count, desc, eq, gt, inArray, isNull, like, or, sql } from 'drizzle-orm';
 import Link from 'next/link';
 import { consolidateNow, recompileCard } from '@/app/profile/actions';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
+import { type VoiceImportView, VoiceSamplesPanel } from '@/app/profile/voice-samples';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
@@ -25,6 +37,7 @@ const countBadge = countBadgeClass;
 const PROFILE_CONTACT_LIMIT = 500;
 const PROFILE_FACT_LIMIT = 250;
 const QUARANTINE_LIMIT = 100;
+const VOICE_IMPORT_LIMIT = 5;
 
 function toFactView(m: MemoryRow, now: Date, inCard = false): FactView {
   const from = m.validFrom?.toISOString().slice(0, 10);
@@ -57,7 +70,7 @@ export default async function ProfilePage() {
     or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
   );
 
-  const [allContacts, quarantined, [card]] = await Promise.all([
+  const [allContacts, quarantined, [card], voiceStats, voiceImports] = await Promise.all([
     db.select().from(contacts).orderBy(contacts.name).limit(PROFILE_CONTACT_LIMIT),
     db
       .select()
@@ -71,7 +84,23 @@ export default async function ProfilePage() {
       .orderBy(desc(memories.createdAt))
       .limit(QUARANTINE_LIMIT),
     db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
+    voiceSampleStats(db),
+    db
+      .select()
+      .from(importSources)
+      .where(like(importSources.source, 'voice-samples%'))
+      .orderBy(desc(importSources.updatedAt))
+      .limit(VOICE_IMPORT_LIMIT),
   ]);
+  const voiceImportViews: VoiceImportView[] = voiceImports.map((row) => ({
+    source: row.source,
+    status: row.status,
+    itemsTotal: row.itemsTotal,
+    itemsProcessed: row.itemsProcessed,
+    memoriesSaved: row.memoriesSaved,
+    taskId: row.taskId,
+    error: row.error,
+  }));
 
   const owner = allContacts.find((c) => c.trust === 'owner');
   const contactIds = allContacts.map((contact) => contact.id);
@@ -237,6 +266,14 @@ export default async function ProfilePage() {
           )}
         </details>
       </section>
+
+      {/* Writing voice — sample corpus + one-time batch upload */}
+      <VoiceSamplesPanel
+        total={voiceStats.total}
+        auto={voiceStats.auto}
+        uploaded={voiceStats.uploaded}
+        imports={voiceImportViews}
+      />
 
       {/* People — one collapsed card per person */}
       <section className="mt-8">

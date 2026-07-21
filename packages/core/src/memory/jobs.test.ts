@@ -64,6 +64,7 @@ describe('codeJobName', () => {
   it('recognizes registered jobs and rejects everything else', () => {
     expect(codeJobName(taskWith({ job: 'memory.extract' }))).toBe('memory.extract');
     expect(codeJobName(taskWith({ job: 'memory.consolidate' }))).toBe('memory.consolidate');
+    expect(codeJobName(taskWith({ job: 'voice.ingest' }))).toBe('voice.ingest');
     expect(codeJobName(taskWith({ job: 'rm -rf /' }))).toBeNull();
     expect(codeJobName(taskWith({ instruction: 'do things' }))).toBeNull();
     expect(codeJobName({ trigger: null } as never)).toBeNull();

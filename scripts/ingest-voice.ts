@@ -15,7 +15,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, ModelRouter } from '@assistant/core';
+import { loadConfig, ModelRouter, registerForFilename } from '@assistant/core';
 import { createDb, voiceProfile, writingSamples } from '@assistant/db';
 import { count, eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -32,14 +32,6 @@ if (!dbUrl) {
 }
 const db = createDb(dbUrl);
 const router = new ModelRouter(db, config.OPENROUTER_API_KEY);
-
-function registerFor(filename: string): 'email_professional' | 'email_casual' | 'sms' | 'chat' {
-  const f = filename.toLowerCase();
-  if (f.startsWith('sms')) return 'sms';
-  if (f.startsWith('chat')) return 'chat';
-  if (f.startsWith('email-pro') || f.includes('professional')) return 'email_professional';
-  return 'email_casual';
-}
 
 let files: string[] = [];
 try {
@@ -58,7 +50,7 @@ if (files.length === 0) {
 let inserted = 0;
 let skipped = 0;
 for (const file of files) {
-  const register = registerFor(file);
+  const register = registerForFilename(file);
   const raw = readFileSync(path.join(voiceDir, file), 'utf8');
   const samples = raw
     .split(/\n---+\n/)

@@ -4,6 +4,7 @@ import { runMemoryConsolidation } from './consolidation.js';
 import { runMemoryExtraction } from './extraction.js';
 import { runImportJob, type WorkspaceReader } from './import.js';
 import { segmentConversations } from './segmentation.js';
+import { runVoiceIngest } from './voice-ingest.js';
 
 /**
  * Code jobs: tasks whose trigger payload carries { job: '<name>' } run a
@@ -12,13 +13,19 @@ import { segmentConversations } from './segmentation.js';
  * retry/dead-letter machinery, and a job may yield (done: false) to sleep
  * and resume from its checkpoint — that's how imports survive interruption.
  */
-export type CodeJobName = 'memory.extract' | 'memory.consolidate' | 'chat.segment' | 'import.run';
+export type CodeJobName =
+  | 'memory.extract'
+  | 'memory.consolidate'
+  | 'chat.segment'
+  | 'import.run'
+  | 'voice.ingest';
 
 const CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.extract',
   'memory.consolidate',
   'chat.segment',
   'import.run',
+  'voice.ingest',
 ]);
 
 export interface CodeJobOutcome {
@@ -70,5 +77,7 @@ export async function runCodeJob(
     }
     case 'import.run':
       return runImportJob(deps, task);
+    case 'voice.ingest':
+      return runVoiceIngest(deps, task);
   }
 }

@@ -1,7 +1,13 @@
 'use server';
 
 import { createHash } from 'node:crypto';
-import { compileOwnerCard, enqueueTask, getAgent, InboundEventSchema } from '@assistant/core';
+import {
+  compileOwnerCard,
+  enqueueTask,
+  getAgent,
+  InboundEventSchema,
+  purgeVoiceSamples,
+} from '@assistant/core';
 import {
   addTombstone,
   contacts,
@@ -13,7 +19,7 @@ import {
 import { eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getDb, getRouter } from '@/lib/server';
+import { getDb, getRouter, getWorkspace } from '@/lib/server';
 
 function revalidateProfile(): void {
   revalidatePath('/profile', 'layout');
@@ -227,5 +233,15 @@ export async function mergeContactAction(sourceId: string, targetId: string): Pr
   const db = getDb();
   await mergeContacts(db, { sourceId, targetId });
   await compileOwnerCard(db);
+  revalidateProfile();
+}
+
+/**
+ * Clear the auto-captured and uploaded voice samples (and any voice-import
+ * husks), leaving seed-script samples and the distilled profile untouched.
+ */
+export async function purgeVoiceSamplesAction(): Promise<void> {
+  await requireOwner();
+  await purgeVoiceSamples(getDb(), getWorkspace());
   revalidateProfile();
 }

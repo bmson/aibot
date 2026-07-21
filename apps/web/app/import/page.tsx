@@ -1,3 +1,4 @@
+import { isVoiceImportSource } from '@assistant/core';
 import { type ImportSourceRow, importSources, memories } from '@assistant/db';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { SourceCard, type SourceView, StartImportButton } from '@/app/import/source-card';
@@ -29,7 +30,7 @@ export default async function ImportPage() {
   const db = getDb();
   const now = new Date();
 
-  const [sources, quarantineCounts, importFiles] = await Promise.all([
+  const [allSources, quarantineCounts, importFiles] = await Promise.all([
     db.select().from(importSources).orderBy(desc(importSources.updatedAt)),
     db
       .select({ source: memories.source, n: sql<number>`count(*)` })
@@ -40,8 +41,11 @@ export default async function ImportPage() {
       .list('import')
       .catch(() => [] as Array<{ name: string; dir: boolean }>),
   ]);
+  // Voice-sample imports seed the writing corpus, not memory — they're managed
+  // on the Profile page, so they never appear in the backstory list.
+  const sources = allSources.filter((s) => !isVoiceImportSource(s.source));
   const quarantinedBySource = new Map(quarantineCounts.map((r) => [r.source ?? '', Number(r.n)]));
-  const knownPaths = new Set(sources.map((s) => s.workspacePath));
+  const knownPaths = new Set(allSources.map((s) => s.workspacePath));
   const unstartedFiles = importFiles.filter((f) => !f.dir && !knownPaths.has(`import/${f.name}`));
 
   return (
