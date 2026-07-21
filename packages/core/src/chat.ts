@@ -380,7 +380,7 @@ export async function createChatTask(
         // Attributed to the goal when this is a goal's work chat, so the
         // goal's history includes the turns the owner had in it.
         goalId: input.goalId,
-        budgetUsdLimit: budgetRow?.limitUsd ?? '0.25',
+        budgetUsdLimit: budgetRow?.limitUsd ?? '0.50',
         trigger: { source: 'chat', conversationId: input.conversationId },
       })
       .returning({ id: tasks.id });

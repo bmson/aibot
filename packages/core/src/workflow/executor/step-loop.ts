@@ -41,6 +41,7 @@ import {
   notifyOwnerAndConversation,
   postConversationNotice,
   recordGoalBlocked,
+  taskBudgetPermissionRequest,
 } from './notices.js';
 import type { RunContext } from './phases.js';
 import { roleForTask } from './role.js';
@@ -355,11 +356,8 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         `budget: ${stepResult.decision.reason}`,
       );
       if (!marked) return LOST_LEASE;
-      await notifyOwnerAndConversation(
-        deps,
-        task,
-        `I hit this task's own budget cap (${stepResult.decision.reason}) and stopped. It's marked needs-attention on the Tasks page — raise the task budget there if you want me to finish.`,
-      );
+      const budgetRequest = taskBudgetPermissionRequest(task, stepResult.decision.reason);
+      await notifyOwnerAndConversation(deps, task, budgetRequest.text, [budgetRequest.part]);
       return { outcome: 'needs_attention', detail: stepResult.decision.reason };
     }
 

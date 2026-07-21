@@ -392,6 +392,56 @@ export class ModelRouter {
     return { reservation, maxOutputTokens, providerOptions };
   }
 
+  /**
+   * Route and reserve a model call as one budget-aware decision. The routing
+   * guard can only see money already spent; a large primary-model reservation
+   * may still fail even when the task is below its soft threshold. Because no
+   * provider work has happened at that point, retry the preflight with the
+   * cheaper fallback before asking the owner for more budget.
+   */
+  private async prepareModelCall(
+    role: Exclude<ModelRole, 'embed'>,
+    opts: CallOptions,
+  ): Promise<
+    | { ok: false; decision: Extract<BudgetDecision, { mode: 'park' | 'block' }> }
+    | {
+        ok: true;
+        route: Extract<Route, { ok: true }>;
+        reservationId: string;
+        maxOutputTokens: number;
+        providerOptions?: ProviderOptions;
+      }
+  > {
+    const attempt = async (forceFallback: boolean) => {
+      const route = await this.route(role, { ...opts, forceFallback });
+      if (!route.ok) return { ok: false as const, decision: route.decision };
+      const prepared = await this.reserveModelCall(role, route, opts);
+      if (!prepared.reservation.ok) {
+        return {
+          ok: false as const,
+          decision: reservationDecision(prepared.reservation.reason),
+          route,
+        };
+      }
+      return {
+        ok: true as const,
+        route,
+        reservationId: prepared.reservation.reservationId,
+        maxOutputTokens: prepared.maxOutputTokens,
+        providerOptions: prepared.providerOptions,
+      };
+    };
+
+    const preferred = await attempt(Boolean(opts.forceFallback));
+    if (preferred.ok || !preferred.route || preferred.route.degraded) return preferred;
+
+    const fallback = await attempt(true);
+    // A role may intentionally point primary and fallback at the same model.
+    // Preserve the first failure instead of repeating the identical decision.
+    if (fallback.route?.modelId === preferred.route.modelId) return preferred;
+    return fallback;
+  }
+
   private async meter(input: MeterInput): Promise<void> {
     const providerMetadata =
       input.event.providerMetadata ??
@@ -447,15 +497,10 @@ export class ModelRouter {
 
   /** Non-streaming call with metering. Callers must handle { ok: false }. */
   async generate(role: ModelRole, opts: CallOptions): Promise<GenerateOutcome> {
-    const route = await this.route(role, opts);
-    if (!route.ok) return { ok: false, decision: route.decision };
     if (role === 'embed') throw new Error('generate() cannot use the embed role');
-    const { reservation, maxOutputTokens, providerOptions } = await this.reserveModelCall(
-      role,
-      route,
-      opts,
-    );
-    if (!reservation.ok) return { ok: false, decision: reservationDecision(reservation.reason) };
+    const prepared = await this.prepareModelCall(role, opts);
+    if (!prepared.ok) return prepared;
+    const { route, reservationId, maxOutputTokens, providerOptions } = prepared;
 
     const started = Date.now();
     try {
@@ -475,7 +520,7 @@ export class ModelRouter {
           modelId: route.modelId,
           latencyMs: Date.now() - started,
           event: result as FinishEventLike,
-          reservationId: reservation.reservationId,
+          reservationId,
           promptCostPerMTok: route.promptCostPerMTok,
           completionCostPerMTok: route.completionCostPerMTok,
         });
@@ -488,7 +533,7 @@ export class ModelRouter {
         };
       });
     } catch (err) {
-      await releaseReservation(this.db, reservation.reservationId).catch(() => {});
+      await releaseReservation(this.db, reservationId).catch(() => {});
       throw err;
     }
   }
@@ -504,15 +549,10 @@ export class ModelRouter {
       onError?: (error: unknown) => Promise<void>;
     },
   ): Promise<StreamOutcome> {
-    const route = await this.route(role, opts);
-    if (!route.ok) return { ok: false, decision: route.decision };
     if (role === 'embed') throw new Error('stream() cannot use the embed role');
-    const { reservation, maxOutputTokens, providerOptions } = await this.reserveModelCall(
-      role,
-      route,
-      opts,
-    );
-    if (!reservation.ok) return { ok: false, decision: reservationDecision(reservation.reason) };
+    const prepared = await this.prepareModelCall(role, opts);
+    if (!prepared.ok) return prepared;
+    const { route, reservationId, maxOutputTokens, providerOptions } = prepared;
 
     const started = Date.now();
     let result: ReturnType<typeof streamText>;
@@ -535,7 +575,7 @@ export class ModelRouter {
               modelId: route.modelId,
               latencyMs: Date.now() - started,
               event,
-              reservationId: reservation.reservationId,
+              reservationId,
               promptCostPerMTok: route.promptCostPerMTok,
               completionCostPerMTok: route.completionCostPerMTok,
             }),
@@ -543,7 +583,7 @@ export class ModelRouter {
           ]);
         },
         onError: async ({ error }: { error: unknown }) => {
-          await releaseReservation(this.db, reservation.reservationId).catch(() => {});
+          await releaseReservation(this.db, reservationId).catch(() => {});
           if (opts.onError) {
             await opts.onError(error).catch((callbackError) => {
               console.error('stream error callback failed', callbackError);
@@ -552,7 +592,7 @@ export class ModelRouter {
         },
         onAbort: async () => {
           const error = new Error('model stream aborted');
-          await releaseReservation(this.db, reservation.reservationId).catch(() => {});
+          await releaseReservation(this.db, reservationId).catch(() => {});
           if (opts.onError) {
             await opts.onError(error).catch((callbackError) => {
               console.error('stream abort callback failed', callbackError);
@@ -561,7 +601,7 @@ export class ModelRouter {
         },
       });
     } catch (err) {
-      await releaseReservation(this.db, reservation.reservationId).catch(() => {});
+      await releaseReservation(this.db, reservationId).catch(() => {});
       throw err;
     }
 
@@ -593,15 +633,10 @@ export class ModelRouter {
     role: ModelRole,
     opts: CallOptions & { tools: ToolSet; toolChoice?: StepToolChoice },
   ): Promise<StepCallOutcome> {
-    const route = await this.route(role, opts);
-    if (!route.ok) return { ok: false, decision: route.decision };
     if (role === 'embed') throw new Error('step() cannot use the embed role');
-    const { reservation, maxOutputTokens, providerOptions } = await this.reserveModelCall(
-      role,
-      route,
-      opts,
-    );
-    if (!reservation.ok) return { ok: false, decision: reservationDecision(reservation.reason) };
+    const prepared = await this.prepareModelCall(role, opts);
+    if (!prepared.ok) return prepared;
+    const { route, reservationId, maxOutputTokens, providerOptions } = prepared;
 
     const { encoded, decode } = encodeToolNames(opts.tools);
     const toolChoice =
@@ -632,7 +667,7 @@ export class ModelRouter {
           modelId: route.modelId,
           latencyMs: Date.now() - started,
           event: result as FinishEventLike,
-          reservationId: reservation.reservationId,
+          reservationId,
           promptCostPerMTok: route.promptCostPerMTok,
           completionCostPerMTok: route.completionCostPerMTok,
         });
@@ -651,7 +686,7 @@ export class ModelRouter {
         };
       });
     } catch (err) {
-      await releaseReservation(this.db, reservation.reservationId).catch(() => {});
+      await releaseReservation(this.db, reservationId).catch(() => {});
       throw err;
     }
   }
@@ -664,19 +699,12 @@ export class ModelRouter {
     if (role === 'embed') throw new Error('object() cannot use the embed role');
 
     const runOnce = async (forceFallback: boolean): Promise<ObjectOutcome<T>> => {
-      const route = await this.route(role, {
-        taskId: opts.taskId,
-        modelOverride: opts.modelOverride,
-        critical: opts.critical,
+      const prepared = await this.prepareModelCall(role, {
+        ...opts,
         forceFallback: forceFallback || opts.forceFallback,
       });
-      if (!route.ok) return { ok: false, decision: route.decision };
-      const { reservation, maxOutputTokens, providerOptions } = await this.reserveModelCall(
-        role,
-        route,
-        opts,
-      );
-      if (!reservation.ok) return { ok: false, decision: reservationDecision(reservation.reason) };
+      if (!prepared.ok) return prepared;
+      const { route, reservationId, maxOutputTokens, providerOptions } = prepared;
 
       const started = Date.now();
       try {
@@ -697,7 +725,7 @@ export class ModelRouter {
             modelId: route.modelId,
             latencyMs: Date.now() - started,
             event: result as unknown as FinishEventLike,
-            reservationId: reservation.reservationId,
+            reservationId,
             promptCostPerMTok: route.promptCostPerMTok,
             completionCostPerMTok: route.completionCostPerMTok,
           });
@@ -709,7 +737,7 @@ export class ModelRouter {
           };
         });
       } catch (err) {
-        await releaseReservation(this.db, reservation.reservationId).catch(() => {});
+        await releaseReservation(this.db, reservationId).catch(() => {});
         throw err;
       }
     };

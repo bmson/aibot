@@ -9,7 +9,13 @@ import { formatDateTime, formatUsd, prettyJson, relativeTime, truncate } from '@
 import { getDb } from '@/lib/server';
 import { btn } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
-import { archiveTask, restoreTask } from '../actions';
+import {
+  archiveTask,
+  cancelTask,
+  raiseTaskBudgetAndRetry,
+  restoreTask,
+  retryTask,
+} from '../actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -181,6 +187,10 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
   const completedActions = taskToolCalls.filter(completedSuccessfully);
   const incompleteActions = taskToolCalls.filter((call) => !completedSuccessfully(call));
+  const taskBudget = Number(task.budgetUsdLimit);
+  const suggestedBudget = Math.ceil(Math.max(taskBudget * 2, Number(task.spentUsd) + 0.25) * 4) / 4;
+  const stoppedForTaskBudget =
+    task.status === 'needs_attention' && task.progress.startsWith('budget: task budget');
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -193,6 +203,20 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold tracking-[-0.03em]">{taskTypeLabel(task.type)}</h1>
         <StatusChip status={task.status} />
+        {task.status === 'needs_attention' && !stoppedForTaskBudget ? (
+          <form action={retryTask.bind(null, task.id)}>
+            <button type="submit" className={btn.primary}>
+              Retry
+            </button>
+          </form>
+        ) : null}
+        {task.status === 'needs_attention' ? (
+          <form action={cancelTask.bind(null, task.id)}>
+            <button type="submit" className={btn.outline}>
+              Cancel
+            </button>
+          </form>
+        ) : null}
         {task.archivedAt ? (
           <form action={restoreTask.bind(null, task.id)}>
             <button type="submit" className={btn.outline}>
@@ -207,6 +231,33 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           </form>
         ) : null}
       </div>
+
+      {stoppedForTaskBudget ? (
+        <form
+          action={raiseTaskBudgetAndRetry.bind(null, task.id)}
+          className="mt-5 flex flex-wrap items-end gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/20"
+        >
+          <label className="flex flex-col gap-1 text-xs font-medium text-amber-900 dark:text-amber-200">
+            New task budget (USD)
+            <input
+              type="number"
+              name="budgetUsdLimit"
+              step="0.01"
+              min={(taskBudget + 0.01).toFixed(2)}
+              max="10000"
+              defaultValue={suggestedBudget.toFixed(2)}
+              required
+              className="w-32 rounded-md border border-amber-300 bg-white px-2 py-1 text-base text-zinc-900 sm:text-sm dark:border-amber-800 dark:bg-zinc-900 dark:text-zinc-100"
+            />
+          </label>
+          <button type="submit" className={btn.primary}>
+            Raise budget and retry
+          </button>
+          <p className="w-full text-xs text-amber-800 dark:text-amber-300">
+            The task resumes from its saved checkpoint; completed actions are not repeated.
+          </p>
+        </form>
+      ) : null}
 
       <div className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
         <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm sm:grid-cols-3">

@@ -1,5 +1,5 @@
 import { costTotals } from '@assistant/core';
-import { costEvents, costReservations, modelCalls, tasks } from '@assistant/db';
+import { budgets, costEvents, costReservations, modelCalls, tasks } from '@assistant/db';
 import { desc, eq, gte, sql, sum } from 'drizzle-orm';
 import Link from 'next/link';
 import { updateCaps } from '@/app/costs/actions';
@@ -29,41 +29,43 @@ export default async function CostsPage() {
   const db = getDb();
 
   const monthStart = sql`date_trunc('month', now())`;
-  const [totals, bySource, byModel, topTasks, held, recent, [parkedCount]] = await Promise.all([
-    costTotals(db),
-    db
-      .select({ source: costEvents.source, usd: sum(costEvents.usd), n: sql<number>`count(*)` })
-      .from(costEvents)
-      .where(gte(costEvents.createdAt, monthStart))
-      .groupBy(costEvents.source)
-      .orderBy(desc(sum(costEvents.usd))),
-    db
-      .select({ model: modelCalls.model, usd: sum(modelCalls.costUsd), n: sql<number>`count(*)` })
-      .from(modelCalls)
-      .where(gte(modelCalls.createdAt, monthStart))
-      .groupBy(modelCalls.model)
-      .orderBy(desc(sum(modelCalls.costUsd))),
-    db
-      .select({
-        taskId: costEvents.taskId,
-        usd: sum(costEvents.usd),
-        type: tasks.type,
-        progress: tasks.progress,
-      })
-      .from(costEvents)
-      .innerJoin(tasks, eq(tasks.id, costEvents.taskId))
-      .where(gte(costEvents.createdAt, monthStart))
-      .groupBy(costEvents.taskId, tasks.type, tasks.progress)
-      .orderBy(desc(sum(costEvents.usd)))
-      .limit(10),
-    db
-      .select()
-      .from(costReservations)
-      .where(eq(costReservations.status, 'held'))
-      .orderBy(desc(costReservations.createdAt)),
-    db.select().from(costEvents).orderBy(desc(costEvents.createdAt)).limit(15),
-    db.select({ n: sql<number>`count(*)` }).from(tasks).where(eq(tasks.status, 'waiting_budget')),
-  ]);
+  const [totals, bySource, byModel, topTasks, held, recent, [parkedCount], [taskDefault]] =
+    await Promise.all([
+      costTotals(db),
+      db
+        .select({ source: costEvents.source, usd: sum(costEvents.usd), n: sql<number>`count(*)` })
+        .from(costEvents)
+        .where(gte(costEvents.createdAt, monthStart))
+        .groupBy(costEvents.source)
+        .orderBy(desc(sum(costEvents.usd))),
+      db
+        .select({ model: modelCalls.model, usd: sum(modelCalls.costUsd), n: sql<number>`count(*)` })
+        .from(modelCalls)
+        .where(gte(modelCalls.createdAt, monthStart))
+        .groupBy(modelCalls.model)
+        .orderBy(desc(sum(modelCalls.costUsd))),
+      db
+        .select({
+          taskId: costEvents.taskId,
+          usd: sum(costEvents.usd),
+          type: tasks.type,
+          progress: tasks.progress,
+        })
+        .from(costEvents)
+        .innerJoin(tasks, eq(tasks.id, costEvents.taskId))
+        .where(gte(costEvents.createdAt, monthStart))
+        .groupBy(costEvents.taskId, tasks.type, tasks.progress)
+        .orderBy(desc(sum(costEvents.usd)))
+        .limit(10),
+      db
+        .select()
+        .from(costReservations)
+        .where(eq(costReservations.status, 'held'))
+        .orderBy(desc(costReservations.createdAt)),
+      db.select().from(costEvents).orderBy(desc(costEvents.createdAt)).limit(15),
+      db.select({ n: sql<number>`count(*)` }).from(tasks).where(eq(tasks.status, 'waiting_budget')),
+      db.select().from(budgets).where(eq(budgets.scope, 'task_default')),
+    ]);
 
   const parked = Number(parkedCount?.n ?? 0);
 
@@ -110,6 +112,17 @@ export default async function CostsPage() {
       {/* Cap editing */}
       <section className="mt-6">
         <form action={updateCaps} className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+            Default task cap (USD)
+            <input
+              type="number"
+              name="task_default"
+              step="0.05"
+              min="0.05"
+              defaultValue={taskDefault ? Number(taskDefault.limitUsd) : ''}
+              className="w-28 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            />
+          </label>
           <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">
             Daily cap (USD)
             <input

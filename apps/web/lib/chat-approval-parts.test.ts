@@ -59,7 +59,44 @@ describe('withApprovalStatuses', () => {
     ]);
   });
 
-  it('does not query when a message has no approval parts', async () => {
+  it('hydrates a budget request from the task cap and status', async () => {
+    const where = vi.fn().mockResolvedValue([
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        status: 'pending',
+        budgetUsdLimit: '0.5000',
+      },
+    ]);
+    const from = vi.fn(() => ({ where }));
+    const select = vi.fn(() => ({ from }));
+    const db = { select } as unknown as Db;
+    const messages = [
+      {
+        id: 'message-1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'May I spend more?' },
+          {
+            type: 'budget-request',
+            taskId: '33333333-3333-4333-8333-333333333333',
+            currentBudgetUsd: 0.25,
+            proposedBudgetUsd: 0.5,
+            spentUsd: 0.1061,
+          },
+        ] as unknown as UIMessage['parts'],
+      },
+    ] satisfies UIMessage[];
+
+    const hydrated = await withApprovalStatuses(db, messages);
+
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(hydrated[0]?.parts).toMatchObject([
+      { type: 'text' },
+      { type: 'budget-request', status: 'approved' },
+    ]);
+  });
+
+  it('does not query when a message has no actionable parts', async () => {
     const select = vi.fn();
     const db = { select } as unknown as Db;
     const messages = [

@@ -1,4 +1,4 @@
-import { approvals, type Db } from '@assistant/db';
+import { approvals, type Db, tasks } from '@assistant/db';
 import type { UIMessage } from 'ai';
 import { inArray } from 'drizzle-orm';
 
@@ -14,12 +14,29 @@ interface ApprovalPartLike {
   status?: InlineApprovalStatus;
 }
 
+interface BudgetRequestPartLike {
+  type: 'budget-request';
+  taskId: string;
+  proposedBudgetUsd: number;
+  status?: 'pending' | 'approved' | 'denied' | 'missing';
+}
+
 function isApprovalPart(part: unknown): part is ApprovalPartLike {
   return (
     Boolean(part) &&
     typeof part === 'object' &&
     (part as { type?: unknown }).type === 'approval' &&
     typeof (part as { approvalId?: unknown }).approvalId === 'string'
+  );
+}
+
+function isBudgetRequestPart(part: unknown): part is BudgetRequestPartLike {
+  return (
+    Boolean(part) &&
+    typeof part === 'object' &&
+    (part as { type?: unknown }).type === 'budget-request' &&
+    typeof (part as { taskId?: unknown }).taskId === 'string' &&
+    typeof (part as { proposedBudgetUsd?: unknown }).proposedBudgetUsd === 'number'
   );
 }
 
@@ -60,17 +77,48 @@ export async function withApprovalStatuses(db: Db, messages: UIMessage[]): Promi
       ),
     ),
   ];
-  if (approvalIds.length === 0) return messages;
+  const budgetTaskIds = [
+    ...new Set(
+      messages.flatMap((message) =>
+        (message.parts as unknown[]).filter(isBudgetRequestPart).map((part) => part.taskId),
+      ),
+    ),
+  ];
+  if (approvalIds.length === 0 && budgetTaskIds.length === 0) return messages;
 
-  const rows = await db
-    .select({ id: approvals.id, status: approvals.status, payload: approvals.payload })
-    .from(approvals)
-    .where(inArray(approvals.id, approvalIds));
+  const [rows, budgetTasks] = await Promise.all([
+    approvalIds.length > 0
+      ? db
+          .select({ id: approvals.id, status: approvals.status, payload: approvals.payload })
+          .from(approvals)
+          .where(inArray(approvals.id, approvalIds))
+      : [],
+    budgetTaskIds.length > 0
+      ? db
+          .select({ id: tasks.id, status: tasks.status, budgetUsdLimit: tasks.budgetUsdLimit })
+          .from(tasks)
+          .where(inArray(tasks.id, budgetTaskIds))
+      : [],
+  ]);
   const approvalById = new Map(rows.map((row) => [row.id, row]));
+  const taskById = new Map(budgetTasks.map((task) => [task.id, task]));
 
   return messages.map((message) => ({
     ...message,
     parts: (message.parts as unknown[]).map((part) => {
+      if (isBudgetRequestPart(part)) {
+        const task = taskById.get(part.taskId);
+        const status = !task
+          ? 'missing'
+          : Number(task.budgetUsdLimit) >= part.proposedBudgetUsd
+            ? 'approved'
+            : task.status === 'cancelled'
+              ? 'denied'
+              : task.status === 'needs_attention'
+                ? 'pending'
+                : 'missing';
+        return { ...part, status };
+      }
       if (!isApprovalPart(part)) return part;
       const approval = approvalById.get(part.approvalId);
       return approval

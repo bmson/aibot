@@ -15,6 +15,7 @@ function revalidateTaskViews(taskId: string): void {
   revalidatePath('/');
   revalidatePath('/tasks');
   revalidatePath(`/tasks/${taskId}`);
+  revalidatePath('/chat', 'layout');
 }
 
 /** Re-queue a stuck task (needs_attention → pending). */
@@ -22,6 +23,39 @@ export async function retryTask(taskId: string): Promise<void> {
   await requireOwner();
   await wakeTask(getDb(), taskId);
   revalidateTaskViews(taskId);
+}
+
+/** Raise one task's hard cap and immediately re-queue its checkpointed work. */
+export async function raiseTaskBudgetAndRetry(taskId: string, formData: FormData): Promise<void> {
+  await requireOwner();
+  const requested = Number.parseFloat(String(formData.get('budgetUsdLimit') ?? '').trim());
+  if (!Number.isFinite(requested) || requested <= 0 || requested > 10000) {
+    throw new Error('task budget must be between $0.01 and $10,000');
+  }
+
+  const db = getDb();
+  const agent = await getAgent(db);
+  const [task] = await db
+    .select({
+      id: tasks.id,
+      status: tasks.status,
+      budgetUsdLimit: tasks.budgetUsdLimit,
+      spentUsd: tasks.spentUsd,
+    })
+    .from(tasks)
+    .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agent.id)));
+  if (!task) throw new Error('activity item not found');
+  if (task.status !== 'needs_attention') throw new Error('only stalled tasks can be retried');
+  if (requested <= Number(task.budgetUsdLimit) || requested < Number(task.spentUsd)) {
+    throw new Error('new task budget must be above its current cap and spend');
+  }
+
+  await db
+    .update(tasks)
+    .set({ budgetUsdLimit: requested.toFixed(4), updatedAt: new Date() })
+    .where(and(eq(tasks.id, task.id), eq(tasks.agentId, agent.id)));
+  if (!(await wakeTask(db, task.id))) throw new Error('task could not be retried');
+  revalidateTaskViews(task.id);
 }
 
 export async function cancelTask(taskId: string): Promise<void> {

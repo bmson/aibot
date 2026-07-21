@@ -10,7 +10,11 @@ import { requestedArtifactIntent } from './artifact-intent.js';
 import { isKnownSenderReplyTask } from './executor/context-helpers.js';
 import { finalizePendingResponse } from './executor/finalize.js';
 import { unreadSharedDocumentIntent } from './executor/intent.js';
-import { notifyOwnerAndConversation, postConversationNotice } from './executor/notices.js';
+import {
+  notifyOwnerAndConversation,
+  postConversationNotice,
+  taskBudgetPermissionRequest,
+} from './executor/notices.js';
 import {
   type RunContext,
   resumePendingApprovals,
@@ -69,11 +73,8 @@ export async function executeTask(deps: ExecutorDeps, taskId: string): Promise<E
         if (err.message.startsWith('task budget')) {
           const marked = await markTaskNeedsAttention(db, task, `budget: ${err.message}`);
           if (!marked) return LOST_LEASE;
-          await notifyOwnerAndConversation(
-            deps,
-            task,
-            `I hit this task's own budget cap (${err.message}) and stopped. Raise the task budget on the Tasks page if you want it retried.`,
-          );
+          const budgetRequest = taskBudgetPermissionRequest(task, err.message);
+          await notifyOwnerAndConversation(deps, task, budgetRequest.text, [budgetRequest.part]);
           return { outcome: 'needs_attention', detail: err.message.slice(0, 500) };
         }
         const [fresh] = await db.select().from(tasks).where(eq(tasks.id, task.id));

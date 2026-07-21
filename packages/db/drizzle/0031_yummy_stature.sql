@@ -1,0 +1,1 @@
+ALTER TABLE "tasks" ALTER COLUMN "budget_usd_limit" SET DEFAULT '0.50';

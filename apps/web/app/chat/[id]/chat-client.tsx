@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { btn } from '@/lib/ui';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
 import { InlineApproval, type InlineApprovalPart } from './inline-approval';
+import { InlineBudgetRequest, type InlineBudgetRequestPart } from './inline-budget-request';
 import { MessageMarkdown } from './markdown';
 
 interface ChatClientProps {
@@ -236,16 +237,13 @@ export function ChatClient({
           if (
             (data.taskStatus === 'done' ||
               data.taskStatus === 'waiting_approval' ||
-              data.taskStatus === 'waiting_budget') &&
+              data.taskStatus === 'waiting_budget' ||
+              data.taskStatus === 'needs_attention') &&
             sawAssistant
           ) {
             return settle(null);
           }
-          if (
-            data.taskStatus === 'failed' ||
-            data.taskStatus === 'needs_attention' ||
-            data.taskStatus === 'cancelled'
-          ) {
+          if (data.taskStatus === 'failed' || data.taskStatus === 'cancelled') {
             return settle(
               `the task ${data.taskStatus === 'cancelled' ? 'was cancelled' : `ended ${data.taskStatus}`} — see the Tasks page`,
             );
@@ -394,25 +392,30 @@ export function ChatClient({
                   {message.role === 'assistant' ? (
                     <RecallChip sources={recallSourcesOf(message)} />
                   ) : null}
-                  {(message.parts as Array<UIMessage['parts'][number] | InlineApprovalPart>).map(
-                    (part, index) =>
-                      part.type === 'text' ? (
-                        message.role === 'assistant' ? (
-                          <MessageMarkdown
-                            key={`${message.id}-${index.toString()}`}
-                            text={part.text}
-                          />
-                        ) : (
-                          <p
-                            key={`${message.id}-${index.toString()}`}
-                            className="whitespace-pre-wrap"
-                          >
-                            {part.text}
-                          </p>
-                        )
-                      ) : part.type === 'approval' ? (
-                        <InlineApproval key={part.approvalId} part={part} />
-                      ) : null,
+                  {(
+                    message.parts as Array<
+                      UIMessage['parts'][number] | InlineApprovalPart | InlineBudgetRequestPart
+                    >
+                  ).map((part, index) =>
+                    part.type === 'text' ? (
+                      message.role === 'assistant' ? (
+                        <MessageMarkdown
+                          key={`${message.id}-${index.toString()}`}
+                          text={part.text}
+                        />
+                      ) : (
+                        <p
+                          key={`${message.id}-${index.toString()}`}
+                          className="whitespace-pre-wrap"
+                        >
+                          {part.text}
+                        </p>
+                      )
+                    ) : part.type === 'approval' ? (
+                      <InlineApproval key={part.approvalId} part={part} />
+                    ) : part.type === 'budget-request' ? (
+                      <InlineBudgetRequest key={part.taskId} part={part} />
+                    ) : null,
                   )}
                 </div>
               </div>

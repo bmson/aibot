@@ -2,7 +2,7 @@ import { createDb, type Db, tasks } from '@assistant/db';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createChatTask, ensureChatConversation, getAgent } from '../chat.js';
-import { BudgetReservationError } from '../cost.js';
+import { BudgetReservationError, releaseReservation } from '../cost.js';
 import { isUnparseableObjectError, ModelRouter } from './router.js';
 
 const DATABASE_URL =
@@ -116,6 +116,42 @@ describe('ModelRouter.route (integration)', () => {
       expect(route.modelId).toBe('openai/gpt-oss-120b'); // draft fallback
     }
 
+    await db.delete(tasks).where(eq(tasks.id, task.id));
+  });
+
+  it('tries the cheaper fallback when the primary reservation does not fit', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const agent = await getAgent(db);
+    const conversation = await ensureChatConversation(db, agent.id);
+    const task = await createChatTask(db, { agentId: agent.id, conversationId: conversation.id });
+    await db
+      .update(tasks)
+      .set({ budgetUsdLimit: '0.0200', spentUsd: '0' })
+      .where(eq(tasks.id, task.id));
+
+    const router = new ModelRouter(db, 'test-key-unused');
+    const prepared = await (
+      router as unknown as {
+        prepareModelCall: (
+          role: 'reason',
+          opts: { taskId: string; prompt: string },
+        ) => Promise<
+          | { ok: false }
+          | {
+              ok: true;
+              route: { modelId: string; degraded: boolean };
+              reservationId: string;
+            }
+        >;
+      }
+    ).prepareModelCall('reason', { taskId: task.id, prompt: 'Finish the task.' });
+
+    expect(prepared.ok).toBe(true);
+    if (prepared.ok) {
+      expect(prepared.route.modelId).toBe('deepseek/deepseek-chat');
+      expect(prepared.route.degraded).toBe(true);
+      await releaseReservation(db, prepared.reservationId);
+    }
     await db.delete(tasks).where(eq(tasks.id, task.id));
   });
 

@@ -267,7 +267,7 @@ export const tasks = pgTable(
     maxSteps: integer('max_steps').notNull().default(12),
     budgetUsdLimit: numeric('budget_usd_limit', { precision: 8, scale: 4 })
       .notNull()
-      .default('0.25'),
+      .default('0.50'),
     spentUsd: numeric('spent_usd', { precision: 10, scale: 6 }).notNull().default('0'),
     parentTaskId: uuid('parent_task_id').references((): AnyPgColumn => tasks.id),
     /** Owner-hidden terminal history. Evidence stays intact and can be restored. */
