@@ -7,7 +7,7 @@ import { PROMPT_VERSION } from '../../chat.js';
 import { getRate, reconcileReservation } from '../../cost.js';
 import { type Plan, PlanSchema, type TaskState } from '../../events.js';
 import { codeJobName, runCodeJob } from '../../memory/jobs.js';
-import type { ModelRouter } from '../../model-router/router.js';
+import type { ModelRouter, ProposedToolCall } from '../../model-router/router.js';
 import { markApprovalsNotified } from '../approvals.js';
 import {
   type ArtifactIntent,
@@ -54,7 +54,10 @@ export interface RunContext {
   agent: AgentRow;
   state: TaskState;
   ctx: ToolContextLike;
+  /** Live model-message window. Phases push onto it; the step loop reassigns it (compaction). */
   window: ModelMessage[];
+  /** Calls queued after the one that launched a browser job (read by the staging closures). */
+  browserStageRemainder: ProposedToolCall[];
   artifactIntent?: ArtifactIntent;
   documentReadIntent?: DocumentReadIntent;
 }
