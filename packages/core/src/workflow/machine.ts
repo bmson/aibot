@@ -1,6 +1,6 @@
 import { type Db, type TaskRow, tasks } from '@assistant/db';
 import { and, eq, gt, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
-import type { InboundEvent } from '../events.js';
+import type { InboundEvent, Plan } from '../events.js';
 import { type TaskState, TaskStateSchema } from '../events.js';
 import { getQueueNotifier } from '../queue.js';
 
@@ -66,6 +66,12 @@ export async function enqueueTask(
     runAfter?: Date;
     deadline?: Date;
     maxSteps?: number;
+    /**
+     * Pre-set the task's plan so the executor skips planning entirely. Used by
+     * deterministically-enqueued internal children (e.g. the D9 known-sender
+     * reply) whose next action is fixed rather than model-decided.
+     */
+    plan?: Plan;
     /** Caller is inside a larger transaction and will notify only after commit. */
     deferNotification?: boolean;
   },
@@ -84,6 +90,7 @@ export async function enqueueTask(
     deadline: input.deadline,
     ...(input.budgetUsdLimit ? { budgetUsdLimit: input.budgetUsdLimit } : {}),
     ...(input.maxSteps ? { maxSteps: input.maxSteps } : {}),
+    ...(input.plan ? { plan: input.plan } : {}),
   };
 
   if (input.event.externalEventId) {
