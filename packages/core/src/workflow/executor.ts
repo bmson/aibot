@@ -20,7 +20,7 @@ import {
   nextMonthlyReset,
   reconcileReservation,
 } from '../cost.js';
-import { type PendingFinal, PlanSchema, type TaskState, type Trust } from '../events.js';
+import { type PendingFinal, type Plan, PlanSchema, type TaskState, type Trust } from '../events.js';
 import { getOwnerCard } from '../memory/consolidation.js';
 import type { WorkspaceReader } from '../memory/import.js';
 import { codeJobName, runCodeJob } from '../memory/jobs.js';
@@ -184,8 +184,38 @@ const ROLE_FOR_TYPE: Record<string, ModelRole> = {
   adhoc: 'draft',
 };
 
-const RESULT_CHAR_LIMIT = 4000;
-const CONTEXT_WINDOW_LIMIT = 40;
+/** Interactive/action types whose non-trivial requests should reason with tools. */
+const ACTION_ROUTED_TYPES = new Set(['chat_turn', 'sms_turn', 'scheduled']);
+
+/**
+ * Which model tier runs a task's tool loop. The reasoning model (Claude) is not
+ * reserved for background missions: any request that intends to DO something —
+ * an unattended goal session, a mission, an email to triage, a mission work
+ * session (adhoc), or a chat/SMS/scheduled turn the planner routed to real work
+ * (action !== 'reply') — drives its tools on the strong model. Trivial
+ * conversation (the planner's classify short-circuit returns a null plan, or a
+ * 'reply' action) stays on the cheap draft model.
+ *
+ * This is the single biggest competence lever: before it, every interactive
+ * "do this for me" request ran its tool-calling loop on the draft model, which
+ * answers with plausible prose and no tool calls.
+ */
+export function roleForTask(task: Pick<TaskRow, 'type' | 'goalId'>, plan: Plan | null): ModelRole {
+  if (isUnattendedGoalSession(task)) return 'reason';
+  const base = ROLE_FOR_TYPE[task.type] ?? 'draft';
+  if (base === 'reason') return 'reason';
+  // Email triage and mission sessions are inherently action-oriented.
+  if (task.type === 'email_triage' || task.type === 'adhoc') return 'reason';
+  if (ACTION_ROUTED_TYPES.has(task.type) && plan && plan.action !== 'reply') return 'reason';
+  return base;
+}
+
+// A fetched page or read document is clipped to this before the model reasons
+// over it; 4000 chars starved complex tasks. Both models in use have ample
+// context (deepseek 64k+, Claude 200k), so the larger window is affordable and
+// the checkpoint stays small because most tool results are far under the cap.
+const RESULT_CHAR_LIMIT = 8000;
+const CONTEXT_WINDOW_LIMIT = 60;
 
 const LOST_LEASE: ExecuteResult = {
   outcome: 'not_claimable',
@@ -397,7 +427,7 @@ async function notifyOwnerAndConversation(
  * silently spins. Chat turns are excluded on purpose; there the owner is
  * reading the same honesty message in real time.
  */
-function isUnattendedGoalSession(task: TaskRow): boolean {
+function isUnattendedGoalSession(task: Pick<TaskRow, 'goalId' | 'type'>): boolean {
   return task.goalId !== null && task.type !== 'chat_turn' && task.type !== 'sms_turn';
 }
 
@@ -1286,11 +1316,19 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     }
   }
 
-  // A goal's automatic session is the same class of work as a mission:
-  // unattended, multi-step, and worthless unless it actually drives tools.
-  // The draft model answers these with plausible prose and no tool calls,
-  // which is how a goal can report progress for days while doing nothing.
-  const role = isUnattendedGoalSession(task) ? 'reason' : (ROLE_FOR_TYPE[task.type] ?? 'draft');
+  // Route action requests to the reasoning model (see roleForTask): a goal
+  // session, a mission, an email to triage, or a chat/SMS turn the planner
+  // routed to real work all drive tools on the strong model. The draft model
+  // answers these with plausible prose and no tool calls — how a request can
+  // look handled while nothing happened.
+  const role = roleForTask(task, plan);
+  // Forced-named-tool retries drop to the role's fallback because the DRAFT
+  // primary (deepseek) intermittently times out when a tool is mandatory. The
+  // reasoning primary (Claude) has no such issue, and its fallback is the
+  // WEAKER draft model — so on a reason task, forcing the fallback is a pure
+  // downgrade. Keep the fallback only for draft; a hard task on reason stays on
+  // the strong model through its retries (the missing escalation path, E2).
+  const useForcedToolFallback = role !== 'reason';
   const privilegedTask = task.trust === 'owner' || task.trust === 'assistant';
   const ownerCard = privilegedTask && !state.untrustedContext ? await getOwnerCard(db) : undefined;
 
@@ -1395,11 +1433,17 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       });
     }
 
-    // An unattended goal session opens by acting, not by talking. Prose on the
-    // first step is how these runs end up with nothing done, so the first step
-    // must produce a tool call; later steps are free to conclude in prose once
-    // there is a real result to report.
-    const mustAct = !forcedArtifact && isUnattendedGoalSession(task) && state.step === 0;
+    // Open by acting, not talking, when the work is settled. An unattended goal
+    // session and any turn the planner routed to a 'workflow' (multi-step work
+    // executable now) must produce a tool call on the first step; later steps
+    // are free to conclude in prose once there is a real result. This closes the
+    // "forwarded/action request makes zero tool calls" path on the email/chat
+    // side the goal path was already hardened against. A 'reply'/'clarify' plan
+    // is intentionally excluded — those legitimately answer in prose.
+    const mustAct =
+      !forcedArtifact &&
+      state.step === 0 &&
+      (isUnattendedGoalSession(task) || plan?.action === 'workflow');
 
     let stepResult = await router.step(role, {
       taskId: task.id,
@@ -1417,7 +1461,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       // is mandatory. Use the role's configured tool-capable fallback. Goal
       // bookkeeping stays tightly bounded; artifact arguments may contain the
       // full document, sheet, or presentation and must not be truncated.
-      forceFallback: Boolean(forcedArtifact || mustRecordGoalProgress),
+      forceFallback: useForcedToolFallback && Boolean(forcedArtifact || mustRecordGoalProgress),
       maxOutputTokens: mustRecordGoalProgress ? 256 : undefined,
       critical,
     });
@@ -1441,7 +1485,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         messages: window,
         tools: toolSet as never,
         toolChoice: { type: 'tool', toolName: forcedArtifact.toolName },
-        forceFallback: true,
+        forceFallback: useForcedToolFallback,
         critical,
       });
       if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
@@ -1476,7 +1520,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         messages: window,
         tools: toolSet as never,
         toolChoice: { type: 'tool', toolName: 'goals.update_progress' },
-        forceFallback: true,
+        forceFallback: useForcedToolFallback,
         maxOutputTokens: 256,
         critical,
       });
@@ -1509,7 +1553,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
         messages: window,
         tools: toolSet as never,
         toolChoice: 'required',
-        forceFallback: true,
+        forceFallback: useForcedToolFallback,
         critical,
       });
       if (!(await renewTaskLease(db, lease))) return LOST_LEASE;

@@ -9,7 +9,10 @@ import type { ModelRouter } from '../model-router/router.js';
 /** Bump whenever planner prompting changes behavior — recorded in tool_calls.decision. */
 export const PLANNER_VERSION = 3;
 
-const PLANNER_CONTEXT_LIMIT = 6000;
+// Widened from 6000: the tighter window dropped the owner's earlier answers out
+// of planner context on longer threads, making it re-derive 'clarify'. This is
+// a window size, not a prompt-wording change, so PLANNER_VERSION is unaffected.
+const PLANNER_CONTEXT_LIMIT = 12000;
 
 /**
  * The assistant's own prose is the least informative part of planner context
@@ -18,7 +21,7 @@ const PLANNER_CONTEXT_LIMIT = 6000;
  * so the planner re-derives 'clarify' from its own questions and the goal
  * spins. Owner messages survive whole; the assistant's keep only their head.
  */
-const PLANNER_ASSISTANT_CHAR_LIMIT = 400;
+const PLANNER_ASSISTANT_CHAR_LIMIT = 600;
 
 export function plannerContext(window: ModelMessage[]): string {
   return window

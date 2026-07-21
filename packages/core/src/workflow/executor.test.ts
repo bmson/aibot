@@ -1,7 +1,8 @@
 import type { TaskRow } from '@assistant/db';
 import { modelMessageSchema } from 'ai';
 import { describe, expect, it } from 'vitest';
-import { shouldTaintContext, toolResultMessage } from './executor.js';
+import type { Plan } from '../events.js';
+import { roleForTask, shouldTaintContext, toolResultMessage } from './executor.js';
 
 function task(
   trust: string,
@@ -90,5 +91,30 @@ describe('shouldTaintContext', () => {
     expect(
       shouldTaintContext(task('assistant', { source: 'internal', payload: { instruction: 'ok' } })),
     ).toBe(false);
+  });
+});
+
+describe('roleForTask', () => {
+  const t = (type: string, goalId: string | null = null) =>
+    ({ type, goalId }) as Pick<TaskRow, 'type' | 'goalId'>;
+  const plan = (action: Plan['action']): Plan =>
+    ({ action, reasoning: '', steps: [], missingInfo: [] }) as Plan;
+
+  it('routes inherently action-oriented types to reason', () => {
+    expect(roleForTask(t('mission'), null)).toBe('reason');
+    expect(roleForTask(t('email_triage'), plan('reply'))).toBe('reason'); // always
+    expect(roleForTask(t('adhoc'), null)).toBe('reason');
+    // An unattended goal session (scheduled with a goalId) is always reason.
+    expect(roleForTask(t('scheduled', 'goal-1'), null)).toBe('reason');
+  });
+
+  it('routes a planned action on chat/sms/scheduled to reason, plain reply to draft', () => {
+    expect(roleForTask(t('chat_turn'), plan('workflow'))).toBe('reason');
+    expect(roleForTask(t('sms_turn'), plan('schedule'))).toBe('reason');
+    expect(roleForTask(t('scheduled'), plan('mission'))).toBe('reason');
+    // A direct-answer plan, or the trivial short-circuit (null plan), stays cheap.
+    expect(roleForTask(t('chat_turn'), plan('reply'))).toBe('draft');
+    expect(roleForTask(t('chat_turn'), null)).toBe('draft');
+    expect(roleForTask(t('sms_turn'), null)).toBe('draft');
   });
 });

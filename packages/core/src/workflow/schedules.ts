@@ -275,7 +275,9 @@ export async function ensureGoalAutomation(
     goalId: goal.id,
     conversationId,
     budgetUsdLimit: GOAL_SESSION_BUDGET_USD,
-    maxSteps: 12,
+    // Raised from 12: a browse-and-act session (plan → execute → extract →
+    // update progress) can spend several steps before real work begins.
+    maxSteps: 16,
     instruction: goalInstruction(goal),
     // Carry the goal's provenance into every automation firing: a goal created
     // from a tainted session must run its sessions taint-gated, never with

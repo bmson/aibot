@@ -110,12 +110,24 @@ for (const m of modelSeed) {
 
 // ── Role routing ─────────────────────────────────────────────────────────────
 
+// Structured-output roles run at temperature 0: plan/classify/extract must
+// produce schema-valid JSON deterministically. A non-zero (provider-default)
+// temperature is a plausible root cause of the AI_NoObjectGeneratedError parse
+// failures. Migration 0023 applies the same params to existing rows still at {}.
+const DETERMINISTIC = { temperature: 0 };
+
 const roleSeed = [
-  { role: 'plan', primaryModel: 'deepseek/deepseek-chat', fallbackModel: 'openai/gpt-oss-120b' },
+  {
+    role: 'plan',
+    primaryModel: 'deepseek/deepseek-chat',
+    fallbackModel: 'openai/gpt-oss-120b',
+    params: DETERMINISTIC,
+  },
   {
     role: 'classify',
     primaryModel: 'qwen/qwen3-30b-a3b-instruct-2507',
     fallbackModel: 'openai/gpt-oss-120b',
+    params: DETERMINISTIC,
   },
   {
     // Structured extraction (memory extraction/consolidation/import). qwen3-30b
@@ -125,6 +137,7 @@ const roleSeed = [
     role: 'extract',
     primaryModel: 'deepseek/deepseek-chat',
     fallbackModel: 'openai/gpt-oss-120b',
+    params: DETERMINISTIC,
   },
   { role: 'draft', primaryModel: 'deepseek/deepseek-chat', fallbackModel: 'openai/gpt-oss-120b' },
   {
@@ -150,10 +163,14 @@ for (const r of roleSeed) {
 
 // ── Budgets & rate limits ────────────────────────────────────────────────────
 
+// Raised for the reason-model routing (Phase 3): interactive owner actions now
+// run on Claude (~$0.10-0.15/action), so the ceilings give real headroom while
+// staying bounded. Migration 0023 lifts existing rows still at the old values,
+// leaving any the owner has since edited untouched.
 const budgetSeed = [
-  { scope: 'task_default', limitUsd: '0.25' },
-  { scope: 'daily', limitUsd: '2.00' },
-  { scope: 'monthly', limitUsd: '20.00' },
+  { scope: 'task_default', limitUsd: '0.50' },
+  { scope: 'daily', limitUsd: '4.00' },
+  { scope: 'monthly', limitUsd: '50.00' },
 ] as const;
 
 for (const b of budgetSeed) {

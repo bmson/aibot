@@ -378,6 +378,9 @@ export async function processMessage(
           : 'unknown';
     const { created } = await enqueueTask(deps.db, {
       type: 'email_triage',
+      // Email triage now reasons with tools (roleForTask → reason); give it the
+      // same step headroom as a goal session so a browse-and-reply can complete.
+      maxSteps: 16,
       event: {
         source: 'email',
         externalEventId: channelMessageId,
@@ -433,6 +436,9 @@ export async function processMessage(
 
   const { created } = await enqueueTask(deps.db, {
     type: 'email_triage',
+    // Email triage now reasons with tools (roleForTask → reason); give it the
+    // same step headroom as a goal session so a browse-and-reply can complete.
+    maxSteps: 16,
     event: {
       source: 'email',
       externalEventId: `gmail:${msg.id}`,
