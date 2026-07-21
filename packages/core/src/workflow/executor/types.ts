@@ -1,6 +1,6 @@
 import type { Db, TaskRow } from '@assistant/db';
 import type { ZodType } from 'zod';
-import type { BrowserJobPendingResult } from '../../browse.js';
+import type { StagedJobPending } from '../../code-exec.js';
 import type { Trust } from '../../events.js';
 import type { WorkspaceReader } from '../../memory/import.js';
 import type { ModelRouter } from '../../model-router/router.js';
@@ -57,13 +57,13 @@ export interface ToolContextLike {
     dbToolCallId: string;
     modelToolCallId: string;
     toolName: string;
-    pending: BrowserJobPendingResult;
+    pending: StagedJobPending;
   }) => Promise<void>;
   clearStagedBrowserJob?: (job: {
     dbToolCallId: string;
     modelToolCallId: string;
     toolName: string;
-    pending: BrowserJobPendingResult;
+    pending: StagedJobPending;
   }) => Promise<void>;
 }
 

@@ -10,15 +10,19 @@ import {
 import { createDb, type Db } from '@assistant/db';
 import {
   type BrowserJobLauncher,
+  CloudRunCodeJobLauncher,
   CloudRunJobLauncher,
+  type CodeJobLauncher,
   GcsWorkspaceStore,
   GoogleClient,
+  LocalCodeProcessLauncher,
   LocalProcessLauncher,
   LocalWorkspaceStore,
   registerApplicationTools,
   registerBrowserTools,
   registerBuiltinTools,
   registerCalendarTools,
+  registerCodeTools,
   registerDocsTools,
   registerDriveTools,
   registerGmailTools,
@@ -92,6 +96,22 @@ export function buildDeps(): AgentDeps {
     plan: (input) => planBrowse(router, input),
     launcher: browserLauncher,
     callbackUrl: `${config.PUBLIC_URL}/webhooks/browser/callback`,
+  });
+
+  // Phase 13: the code-execution worker — a second credential-free Cloud Run
+  // Job occupant, launched the same way (child process locally, Job in prod).
+  const codeLauncher: CodeJobLauncher =
+    config.CODE_DRIVER === 'cloudrun'
+      ? new CloudRunCodeJobLauncher({
+          project: config.GCP_PROJECT,
+          location: config.GCP_LOCATION,
+          jobName: config.CODE_JOB_NAME,
+          storage: { driver: 'gcs', bucket: config.WORKSPACE_BUCKET, prefix: workspacePrefix },
+        })
+      : new LocalCodeProcessLauncher({ repoRoot, workspaceRoot });
+  registerCodeTools(registry, {
+    launcher: codeLauncher,
+    callbackUrl: `${config.PUBLIC_URL}/webhooks/code/callback`,
   });
   // Inbox watchers take no outward action and need no provider client, so they
   // are available even when Google/Twilio are not configured.

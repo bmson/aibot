@@ -1,4 +1,4 @@
-import { loadConfig, recordBrowserJobResult } from '@assistant/core';
+import { loadConfig, recordBrowserJobResult, recordCodeJobResult } from '@assistant/core';
 import { validateTwilioSignature } from '@assistant/tools';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -63,6 +63,27 @@ webhooks.post('/browser/callback', async (c) => {
 
   const deps = buildDeps();
   const outcome = await recordBrowserJobResult(deps.db, {
+    taskId: body.taskId,
+    token: body.token,
+    result: body.result ?? { ok: false, error: 'job reported no result' },
+  });
+  if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
+  return c.json({ ok: true });
+});
+
+/**
+ * Code-job result callback (Phase 13). Same one-shot-token auth as the browser
+ * callback: the per-launch token minted by code.execute and checkpointed in the
+ * task state is the only credential the credential-free job carries.
+ */
+webhooks.post('/code/callback', async (c) => {
+  const body = await c.req
+    .json<{ taskId?: string; token?: string; result?: Record<string, unknown> }>()
+    .catch(() => null);
+  if (!body?.taskId || !body?.token) return c.json({ error: 'bad request' }, 400);
+
+  const deps = buildDeps();
+  const outcome = await recordCodeJobResult(deps.db, {
     taskId: body.taskId,
     token: body.token,
     result: body.result ?? { ok: false, error: 'job reported no result' },

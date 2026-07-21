@@ -17,6 +17,7 @@ fi
 IMAGE_ROOT="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}"
 AGENT_SERVICE_ACCOUNT="assistant-agent@${PROJECT}.iam.gserviceaccount.com"
 BROWSER_SERVICE_ACCOUNT="assistant-browser@${PROJECT}.iam.gserviceaccount.com"
+CODE_SERVICE_ACCOUNT="assistant-code@${PROJECT}.iam.gserviceaccount.com"
 INTERNAL_INVOKER_SERVICE_ACCOUNT="assistant-internal-invoker@${PROJECT}.iam.gserviceaccount.com"
 
 if [[ "${SKIP_IMAGE_BUILD:-false}" != "true" ]]; then
@@ -141,6 +142,19 @@ gcloud run jobs update assistant-browser \
   --project "$PROJECT" --region "$REGION" \
   --image "${IMAGE_ROOT}/browser:${TAG}" \
   --service-account "$BROWSER_SERVICE_ACCOUNT" --quiet
+
+echo "Rolling out code job"
+# Unlike the browser job, assistant-code is provisioned by deploy.sh and may not
+# exist yet on the first release after it lands. Skip (don't fail the release)
+# until deploy.sh has created it, exactly as we tolerate absent scheduler jobs.
+if gcloud run jobs describe assistant-code --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
+  gcloud run jobs update assistant-code \
+    --project "$PROJECT" --region "$REGION" \
+    --image "${IMAGE_ROOT}/code:${TAG}" \
+    --service-account "$CODE_SERVICE_ACCOUNT" --quiet
+else
+  echo "  assistant-code not provisioned yet — run infra/gcp/deploy.sh; skipping"
+fi
 
 echo "Rolling out web"
 gcloud run services update assistant-web \

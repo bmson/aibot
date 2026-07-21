@@ -2,8 +2,9 @@ import type { AgentRow, Db } from '@assistant/db';
 import { approvals, tasks, toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { eq, inArray } from 'drizzle-orm';
-import { hashCallbackToken, isBrowserJobPending } from '../../browse.js';
+import { hashCallbackToken } from '../../browse.js';
 import { PROMPT_VERSION } from '../../chat.js';
+import { isJobPending } from '../../code-exec.js';
 import { getRate, reconcileReservation } from '../../cost.js';
 import { type Plan, PlanSchema, type TaskState } from '../../events.js';
 import { codeJobName, runCodeJob } from '../../memory/jobs.js';
@@ -171,14 +172,14 @@ export async function resumePendingJob(rc: RunContext): Promise<void> {
     const settled = await db.transaction(async (tx) => {
       await tx.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, task.id)).for('update');
       const [row] = await tx.select().from(toolCalls).where(eq(toolCalls.id, pending.dbToolCallId));
-      if (row && !isBrowserJobPending(row.result)) {
+      if (row && !isJobPending(row.result)) {
         return { kind: 'result' as const, row };
       }
       const timedOut = Date.now() >= new Date(pending.timeoutAt).getTime();
       if (row && !timedOut) return { kind: 'still_pending' as const };
       const failure = {
         ok: false,
-        error: 'the browser job never reported back (timed out) — treat this attempt as failed',
+        error: 'the background job never reported back (timed out) — treat this attempt as failed',
       };
       if (row) {
         await tx
@@ -256,11 +257,11 @@ export async function resumePendingApprovals(rc: RunContext): Promise<ExecuteRes
           );
           return { outcome: 'parked', detail: outcome.reason };
         }
-        if (outcome.kind === 'executed' && isBrowserJobPending(outcome.result)) {
-          // The approved call launched a browser job — park for its callback.
+        if (outcome.kind === 'executed' && isJobPending(outcome.result)) {
+          // The approved call launched a background job — park for its callback.
           window.push(
             toolResultMessage(pending.toolCallId, pending.toolName, {
-              status: 'browser_job_running',
+              status: 'background_job_running',
               note: 'the job is running; its results will arrive in the next turn',
             }),
           );

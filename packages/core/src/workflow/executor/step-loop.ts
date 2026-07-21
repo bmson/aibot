@@ -1,8 +1,9 @@
 import { toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { eq } from 'drizzle-orm';
-import { hashCallbackToken, isBrowserJobPending } from '../../browse.js';
+import { hashCallbackToken } from '../../browse.js';
 import { buildSystemPrompt, PROMPT_VERSION } from '../../chat.js';
+import { isJobPending } from '../../code-exec.js';
 import { loadConfig } from '../../config.js';
 import type { Plan, TaskState, Trust } from '../../events.js';
 import { getOwnerCard } from '../../memory/consolidation.js';
@@ -466,10 +467,10 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         rc.browserStageRemainder = [];
 
         if (outcome.kind === 'executed') {
-          if (isBrowserJobPending(outcome.result)) {
+          if (isJobPending(outcome.result)) {
             rc.window.push(
               toolResultMessage(tc.toolCallId, tc.toolName, {
-                status: 'browser_job_running',
+                status: 'background_job_running',
                 note: 'the job is running; its results will arrive in the next turn',
               }),
             );

@@ -1,4 +1,4 @@
-import type { BrowserJobPendingResult, Trust } from '@assistant/core';
+import type { StagedJobPending, Trust } from '@assistant/core';
 import type { Db, SpendSource } from '@assistant/db';
 import type { z } from 'zod';
 
@@ -11,7 +11,7 @@ export interface ToolExecutionIdentity {
 }
 
 export interface StagedBrowserJob extends ToolExecutionIdentity {
-  pending: BrowserJobPendingResult;
+  pending: StagedJobPending;
 }
 
 export interface ToolContext {

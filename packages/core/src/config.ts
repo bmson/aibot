@@ -62,6 +62,9 @@ const ConfigSchema = z.object({
   /** local = detached child process; cloudrun = Cloud Run Job execution. */
   BROWSER_DRIVER: z.enum(['local', 'cloudrun']).default('local'),
   BROWSER_JOB_NAME: z.string().default('assistant-browser'),
+  /** Code-execution worker (Phase 13): local child process vs Cloud Run Job. */
+  CODE_DRIVER: z.enum(['local', 'cloudrun']).default('local'),
+  CODE_JOB_NAME: z.string().default('assistant-code'),
   /** Trace-archive bucket (30-day lifecycle); empty = store traces in the workspace. */
   TRACES_BUCKET: z.string().default(''),
   /** Explicit opt-in: canaries send one real email/SMS and launch one browser job. */
