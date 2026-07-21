@@ -1,0 +1,238 @@
+import { createDb, type Db, documentChunks, documents, files, tasks } from '@assistant/db';
+import { and, eq, like } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { getAgent } from '../chat.js';
+import type { ModelRouter } from '../model-router/router.js';
+import {
+  chunkText,
+  documentStats,
+  extractDocumentText,
+  extractorFor,
+  listDocuments,
+  purgeDocument,
+  runDocumentExtraction,
+  searchDocumentChunks,
+  startDocumentIngest,
+} from './documents.js';
+
+const DATABASE_URL =
+  process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
+
+/** In-memory workspace satisfying the reader shape the job needs. */
+function fakeWorkspace() {
+  const store = new Map<string, Buffer>();
+  return {
+    store,
+    async read(p: string) {
+      return (store.get(p) ?? Buffer.alloc(0)).toString('utf8');
+    },
+    async readBytes(p: string) {
+      return store.get(p) ?? Buffer.alloc(0);
+    },
+    async write(p: string, c: string) {
+      store.set(p, Buffer.from(c, 'utf8'));
+      return { bytes: Buffer.byteLength(c) };
+    },
+    async list() {
+      return [] as Array<{ name: string; dir: boolean }>;
+    },
+    async delete(p: string) {
+      store.delete(p);
+    },
+  };
+}
+
+const fakeRouter = {
+  async embed(texts: string[]) {
+    // Deterministic non-zero vectors; content-agnostic (mechanics, not ranking).
+    return texts.map((_, i) => new Array(1536).fill(0.01 + i * 0.0001));
+  },
+} as unknown as ModelRouter;
+
+describe('document intelligence — pure helpers', () => {
+  it('routes mimes/filenames to the right extractor', () => {
+    expect(extractorFor('application/pdf', 'a.pdf')).toBe('pdf');
+    expect(extractorFor('application/octet-stream', 'report.pdf')).toBe('pdf');
+    expect(extractorFor('text/plain', 'notes.txt')).toBe('text');
+    expect(extractorFor('text/markdown', 'x.md')).toBe('text');
+    expect(extractorFor('application/json', 'data.json')).toBe('text');
+    expect(extractorFor('application/octet-stream', 'main.ts')).toBe('text');
+    expect(extractorFor('image/png', 'scan.png')).toBe('pending_processor');
+    expect(
+      extractorFor(
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'x.docx',
+      ),
+    ).toBe('pending_processor');
+    expect(extractorFor('application/x-tar', 'archive.tar')).toBe('unsupported');
+  });
+
+  it('chunks text with overlap and honors boundaries', () => {
+    expect(chunkText('')).toEqual([]);
+    expect(chunkText('short note')).toEqual(['short note']);
+    const long = `${'a'.repeat(700)}\n\n${'b'.repeat(700)}\n\n${'c'.repeat(700)}`;
+    const chunks = chunkText(long, { size: 800, overlap: 100 });
+    expect(chunks.length).toBeGreaterThan(1);
+    // Every chunk is within a reasonable bound of the target size.
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(900);
+    // Coverage: concatenated chunks contain all three blocks.
+    const joined = chunks.join('');
+    expect(joined).toContain('a'.repeat(50));
+    expect(joined).toContain('c'.repeat(50));
+  });
+
+  it('extracts text and strips html', async () => {
+    const plain = await extractDocumentText(
+      'text',
+      Buffer.from('hello world', 'utf8'),
+      'text/plain',
+    );
+    expect(plain).toBe('hello world');
+    const html = await extractDocumentText(
+      'text',
+      Buffer.from('<html><body><p>Hi</p><script>bad()</script><p>There</p></body></html>', 'utf8'),
+      'text/html',
+    );
+    expect(html).toContain('Hi');
+    expect(html).toContain('There');
+    expect(html).not.toContain('bad()');
+    expect(html).not.toContain('<p>');
+  });
+});
+
+describe('document intelligence — extraction job', () => {
+  let db: Db;
+  let dbUp = false;
+  let agentId: string;
+  const ws = fakeWorkspace();
+
+  async function cleanup() {
+    const docs = await db
+      .select({ id: documents.id, fileId: documents.fileId })
+      .from(documents)
+      .where(like(documents.title, 'XTESTDOC%'));
+    for (const d of docs) {
+      await db.delete(documentChunks).where(eq(documentChunks.documentId, d.id));
+    }
+    if (docs.length) {
+      await db.delete(documents).where(like(documents.title, 'XTESTDOC%'));
+      await db.delete(files).where(like(files.workspacePath, 'xtestdoc/%'));
+    }
+    await db
+      .delete(tasks)
+      .where(and(eq(tasks.type, 'adhoc'), like(tasks.progress, 'extract XTESTDOC%')));
+  }
+
+  beforeAll(async () => {
+    db = createDb(DATABASE_URL);
+    try {
+      agentId = (await getAgent(db)).id;
+      dbUp = true;
+      await cleanup();
+    } catch {
+      console.warn('documents.test: database unreachable — skipping');
+    }
+  });
+
+  afterAll(async () => {
+    if (dbUp) await cleanup();
+    await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
+  });
+
+  it('files a text document, extracts+embeds chunks, searches, and purges', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const path = `xtestdoc/${Date.now()}-notes.txt`;
+    const body = `The Reykjavik project kicked off in March.\n\n${'Detail line. '.repeat(120)}\n\nQuarterly revenue reached 4.2 million.`;
+    await ws.write(path, body);
+    const sha256 = (await import('node:crypto')).createHash('sha256').update(body).digest('hex');
+
+    const started = await startDocumentIngest(db, {
+      agentId,
+      title: 'XTESTDOC notes',
+      workspacePath: path,
+      mime: 'text/plain',
+      bytes: Buffer.byteLength(body),
+      sha256,
+    });
+    expect(started.duplicate).toBe(false);
+    expect(started.taskId).toBeTruthy();
+    expect(started.document.status).toBe('pending');
+    expect(started.document.extractor).toBe('text');
+
+    // Dedup: an identical re-file returns the same document, no new task.
+    const again = await startDocumentIngest(db, {
+      agentId,
+      title: 'XTESTDOC notes dup',
+      workspacePath: path,
+      mime: 'text/plain',
+      bytes: Buffer.byteLength(body),
+      sha256,
+    });
+    expect(again.duplicate).toBe(true);
+    expect(again.taskId).toBeNull();
+    expect(again.document.id).toBe(started.document.id);
+
+    const [task] = await db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.id, started.taskId ?? ''));
+    if (!task) return ctx.skip();
+    const outcome = await runDocumentExtraction({ db, router: fakeRouter, workspace: ws }, task);
+    expect(outcome.done).toBe(true);
+
+    const [doc] = await db.select().from(documents).where(eq(documents.id, started.document.id));
+    expect(doc?.status).toBe('ready');
+    expect(doc?.chunkCount).toBeGreaterThan(0);
+    expect(doc?.charCount).toBeGreaterThan(0);
+
+    const chunks = await db
+      .select()
+      .from(documentChunks)
+      .where(eq(documentChunks.documentId, started.document.id));
+    expect(chunks.length).toBe(doc?.chunkCount);
+
+    const hits = await searchDocumentChunks(db, {
+      agentId,
+      embedding: new Array(1536).fill(0.01),
+      limit: 3,
+    });
+    expect(hits.some((h) => h.documentId === started.document.id)).toBe(true);
+
+    const stats = await documentStats(db, agentId);
+    expect(stats.ready).toBeGreaterThanOrEqual(1);
+    const listed = await listDocuments(db, agentId);
+    expect(listed.some((d) => d.id === started.document.id)).toBe(true);
+
+    const purged = await purgeDocument(db, agentId, started.document.id, ws);
+    expect(purged.deleted).toBe(true);
+    const after = await db.select().from(documents).where(eq(documents.id, started.document.id));
+    expect(after.length).toBe(0);
+    const afterChunks = await db
+      .select()
+      .from(documentChunks)
+      .where(eq(documentChunks.documentId, started.document.id));
+    expect(afterChunks.length).toBe(0);
+  });
+
+  it('records an office document as pending for the processor worker, no job', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const path = `xtestdoc/${Date.now()}-slides.pptx`;
+    await ws.write(path, 'binary-ish');
+    const sha256 = (await import('node:crypto'))
+      .createHash('sha256')
+      .update(`${path}`)
+      .digest('hex');
+    const started = await startDocumentIngest(db, {
+      agentId,
+      title: 'XTESTDOC slides',
+      workspacePath: path,
+      mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      bytes: 10,
+      sha256,
+    });
+    expect(started.document.status).toBe('pending');
+    expect(started.document.extractor).toBe('pending_processor');
+    expect(started.taskId).toBeNull();
+    await purgeDocument(db, agentId, started.document.id, ws);
+  });
+});

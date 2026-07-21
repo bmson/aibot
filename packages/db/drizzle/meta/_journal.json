@@ -211,6 +211,13 @@
       "when": 1784622995191,
       "tag": "0029_perfect_magus",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1784624454839,
+      "tag": "0030_mixed_roland_deschain",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,5 @@
 export * from './consolidation.js';
+export * from './documents.js';
 export * from './extraction.js';
 export * from './import.js';
 export * from './import-parsers.js';

@@ -3,6 +3,7 @@ import type { ModelRouter } from '../model-router/router.js';
 import { runAnomalyScan } from '../workflow/anomaly.js';
 import { runSelfImprove } from '../workflow/improve.js';
 import { runMemoryConsolidation } from './consolidation.js';
+import { runDocumentExtraction } from './documents.js';
 import { runMemoryExtraction } from './extraction.js';
 import { runImportJob, type WorkspaceReader } from './import.js';
 import { segmentConversations } from './segmentation.js';
@@ -24,7 +25,8 @@ export type CodeJobName =
   | 'voice.ingest'
   | 'anomaly.scan'
   | 'skill.reflect'
-  | 'self.improve';
+  | 'self.improve'
+  | 'documents.extract';
 
 const CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.extract',
@@ -35,6 +37,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'anomaly.scan',
   'skill.reflect',
   'self.improve',
+  'documents.extract',
 ]);
 
 export interface CodeJobOutcome {
@@ -115,5 +118,7 @@ export async function runCodeJob(
         summary: `self-improve: ${r.proposalsDrafted} proposal(s) from ${r.patterns} failure pattern(s)${r.experienceSaved ? ', experience saved' : ''}`,
       };
     }
+    case 'documents.extract':
+      return runDocumentExtraction(deps, task);
   }
 }

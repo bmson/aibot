@@ -25,7 +25,7 @@ export default async function ChatConversationPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ task?: string; cursor?: string; notice?: string }>;
+  searchParams: Promise<{ task?: string; cursor?: string; notice?: string; ask?: string }>;
 }) {
   await requireOwner();
   const [{ id }, query] = await Promise.all([params, searchParams]);
@@ -109,6 +109,7 @@ export default async function ChatConversationPage({
       archived={conversation.archivedAt !== null}
       canArchive={!conversation.isPrimary && (activeTasks[0]?.value ?? 0) === 0}
       initialNotice={chatNoticeMessage(query.notice)}
+      initialInput={typeof query.ask === 'string' ? query.ask.slice(0, 500) : undefined}
       initialAsyncTurn={
         requestedTask && requestedCursor
           ? { taskId: requestedTask.id, cursor: query.cursor as string }

@@ -44,6 +44,8 @@ export interface WorkspaceReader {
   read(relPath: string): Promise<string>;
   write(relPath: string, content: string): Promise<unknown>;
   list(relPath: string): Promise<Array<{ name: string; dir: boolean }>>;
+  /** Binary read — present on the real store; used by document extraction (PDFs). */
+  readBytes?(relPath: string): Promise<Buffer>;
 }
 
 const ImportFactsSchema = z.object({ facts: z.array(ExtractedFactSchema).max(20) });

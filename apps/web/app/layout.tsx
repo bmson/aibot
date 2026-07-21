@@ -28,6 +28,7 @@ const navItems = [
   { href: '/tasks', label: 'Activity' },
   { href: '/goals', label: 'Goals' },
   { href: '/profile', label: 'What I remember' },
+  { href: '/documents', label: 'Documents', utility: true },
   { href: '/skills', label: 'Skills', utility: true },
   { href: '/import', label: 'Import', utility: true },
   { href: '/costs', label: 'Costs', utility: true },

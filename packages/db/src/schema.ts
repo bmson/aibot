@@ -1143,6 +1143,87 @@ export const files = pgTable(
   (t) => [index('files_agent_idx').on(t.agentId, t.createdAt)],
 );
 
+// ── Document intelligence (Phase 11) ─────────────────────────────────────────
+
+/**
+ * A file promoted to a searchable document: an owner upload or an attachment
+ * the assistant auto-filed from a trusted sender. The bytes live in the
+ * workspace via the files inventory (`fileId`); extracted text is chunked into
+ * `document_chunks` with embeddings behind the `documents.search` tool. Text
+ * and PDF are extracted in-process; heavy formats (scans, images, office,
+ * audio) are parked `status='pending'` with `extractor='pending_processor'`
+ * for the future document-processor worker (Phase 14). A document's `trust`
+ * carries into search results — a third-party attachment taints downstream.
+ */
+export const documents = pgTable(
+  'documents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    /** The stored bytes in the files inventory (holds the workspace path). */
+    fileId: uuid('file_id')
+      .notNull()
+      .references(() => files.id),
+    title: text('title').notNull(),
+    mime: text('mime').notNull().default('application/octet-stream'),
+    /** Where it came from: 'upload' (owner) or 'email' (auto-filed attachment). */
+    source: text('source').notNull().default('upload'),
+    /** Free-form provenance: sender email, Gmail message id, conversation id. */
+    sourceRef: text('source_ref').notNull().default(''),
+    /** Trust of the content — a non-owner document taints search downstream. */
+    trust: text('trust').notNull().default('owner'),
+    /** Content hash: idempotent re-ingest and cross-source dedup. */
+    sha256: text('sha256').notNull(),
+    /** pending → extracting → ready | unsupported | failed. */
+    status: text('status').notNull().default('pending'),
+    /** Which extractor handled it: 'text' | 'pdf' | 'pending_processor' | ''. */
+    extractor: text('extractor').notNull().default(''),
+    chunkCount: integer('chunk_count').notNull().default(0),
+    charCount: integer('char_count').notNull().default(0),
+    error: text('error'),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      'documents_status_check',
+      sql`${t.status} IN ('pending','extracting','ready','unsupported','failed')`,
+    ),
+    check('documents_trust_check', sql`${t.trust} IN ('owner','known','unknown','assistant')`),
+    uniqueIndex('documents_dedup_idx').on(t.agentId, t.sha256),
+    index('documents_agent_status_idx').on(t.agentId, t.status),
+  ],
+);
+
+/**
+ * A contiguous text chunk of a document with its embedding — the retrieval
+ * unit for `documents.search`. Chunks are deleted and reinserted whole on
+ * re-extraction, so `(document_id, chunk_index)` is unique.
+ */
+export const documentChunks = pgTable(
+  'document_chunks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    chunkIndex: integer('chunk_index').notNull(),
+    text: text('text').notNull(),
+    charCount: integer('char_count').notNull().default(0),
+    embedding: vector('embedding', { dimensions: 1536 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('document_chunks_doc_idx').on(t.documentId, t.chunkIndex),
+    index('document_chunks_embedding_idx').using('hnsw', t.embedding.op('vector_cosine_ops')),
+    index('document_chunks_agent_idx').on(t.agentId),
+  ],
+);
+
 // ── Inferred row types ───────────────────────────────────────────────────────
 
 export type AgentRow = typeof agents.$inferSelect;
@@ -1167,6 +1248,9 @@ export type OccasionRow = typeof occasions.$inferSelect;
 export type AnomalyRow = typeof anomalies.$inferSelect;
 export type SkillRow = typeof skills.$inferSelect;
 export type ImprovementProposalRow = typeof improvementProposals.$inferSelect;
+export type FileRow = typeof files.$inferSelect;
+export type DocumentRow = typeof documents.$inferSelect;
+export type DocumentChunkRow = typeof documentChunks.$inferSelect;
 export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;

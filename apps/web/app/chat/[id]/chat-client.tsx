@@ -20,6 +20,8 @@ interface ChatClientProps {
   archived: boolean;
   canArchive: boolean;
   initialNotice?: string;
+  /** Pre-fills the composer (e.g. an "ask about this document" deep-link). */
+  initialInput?: string;
 }
 
 const ASYNC_ACK_TEXT = 'Got it — I’m working on this now. I’ll post the result here.';
@@ -114,8 +116,9 @@ export function ChatClient({
   archived,
   canArchive,
   initialNotice,
+  initialInput,
 }: ChatClientProps) {
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(initialInput ?? '');
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   const [isSwitching, startTransition] = useTransition();
   /** Set when the route handed the turn to the executor — we poll until it settles. */
