@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { createDb, type Db, writingSamples } from '@assistant/db';
+import { eq, like } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ModelRouter } from './model-router/router.js';
-import { rewriteInVoice, type VoiceContext } from './voice.js';
+import { captureOwnerWritingSample, rewriteInVoice, type VoiceContext } from './voice.js';
 
 const context: VoiceContext = {
   description: 'casual, direct, short sentences',
@@ -171,5 +173,65 @@ describe('voice pipeline', () => {
     });
 
     expect(result).toEqual({ text: DRAFT, rewritten: false });
+  });
+});
+
+describe('captureOwnerWritingSample (integration)', () => {
+  let db: Db;
+  let dbUp = false;
+  const marker = `auto:test-${Date.now()}`;
+  const embedRouter = {
+    embed: async (texts: string[]) => texts.map(() => new Array(1536).fill(0.01)),
+  } as unknown as ModelRouter;
+
+  beforeAll(async () => {
+    db = createDb(
+      process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant',
+    );
+    try {
+      await db.select().from(writingSamples).limit(1);
+      dbUp = true;
+    } catch {
+      console.warn('voice.test: database unreachable — skipping capture tests');
+    }
+  });
+
+  afterAll(async () => {
+    if (dbUp) await db.delete(writingSamples).where(like(writingSamples.context, `${marker}%`));
+    await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
+  });
+
+  const longText =
+    'Hey — can you grab the flight details and put lunch on Friday at noon? Loki works. Thanks a lot.';
+
+  it('captures a substantial owner message, deduping exact repeats', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const first = await captureOwnerWritingSample(db, embedRouter, {
+      text: longText,
+      register: 'email_casual',
+      context: marker.slice('auto:'.length),
+    });
+    // Note: production prefixes context with 'auto:'; here we pass the suffix so
+    // the row lands under our unique marker for cleanup.
+    expect(first).toBe(true);
+    const rows = await db.select().from(writingSamples).where(eq(writingSamples.text, longText));
+    expect(rows).toHaveLength(1);
+
+    const second = await captureOwnerWritingSample(db, embedRouter, {
+      text: longText,
+      register: 'email_casual',
+      context: marker.slice('auto:'.length),
+    });
+    expect(second).toBe(false); // exact duplicate not stored twice
+  });
+
+  it('skips trivial one-liners below the minimum length', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const stored = await captureOwnerWritingSample(db, embedRouter, {
+      text: 'ok thanks',
+      register: 'sms',
+      context: marker.slice('auto:'.length),
+    });
+    expect(stored).toBe(false);
   });
 });

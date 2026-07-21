@@ -49,6 +49,8 @@ must end with evidence for each claimed action.
 | Structured-output roles produce schema JSON | plan/classify/extract run at temperature 0 for determinism; spend ceilings sit at the reason-routing floor | `packages/db/src/runtime-defaults.test.ts` |
 | Model claims an unsupported external action | Replace the prose with the evidence-backed failure response | `packages/core/src/workflow/response-contract.test.ts`, `apps/agent/src/executor.e2e.test.ts` |
 | A multi-action response mixes verified success with an unsupported claim | Preserve the verified actions in deterministic copy and reject only the unsupported completion claim; never replace real partial success with “nothing happened” | `packages/core/src/workflow/response-contract.test.ts` |
+| Owner writes an authenticated, non-forwarded message | Its body is opportunistically captured as a private voice sample (bounded, deduped); a forwarded/quoted message is never sampled, and a trivial one-liner is skipped | `packages/core/src/voice.test.ts` |
+| Outbound message is rewritten in the owner's voice | With a profile or samples present the rewrite runs and every fact is preserved or it falls back to the original, flagged; the persona/no-filler block shapes the draft either way | `packages/core/src/voice.test.ts`, `packages/core/src/chat.test.ts` |
 | Core UI runs at a 390×844 touch viewport | Dashboard, chat, Goals, tasks, profile, and settings have no horizontal overflow; interactive controls are at least 44×44; fields do not trigger iOS focus zoom; the navigation drawer contains focus and restores it on close | `scripts/mobile-smoke.ts`, `.github/workflows/ci.yml` |
 
 ## Still requiring stronger proof

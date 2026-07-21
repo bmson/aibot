@@ -169,6 +169,13 @@
       "when": 1784609200000,
       "tag": "0023_reason_routing_budgets",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1784609300000,
+      "tag": "0024_default_voice_profile",
+      "breakpoints": true
     }
   ]
 }

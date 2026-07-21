@@ -226,7 +226,30 @@ const ownerPolicyValues = resolveOwnerPolicyValues(ownerContact, {
 
 // ── Voice profile singleton ──────────────────────────────────────────────────
 
-await db.insert(voiceProfile).values({ id: 1 }).onConflictDoNothing();
+// An honest baseline (not a fabricated idiosyncratic style): it activates the
+// outbound voice rewrite as a consistency enforcer for plain, warm, filler-free
+// writing. Real uploaded/sampled writing later refines this. Migration 0024
+// backfills existing databases whose singleton is still empty; the owner's own
+// edits (a non-empty description) are never overwritten.
+const DEFAULT_VOICE = {
+  description:
+    'Plain, warm, and direct — writes like a capable human colleague. Short sentences, concrete, no corporate filler.',
+  dos: [
+    'Get to the point; lead with the useful thing',
+    'Sound warm and human, not formal or robotic',
+    'Keep sentences short and concrete',
+  ],
+  donts: [
+    'No corporate filler or AI throat-clearing ("I hope this helps", "As an AI", "Certainly!")',
+    'No hedging preambles before the answer',
+    'Do not over-explain or pad',
+  ],
+};
+
+await db
+  .insert(voiceProfile)
+  .values({ id: 1, ...DEFAULT_VOICE })
+  .onConflictDoNothing();
 
 // ── Default approval policies (v2's dynamic rules as data) ───────────────────
 

@@ -354,12 +354,12 @@ function channelContext(task: TaskRow): string {
       return [
         `\nThis task was triggered by an email from ${from}${subject ? ` (subject: "${subject}")` : ''}.`,
         task.trust === 'owner'
-          ? 'When you finish with a text answer, it is AUTOMATICALLY emailed back to the sender on the same thread — write your final message as that email reply, and complete any needed tool actions (calendar, lookups) BEFORE finishing.'
+          ? 'When you finish with a text answer, it is AUTOMATICALLY emailed back to the sender on the same thread — write your final message as that email reply (a short greeting, the substance, and a brief sign-off as yourself), and complete any needed tool actions (calendar, lookups) BEFORE finishing.'
           : 'The sender is not the owner: nothing is auto-sent. If a reply is warranted, use gmail.create_draft (or gmail.send, which needs owner approval).',
       ].join('\n');
     }
     case 'sms_turn':
-      return '\nThis task came in by SMS; your final text goes back as an SMS — keep it short and plain.';
+      return '\nThis task came in by SMS; your final text goes back as an SMS — one or two plain sentences, no greeting or sign-off, no markdown.';
     case 'chat_turn':
       return "\nThis task came from the owner's dashboard chat; your final text appears there as your reply.";
     default:

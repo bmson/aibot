@@ -1,5 +1,11 @@
 import type { Trust } from '@assistant/core';
-import { enqueueTask, getAgent, persistMessage, quotesExternalContent } from '@assistant/core';
+import {
+  captureOwnerWritingSample,
+  enqueueTask,
+  getAgent,
+  persistMessage,
+  quotesExternalContent,
+} from '@assistant/core';
 import {
   channelBindings,
   contacts,
@@ -433,6 +439,17 @@ export async function processMessage(
     channelMessageId,
   });
   if (!persisted) return 'skipped'; // another instance won the idempotency race
+
+  // Opportunistically learn the owner's voice from their own authenticated,
+  // non-forwarded mail. Gated on owner trust + not quoting external content so
+  // no third-party text ever enters the private voice corpus. Best-effort.
+  if (trust === 'owner' && !quotesExternalContent({ subject, body: text })) {
+    await captureOwnerWritingSample(deps.db, deps.router, {
+      text,
+      register: 'email_casual',
+      context: 'inbound-email',
+    }).catch((err) => console.error('voice sampling failed', err));
+  }
 
   const { created } = await enqueueTask(deps.db, {
     type: 'email_triage',

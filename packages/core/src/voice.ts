@@ -5,6 +5,55 @@ import type { ModelRouter } from './model-router/router.js';
 
 export type VoiceRegister = 'email_professional' | 'email_casual' | 'sms' | 'chat';
 
+/** Auto-captured samples are prefixed so the cap counts only them, never uploads. */
+const AUTO_SAMPLE_PREFIX = 'auto:';
+const MIN_SAMPLE_CHARS = 80;
+const MAX_SAMPLE_CHARS = 4000;
+const MAX_AUTO_SAMPLES = 300;
+
+/**
+ * Opportunistically learn the owner's voice from their own authenticated,
+ * non-forwarded messages (the owner writing TO the bot is a sample of how the
+ * owner writes). Bounded, deduped, and best-effort — never fails the caller.
+ *
+ * CALLERS MUST pass only owner-authored, non-tainted text: a forwarded or
+ * quoted message is third-party content and must never enter the private voice
+ * corpus. Trivial one-liners are skipped (too short to be a useful sample).
+ */
+export async function captureOwnerWritingSample(
+  db: Db,
+  router: ModelRouter,
+  input: { text: string; register: VoiceRegister; context?: string },
+): Promise<boolean> {
+  const text = input.text.trim();
+  if (text.length < MIN_SAMPLE_CHARS || text.length > MAX_SAMPLE_CHARS) return false;
+  try {
+    const [duplicate] = await db
+      .select({ id: writingSamples.id })
+      .from(writingSamples)
+      .where(eq(writingSamples.text, text))
+      .limit(1);
+    if (duplicate) return false;
+    const [count] = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(writingSamples)
+      .where(sql`${writingSamples.context} LIKE ${`${AUTO_SAMPLE_PREFIX}%`}`);
+    if (Number(count?.n ?? 0) >= MAX_AUTO_SAMPLES) return false;
+    const [embedding] = await router.embed([text.slice(0, 4000)]);
+    await db.insert(writingSamples).values({
+      register: input.register,
+      text,
+      context: `${AUTO_SAMPLE_PREFIX}${input.context ?? 'email'}`,
+      embedding,
+    });
+    return true;
+  } catch (err) {
+    // Sampling is a nicety; a failed embed/insert must never affect triage.
+    console.error('owner voice sample capture failed', err);
+    return false;
+  }
+}
+
 export interface VoiceContext {
   description: string;
   dos: string[];

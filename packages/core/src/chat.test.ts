@@ -59,6 +59,14 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
   it('records the prompt version bump', () => {
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(12);
   });
+
+  it('carries a persona/voice block that bans AI filler (v13)', () => {
+    const prompt = buildSystemPrompt(agent, {});
+    expect(prompt).toContain('Voice and manner');
+    expect(prompt).toMatch(/no corporate filler|AI throat-clearing/i);
+    expect(prompt).toMatch(/As an AI/); // named as a phrase to avoid
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(13);
+  });
 });
 
 describe('message cursors', () => {
