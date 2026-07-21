@@ -1,43 +1,54 @@
 import type { Db, TaskRow } from '@assistant/db';
-import { approvals, goals, messages, tasks, toolCalls } from '@assistant/db';
+import { approvals, tasks, toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
-import { and, eq, inArray, ne, sql } from 'drizzle-orm';
-import type { ZodType } from 'zod';
-import { type BrowserJobPendingResult, hashCallbackToken, isBrowserJobPending } from '../browse.js';
-import {
-  assistantMessageParts,
-  buildSystemPrompt,
-  getAgent,
-  listMessages,
-  PROMPT_VERSION,
-  persistMessage,
-} from '../chat.js';
+import { and, eq, inArray } from 'drizzle-orm';
+import { hashCallbackToken, isBrowserJobPending } from '../browse.js';
+import { buildSystemPrompt, getAgent, PROMPT_VERSION } from '../chat.js';
 import { loadConfig } from '../config.js';
-import {
-  BudgetReservationError,
-  getRate,
-  nextDailyReset,
-  nextMonthlyReset,
-  reconcileReservation,
-} from '../cost.js';
-import { type PendingFinal, type Plan, PlanSchema, type TaskState, type Trust } from '../events.js';
+import { BudgetReservationError, getRate, reconcileReservation } from '../cost.js';
+import { PlanSchema, type TaskState, type Trust } from '../events.js';
 import { getOwnerCard } from '../memory/consolidation.js';
-import type { WorkspaceReader } from '../memory/import.js';
 import { codeJobName, runCodeJob } from '../memory/jobs.js';
-import { type RecallSource, recallRelevantContext, recentWindowStart } from '../memory/recall.js';
-import type { ModelRole, ModelRouter, ProposedToolCall } from '../model-router/router.js';
+import { recallRelevantContext, recentWindowStart } from '../memory/recall.js';
+import type { ProposedToolCall } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import { markApprovalsNotified } from './approvals.js';
 import {
-  type ArtifactIntent,
-  artifactExecutionFailure,
   artifactRoutingFailure,
   artifactToolUnavailable,
   documentReadDispatchFailure,
   needsArtifactToolRetry,
   requestedArtifactIntent,
-  requestedDocumentReadIntent,
 } from './artifact-intent.js';
+import {
+  budgetResumeAt,
+  channelContext,
+  isKnownSenderReplyTask,
+  isUnattendedGoalSession,
+} from './executor/context-helpers.js';
+import {
+  finalizePendingResponse,
+  maybeEnqueueKnownSenderReply,
+  SCHEDULE_DIRECTIVE,
+  stageFinalResponse,
+  stageModelFinalResponse,
+  stopForUnsavedGoalProgress,
+} from './executor/finalize.js';
+import { unreadSharedDocumentIntent } from './executor/intent.js';
+import {
+  notifyOwnerAndConversation,
+  postConversationNotice,
+  recordGoalBlocked,
+} from './executor/notices.js';
+import { roleForTask } from './executor/role.js';
+import { seedContext } from './executor/seed.js';
+import {
+  type ExecuteResult,
+  type ExecutorDeps,
+  LOST_LEASE,
+  type ToolContextLike,
+} from './executor/types.js';
+import { compact, latestUserText, toolResultMessage } from './executor/util.js';
 import {
   isGoalWorkEvidence,
   needsGoalProgressToolRetry,
@@ -47,7 +58,6 @@ import {
   checkpointTask,
   claimTask,
   completeTask,
-  enqueueTask,
   markTaskNeedsAttention,
   parkForApproval,
   parkForBudget,
@@ -59,264 +69,18 @@ import {
 } from './machine.js';
 import { startMission, wakeMission } from './missions.js';
 import { PLANNER_VERSION, planTask } from './planner.js';
-import {
-  type ActionEvidence,
-  enforceResponseContract,
-  isSimulatedApprovalNotice,
-} from './response-contract.js';
-import { GOAL_BLOCKED_PREFIX } from './schedules.js';
+import { isSimulatedApprovalNotice } from './response-contract.js';
 
-/** Structural port implemented by @assistant/tools' ToolDispatcher — keeps core free of a package cycle. */
-export interface DispatcherPort {
-  toolDefs(
-    trust: Trust,
-    scope?: { isMissionSession: boolean },
-  ): Array<{ name: string; description: string; inputSchema: ZodType }>;
-  resultIsUntrusted(toolName: string): boolean;
-  dispatch(input: {
-    task: TaskRow;
-    step: number;
-    modelToolCallId: string;
-    toolName: string;
-    args: Record<string, unknown>;
-    ctx: ToolContextLike;
-    provenance: { plannerVersion: number; promptVersion: number; model: string };
-  }): Promise<
-    | { kind: 'executed'; toolCallId: string; result: unknown; cached: boolean }
-    | {
-        kind: 'awaiting_approval';
-        toolCallId: string;
-        approvalId: string;
-        shortCode: string;
-        summary: string;
-      }
-    | { kind: 'rejected'; reason: string }
-    | { kind: 'budget_blocked'; reason: string; resumeAt: Date }
-  >;
-  executeApproved(
-    toolCallId: string,
-    ctx: ToolContextLike,
-  ): Promise<
-    | { kind: 'executed'; result: unknown }
-    | { kind: 'failed'; error: string }
-    | { kind: 'budget_blocked'; reason: string; resumeAt: Date }
-  >;
-}
-
-export interface ToolContextLike {
-  taskId: string;
-  agentId: string;
-  conversationId?: string;
-  trust: Trust;
-  tainted: boolean;
-  db: Db;
-  now: () => Date;
-  signal: AbortSignal;
-  log: (type: string, payload: unknown) => Promise<void>;
-  execution?: { dbToolCallId: string; modelToolCallId: string; toolName: string };
-  stageBrowserJob?: (job: {
-    dbToolCallId: string;
-    modelToolCallId: string;
-    toolName: string;
-    pending: BrowserJobPendingResult;
-  }) => Promise<void>;
-  clearStagedBrowserJob?: (job: {
-    dbToolCallId: string;
-    modelToolCallId: string;
-    toolName: string;
-    pending: BrowserJobPendingResult;
-  }) => Promise<void>;
-}
-
-export interface ExecutorDeps {
-  db: Db;
-  router: ModelRouter;
-  dispatcher: DispatcherPort;
-  /** Workspace file store — required only for code jobs that read archives (imports). */
-  workspace?: WorkspaceReader;
-  /** Channel delivery for a task's final text (e.g. SMS reply). Errors are retried by the workflow. */
-  deliverFinal?: (task: TaskRow, text: string) => Promise<void>;
-  /**
-   * Owner notification when approvals park a task (e.g. SMS "Reply YES A7").
-   *
-   * Receives the task so the deliverer can also answer on the channel the
-   * request arrived on. That matters for email: parking otherwise leaves the
-   * thread the owner is watching completely silent, because
-   * postConversationNotice only writes a dashboard row.
-   */
-  notifyApproval?: (
-    task: TaskRow,
-    approvals: Array<{ taskId: string; shortCode: string; summary: string; toolName?: string }>,
-  ) => Promise<void>;
-  /**
-   * Out-of-band owner ping for async events the owner would otherwise only see
-   * by opening the dashboard: a task that permanently failed (dead-letter), a
-   * task stalled on its own budget cap, or a mission that needs a decision.
-   * Delivered to the owner's channel (e.g. SMS) in addition to the dashboard
-   * conversation notice. Best-effort — callers swallow its errors.
-   */
-  notifyOwner?: (input: {
-    taskId: string;
-    conversationId: string | null;
-    text: string;
-  }) => Promise<void>;
-}
-
-export type ExecuteResult = {
-  outcome:
-    | 'done'
-    | 'parked'
-    | 'sleeping'
-    | 'failed'
-    | 'dead_letter'
-    | 'not_claimable'
-    | 'needs_attention'
-    | 'clarify';
-  detail?: string;
-};
-
-const ROLE_FOR_TYPE: Record<string, ModelRole> = {
-  chat_turn: 'draft',
-  sms_turn: 'draft',
-  email_triage: 'draft',
-  scheduled: 'draft',
-  mission: 'reason',
-  browser_job: 'draft',
-  adhoc: 'draft',
-};
-
-/** Interactive/action types whose non-trivial requests should reason with tools. */
-const ACTION_ROUTED_TYPES = new Set(['chat_turn', 'sms_turn', 'scheduled']);
-
-/**
- * Which model tier runs a task's tool loop. The reasoning model (Claude) is not
- * reserved for background missions: any request that intends to DO something —
- * an unattended goal session, a mission, an email to triage, a mission work
- * session (adhoc), or a chat/SMS/scheduled turn the planner routed to real work
- * (action !== 'reply') — drives its tools on the strong model. Trivial
- * conversation (the planner's classify short-circuit returns a null plan, or a
- * 'reply' action) stays on the cheap draft model.
- *
- * This is the single biggest competence lever: before it, every interactive
- * "do this for me" request ran its tool-calling loop on the draft model, which
- * answers with plausible prose and no tool calls.
- */
-export function roleForTask(task: Pick<TaskRow, 'type' | 'goalId'>, plan: Plan | null): ModelRole {
-  if (isUnattendedGoalSession(task)) return 'reason';
-  const base = ROLE_FOR_TYPE[task.type] ?? 'draft';
-  if (base === 'reason') return 'reason';
-  // Email triage and mission sessions are inherently action-oriented.
-  if (task.type === 'email_triage' || task.type === 'adhoc') return 'reason';
-  if (ACTION_ROUTED_TYPES.has(task.type) && plan && plan.action !== 'reply') return 'reason';
-  return base;
-}
-
-// A fetched page or read document is clipped to this before the model reasons
-// over it; 4000 chars starved complex tasks. Both models in use have ample
-// context (deepseek 64k+, Claude 200k), so the larger window is affordable and
-// the checkpoint stays small because most tool results are far under the cap.
-const RESULT_CHAR_LIMIT = 8000;
-const CONTEXT_WINDOW_LIMIT = 60;
-
-/**
- * Trigger-payload marker for the D9 known-sender reply child: an assistant-trust
- * adhoc task whose sole job is to propose a pre-drafted reply back to a known
- * (authenticated non-owner) email sender, gated by gmail.send's owner approval.
- */
-const KNOWN_SENDER_REPLY_KIND = 'known_sender_reply';
-
-function isKnownSenderReplyTask(task: Pick<TaskRow, 'trigger'>): boolean {
-  const trigger = task.trigger as { payload?: { kind?: unknown } } | null;
-  return trigger?.payload?.kind === KNOWN_SENDER_REPLY_KIND;
-}
-
-const LOST_LEASE: ExecuteResult = {
-  outcome: 'not_claimable',
-  detail: 'task lease was cancelled, expired, or reclaimed',
-};
-
-function truncateResult(result: unknown): unknown {
-  const json = JSON.stringify(result ?? null);
-  // Round-trip through JSON: results straight from tools may hold Date
-  // instances (drizzle rows) or undefined props, which fail the AI SDK's
-  // ModelMessage schema on the NEXT step's validation (checkpointed windows
-  // don't hit this — jsonb already serialized them, which is why retries
-  // succeeded where first attempts crashed).
-  if (json.length <= RESULT_CHAR_LIMIT) return JSON.parse(json);
-  return {
-    truncated: true,
-    note: `result truncated from ${json.length} chars; full result stored in tool_calls`,
-    preview: json.slice(0, RESULT_CHAR_LIMIT),
-  };
-}
-
-export function toolResultMessage(
-  toolCallId: string,
-  toolName: string,
-  value: unknown,
-): ModelMessage {
-  return {
-    role: 'tool',
-    content: [
-      {
-        type: 'tool-result',
-        toolCallId,
-        toolName,
-        output: { type: 'json', value: truncateResult(value) },
-      },
-    ],
-  } as ModelMessage;
-}
-
-/** Drop-oldest compaction (v1): the storage bound and the model context bound in one. */
-function compact(window: ModelMessage[]): ModelMessage[] {
-  return window.length <= CONTEXT_WINDOW_LIMIT
-    ? window
-    : window.slice(window.length - CONTEXT_WINDOW_LIMIT);
-}
-
-/** Latest direct owner wording, used only for deterministic artifact routing. */
-function latestUserText(window: ModelMessage[]): string | undefined {
-  for (let i = window.length - 1; i >= 0; i -= 1) {
-    const message = window[i];
-    if (message?.role === 'user' && typeof message.content === 'string') {
-      return message.content;
-    }
-  }
-  return undefined;
-}
-
-/** The most recent owner-supplied Google Doc URL still present in this chat. */
-function sharedDocumentIntent(window: ModelMessage[]) {
-  for (let i = window.length - 1; i >= 0; i -= 1) {
-    const message = window[i];
-    if (message?.role !== 'user' || typeof message.content !== 'string') continue;
-    const intent = requestedDocumentReadIntent(message.content);
-    if (intent) return intent;
-  }
-  return undefined;
-}
-
-/** Avoid repeatedly re-reading the same shared document on every chat turn. */
-async function unreadSharedDocumentIntent(db: Db, task: TaskRow, window: ModelMessage[]) {
-  if (task.trust !== 'owner') return undefined;
-  const intent = sharedDocumentIntent(window);
-  if (!intent || !task.conversationId) return intent;
-  const [alreadyRead] = await db
-    .select({ id: toolCalls.id })
-    .from(toolCalls)
-    .innerJoin(tasks, eq(tasks.id, toolCalls.taskId))
-    .where(
-      and(
-        eq(tasks.conversationId, task.conversationId),
-        eq(toolCalls.toolName, intent.toolName),
-        eq(toolCalls.status, 'succeeded'),
-        sql`${toolCalls.args}->>'documentId' = ${intent.documentId}`,
-      ),
-    )
-    .limit(1);
-  return alreadyRead ? undefined : intent;
-}
+export { roleForTask } from './executor/role.js';
+// Public API preserved: these symbols now live in ./executor/* modules but stay
+// importable from './workflow/executor.js' (and thus '@assistant/core').
+export type {
+  DispatcherPort,
+  ExecuteResult,
+  ExecutorDeps,
+  ToolContextLike,
+} from './executor/types.js';
+export { toolResultMessage } from './executor/util.js';
 
 /**
  * Reconcile a settled browser job's pre-flight reservation to what it
@@ -346,511 +110,6 @@ async function settleJobReservation(
   } catch (err) {
     console.error('job reservation reconcile failed', err);
   }
-}
-
-/** Where budget-parked work resumes: the reset of whichever period is exhausted. */
-function budgetResumeAt(reason: string): Date {
-  return reason.includes('monthly') ? nextMonthlyReset() : nextDailyReset();
-}
-
-/**
- * Where this task's final answer lands — the model writes very different
- * replies for an email thread than for a chat bubble, and must know that
- * delivery back through the source channel is automatic.
- */
-function channelContext(task: TaskRow): string {
-  const payload = (task.trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
-  switch (task.type) {
-    case 'email_triage': {
-      const from = typeof payload.from === 'string' ? payload.from : 'the sender';
-      const subject = typeof payload.subject === 'string' ? payload.subject : '';
-      return [
-        `\nThis task was triggered by an email from ${from}${subject ? ` (subject: "${subject}")` : ''}.`,
-        task.trust === 'owner'
-          ? 'When you finish with a text answer, it is AUTOMATICALLY emailed back to the sender on the same thread — write your final message as that email reply (a short greeting, the substance, and a brief sign-off as yourself), and complete any needed tool actions (calendar, lookups) BEFORE finishing.'
-          : 'The sender is not the owner: nothing is auto-sent. If a reply is warranted, use gmail.create_draft (or gmail.send, which needs owner approval).',
-      ].join('\n');
-    }
-    case 'sms_turn':
-      return '\nThis task came in by SMS; your final text goes back as an SMS — one or two plain sentences, no greeting or sign-off, no markdown.';
-    case 'chat_turn':
-      return "\nThis task came from the owner's dashboard chat; your final text appears there as your reply.";
-    default:
-      if (task.goalId) {
-        // Nobody is reading this live, so a message describing what you intend
-        // to do reaches no one and changes nothing. Only a tool result does.
-        return [
-          "\nThis is a goal's automatic work session. The owner is NOT present and will not answer during this run.",
-          'Do the work now with your tools — do not describe a plan, promise to report back, or ask a question you could answer yourself by looking.',
-          'Everything you know about this goal is already in this prompt. Do NOT re-read your own state: goals.list, memory.recall, conversations.search and workspace.* tell you nothing new here.',
-          // Not a style preference — the provenance rule below makes call order
-          // decide whether this session can act at all.
-          'ORDER MATTERS. Reading anything marks this session as carrying untrusted content, and from that point on every outward call needs the owner to approve it by hand — which, with nobody present, means the session stops. So spend your FIRST tool call on the outward step that moves the goal: browser.plan, then browser.execute (or web.fetch for a plain page). Any lookup you do first permanently costs you the ability to browse this run.',
-          'You get one autonomous outward action, so make it count. browser.plan is free — it only plans. Your ONE outward call comes after it, and it must do the entire job: a single read-only browser.execute plan that searches, opens the promising results, and extracts everything you need. Do not spend that one action on a preliminary web.fetch to see what is there; if you would need several pages, ask browser.plan for a headless plan covering all of them.',
-          'Not knowing a URL is not a blocker: start from a search results page and navigate from there.',
-          'Finish by calling goals.update_progress with what you verified and the concrete next step.',
-        ].join('\n');
-      }
-      return '';
-  }
-}
-
-/** Parked/paused tasks with a conversation must say so in the thread, not go silent. */
-async function postConversationNotice(
-  db: Db,
-  task: TaskRow,
-  text: string,
-  extraParts: unknown[] = [],
-): Promise<void> {
-  if (!task.conversationId) return;
-  await persistMessage(db, {
-    conversationId: task.conversationId,
-    taskId: task.id,
-    role: 'assistant',
-    origin: 'assistant',
-    parts: [{ type: 'text', text }, ...extraParts],
-    text,
-  }).catch((err) => console.error('conversation notice failed', err));
-}
-
-/**
- * Post the dashboard notice AND push it to the owner's channel for events that
- * would otherwise only be visible by opening the dashboard (permanent failure,
- * budget stall). Owner ping is best-effort: a delivery failure must never mask
- * the underlying task outcome.
- */
-async function notifyOwnerAndConversation(
-  deps: ExecutorDeps,
-  task: TaskRow,
-  text: string,
-): Promise<void> {
-  await postConversationNotice(deps.db, task, text);
-  if (deps.notifyOwner) {
-    await deps
-      .notifyOwner({ taskId: task.id, conversationId: task.conversationId, text })
-      .catch((err) => console.error('owner notification failed', err));
-  }
-}
-
-/**
- * A goal's automatic work session runs with nobody watching it. A run that
- * ends without a single verified tool result therefore must not complete as
- * 'done': the owner sees a green task, the goal keeps its old progress line,
- * and the next session is re-seeded with the same stale state — the goal
- * silently spins. Chat turns are excluded on purpose; there the owner is
- * reading the same honesty message in real time.
- */
-function isUnattendedGoalSession(task: Pick<TaskRow, 'goalId' | 'type'>): boolean {
-  return task.goalId !== null && task.type !== 'chat_turn' && task.type !== 'sms_turn';
-}
-
-/**
- * Park the goal itself, not just the task. goalInstruction() re-seeds every
- * session from these columns, so an unanswered question has to land here or
- * tomorrow's run starts from the same stale line and asks all over again.
- */
-async function recordGoalBlocked(db: Db, goalId: string, question: string): Promise<void> {
-  await db
-    .update(goals)
-    .set({
-      nextAction: `${GOAL_BLOCKED_PREFIX} ${question}`.slice(0, 500),
-      updatedAt: sql`now()`,
-    })
-    .where(eq(goals.id, goalId));
-}
-
-async function stopForUnsavedGoalProgress(
-  deps: ExecutorDeps,
-  task: TaskLease,
-  state: TaskState,
-  window: ModelMessage[],
-  reason: string,
-): Promise<ExecuteResult> {
-  const text =
-    "I completed a verified goal step, but I couldn't save the progress update. Open Activity and retry this task so the goal does not continue from stale information.";
-  console.error('required goal progress was not saved', { taskId: task.id, reason });
-  if (task.goalId) await recordGoalBlocked(deps.db, task.goalId, text);
-  await notifyOwnerAndConversation(
-    deps,
-    task,
-    'A goal completed work but could not save its progress update. The task needs to be retried from Activity.',
-  );
-  window.push({ role: 'assistant', content: text } as ModelMessage);
-  return stageFinalResponse(deps, task, state, window, {
-    text,
-    progress: text.slice(0, 200),
-    terminalStatus: 'needs_attention',
-    outcome: 'needs_attention',
-  });
-}
-
-/** A retry must not duplicate the dashboard/chat copy of a final response. */
-async function persistFinalConversationOnce(
-  db: Db,
-  task: TaskRow,
-  text: string,
-  recall?: RecallSource[],
-): Promise<void> {
-  if (!task.conversationId) return;
-  const [existing] = await db
-    .select({ id: messages.id })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.taskId, task.id),
-        eq(messages.role, 'assistant'),
-        eq(messages.origin, 'assistant'),
-        eq(messages.text, text),
-      ),
-    )
-    .limit(1);
-  if (existing) return;
-  await persistMessage(db, {
-    conversationId: task.conversationId,
-    taskId: task.id,
-    role: 'assistant',
-    origin: 'assistant',
-    parts: assistantMessageParts(text, recall),
-    text,
-  });
-}
-
-/** Deliver a previously checkpointed final response, then finish under CAS. */
-async function finalizePendingResponse(
-  deps: ExecutorDeps,
-  task: TaskLease,
-  pending: PendingFinal,
-  checkpointState?: TaskState,
-): Promise<ExecuteResult> {
-  if (!(await renewTaskLease(deps.db, task))) return LOST_LEASE;
-  const recallSources = (checkpointState ?? taskState(task)).recall ?? undefined;
-  await persistFinalConversationOnce(deps.db, task, pending.text, recallSources);
-
-  // Check cancellation/reclaim immediately before the external side effect.
-  if (deps.deliverFinal && !pending.deliveryAttempted) {
-    // Fence the provider call at-most-once. If the process disappears after
-    // provider acceptance but before task completion, the retry assumes this
-    // ambiguous attempt may have delivered instead of sending a duplicate.
-    pending.deliveryAttempted = true;
-    const state = checkpointState ?? taskState(task);
-    state.pendingFinal = pending;
-    if (!(await checkpointTask(deps.db, task, state))) return LOST_LEASE;
-    if (!(await renewTaskLease(deps.db, task))) return LOST_LEASE;
-    try {
-      await deps.deliverFinal(task, pending.text);
-    } catch (error) {
-      // A definitive provider rejection is retryable. Ambiguous transport
-      // failures are normalized by channel adapters and do not throw.
-      pending.deliveryAttempted = false;
-      state.pendingFinal = pending;
-      if (!(await checkpointTask(deps.db, task, state))) return LOST_LEASE;
-      throw error;
-    }
-  }
-
-  // The final text is delivered first either way; only the resting state of
-  // the task differs. needs_attention keeps it re-queueable from the Tasks
-  // page instead of closing it out as a completed run.
-  const completed =
-    pending.terminalStatus === 'needs_attention'
-      ? await markTaskNeedsAttention(deps.db, task, pending.progress)
-      : await completeTask(deps.db, task, {
-          status: pending.terminalStatus,
-          progress: pending.progress,
-        });
-  if (!completed) return LOST_LEASE;
-  return { outcome: pending.outcome, detail: pending.progress.slice(0, 200) };
-}
-
-/** Persist-before-send turns the task checkpoint into a small durable outbox. */
-async function stageFinalResponse(
-  deps: ExecutorDeps,
-  task: TaskLease,
-  state: TaskState,
-  window: ModelMessage[],
-  pending: PendingFinal,
-): Promise<ExecuteResult> {
-  state.pendingFinal = pending;
-  state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-  if (!(await checkpointTask(deps.db, task, state))) return LOST_LEASE;
-  return finalizePendingResponse(deps, task, pending, state);
-}
-
-/**
- * Deferred work is only real once a durable row exists. Left to prose the
- * model answers "I'll keep updating it as I go" — a promise nothing in the
- * system will keep, and which the response contract then has to blank out.
- */
-const SCHEDULE_DIRECTIVE =
-  '\nThis turn defers work to the future. Before you finish, call task.schedule with a concrete time and a self-contained instruction (or mission.update if this belongs to a mission). Do not promise to continue, watch, or keep updating anything unless that call succeeded — if you cannot schedule it, say so plainly and do the part you can do now.';
-
-const EVIDENCE_COLUMNS = {
-  toolName: toolCalls.toolName,
-  status: toolCalls.status,
-  result: toolCalls.result,
-  error: toolCalls.error,
-} as const;
-
-/**
- * The prose model is never the evidence source for an external action. Query
- * the durable ledger immediately before publishing a free-form final answer;
- * this also covers tool failures that were visible to the model but ignored.
- *
- * Two scopes: this task's rows decide whether *this* attempt succeeded, and
- * earlier rows from the same conversation let the contract recognise
- * artifacts that genuinely exist. Without the second scope, referring back to
- * a doc built two turns ago was answered with "I have not created anything
- * outside this chat" — a flat falsehood with the doc sitting in Drive. The
- * response contract still refuses to let prior-turn rows authorise a new
- * send, submission, or booking.
- */
-async function stageModelFinalResponse(
-  deps: ExecutorDeps,
-  task: TaskLease,
-  state: TaskState,
-  window: ModelMessage[],
-  pending: PendingFinal,
-  expectedArtifact?: ArtifactIntent,
-): Promise<ExecuteResult> {
-  const rows = await deps.db
-    .select(EVIDENCE_COLUMNS)
-    .from(toolCalls)
-    .where(eq(toolCalls.taskId, task.id));
-  const priorRows = task.conversationId
-    ? await deps.db
-        .select(EVIDENCE_COLUMNS)
-        .from(toolCalls)
-        .innerJoin(tasks, eq(toolCalls.taskId, tasks.id))
-        .where(and(eq(tasks.conversationId, task.conversationId), ne(toolCalls.taskId, task.id)))
-    : [];
-  const evidence: ActionEvidence[] = [
-    ...priorRows.map((row) => ({ ...row, fromCurrentTask: false })),
-    ...rows,
-  ];
-  const explicitFailure = expectedArtifact
-    ? artifactExecutionFailure(expectedArtifact, rows)
-    : undefined;
-  if (explicitFailure) {
-    return stageFinalResponse(deps, task, state, window, {
-      ...pending,
-      text: explicitFailure,
-      progress: explicitFailure.slice(0, 200),
-      terminalStatus: 'failed',
-      outcome: 'failed',
-    });
-  }
-  const checked = enforceResponseContract(pending.text, evidence);
-  const text = checked.text;
-  if (checked.blocked) {
-    console.warn('blocked unsupported assistant action claim', {
-      taskId: task.id,
-      unsupported: checked.unsupported,
-      toolCalls: rows.map((row) => ({ toolName: row.toolName, status: row.status })),
-    });
-  }
-  // An automatic goal session that produced no verified tool result did no
-  // work, whatever its prose says. Surfacing it as needs_attention is what
-  // turns a goal that is quietly spinning into one the owner can see is stuck.
-  if (isUnattendedGoalSession(task) && !rows.some(isGoalWorkEvidence)) {
-    if (task.goalId) await recordGoalBlocked(deps.db, task.goalId, text);
-    await notifyOwnerAndConversation(
-      deps,
-      task,
-      `This goal's automatic session finished without completing any verified action. It needs you: ${text}`,
-    );
-    return stageFinalResponse(deps, task, state, window, {
-      ...pending,
-      text,
-      progress: text.slice(0, 200),
-      terminalStatus: 'needs_attention',
-      outcome: 'needs_attention',
-    });
-  }
-  // A known contact's plain answer would otherwise dead-end in the dashboard;
-  // propose it back to them (owner-approved) so the thread does not go silent.
-  await maybeEnqueueKnownSenderReply(deps, task, text);
-  return stageFinalResponse(deps, task, state, window, {
-    ...pending,
-    text,
-    progress: text.slice(0, 200),
-  });
-}
-
-/**
- * D9 — close the known-sender email dead-end.
- *
- * A KNOWN contact (an authenticated, non-owner sender) whose email_triage task
- * ends in a plain answer or a clarify question gets NOTHING back: deliverEmailFinal
- * auto-sends only to the owner, so the drafted reply lands solely in the dashboard
- * and the sender's thread goes silent. When the triage model itself took no
- * outbound action (no gmail.send / gmail.create_draft row), deterministically
- * enqueue an assistant-trust adhoc child that PROPOSES exactly that reply via
- * gmail.send. Because gmail.send is risk:'approval', the owner sees the approval
- * card and approves or denies — nothing is ever auto-sent to a third party. The
- * child is stamped taintedOrigin (S1): the draft derives from the sender's own
- * message, so the child runs tainted and every outward call stays gated.
- *
- * Unknown senders are unchanged (dashboard only). Idempotent on externalEventId:
- * a finalization retry never enqueues a duplicate child.
- */
-async function maybeEnqueueKnownSenderReply(
-  deps: ExecutorDeps,
-  task: TaskRow,
-  draft: string,
-): Promise<void> {
-  const conversationId = task.conversationId;
-  if (task.type !== 'email_triage' || task.trust !== 'known' || !conversationId) return;
-  const reply = draft.trim();
-  if (!reply) return;
-
-  const payload = (task.trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
-  const asStr = (v: unknown) => (typeof v === 'string' ? v : '');
-  const to = asStr(payload.from);
-  const threadId = asStr(payload.threadId);
-  // Without an authenticated recipient and a thread to reply on there is nothing
-  // to send; leave the answer in the dashboard as before.
-  if (!to || !threadId) return;
-  const subject = asStr(payload.subject);
-  const rfcMessageId = asStr(payload.rfcMessageId);
-
-  // If the triage model already drafted or sent a reply of its own, a reply path
-  // exists — do not propose a second one. (gmail.send parks for approval before
-  // it could reach this finalization, but a resumed-and-sent call leaves a row.)
-  const [outbound] = await deps.db
-    .select({ id: toolCalls.id })
-    .from(toolCalls)
-    .where(
-      and(
-        eq(toolCalls.taskId, task.id),
-        inArray(toolCalls.toolName, ['gmail.send', 'gmail.create_draft']),
-      ),
-    )
-    .limit(1);
-  if (outbound) return;
-
-  const replySubject = /^re:/i.test(subject) ? subject : `Re: ${subject || '(no subject)'}`;
-  const instruction = [
-    `A known contact (${to}) emailed you, and this reply has been drafted for them.`,
-    `Send it now by calling gmail.send exactly once with to: ["${to}"], subject: ${JSON.stringify(
-      replySubject,
-    )}, threadId: "${threadId}", and body set to the draft below VERBATIM.`,
-    'Do not rewrite, shorten, translate, or add to the draft, and do not call any other tool. gmail.send always requires the owner to approve the exact message before anything is sent.',
-    '',
-    'Draft to send:',
-    reply,
-  ].join('\n');
-
-  await enqueueTask(deps.db, {
-    event: {
-      source: 'internal',
-      externalEventId: `known-sender-reply:${task.id}`,
-      agentId: task.agentId,
-      conversationId,
-      trust: 'assistant',
-      payload: {
-        kind: KNOWN_SENDER_REPLY_KIND,
-        to,
-        threadId,
-        subject: replySubject,
-        rfcMessageId,
-        draft: reply,
-        instruction,
-        // External provenance carried forward so the child runs tainted and any
-        // outward call it makes stays approval-gated.
-        taintedOrigin: true,
-      },
-    },
-    type: 'adhoc',
-    parentTaskId: task.id,
-    // Fixed next action: send the drafted reply. A pre-set plan skips planning so
-    // the executor forces the tool call on step 0 (mustAct) rather than leaving
-    // it to the planner.
-    plan: {
-      action: 'workflow',
-      reasoning: 'Propose the drafted reply to the known sender for owner approval',
-      steps: ['Send the drafted reply via gmail.send (owner-approved)'],
-      missingInfo: [],
-    },
-    maxSteps: 4,
-  });
-}
-
-async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]> {
-  if (task.conversationId) {
-    // A deterministically-enqueued known-sender reply child (D9) carries its
-    // exact instruction + draft on the trigger. Seed from that, never the shared
-    // (known-trust) email thread, so the child proposes precisely that reply and
-    // reads no other message in the conversation.
-    if (isKnownSenderReplyTask(task)) {
-      const instruction = (task.trigger as { payload?: { instruction?: unknown } } | null)?.payload
-        ?.instruction;
-      if (typeof instruction === 'string' && instruction.length > 0) {
-        return [{ role: 'user', content: instruction } as ModelMessage];
-      }
-    }
-    if (task.trust === 'known' || task.trust === 'unknown') {
-      const trigger = task.trigger as {
-        source?: unknown;
-        payload?: { messageId?: unknown };
-      } | null;
-      const messageId =
-        trigger?.source === 'email' && typeof trigger.payload?.messageId === 'string'
-          ? trigger.payload.messageId
-          : undefined;
-      if (messageId) {
-        const [inbound] = await db
-          .select({ text: messages.text })
-          .from(messages)
-          .where(
-            and(
-              eq(messages.conversationId, task.conversationId),
-              eq(messages.channelMessageId, `gmail:${messageId}`),
-            ),
-          )
-          .limit(1);
-        if (inbound) return [{ role: 'user', content: inbound.text } as ModelMessage];
-      }
-      // Never expose the rest of a private bound conversation to an external
-      // sender when no event-specific message can be proven.
-      return [
-        {
-          role: 'user',
-          content: `External task trigger (${task.type}):\n${JSON.stringify(task.trigger)}`,
-        } as ModelMessage,
-      ];
-    }
-    const rows = await listMessages(db, task.conversationId);
-    const conversationWindow = rows
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .slice(-20)
-      .map(
-        (m) =>
-          ({ role: m.role as 'user' | 'assistant', content: m.text || '(empty)' }) as ModelMessage,
-      );
-    if (conversationWindow.length > 0) return conversationWindow;
-
-    // A newly-created Goal work chat deliberately does not render the
-    // system-generated opening instruction as if the owner had written it.
-    // Its durable task trigger remains the source of truth for the first
-    // model step, so the work can begin without a misleading chat bubble.
-    const trigger = task.trigger as { payload?: { text?: unknown; instruction?: unknown } } | null;
-    const initialInstruction =
-      typeof trigger?.payload?.text === 'string'
-        ? trigger.payload.text
-        : typeof trigger?.payload?.instruction === 'string'
-          ? trigger.payload.instruction
-          : undefined;
-    if (initialInstruction) {
-      return [{ role: 'user', content: initialInstruction } as ModelMessage];
-    }
-    return conversationWindow;
-  }
-  return [
-    {
-      role: 'user',
-      content: `Task trigger (${task.type}):\n\`\`\`json\n${JSON.stringify(task.trigger)}\n\`\`\``,
-    } as ModelMessage,
-  ];
 }
 
 /**
