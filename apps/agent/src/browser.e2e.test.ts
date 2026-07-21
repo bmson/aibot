@@ -76,6 +76,14 @@ function makeFakeRouter(plan: BrowserPlan) {
       };
     },
     async step(_role: string, callOpts: { messages?: ModelMessage[] }): Promise<StepCallOutcome> {
+      const resultIds = (callOpts.messages ?? []).flatMap((message) =>
+        message.role === 'tool' && Array.isArray(message.content)
+          ? message.content
+              .filter((part) => part.type === 'tool-result')
+              .map((part) => part.toolCallId)
+          : [],
+      );
+      expect(new Set(resultIds).size).toBe(resultIds.length);
       const transcript = JSON.stringify(callOpts.messages ?? []);
       const proposed = transcript.includes('"toolName":"browser.execute"');
       const settled =
@@ -92,8 +100,8 @@ function makeFakeRouter(plan: BrowserPlan) {
         };
       }
       if (!settled) {
-        // Placeholder result visible (job running / awaiting approval) — a
-        // well-behaved model has nothing to add; the executor parked already.
+        // The executor parks before asking the model to interpret an unfinished
+        // approval or background job.
         return { ok: true, modelId: 'fake/model', degraded: false, text: '', toolCalls: [] };
       }
       return {

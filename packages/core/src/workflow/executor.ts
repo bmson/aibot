@@ -49,7 +49,7 @@ export type {
   ExecutorDeps,
   ToolContextLike,
 } from './executor/types.js';
-export { toolResultMessage } from './executor/util.js';
+export { replaceToolResultMessage, toolResultMessage } from './executor/util.js';
 
 /**
  * The workflow executor: claim → load checkpoint → (plan) → step loop

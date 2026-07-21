@@ -2,7 +2,12 @@ import type { TaskRow } from '@assistant/db';
 import { modelMessageSchema } from 'ai';
 import { describe, expect, it } from 'vitest';
 import type { Plan } from '../events.js';
-import { roleForTask, shouldTaintContext, toolResultMessage } from './executor.js';
+import {
+  replaceToolResultMessage,
+  roleForTask,
+  shouldTaintContext,
+  toolResultMessage,
+} from './executor.js';
 
 function task(
   trust: string,
@@ -36,6 +41,45 @@ describe('toolResultMessage', () => {
     const part = (msg.content as Array<{ output: { value: { truncated?: boolean } } }>)[0];
     expect(part?.output.value.truncated).toBe(true);
     expect(modelMessageSchema.safeParse(msg).success).toBe(true);
+  });
+
+  it('replaces provisional and duplicate results when a call settles', () => {
+    const window = [
+      {
+        role: 'assistant' as const,
+        content: [
+          {
+            type: 'tool-call' as const,
+            toolCallId: 'call_browser',
+            toolName: 'browser.execute',
+            input: {},
+          },
+        ],
+      },
+      toolResultMessage('call_browser', 'browser.execute', {
+        status: 'awaiting_owner_approval',
+      }),
+      toolResultMessage('call_browser', 'browser.execute', {
+        status: 'background_job_running',
+      }),
+    ];
+
+    replaceToolResultMessage(window, 'call_browser', 'browser.execute', {
+      ok: true,
+      outputs: ['job listing'],
+    });
+
+    const results = window.flatMap((message) =>
+      Array.isArray(message.content)
+        ? message.content.filter(
+            (part) => part.type === 'tool-result' && part.toolCallId === 'call_browser',
+          )
+        : [],
+    );
+    expect(results).toHaveLength(1);
+    expect(JSON.stringify(results[0])).toContain('job listing');
+    expect(JSON.stringify(window)).not.toContain('awaiting_owner_approval');
+    expect(JSON.stringify(window)).not.toContain('background_job_running');
   });
 });
 

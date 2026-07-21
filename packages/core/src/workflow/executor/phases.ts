@@ -39,7 +39,7 @@ import {
   LOST_LEASE,
   type ToolContextLike,
 } from './types.js';
-import { compact, toolResultMessage } from './util.js';
+import { compact, replaceToolResultMessage, toolResultMessage } from './util.js';
 
 /**
  * Shared, mutable state threaded through the pre-step-loop phases of a task run.
@@ -191,7 +191,7 @@ export async function resumePendingJob(rc: RunContext): Promise<void> {
     });
 
     if (settled.kind === 'result') {
-      window.push(toolResultMessage(pending.toolCallId, pending.toolName, settled.row.result));
+      replaceToolResultMessage(window, pending.toolCallId, pending.toolName, settled.row.result);
       if (dispatcher.resultIsUntrusted(pending.toolName)) {
         state.untrustedContext = true;
         ctx.tainted = true;
@@ -201,7 +201,7 @@ export async function resumePendingJob(rc: RunContext): Promise<void> {
       await settleJobReservation(db, settled.row);
     } else if (settled.kind === 'timeout') {
       if (settled.row) await settleJobReservation(db, settled.row);
-      window.push(toolResultMessage(pending.toolCallId, pending.toolName, settled.failure));
+      replaceToolResultMessage(window, pending.toolCallId, pending.toolName, settled.failure);
       state.completedToolCallIds.push(pending.dbToolCallId);
       state.pendingJob = null;
     }
@@ -258,13 +258,9 @@ export async function resumePendingApprovals(rc: RunContext): Promise<ExecuteRes
           return { outcome: 'parked', detail: outcome.reason };
         }
         if (outcome.kind === 'executed' && isJobPending(outcome.result)) {
-          // The approved call launched a background job — park for its callback.
-          window.push(
-            toolResultMessage(pending.toolCallId, pending.toolName, {
-              status: 'background_job_running',
-              note: 'the job is running; its results will arrive in the next turn',
-            }),
-          );
+          // The approved call launched a background job. Do not add a
+          // provisional tool result: the callback's terminal result must be the
+          // one and only result paired with this model tool-call id.
           state.pendingJob = {
             dbToolCallId: pending.dbToolCallId,
             toolCallId: pending.toolCallId,
@@ -273,12 +269,11 @@ export async function resumePendingApprovals(rc: RunContext): Promise<ExecuteRes
             timeoutAt: outcome.result.timeoutAt,
           };
         } else {
-          window.push(
-            toolResultMessage(
-              pending.toolCallId,
-              pending.toolName,
-              outcome.kind === 'executed' ? outcome.result : { error: outcome.error },
-            ),
+          replaceToolResultMessage(
+            window,
+            pending.toolCallId,
+            pending.toolName,
+            outcome.kind === 'executed' ? outcome.result : { error: outcome.error },
           );
           state.completedToolCallIds.push(pending.dbToolCallId);
           if (outcome.kind === 'executed' && dispatcher.resultIsUntrusted(pending.toolName)) {
@@ -287,15 +282,13 @@ export async function resumePendingApprovals(rc: RunContext): Promise<ExecuteRes
           }
         }
       } else {
-        window.push(
-          toolResultMessage(pending.toolCallId, pending.toolName, {
-            denied: true,
-            reason:
-              approval.status === 'expired'
-                ? 'approval expired before the owner responded'
-                : 'the owner denied this action',
-          }),
-        );
+        replaceToolResultMessage(window, pending.toolCallId, pending.toolName, {
+          denied: true,
+          reason:
+            approval.status === 'expired'
+              ? 'approval expired before the owner responded'
+              : 'the owner denied this action',
+        });
       }
     }
 

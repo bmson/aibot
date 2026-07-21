@@ -468,12 +468,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
 
         if (outcome.kind === 'executed') {
           if (isJobPending(outcome.result)) {
-            rc.window.push(
-              toolResultMessage(tc.toolCallId, tc.toolName, {
-                status: 'background_job_running',
-                note: 'the job is running; its results will arrive in the next turn',
-              }),
-            );
+            // Leave this tool call unmatched while the task sleeps. The
+            // callback's terminal output will be its one result before the
+            // transcript is sent to the model again.
             state.pendingJob = {
               dbToolCallId: outcome.toolCallId,
               toolCallId: tc.toolCallId,
@@ -514,13 +511,8 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
           );
           return { outcome: 'parked', detail: outcome.reason };
         } else if (outcome.kind === 'awaiting_approval') {
-          rc.window.push(
-            toolResultMessage(tc.toolCallId, tc.toolName, {
-              status: 'awaiting_owner_approval',
-              approvalShortCode: outcome.shortCode,
-              summary: outcome.summary,
-            }),
-          );
+          // Approval is runtime state, not a tool result. The approved,
+          // denied, or expired terminal outcome is stitched in on resume.
           pendingApprovals.push({
             approvalId: outcome.approvalId,
             toolCallId: tc.toolCallId,

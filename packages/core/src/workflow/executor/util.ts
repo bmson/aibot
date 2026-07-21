@@ -40,6 +40,36 @@ export function toolResultMessage(
   } as ModelMessage;
 }
 
+/**
+ * Stitch the terminal result for a tool call into the transcript exactly once.
+ *
+ * Older checkpoints may contain provisional `awaiting_owner_approval` or
+ * `background_job_running` results. Replaying one of those beside the real
+ * result is invalid for providers that require a one-to-one tool_use/result
+ * pairing, so settling a call replaces every earlier result with the same id.
+ */
+export function replaceToolResultMessage(
+  window: ModelMessage[],
+  toolCallId: string,
+  toolName: string,
+  value: unknown,
+): void {
+  for (let index = window.length - 1; index >= 0; index -= 1) {
+    const message = window[index];
+    if (message?.role !== 'tool' || !Array.isArray(message.content)) continue;
+    const content = message.content.filter(
+      (part) => !(part.type === 'tool-result' && part.toolCallId === toolCallId),
+    );
+    if (content.length === message.content.length) continue;
+    if (content.length === 0) {
+      window.splice(index, 1);
+    } else {
+      window[index] = { ...message, content } as ModelMessage;
+    }
+  }
+  window.push(toolResultMessage(toolCallId, toolName, value));
+}
+
 /** Drop-oldest compaction (v1): the storage bound and the model context bound in one. */
 export function compact(window: ModelMessage[]): ModelMessage[] {
   return window.length <= CONTEXT_WINDOW_LIMIT
