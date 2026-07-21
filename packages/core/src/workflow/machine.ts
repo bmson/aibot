@@ -387,12 +387,17 @@ export async function recordFailedAttempt(
   return updated.status === 'needs_attention' ? 'dead_letter' : 'retry';
 }
 
-/** Resume a parked task after approval resolution: back to pending for the queue. */
+/** Resume a parked task: back to pending for the queue. */
 export async function wakeTask(db: Db, taskId: string): Promise<boolean> {
   const [woken] = await db
     .update(tasks)
     .set({
       status: 'pending',
+      // A needs-attention final has already been delivered. Retrying it must
+      // continue from the saved work checkpoint, not finalize the same message
+      // and immediately return to needs_attention. Approval/budget/event wakes
+      // keep their checkpoint untouched.
+      state: sql`CASE WHEN ${tasks.status} = 'needs_attention' THEN ${tasks.state} - 'pendingFinal' ELSE ${tasks.state} END`,
       runAfter: null,
       lockedUntil: null,
       queueGeneration: sql`${tasks.queueGeneration} + 1`,

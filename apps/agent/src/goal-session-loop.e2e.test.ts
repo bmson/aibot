@@ -317,6 +317,86 @@ describe('unattended goal sessions never report silent success', () => {
     expect(progressRows.filter((row) => row.toolName === 'goals.update_progress')).toHaveLength(2);
   });
 
+  it('uses the fallback when the reasoning model ignores a forced progress call', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { goalId, conversationId } = await seedGoal('Goal progress fallback');
+    const { task } = await enqueueTask(db, {
+      event: event(conversationId),
+      type: 'scheduled',
+      goalId,
+      maxSteps: 4,
+    });
+    createdTaskIds.push(task.id);
+    const progressAttempts: boolean[] = [];
+
+    const router = {
+      async object() {
+        return { ok: true, modelId: 'fake/model', degraded: false, object: workflowPlan };
+      },
+      async step(
+        _role: string,
+        opts: {
+          messages?: unknown[];
+          toolChoice?: { type?: string; toolName?: string } | string;
+          forceFallback?: boolean;
+        },
+      ): Promise<StepCallOutcome> {
+        const transcript = JSON.stringify(opts.messages ?? []);
+        const forcedProgress =
+          typeof opts.toolChoice === 'object' &&
+          opts.toolChoice?.toolName === 'goals.update_progress';
+        if (!transcript.includes('goal.test_work')) {
+          return {
+            ok: true,
+            modelId: 'fake/model',
+            degraded: false,
+            text: '',
+            toolCalls: [
+              { toolCallId: 'work-fallback', toolName: 'goal.test_work', input: { phase: 1 } },
+            ],
+          };
+        }
+        if (forcedProgress) {
+          progressAttempts.push(opts.forceFallback === true);
+          return opts.forceFallback
+            ? {
+                ok: true,
+                modelId: 'fake/fallback',
+                degraded: true,
+                text: '',
+                toolCalls: [progressCall(goalId, 1)],
+              }
+            : {
+                ok: true,
+                modelId: 'fake/primary',
+                degraded: false,
+                text: 'I saved the progress.',
+                toolCalls: [],
+                finishReason: 'stop',
+              };
+        }
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: 'Finished.',
+          toolCalls: [],
+          finishReason: 'stop',
+        };
+      },
+    } as unknown as ModelRouter;
+
+    const outcome = await executeTask(
+      { db, router, dispatcher: new ToolDispatcher(db, goalWorkRegistry()) },
+      task.id,
+    );
+
+    expect(outcome.outcome).toBe('done');
+    expect(progressAttempts).toEqual([false, true]);
+    const [goal] = await db.select().from(goals).where(eq(goals.id, goalId));
+    expect(goal?.progress).toBe('Finished phase 1');
+  });
+
   it('stops immediately when the required progress write is rejected', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const { goalId, conversationId } = await seedGoal('Rejected goal progress');

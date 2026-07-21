@@ -4,13 +4,12 @@ import type { ModelMessage } from 'ai';
 import { and, eq, sql } from 'drizzle-orm';
 import { requestedDocumentReadIntent } from '../artifact-intent.js';
 
-/** The most recent owner-supplied Google Doc URL still present in this chat. */
+/** The latest owner-supplied Google Doc URL in the current user turn, if any. */
 function sharedDocumentIntent(window: ModelMessage[]) {
   for (let i = window.length - 1; i >= 0; i -= 1) {
     const message = window[i];
     if (message?.role !== 'user' || typeof message.content !== 'string') continue;
-    const intent = requestedDocumentReadIntent(message.content);
-    if (intent) return intent;
+    return requestedDocumentReadIntent(message.content);
   }
   return undefined;
 }
@@ -28,7 +27,6 @@ export async function unreadSharedDocumentIntent(db: Db, task: TaskRow, window: 
       and(
         eq(tasks.conversationId, task.conversationId),
         eq(toolCalls.toolName, intent.toolName),
-        eq(toolCalls.status, 'succeeded'),
         sql`${toolCalls.args}->>'documentId' = ${intent.documentId}`,
       ),
     )
