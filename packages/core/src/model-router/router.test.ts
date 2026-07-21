@@ -1,4 +1,4 @@
-import { createDb, type Db, tasks } from '@assistant/db';
+import { costReservations, createDb, type Db, tasks } from '@assistant/db';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createChatTask, ensureChatConversation, getAgent } from '../chat.js';
@@ -152,6 +152,7 @@ describe('ModelRouter.route (integration)', () => {
       expect(prepared.route.degraded).toBe(true);
       await releaseReservation(db, prepared.reservationId);
     }
+    await db.delete(costReservations).where(eq(costReservations.taskId, task.id));
     await db.delete(tasks).where(eq(tasks.id, task.id));
   });
 
