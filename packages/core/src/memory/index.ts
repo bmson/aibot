@@ -6,4 +6,6 @@ export * from './jobs.js';
 export * from './occasions.js';
 export * from './recall.js';
 export * from './segmentation.js';
+export * from './skill-reflect.js';
+export * from './skills.js';
 export * from './voice-ingest.js';

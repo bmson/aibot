@@ -7,6 +7,7 @@ import { loadConfig } from '../../config.js';
 import type { Plan, TaskState, Trust } from '../../events.js';
 import { getOwnerCard } from '../../memory/consolidation.js';
 import { recallRelevantContext, recentWindowStart } from '../../memory/recall.js';
+import { bumpSkillUse, recallSkills, renderSkillsBlock } from '../../memory/skills.js';
 import { markApprovalsNotified } from '../approvals.js';
 import {
   artifactRoutingFailure,
@@ -111,6 +112,35 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     }
   }
 
+  // Skill library (Phase 26): retrieve learned procedures relevant to this task
+  // as ADVICE (never auto-run). Owner-private, mirrors the owner-card gate;
+  // fetched once and reused across loop iterations — the library is task-stable.
+  let skillsBlock: string | undefined;
+  if (privilegedTask && !state.untrustedContext) {
+    const lastUser = [...rc.window].reverse().find((m) => m.role === 'user');
+    const skillQuery = [
+      plan?.reasoning,
+      typeof lastUser?.content === 'string' ? lastUser.content : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    if (skillQuery) {
+      try {
+        const found = await recallSkills(db, router, agent.id, skillQuery, { taskId: task.id });
+        if (found.length > 0) {
+          skillsBlock = renderSkillsBlock(found);
+          await bumpSkillUse(
+            db,
+            found.map((s) => s.id),
+          );
+        }
+      } catch (err) {
+        console.error('skill recall failed — continuing without it', err);
+      }
+    }
+  }
+
   // Owner chat/SMS replies are the critical carve-out: hard caps degrade
   // them to the fallback model instead of blocking (evaluateBudget).
   const critical =
@@ -137,6 +167,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       buildSystemPrompt(agent, {
         ownerCard: !state.untrustedContext ? ownerCard : undefined,
         recall: !state.untrustedContext ? recallBlock : undefined,
+        skills: !state.untrustedContext ? skillsBlock : undefined,
         tainted: state.untrustedContext,
       }),
       channelContext(task),

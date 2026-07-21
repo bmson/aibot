@@ -5,6 +5,7 @@ import { runMemoryConsolidation } from './consolidation.js';
 import { runMemoryExtraction } from './extraction.js';
 import { runImportJob, type WorkspaceReader } from './import.js';
 import { segmentConversations } from './segmentation.js';
+import { runSkillReflection } from './skill-reflect.js';
 import { runVoiceIngest } from './voice-ingest.js';
 
 /**
@@ -20,7 +21,8 @@ export type CodeJobName =
   | 'chat.segment'
   | 'import.run'
   | 'voice.ingest'
-  | 'anomaly.scan';
+  | 'anomaly.scan'
+  | 'skill.reflect';
 
 const CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.extract',
@@ -29,6 +31,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'import.run',
   'voice.ingest',
   'anomaly.scan',
+  'skill.reflect',
 ]);
 
 export interface CodeJobOutcome {
@@ -91,6 +94,14 @@ export async function runCodeJob(
       return {
         done: true,
         summary: `anomaly scan: ${r.flagged} new anomal${r.flagged === 1 ? 'y' : 'ies'}${kinds ? ` (${kinds})` : ''}`,
+      };
+    }
+    case 'skill.reflect': {
+      await deps.heartbeat?.();
+      const r = await runSkillReflection(deps, { taskId: task.id });
+      return {
+        done: true,
+        summary: `skill reflection: ${r.skillsDrafted} skill(s) drafted from ${r.tasksReviewed} reviewed task(s)`,
       };
     }
   }

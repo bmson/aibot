@@ -65,11 +65,11 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 13;
+export const PROMPT_VERSION = 14;
 
 export function buildSystemPrompt(
   agent: AgentRow,
-  extras: { ownerCard?: string; recall?: string; tainted?: boolean } = {},
+  extras: { ownerCard?: string; recall?: string; skills?: string; tainted?: boolean } = {},
 ): string {
   const now = new Intl.DateTimeFormat('en-US', {
     timeZone: agent.timezone,
@@ -118,6 +118,7 @@ export function buildSystemPrompt(
         ]
       : []),
     ...(extras.recall ? ['', extras.recall] : []),
+    ...(extras.skills ? ['', extras.skills] : []),
   ].join('\n');
 }
 

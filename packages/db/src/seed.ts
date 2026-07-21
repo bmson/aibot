@@ -337,6 +337,13 @@ const scheduleSeed = [
     cron: '0 23 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.05', job: 'anomaly.scan' },
   },
+  // Phase 26: nightly reflection distills reusable skills from the day's
+  // non-obvious task successes. Runs after consolidation; a model job.
+  {
+    name: 'skill-reflection',
+    cron: '30 23 * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.15', job: 'skill.reflect' },
+  },
 ] as const;
 
 /** Schedules whose definition the seed owns — updated in place on re-seed (prod picks up changes on deploy). */
@@ -345,6 +352,7 @@ const SEED_OWNED_SCHEDULES = new Set([
   'memory-consolidation',
   'chat-segmentation',
   'anomaly-scan',
+  'skill-reflection',
 ]);
 
 for (const s of scheduleSeed) {

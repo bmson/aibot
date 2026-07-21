@@ -514,6 +514,48 @@ export const anomalies = pgTable(
   ],
 );
 
+/**
+ * Skill library (Phase 26): Voyager-style competence memory, kept separate from
+ * facts. A post-task reflection distills a named procedure — preconditions,
+ * steps (advice, never auto-run code), gotchas, and provenance — from a task
+ * that succeeded a non-obvious way. Embedded for retrieval into planning; carries
+ * a use/success lifecycle and is revised or deprecated on failure. Only
+ * owner/assistant-trust (non-tainted) work may write a skill.
+ */
+export const skills = pgTable(
+  'skills',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    name: text('name').notNull(),
+    /** When this procedure applies. */
+    preconditions: text('preconditions').notNull().default(''),
+    /** The procedure itself — advice the model reads before acting, not executable code. */
+    steps: text('steps').notNull(),
+    /** Pitfalls learned the hard way. */
+    gotchas: text('gotchas').notNull().default(''),
+    embedding: vector('embedding', { dimensions: 1536 }),
+    /** The task that taught it (plain id, no FK — a skill outlives its source task). */
+    sourceTaskId: uuid('source_task_id'),
+    originTrust: text('origin_trust').notNull().default('assistant'),
+    ownerAuthored: boolean('owner_authored').notNull().default(false),
+    useCount: integer('use_count').notNull().default(0),
+    successCount: integer('success_count').notNull().default(0),
+    failureCount: integer('failure_count').notNull().default(0),
+    lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
+    deprecated: boolean('deprecated').notNull().default(false),
+    ...timestamps,
+  },
+  (t) => [
+    check('skills_origin_trust_check', sql`${t.originTrust} IN ('owner','assistant')`),
+    uniqueIndex('skills_name_idx').on(t.agentId, t.name),
+    index('skills_embedding_idx').using('hnsw', t.embedding.op('vector_cosine_ops')),
+    index('skills_active_idx').on(t.agentId, t.deprecated),
+  ],
+);
+
 // ── Memory ───────────────────────────────────────────────────────────────────
 
 export const memories = pgTable(
@@ -1088,6 +1130,7 @@ export type RateRow = typeof rateTable.$inferSelect;
 export type ContactRow = typeof contacts.$inferSelect;
 export type OccasionRow = typeof occasions.$inferSelect;
 export type AnomalyRow = typeof anomalies.$inferSelect;
+export type SkillRow = typeof skills.$inferSelect;
 export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;
