@@ -1,14 +1,13 @@
-import type { Db, TaskRow } from '@assistant/db';
-import { approvals, tasks, toolCalls } from '@assistant/db';
+import type { TaskRow } from '@assistant/db';
+import { tasks, toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
-import { and, eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { hashCallbackToken, isBrowserJobPending } from '../browse.js';
 import { buildSystemPrompt, getAgent, PROMPT_VERSION } from '../chat.js';
 import { loadConfig } from '../config.js';
-import { BudgetReservationError, getRate, reconcileReservation } from '../cost.js';
-import { PlanSchema, type TaskState, type Trust } from '../events.js';
+import { BudgetReservationError } from '../cost.js';
+import type { TaskState, Trust } from '../events.js';
 import { getOwnerCard } from '../memory/consolidation.js';
-import { codeJobName, runCodeJob } from '../memory/jobs.js';
 import { recallRelevantContext, recentWindowStart } from '../memory/recall.js';
 import type { ProposedToolCall } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
@@ -16,7 +15,6 @@ import { markApprovalsNotified } from './approvals.js';
 import {
   artifactRoutingFailure,
   artifactToolUnavailable,
-  documentReadDispatchFailure,
   needsArtifactToolRetry,
   requestedArtifactIntent,
 } from './artifact-intent.js';
@@ -28,7 +26,6 @@ import {
 } from './executor/context-helpers.js';
 import {
   finalizePendingResponse,
-  maybeEnqueueKnownSenderReply,
   SCHEDULE_DIRECTIVE,
   stageFinalResponse,
   stageModelFinalResponse,
@@ -40,14 +37,19 @@ import {
   postConversationNotice,
   recordGoalBlocked,
 } from './executor/notices.js';
+import {
+  type RunContext,
+  resumePendingApprovals,
+  resumePendingJob,
+  runCodeJobPhase,
+  runDirectDocumentRead,
+  runMissionPhase,
+  runPlanPhase,
+} from './executor/phases.js';
 import { roleForTask } from './executor/role.js';
 import { seedContext } from './executor/seed.js';
-import {
-  type ExecuteResult,
-  type ExecutorDeps,
-  LOST_LEASE,
-  type ToolContextLike,
-} from './executor/types.js';
+import { createToolContext } from './executor/tool-context.js';
+import { type ExecuteResult, type ExecutorDeps, LOST_LEASE } from './executor/types.js';
 import { compact, latestUserText, toolResultMessage } from './executor/util.js';
 import {
   isGoalWorkEvidence,
@@ -57,7 +59,6 @@ import {
 import {
   checkpointTask,
   claimTask,
-  completeTask,
   markTaskNeedsAttention,
   parkForApproval,
   parkForBudget,
@@ -67,8 +68,7 @@ import {
   type TaskLease,
   taskState,
 } from './machine.js';
-import { startMission, wakeMission } from './missions.js';
-import { PLANNER_VERSION, planTask } from './planner.js';
+import { PLANNER_VERSION } from './planner.js';
 import { isSimulatedApprovalNotice } from './response-contract.js';
 
 export { roleForTask } from './executor/role.js';
@@ -81,36 +81,6 @@ export type {
   ToolContextLike,
 } from './executor/types.js';
 export { toolResultMessage } from './executor/util.js';
-
-/**
- * Reconcile a settled browser job's pre-flight reservation to what it
- * actually ran (Phase 27): elapsed seconds × rate, in place of the
- * worst-case estimate that was held at launch. Idempotent — the reservation
- * reconciles once; crash-retries no-op.
- */
-async function settleJobReservation(
-  db: Db,
-  row: { decision: unknown; startedAt: Date | null; id: string },
-): Promise<void> {
-  const reservationId = (row.decision as { reservationId?: unknown } | null)?.reservationId;
-  if (typeof reservationId !== 'string') return;
-  try {
-    const rate = await getRate(db, 'cloud_run_job_sec');
-    const elapsedSeconds = row.startedAt
-      ? Math.max(1, Math.round((Date.now() - row.startedAt.getTime()) / 1000))
-      : 60;
-    await reconcileReservation(db, reservationId, {
-      usd: elapsedSeconds * rate.unitPriceUsd,
-      quantity: elapsedSeconds,
-      unit: rate.unit,
-      unitPriceUsd: rate.unitPriceUsd,
-      toolCallId: row.id,
-      description: 'browser job runtime (reconciled at settle)',
-    });
-  } catch (err) {
-    console.error('job reservation reconcile failed', err);
-  }
-}
 
 /**
  * The workflow executor: claim → load checkpoint → (plan) → step loop
@@ -215,66 +185,22 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   const agent = await getAgent(db);
   const abort = new AbortController();
 
-  // Code jobs (nightly memory extraction/consolidation, imports) run a
-  // registered function instead of the model loop — same retry/budget
-  // machinery. A job may yield (done: false) to sleep and resume later from
-  // its own checkpoint in tasks.state.
-  const job = codeJobName(task);
-  if (job) {
-    const outcome = await runCodeJob(
-      {
-        db,
-        router,
-        workspace: deps.workspace,
-        heartbeat: async () => {
-          if (!(await renewTaskLease(db, lease))) throw new Error('task lease lost');
-        },
-      },
-      job,
-      task,
-    );
-    if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
-    if (!outcome.done) {
-      const [fresh] = await db.select().from(tasks).where(eq(tasks.id, task.id));
-      const slept = await sleepTask(
-        db,
-        lease,
-        taskState(fresh ?? task),
-        outcome.runAfter ?? new Date(Date.now() + 5000),
-      );
-      if (!slept) return LOST_LEASE;
-      return { outcome: 'sleeping', detail: outcome.summary.slice(0, 200) };
-    }
-    const completed = await completeTask(db, lease, {
-      status: 'done',
-      progress: outcome.summary.slice(0, 500),
-    });
-    if (!completed) return LOST_LEASE;
-    return { outcome: 'done', detail: outcome.summary.slice(0, 200) };
-  }
-
-  // Missions never run the step loop themselves: each wake is a deadline
-  // check, a reflection, or a fresh bounded session child.
-  if (task.type === 'mission') {
-    const wake = await wakeMission({ db, router, notifyOwner: deps.notifyOwner }, task, agent);
-    if (wake.action === 'lease_lost') return LOST_LEASE;
-    return {
-      outcome: wake.action === 'deadline_reached' ? 'done' : 'sleeping',
-      detail: wake.action,
-    };
-  }
+  // Code jobs (nightly extraction/consolidation, imports) run a registered
+  // function, and missions run a deadline/reflection wake — both instead of the
+  // model step loop.
+  const codeJobResult = await runCodeJobPhase(deps, lease);
+  if (codeJobResult) return codeJobResult;
+  const missionResult = await runMissionPhase(deps, lease, agent);
+  if (missionResult) return missionResult;
 
   let window = state.contextWindow as unknown as ModelMessage[];
   if (window.length === 0) {
     window = await seedContext(db, task);
   }
-  // A direct document/sheet/slides request skips the generic planner, then
-  // forces the matching creation tool. The model still authors the actual
-  // title and content; deterministic blank placeholders are never dispatched.
-  //
-  // The D9 known-sender reply child is exempt: its instruction embeds the sender's
-  // own draft, whose free text could otherwise trip the artifact/doc-URL heuristics
-  // and force docs.create/docs.get instead of the intended gmail.send.
+  // A direct document/sheet/slides request skips the generic planner, then forces
+  // the matching creation tool. The D9 known-sender reply child is exempt: its
+  // instruction embeds the sender's own draft, whose free text could otherwise
+  // trip the artifact/doc-URL heuristics and force docs.create over gmail.send.
   const isKnownReply = isKnownSenderReplyTask(task);
   const artifactIntent =
     state.step === 0 && !isKnownReply
@@ -290,255 +216,34 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     { contextWindow: TaskState['contextWindow']; pendingJob: TaskState['pendingJob'] }
   >();
 
-  const ctx: ToolContextLike = {
-    taskId: task.id,
-    agentId: task.agentId,
-    conversationId: task.conversationId ?? undefined,
-    trust: task.trust as Trust,
-    tainted: state.untrustedContext,
+  const ctx = createToolContext({
     db,
-    now: () => new Date(),
+    task,
+    state,
     signal: abort.signal,
-    log: async () => {},
-    stageBrowserJob: async (job) => {
-      // The raw callback token has already been handed to the job at launch;
-      // only its hash is persisted anywhere (task checkpoint AND the tool_calls
-      // sentinel), so a DB read never yields a usable callback credential.
-      const callbackTokenHash = hashCallbackToken(job.pending.callbackToken);
-      const stagedSentinel = { ...job.pending, callbackToken: callbackTokenHash };
-      const pendingJob = {
-        dbToolCallId: job.dbToolCallId,
-        toolCallId: job.modelToolCallId,
-        toolName: job.toolName,
-        callbackTokenHash,
-        timeoutAt: job.pending.timeoutAt,
-      };
-      // The model may have proposed several calls in one assistant message. A
-      // crash after launch cannot leave dangling tool calls in the durable
-      // transcript, so calls after browser.execute are checkpointed as refused
-      // exactly as the live loop will refuse them below.
-      const durableWindow = [
-        ...window,
-        ...browserStageRemainder.map((call) =>
-          toolResultMessage(call.toolCallId, call.toolName, {
-            error:
-              'a browser job is already running for this task — wait for its result before making more tool calls',
-          }),
-        ),
-      ];
-      const contextWindow = compact(durableWindow) as unknown as TaskState['contextWindow'];
-      const snapshot = {
-        contextWindow: state.contextWindow,
-        pendingJob: state.pendingJob,
-      };
-      // If this is an approved call, remove the approval from the DURABLE
-      // recovery checkpoint before launch. Keep the in-memory list untouched so
-      // the current loop can continue processing its remaining approvals.
-      const checkpointState: TaskState = {
-        ...state,
-        pendingApprovals: state.pendingApprovals.filter(
-          (approval) => approval.dbToolCallId !== job.dbToolCallId,
-        ),
-        pendingJob,
-        contextWindow,
-      };
-      await db.transaction(async (tx) => {
-        const [staged] = await tx
-          .update(toolCalls)
-          .set({ result: stagedSentinel })
-          .where(
-            and(
-              eq(toolCalls.id, job.dbToolCallId),
-              eq(toolCalls.taskId, task.id),
-              eq(toolCalls.status, 'executing'),
-            ),
-          )
-          .returning({ id: toolCalls.id });
-        if (!staged) throw new Error('browser tool call could not be staged');
-        if (!(await checkpointTask(tx as unknown as Db, lease, checkpointState))) {
-          throw new Error('task lease lost while staging browser job');
-        }
-      });
-      browserStageSnapshots.set(job.dbToolCallId, snapshot);
-      state.pendingJob = pendingJob;
-      state.contextWindow = contextWindow;
-    },
-    clearStagedBrowserJob: async (job) => {
-      const snapshot = browserStageSnapshots.get(job.dbToolCallId);
-      const checkpointState: TaskState = {
-        ...state,
-        pendingJob: snapshot?.pendingJob ?? null,
-        contextWindow: snapshot?.contextWindow ?? state.contextWindow,
-      };
-      await db.transaction(async (tx) => {
-        const [cleared] = await tx
-          .update(toolCalls)
-          .set({ result: null })
-          .where(
-            and(
-              eq(toolCalls.id, job.dbToolCallId),
-              eq(toolCalls.taskId, task.id),
-              eq(toolCalls.status, 'executing'),
-            ),
-          )
-          .returning({ id: toolCalls.id });
-        if (!cleared) throw new Error('staged browser tool call could not be cleared');
-        if (!(await checkpointTask(tx as unknown as Db, lease, checkpointState))) {
-          throw new Error('task lease lost while clearing browser job');
-        }
-      });
-      state.pendingJob = checkpointState.pendingJob;
-      state.contextWindow = checkpointState.contextWindow;
-      browserStageSnapshots.delete(job.dbToolCallId);
-    },
+    getWindow: () => window,
+    getBrowserStageRemainder: () => browserStageRemainder,
+    browserStageSnapshots,
+  });
+
+  const rc: RunContext = {
+    deps,
+    db,
+    router,
+    dispatcher,
+    task,
+    agent,
+    state,
+    ctx,
+    window,
+    artifactIntent,
+    documentReadIntent,
   };
 
-  // ── Resume: settle a finished (or timed-out) browser job ──────────────────
-  // The job's callback replaced the sentinel result on the tool_calls row
-  // before waking us; if we woke for another reason (approval resolution)
-  // while the job is still in flight, leave pendingJob set — the post-approval
-  // check below puts the task back to sleep until the job's timeout.
-  if (state.pendingJob) {
-    const pending = state.pendingJob;
-    // Settle under a task-row lock. recordBrowserJobResult also locks the task
-    // FOR UPDATE before replacing the sentinel, so serializing here closes the
-    // window where a late callback commits the real result between our read and
-    // a timeout write that would otherwise clobber it. The timeout failure is
-    // written only while the sentinel is still present; a real result wins.
-    const settled = await db.transaction(async (tx) => {
-      await tx.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, task.id)).for('update');
-      const [row] = await tx.select().from(toolCalls).where(eq(toolCalls.id, pending.dbToolCallId));
-      if (row && !isBrowserJobPending(row.result)) {
-        return { kind: 'result' as const, row };
-      }
-      const timedOut = Date.now() >= new Date(pending.timeoutAt).getTime();
-      if (row && !timedOut) return { kind: 'still_pending' as const };
-      const failure = {
-        ok: false,
-        error: 'the browser job never reported back (timed out) — treat this attempt as failed',
-      };
-      if (row) {
-        await tx
-          .update(toolCalls)
-          .set({ status: 'failed', result: failure, error: failure.error, finishedAt: new Date() })
-          .where(eq(toolCalls.id, row.id));
-      }
-      return { kind: 'timeout' as const, row: row ?? null, failure };
-    });
-
-    if (settled.kind === 'result') {
-      window.push(toolResultMessage(pending.toolCallId, pending.toolName, settled.row.result));
-      if (dispatcher.resultIsUntrusted(pending.toolName)) {
-        state.untrustedContext = true;
-        ctx.tainted = true;
-      }
-      state.completedToolCallIds.push(pending.dbToolCallId);
-      state.pendingJob = null;
-      await settleJobReservation(db, settled.row);
-    } else if (settled.kind === 'timeout') {
-      if (settled.row) await settleJobReservation(db, settled.row);
-      window.push(toolResultMessage(pending.toolCallId, pending.toolName, settled.failure));
-      state.completedToolCallIds.push(pending.dbToolCallId);
-      state.pendingJob = null;
-    }
-    // 'still_pending' (row present, sentinel intact, not yet timed out): leave
-    // pendingJob set — the sleep-until-timeout below handles it, as before.
-  }
-
-  // ── Resume: settle pending approvals first ────────────────────────────────
-  if (state.pendingApprovals.length > 0) {
-    const rows = await db
-      .select()
-      .from(approvals)
-      .where(
-        inArray(
-          approvals.id,
-          state.pendingApprovals.map((p) => p.approvalId),
-        ),
-      );
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    const stillPending: typeof state.pendingApprovals = [];
-
-    for (let i = 0; i < state.pendingApprovals.length; i += 1) {
-      const pending = state.pendingApprovals[i] as (typeof state.pendingApprovals)[number];
-      const approval = byId.get(pending.approvalId);
-      if (!approval || approval.status === 'pending') {
-        stillPending.push(pending);
-        continue;
-      }
-      if (approval.status === 'approved') {
-        // One browser job at a time — defer further approved calls until the
-        // in-flight job settles; they stay parked and run on the next wake.
-        if (state.pendingJob) {
-          stillPending.push(pending);
-          continue;
-        }
-        if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
-        const outcome = await dispatcher.executeApproved(pending.dbToolCallId, ctx);
-        if (outcome.kind === 'budget_blocked') {
-          // Keep this approved call (and every unprocessed call) in the
-          // checkpoint. Approval grants permission, not unlimited spend.
-          state.pendingApprovals = [...stillPending, ...state.pendingApprovals.slice(i)];
-          state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-          const parked = await parkForBudget(db, lease, state, outcome.resumeAt);
-          if (!parked) return LOST_LEASE;
-          await postConversationNotice(
-            db,
-            task,
-            `I'm pausing here — the approved action doesn't fit the remaining budget (${outcome.reason}). It resumes automatically when the budget resets.`,
-          );
-          return { outcome: 'parked', detail: outcome.reason };
-        }
-        if (outcome.kind === 'executed' && isBrowserJobPending(outcome.result)) {
-          // The approved call launched a browser job — park for its callback.
-          window.push(
-            toolResultMessage(pending.toolCallId, pending.toolName, {
-              status: 'browser_job_running',
-              note: 'the job is running; its results will arrive in the next turn',
-            }),
-          );
-          state.pendingJob = {
-            dbToolCallId: pending.dbToolCallId,
-            toolCallId: pending.toolCallId,
-            toolName: pending.toolName,
-            callbackTokenHash: hashCallbackToken(outcome.result.callbackToken),
-            timeoutAt: outcome.result.timeoutAt,
-          };
-        } else {
-          window.push(
-            toolResultMessage(
-              pending.toolCallId,
-              pending.toolName,
-              outcome.kind === 'executed' ? outcome.result : { error: outcome.error },
-            ),
-          );
-          state.completedToolCallIds.push(pending.dbToolCallId);
-          if (outcome.kind === 'executed' && dispatcher.resultIsUntrusted(pending.toolName)) {
-            state.untrustedContext = true;
-            ctx.tainted = true;
-          }
-        }
-      } else {
-        window.push(
-          toolResultMessage(pending.toolCallId, pending.toolName, {
-            denied: true,
-            reason:
-              approval.status === 'expired'
-                ? 'approval expired before the owner responded'
-                : 'the owner denied this action',
-          }),
-        );
-      }
-    }
-
-    if (stillPending.length > 0) {
-      state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-      const parked = await parkForApproval(db, lease, state, stillPending);
-      if (!parked) return LOST_LEASE;
-      return { outcome: 'parked', detail: 'still waiting on approvals' };
-    }
-    state.pendingApprovals = [];
-  }
+  // ── Resume: settle a finished (or timed-out) browser job, then approvals ───
+  await resumePendingJob(rc);
+  const approvalsResult = await resumePendingApprovals(rc);
+  if (approvalsResult) return approvalsResult;
 
   // A browser job is (still) in flight — sleep until its callback or timeout.
   if (state.pendingJob) {
@@ -548,170 +253,13 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     return { outcome: 'sleeping', detail: 'browser job running' };
   }
 
-  // The owner supplied a real Google Doc URL (commonly a CV). Read it before
-  // asking the model to continue, so the assistant has durable evidence of
-  // whether it could access the document instead of merely promising to do so.
-  if (documentReadIntent && state.step === 0) {
-    const outcome = await dispatcher.dispatch({
-      task,
-      step: state.step,
-      modelToolCallId: `direct-document-read-${task.id}`,
-      toolName: documentReadIntent.toolName,
-      args: { documentId: documentReadIntent.documentId },
-      ctx,
-      provenance: {
-        plannerVersion: PLANNER_VERSION,
-        promptVersion: PROMPT_VERSION,
-        model: 'direct-document-router',
-      },
-    });
-    if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+  // Read an owner-supplied shared document (step 0) before the model continues.
+  const documentReadResult = await runDirectDocumentRead(rc);
+  if (documentReadResult) return documentReadResult;
 
-    if (outcome.kind === 'budget_blocked') {
-      state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-      const parked = await parkForBudget(db, lease, state, outcome.resumeAt);
-      if (!parked) return LOST_LEASE;
-      return { outcome: 'parked', detail: outcome.reason };
-    }
-    if (outcome.kind === 'awaiting_approval') {
-      const parked = await parkForApproval(db, lease, state, [
-        {
-          approvalId: outcome.approvalId,
-          dbToolCallId: outcome.toolCallId,
-          toolCallId: `direct-document-read-${task.id}`,
-          toolName: documentReadIntent.toolName,
-        },
-      ]);
-      if (!parked) return LOST_LEASE;
-      let ownerNotified = false;
-      if (deps.notifyApproval) {
-        ownerNotified = await deps
-          .notifyApproval(task, [
-            {
-              taskId: task.id,
-              shortCode: outcome.shortCode,
-              summary: outcome.summary,
-              toolName: documentReadIntent.toolName,
-            },
-          ])
-          .then(() => true)
-          .catch((err) => {
-            console.error('approval notification failed', err);
-            return false;
-          });
-      }
-      await postConversationNotice(
-        db,
-        task,
-        `I need your approval before reading the shared Google Doc: ${outcome.summary}`,
-        [
-          {
-            type: 'approval',
-            approvalId: outcome.approvalId,
-            shortCode: outcome.shortCode,
-            summary: outcome.summary,
-          },
-        ],
-      );
-      await markApprovalsNotified(
-        db,
-        [outcome.approvalId],
-        ownerNotified ? ['owner', 'conversation'] : ['conversation'],
-      );
-      return { outcome: 'parked', detail: 'document read awaiting approval' };
-    }
-    if (outcome.kind !== 'executed') {
-      const text = documentReadDispatchFailure(documentReadIntent, outcome.reason);
-      window.push({ role: 'assistant', content: text } as ModelMessage);
-      return stageFinalResponse(deps, lease, state, window, {
-        text,
-        progress: text.slice(0, 200),
-        terminalStatus: 'failed',
-        outcome: 'failed',
-      });
-    }
-
-    window.push(
-      toolResultMessage(
-        `direct-document-read-${task.id}`,
-        documentReadIntent.toolName,
-        outcome.result,
-      ),
-    );
-    state.completedToolCallIds.push(outcome.toolCallId);
-    if (dispatcher.resultIsUntrusted(documentReadIntent.toolName)) {
-      state.untrustedContext = true;
-      ctx.tainted = true;
-    }
-    state.step += 1;
-  }
-
-  let plan = task.plan ? PlanSchema.parse(task.plan) : null;
-  if (!plan && !artifactIntent) {
-    plan = await planTask({ db, router }, task, agent, window, {
-      tainted: state.untrustedContext === true,
-    });
-    if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
-    if (plan?.action === 'mission') {
-      if (state.untrustedContext || (task.trust !== 'owner' && task.trust !== 'assistant')) {
-        const refused = 'I did not start a long-running mission from an external request.';
-        window.push({ role: 'assistant', content: refused } as ModelMessage);
-        return stageFinalResponse(deps, lease, state, window, {
-          text: refused,
-          progress: 'refused externally triggered mission',
-          terminalStatus: 'done',
-          outcome: 'done',
-        });
-      }
-      const statement = plan.steps.length
-        ? `${plan.reasoning || 'Long-horizon work'} — steps: ${plan.steps.join('; ')}`
-        : plan.reasoning || 'Long-horizon work from owner request';
-      const mission = await startMission(db, task, plan, statement);
-      const confirmation = `Started a mission for this (id ${mission.id.slice(0, 8)}). I'll work on it in daily sessions, reflect weekly on whether it's still worth pursuing, and report as things happen. It's visible under Monitoring on the dashboard.`;
-      window.push({ role: 'assistant', content: confirmation } as ModelMessage);
-      return stageFinalResponse(deps, lease, state, window, {
-        text: confirmation,
-        progress: `spawned mission ${mission.id}`,
-        terminalStatus: 'done',
-        outcome: 'done',
-      });
-    }
-    if (plan?.action === 'clarify' && task.conversationId) {
-      const question =
-        plan.missingInfo.length > 0
-          ? `Before I proceed, I need to know: ${plan.missingInfo.join('; ')}`
-          : 'I need more detail before I can act on this — what exactly would you like me to do?';
-      window.push({ role: 'assistant', content: question } as ModelMessage);
-      // An automatic goal session has no owner present to answer, so a
-      // question is where the goal stops, not a completed run. Record it on
-      // the goal and park the task; otherwise the session closes as 'done',
-      // the goal keeps its previous progress line, and every later session
-      // re-asks the same question into an empty room.
-      if (isUnattendedGoalSession(task)) {
-        if (task.goalId) await recordGoalBlocked(deps.db, task.goalId, question);
-        await notifyOwnerAndConversation(
-          deps,
-          task,
-          `This goal's automatic session is blocked until you answer: ${question}`,
-        );
-        return stageFinalResponse(deps, lease, state, window, {
-          text: question,
-          progress: `blocked on owner input: ${question}`.slice(0, 200),
-          terminalStatus: 'needs_attention',
-          outcome: 'needs_attention',
-        });
-      }
-      // A known contact's clarify question would otherwise dead-end in the
-      // dashboard; propose it back to them (owner-approved) so the thread lives.
-      await maybeEnqueueKnownSenderReply(deps, task, question);
-      return stageFinalResponse(deps, lease, state, window, {
-        text: question,
-        progress: 'asked for clarification',
-        terminalStatus: 'done',
-        outcome: 'clarify',
-      });
-    }
-  }
+  const planResult = await runPlanPhase(rc);
+  if ('outcome' in planResult) return planResult;
+  const plan = planResult.plan;
 
   // Route action requests to the reasoning model (see roleForTask): a goal
   // session, a mission, an email to triage, or a chat/SMS turn the planner
