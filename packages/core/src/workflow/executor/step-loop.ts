@@ -291,7 +291,11 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         messages: rc.window,
         tools: toolSet as never,
         toolChoice: { type: 'tool', toolName: 'goals.update_progress' },
-        forceFallback: useForcedToolFallback,
+        // The primary provider already ignored this exact named-tool request.
+        // A second attempt on the same route just repeats that failure. Goal
+        // bookkeeping is schema-bounded and simple, so use the configured
+        // fallback to give the task an independent way to save its checkpoint.
+        forceFallback: true,
         maxOutputTokens: 256,
         critical,
       });

@@ -9,6 +9,7 @@ import {
   completeTask,
   enqueueTask,
   findDueTasks,
+  markTaskNeedsAttention,
   parkForApproval,
   recordFailedAttempt,
   sleepTask,
@@ -127,6 +128,40 @@ describe('task state machine (integration)', () => {
     await completeTask(db, reclaimed as NonNullable<typeof reclaimed>, { status: 'done' });
     [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(row?.status).toBe('done');
+  });
+
+  it('clears a delivered needs-attention final before retrying saved work', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { task } = await track(enqueueTask(db, { event: event(), type: 'adhoc' }));
+    const claimed = await claimTask(db, task.id);
+    expect(claimed).not.toBeNull();
+
+    const state = taskState(claimed as NonNullable<typeof claimed>);
+    state.step = 3;
+    state.completedToolCallIds.push('verified-work');
+    state.pendingFinal = {
+      text: 'Retry this task.',
+      progress: 'progress was not saved',
+      terminalStatus: 'needs_attention',
+      outcome: 'needs_attention',
+      deliveryAttempted: true,
+    };
+    expect(await checkpointTask(db, claimed as NonNullable<typeof claimed>, state)).toBe(true);
+    expect(
+      await markTaskNeedsAttention(
+        db,
+        claimed as NonNullable<typeof claimed>,
+        'progress was not saved',
+      ),
+    ).toBe(true);
+
+    expect(await wakeTask(db, task.id)).toBe(true);
+    const [woken] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(woken?.status).toBe('pending');
+    const resumed = taskState(woken as NonNullable<typeof woken>);
+    expect(resumed.pendingFinal).toBeUndefined();
+    expect(resumed.step).toBe(3);
+    expect(resumed.completedToolCallIds).toContain('verified-work');
   });
 
   it('sleeping tasks are not due until runAfter, then wake via findDueTasks', async (ctx) => {
