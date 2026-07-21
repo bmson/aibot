@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadConfig, resetConfigForTest } from './config.js';
+import { loadConfig, resetConfigForTest, validateProdConfig } from './config.js';
 
 describe('config', () => {
   afterEach(() => resetConfigForTest());
@@ -40,5 +40,42 @@ describe('config', () => {
     );
     resetConfigForTest();
     expect(() => loadConfig({ CANARY_MAX_COST_USD: '1' })).toThrow();
+  });
+
+  it('passes prod validation for a local (default) config', () => {
+    resetConfigForTest();
+    expect(validateProdConfig(loadConfig({}))).toEqual([]);
+  });
+
+  it('flags a cloudtasks/oidc config missing its required keys', () => {
+    resetConfigForTest();
+    const config = loadConfig({
+      QUEUE_DRIVER: 'cloudtasks',
+      INTERNAL_AUTH_MODE: 'oidc',
+      // AGENT_URL, GCP_PROJECT, INTERNAL_OIDC_* deliberately empty
+    });
+    const problems = validateProdConfig(config);
+    expect(problems).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('AGENT_URL'),
+        expect.stringContaining('GCP_PROJECT'),
+        expect.stringContaining('INTERNAL_OIDC_AUDIENCE'),
+        expect.stringContaining('INTERNAL_OIDC_SERVICE_ACCOUNT'),
+      ]),
+    );
+  });
+
+  it('is satisfied once the required cloudtasks/oidc keys are present', () => {
+    resetConfigForTest();
+    const config = loadConfig({
+      QUEUE_DRIVER: 'cloudtasks',
+      INTERNAL_AUTH_MODE: 'oidc',
+      AGENT_URL: 'https://agent.example',
+      GCP_PROJECT: 'proj',
+      CLOUD_TASKS_QUEUE: 'agent-steps',
+      INTERNAL_OIDC_AUDIENCE: 'https://agent.example',
+      INTERNAL_OIDC_SERVICE_ACCOUNT: 'invoker@proj.iam.gserviceaccount.com',
+    });
+    expect(validateProdConfig(config)).toEqual([]);
   });
 });

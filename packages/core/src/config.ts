@@ -92,6 +92,33 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return cached;
 }
 
+/**
+ * Fail loudly at startup when a production-shaped config is missing a key that
+ * would otherwise fail silently much later (an empty AGENT_URL makes
+ * `new URL('/internal/tasks/execute', AGENT_URL)` throw only when the first task
+ * dispatches; empty OIDC settings make every internal call unauthenticated).
+ * Returns the list of problems so the caller can log and exit; empty = healthy.
+ */
+export function validateProdConfig(config: Config = loadConfig()): string[] {
+  // Only a cloud deploy (the queue driver Cloud Tasks uses) is production-shaped.
+  // Local dev keeps the schema's oidc default but runs shared-secret with no GCP
+  // wiring, so it must not trip these checks.
+  if (config.QUEUE_DRIVER !== 'cloudtasks') return [];
+  const problems: string[] = [];
+  if (!config.AGENT_URL) problems.push('AGENT_URL is required when QUEUE_DRIVER=cloudtasks');
+  if (!config.GCP_PROJECT) problems.push('GCP_PROJECT is required when QUEUE_DRIVER=cloudtasks');
+  if (!config.CLOUD_TASKS_QUEUE) problems.push('CLOUD_TASKS_QUEUE is required');
+  if (config.INTERNAL_AUTH_MODE === 'oidc') {
+    if (!config.INTERNAL_OIDC_AUDIENCE) {
+      problems.push('INTERNAL_OIDC_AUDIENCE is required when INTERNAL_AUTH_MODE=oidc');
+    }
+    if (!config.INTERNAL_OIDC_SERVICE_ACCOUNT) {
+      problems.push('INTERNAL_OIDC_SERVICE_ACCOUNT is required when INTERNAL_AUTH_MODE=oidc');
+    }
+  }
+  return problems;
+}
+
 /** Test seam — clears the config cache. */
 export function resetConfigForTest(): void {
   cached = undefined;

@@ -63,9 +63,13 @@ gcloud run jobs execute assistant-migrate --project "$PROJECT" --region "$REGION
 # release instead, and say which script to run.
 echo "Verifying agent configuration"
 REQUIRED_AGENT_ENV=(
+  AGENT_URL
+  CLOUD_TASKS_QUEUE
+  GCP_PROJECT
   GMAIL_PUBSUB_TOPIC
   GMAIL_PUSH_SERVICE_ACCOUNT
   INTERNAL_AUTH_MODE
+  INTERNAL_OIDC_AUDIENCE
   INTERNAL_OIDC_SERVICE_ACCOUNT
   OWNER_EMAIL
   PUBLIC_URL

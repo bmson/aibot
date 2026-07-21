@@ -2,7 +2,7 @@
 
 A personal AI assistant that is a **separate actor** — its own identity (email `bot@bmson.com`, calendar, phone, cloud Workspace), not a chat feature. It monitors its own inbox, drafts and schedules on your behalf (inviting you to events on *its* calendar), runs long-horizon missions that wake/work/sleep/reflect, and gates every outward-facing action behind your approval.
 
-Architecture plan (v4, the source of truth for design decisions): `~/.claude/plans/i-want-to-build-rippling-lecun.md`.
+Architecture plan (v4, the source of truth for design decisions): `~/.claude/plans/i-want-to-build-rippling-lecun.md` (kept outside the repo). In-repo design notes live in [`docs/`](docs/).
 
 ## Production
 
@@ -17,7 +17,7 @@ Architecture plan (v4, the source of truth for design decisions): `~/.claude/pla
 - `apps/web` — Next.js: dashboard (approvals/waiting/monitoring/goals), chat with model switcher, tasks audit timeline, goals CRUD
 - `apps/agent` — Hono worker: webhooks (Gmail Pub/Sub, Twilio), executor endpoints, local poller, email sync, SMS channel
 - `packages/core` — runtime: planner → executor (checkpointed, crash-safe), approvals, missions + reflection, schedules, model router with budget guard, voice pipeline, queue notifier
-- `packages/db` — Drizzle schema (22 tables) + migrations + seed
+- `packages/db` — Drizzle schema (33 tables) + migrations + seed
 - `packages/tools` — risk-gated tool registry: Gmail, Calendar, Docs/Sheets/Slides, Drive search + attachment staging, browser plans, SMS, memory, public web fetch, Workspace, goals, missions
 - `infra/` — Dockerfiles, Cloud Build config, deploy script, GCP setup docs
 - `scripts/` — `auth-bot.ts` (bot OAuth), `ingest-voice.ts` (writing samples → voice profile), `dev-tunnel.sh`
