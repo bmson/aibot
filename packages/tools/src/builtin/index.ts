@@ -3,6 +3,7 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { isIP, type LookupFunction } from 'node:net';
+import { saveOccasion, upcomingOccasions } from '@assistant/core';
 import {
   conversations,
   goals,
@@ -410,6 +411,102 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       },
     },
     { confidentialRead: true, returnsUntrustedContent: true },
+  );
+
+  // ── occasions (Phase 17) ─────────────────────────────────────────────────────
+  register(
+    registry,
+    {
+      name: 'occasions.save',
+      description:
+        "Record a recurring date for one of the owner's people — a birthday, anniversary, or custom occasion — so it can be surfaced at lead time. Give the person by name (subject), the month and day; year and gift-idea notes are optional. Re-saving the same date merges new notes and fills in a missing year.",
+      inputSchema: z.object({
+        subject: z.string().min(1).max(120).describe("The person's name this occasion is about."),
+        kind: z.enum(['birthday', 'anniversary', 'custom']),
+        label: z
+          .string()
+          .max(120)
+          .default('')
+          .describe('For a custom occasion, what it is (e.g. "graduation").'),
+        month: z.number().int().min(1).max(12),
+        day: z.number().int().min(1).max(31),
+        year: z.number().int().min(1900).max(2200).optional(),
+        leadDays: z.number().int().min(0).max(60).default(7),
+        notes: z
+          .string()
+          .max(2000)
+          .default('')
+          .describe('Gift ideas or context for this occasion.'),
+      }),
+      risk: 'autonomous',
+      acceptsUntrustedInput: false,
+      approvalSummary: (args) =>
+        `Remember ${args.subject}'s ${
+          args.kind === 'custom' ? args.label || 'occasion' : args.kind
+        } on ${args.month}/${args.day}`,
+      execute: async (args, ctx) => {
+        const resolved = await resolveSubjectContact(ctx.db, { subject: args.subject });
+        if (!resolved) {
+          return { saved: false, note: 'could not resolve who this occasion is about' };
+        }
+        // Untrusted sessions store the occasion quarantined, exactly like memory.save.
+        const quarantined = ctx.trust !== 'owner' && ctx.trust !== 'assistant';
+        const result = await saveOccasion(ctx.db, {
+          agentId: ctx.agentId,
+          contactId: resolved.contactId,
+          kind: args.kind,
+          label: args.label,
+          month: args.month,
+          day: args.day,
+          year: args.year ?? null,
+          leadDays: args.leadDays,
+          notes: args.notes,
+          originTrust: ctx.trust,
+          quarantined,
+          source: 'occasions.save',
+        });
+        return { saved: result.saved, updated: !result.saved, quarantined, person: args.subject };
+      },
+    },
+    { writesMemory: true },
+  );
+
+  register(
+    registry,
+    {
+      name: 'occasions.list',
+      description:
+        "List the owner's people's upcoming occasions (birthdays, anniversaries, custom dates), soonest first. Use this to answer 'whose birthday is coming up?' or, together with memory.recall, 'what should I get them?'.",
+      inputSchema: z.object({
+        withinDays: z
+          .number()
+          .int()
+          .min(1)
+          .max(366)
+          .default(30)
+          .describe('How far ahead to look, in days.'),
+      }),
+      risk: 'autonomous',
+      // Occasion + contact fields are owner/assistant-authored reference data
+      // (quarantined ones never surface here), so — like goals.list — this is a
+      // confidential read but NOT untrusted content.
+      acceptsUntrustedInput: true,
+      execute: async (args, ctx) => {
+        const upcoming = await upcomingOccasions(ctx.db, ctx.agentId, {
+          withinDays: args.withinDays,
+        });
+        return {
+          occasions: upcoming.map((o) => ({
+            person: o.contactName,
+            kind: o.kind === 'custom' ? o.label || 'occasion' : o.kind,
+            date: o.nextDate,
+            daysUntil: o.daysUntil,
+            notes: o.notes || undefined,
+          })),
+        };
+      },
+    },
+    { confidentialRead: true },
   );
 
   // ── web ────────────────────────────────────────────────────────────────────

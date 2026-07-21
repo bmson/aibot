@@ -56,7 +56,7 @@ export async function runCodeJob(
       const r = await runMemoryExtraction(deps, { taskId: task.id });
       return {
         done: true,
-        summary: `extraction: ${r.saved} saved (${r.quarantined} quarantined, ${r.contactsCreated} new people), ${r.duplicates} duplicate, ${r.tombstoned} tombstoned, from ${r.conversationsScanned} conversation(s)`,
+        summary: `extraction: ${r.saved} saved (${r.quarantined} quarantined, ${r.contactsCreated} new people), ${r.duplicates} duplicate, ${r.tombstoned} tombstoned, ${r.occasionsSaved} occasion(s), from ${r.conversationsScanned} conversation(s)`,
       };
     }
     case 'memory.consolidate': {

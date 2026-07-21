@@ -176,6 +176,20 @@
       "when": 1784609300000,
       "tag": "0024_default_voice_profile",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784619737509,
+      "tag": "0025_icy_bullseye",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1784619737510,
+      "tag": "0026_occasions_morning_brief",
+      "breakpoints": true
     }
   ]
 }

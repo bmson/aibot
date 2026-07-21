@@ -1,9 +1,11 @@
+import { listOccasionsForContact } from '@assistant/core';
 import { contacts, findDuplicateContactSuggestions, type MemoryRow, memories } from '@assistant/db';
 import { and, count, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { MergeControl } from '@/app/profile/merge-control';
+import { OccasionsPanel, type OccasionView } from '@/app/profile/occasions-panel';
 import { PersonControls } from '@/app/profile/person-controls';
 import { RelationshipForm } from '@/app/profile/relationship-form';
 import { requireOwner } from '@/auth';
@@ -51,7 +53,7 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
     eq(memories.quarantined, false),
     or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
   );
-  const [facts, [factCount], allContacts] = await Promise.all([
+  const [facts, [factCount], allContacts, occasionRows] = await Promise.all([
     db
       .select()
       .from(memories)
@@ -63,7 +65,18 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
       .from(memories)
       .where(and(active, eq(memories.subjectContactId, contact.id))),
     db.select().from(contacts).orderBy(contacts.name).limit(500),
+    listOccasionsForContact(db, contact.id),
   ]);
+  const occasionViews: OccasionView[] = occasionRows.map((o) => ({
+    id: o.id,
+    kind: o.kind,
+    label: o.label,
+    month: o.month,
+    day: o.day,
+    year: o.year,
+    notes: o.notes,
+    quarantined: o.quarantined,
+  }));
   const totalFacts = Number(factCount?.n ?? 0);
   const mergeOptions = allContacts
     .filter((person) => person.id !== contact.id)
@@ -113,6 +126,8 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
           <MergeControl contactId={contact.id} options={mergeOptions} suggested={duplicate} />
         </div>
       </section>
+
+      <OccasionsPanel contactId={contact.id} personName={contact.name} occasions={occasionViews} />
 
       <section className="mt-8">
         <h2 className="flex items-baseline gap-2 text-sm font-medium">

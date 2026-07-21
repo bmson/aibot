@@ -14,6 +14,7 @@ import { getAgent } from '../chat.js';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
 import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
+import { saveOccasion } from './occasions.js';
 
 export const MEMORY_DOMAINS = [
   'identity',
@@ -56,8 +57,20 @@ export const ExtractedFactSchema = z.object({
     .describe('ISO date when the fact became true, ONLY if explicitly stated (e.g. "since 2019").'),
 });
 
+/** Recurring dates for named people (Phase 17) — mined alongside facts. */
+export const ExtractedOccasionSchema = z.object({
+  subject: z.string().min(1).max(120).describe('The person whose occasion this is (their name).'),
+  kind: z.enum(['birthday', 'anniversary', 'custom']),
+  label: z.string().max(120).default('').describe('For a custom occasion, what it is.'),
+  month: z.number().int().min(1).max(12),
+  day: z.number().int().min(1).max(31),
+  year: z.number().int().min(1900).max(2200).nullable().default(null),
+  notes: z.string().max(500).default('').describe('Gift ideas or context, if mentioned.'),
+});
+
 const ExtractionOutputSchema = z.object({
   facts: z.array(ExtractedFactSchema).max(25),
+  occasions: z.array(ExtractedOccasionSchema).max(10).default([]),
 });
 
 export interface ExtractionDeps {
@@ -74,6 +87,7 @@ export interface ExtractionResult {
   tombstoned: number;
   quarantined: number;
   contactsCreated: number;
+  occasionsSaved: number;
 }
 
 const WINDOW_HOURS = 26; // nightly run with an hour of overlap slack
@@ -92,7 +106,11 @@ function extractionSystem(knownNames: string[]): string {
     knownNames.length
       ? `Known people (use these exact names when the fact is about one of them): ${knownNames.join(', ')}.`
       : '',
-    'If nothing is worth remembering, return an empty facts array.',
+    'Also capture OCCASIONS in the separate occasions array: recurring dates for named people —',
+    'birthdays, anniversaries, and other dated events ("mom\'s birthday is March 3rd" → subject "mom",',
+    'kind "birthday", month 3, day 3). Only when a specific month and day are stated; include the year',
+    'only if given, and any gift ideas mentioned as notes.',
+    'If nothing is worth remembering, return empty facts and occasions arrays.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -126,6 +144,7 @@ export async function runMemoryExtraction(
       tombstoned: 0,
       quarantined: 0,
       contactsCreated: 0,
+      occasionsSaved: 0,
     };
 
     const activeConversations = await db
@@ -281,6 +300,32 @@ export async function runMemoryExtraction(
         else {
           result.saved += 1;
           if (quarantined) result.quarantined += 1;
+        }
+      }
+
+      // Occasions (Phase 17): recurring dates for named people. Same
+      // attribution + quarantine rules as facts; a bad date never fails the run.
+      for (const occ of outcome.object.occasions ?? []) {
+        const resolvedContact = await resolveSubjectContact(db, { subject: occ.subject });
+        if (!resolvedContact) continue;
+        if (resolvedContact.created) result.contactsCreated += 1;
+        try {
+          const savedOccasion = await saveOccasion(db, {
+            agentId,
+            contactId: resolvedContact.contactId,
+            kind: occ.kind,
+            label: occ.label,
+            month: occ.month,
+            day: occ.day,
+            year: occ.year,
+            notes: occ.notes,
+            originTrust: trust,
+            quarantined: trust !== 'owner' && trust !== 'assistant',
+            source: 'extraction',
+          });
+          if (savedOccasion.saved) result.occasionsSaved += 1;
+        } catch (err) {
+          console.error('memory extraction: skipping unsavable occasion', err);
         }
       }
     }

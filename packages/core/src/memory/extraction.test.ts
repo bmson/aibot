@@ -8,6 +8,7 @@ import {
   memories,
   memoryTombstones,
   messages,
+  occasions,
 } from '@assistant/db';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -78,6 +79,17 @@ const fakeRouter = {
             validFrom: '',
           },
         ],
+        occasions: [
+          {
+            subject: 'Solveig Extractsdottir',
+            kind: 'birthday',
+            label: '',
+            month: 9,
+            day: 12,
+            year: null,
+            notes: '',
+          },
+        ],
       },
     };
   },
@@ -138,6 +150,12 @@ afterAll(async () => {
       await db.delete(messages).where(inArray(messages.conversationId, conversationIds));
       await db.delete(conversations).where(inArray(conversations.id, conversationIds));
     }
+    // Occasions FK the contact, so clear them before deleting Solveig.
+    const [solveig] = await db
+      .select({ id: contacts.id })
+      .from(contacts)
+      .where(eq(contacts.name, 'Solveig Extractsdottir'));
+    if (solveig) await db.delete(occasions).where(eq(occasions.contactId, solveig.id));
     await db.delete(contacts).where(eq(contacts.name, 'Solveig Extractsdottir'));
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
@@ -172,14 +190,28 @@ describe('memory extraction (integration)', () => {
     const [personFact] = await db.select().from(memories).where(eq(memories.content, FACT_PERSON));
     expect(personFact?.subjectContactId).toBe(personContact?.id);
 
+    // Phase 17: the birthday mentioned in the conversation became an occasion
+    // linked to Solveig, non-quarantined (owner-trust conversation).
+    expect(first.occasionsSaved).toBeGreaterThanOrEqual(1);
+    const [birthday] = await db
+      .select()
+      .from(occasions)
+      .where(eq(occasions.contactId, personContact?.id ?? ''));
+    expect(birthday?.kind).toBe('birthday');
+    expect(birthday?.month).toBe(9);
+    expect(birthday?.day).toBe(12);
+    expect(birthday?.quarantined).toBe(false);
+
     // the tombstoned fact must not exist
     const forgotten = await db.select().from(memories).where(eq(memories.content, FACT_FORGOTTEN));
     expect(forgotten).toHaveLength(0);
 
-    // second run: everything already stored → duplicates, nothing new
+    // second run: everything already stored → duplicates, nothing new (the
+    // occasion dedupes on its unique date, so nothing new there either).
     const second = await runMemoryExtraction({ db, router: fakeRouter });
     expect(second.saved).toBe(0);
     expect(second.duplicates).toBeGreaterThanOrEqual(2);
+    expect(second.occasionsSaved).toBe(0);
   });
 
   it('quarantines facts extracted from untrusted conversations', async (ctx) => {

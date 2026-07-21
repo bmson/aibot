@@ -586,6 +586,56 @@ export const contacts = pgTable(
 );
 
 /**
+ * Occasions (Phase 17): recurring dates tied to a contact — birthdays,
+ * anniversaries, and custom dates the assistant surfaces at lead time. Month/day
+ * drive annual recurrence; `year` is optional (often unknown for a birthday).
+ * Provenance mirrors memories: an occasion learned from an untrusted email waits
+ * quarantined until the owner reviews it.
+ */
+export const occasions = pgTable(
+  'occasions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    contactId: uuid('contact_id')
+      .notNull()
+      .references(() => contacts.id),
+    kind: text('kind').notNull(),
+    /** Free-text label for a custom occasion (e.g. "graduation"); '' otherwise. */
+    label: text('label').notNull().default(''),
+    month: smallint('month').notNull(),
+    day: smallint('day').notNull(),
+    /** Optional — a birthday's year is frequently unknown. */
+    year: smallint('year'),
+    recurrence: text('recurrence').notNull().default('annual'),
+    /** Days before the date to start surfacing it in the brief. */
+    leadDays: smallint('lead_days').notNull().default(7),
+    /** Gift ideas / context for this occasion. */
+    notes: text('notes').notNull().default(''),
+    originTrust: text('origin_trust').notNull().default('owner'),
+    quarantined: boolean('quarantined').notNull().default(false),
+    ownerConfirmed: boolean('owner_confirmed').notNull().default(false),
+    source: text('source'),
+    ...timestamps,
+  },
+  (t) => [
+    check('occasions_kind_check', sql`${t.kind} IN ('birthday','anniversary','custom')`),
+    check('occasions_recurrence_check', sql`${t.recurrence} IN ('annual','once')`),
+    check('occasions_month_check', sql`${t.month} >= 1 AND ${t.month} <= 12`),
+    check('occasions_day_check', sql`${t.day} >= 1 AND ${t.day} <= 31`),
+    check(
+      'occasions_origin_trust_check',
+      sql`${t.originTrust} IN ('owner','known','unknown','assistant')`,
+    ),
+    uniqueIndex('occasions_dedup_idx').on(t.agentId, t.contactId, t.kind, t.month, t.day),
+    index('occasions_contact_idx').on(t.contactId),
+    index('occasions_month_day_idx').on(t.month, t.day),
+  ],
+);
+
+/**
  * Backstory import sources (Phase 22): one row per archive dropped into the
  * workspace import/ prefix. `source` is the provenance tag stamped on every
  * memory the import produces — re-run or purge a whole source atomically.
@@ -998,6 +1048,7 @@ export type CostEventRow = typeof costEvents.$inferSelect;
 export type CostReservationRow = typeof costReservations.$inferSelect;
 export type RateRow = typeof rateTable.$inferSelect;
 export type ContactRow = typeof contacts.$inferSelect;
+export type OccasionRow = typeof occasions.$inferSelect;
 export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;

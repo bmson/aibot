@@ -6,7 +6,9 @@ import {
   enqueueTask,
   getAgent,
   InboundEventSchema,
+  isOccasionKind,
   purgeVoiceSamples,
+  saveOccasion,
 } from '@assistant/core';
 import {
   addTombstone,
@@ -14,6 +16,7 @@ import {
   deleteContact,
   memories,
   mergeContacts,
+  occasions,
   updateContactIdentity,
 } from '@assistant/db';
 import { eq, sql } from 'drizzle-orm';
@@ -243,5 +246,92 @@ export async function mergeContactAction(sourceId: string, targetId: string): Pr
 export async function purgeVoiceSamplesAction(): Promise<void> {
   await requireOwner();
   await purgeVoiceSamples(getDb(), getWorkspace());
+  revalidateProfile();
+}
+
+// ── Occasions (Phase 17) ─────────────────────────────────────────────────────
+
+/** Owner adds an occasion (birthday/anniversary/custom) for a person. */
+export async function addOccasionAction(
+  contactId: string,
+  input: {
+    kind: string;
+    label: string;
+    month: string;
+    day: string;
+    year: string;
+    leadDays: string;
+    notes: string;
+  },
+): Promise<{ error?: string }> {
+  await requireOwner();
+  if (!UUID_RE.test(contactId)) return { error: 'Invalid person identifier.' };
+  if (!isOccasionKind(input.kind)) return { error: 'Choose an occasion type.' };
+  const month = Number(input.month);
+  const day = Number(input.day);
+  const year = input.year.trim() ? Number(input.year) : null;
+  if (
+    !Number.isInteger(month) ||
+    month < 1 ||
+    month > 12 ||
+    !Number.isInteger(day) ||
+    day < 1 ||
+    day > 31
+  ) {
+    return { error: 'Enter a valid month (1–12) and day (1–31).' };
+  }
+  if (year !== null && (!Number.isInteger(year) || year < 1900 || year > 2200)) {
+    return { error: 'Enter a valid year, or leave it blank.' };
+  }
+  const leadDays = input.leadDays.trim() ? Number(input.leadDays) : 7;
+  const db = getDb();
+  const agent = await getAgent(db);
+  try {
+    await saveOccasion(db, {
+      agentId: agent.id,
+      contactId,
+      kind: input.kind,
+      label: input.label.trim(),
+      month,
+      day,
+      year,
+      leadDays: Number.isInteger(leadDays) && leadDays >= 0 ? leadDays : 7,
+      notes: input.notes.trim(),
+      originTrust: 'owner',
+      quarantined: false,
+      ownerConfirmed: true,
+      source: 'profile',
+    });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Occasion could not be saved.' };
+  }
+  revalidateProfile();
+  return {};
+}
+
+/** Owner removes an occasion. */
+export async function forgetOccasionAction(occasionId: string): Promise<void> {
+  await requireOwner();
+  if (!UUID_RE.test(occasionId)) return;
+  await getDb().delete(occasions).where(eq(occasions.id, occasionId));
+  revalidateProfile();
+}
+
+/** Quarantine review for occasions learned from unverified sources. */
+export async function reviewOccasionAction(
+  occasionId: string,
+  verdict: 'approve' | 'reject',
+): Promise<void> {
+  await requireOwner();
+  if (!UUID_RE.test(occasionId)) return;
+  const db = getDb();
+  if (verdict === 'approve') {
+    await db
+      .update(occasions)
+      .set({ quarantined: false, ownerConfirmed: true, updatedAt: sql`now()` })
+      .where(eq(occasions.id, occasionId));
+  } else {
+    await db.delete(occasions).where(eq(occasions.id, occasionId));
+  }
   revalidateProfile();
 }
