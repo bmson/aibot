@@ -330,6 +330,13 @@ const scheduleSeed = [
     cron: '0 21 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'chat.segment' },
   },
+  // Phase 18: nightly approval-anomaly scan over policy-matched auto-executions.
+  // Runs after extraction/consolidation; a code job (no model), so budget is nominal.
+  {
+    name: 'anomaly-scan',
+    cron: '0 23 * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.05', job: 'anomaly.scan' },
+  },
 ] as const;
 
 /** Schedules whose definition the seed owns — updated in place on re-seed (prod picks up changes on deploy). */
@@ -337,6 +344,7 @@ const SEED_OWNED_SCHEDULES = new Set([
   'memory-extraction',
   'memory-consolidation',
   'chat-segmentation',
+  'anomaly-scan',
 ]);
 
 for (const s of scheduleSeed) {

@@ -1,3 +1,4 @@
+export * from './anomaly.js';
 export * from './approvals.js';
 export * from './browser.js';
 export * from './executor.js';

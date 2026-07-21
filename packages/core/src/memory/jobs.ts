@@ -1,5 +1,6 @@
 import type { Db, TaskRow } from '@assistant/db';
 import type { ModelRouter } from '../model-router/router.js';
+import { runAnomalyScan } from '../workflow/anomaly.js';
 import { runMemoryConsolidation } from './consolidation.js';
 import { runMemoryExtraction } from './extraction.js';
 import { runImportJob, type WorkspaceReader } from './import.js';
@@ -18,7 +19,8 @@ export type CodeJobName =
   | 'memory.consolidate'
   | 'chat.segment'
   | 'import.run'
-  | 'voice.ingest';
+  | 'voice.ingest'
+  | 'anomaly.scan';
 
 const CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.extract',
@@ -26,6 +28,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'chat.segment',
   'import.run',
   'voice.ingest',
+  'anomaly.scan',
 ]);
 
 export interface CodeJobOutcome {
@@ -79,5 +82,16 @@ export async function runCodeJob(
       return runImportJob(deps, task);
     case 'voice.ingest':
       return runVoiceIngest(deps, task);
+    case 'anomaly.scan': {
+      await deps.heartbeat?.();
+      const r = await runAnomalyScan(deps, { taskId: task.id });
+      const kinds = Object.entries(r.byKind)
+        .map(([k, n]) => `${n} ${k}`)
+        .join(', ');
+      return {
+        done: true,
+        summary: `anomaly scan: ${r.flagged} new anomal${r.flagged === 1 ? 'y' : 'ies'}${kinds ? ` (${kinds})` : ''}`,
+      };
+    }
   }
 }

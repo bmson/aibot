@@ -476,6 +476,44 @@ export const approvalPolicies = pgTable(
   ],
 );
 
+/**
+ * Approval anomaly detection (Phase 18): a nightly scan over `tool_calls.decision`
+ * flags policies auto-executing far above their baseline, outward-facing actions
+ * at unusual hours, or bursts. Each row cites the triggering tool_calls. Suspend
+ * reuses `approval_policies.enabled`; dismissing raises the effective baseline.
+ */
+export const anomalies = pgTable(
+  'anomalies',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    kind: text('kind').notNull(),
+    /** The policy whose auto-executions triggered this — plain id, no FK (policies can be deleted). */
+    policyId: uuid('policy_id'),
+    toolName: text('tool_name').notNull(),
+    observed: integer('observed').notNull(),
+    /** The baseline/threshold the observation exceeded. */
+    expected: integer('expected').notNull().default(0),
+    /** tool_calls.id values that evidence this anomaly (citations). */
+    toolCallIds: text('tool_call_ids').array().notNull().default([]),
+    detail: text('detail').notNull().default(''),
+    /** Stable window key for dedup, e.g. '2026-07-21' (daily) or a burst-start ISO minute. */
+    windowLabel: text('window_label').notNull(),
+    /** policyId or toolName — the dedup subject (policyId may be null). */
+    subjectKey: text('subject_key').notNull(),
+    status: text('status').notNull().default('open'),
+    ...timestamps,
+  },
+  (t) => [
+    check('anomalies_kind_check', sql`${t.kind} IN ('frequency','off_hours','burst')`),
+    check('anomalies_status_check', sql`${t.status} IN ('open','dismissed','suspended')`),
+    uniqueIndex('anomalies_dedup_idx').on(t.agentId, t.kind, t.subjectKey, t.windowLabel),
+    index('anomalies_status_idx').on(t.agentId, t.status),
+  ],
+);
+
 // ── Memory ───────────────────────────────────────────────────────────────────
 
 export const memories = pgTable(
@@ -1049,6 +1087,7 @@ export type CostReservationRow = typeof costReservations.$inferSelect;
 export type RateRow = typeof rateTable.$inferSelect;
 export type ContactRow = typeof contacts.$inferSelect;
 export type OccasionRow = typeof occasions.$inferSelect;
+export type AnomalyRow = typeof anomalies.$inferSelect;
 export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;
