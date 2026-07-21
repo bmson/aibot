@@ -1,10 +1,13 @@
+import { createHash } from 'node:crypto';
 import type { Trust } from '@assistant/core';
 import {
   captureOwnerWritingSample,
   enqueueTask,
+  extractorFor,
   getAgent,
   persistMessage,
   quotesExternalContent,
+  startDocumentIngest,
 } from '@assistant/core';
 import {
   channelBindings,
@@ -14,7 +17,13 @@ import {
   messages as storedMessages,
   tasks,
 } from '@assistant/db';
-import { extractGmailText, type GmailPayload, gmailHeader } from '@assistant/tools';
+import {
+  collectGmailAttachments,
+  extractGmailText,
+  type GmailPayload,
+  gmailHeader,
+  safeRelPath,
+} from '@assistant/tools';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { processApplicationConfirmation } from './application-confirmations.js';
@@ -29,6 +38,8 @@ const MAX_PAGES_PER_SYNC = 2;
 const MAX_SYNC_WALL_MS = 90_000;
 const MESSAGE_FETCH_TIMEOUT_MS = 30_000;
 const CLASSIFY_TIMEOUT_MS = 20_000;
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 
 const AutomatedSchema = z.object({
   automated: z
@@ -306,6 +317,54 @@ async function conversationForThread(
   return conversation.id;
 }
 
+/**
+ * Auto-file the attachments of an authenticated message from someone we know
+ * as searchable documents (Phase 11). Best-effort and fail-open: a fetch or
+ * store error on one attachment is logged and skipped, and the whole pass is
+ * wrapped by the caller — attachment filing never blocks or fails triage.
+ * Dedup is by content hash, so a Gmail history replay re-files nothing.
+ */
+async function fileMessageAttachments(
+  deps: AgentDeps,
+  input: { agentId: string; message: GmailMessage; trust: Trust },
+): Promise<void> {
+  const attachments = collectGmailAttachments(input.message.payload).slice(
+    0,
+    MAX_ATTACHMENTS_PER_MESSAGE,
+  );
+  for (const att of attachments) {
+    try {
+      // Skip formats we can neither read in-process nor hand to the processor.
+      if (extractorFor(att.mimeType, att.filename) === 'unsupported') continue;
+      if (att.size > MAX_ATTACHMENT_BYTES) continue;
+      const res = await deps.googleClient.api<{ data?: string }>(
+        `${GMAIL}/messages/${input.message.id}/attachments/${att.attachmentId}`,
+        { signal: AbortSignal.timeout(MESSAGE_FETCH_TIMEOUT_MS) },
+      );
+      const bytes = res.data ? Buffer.from(res.data, 'base64url') : Buffer.alloc(0);
+      if (bytes.length === 0 || bytes.length > MAX_ATTACHMENT_BYTES) continue;
+      const cleanName =
+        att.filename.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120) || 'attachment';
+      const workspacePath = safeRelPath(`documents/email/${input.message.id}-${cleanName}`);
+      await deps.workspace.writeBytes(workspacePath, bytes, att.mimeType);
+      const result = await startDocumentIngest(deps.db, {
+        agentId: input.agentId,
+        title: att.filename.slice(0, 300),
+        workspacePath,
+        mime: att.mimeType,
+        bytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        source: 'email',
+        sourceRef: `gmail:${input.message.id}`,
+        trust: input.trust,
+      });
+      if (result.duplicate) await deps.workspace.delete(workspacePath).catch(() => {});
+    } catch (err) {
+      console.error(`email-sync: failed to file attachment ${att.filename}`, err);
+    }
+  }
+}
+
 export async function processMessage(
   deps: AgentDeps,
   agentId: string,
@@ -449,6 +508,14 @@ export async function processMessage(
       register: 'email_casual',
       context: 'inbound-email',
     }).catch((err) => console.error('voice sampling failed', err));
+  }
+
+  // Auto-file attachments from authenticated people we know, so the owner can
+  // ask about them (Phase 11). Best-effort — never blocks triage.
+  if (authenticated && (trust === 'owner' || trust === 'known')) {
+    await fileMessageAttachments(deps, { agentId, message: msg, trust }).catch((err) =>
+      console.error('attachment filing failed', err),
+    );
   }
 
   const { created } = await enqueueTask(deps.db, {

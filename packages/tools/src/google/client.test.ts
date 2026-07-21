@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AmbiguousGoogleMutationError,
   buildRawEmail,
+  collectGmailAttachments,
   GoogleApiError,
   GoogleClient,
 } from './client.js';
@@ -198,5 +199,41 @@ describe('buildRawEmail', () => {
         body: 'hello',
       }),
     ).toThrow('Subject contains a forbidden line break');
+  });
+});
+
+describe('collectGmailAttachments', () => {
+  it('collects named parts with an attachmentId, skipping inline body parts', () => {
+    const payload = {
+      mimeType: 'multipart/mixed',
+      parts: [
+        { mimeType: 'text/plain', body: { data: 'aGk=' } }, // inline body — not an attachment
+        {
+          mimeType: 'application/pdf',
+          filename: 'lease.pdf',
+          body: { attachmentId: 'att-1', size: 4096 },
+        },
+        {
+          mimeType: 'multipart/related',
+          parts: [
+            {
+              mimeType: 'image/png',
+              filename: 'scan.png',
+              body: { attachmentId: 'att-2', size: 8192 },
+            },
+          ],
+        },
+        // Named but no attachmentId → not fetchable, skipped.
+        { mimeType: 'text/calendar', filename: 'invite.ics', body: {} },
+      ],
+    };
+    const found = collectGmailAttachments(payload);
+    expect(found.map((a) => a.filename)).toEqual(['lease.pdf', 'scan.png']);
+    expect(found[0]).toMatchObject({
+      mimeType: 'application/pdf',
+      attachmentId: 'att-1',
+      size: 4096,
+    });
+    expect(collectGmailAttachments(undefined)).toEqual([]);
   });
 });

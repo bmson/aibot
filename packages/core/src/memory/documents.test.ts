@@ -1,5 +1,5 @@
 import { createDb, type Db, documentChunks, documents, files, tasks } from '@assistant/db';
-import { and, eq, like } from 'drizzle-orm';
+import { eq, inArray, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import type { ModelRouter } from '../model-router/router.js';
@@ -105,10 +105,13 @@ describe('document intelligence — extraction job', () => {
   let dbUp = false;
   let agentId: string;
   const ws = fakeWorkspace();
+  // Delete only tasks this run created (by id) — a progress-`like` sweep could
+  // hit an unrelated task that has model_calls and FK-block the delete.
+  const createdTaskIds: string[] = [];
 
   async function cleanup() {
     const docs = await db
-      .select({ id: documents.id, fileId: documents.fileId })
+      .select({ id: documents.id })
       .from(documents)
       .where(like(documents.title, 'XTESTDOC%'));
     for (const d of docs) {
@@ -118,9 +121,9 @@ describe('document intelligence — extraction job', () => {
       await db.delete(documents).where(like(documents.title, 'XTESTDOC%'));
       await db.delete(files).where(like(files.workspacePath, 'xtestdoc/%'));
     }
-    await db
-      .delete(tasks)
-      .where(and(eq(tasks.type, 'adhoc'), like(tasks.progress, 'extract XTESTDOC%')));
+    if (createdTaskIds.length) {
+      await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
+    }
   }
 
   beforeAll(async () => {
@@ -156,6 +159,7 @@ describe('document intelligence — extraction job', () => {
     });
     expect(started.duplicate).toBe(false);
     expect(started.taskId).toBeTruthy();
+    if (started.taskId) createdTaskIds.push(started.taskId);
     expect(started.document.status).toBe('pending');
     expect(started.document.extractor).toBe('text');
 

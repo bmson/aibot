@@ -450,9 +450,38 @@ export function extractGmailText(payload: GmailPayload | undefined): string {
 
 export interface GmailPayload {
   mimeType?: string;
-  body?: { data?: string };
+  /** Non-empty for an attachment part (as opposed to an inline body part). */
+  filename?: string;
+  body?: { data?: string; attachmentId?: string; size?: number };
   parts?: GmailPayload[];
   headers?: Array<{ name: string; value: string }>;
+}
+
+export interface GmailAttachmentRef {
+  filename: string;
+  mimeType: string;
+  attachmentId: string;
+  size: number;
+}
+
+/** Collect real file attachments (named parts carrying an attachmentId) from a payload. */
+export function collectGmailAttachments(payload: GmailPayload | undefined): GmailAttachmentRef[] {
+  if (!payload) return [];
+  const found: GmailAttachmentRef[] = [];
+  const walk = (p: GmailPayload) => {
+    const attachmentId = p.body?.attachmentId;
+    if (p.filename && attachmentId) {
+      found.push({
+        filename: p.filename,
+        mimeType: (p.mimeType || 'application/octet-stream').split(';')[0]?.trim() ?? '',
+        attachmentId,
+        size: p.body?.size ?? 0,
+      });
+    }
+    for (const child of p.parts ?? []) walk(child);
+  };
+  walk(payload);
+  return found;
 }
 
 export function gmailHeader(payload: GmailPayload | undefined, name: string): string {
