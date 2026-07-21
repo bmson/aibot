@@ -1256,7 +1256,9 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
 
   let plan = task.plan ? PlanSchema.parse(task.plan) : null;
   if (!plan && !artifactIntent) {
-    plan = await planTask({ db, router }, task, agent, window);
+    plan = await planTask({ db, router }, task, agent, window, {
+      tainted: state.untrustedContext === true,
+    });
     if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
     if (plan?.action === 'mission') {
       if (state.untrustedContext || (task.trust !== 'owner' && task.trust !== 'assistant')) {

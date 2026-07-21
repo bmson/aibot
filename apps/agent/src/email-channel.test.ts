@@ -1,5 +1,12 @@
 import { getAgent } from '@assistant/core';
-import { conversations, createDb, type Db, type TaskRow } from '@assistant/db';
+import {
+  channelBindings,
+  conversations,
+  createDb,
+  type Db,
+  type TaskRow,
+  tasks,
+} from '@assistant/db';
 import { inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AgentDeps } from './deps.js';
@@ -14,6 +21,7 @@ let agentId: string;
 let emailConvId: string;
 let chatConvId: string;
 const createdConversationIds: string[] = [];
+const createdTaskIds: string[] = [];
 
 /** Captures Gmail sends instead of performing them; serves Message-ID metadata reads. */
 function makeDeps(): { deps: AgentDeps; sent: Array<{ url: string; body: string }> } {
@@ -76,7 +84,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (dbUp && createdTaskIds.length) {
+    await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
+  }
   if (dbUp && createdConversationIds.length) {
+    await db
+      .delete(channelBindings)
+      .where(inArray(channelBindings.conversationId, createdConversationIds));
     await db.delete(conversations).where(inArray(conversations.id, createdConversationIds));
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
@@ -129,6 +143,62 @@ describe('deliverEmailFinal', () => {
       ),
     ).toBe(false);
     expect(sent).toHaveLength(0);
+  });
+
+  it('replies to the email thread for a follow-up (adhoc) task on the same conversation (D5)', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // A conversation started by email, with its thread binding and the original
+    // authenticated email_triage task recorded.
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'email', trust: 'owner', title: 'followup-thread' })
+      .returning();
+    const convId = (conv as NonNullable<typeof conv>).id;
+    createdConversationIds.push(convId);
+    await db.insert(channelBindings).values({
+      conversationId: convId,
+      channel: 'email',
+      externalId: 'thread-followup',
+    });
+    const [origin] = await db
+      .insert(tasks)
+      .values({
+        agentId,
+        conversationId: convId,
+        type: 'email_triage',
+        trust: 'owner',
+        trigger: {
+          source: 'email',
+          payload: {
+            threadId: 'thread-followup',
+            from: 'bmson@bmson.com',
+            subject: 'Trip planning',
+            rfcMessageId: '<orig-followup@mail>',
+          },
+        },
+      })
+      .returning();
+    createdTaskIds.push((origin as NonNullable<typeof origin>).id);
+
+    const { deps, sent } = makeDeps();
+    // A mission/adhoc continuation carries no email payload of its own.
+    const adhoc = {
+      id: '00000000-0000-0000-0000-0000000000aa',
+      type: 'adhoc',
+      trust: 'owner',
+      conversationId: convId,
+      trigger: { source: 'internal', payload: {} },
+    } as TaskRow;
+
+    const delivered = await deliverEmailFinal(deps, adhoc, 'Booked the flights.');
+    expect(delivered).toBe(true);
+    const body = JSON.parse(sent[0]?.body ?? '{}') as { raw: string; threadId: string };
+    expect(body.threadId).toBe('thread-followup');
+    const decoded = Buffer.from(body.raw, 'base64url').toString('utf8');
+    expect(decoded).toContain('To: bmson@bmson.com');
+    expect(decoded).toContain('Subject: Re: Trip planning');
+    expect(decoded).toContain('In-Reply-To: <orig-followup@mail>');
+    expect(decoded).toContain('Booked the flights.');
   });
 
   it('keeps an existing Re: prefix', async (ctx) => {

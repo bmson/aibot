@@ -1,16 +1,79 @@
 import { getAgent } from '@assistant/core';
 import type { TaskRow } from '@assistant/db';
-import { conversations } from '@assistant/db';
+import { channelBindings, conversations, tasks } from '@assistant/db';
 import {
   buildRawEmail,
   type GmailPayload,
   gmailHeader,
   isAmbiguousGoogleMutationError,
 } from '@assistant/tools';
-import { eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import type { AgentDeps } from './deps.js';
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
+
+interface EmailThreadTarget {
+  threadId: string;
+  to: string;
+  subject: string;
+  rfcMessageId: string;
+}
+
+/**
+ * Resolve where an owner-trust task's final email reply should go. For an
+ * email_triage task the thread/sender live on its own trigger payload. For a
+ * follow-up task on the same email conversation (an adhoc/scheduled continuation)
+ * they are recovered from the conversation's channel binding (threadId) and its
+ * earliest email_triage task (the authenticated original sender) — so
+ * email-originated follow-up work returns to the thread the owner started rather
+ * than only the dashboard.
+ */
+async function resolveEmailThreadTarget(
+  deps: AgentDeps,
+  task: TaskRow,
+): Promise<EmailThreadTarget | null> {
+  const ownPayload = (task.trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
+  const asStr = (v: unknown) => (typeof v === 'string' ? v : '');
+  if (task.type === 'email_triage') {
+    const threadId = asStr(ownPayload.threadId);
+    const to = asStr(ownPayload.from);
+    if (!threadId || !to) return null;
+    return {
+      threadId,
+      to,
+      subject: asStr(ownPayload.subject),
+      rfcMessageId: asStr(ownPayload.rfcMessageId),
+    };
+  }
+  if (!task.conversationId) return null;
+  const [binding] = await deps.db
+    .select({ externalId: channelBindings.externalId })
+    .from(channelBindings)
+    .where(
+      and(
+        eq(channelBindings.conversationId, task.conversationId),
+        eq(channelBindings.channel, 'email'),
+      ),
+    )
+    .limit(1);
+  if (!binding?.externalId) return null;
+  const [origin] = await deps.db
+    .select({ trigger: tasks.trigger })
+    .from(tasks)
+    .where(and(eq(tasks.conversationId, task.conversationId), eq(tasks.type, 'email_triage')))
+    .orderBy(asc(tasks.createdAt))
+    .limit(1);
+  const originPayload =
+    (origin?.trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
+  const to = asStr(originPayload.from);
+  if (!to) return null;
+  return {
+    threadId: binding.externalId,
+    to,
+    subject: asStr(originPayload.subject),
+    rfcMessageId: asStr(originPayload.rfcMessageId),
+  };
+}
 
 /**
  * Executor hook: a finished email_triage task's final text goes back as an
@@ -27,7 +90,7 @@ export async function deliverEmailFinal(
   task: TaskRow,
   text: string,
 ): Promise<boolean> {
-  if (task.type !== 'email_triage' || task.trust !== 'owner') return false;
+  if (task.trust !== 'owner') return false;
   if (!task.conversationId || !deps.googleClient.configured()) return false;
 
   const [conversation] = await deps.db
@@ -36,19 +99,16 @@ export async function deliverEmailFinal(
     .where(eq(conversations.id, task.conversationId));
   if (conversation?.channel !== 'email') return false;
 
-  const payload = (task.trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
-  const threadId = typeof payload.threadId === 'string' ? payload.threadId : '';
-  const from = typeof payload.from === 'string' ? payload.from : '';
-  const subject = typeof payload.subject === 'string' ? payload.subject : '';
-  if (!threadId || !from) return false;
+  const target = await resolveEmailThreadTarget(deps, task);
+  if (!target) return false;
 
   // RFC threading headers so the reply nests in ANY mail client (Gmail
   // threads by threadId, but Apple Mail etc. need In-Reply-To/References).
   // The RFC-822 Message-ID is captured at ingest (payload.rfcMessageId); the
   // per-send metadata fetch is only a fallback for tasks enqueued before that.
-  const rfcMessageId = typeof payload.rfcMessageId === 'string' ? payload.rfcMessageId : '';
-  const messageId = typeof payload.messageId === 'string' ? payload.messageId : '';
-  let inReplyTo = rfcMessageId;
+  const ownPayload = (task.trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
+  const messageId = typeof ownPayload.messageId === 'string' ? ownPayload.messageId : '';
+  let inReplyTo = target.rfcMessageId;
   if (!inReplyTo && messageId) {
     const original = await deps.googleClient
       .api<{ payload?: GmailPayload }>(
@@ -63,15 +123,17 @@ export async function deliverEmailFinal(
     // explicit display name — otherwise recipients see the Google account's
     // profile name, which nothing in this stack controls
     from: `"${agent.name}" <${agent.email}>`,
-    to: [from],
-    subject: /^re:/i.test(subject) ? subject : `Re: ${subject || '(no subject)'}`,
+    to: [target.to],
+    subject: /^re:/i.test(target.subject)
+      ? target.subject
+      : `Re: ${target.subject || '(no subject)'}`,
     body: text,
     ...(inReplyTo ? { inReplyTo, references: inReplyTo } : {}),
   });
   try {
     await deps.googleClient.api(`${GMAIL}/messages/send`, {
       method: 'POST',
-      body: JSON.stringify({ raw, threadId }),
+      body: JSON.stringify({ raw, threadId: target.threadId }),
     });
   } catch (error) {
     if (!isAmbiguousGoogleMutationError(error)) throw error;
