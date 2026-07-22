@@ -1,3 +1,4 @@
+export * from './ambient.js';
 export * from './consolidation.js';
 export * from './documents.js';
 export * from './extraction.js';

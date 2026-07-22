@@ -1253,6 +1253,29 @@ export const locationPings = pgTable(
   (t) => [index('location_pings_agent_idx').on(t.agentId, t.capturedAt)],
 );
 
+/**
+ * Ambient "right now" context (Phase 25). A cheap, frequently-refreshed fusion
+ * of the transient sources (location + weather today; calendar/health later) into
+ * one compiled block plus derived flags, cached here so every planning step reads
+ * it once instead of re-deriving — the same computed-once pattern as the owner
+ * card. Operational cache, NOT memory: it is never read into extraction and never
+ * becomes a durable fact; a stale snapshot is superseded by the next refresh.
+ */
+export const ambientSnapshots = pgTable('ambient_snapshots', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  agentId: uuid('agent_id')
+    .notNull()
+    .references(() => agents.id)
+    .unique(),
+  /** The rendered "right now" block injected into the prompt. */
+  block: text('block').notNull().default(''),
+  /** Derived boolean flags the planner can act on (raining_soon, traveling_away_from_home, …). */
+  flags: jsonb('flags').notNull().default({}),
+  /** Per-source freshness/values ({ location: {...}, weather: {...} }). */
+  sources: jsonb('sources').notNull().default({}),
+  computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // ── Inferred row types ───────────────────────────────────────────────────────
 
 export type AgentRow = typeof agents.$inferSelect;
@@ -1281,6 +1304,7 @@ export type FileRow = typeof files.$inferSelect;
 export type DocumentRow = typeof documents.$inferSelect;
 export type DocumentChunkRow = typeof documentChunks.$inferSelect;
 export type LocationPingRow = typeof locationPings.$inferSelect;
+export type AmbientSnapshotRow = typeof ambientSnapshots.$inferSelect;
 export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;

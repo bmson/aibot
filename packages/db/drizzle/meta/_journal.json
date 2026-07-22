@@ -232,6 +232,13 @@
       "when": 1784683114856,
       "tag": "0032_colossal_bug",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1784683680495,
+      "tag": "0033_sticky_anthem",
+      "breakpoints": true
     }
   ]
 }

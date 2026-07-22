@@ -6,8 +6,8 @@ import { buildSystemPrompt, PROMPT_VERSION } from '../../chat.js';
 import { isJobPending } from '../../code-exec.js';
 import { loadConfig } from '../../config.js';
 import type { Plan, TaskState, Trust } from '../../events.js';
+import { getAmbientBlock } from '../../memory/ambient.js';
 import { getOwnerCard } from '../../memory/consolidation.js';
-import { formatLocationLine, latestLocation } from '../../memory/location.js';
 import { recallRelevantContext, recentWindowStart } from '../../memory/recall.js';
 import { bumpSkillUse, recallSkills, renderSkillsBlock } from '../../memory/skills.js';
 import { markApprovalsNotified } from '../approvals.js';
@@ -74,15 +74,15 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   const privilegedTask = task.trust === 'owner' || task.trust === 'assistant';
   const ownerCard = privilegedTask && !state.untrustedContext ? await getOwnerCard(db) : undefined;
 
-  // Ambient context (Phase 15): the owner's current location when a fresh ping
-  // exists — owner-private and transient, so it mirrors the owner-card gate.
+  // Ambient "right now" context (Phase 25): the fused location + weather block
+  // (falls back to location-only when the snapshot is stale). Owner-private and
+  // transient, so it mirrors the owner-card gate.
   let ambientBlock: string | undefined;
   if (privilegedTask && !state.untrustedContext) {
     try {
-      const ping = await latestLocation(db, agent.id, loadConfig().LOCATION_RETENTION_DAYS);
-      ambientBlock = formatLocationLine(ping);
+      ambientBlock = await getAmbientBlock(db, agent.id);
     } catch (err) {
-      console.error('ambient location lookup failed — continuing without it', err);
+      console.error('ambient lookup failed — continuing without it', err);
     }
   }
 

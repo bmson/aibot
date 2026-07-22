@@ -351,6 +351,13 @@ const scheduleSeed = [
     cron: '0 0 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.15', job: 'self.improve' },
   },
+  // Ambient "right now" fusion (Phase 25): refresh location+weather every 30 min
+  // so every planning step reads a fresh block without a mid-task weather call.
+  {
+    name: 'ambient-refresh',
+    cron: '*/30 * * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.02', job: 'ambient.refresh' },
+  },
 ] as const;
 
 /** Schedules whose definition the seed owns — updated in place on re-seed (prod picks up changes on deploy). */
@@ -361,6 +368,7 @@ const SEED_OWNED_SCHEDULES = new Set([
   'anomaly-scan',
   'skill-reflection',
   'self-improve',
+  'ambient-refresh',
 ]);
 
 for (const s of scheduleSeed) {

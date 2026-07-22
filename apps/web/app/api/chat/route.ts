@@ -5,11 +5,10 @@ import {
   enqueueTask,
   ensureChatConversation,
   finishTask,
-  formatLocationLine,
   getAgent,
+  getAmbientBlock,
   getOwnerCard,
   goalIdForConversation,
-  latestLocation,
   listMessages,
   loadConfig,
   persistMessage,
@@ -336,11 +335,10 @@ export async function POST(req: Request) {
         buildSystemPrompt(agent, {
           ownerCard: await getOwnerCard(db),
           recall: recallBlock,
-          // Owner chat is always owner-trust and untainted here, so the current
-          // location can answer "where am I?" directly (Phase 15).
-          ambient: formatLocationLine(
-            await latestLocation(db, agent.id, loadConfig().LOCATION_RETENTION_DAYS),
-          ),
+          // Owner chat is always owner-trust and untainted here, so the fused
+          // "right now" block (location + weather) is available — "where am I?"
+          // and "should I go for a run?" answer without a mid-task tool call.
+          ambient: await getAmbientBlock(db, agent.id),
         }),
         '',
         'This turn is conversational: just answer. You have no tools in this turn, so if the user is actually asking you to take an action, say plainly that you cannot do it in this reply and ask them to restate it as a direct request. Otherwise do not mention tools, capabilities, or this instruction at all — no postscripts.',
