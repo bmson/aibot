@@ -65,6 +65,10 @@ const ConfigSchema = z.object({
   /** Code-execution worker (Phase 13): local child process vs Cloud Run Job. */
   CODE_DRIVER: z.enum(['local', 'cloudrun']).default('local'),
   CODE_JOB_NAME: z.string().default('assistant-code'),
+  /** Location context (Phase 15): HMAC key the owner's Shortcut signs pings with; empty disables ingest. */
+  LOCATION_PING_SECRET: z.string().default(''),
+  /** How many days a location ping is kept before the sweep purges it. */
+  LOCATION_RETENTION_DAYS: z.coerce.number().min(1).max(90).default(3),
   /** Trace-archive bucket (30-day lifecycle); empty = store traces in the workspace. */
   TRACES_BUCKET: z.string().default(''),
   /** Explicit opt-in: canaries send one real email/SMS and launch one browser job. */

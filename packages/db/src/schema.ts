@@ -1224,6 +1224,35 @@ export const documentChunks = pgTable(
   ],
 );
 
+// ── Location context (Phase 15) ──────────────────────────────────────────────
+
+/**
+ * Owner location pings from an HMAC-signed iOS Shortcut / native app. Kept
+ * deliberately transient — never long-term location history: the sweep purges
+ * rows older than the owner-configurable retention window (LOCATION_RETENTION_DAYS),
+ * and location never enters the semantic memory/embedding space or memory
+ * extraction. The latest fresh ping is surfaced as ambient context to the
+ * owner's own (non-tainted) prompts and the morning brief.
+ */
+export const locationPings = pgTable(
+  'location_pings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    lat: numeric('lat', { precision: 9, scale: 6 }).notNull(),
+    lng: numeric('lng', { precision: 9, scale: 6 }).notNull(),
+    /** Optional human label the Shortcut may attach ("home", "office", a city). */
+    label: text('label').notNull().default(''),
+    accuracyM: integer('accuracy_m'),
+    source: text('source').notNull().default('shortcut'),
+    capturedAt: timestamp('captured_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('location_pings_agent_idx').on(t.agentId, t.capturedAt)],
+);
+
 // ── Inferred row types ───────────────────────────────────────────────────────
 
 export type AgentRow = typeof agents.$inferSelect;
@@ -1251,6 +1280,7 @@ export type ImprovementProposalRow = typeof improvementProposals.$inferSelect;
 export type FileRow = typeof files.$inferSelect;
 export type DocumentRow = typeof documents.$inferSelect;
 export type DocumentChunkRow = typeof documentChunks.$inferSelect;
+export type LocationPingRow = typeof locationPings.$inferSelect;
 export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;

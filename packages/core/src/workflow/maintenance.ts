@@ -1,6 +1,8 @@
 import { type Db, memories, messages, toolCache } from '@assistant/db';
 import { and, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { loadConfig } from '../config.js';
 import { releaseStaleReservations } from '../cost.js';
+import { purgeStaleLocations } from '../memory/location.js';
 import type { ModelRouter } from '../model-router/router.js';
 
 /**
@@ -41,7 +43,7 @@ export async function backfillMessageEmbeddings(
 export async function purgeExpired(
   db: Db,
   batch = 500,
-): Promise<{ cache: number; memories: number; reservations: number }> {
+): Promise<{ cache: number; memories: number; reservations: number; locations: number }> {
   const expiredCache = db
     .select({ id: toolCache.cacheKey })
     .from(toolCache)
@@ -52,13 +54,20 @@ export async function purgeExpired(
     .from(memories)
     .where(and(isNotNull(memories.expiresAt), lte(memories.expiresAt, sql`now()`)))
     .limit(batch);
-  const [cacheRows, memoryRows, reservations] = await Promise.all([
+  const [cacheRows, memoryRows, reservations, locations] = await Promise.all([
     db
       .delete(toolCache)
       .where(inArray(toolCache.cacheKey, expiredCache))
       .returning({ id: toolCache.cacheKey }),
     db.delete(memories).where(inArray(memories.id, expiredMemories)).returning({ id: memories.id }),
     releaseStaleReservations(db, 120, batch),
+    // Phase 15: location pings are transient — purge past the retention window.
+    purgeStaleLocations(db, loadConfig().LOCATION_RETENTION_DAYS, batch),
   ]);
-  return { cache: cacheRows.length, memories: memoryRows.length, reservations };
+  return {
+    cache: cacheRows.length,
+    memories: memoryRows.length,
+    reservations,
+    locations,
+  };
 }

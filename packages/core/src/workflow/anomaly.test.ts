@@ -120,7 +120,10 @@ describe('approval anomaly detection', () => {
   it('flags a burst, cites the calls, notifies, dedupes, and suspends the policy', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const policyId = await makePolicy('gmail.send', `burst-${Date.now()}@x.com`);
+    // Pin to noon UTC so the off-hours detector (00:00-06:00 UTC) never also fires
+    // on these outward-tool calls — this test asserts exactly one (burst) anomaly.
     const now = new Date();
+    now.setUTCHours(12, 0, 0, 0);
     // exactly BURST_MIN (5) auto-execs within a couple of minutes → burst, but not
     // over the frequency threshold (5 is not > 5), so exactly one anomaly.
     for (let i = 0; i < 5; i++) {
@@ -167,7 +170,9 @@ describe('approval anomaly detection', () => {
   it('flags high frequency and dismissing it stops re-flagging', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const policyId = await makePolicy('calendar.create_event', `freq-${Date.now()}@x.com`);
+    // Pin to noon UTC so off-hours never co-fires on these outward-tool calls.
     const now = new Date();
+    now.setUTCHours(12, 0, 0, 0);
     // 7 auto-execs spread over ~35 min (no 5-in-10-min burst), but > the freq
     // threshold (max(5, 0, 0)) → a single frequency anomaly.
     for (let i = 0; i < 7; i++) {

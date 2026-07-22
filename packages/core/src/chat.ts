@@ -61,15 +61,23 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * v10: assistant-owned reads/files stay autonomous while outward sinks remain gated;
  * v11: approval codes/notices are explicitly runtime-only;
  * v12: forwarding/quoting something IS a request to handle it — act, don't just summarize;
- * v13: a persona/voice block — warm, human, no filler, channel-appropriate register).
+ * v13: a persona/voice block — warm, human, no filler, channel-appropriate register;
+ * v14: a learned-skills advice block (Phase 26);
+ * v15: an ambient-context line — the owner's current location when fresh (Phase 15)).
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 14;
+export const PROMPT_VERSION = 15;
 
 export function buildSystemPrompt(
   agent: AgentRow,
-  extras: { ownerCard?: string; recall?: string; skills?: string; tainted?: boolean } = {},
+  extras: {
+    ownerCard?: string;
+    recall?: string;
+    skills?: string;
+    ambient?: string;
+    tainted?: boolean;
+  } = {},
 ): string {
   const now = new Intl.DateTimeFormat('en-US', {
     timeZone: agent.timezone,
@@ -119,6 +127,7 @@ export function buildSystemPrompt(
       : []),
     ...(extras.recall ? ['', extras.recall] : []),
     ...(extras.skills ? ['', extras.skills] : []),
+    ...(extras.ambient ? ['', extras.ambient] : []),
   ].join('\n');
 }
 

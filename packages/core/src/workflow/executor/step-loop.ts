@@ -7,6 +7,7 @@ import { isJobPending } from '../../code-exec.js';
 import { loadConfig } from '../../config.js';
 import type { Plan, TaskState, Trust } from '../../events.js';
 import { getOwnerCard } from '../../memory/consolidation.js';
+import { formatLocationLine, latestLocation } from '../../memory/location.js';
 import { recallRelevantContext, recentWindowStart } from '../../memory/recall.js';
 import { bumpSkillUse, recallSkills, renderSkillsBlock } from '../../memory/skills.js';
 import { markApprovalsNotified } from '../approvals.js';
@@ -72,6 +73,18 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   const useForcedToolFallback = role !== 'reason';
   const privilegedTask = task.trust === 'owner' || task.trust === 'assistant';
   const ownerCard = privilegedTask && !state.untrustedContext ? await getOwnerCard(db) : undefined;
+
+  // Ambient context (Phase 15): the owner's current location when a fresh ping
+  // exists — owner-private and transient, so it mirrors the owner-card gate.
+  let ambientBlock: string | undefined;
+  if (privilegedTask && !state.untrustedContext) {
+    try {
+      const ping = await latestLocation(db, agent.id, loadConfig().LOCATION_RETENTION_DAYS);
+      ambientBlock = formatLocationLine(ping);
+    } catch (err) {
+      console.error('ambient location lookup failed — continuing without it', err);
+    }
+  }
 
   // Long-running-chat auto-recall (Phase 1). Action-routed chat turns run here
   // instead of the streaming route, so recall is wired at both entry points.
@@ -170,6 +183,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         ownerCard: !state.untrustedContext ? ownerCard : undefined,
         recall: !state.untrustedContext ? recallBlock : undefined,
         skills: !state.untrustedContext ? skillsBlock : undefined,
+        ambient: !state.untrustedContext ? ambientBlock : undefined,
         tainted: state.untrustedContext,
       }),
       channelContext(task),

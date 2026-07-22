@@ -1,4 +1,12 @@
-import { loadConfig, recordBrowserJobResult, recordCodeJobResult } from '@assistant/core';
+import {
+  getAgent,
+  LocationPingSchema,
+  loadConfig,
+  recordBrowserJobResult,
+  recordCodeJobResult,
+  recordLocationPing,
+  verifyLocationSignature,
+} from '@assistant/core';
 import { validateTwilioSignature } from '@assistant/tools';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -89,6 +97,34 @@ webhooks.post('/code/callback', async (c) => {
     result: body.result ?? { ok: false, error: 'job reported no result' },
   });
   if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
+  return c.json({ ok: true });
+});
+
+/**
+ * Owner location ping (Phase 15). Authenticated by an HMAC-SHA256 signature
+ * (hex, `X-Signature` header) over the exact raw body, keyed by the shared
+ * LOCATION_PING_SECRET the owner's Shortcut holds. An unsigned or forged ping
+ * is rejected 403; ingest is off entirely when no secret is configured.
+ */
+webhooks.post('/location', async (c) => {
+  const config = loadConfig();
+  if (!config.LOCATION_PING_SECRET) return c.json({ error: 'location ingest disabled' }, 404);
+  const raw = await c.req.text();
+  if (!verifyLocationSignature(config.LOCATION_PING_SECRET, raw, c.req.header('x-signature'))) {
+    return c.json({ error: 'invalid signature' }, 403);
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return c.json({ error: 'invalid json' }, 400);
+  }
+  const parsed = LocationPingSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: 'invalid ping' }, 400);
+
+  const deps = buildDeps();
+  const agent = await getAgent(deps.db);
+  await recordLocationPing(deps.db, agent.id, parsed.data);
   return c.json({ ok: true });
 });
 
