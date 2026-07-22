@@ -1,5 +1,5 @@
 import type { InboundEvent, ModelRouter, StepCallOutcome } from '@assistant/core';
-import { enqueueTask, executeTask, getAgent } from '@assistant/core';
+import { enqueueTask, executeTask, getAgent, wakeTask } from '@assistant/core';
 import {
   conversations,
   costEvents,
@@ -464,5 +464,134 @@ describe('unattended goal sessions never report silent success', () => {
       .where(and(eq(toolCalls.taskId, task.id), eq(toolCalls.toolName, 'goals.update_progress')));
     expect(progressRows).toHaveLength(1);
     expect(progressRows[0]?.args).toMatchObject({ goalId });
+  });
+
+  /** A task already at its step cap with verified-but-unsaved work — the shape a
+   * needs-attention retry resumes into after the budget was spent. */
+  async function seedExhaustedSession(maxSteps: number) {
+    const { goalId, conversationId } = await seedGoal('Exhausted goal progress');
+    const { task } = await enqueueTask(db, {
+      event: event(conversationId),
+      type: 'scheduled',
+      goalId,
+      maxSteps,
+    });
+    createdTaskIds.push(task.id);
+    await db.insert(toolCalls).values({
+      taskId: task.id,
+      step: 2,
+      toolName: 'goal.test_work',
+      args: { phase: 1 },
+      risk: 'autonomous',
+      status: 'succeeded',
+      result: { ok: true, phase: 1 },
+    });
+    await db
+      .update(tasks)
+      .set({
+        plan: workflowPlan,
+        state: {
+          step: maxSteps,
+          contextWindow: [
+            { role: 'user', content: 'Run one focused automatic work session for the goal.' },
+            { role: 'assistant', content: 'Completed the work step; budget spent.' },
+          ],
+        },
+      })
+      .where(eq(tasks.id, task.id));
+    return { goalId, task };
+  }
+
+  it('grants a step-exhausted session one bookkeeping turn to save owed progress', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { goalId, task } = await seedExhaustedSession(4);
+    let stepCalls = 0;
+
+    const router = {
+      async object() {
+        return { ok: true, modelId: 'fake/model', degraded: false, object: workflowPlan };
+      },
+      async step(
+        _role: string,
+        opts: { toolChoice?: { type?: string; toolName?: string } | string },
+      ): Promise<StepCallOutcome> {
+        stepCalls += 1;
+        // The only turn allowed past the cap is the forced progress write.
+        expect(opts.toolChoice).toMatchObject({ toolName: 'goals.update_progress' });
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: '',
+          toolCalls: [progressCall(goalId, 1)],
+        };
+      },
+    } as unknown as ModelRouter;
+
+    const outcome = await executeTask(
+      { db, router, dispatcher: new ToolDispatcher(db, goalWorkRegistry()) },
+      task.id,
+    );
+
+    // The session still ends as exhausted, but the goal keeps its progress —
+    // not needs_attention, so the automation gate can supersede it.
+    expect(outcome.outcome).toBe('failed');
+    expect(stepCalls).toBe(1);
+    const [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(row?.status).toBe('failed');
+    const [goal] = await db.select().from(goals).where(eq(goals.id, goalId));
+    expect(goal?.progress).toBe('Finished phase 1');
+  });
+
+  it('keeps a failed bookkeeping turn retryable — the retry gets a fresh turn', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { goalId, task } = await seedExhaustedSession(4);
+
+    const ignoresForcedCall = {
+      async object() {
+        return { ok: true, modelId: 'fake/model', degraded: false, object: workflowPlan };
+      },
+      async step(): Promise<StepCallOutcome> {
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: 'I could not save the progress.',
+          toolCalls: [],
+          finishReason: 'stop',
+        };
+      },
+    } as unknown as ModelRouter;
+
+    const first = await executeTask(
+      { db, router: ignoresForcedCall, dispatcher: new ToolDispatcher(db, goalWorkRegistry()) },
+      task.id,
+    );
+    expect(first.outcome).toBe('needs_attention');
+
+    expect(await wakeTask(db, task.id)).toBe(true);
+
+    const savesProgress = {
+      async object() {
+        return { ok: true, modelId: 'fake/model', degraded: false, object: workflowPlan };
+      },
+      async step(): Promise<StepCallOutcome> {
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: '',
+          toolCalls: [progressCall(goalId, 1)],
+        };
+      },
+    } as unknown as ModelRouter;
+
+    const second = await executeTask(
+      { db, router: savesProgress, dispatcher: new ToolDispatcher(db, goalWorkRegistry()) },
+      task.id,
+    );
+    expect(second.outcome).toBe('failed');
+    const [goal] = await db.select().from(goals).where(eq(goals.id, goalId));
+    expect(goal?.progress).toBe('Finished phase 1');
   });
 });

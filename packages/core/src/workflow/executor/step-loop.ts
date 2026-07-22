@@ -162,7 +162,17 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     (task.type === 'chat_turn' || task.type === 'sms_turn') && task.trust === 'owner';
 
   // ── Step loop ─────────────────────────────────────────────────────────────
-  while (state.step < task.maxSteps) {
+  // One turn beyond maxSteps is reserved for goal bookkeeping. A session whose
+  // final work step spent the whole budget — or a retried task already at the
+  // cap — must still be able to save its verified progress; without this it
+  // dead-ends in stopForUnsavedGoalProgress on every retry, with no model turn
+  // ever allowed to write the update. The bonus turn cannot extend real work:
+  // it runs only while a progress update is owed, its tool choice is forced to
+  // goals.update_progress, and every other proposed call is dropped. Measured
+  // from the entry step so a retry after a failed bookkeeping turn gets exactly
+  // one fresh attempt instead of none.
+  const bookkeepingStepCap = Math.max(task.maxSteps, state.step) + 1;
+  while (state.step < bookkeepingStepCap) {
     const goalToolEvidence = isUnattendedGoalSession(task)
       ? await db
           .select({
@@ -175,6 +185,8 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
           .where(eq(toolCalls.taskId, task.id))
       : [];
     const mustRecordGoalProgress = needsGoalProgressUpdate(goalToolEvidence);
+    // Past the ordinary budget, only the owed bookkeeping turn may run.
+    if (state.step >= task.maxSteps && !mustRecordGoalProgress) break;
     // Rebuild the system prompt after each tool turn. Once an external result
     // taints the context, the private owner card is removed from every later
     // model call instead of lingering in a constant system prompt.
