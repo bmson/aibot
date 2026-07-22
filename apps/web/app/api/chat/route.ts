@@ -26,6 +26,7 @@ import {
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { isAuthed } from '@/auth';
+import { looksLikeActionRequest } from '@/lib/chat-triage';
 import { getDb, getRouter } from '@/lib/server';
 
 const MAX_REQUEST_BYTES = 32 * 1024;
@@ -229,20 +230,32 @@ export async function POST(req: Request) {
   // On triage failure default to the executor — a slow honest answer beats a
   // fast hallucinated one.
   let needsAction = true;
-  try {
-    const recent = modelHistory
-      .slice(-6)
-      .map((m) => `${m.role}: ${textOf(m).slice(0, 500)}`)
-      .join('\n');
-    const triage = await getRouter().object<z.infer<typeof NeedsActionSchema>>('classify', {
-      schema: NeedsActionSchema,
-      system:
-        'Classify whether the LATEST user message asks the assistant to take an action or check its accounts, versus plain conversation.',
-      prompt: recent,
-    });
-    if (triage.ok) needsAction = triage.object.needsAction;
-  } catch (err) {
-    console.error('chat triage failed — routing to executor', err);
+  // A deterministic gate first: a clear imperative ("add lunch Friday noon")
+  // must reach the tools path even when the cheap classify model misreads it as
+  // conversation. Only the genuinely ambiguous rest falls through to the model.
+  if (looksLikeActionRequest(userText)) {
+    needsAction = true;
+  } else {
+    try {
+      // Prior turns are context only; the latest message is what we classify.
+      // Passing them mixed together let the model judge the whole thread (a
+      // finished task in the history read as "nothing to do").
+      const context = modelHistory
+        .slice(-6, -1)
+        .map((m) => `${m.role}: ${textOf(m).slice(0, 500)}`)
+        .join('\n');
+      const triage = await getRouter().object<z.infer<typeof NeedsActionSchema>>('classify', {
+        schema: NeedsActionSchema,
+        system:
+          'Route one chat turn. Decide whether the LATEST user message asks the assistant to DO or CHECK something (send/schedule/book/buy/browse, read the inbox or calendar, remember something, set a reminder, run a task) versus plain conversation. Judge ONLY the latest message; earlier turns are context. When uncertain, choose action — this streaming path has no tools and cannot act on the message.',
+        prompt: context
+          ? `Prior turns (context only):\n${context}\n\nLATEST USER MESSAGE (classify this):\n${userText}`
+          : `LATEST USER MESSAGE (classify this):\n${userText}`,
+      });
+      if (triage.ok) needsAction = triage.object.needsAction;
+    } catch (err) {
+      console.error('chat triage failed — routing to executor', err);
+    }
   }
 
   if (needsAction) {
