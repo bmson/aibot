@@ -150,9 +150,13 @@ Escalation ladder — always pick the CHEAPEST rung that can do the job:
 4. "headless" — the page needs JavaScript rendering or multi-step navigation; produce explicit steps.
 5. "visual" — DOM extraction won't work (canvas, anti-bot layouts); steps ending in screenshots. Last resort.
 
-Not knowing the target URL is never a reason to refuse. When the goal names what to find but not where,
-start from a search engine results page (e.g. https://duckduckgo.com/html/?q=<url-encoded query>) and follow
-it to the real source; prefer a site's own listing/API page once you know which site it is.
+Not knowing the target URL is never a reason to refuse. When the goal names what to find but not where, go
+straight to the kind of site that would hold the answer — a company's own careers page, an official tourism
+board or city site, Wikipedia/Wikivoyage for places, a project's own docs. Major search engines (Google,
+DuckDuckGo) answer datacenter traffic with CAPTCHA walls, so a search results page is a LAST resort, not the
+default entry; if you must search, use https://www.bing.com/search?q=<url-encoded query> and treat a tiny
+"verify you are human" page as a block to route around — never plan around solving a challenge.
+Prefer a site's own listing/API page once you know which site it is.
 Put the query in the URL rather than typing into a search box: an interactive step (click/type/select/press)
 turns the whole plan into something the owner must approve by hand, so a plan that only navigates and extracts
 is the difference between work that happens now and work that waits. Chain several goto/extract pairs in one

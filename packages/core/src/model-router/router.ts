@@ -178,7 +178,12 @@ const DEFAULT_MAX_OUTPUT_TOKENS: Record<Exclude<ModelRole, 'embed'>, number> = {
 };
 const HARD_MAX_OUTPUT_TOKENS = 4_096;
 const ESTIMATE_SAFETY_FACTOR = 1.25;
-const MODEL_CALL_TIMEOUT_MS = 120_000;
+// OpenRouter load-balances each request across upstream providers, and the
+// slow tail is real: successful deepseek-chat calls on goal-session prompts
+// have been observed at 97–118s in prod. 120s cut those off mid-generation
+// (billed but discarded); 150s clears the observed tail while staying far
+// inside the executor's 900s request window and 10-min heartbeated lease.
+const MODEL_CALL_TIMEOUT_MS = 150_000;
 
 /**
  * Reasoning ("thinking") models spend completion tokens on hidden reasoning
@@ -236,6 +241,31 @@ export function isUnparseableObjectError(err: unknown): boolean {
     err instanceof Error &&
     (err.name === 'AI_NoObjectGeneratedError' || err.name === 'NoObjectGeneratedError')
   );
+}
+
+/**
+ * The per-call deadline (modelCallSignal) aborts with a DOMException named
+ * TimeoutError. Only that deadline produces this name inside a model call, so
+ * it is safe to treat as "this one provider request was too slow" rather than
+ * "the caller cancelled us".
+ */
+function isModelCallTimeout(err: unknown): boolean {
+  return err instanceof Error && err.name === 'TimeoutError';
+}
+
+/**
+ * True when a provider rejected the *shape* of the request rather than
+ * failing transiently — e.g. Novita serving deepseek-chat answers
+ * "response format json_schema is not supported", and OpenRouter itself
+ * reports an empty provider pool when routing preferences exclude everyone.
+ * These never heal by retrying the same model: the cure is the role's
+ * fallback model, whose provider pool is different. Kept deliberately
+ * narrow so genuinely transient APICallErrors (429/5xx) stay with the
+ * task-level retry.
+ */
+export function isProviderCapabilityError(err: unknown): boolean {
+  if (!(err instanceof Error) || err.name !== 'AI_APICallError') return false;
+  return /not supported|no endpoints? (found|match)|no allowed providers/i.test(err.message);
 }
 
 export class ModelRouter {
@@ -321,7 +351,13 @@ export class ModelRouter {
 
     return {
       ok: true,
-      model: this.provider.chat(modelId),
+      // require_parameters: OpenRouter must only route to providers that
+      // support everything this request sends (json_schema response format,
+      // tools, …). Without it a structured-output call is a lottery — e.g.
+      // deepseek-chat is also served by providers with no structured-output
+      // support, which hard-fail the request. Per-request semantics: plain
+      // text calls still use the full provider pool.
+      model: this.provider.chat(modelId, { provider: { require_parameters: true } }),
       modelId,
       degraded,
       thinking: capabilities.thinking === true,
@@ -442,6 +478,26 @@ export class ModelRouter {
     return fallback;
   }
 
+  /**
+   * Run a prepare+call sequence, retrying ONCE when it dies on the per-call
+   * deadline. Each OpenRouter request is load-balanced across upstream
+   * providers, so a timeout is usually a per-request lottery loss (one slow
+   * or degraded provider), not a property of the model — and without this,
+   * that single slow request burns an entire task attempt: checkpoint reseed,
+   * exponential backoff, and a re-billed context window. The retry re-runs
+   * preparation, so budget routing and the cost reservation stay honest (the
+   * timed-out try already released its hold). A caller whose own abortSignal
+   * has fired is not retried — that deadline is not ours to extend.
+   */
+  private async withTimeoutRetry<T>(opts: CallOptions, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (err) {
+      if (!isModelCallTimeout(err) || opts.abortSignal?.aborted) throw err;
+      return await run();
+    }
+  }
+
   private async meter(input: MeterInput): Promise<void> {
     const providerMetadata =
       input.event.providerMetadata ??
@@ -498,6 +554,13 @@ export class ModelRouter {
   /** Non-streaming call with metering. Callers must handle { ok: false }. */
   async generate(role: ModelRole, opts: CallOptions): Promise<GenerateOutcome> {
     if (role === 'embed') throw new Error('generate() cannot use the embed role');
+    return this.withTimeoutRetry(opts, () => this.generateOnce(role, opts));
+  }
+
+  private async generateOnce(
+    role: Exclude<ModelRole, 'embed'>,
+    opts: CallOptions,
+  ): Promise<GenerateOutcome> {
     const prepared = await this.prepareModelCall(role, opts);
     if (!prepared.ok) return prepared;
     const { route, reservationId, maxOutputTokens, providerOptions } = prepared;
@@ -634,6 +697,13 @@ export class ModelRouter {
     opts: CallOptions & { tools: ToolSet; toolChoice?: StepToolChoice },
   ): Promise<StepCallOutcome> {
     if (role === 'embed') throw new Error('step() cannot use the embed role');
+    return this.withTimeoutRetry(opts, () => this.stepOnce(role, opts));
+  }
+
+  private async stepOnce(
+    role: Exclude<ModelRole, 'embed'>,
+    opts: CallOptions & { tools: ToolSet; toolChoice?: StepToolChoice },
+  ): Promise<StepCallOutcome> {
     const prepared = await this.prepareModelCall(role, opts);
     if (!prepared.ok) return prepared;
     const { route, reservationId, maxOutputTokens, providerOptions } = prepared;
@@ -742,20 +812,32 @@ export class ModelRouter {
       }
     };
 
+    const attempt = (forceFallback: boolean) =>
+      this.withTimeoutRetry(opts, () => runOnce(forceFallback));
+
     try {
-      return await runOnce(false);
+      return await attempt(false);
     } catch (err) {
-      // A weak primary model routinely returns JSON that fails schema parsing
-      // (AI_NoObjectGeneratedError). Give the role's (stronger) fallback model
-      // one shot before surfacing it — otherwise a durable job retries the same
-      // primary on every attempt and dead-letters. Any other error (transport,
-      // timeout) is genuinely transient and is left to the caller's retry.
-      if (opts.forceFallback || !isUnparseableObjectError(err)) throw err;
+      // Two error classes get one shot on the role's fallback model before
+      // surfacing, because both are properties of the primary model rather
+      // than transient: schema output a weak primary cannot parse
+      // (AI_NoObjectGeneratedError), and provider-capability rejections
+      // (e.g. "response format json_schema is not supported") where the
+      // primary's provider pool cannot serve the request shape at all —
+      // otherwise a durable job retries the same primary on every attempt
+      // and dead-letters. Any other error (transport, 429/5xx) is genuinely
+      // transient and is left to the caller's retry.
+      if (
+        opts.forceFallback ||
+        !(isUnparseableObjectError(err) || isProviderCapabilityError(err))
+      ) {
+        throw err;
+      }
       try {
-        return await runOnce(true);
+        return await attempt(true);
       } catch {
-        // No usable fallback, or it also could not produce parseable output:
-        // surface the original parse failure so the caller can skip this item.
+        // No usable fallback, or it also failed: surface the original
+        // failure so the caller can skip this item.
         throw err;
       }
     }

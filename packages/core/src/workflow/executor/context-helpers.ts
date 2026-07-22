@@ -64,7 +64,7 @@ export function channelContext(task: TaskRow): string {
           // decide whether this session can act at all.
           'ORDER MATTERS. Reading anything marks this session as carrying untrusted content, and from that point on every outward call needs the owner to approve it by hand — which, with nobody present, means the session stops. So spend your FIRST tool call on the outward step that moves the goal: browser.plan, then browser.execute (or web.fetch for a plain page). Any lookup you do first permanently costs you the ability to browse this run.',
           'You get one autonomous outward action, so make it count. browser.plan is free — it only plans. Your ONE outward call comes after it, and it must do the entire job: a single read-only browser.execute plan that searches, opens the promising results, and extracts everything you need. Do not spend that one action on a preliminary web.fetch to see what is there; if you would need several pages, ask browser.plan for a headless plan covering all of them.',
-          'Not knowing a URL is not a blocker: start from a search results page and navigate from there.',
+          'Not knowing a URL is not a blocker: go straight to the most likely site (official pages, Wikipedia/Wikivoyage, a company careers page). Big search engines CAPTCHA datacenter traffic — treat a search results page as a last resort, and a "verify you are human" page as a block, never as content.',
           'Finish by calling goals.update_progress with what you verified and the concrete next step.',
         ].join('\n');
       }

@@ -295,6 +295,27 @@ export async function fetchPublicWebPage(
   }
 }
 
+/**
+ * Bot-challenge detector for web.fetch. Search engines and Cloudflare-fronted
+ * sites answer datacenter traffic with a small verification page instead of
+ * content — DuckDuckGo even serves its CAPTCHA as HTTP 202, so neither the
+ * status code nor "we got HTML" distinguishes a wall from an answer. Treating
+ * a challenge as a successful fetch poisons everything downstream: the model
+ * summarizes a CAPTCHA page as if it were content, and an unattended goal
+ * session counts the fetch as verified work (exactly that burned a goal
+ * session's budget in prod). Phrases are only matched near the top of the
+ * page, and only when the response also has a challenge-ish status or is
+ * suspiciously small, so an article ABOUT captchas does not trip it.
+ */
+export function looksLikeBotChallenge(status: number, text: string): boolean {
+  const head = text.slice(0, 2000).toLowerCase();
+  const phrase =
+    /complete the following challenge|verify (that )?you('re| are) (a )?human|are you a robot|enable javascript and cookies to continue|additional verification required|checking your browser|just a moment/;
+  if (!phrase.test(head)) return false;
+  const challengeStatus = status === 202 || status === 403 || status === 429 || status === 503;
+  return challengeStatus || text.length < 4000;
+}
+
 function register<S extends z.ZodType, Out>(
   registry: ToolRegistry,
   tool: AssistantTool<S, Out>,
@@ -575,6 +596,12 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
               .replace(/\s+/g, ' ')
               .trim()
           : fetched.body;
+        if (looksLikeBotChallenge(fetched.status, text)) {
+          throw new Error(
+            `bot-challenge wall instead of content: ${fetched.finalUrl} answered HTTP ${fetched.status} with a CAPTCHA/verification page. ` +
+              'This site blocks automated fetches — do not retry this URL; go to a different source (the target site directly, its API or RSS feed).',
+          );
+        }
         return {
           status: fetched.status,
           contentType: fetched.contentType,

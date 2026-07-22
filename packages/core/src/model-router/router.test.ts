@@ -55,6 +55,12 @@ describe('ModelRouter.route (integration)', () => {
     if (route.ok) {
       expect(route.modelId).toBe('qwen/qwen3-30b-a3b-instruct-2507');
       expect(route.degraded).toBe(false);
+      // OpenRouter must not route feature-dependent requests (json_schema,
+      // tools) to providers that cannot honor them.
+      const settings = (
+        route.model as { settings?: { provider?: { require_parameters?: boolean } } }
+      ).settings;
+      expect(settings?.provider?.require_parameters).toBe(true);
     }
   });
 

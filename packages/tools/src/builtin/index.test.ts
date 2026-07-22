@@ -3,11 +3,44 @@ import { ToolRegistry } from '../registry.js';
 import {
   fetchPublicWebPage,
   isPublicIpAddress,
+  looksLikeBotChallenge,
   registerBuiltinTools,
   WEB_FETCH_MAX_BYTES,
   type WebFetchIo,
   type WebFetchResponse,
 } from './index.js';
+
+// Verbatim (tag-stripped) bodies that real bot walls served the prod agent.
+const DDG_CAPTCHA_202 =
+  '--> DuckDuckGo DuckDuckGo Unfortunately, bots use DuckDuckGo too. Please complete the following challenge to confirm this search was made by a human. Select all squares containing a duck: Submit Images not loading? Please email the following code to: error-lite@duckduckgo.com Code: d4cd0dabcf4caa22ad92fab40844c786 here . //-->';
+const INDEED_CHALLENGE_403 =
+  'Security Check - Indeed.com Additional Verification Required Please enable JavaScript to complete the security check. Return home Enable JavaScript and cookies to continue';
+
+describe('looksLikeBotChallenge', () => {
+  it('flags the DuckDuckGo CAPTCHA page even though it is served as HTTP 202', () => {
+    expect(looksLikeBotChallenge(202, DDG_CAPTCHA_202)).toBe(true);
+  });
+
+  it('flags Cloudflare-style verification interstitials on 403', () => {
+    expect(looksLikeBotChallenge(403, INDEED_CHALLENGE_403)).toBe(true);
+  });
+
+  it('leaves a real content page alone even when it mentions humans and checks', () => {
+    const article = `${'Real article content. '.repeat(300)} This guide explains how sites verify you are human.`;
+    expect(looksLikeBotChallenge(200, article)).toBe(false);
+  });
+
+  it('leaves ordinary small pages and errors alone', () => {
+    expect(looksLikeBotChallenge(200, 'Weather in Vienna: 24C, sunny.')).toBe(false);
+    expect(looksLikeBotChallenge(404, 'Not found')).toBe(false);
+    expect(looksLikeBotChallenge(503, 'Service temporarily unavailable, retry later.')).toBe(false);
+  });
+
+  it('requires challenge language near the top of the page', () => {
+    const buried = `${'x'.repeat(2500)} please complete the following challenge`;
+    expect(looksLikeBotChallenge(403, buried)).toBe(false);
+  });
+});
 
 const signal = new AbortController().signal;
 
