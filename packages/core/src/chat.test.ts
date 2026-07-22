@@ -88,6 +88,37 @@ describe('message cursors', () => {
 });
 
 describe('direct chat task leases (integration)', () => {
+  it('does not expose email threads as broken chats', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const agent = await getAgent(db);
+    const [emailConversation] = await db
+      .insert(conversations)
+      .values({
+        agentId: agent.id,
+        channel: 'email',
+        title: 'Re: list filtering test',
+        trust: 'owner',
+      })
+      .returning();
+    if (!emailConversation) throw new Error('failed to create email conversation fixture');
+
+    expect(
+      (await listConversations(db, agent.id)).some((row) => row.id === emailConversation.id),
+    ).toBe(false);
+
+    await db
+      .update(conversations)
+      .set({ archivedAt: new Date() })
+      .where(eq(conversations.id, emailConversation.id));
+    expect(
+      (await listConversations(db, agent.id, { archived: true })).some(
+        (row) => row.id === emailConversation.id,
+      ),
+    ).toBe(false);
+
+    await db.delete(conversations).where(eq(conversations.id, emailConversation.id));
+  });
+
   it('keeps archived chats out of the current list but makes them restorable', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const agent = await getAgent(db);

@@ -287,6 +287,7 @@ export async function listConversations(
     .where(
       and(
         eq(conversations.agentId, agentId),
+        eq(conversations.channel, 'chat'),
         options.archived ? isNotNull(conversations.archivedAt) : isNull(conversations.archivedAt),
       ),
     )
