@@ -2,44 +2,87 @@ import type { Db, TaskRow } from '@assistant/db';
 import { goals } from '@assistant/db';
 import { eq, sql } from 'drizzle-orm';
 import { persistMessage } from '../../chat.js';
+import { markAttentionNotified } from '../machine.js';
 import { GOAL_BLOCKED_PREFIX } from '../schedules.js';
 import type { ExecutorDeps } from './types.js';
 
-/** Parked/paused tasks with a conversation must say so in the thread, not go silent. */
+/**
+ * Parked/paused tasks with a conversation must say so in the thread, not go
+ * silent. Returns whether a row was actually persisted so callers can tell
+ * whether the owner has any chance of seeing this (used by the re-notify sweep).
+ */
 export async function postConversationNotice(
   db: Db,
   task: TaskRow,
   text: string,
   extraParts: unknown[] = [],
-): Promise<void> {
-  if (!task.conversationId) return;
-  await persistMessage(db, {
-    conversationId: task.conversationId,
-    taskId: task.id,
-    role: 'assistant',
-    origin: 'assistant',
-    parts: [{ type: 'text', text }, ...extraParts],
-    text,
-  }).catch((err) => console.error('conversation notice failed', err));
+): Promise<boolean> {
+  if (!task.conversationId) return false;
+  try {
+    await persistMessage(db, {
+      conversationId: task.conversationId,
+      taskId: task.id,
+      role: 'assistant',
+      origin: 'assistant',
+      parts: [{ type: 'text', text }, ...extraParts],
+      text,
+    });
+    return true;
+  } catch (err) {
+    console.error('conversation notice failed', err);
+    return false;
+  }
 }
 
 /**
  * Post the dashboard notice AND push it to the owner's channel for events that
  * would otherwise only be visible by opening the dashboard (permanent failure,
  * budget stall). Owner ping is best-effort: a delivery failure must never mask
- * the underlying task outcome.
+ * the underlying task outcome. Returns which legs succeeded.
  */
 export async function notifyOwnerAndConversation(
   deps: ExecutorDeps,
   task: TaskRow,
   text: string,
   extraParts: unknown[] = [],
-): Promise<void> {
-  await postConversationNotice(deps.db, task, text, extraParts);
+): Promise<{ conversationNotified: boolean; ownerNotified: boolean }> {
+  const conversationNotified = await postConversationNotice(deps.db, task, text, extraParts);
+  let ownerNotified = false;
   if (deps.notifyOwner) {
-    await deps
+    ownerNotified = await deps
       .notifyOwner({ taskId: task.id, conversationId: task.conversationId, text })
-      .catch((err) => console.error('owner notification failed', err));
+      .then(() => true)
+      .catch((err) => {
+        console.error('owner notification failed', err);
+        return false;
+      });
+  }
+  return { conversationNotified, ownerNotified };
+}
+
+/**
+ * Notify the owner that a task needs them (needs_attention / waiting_event) and,
+ * only if at least one leg actually reached somewhere the owner can see, stamp
+ * the task so the re-notify sweep leaves it alone. If every leg fails (e.g. a
+ * conversation-less task with owner push unconfigured), the row stays unstamped
+ * and the sweep keeps retrying until Phase-2's sink or a working channel lands.
+ */
+export async function notifyAttention(
+  deps: ExecutorDeps,
+  task: TaskRow,
+  text: string,
+  extraParts: unknown[] = [],
+): Promise<void> {
+  const { conversationNotified, ownerNotified } = await notifyOwnerAndConversation(
+    deps,
+    task,
+    text,
+    extraParts,
+  );
+  if (conversationNotified || ownerNotified) {
+    await markAttentionNotified(deps.db, task.id).catch((err) =>
+      console.error('attention stamp failed', err),
+    );
   }
 }
 

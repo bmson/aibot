@@ -1,5 +1,12 @@
 import type { DispatcherPort, InboundEvent, ModelRouter, StepCallOutcome } from '@assistant/core';
-import { completeTask, enqueueTask, executeTask, getAgent, resolveApproval } from '@assistant/core';
+import {
+  completeTask,
+  enqueueTask,
+  executeTask,
+  getAgent,
+  renotifyStalledAttention,
+  resolveApproval,
+} from '@assistant/core';
 import {
   approvalPolicies,
   approvals,
@@ -428,6 +435,60 @@ describe('executor end-to-end (integration, scripted model)', () => {
 
     [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(row?.status).toBe('waiting_approval');
+  });
+
+  it('a dead-letter whose notify fails stays unstamped so the sweep re-notifies it', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const key = `t-deadletter-${Date.now()}`;
+    const dispatcher = new ToolDispatcher(db, makeRegistry(key));
+    // Owner task with NO conversation: the owner's only path here is the push.
+    const { task } = await enqueueTask(db, { event: event(), type: 'adhoc' });
+    createdTaskIds.push(task.id);
+    // Jump to the final attempt so a single crash dead-letters immediately.
+    await db.update(tasks).set({ attempt: 7 }).where(eq(tasks.id, task.id));
+
+    // The dead-letter owner push throws → nothing reaches the owner, so the row
+    // must NOT be stamped as notified.
+    let pushAttempts = 0;
+    const throwingPush = async () => {
+      pushAttempts += 1;
+      throw new Error('push channel down');
+    };
+    const crashy = makeFakeRouter({ throwOnStep: 1 });
+    const run = await executeTask(
+      { db, router: crashy, dispatcher, notifyOwner: throwingPush },
+      task.id,
+    );
+    expect(run.outcome).toBe('dead_letter');
+    expect(pushAttempts).toBe(1);
+
+    let [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(row?.status).toBe('needs_attention');
+    expect(row?.attentionNotifiedAt).toBeNull();
+
+    // Age it past the grace window and run the real sweep with a working push:
+    // it re-notifies and stamps the row exactly once.
+    await db
+      .update(tasks)
+      .set({ updatedAt: new Date(Date.now() - 30 * 60_000) })
+      .where(eq(tasks.id, task.id));
+    const delivered: string[] = [];
+    const count = await renotifyStalledAttention(
+      db,
+      async ({ taskId }) => {
+        delivered.push(taskId);
+      },
+      { olderThanMinutes: 5 },
+    );
+    expect(count).toBeGreaterThanOrEqual(1);
+    expect(delivered).toContain(task.id);
+    [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(row?.attentionNotifiedAt).not.toBeNull();
+
+    // A second sweep leaves it alone now that it is stamped.
+    const again = await renotifyStalledAttention(db, async () => {}, { olderThanMinutes: 5 });
+    void again;
+    expect(delivered.filter((id) => id === task.id)).toHaveLength(1);
   });
 
   it('retries a failed final delivery from the exact checkpoint without rerunning the model', async (ctx) => {

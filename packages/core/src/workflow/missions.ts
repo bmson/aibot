@@ -8,6 +8,7 @@ import {
   checkpointTask,
   completeTask,
   enqueueTask,
+  markAttentionNotified,
   markTaskNeedsAttention,
   parkForEvent,
   renewTaskLease,
@@ -299,18 +300,26 @@ async function reflect(
     }
     case 'pause': {
       if (!(await parkForEvent(db, mission))) return { action: 'lease_lost' };
-      await report(
+      const delivered = await report(
         deps,
         mission,
         `Mission paused after reflection: ${reflection.reasoning}. Wake it from the dashboard when ready.`,
       );
+      // Stamp only if the pause notice actually reached the owner; otherwise the
+      // re-notify sweep re-emits it so a paused mission is never silently stuck.
+      if (delivered) await markAttentionNotified(db, mission.id).catch(() => {});
       return { action: 'reflected', decision: 'pause' };
     }
     case 'escalate': {
       if (!(await markTaskNeedsAttention(db, mission, `escalated: ${reflection.reasoning}`))) {
         return { action: 'lease_lost' };
       }
-      await report(deps, mission, `Mission needs your attention: ${reflection.reasoning}`);
+      const delivered = await report(
+        deps,
+        mission,
+        `Mission needs your attention: ${reflection.reasoning}`,
+      );
+      if (delivered) await markAttentionNotified(db, mission.id).catch(() => {});
       return { action: 'reflected', decision: 'escalate' };
     }
     case 'complete': {
@@ -343,7 +352,8 @@ async function reflect(
  * background work shows up in the one discussion (long-running-chat, option B).
  * Terminal/decision events only; owner push and mirror are best-effort.
  */
-async function report(deps: MissionDeps, mission: TaskRow, text: string): Promise<void> {
+async function report(deps: MissionDeps, mission: TaskRow, text: string): Promise<boolean> {
+  let delivered = false;
   if (mission.conversationId) {
     await persistMessage(deps.db, {
       conversationId: mission.conversationId,
@@ -353,6 +363,7 @@ async function report(deps: MissionDeps, mission: TaskRow, text: string): Promis
       parts: [{ type: 'text', text }],
       text,
     });
+    delivered = true;
     if (deps.notifyOwner) {
       await deps
         .notifyOwner({ taskId: mission.id, conversationId: mission.conversationId, text })
@@ -362,6 +373,7 @@ async function report(deps: MissionDeps, mission: TaskRow, text: string): Promis
   await mirrorGoalUpdateToPrimary(deps.db, mission, text).catch((err) =>
     console.error('goal update mirror to primary thread failed', err),
   );
+  return delivered;
 }
 
 /** Postgres interval → ms (supports the shapes we write: 'N days', 'HH:MM:SS'). */

@@ -11,6 +11,7 @@ import {
   checkpointTask,
   completeTask,
   enqueueTask,
+  markAttentionNotified,
   markTaskNeedsAttention,
   renewTaskLease,
   type TaskLease,
@@ -137,6 +138,15 @@ export async function finalizePendingResponse(
           progress: pending.progress,
         });
   if (!completed) return LOST_LEASE;
+  // A needs_attention final has already delivered its text (dashboard row above
+  // and/or the owner channel via deliverFinal), so stamp it as notified and keep
+  // the re-notify sweep off it. A conversation-less task delivered nowhere yet —
+  // leave it unstamped so the sweep (and Phase-2's Notifications sink) reach it.
+  if (pending.terminalStatus === 'needs_attention' && task.conversationId) {
+    await markAttentionNotified(deps.db, task.id).catch((err) =>
+      console.error('attention stamp failed', err),
+    );
+  }
   return { outcome: pending.outcome, detail: pending.progress.slice(0, 200) };
 }
 

@@ -361,6 +361,9 @@ export async function markTaskNeedsAttention(
       lockedUntil: null,
       runAfter: null,
       attempt: 0,
+      // Re-arm the re-notify sweep: a fresh park is unnotified until a notice
+      // lands, even if an earlier park on this task had been notified.
+      attentionNotifiedAt: null,
       updatedAt: sql`now()`,
     })
     .where(activeLease(task))
@@ -377,9 +380,24 @@ export async function parkForEvent(db: Db, task: TaskLease): Promise<boolean> {
       lockedUntil: null,
       runAfter: null,
       attempt: 0,
+      attentionNotifiedAt: null,
       updatedAt: sql`now()`,
     })
     .where(activeLease(task))
+    .returning({ id: tasks.id });
+  return Boolean(updated);
+}
+
+/**
+ * Stamp that the owner has been told this task needs them. Status-guarded so a
+ * concurrent wake (which clears the stamp) or a resume can't leave a stale mark;
+ * the re-notify sweep only stamps rows still in a waiting-on-owner state.
+ */
+export async function markAttentionNotified(db: Db, taskId: string): Promise<boolean> {
+  const [updated] = await db
+    .update(tasks)
+    .set({ attentionNotifiedAt: sql`now()` })
+    .where(and(eq(tasks.id, taskId), inArray(tasks.status, ['needs_attention', 'waiting_event'])))
     .returning({ id: tasks.id });
   return Boolean(updated);
 }
@@ -401,6 +419,10 @@ export async function recordFailedAttempt(
       status: sql`CASE WHEN ${tasks.attempt} + 1 >= ${MAX_ATTEMPTS} THEN 'needs_attention' ELSE 'sleeping' END`,
       progress: sql`'attempt ' || (${tasks.attempt} + 1)::text || ' failed: ' || ${message}`,
       runAfter: sql`CASE WHEN ${tasks.attempt} + 1 >= ${MAX_ATTEMPTS} THEN NULL ELSE now() + least(300, (5 * power(2, ${tasks.attempt}))::int) * interval '1 second' END`,
+      // Dead-lettering here often has no accompanying notify (a crashed worker).
+      // Nulling the stamp lets the re-notify sweep reach it; harmless when the
+      // task instead sleeps (the sweep never selects sleeping rows).
+      attentionNotifiedAt: null,
       lockedUntil: null,
       queueGeneration: sql`${tasks.queueGeneration} + 1`,
       updatedAt: sql`now()`,
@@ -426,6 +448,9 @@ export async function wakeTask(db: Db, taskId: string): Promise<boolean> {
       lockedUntil: null,
       queueGeneration: sql`${tasks.queueGeneration} + 1`,
       attempt: 0,
+      // Leaving the waiting-on-owner state clears the notified stamp; a later
+      // re-park re-arms it, so the sweep never re-notifies a resumed task.
+      attentionNotifiedAt: null,
       updatedAt: sql`now()`,
     })
     .where(and(eq(tasks.id, taskId), inArray(tasks.status, [...WAKEABLE])))
@@ -463,6 +488,9 @@ export async function findDueTasks(db: Db, limit = 10): Promise<TaskRow[]> {
       reclaimCount: sql`${tasks.reclaimCount} + 1`,
       progress: sql`CASE WHEN ${tasks.reclaimCount} + 1 >= ${MAX_RECLAIMS} THEN 'stopped after a worker repeatedly failed to complete a step without recording progress (hung or killed ' || (${tasks.reclaimCount} + 1)::text || ' times)' ELSE ${tasks.progress} END`,
       runAfter: sql`CASE WHEN ${tasks.reclaimCount} + 1 >= ${MAX_RECLAIMS} THEN NULL ELSE ${tasks.runAfter} END`,
+      // This dead-letter path has no notify at all — let the re-notify sweep
+      // reach it. Null on the pending branch is never read (sweep skips it).
+      attentionNotifiedAt: null,
       lockedUntil: null,
       queueGeneration: sql`${tasks.queueGeneration} + 1`,
     })

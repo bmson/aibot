@@ -11,7 +11,7 @@ import { isKnownSenderReplyTask } from './executor/context-helpers.js';
 import { finalizePendingResponse } from './executor/finalize.js';
 import { unreadSharedDocumentIntent } from './executor/intent.js';
 import {
-  notifyOwnerAndConversation,
+  notifyAttention,
   postConversationNotice,
   taskBudgetPermissionRequest,
 } from './executor/notices.js';
@@ -74,7 +74,7 @@ export async function executeTask(deps: ExecutorDeps, taskId: string): Promise<E
           const marked = await markTaskNeedsAttention(db, task, `budget: ${err.message}`);
           if (!marked) return LOST_LEASE;
           const budgetRequest = taskBudgetPermissionRequest(task, err.message);
-          await notifyOwnerAndConversation(deps, task, budgetRequest.text, [budgetRequest.part]);
+          await notifyAttention(deps, task, budgetRequest.text, [budgetRequest.part]);
           return { outcome: 'needs_attention', detail: err.message.slice(0, 500) };
         }
         const [fresh] = await db.select().from(tasks).where(eq(tasks.id, task.id));
@@ -93,7 +93,9 @@ export async function executeTask(deps: ExecutorDeps, taskId: string): Promise<E
         // Retry budget exhausted: the task is now needs_attention and will not
         // self-resume. Every other terminal/park branch notifies the owner, so
         // this one must too — otherwise the request dies silently in its thread.
-        await notifyOwnerAndConversation(
+        // notifyAttention stamps the row so the re-notify sweep won't repeat it,
+        // and leaves it unstamped (sweep-eligible) if this notify itself failed.
+        await notifyAttention(
           deps,
           task,
           `I couldn't complete this after repeated attempts and stopped. It's marked needs-attention on the Tasks page. Last error: ${String(err).slice(0, 300)}`,

@@ -55,55 +55,95 @@ internal.post('/tasks/execute', async (c) => {
 
 internal.post('/sweep', async (c) => {
   const deps = buildDeps();
-  const woken = await expireStaleApprovals(deps.db);
-  const resumedApprovalTasks = await resumeResolvedApprovalTasks(deps.db);
-  const { renotifyStalledApprovals } = await import('@assistant/core');
-  const { executorDeps } = await import('../executor-deps.js');
-  const renotifiedApprovals = await renotifyStalledApprovals(
-    deps.db,
-    executorDeps(deps).notifyApproval,
-  ).catch((err) => {
-    console.error('approval re-notification sweep failed', err);
-    return 0;
-  });
   const {
     backfillMessageEmbeddings,
     emitBudgetNotices,
     getAgent,
     getQueueNotifier,
     purgeExpired,
+    renotifyStalledApprovals,
+    renotifyStalledAttention,
     runDueSchedules,
   } = await import('@assistant/core');
+  const { executorDeps } = await import('../executor-deps.js');
+  // Each step is independent maintenance; one failing must not starve the rest
+  // (a single bad schedule row used to 500 the whole endpoint and stall every
+  // later reaper). Wrap each in its own guard and report what ran.
+  const step = async <T>(name: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
+    try {
+      return await fn();
+    } catch (err) {
+      console.error(`sweep step failed: ${name}`, err);
+      return fallback;
+    }
+  };
+
+  const woken = await step(
+    'expireStaleApprovals',
+    () => expireStaleApprovals(deps.db),
+    [] as string[],
+  );
+  const resumedApprovalTasks = await step(
+    'resumeResolvedApprovalTasks',
+    () => resumeResolvedApprovalTasks(deps.db),
+    [] as string[],
+  );
+  const renotifiedApprovals = await step(
+    'renotifyStalledApprovals',
+    () => renotifyStalledApprovals(deps.db, executorDeps(deps).notifyApproval),
+    0,
+  );
+  const renotifiedAttention = await step(
+    'renotifyStalledAttention',
+    () => renotifyStalledAttention(deps.db, executorDeps(deps).notifyOwner),
+    0,
+  );
   const agent = await getAgent(deps.db);
-  const fired = await runDueSchedules(deps.db, agent.timezone);
-  const budgetNotices = await emitBudgetNotices(deps.db, agent.id).catch((err) => {
-    console.error('budget notices failed', err);
-    return [] as string[];
-  });
+  const fired = await step(
+    'runDueSchedules',
+    () => runDueSchedules(deps.db, agent.timezone),
+    [] as Awaited<ReturnType<typeof runDueSchedules>>,
+  );
+  const budgetNotices = await step(
+    'emitBudgetNotices',
+    () => emitBudgetNotices(deps.db, agent.id),
+    [] as string[],
+  );
   // Backstop: re-notify everything due (sleep wake-ups, retries, lost notifications).
   // Locally the poller executes these itself; in prod Cloud Tasks calls back.
-  const due = await findDueTasks(deps.db, 50);
+  const due = await step(
+    'findDueTasks',
+    () => findDueTasks(deps.db, 50),
+    [] as Awaited<ReturnType<typeof findDueTasks>>,
+  );
   const notifier = getQueueNotifier();
   for (const task of due) notifier.notify(task.id, task.queueGeneration);
-  const embedded = await backfillMessageEmbeddings(deps.db, deps.router).catch((err) => {
-    console.error('embedding backfill failed', err);
-    return 0;
-  });
-  const purged = await purgeExpired(deps.db);
-  const { reapExpiredApplicationWatches } = await import('../application-confirmations.js');
-  const expiredWatches = await reapExpiredApplicationWatches(deps).catch((err) => {
-    console.error('application watch reaper failed', err);
-    return 0;
-  });
-  const { reapExpiredWatches } = await import('../watches.js');
-  const expiredInboxWatches = await reapExpiredWatches(deps).catch((err) => {
-    console.error('watch reaper failed', err);
-    return 0;
-  });
+  const embedded = await step(
+    'backfillMessageEmbeddings',
+    () => backfillMessageEmbeddings(deps.db, deps.router),
+    0,
+  );
+  const purged = await step(
+    'purgeExpired',
+    () => purgeExpired(deps.db),
+    null as Awaited<ReturnType<typeof purgeExpired>> | null,
+  );
+  const expiredWatches = await step(
+    'reapExpiredApplicationWatches',
+    async () =>
+      (await import('../application-confirmations.js')).reapExpiredApplicationWatches(deps),
+    0,
+  );
+  const expiredInboxWatches = await step(
+    'reapExpiredWatches',
+    async () => (await import('../watches.js')).reapExpiredWatches(deps),
+    0,
+  );
   return c.json({
     expiredApprovalsWoke: woken.length,
     resumedApprovalTasks: resumedApprovalTasks.length,
     renotifiedApprovals,
+    renotifiedAttention,
     schedulesFired: fired.length,
     dueTasksNotified: due.length,
     messagesEmbedded: embedded,

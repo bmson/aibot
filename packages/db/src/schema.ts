@@ -291,6 +291,13 @@ export const tasks = pgTable(
     parentTaskId: uuid('parent_task_id').references((): AnyPgColumn => tasks.id),
     /** Owner-hidden terminal history. Evidence stays intact and can be restored. */
     archivedAt: timestamp('archived_at', { withTimezone: true }),
+    /**
+     * Set when the owner has been told this task needs them (needs_attention or
+     * waiting_event). Nulled on every entry into those states and on wake, so the
+     * re-notify sweep (workflow/attention.ts) can re-emit a notice for any task
+     * whose park→notify was lost to a crash. Mirrors approvals.notified_channels.
+     */
+    attentionNotifiedAt: timestamp('attention_notified_at', { withTimezone: true }),
     ...timestamps,
   },
   (t) => [

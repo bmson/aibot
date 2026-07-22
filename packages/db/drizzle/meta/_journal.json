@@ -267,6 +267,13 @@
       "when": 1784734228576,
       "tag": "0037_thin_madripoor",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1784763024024,
+      "tag": "0038_sturdy_molly_hayes",
+      "breakpoints": true
     }
   ]
 }

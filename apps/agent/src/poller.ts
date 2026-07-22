@@ -6,6 +6,7 @@ import {
   getAgent,
   purgeExpired,
   renotifyStalledApprovals,
+  renotifyStalledAttention,
   resumeResolvedApprovalTasks,
   runDueSchedules,
 } from '@assistant/core';
@@ -35,34 +36,51 @@ export function startPoller(deps: AgentDeps): () => void {
     try {
       tick += 1;
       if (tick % SWEEP_EVERY_TICKS === 0) {
-        const woken = await expireStaleApprovals(deps.db);
-        if (woken.length) console.log(`sweep: expired approvals woke ${woken.length} task(s)`);
-        const resumed = await resumeResolvedApprovalTasks(deps.db);
-        if (resumed.length)
-          console.log(`sweep: resumed ${resumed.length} stranded approval task(s)`);
-        const renotified = await renotifyStalledApprovals(
-          deps.db,
-          executorDeps(deps).notifyApproval,
-        ).catch((err) => {
-          console.error('approval re-notification sweep failed', err);
-          return 0;
+        // Each maintenance step is independent; guard each so one failure can't
+        // starve the rest (mirrors the prod /internal/sweep resilience).
+        const runStep = async (name: string, fn: () => Promise<unknown>) => {
+          try {
+            await fn();
+          } catch (err) {
+            console.error(`sweep step failed: ${name}`, err);
+          }
+        };
+        await runStep('expireStaleApprovals', async () => {
+          const woken = await expireStaleApprovals(deps.db);
+          if (woken.length) console.log(`sweep: expired approvals woke ${woken.length} task(s)`);
         });
-        if (renotified) console.log(`sweep: re-notified ${renotified} silent approval(s)`);
+        await runStep('resumeResolvedApprovalTasks', async () => {
+          const resumed = await resumeResolvedApprovalTasks(deps.db);
+          if (resumed.length)
+            console.log(`sweep: resumed ${resumed.length} stranded approval task(s)`);
+        });
+        await runStep('renotifyStalledApprovals', async () => {
+          const renotified = await renotifyStalledApprovals(
+            deps.db,
+            executorDeps(deps).notifyApproval,
+          );
+          if (renotified) console.log(`sweep: re-notified ${renotified} silent approval(s)`);
+        });
+        await runStep('renotifyStalledAttention', async () => {
+          const renotified = await renotifyStalledAttention(
+            deps.db,
+            executorDeps(deps).notifyOwner,
+          );
+          if (renotified) console.log(`sweep: re-notified ${renotified} stalled task(s)`);
+        });
         const agent = await getAgent(deps.db);
-        const fired = await runDueSchedules(deps.db, agent.timezone);
-        for (const f of fired)
-          console.log(`schedule fired: ${f.schedule} → ${f.taskId.slice(0, 8)}`);
-        await purgeExpired(deps.db);
-        await backfillMessageEmbeddings(deps.db, deps.router).catch((err) =>
-          console.error('embedding backfill failed', err),
+        await runStep('runDueSchedules', async () => {
+          const fired = await runDueSchedules(deps.db, agent.timezone);
+          for (const f of fired)
+            console.log(`schedule fired: ${f.schedule} → ${f.taskId.slice(0, 8)}`);
+        });
+        await runStep('purgeExpired', () => purgeExpired(deps.db));
+        await runStep('backfillMessageEmbeddings', () =>
+          backfillMessageEmbeddings(deps.db, deps.router),
         );
-        await emitBudgetNotices(deps.db, agent.id).catch((err) =>
-          console.error('budget notices failed', err),
-        );
-        await reapExpiredApplicationWatches(deps).catch((err) =>
-          console.error('application watch reaper failed', err),
-        );
-        await reapExpiredWatches(deps).catch((err) => console.error('watch reaper failed', err));
+        await runStep('emitBudgetNotices', () => emitBudgetNotices(deps.db, agent.id));
+        await runStep('reapExpiredApplicationWatches', () => reapExpiredApplicationWatches(deps));
+        await runStep('reapExpiredWatches', () => reapExpiredWatches(deps));
       }
       if (tick % EMAIL_SYNC_EVERY_TICKS === 0 && deps.googleClient.configured()) {
         await syncMailbox(deps).catch((err) => console.error('email-sync error', err));

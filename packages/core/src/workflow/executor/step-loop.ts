@@ -39,6 +39,7 @@ import {
   stopForUnsavedGoalProgress,
 } from './finalize.js';
 import {
+  notifyAttention,
   notifyOwnerAndConversation,
   postConversationNotice,
   recordGoalBlocked,
@@ -426,7 +427,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       );
       if (!marked) return LOST_LEASE;
       const budgetRequest = taskBudgetPermissionRequest(task, stepResult.decision.reason);
-      await notifyOwnerAndConversation(deps, task, budgetRequest.text, [budgetRequest.part]);
+      await notifyAttention(deps, task, budgetRequest.text, [budgetRequest.part]);
       return { outcome: 'needs_attention', detail: stepResult.decision.reason };
     }
 
