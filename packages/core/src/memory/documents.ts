@@ -226,38 +226,43 @@ export async function runDocumentExtraction(
     }
 
     const extractor = (doc.extractor || extractorFor(doc.mime, doc.title)) as DocumentExtractor;
-    if (extractor === 'pending_processor' || extractor === 'unsupported') {
-      // Nothing in-process to do — leave it for Phase 14 (pending) or mark it
-      // unsupported. startDocumentIngest already avoids enqueuing these, so this
-      // is only a safety net for a hand-enqueued job.
+
+    let fullText: string;
+    if (extractor === 'pending_processor') {
+      // Handed to the document-processor worker (Phase 14). Once it has uploaded
+      // the extracted text and its callback set processedTextPath, chunk+embed it
+      // here through the same pipeline as in-process formats. Until then there is
+      // nothing to do — the processor sweep owns the launch.
+      if (!doc.processedTextPath) {
+        return { done: true, summary: `document ${doc.title}: awaiting document processor` };
+      }
+      const textBytes = await readBytes(doc.processedTextPath);
+      await deps.heartbeat?.();
+      fullText = textBytes.toString('utf8').trim();
+    } else if (extractor === 'unsupported') {
       await db
         .update(documents)
-        .set({
-          status: extractor === 'pending_processor' ? 'pending' : 'unsupported',
-          extractor,
-          updatedAt: sql`now()`,
-        })
+        .set({ status: 'unsupported', extractor, updatedAt: sql`now()` })
         .where(eq(documents.id, documentId));
-      return { done: true, summary: `document ${doc.title}: ${extractor}` };
-    }
+      return { done: true, summary: `document ${doc.title}: unsupported` };
+    } else {
+      if ((file.bytes ?? 0) > MAX_EXTRACT_BYTES) {
+        await failDocument(db, documentId, `too large to extract in-process (${file.bytes} bytes)`);
+        return { done: true, summary: `document ${doc.title}: too large` };
+      }
+      const bytes = await readBytes(file.workspacePath);
+      await deps.heartbeat?.();
+      fullText = await extractDocumentText(extractor, bytes, doc.mime);
 
-    if ((file.bytes ?? 0) > MAX_EXTRACT_BYTES) {
-      await failDocument(db, documentId, `too large to extract in-process (${file.bytes} bytes)`);
-      return { done: true, summary: `document ${doc.title}: too large` };
-    }
-
-    const bytes = await readBytes(file.workspacePath);
-    await deps.heartbeat?.();
-    const fullText = await extractDocumentText(extractor, bytes, doc.mime);
-
-    // A PDF with (almost) no text layer is a scan → hand it to the OCR-capable
-    // document processor (Phase 14) instead of storing an empty document.
-    if (extractor === 'pdf' && fullText.length < MIN_PDF_TEXT_CHARS) {
-      await db
-        .update(documents)
-        .set({ status: 'pending', extractor: 'pending_processor', updatedAt: sql`now()` })
-        .where(eq(documents.id, documentId));
-      return { done: true, summary: `document ${doc.title}: no text layer — queued for OCR` };
+      // A PDF with (almost) no text layer is a scan → hand it to the OCR-capable
+      // document processor (Phase 14) instead of storing an empty document.
+      if (extractor === 'pdf' && fullText.length < MIN_PDF_TEXT_CHARS) {
+        await db
+          .update(documents)
+          .set({ status: 'pending', extractor: 'pending_processor', updatedAt: sql`now()` })
+          .where(eq(documents.id, documentId));
+        return { done: true, summary: `document ${doc.title}: no text layer — queued for OCR` };
+      }
     }
 
     const chunks = chunkText(fullText);
@@ -458,7 +463,6 @@ export async function startDocumentIngest(
   input: StartDocumentInput,
 ): Promise<StartDocumentResult> {
   const extractor = extractorFor(input.mime, input.title);
-  const inProcess = extractor === 'text' || extractor === 'pdf';
   const status = extractor === 'unsupported' ? 'unsupported' : 'pending';
 
   type EnqueuedTask = { id: string; queueGeneration: number };
@@ -502,17 +506,29 @@ export async function startDocumentIngest(
       .returning();
     if (!doc) throw new Error('failed to create document row');
 
-    if (!inProcess) return { document: doc, task: null as EnqueuedTask | null, duplicate: false };
+    // text/pdf are extracted in-process; heavy formats are handed to the
+    // out-of-process document-processor worker (Phase 14). Unsupported enqueues
+    // nothing.
+    const job =
+      extractor === 'text' || extractor === 'pdf'
+        ? 'documents.extract'
+        : extractor === 'pending_processor'
+          ? 'documents.process'
+          : null;
+    if (!job) return { document: doc, task: null as EnqueuedTask | null, duplicate: false };
 
     const { task } = await enqueueTask(txDb, {
       event: {
         source: 'internal',
         agentId: input.agentId,
         trust: 'assistant',
-        payload: { job: 'documents.extract', documentId: doc.id },
+        payload: { job, documentId: doc.id },
       },
       type: 'adhoc',
-      budgetUsdLimit: input.budgetUsdLimit ?? DEFAULT_DOCUMENT_BUDGET_USD,
+      budgetUsdLimit:
+        job === 'documents.process'
+          ? '0.05'
+          : (input.budgetUsdLimit ?? DEFAULT_DOCUMENT_BUDGET_USD),
       deferNotification: true,
     });
     return {
@@ -617,7 +633,7 @@ export async function purgeDocument(
       .set({ status: 'cancelled', lockedUntil: null, runAfter: null, updatedAt: sql`now()` })
       .where(
         and(
-          sql`${tasks.trigger}->'payload'->>'job' = 'documents.extract'`,
+          sql`${tasks.trigger}->'payload'->>'job' IN ('documents.extract','documents.process')`,
           sql`${tasks.trigger}->'payload'->>'documentId' = ${documentId}`,
           inArray(tasks.status, ['pending', 'sleeping', 'running', 'needs_attention']),
         ),
@@ -630,6 +646,13 @@ export async function purgeDocument(
   if (workspace && file) {
     await workspace.delete(file.workspacePath).catch((err) => {
       console.error(`document purge: workspace delete failed for ${file.workspacePath}`, err);
+    });
+  }
+  // The document-processor worker's extracted-text blob (Phase 14) lives outside
+  // the files inventory, so purge it explicitly.
+  if (workspace && doc.processedTextPath) {
+    await workspace.delete(doc.processedTextPath).catch((err) => {
+      console.error(`document purge: text-blob delete failed for ${doc.processedTextPath}`, err);
     });
   }
   return { deleted: true };

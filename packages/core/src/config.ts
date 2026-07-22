@@ -65,6 +65,9 @@ const ConfigSchema = z.object({
   /** Code-execution worker (Phase 13): local child process vs Cloud Run Job. */
   CODE_DRIVER: z.enum(['local', 'cloudrun']).default('local'),
   CODE_JOB_NAME: z.string().default('assistant-code'),
+  /** Document-processor worker (Phase 14): local child process vs Cloud Run Job. */
+  PROCESSOR_DRIVER: z.enum(['local', 'cloudrun']).default('local'),
+  PROCESSOR_JOB_NAME: z.string().default('assistant-processor'),
   /** Location context (Phase 15): HMAC key the owner's Shortcut signs pings with; empty disables ingest. */
   LOCATION_PING_SECRET: z.string().default(''),
   /** How many days a location ping is kept before the sweep purges it. */

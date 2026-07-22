@@ -58,6 +58,7 @@ WEB_SA="assistant-web@${PROJECT}.iam.gserviceaccount.com"
 AGENT_SA="assistant-agent@${PROJECT}.iam.gserviceaccount.com"
 BROWSER_SA="assistant-browser@${PROJECT}.iam.gserviceaccount.com"
 CODE_SA="assistant-code@${PROJECT}.iam.gserviceaccount.com"
+PROCESSOR_SA="assistant-processor@${PROJECT}.iam.gserviceaccount.com"
 INTERNAL_INVOKER_SA="assistant-internal-invoker@${PROJECT}.iam.gserviceaccount.com"
 GMAIL_PUSH_SA="assistant-gmail-push@${PROJECT}.iam.gserviceaccount.com"
 CLOUD_TASKS_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
@@ -97,6 +98,7 @@ ensure_service_account assistant-web "Assistant web runtime"
 ensure_service_account assistant-agent "Assistant agent runtime"
 ensure_service_account assistant-browser "Assistant sandboxed browser runtime"
 ensure_service_account assistant-code "Assistant sandboxed code runtime"
+ensure_service_account assistant-processor "Assistant sandboxed document processor runtime"
 ensure_service_account assistant-internal-invoker "Assistant internal OIDC invoker"
 ensure_service_account assistant-gmail-push "Assistant Gmail Pub/Sub push identity"
 
@@ -142,6 +144,15 @@ gcloud storage buckets remove-iam-policy-binding "gs://${BUCKET}" \
 gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
   --member="serviceAccount:${CODE_SA}" --role=roles/storage.objectCreator \
   --condition="expression=resource.name.startsWith(\"projects/_/buckets/${BUCKET}/objects/workspace/b-bot/code/\"),title=code-outputs-only,description=Code job outputs only" \
+  --quiet >/dev/null
+# The document processor may read source bytes and write extracted text only
+# under the documents/ prefix — never memories, imports, or other objects.
+gcloud storage buckets remove-iam-policy-binding "gs://${BUCKET}" \
+  --member="serviceAccount:${PROCESSOR_SA}" --role=roles/storage.objectUser --condition=None \
+  --quiet >/dev/null 2>&1 || true
+gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
+  --member="serviceAccount:${PROCESSOR_SA}" --role=roles/storage.objectUser \
+  --condition="expression=resource.name.startsWith(\"projects/_/buckets/${BUCKET}/objects/workspace/b-bot/documents/\"),title=document-objects-only,description=Document source bytes and extracted text only" \
   --quiet >/dev/null
 # Remove the broad binding installed by older deploys that used the Compute SA.
 gcloud storage buckets remove-iam-policy-binding "gs://${BUCKET}" \
@@ -234,7 +245,7 @@ gcloud run deploy assistant-agent \
   --image "${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/agent:latest" \
   --region "$REGION" --allow-unauthenticated --service-account "$AGENT_SA" \
   --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3 --concurrency 4 --timeout 900 \
-  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=gcs,WORKSPACE_BUCKET=${PROJECT}-workspace,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},GMAIL_PUBSUB_TOPIC=projects/${PROJECT}/topics/${TOPIC},GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_SA},INTERNAL_AUTH_MODE=oidc,INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA},BROWSER_DRIVER=cloudrun,BROWSER_JOB_NAME=assistant-browser,CODE_DRIVER=cloudrun,CODE_JOB_NAME=assistant-code,TRACES_BUCKET=${TRACES_BUCKET},CANARY_ENABLED=true,CANARY_MAX_COST_USD=0.03,CHAT_RECALL_ENABLED=true,OTEL_EXPORTER=none${TWILIO_ENV}" \
+  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=gcs,WORKSPACE_BUCKET=${PROJECT}-workspace,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},GMAIL_PUBSUB_TOPIC=projects/${PROJECT}/topics/${TOPIC},GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_SA},INTERNAL_AUTH_MODE=oidc,INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA},BROWSER_DRIVER=cloudrun,BROWSER_JOB_NAME=assistant-browser,CODE_DRIVER=cloudrun,CODE_JOB_NAME=assistant-code,PROCESSOR_DRIVER=cloudrun,PROCESSOR_JOB_NAME=assistant-processor,TRACES_BUCKET=${TRACES_BUCKET},CANARY_ENABLED=true,CANARY_MAX_COST_USD=0.03,CHAT_RECALL_ENABLED=true,OTEL_EXPORTER=none${TWILIO_ENV}" \
   --set-secrets "$AGENT_SECRETS" \
   --quiet
 
@@ -277,6 +288,20 @@ else
     --memory 1Gi --cpu 1 --task-timeout 900 --max-retries 0 --quiet
 fi
 gcloud run jobs add-iam-policy-binding assistant-code --region "$REGION" \
+  --member="serviceAccount:${AGENT_SA}" --role="roles/run.jobsExecutorWithOverrides" --quiet >/dev/null
+
+echo "── document-processor job (Cloud Run Job — no DB creds, no secrets)"
+PROCESSOR_IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/processor:latest"
+if gcloud run jobs describe assistant-processor --region "$REGION" >/dev/null 2>&1; then
+  gcloud run jobs update assistant-processor --region "$REGION" \
+    --image "$PROCESSOR_IMAGE" --service-account "$PROCESSOR_SA" \
+    --memory 2Gi --cpu 1 --task-timeout 600 --max-retries 0 --quiet
+else
+  gcloud run jobs create assistant-processor --region "$REGION" \
+    --image "$PROCESSOR_IMAGE" --service-account "$PROCESSOR_SA" \
+    --memory 2Gi --cpu 1 --task-timeout 600 --max-retries 0 --quiet
+fi
+gcloud run jobs add-iam-policy-binding assistant-processor --region "$REGION" \
   --member="serviceAccount:${AGENT_SA}" --role="roles/run.jobsExecutorWithOverrides" --quiet >/dev/null
 
 echo "── cloud tasks queue"

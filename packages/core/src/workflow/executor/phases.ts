@@ -107,6 +107,7 @@ export async function runCodeJobPhase(
         db,
         router,
         workspace: deps.workspace,
+        documentProcessor: deps.documentProcessor,
         heartbeat: async () => {
           if (!(await renewTaskLease(db, lease))) throw new Error('task lease lost');
         },

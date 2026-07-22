@@ -373,6 +373,15 @@ const scheduleSeed = [
     cron: '0 1 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'self.maintain' },
   },
+  // Document-processor backstop (Phase 14): ingest enqueues a per-document
+  // process job immediately, but this sweep relaunches any heavy-format document
+  // whose worker run never called back (stale) or was missed. A code job — no
+  // model — and inert until the processor Cloud Run Job is deployed.
+  {
+    name: 'document-processing',
+    cron: '*/15 * * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.02', job: 'documents.process' },
+  },
 ] as const;
 
 /** Schedules whose definition the seed owns — updated in place on re-seed (prod picks up changes on deploy). */
@@ -386,6 +395,7 @@ const SEED_OWNED_SCHEDULES = new Set([
   'ambient-refresh',
   'dream',
   'self-maintain',
+  'document-processing',
 ]);
 
 for (const s of scheduleSeed) {

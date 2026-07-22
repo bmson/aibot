@@ -1183,6 +1183,16 @@ export const documents = pgTable(
     chunkCount: integer('chunk_count').notNull().default(0),
     charCount: integer('char_count').notNull().default(0),
     error: text('error'),
+    /**
+     * Document-processor worker (Phase 14). While a heavy-format doc is out at
+     * the credential-free processor, the one-shot callback token's SHA-256 lives
+     * here (cleared on settle); processorStartedAt marks the launch for the
+     * staleness/relaunch sweep; processedTextPath is the workspace blob of
+     * extracted text the callback hands back to the documents.extract pipeline.
+     */
+    processorTokenHash: text('processor_token_hash'),
+    processorStartedAt: timestamp('processor_started_at', { withTimezone: true }),
+    processedTextPath: text('processed_text_path'),
     ...timestamps,
   },
   (t) => [

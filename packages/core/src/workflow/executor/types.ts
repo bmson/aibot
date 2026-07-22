@@ -2,6 +2,7 @@ import type { Db, TaskRow } from '@assistant/db';
 import type { ZodType } from 'zod';
 import type { StagedJobPending } from '../../code-exec.js';
 import type { Trust } from '../../events.js';
+import type { DocumentProcessorConfig } from '../../memory/document-processor.js';
 import type { WorkspaceReader } from '../../memory/import.js';
 import type { ModelRouter } from '../../model-router/router.js';
 
@@ -73,6 +74,8 @@ export interface ExecutorDeps {
   dispatcher: DispatcherPort;
   /** Workspace file store — required only for code jobs that read archives (imports). */
   workspace?: WorkspaceReader;
+  /** Document-processor launcher + callback URL (Phase 14). Absent = feature inert. */
+  documentProcessor?: DocumentProcessorConfig;
   /** Channel delivery for a task's final text (e.g. SMS reply). Errors are retried by the workflow. */
   deliverFinal?: (task: TaskRow, text: string) => Promise<void>;
   /**

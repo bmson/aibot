@@ -1,5 +1,8 @@
 import path from 'node:path';
 import {
+  CloudRunDocumentJobLauncher,
+  type DocumentProcessorConfig,
+  LocalDocumentProcessLauncher,
   loadConfig,
   loadVoiceContext,
   ModelRouter,
@@ -45,6 +48,8 @@ export interface AgentDeps {
   twilio: TwilioClient;
   workspace: LocalWorkspaceStore | GcsWorkspaceStore;
   browserLauncher: BrowserJobLauncher;
+  /** Document-processor launcher + callback (Phase 14); undefined = inert (prod pre-deploy). */
+  documentProcessor?: DocumentProcessorConfig;
 }
 
 let cached: AgentDeps | undefined;
@@ -113,6 +118,29 @@ export function buildDeps(): AgentDeps {
     launcher: codeLauncher,
     callbackUrl: `${config.PUBLIC_URL}/webhooks/code/callback`,
   });
+
+  // Phase 14: the document-processor worker — a third credential-free occupant
+  // that does OCR / office parsing outside the agent container. It stays inert
+  // in production until its Cloud Run Job is deployed (PROCESSOR_DRIVER=cloudrun);
+  // a prod agent whose driver is still 'local' gets no launcher, so parked
+  // documents simply wait rather than spawning an unrunnable child.
+  const documentProcessor: DocumentProcessorConfig | undefined =
+    config.PROCESSOR_DRIVER === 'cloudrun'
+      ? {
+          launcher: new CloudRunDocumentJobLauncher({
+            project: config.GCP_PROJECT,
+            location: config.GCP_LOCATION,
+            jobName: config.PROCESSOR_JOB_NAME,
+            storage: { driver: 'gcs', bucket: config.WORKSPACE_BUCKET, prefix: workspacePrefix },
+          }),
+          callbackUrl: `${config.PUBLIC_URL}/webhooks/document/callback`,
+        }
+      : config.QUEUE_DRIVER === 'local'
+        ? {
+            launcher: new LocalDocumentProcessLauncher({ repoRoot, workspaceRoot }),
+            callbackUrl: `${config.PUBLIC_URL}/webhooks/document/callback`,
+          }
+        : undefined;
   // Inbox watchers take no outward action and need no provider client, so they
   // are available even when Google/Twilio are not configured.
   registerWatchTools(registry);
@@ -183,6 +211,7 @@ export function buildDeps(): AgentDeps {
     twilio,
     workspace,
     browserLauncher,
+    documentProcessor,
   };
   return cached;
 }

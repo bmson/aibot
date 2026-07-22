@@ -3,6 +3,8 @@ import { eq, inArray, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import type { ModelRouter } from '../model-router/router.js';
+import { enqueueTask } from '../workflow/machine.js';
+import { extractedTextPath } from './document-processor.js';
 import {
   chunkText,
   documentStats,
@@ -218,7 +220,7 @@ describe('document intelligence — extraction job', () => {
     expect(afterChunks.length).toBe(0);
   });
 
-  it('records an office document as pending for the processor worker, no job', async (ctx) => {
+  it('hands an office document to the processor worker via a documents.process job', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const path = `xtestdoc/${Date.now()}-slides.pptx`;
     await ws.write(path, 'binary-ish');
@@ -236,7 +238,68 @@ describe('document intelligence — extraction job', () => {
     });
     expect(started.document.status).toBe('pending');
     expect(started.document.extractor).toBe('pending_processor');
-    expect(started.taskId).toBeNull();
+    // Heavy formats no longer sit inert — they enqueue the out-of-process worker.
+    expect(started.taskId).toBeTruthy();
+    if (started.taskId) createdTaskIds.push(started.taskId);
+    const [task] = await db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.id, started.taskId ?? ''));
+    expect((task?.trigger as { payload?: { job?: string } })?.payload?.job).toBe(
+      'documents.process',
+    );
+    await purgeDocument(db, agentId, started.document.id, ws);
+  });
+
+  it('embeds a processor-extracted document from its text blob and marks it ready', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const src = `xtestdoc/${Date.now()}-report.docx`;
+    await ws.write(src, 'binary-docx');
+    const sha256 = (await import('node:crypto'))
+      .createHash('sha256')
+      .update(`docx-${Date.now()}`)
+      .digest('hex');
+    const started = await startDocumentIngest(db, {
+      agentId,
+      title: 'XTESTDOC officedoc',
+      workspacePath: src,
+      mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      bytes: 20,
+      sha256,
+    });
+    if (started.taskId) createdTaskIds.push(started.taskId);
+    expect(started.document.extractor).toBe('pending_processor');
+
+    // Simulate the worker + callback: text uploaded, processedTextPath set.
+    const textPath = extractedTextPath(started.document.id);
+    const extracted = `Board minutes.\n\n${'Detail sentence. '.repeat(120)}\n\nAction items follow.`;
+    await ws.write(textPath, extracted);
+    await db
+      .update(documents)
+      .set({ processedTextPath: textPath })
+      .where(eq(documents.id, started.document.id));
+
+    // The callback enqueues a documents.extract job; run it against the text blob.
+    const { task } = await enqueueTask(db, {
+      event: {
+        source: 'internal',
+        agentId,
+        trust: 'assistant',
+        payload: { job: 'documents.extract', documentId: started.document.id },
+      },
+      type: 'adhoc',
+      budgetUsdLimit: '0.50',
+      deferNotification: true,
+    });
+    createdTaskIds.push(task.id);
+    const outcome = await runDocumentExtraction({ db, router: fakeRouter, workspace: ws }, task);
+    expect(outcome.done).toBe(true);
+
+    const [doc] = await db.select().from(documents).where(eq(documents.id, started.document.id));
+    expect(doc?.status).toBe('ready');
+    expect(doc?.chunkCount).toBeGreaterThan(0);
+    expect(doc?.charCount).toBeGreaterThan(0);
+
     await purgeDocument(db, agentId, started.document.id, ws);
   });
 });

@@ -12,6 +12,7 @@ export default defineConfig({
       'apps/agent',
       'apps/web',
       'workers/browser-job',
+      'workers/document-processor',
     ],
   },
 });

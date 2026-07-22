@@ -6,6 +6,7 @@ import { runSelfImprove } from '../workflow/improve.js';
 import { runSelfMaintenance } from '../workflow/self-maintenance.js';
 import { refreshAmbientSnapshot } from './ambient.js';
 import { runMemoryConsolidation } from './consolidation.js';
+import { type DocumentProcessorConfig, runDocumentProcessing } from './document-processor.js';
 import { runDocumentExtraction } from './documents.js';
 import { runMemoryExtraction } from './extraction.js';
 import { runImportJob, type WorkspaceReader } from './import.js';
@@ -30,6 +31,7 @@ export type CodeJobName =
   | 'skill.reflect'
   | 'self.improve'
   | 'documents.extract'
+  | 'documents.process'
   | 'ambient.refresh'
   | 'dream.run'
   | 'self.maintain';
@@ -44,6 +46,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'skill.reflect',
   'self.improve',
   'documents.extract',
+  'documents.process',
   'ambient.refresh',
   'dream.run',
   'self.maintain',
@@ -66,6 +69,7 @@ export async function runCodeJob(
     db: Db;
     router: ModelRouter;
     workspace?: WorkspaceReader;
+    documentProcessor?: DocumentProcessorConfig;
     heartbeat?: () => Promise<void>;
   },
   job: CodeJobName,
@@ -129,6 +133,15 @@ export async function runCodeJob(
     }
     case 'documents.extract':
       return runDocumentExtraction(deps, task);
+    case 'documents.process':
+      return runDocumentProcessing(
+        {
+          db: deps.db,
+          documentProcessor: deps.documentProcessor,
+          heartbeat: deps.heartbeat,
+        },
+        task,
+      );
     case 'ambient.refresh': {
       await deps.heartbeat?.();
       const r = await refreshAmbientSnapshot(

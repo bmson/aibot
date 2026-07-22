@@ -47,6 +47,18 @@ steps:
         '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/code:${_TAG}',
         .,
       ]
+  - name: gcr.io/cloud-builders/docker
+    args:
+      [
+        build,
+        -f,
+        infra/docker/document-processor.Dockerfile,
+        -t,
+        '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/processor:latest',
+        -t,
+        '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/processor:${_TAG}',
+        .,
+      ]
 images:
   - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/agent:latest'
   - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/agent:${_TAG}'
@@ -56,6 +68,8 @@ images:
   - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/browser:${_TAG}'
   - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/code:latest'
   - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/code:${_TAG}'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/processor:latest'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/processor:${_TAG}'
 substitutions:
   _REGION: us-west1
   _REPO: assistant

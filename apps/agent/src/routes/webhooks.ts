@@ -4,6 +4,7 @@ import {
   loadConfig,
   recordBrowserJobResult,
   recordCodeJobResult,
+  recordDocumentProcessorResult,
   recordLocationPing,
   verifyLocationSignature,
 } from '@assistant/core';
@@ -95,6 +96,35 @@ webhooks.post('/code/callback', async (c) => {
     taskId: body.taskId,
     token: body.token,
     result: body.result ?? { ok: false, error: 'job reported no result' },
+  });
+  if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
+  return c.json({ ok: true });
+});
+
+/**
+ * Document-processor result callback (Phase 14). Same one-shot-token auth as the
+ * code/browser callbacks, but keyed on the document row rather than a task: the
+ * per-launch token minted by the processor sweep and checkpointed on the
+ * `documents` row is the only credential the credential-free worker carries.
+ */
+webhooks.post('/document/callback', async (c) => {
+  const body = await c.req
+    .json<{
+      documentId?: string;
+      token?: string;
+      result?: { ok?: boolean; kind?: string; chars?: number; error?: string };
+    }>()
+    .catch(() => null);
+  if (!body?.documentId || !body?.token) return c.json({ error: 'bad request' }, 400);
+
+  const r = body.result;
+  const deps = buildDeps();
+  const outcome = await recordDocumentProcessorResult(deps.db, {
+    documentId: body.documentId,
+    token: body.token,
+    result: r
+      ? { ok: r.ok === true, kind: r.kind, chars: r.chars, error: r.error }
+      : { ok: false, error: 'job reported no result' },
   });
   if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
   return c.json({ ok: true });
