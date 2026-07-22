@@ -232,8 +232,13 @@ export async function POST(req: Request) {
   let needsAction = true;
   // A deterministic gate first: a clear imperative ("add lunch Friday noon")
   // must reach the tools path even when the cheap classify model misreads it as
-  // conversation. Only the genuinely ambiguous rest falls through to the model.
-  if (looksLikeActionRequest(userText)) {
+  // conversation. Failed-action follow-ups also return to the executor when
+  // the preceding assistant turn committed to an action. Only the genuinely
+  // ambiguous rest falls through to the model.
+  const priorAssistantText = [...modelHistory.slice(0, -1)]
+    .reverse()
+    .find((message) => message.role === 'assistant');
+  if (looksLikeActionRequest(userText, priorAssistantText ? textOf(priorAssistantText) : '')) {
     needsAction = true;
   } else {
     try {

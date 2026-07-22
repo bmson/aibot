@@ -193,14 +193,19 @@ function inScope(kind: ActionKind, item: ActionEvidence): boolean {
   return !CURRENT_TASK_ONLY.has(kind) || item.fromCurrentTask !== false;
 }
 
-function supports(kind: ActionKind, evidence: ActionEvidence[]): boolean {
-  const usable = evidence.filter((item) => successful(item) && inScope(kind, item));
+function supports(kind: ActionKind, evidence: ActionEvidence[], currentTaskOnly = false): boolean {
+  const usable = evidence.filter(
+    (item) =>
+      successful(item) &&
+      inScope(kind, item) &&
+      (!currentTaskOnly || item.fromCurrentTask !== false),
+  );
   const names = usable.map((item) => item.toolName);
   switch (kind) {
     case 'workspace':
       return names.some(
         (name) =>
-          /^(docs\.(?:create|append|share)|workspace\.write)$/.test(name) ||
+          /^(docs\.(?:create|append|replace_text|share)|workspace\.write)$/.test(name) ||
           name === 'drive.download',
       );
     case 'spreadsheet':
@@ -246,6 +251,8 @@ function supports(kind: ActionKind, evidence: ActionEvidence[]): boolean {
  */
 const WORKSPACE_MUTATION =
   /\b(?:created|shared|uploaded|saved|updated|published|generated|prepared|exported|added|wrote|written|filled|populated)\b/i;
+const ARTIFACT_EDIT =
+  'updated|changed|edited|replaced|added|wrote|written|filled|populated|appended|formatted|reformatted';
 
 const GOOGLE_ARTIFACT_URL = {
   workspace: /https:\/\/docs\.google\.com\/document\//i,
@@ -260,6 +267,30 @@ const GOOGLE_ARTIFACT_URL = {
  */
 function googleArtifactMutationClaim(text: string, url: RegExp): boolean {
   return text.split('\n').some((line) => url.test(line) && WORKSPACE_MUTATION.test(line));
+}
+
+/**
+ * An existing artifact may truthfully be referenced using evidence from an
+ * earlier turn. A claim that it was freshly edited is different: it needs a
+ * successful write in this task, otherwise an old docs.create can mask a new
+ * no-op update.
+ */
+function freshArtifactEditClaim(text: string, kind: 'workspace' | 'spreadsheet' | 'presentation') {
+  const objects = {
+    workspace: 'document|doc|file|drive file',
+    spreadsheet: 'spreadsheet|sheet|tracker',
+    presentation: 'deck|slides|presentation',
+  }[kind];
+  return (
+    completedActionClaim(text, objects, ARTIFACT_EDIT) ||
+    text
+      .split('\n')
+      .some(
+        (line) =>
+          GOOGLE_ARTIFACT_URL[kind].test(line) &&
+          new RegExp(`\\b(?:${ARTIFACT_EDIT})\\b`, 'i').test(line),
+      )
+  );
 }
 
 function claimedKinds(text: string): ActionKind[] {
@@ -414,7 +445,9 @@ const UNSUPPORTED_LABEL: Record<ActionKind, string> = {
 
 function describeTool(name: string): string | undefined {
   if (name === 'drive.download') return 'the requested Drive file was staged';
-  if (/^docs\.(?:create|append|share)$/.test(name)) return 'the Google Doc action completed';
+  if (/^docs\.(?:create|append|replace_text|share)$/.test(name)) {
+    return 'the Google Doc action completed';
+  }
   if (name === 'workspace.write') return 'the workspace file was written';
   if (/^sheets\.(?:create|append_rows|write_rows)$/.test(name)) {
     return 'the Google Sheet action completed';
@@ -469,7 +502,15 @@ export function enforceResponseContract(
   text: string,
   evidence: ActionEvidence[],
 ): ResponseContractResult {
-  const unsupported = claimedKinds(text).filter((kind) => !supports(kind, evidence));
+  const unsupported = claimedKinds(text).filter(
+    (kind) =>
+      !supports(
+        kind,
+        evidence,
+        (kind === 'workspace' || kind === 'spreadsheet' || kind === 'presentation') &&
+          freshArtifactEditClaim(text, kind),
+      ),
+  );
   if (unsupported.length === 0) return { text, blocked: false, unsupported: [] };
   if (unsupported.includes('approval')) {
     return {

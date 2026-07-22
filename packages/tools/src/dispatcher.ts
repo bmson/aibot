@@ -65,6 +65,8 @@ export function approvalFallbackSummary(toolName: string, args: Record<string, u
       return `Create the Google Doc ${quoted(args.title, '')}`.trim();
     case 'docs.append':
       return 'Add content to the selected Google Doc';
+    case 'docs.replace_text':
+      return 'Replace text in the selected Google Doc';
     case 'docs.get':
       return 'Read the selected Google Doc';
     case 'sheets.create':

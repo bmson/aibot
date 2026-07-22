@@ -123,6 +123,10 @@ export interface DocsDocument {
   body?: { content?: DocsStructuralElement[] };
 }
 
+interface DocsBatchResponse {
+  replies?: Array<{ replaceAllText?: { occurrencesChanged?: number } }>;
+}
+
 interface DocsStructuralElement {
   endIndex?: number;
   paragraph?: { elements?: Array<{ textRun?: { content?: string } }> };
@@ -243,6 +247,98 @@ export function registerDocsTools(registry: ToolRegistry, deps: DocsToolDeps): T
           });
         }
         return { documentId: args.documentId, url: docUrl(args.documentId), appended: true };
+      },
+    },
+    { privateWrite: true },
+  );
+
+  const replacementSchema = z
+    .object({
+      oldText: z.string().min(1).max(10_000),
+      newText: z.string().max(10_000),
+      matchCase: z.boolean().default(true),
+    })
+    .refine((replacement) => replacement.oldText !== replacement.newText, {
+      message: 'oldText and newText must be different',
+    });
+  const replaceTextSchema = z.object({
+    documentId,
+    replacements: z.array(replacementSchema).min(1).max(50),
+  });
+
+  register(
+    registry,
+    {
+      name: 'docs.replace_text',
+      description:
+        'Replace exact text in an existing Google Doc while preserving the surrounding document and formatting. Use this for corrections and edits instead of appending a second, contradictory value. The assistant must already have edit access to the document.',
+      inputSchema: replaceTextSchema,
+      risk: 'autonomous',
+      acceptsUntrustedInput: true,
+      execute: async (args) => {
+        const doc = await deps.client.api<DocsDocument>(
+          `${DOCS}/${encodeURIComponent(args.documentId)}`,
+        );
+        const existing = documentText(doc);
+        const pending: Array<(typeof args.replacements)[number]> = [];
+        const alreadyCurrent = new Set<number>();
+
+        for (const [index, replacement] of args.replacements.entries()) {
+          if (existing.includes(replacement.oldText)) {
+            pending.push(replacement);
+          } else if (replacement.newText.length > 0 && existing.includes(replacement.newText)) {
+            // Makes a dispatcher retry safe after Google committed the first
+            // request but its response was lost.
+            alreadyCurrent.add(index);
+          } else {
+            throw new Error(
+              `Text to replace was not found in Google Doc: ${replacement.oldText.slice(0, 120)}`,
+            );
+          }
+        }
+
+        let occurrences: number[] = [];
+        if (pending.length > 0) {
+          const response = await deps.client.api<DocsBatchResponse>(
+            `${DOCS}/${encodeURIComponent(args.documentId)}:batchUpdate`,
+            {
+              method: 'POST',
+              body: JSON.stringify({
+                requests: pending.map((replacement) => ({
+                  replaceAllText: {
+                    containsText: {
+                      text: replacement.oldText,
+                      matchCase: replacement.matchCase,
+                    },
+                    replaceText: replacement.newText,
+                  },
+                })),
+              }),
+            },
+          );
+          occurrences = pending.map(
+            (_, index) => response.replies?.[index]?.replaceAllText?.occurrencesChanged ?? 0,
+          );
+          if (occurrences.some((count) => count < 1)) {
+            throw new Error('Google Docs reported that requested text was not replaced');
+          }
+        }
+
+        let pendingIndex = 0;
+        return {
+          documentId: args.documentId,
+          url: docUrl(args.documentId),
+          updated: pending.length > 0,
+          replacements: args.replacements.map((replacement, index) =>
+            alreadyCurrent.has(index)
+              ? { ...replacement, occurrencesChanged: 0, alreadyCurrent: true }
+              : {
+                  ...replacement,
+                  occurrencesChanged: occurrences[pendingIndex++] ?? 0,
+                  alreadyCurrent: false,
+                },
+          ),
+        };
       },
     },
     { privateWrite: true },

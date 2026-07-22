@@ -239,6 +239,19 @@ describe('response execution contract', () => {
     ).toMatchObject({ blocked: false, text });
   });
 
+  it('accepts a verified Google Doc text replacement', () => {
+    const text = 'I updated the Google Doc.';
+    expect(
+      enforceResponseContract(text, [
+        {
+          toolName: 'docs.replace_text',
+          status: 'succeeded',
+          result: { documentId: 'doc-1', updated: true },
+        },
+      ]),
+    ).toMatchObject({ blocked: false, text });
+  });
+
   it('allows a complex report only when every claimed action has matching success evidence', () => {
     const text =
       'I created the spreadsheet, sent the email, scheduled the interview, and submitted the application.';
@@ -295,6 +308,19 @@ describe('response execution contract', () => {
         },
       ]),
     ).toMatchObject({ blocked: false, text });
+  });
+
+  it('does not let an earlier artifact action justify a fresh edit claim', () => {
+    const guarded = enforceResponseContract('I updated the Google Doc.', [
+      {
+        toolName: 'docs.create',
+        status: 'succeeded',
+        result: { documentId: 'doc-1' },
+        fromCurrentTask: false,
+      },
+    ]);
+    expect(guarded.blocked).toBe(true);
+    expect(guarded.unsupported).toContain('workspace');
   });
 
   it.each([

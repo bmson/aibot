@@ -172,6 +172,88 @@ describe('registerDocsTools', () => {
     expect(requests[0]).toEqual({ insertText: { location: { index: 11 }, text: '\nmore' } });
   });
 
+  it('replaces existing text without appending duplicate content', async () => {
+    const api = vi
+      .fn()
+      .mockResolvedValueOnce({
+        body: {
+          content: [
+            {
+              paragraph: {
+                elements: [
+                  { textRun: { content: 'baldvin@bmson.com | linkedin.com/in/baldvin\n' } },
+                ],
+              },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        replies: [
+          { replaceAllText: { occurrencesChanged: 1 } },
+          { replaceAllText: { occurrencesChanged: 1 } },
+        ],
+      });
+    const tool = toolsWith(api).get('docs.replace_text')?.tool;
+    const result = await tool?.execute(
+      {
+        documentId: 'DOC0000000',
+        replacements: [
+          { oldText: 'baldvin@bmson.com', newText: 'bmson@bmson.com', matchCase: true },
+          {
+            oldText: 'linkedin.com/in/baldvin',
+            newText: 'linkedin.com/in/bmson',
+            matchCase: true,
+          },
+        ],
+      },
+      {} as never,
+    );
+
+    const [batchUrl, batchInit] = api.mock.calls[1] as [string, RequestInit];
+    expect(batchUrl).toBe('https://docs.googleapis.com/v1/documents/DOC0000000:batchUpdate');
+    expect(JSON.parse(String(batchInit.body))).toEqual({
+      requests: [
+        {
+          replaceAllText: {
+            containsText: { text: 'baldvin@bmson.com', matchCase: true },
+            replaceText: 'bmson@bmson.com',
+          },
+        },
+        {
+          replaceAllText: {
+            containsText: { text: 'linkedin.com/in/baldvin', matchCase: true },
+            replaceText: 'linkedin.com/in/bmson',
+          },
+        },
+      ],
+    });
+    expect(result).toMatchObject({ updated: true });
+  });
+
+  it('treats an already-applied replacement as an idempotent success', async () => {
+    const api = vi.fn().mockResolvedValueOnce({
+      body: {
+        content: [
+          { paragraph: { elements: [{ textRun: { content: 'Contact: bmson@bmson.com\n' } }] } },
+        ],
+      },
+    });
+    const tool = toolsWith(api).get('docs.replace_text')?.tool;
+    const result = await tool?.execute(
+      {
+        documentId: 'DOC0000000',
+        replacements: [
+          { oldText: 'baldvin@bmson.com', newText: 'bmson@bmson.com', matchCase: true },
+        ],
+      },
+      {} as never,
+    );
+
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ updated: false });
+  });
+
   it('shares with a third party as an approval-gated, outward-facing tool', () => {
     const registered = toolsWith(vi.fn()).get('docs.share');
     expect(registered?.tool.risk).toBe('approval');
@@ -184,11 +266,18 @@ describe('registerDocsTools', () => {
     const unknown = registry.toolsForTask('unknown').map((t) => t.name);
     expect(unknown).not.toContain('docs.create');
     expect(unknown).not.toContain('docs.append');
+    expect(unknown).not.toContain('docs.replace_text');
     expect(unknown).not.toContain('docs.get');
     expect(unknown).not.toContain('docs.share');
 
     const owner = registry.toolsForTask('owner').map((t) => t.name);
-    expect(owner).toEqual(['docs.create', 'docs.append', 'docs.get', 'docs.share']);
+    expect(owner).toEqual([
+      'docs.create',
+      'docs.append',
+      'docs.replace_text',
+      'docs.get',
+      'docs.share',
+    ]);
   });
 
   it('rejects a document id that is not a valid path segment', () => {

@@ -45,4 +45,23 @@ describe('looksLikeActionRequest', () => {
       expect(looksLikeActionRequest(t), `should be conversation: ${t}`).toBe(false);
     }
   });
+
+  it('routes a failed-action follow-up back to the executor', () => {
+    expect(
+      looksLikeActionRequest(
+        "I'm not seeing the change in these docs",
+        "I'll update the contact info in both documents now.",
+      ),
+    ).toBe(true);
+    expect(
+      looksLikeActionRequest(
+        'Those were not updated',
+        'I updated both Google Docs with the new email address.',
+      ),
+    ).toBe(true);
+  });
+
+  it('does not infer an action from a complaint without a prior action commitment', () => {
+    expect(looksLikeActionRequest("I'm not seeing the change", 'That makes sense.')).toBe(false);
+  });
 });

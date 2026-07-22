@@ -28,7 +28,16 @@ const ACTION_PHRASE =
 const LEADING_FILLER =
   /^(hey|hi|hello|yo|ok|okay|so|also|and|then|now|please|pls|kindly|just|quick|quickly|could you|can you|would you|will you|can u|would u|i need (?:you )?to|i'?d like (?:you )?to|i want (?:you )?to|i'?d like|let'?s|lets|go ahead and)\b[\s,:-]*/;
 
-export function looksLikeActionRequest(text: string): boolean {
+// A failed-action follow-up often has no imperative at all: "I'm not seeing
+// the change" means "check/fix the update you just promised." The cheap
+// classifier used to treat that as feedback and send it to the no-tools path.
+const FAILED_ACTION_FOLLOW_UP =
+  /\b(?:i(?:'m| am) not seeing (?:the |any )?(?:change|changes|update|updates)|i (?:do not|don't) see (?:the |any )?(?:change|changes|update|updates)|(?:it|that|this|they|those|these) (?:wasn't|was not|weren't|were not|isn't|is not|aren't|are not|hasn't|has not|haven't|have not) (?:actually )?(?:updated|changed|added|sent|created|saved|scheduled|booked|fixed|applied|submitted)|(?:it|that|this|they|those|these) (?:didn't|did not) (?:actually )?(?:update|change|send|save|work)|nothing (?:changed|happened|was updated|was added|was sent|was created|was saved)|still (?:missing|unchanged|not updated|not changed|not there)|did you (?:actually )?(?:update|change|add|send|create|save|schedule|book|fix|apply|submit))\b/;
+
+const PRIOR_ACTION_COMMITMENT =
+  /\b(?:update|change|edit|replace|fix|format|add|send|create|save|schedule|book|apply|submit|upload|share|delete|cancel)(?:d|s|ing)?\b/;
+
+export function looksLikeActionRequest(text: string, priorAssistantText = ''): boolean {
   let t = text.trim().toLowerCase();
   if (!t) return false;
   let prev = '';
@@ -36,5 +45,10 @@ export function looksLikeActionRequest(text: string): boolean {
     prev = t;
     t = t.replace(LEADING_FILLER, '');
   }
-  return LEADING_ACTION.test(t) || ACTION_PHRASE.test(t);
+  return (
+    LEADING_ACTION.test(t) ||
+    ACTION_PHRASE.test(t) ||
+    (FAILED_ACTION_FOLLOW_UP.test(t) &&
+      PRIOR_ACTION_COMMITMENT.test(priorAssistantText.toLowerCase()))
+  );
 }
