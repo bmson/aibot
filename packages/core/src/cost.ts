@@ -50,7 +50,7 @@ export const LEDGER_WIRING: Record<SpendSource, string> = {
   cloud_run_job_sec:
     'ToolDispatcher reservation on browser.execute launch; executor reconciles at job settle',
   storage_gb_month: 'monthly GCP billing reconciliation (manual until the billing export lands)',
-  external_api: 'reserved for future paid APIs (rate 0 until one exists)',
+  external_api: 'web.search records a per-call cost here (search provider queries)',
 };
 
 /** Fallbacks when the rate_table row is missing (also the seed values). */

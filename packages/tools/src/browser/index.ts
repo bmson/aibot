@@ -70,6 +70,15 @@ export function registerBrowserTools(registry: ToolRegistry, deps: BrowserDeps):
         context: args.context || undefined,
         taskId: ctx.taskId,
       });
+      if (plan.rung === 'search') {
+        return {
+          browserNeeded: false,
+          rung: plan.rung,
+          rationale: plan.rationale,
+          searchQuery: plan.searchQuery,
+          note: 'No URL known yet — call web.search with searchQuery, then call browser.plan again with the result URLs.',
+        };
+      }
       if (plan.rung === 'api' || plan.rung === 'fetch' || plan.rung === 'parse') {
         return {
           browserNeeded: false,

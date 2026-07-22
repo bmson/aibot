@@ -30,6 +30,7 @@ import {
   registerDocsTools,
   registerDriveTools,
   registerGmailTools,
+  registerSearchTools,
   registerSheetsTools,
   registerSlidesTools,
   registerSmsTools,
@@ -145,6 +146,16 @@ export function buildDeps(): AgentDeps {
   // Inbox watchers take no outward action and need no provider client, so they
   // are available even when Google/Twilio are not configured.
   registerWatchTools(registry);
+
+  // Web search: registered only when a provider + key are configured (like SMS).
+  if (config.SEARCH_PROVIDER !== 'none' && config.SEARCH_API_KEY) {
+    registerSearchTools(registry, {
+      provider: config.SEARCH_PROVIDER,
+      apiKey: config.SEARCH_API_KEY,
+    });
+  } else {
+    console.warn('web.search disabled — set SEARCH_PROVIDER + SEARCH_API_KEY to enable');
+  }
 
   if (googleClient.configured()) {
     const botEmail = 'bot@bmson.com';

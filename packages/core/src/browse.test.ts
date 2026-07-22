@@ -41,19 +41,34 @@ describe('BrowserPlanSchema', () => {
     expect(plan.rationale).toBe('');
   });
 
-  it('rejects unknown actions and over-long plans', () => {
+  it('rejects unknown actions', () => {
     expect(() =>
       BrowserPlanSchema.parse({
         ...readOnlyPlan,
         steps: [{ action: 'download', url: 'https://x.test' }],
       }),
     ).toThrow();
-    expect(() =>
-      BrowserPlanSchema.parse({
-        ...readOnlyPlan,
-        steps: Array.from({ length: 31 }, () => ({ action: 'scroll' })),
-      }),
-    ).toThrow();
+  });
+
+  it('accepts over-long plans at the schema (planBrowse caps them post-parse)', () => {
+    // maxItems was removed so the plan can be authored by the reason role; the
+    // MAX_BROWSER_STEPS cap is enforced in planBrowse instead of the schema.
+    const parsed = BrowserPlanSchema.parse({
+      ...readOnlyPlan,
+      steps: Array.from({ length: 31 }, () => ({ action: 'scroll' })),
+    });
+    expect(parsed.steps).toHaveLength(31);
+  });
+
+  it('accepts the search rung with a query', () => {
+    const parsed = BrowserPlanSchema.parse({
+      goal: 'find the current pnpm docs',
+      rung: 'search',
+      searchQuery: 'pnpm workspace docs',
+      steps: [],
+    });
+    expect(parsed.rung).toBe('search');
+    expect(parsed.searchQuery).toBe('pnpm workspace docs');
   });
 
   it('allows uploads only from the purpose-staged attachment area', () => {
@@ -117,13 +132,35 @@ describe('isBrowserJobPending', () => {
 });
 
 describe('planBrowse', () => {
-  it('parses the model output through the schema', async () => {
+  it('parses the model output through the schema on the reason role', async () => {
+    let usedRole: string | undefined;
     const router = {
-      object: async () => ({ ok: true, modelId: 'fake', degraded: false, object: readOnlyPlan }),
+      object: async (role: string) => {
+        usedRole = role;
+        return { ok: true, modelId: 'fake', degraded: false, object: readOnlyPlan };
+      },
     } as unknown as ModelRouter;
     const plan = await planBrowse(router, { goal: 'top HN story' });
+    expect(usedRole).toBe('reason');
     expect(plan.rung).toBe('headless');
     expect(plan.steps).toHaveLength(3);
+  });
+
+  it('caps an over-long plan at MAX_BROWSER_STEPS post-parse', async () => {
+    const router = {
+      object: async () => ({
+        ok: true,
+        modelId: 'fake',
+        degraded: false,
+        object: {
+          ...readOnlyPlan,
+          steps: Array.from({ length: 45 }, () => ({ action: 'scroll' })),
+        },
+      }),
+    } as unknown as ModelRouter;
+    const plan = await planBrowse(router, { goal: 'scroll forever' });
+    expect(plan.steps).toHaveLength(30);
+    expect(plan.rationale).toContain('truncated');
   });
 
   it('throws when the budget guard blocks planning', async () => {

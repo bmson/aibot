@@ -72,6 +72,10 @@ const ConfigSchema = z.object({
   LOCATION_PING_SECRET: z.string().default(''),
   /** How many days a location ping is kept before the sweep purges it. */
   LOCATION_RETENTION_DAYS: z.coerce.number().min(1).max(90).default(3),
+  /** Web search: which provider backs the web.search tool; 'none' disables it. */
+  SEARCH_PROVIDER: z.enum(['none', 'brave', 'tavily', 'serper']).default('none'),
+  /** API key for SEARCH_PROVIDER; web.search is unregistered without it. */
+  SEARCH_API_KEY: z.string().default(''),
   /** Self-maintenance (Phase 21): a GitHub token the bot opens self-PRs with; empty disables PRs. */
   GITHUB_TOKEN: z.string().default(''),
   GITHUB_REPO: z.string().default('bmson/aibot'),
