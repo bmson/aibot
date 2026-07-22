@@ -1,5 +1,6 @@
 export * from './anomaly.js';
 export * from './approvals.js';
+export * from './autonomy.js';
 export * from './browser.js';
 export * from './code-job.js';
 export * from './dream.js';

@@ -260,6 +260,13 @@
       "when": 1784687473284,
       "tag": "0036_modern_night_nurse",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1784734228576,
+      "tag": "0037_thin_madripoor",
+      "breakpoints": true
     }
   ]
 }

@@ -254,6 +254,32 @@ export async function setGoalStatus(goalId: string, status: GoalStatus): Promise
   revalidateGoalViews();
 }
 
+/**
+ * Toggle a goal's free-range mode. When on, each automatic session is armed with
+ * an autonomy grant (see workflow/schedules.ts) so it can consult memory AND act
+ * without parking every call — the dispatcher's hard floor still applies. Refused
+ * for a tainted-origin goal, which can never be armed.
+ */
+export async function setGoalAutonomy(goalId: string, enabled: boolean): Promise<void> {
+  await requireOwner();
+  const db = getDb();
+  const agent = await getAgent(db);
+  const [goal] = await db
+    .select({ taintedOrigin: goals.taintedOrigin })
+    .from(goals)
+    .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id)))
+    .limit(1);
+  if (!goal) throw new Error('goal not found');
+  if (enabled && goal.taintedOrigin) {
+    throw new Error('a goal created from external content cannot be given free-range autonomy');
+  }
+  await db
+    .update(goals)
+    .set({ autonomy: enabled, updatedAt: new Date() })
+    .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id)));
+  revalidateGoalViews();
+}
+
 async function requireArchivableGoal(goalId: string) {
   const db = getDb();
   const agent = await getAgent(db);

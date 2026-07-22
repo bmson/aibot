@@ -74,6 +74,15 @@ export const goals = pgTable(
      * instead of autonomous. A goal the owner creates directly is untainted.
      */
     taintedOrigin: boolean('tainted_origin').notNull().default(false),
+    /**
+     * Owner opt-in "free-range" mode: every automatic work session this goal
+     * spawns is armed with an autonomy grant, so it may consult memory AND act
+     * outward without parking each call for approval (the same hard floor as a
+     * per-task grant still applies: memory writes under taint, unverified
+     * recipients, interactive browser/networked code, and policy denies). A
+     * tainted-origin goal can never be armed. Off by default.
+     */
+    autonomy: boolean('autonomy').notNull().default(false),
     /** Owner-hidden goal history. Linked chats, tasks, and evidence stay intact. */
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     ...timestamps,
@@ -231,6 +240,16 @@ export const tasks = pgTable(
     status: text('status').notNull().default('pending'),
     conversationId: uuid('conversation_id').references(() => conversations.id),
     goalId: uuid('goal_id').references(() => goals.id),
+    /** Short human title for activity/approval UIs (planner-authored; falls back to the instruction). */
+    title: text('title'),
+    /**
+     * Owner-armed "free-range" grant (Phase 3). When present, unexpired, and
+     * unrevoked, the dispatcher downgrades an otherwise approval-gated call to
+     * autonomous — EXCEPT the hard floor (memory writes under taint, unverified
+     * recipients, interactive browser / networked code, policy denies, budget).
+     * Never armed from a tainted-origin task. See workflow/autonomy.ts.
+     */
+    autonomyGrant: jsonb('autonomy_grant'),
     /** Normalized InboundEvent that triggered this workflow. */
     trigger: jsonb('trigger').notNull().default({}),
     /** Idempotency for event → task creation (Gmail historyId+msgId, Twilio SID, ...). */

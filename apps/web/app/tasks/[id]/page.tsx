@@ -1,4 +1,4 @@
-import { getAgent } from '@assistant/core';
+import { activeAutonomyGrant, getAgent } from '@assistant/core';
 import { approvals, messages, modelCalls, tasks, toolCalls } from '@assistant/db';
 import { and, asc, eq } from 'drizzle-orm';
 import Link from 'next/link';
@@ -15,6 +15,7 @@ import {
   raiseTaskBudgetAndRetry,
   restoreTask,
   retryTask,
+  revokeAutonomyGrant,
 } from '../actions';
 
 export const dynamic = 'force-dynamic';
@@ -191,6 +192,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   const suggestedBudget = Math.ceil(Math.max(taskBudget * 2, Number(task.spentUsd) + 0.25) * 4) / 4;
   const stoppedForTaskBudget =
     task.status === 'needs_attention' && task.progress.startsWith('budget: task budget');
+  const activeGrant = activeAutonomyGrant(task, Date.now());
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -201,8 +203,27 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         ← Activity
       </Link>
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-semibold tracking-[-0.03em]">{taskTypeLabel(task.type)}</h1>
+        <h1 className="text-2xl font-semibold tracking-[-0.03em]">
+          {task.title || taskTypeLabel(task.type)}
+        </h1>
         <StatusChip status={task.status} />
+        {activeGrant ? (
+          <>
+            <span
+              className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+              title={`Free-range granted via ${activeGrant.grantedVia}. I act without asking, except the hard floor (memory from web content, unknown recipients, logged-in browsing, networked code) and budget caps.`}
+            >
+              ⚡ Free-range
+            </span>
+            {!TERMINAL_TASK_STATUSES.has(task.status) ? (
+              <form action={revokeAutonomyGrant.bind(null, task.id)}>
+                <button type="submit" className={btn.outline}>
+                  Revoke free-range
+                </button>
+              </form>
+            ) : null}
+          </>
+        ) : null}
         {task.status === 'needs_attention' && !stoppedForTaskBudget ? (
           <form action={retryTask.bind(null, task.id)}>
             <button type="submit" className={btn.primary}>

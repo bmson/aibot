@@ -25,6 +25,33 @@ export async function retryTask(taskId: string): Promise<void> {
   revalidateTaskViews(taskId);
 }
 
+/**
+ * Revoke a task's free-range autonomy grant mid-run. Marks the grant revoked so
+ * the dispatcher stops downgrading its calls; the next gated call parks normally.
+ * Owner-only.
+ */
+export async function revokeAutonomyGrant(taskId: string): Promise<void> {
+  await requireOwner();
+  const db = getDb();
+  const agent = await getAgent(db);
+  const [task] = await db
+    .select({ autonomyGrant: tasks.autonomyGrant })
+    .from(tasks)
+    .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agent.id)))
+    .limit(1);
+  const grant = task?.autonomyGrant as Record<string, unknown> | null;
+  if (grant && !grant.revokedAt) {
+    await db
+      .update(tasks)
+      .set({
+        autonomyGrant: { ...grant, revokedAt: new Date().toISOString() },
+        updatedAt: new Date(),
+      })
+      .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agent.id)));
+  }
+  revalidateTaskViews(taskId);
+}
+
 /** Raise one task's hard cap and immediately re-queue its checkpointed work. */
 export async function raiseTaskBudgetAndRetry(taskId: string, formData: FormData): Promise<void> {
   await requireOwner();

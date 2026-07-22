@@ -5,6 +5,7 @@ import { useActionState, useState } from 'react';
 import {
   archiveGoal,
   restoreGoal,
+  setGoalAutonomy,
   setGoalStatus,
   startGoalWork,
   updateGoal,
@@ -46,6 +47,10 @@ export interface GoalView {
   blockedLabel: string;
   /** Mirror this goal's autonomous updates into the primary chat thread. */
   mirrorToPrimary: boolean;
+  /** Free-range: each automatic session acts without per-step approval (floor still applies). */
+  autonomy: boolean;
+  /** A goal from external content — can never be armed free-range. */
+  taintedOrigin: boolean;
 }
 
 const outlineButton = btn.outline;
@@ -131,6 +136,12 @@ export function GoalCard({ goal }: { goal: GoalView }) {
           ↩ Updates mirrored to your main chat thread
         </p>
       ) : null}
+      {goal.autonomy ? (
+        <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-300">
+          ⚡ Free-range: sessions act without asking (memory-from-web, unknown recipients, logged-in
+          browsing, and networked code still ask)
+        </p>
+      ) : null}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
         {goal.conversationId ? (
@@ -164,6 +175,13 @@ export function GoalCard({ goal }: { goal: GoalView }) {
               <form action={setGoalStatus.bind(null, goal.id, 'active')}>
                 <button type="submit" className={outlineButton}>
                   Resume automation
+                </button>
+              </form>
+            ) : null}
+            {!goal.taintedOrigin ? (
+              <form action={setGoalAutonomy.bind(null, goal.id, !goal.autonomy)}>
+                <button type="submit" className={outlineButton}>
+                  {goal.autonomy ? 'Turn off free-range' : 'Make free-range'}
                 </button>
               </form>
             ) : null}

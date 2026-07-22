@@ -579,6 +579,71 @@ describe('ToolDispatcher (integration)', () => {
     expect(provided.kind).toBe('executed');
   });
 
+  it('honors a free-range grant for ordinary approvals but never crosses the floor', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const grant = {
+      grantedAt: new Date().toISOString(),
+      grantedVia: 'composer' as const,
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      revokedAt: null,
+    };
+    const registry = new ToolRegistry()
+      .register(makeTool('test.outward', { risk: 'approval' }), { outwardFacing: true })
+      .register(makeTool('test.mem'), { writesMemory: true })
+      .register(makeTool('test.floor', { risk: 'approval' }), { autonomyFloor: true });
+    const dispatcher = new ToolDispatcher(db, registry);
+    const task = await makeTask('owner');
+    const granted = { ...task, autonomyGrant: grant };
+
+    // Ordinary approval-gated outward call → autonomous under the grant.
+    const outward = await dispatcher.dispatch({
+      task: granted,
+      step: 1,
+      toolName: 'test.outward',
+      args: { value: 'go' },
+      ctx: ctxFor(granted),
+      provenance,
+    });
+    expect(outward.kind).toBe('executed');
+
+    // Floor 1: a memory write under taint stays parked despite the grant.
+    const mem = await dispatcher.dispatch({
+      task: granted,
+      step: 2,
+      toolName: 'test.mem',
+      args: { value: 'x' },
+      ctx: { ...ctxFor(granted), tainted: true },
+      provenance,
+    });
+    expect(mem.kind).toBe('awaiting_approval');
+
+    // Floor 3: a floor-flagged tool (browser/code class) stays parked.
+    const floor = await dispatcher.dispatch({
+      task: granted,
+      step: 3,
+      toolName: 'test.floor',
+      args: { value: 'y' },
+      ctx: ctxFor(granted),
+      provenance,
+    });
+    expect(floor.kind).toBe('awaiting_approval');
+
+    // An expired grant does not downgrade anything.
+    const expired = {
+      ...task,
+      autonomyGrant: { ...grant, expiresAt: new Date(Date.now() - 1000).toISOString() },
+    };
+    const stillParked = await dispatcher.dispatch({
+      task: expired,
+      step: 4,
+      toolName: 'test.outward',
+      args: { value: 'z' },
+      ctx: ctxFor(expired),
+      provenance,
+    });
+    expect(stillParked.kind).toBe('awaiting_approval');
+  });
+
   it('conservatively meters an ambiguous SMS outcome and suppresses retries', async (ctx) => {
     if (!dbUp) return ctx.skip();
     let attempts = 0;

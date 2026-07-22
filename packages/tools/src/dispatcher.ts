@@ -1,5 +1,7 @@
 import { createHash, randomInt } from 'node:crypto';
 import {
+  activeAutonomyGrant,
+  autonomyFloorBlocks,
   getRate,
   isBrowserJobPending,
   isGoalWorkEvidence,
@@ -629,7 +631,7 @@ export class ToolDispatcher {
         ? await this.unverifiedRecipients(input.toolName, args, input.ctx)
         : [];
     const recipientUnverified = unverifiedRecipients.length > 0;
-    const tier: RiskTier = taintNeedsApproval
+    const computedTier: RiskTier = taintNeedsApproval
       ? 'approval'
       : policyAllows
         ? 'autonomous'
@@ -637,15 +639,32 @@ export class ToolDispatcher {
           ? 'approval'
           : baseTier;
 
+    // Free-range grant: an owner-armed grant downgrades an otherwise
+    // approval-gated call to autonomous, unless the call is on the hard floor
+    // (memory write under taint, unverified recipient, or a floor-flagged
+    // high-consequence tool). Policy denies already returned above, and budget
+    // is still reserved on the autonomous path — both stay enforced.
+    const grant = computedTier === 'approval' ? activeAutonomyGrant(input.task, Date.now()) : null;
+    const grantApplied =
+      grant !== null &&
+      !autonomyFloorBlocks({
+        flags: registered.flags,
+        tainted: input.ctx.tainted,
+        recipientUnverified,
+      });
+    const tier: RiskTier = grantApplied ? 'autonomous' : computedTier;
+
     const decision = {
       riskTier: tier,
-      reason: taintNeedsApproval
-        ? 'owner approval required because untrusted content entered this workflow'
-        : policyAllows
-          ? `allowed by policy ${policyMatch?.policy.templateKey}`
-          : recipientUnverified
-            ? `owner approval required: unverified recipient (${unverifiedRecipients.join(', ')}) — not in this conversation or your contacts`
-            : `tool default (${baseTier})`,
+      reason: grantApplied
+        ? `autonomous under your free-range grant (armed via ${grant?.grantedVia})`
+        : taintNeedsApproval
+          ? 'owner approval required because untrusted content entered this workflow'
+          : policyAllows
+            ? `allowed by policy ${policyMatch?.policy.templateKey}`
+            : recipientUnverified
+              ? `owner approval required: unverified recipient (${unverifiedRecipients.join(', ')}) — not in this conversation or your contacts`
+              : `tool default (${baseTier})`,
       policyId: policyMatch?.policy.id,
       policyVersion: policyMatch?.policy.version,
       plannerVersion: input.provenance.plannerVersion,

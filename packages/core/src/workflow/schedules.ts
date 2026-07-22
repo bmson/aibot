@@ -14,6 +14,7 @@ import { Cron } from 'croner';
 import { and, desc, eq, gt, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import { persistMessage } from '../chat.js';
 import { InboundEventSchema } from '../events.js';
+import { type AutonomyGrant, buildAutonomyGrant } from './autonomy.js';
 import { completeTask, enqueueTask, type TaskType } from './machine.js';
 
 const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'];
@@ -499,6 +500,19 @@ export async function runDueSchedules(
       /** A goal created from a tainted session — its firings must start tainted. */
       taintedOrigin?: boolean;
     };
+    // A goal in free-range mode arms each of its automatic sessions with a grant
+    // so they can consult memory AND act outward without parking every call —
+    // the dispatcher's hard floor still holds. Never for a tainted-origin goal.
+    let goalAutonomyGrant: AutonomyGrant | undefined;
+    if (template.goalId) {
+      const [goalRow] = await db
+        .select({ autonomy: goals.autonomy, taintedOrigin: goals.taintedOrigin })
+        .from(goals)
+        .where(eq(goals.id, template.goalId));
+      if (goalRow?.autonomy && !goalRow.taintedOrigin) {
+        goalAutonomyGrant = buildAutonomyGrant({ grantedVia: 'goal', nowMs: Date.now() });
+      }
+    }
     if (template.goalId) {
       const verdict = await goalAutomationGate(db, template.goalId, template.conversationId);
       if (!verdict.fire) {
@@ -539,6 +553,7 @@ export async function runDueSchedules(
       goalId: template.goalId,
       budgetUsdLimit: template.budgetUsdLimit,
       maxSteps: template.maxSteps,
+      ...(goalAutonomyGrant ? { autonomyGrant: goalAutonomyGrant } : {}),
     });
     if (created) fired.push({ schedule: row.name, taskId: task.id });
 

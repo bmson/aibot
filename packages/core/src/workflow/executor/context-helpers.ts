@@ -1,5 +1,6 @@
 import type { TaskRow } from '@assistant/db';
 import { nextDailyReset, nextMonthlyReset } from '../../cost.js';
+import { activeAutonomyGrant } from '../autonomy.js';
 
 /**
  * Trigger-payload marker for the D9 known-sender reply child: an assistant-trust
@@ -54,6 +55,18 @@ export function channelContext(task: TaskRow): string {
       return "\nThis task came from the owner's dashboard chat; your final text appears there as your reply.";
     default:
       if (task.goalId) {
+        const freeRange = activeAutonomyGrant(task, Date.now()) !== null;
+        if (freeRange) {
+          // Free-range goal session: the grant means a lookup no longer forfeits
+          // the ability to act, so the model may ground itself first and then act.
+          return [
+            "\nThis is a goal's automatic work session, running free-range: the owner armed it to work autonomously, so you can consult your own state AND act without stopping for approval on each step.",
+            'Do the work now with your tools — do not describe a plan, promise to report back, or ask a question you could answer yourself by looking.',
+            'Ground yourself first if it helps (memory.recall, goals.list, contacts.lookup), then take the outward step that moves the goal (browser.plan → browser.execute, or web.fetch for a plain page).',
+            'Not knowing a URL is not a blocker: go to the most likely site. A "verify you are human"/CAPTCHA page is a block, never content.',
+            'Finish by calling goals.update_progress with what you verified and the concrete next step.',
+          ].join('\n');
+        }
         // Nobody is reading this live, so a message describing what you intend
         // to do reaches no one and changes nothing. Only a tool result does.
         return [

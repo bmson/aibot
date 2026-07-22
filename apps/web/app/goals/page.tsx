@@ -73,6 +73,8 @@ function toGoalView(
       ? `Blocked — needs you: ${blockedQuestion || 'the last automatic session stopped and needs review (see the work chat)'}`
       : '',
     mirrorToPrimary: goal.mirrorToPrimary,
+    autonomy: goal.autonomy,
+    taintedOrigin: goal.taintedOrigin,
   };
 }
 

@@ -189,10 +189,13 @@ export function registerBrowserTools(registry: ToolRegistry, deps: BrowserDeps):
         }
       },
     },
-    // A logged-in browser acts on the outside world; never blanket-allowable.
+    // A logged-in browser acts on the outside world; never blanket-allowable,
+    // and part of the free-range floor — an autonomy grant never auto-approves
+    // an interactive/profile browser step.
     {
       outwardFacing: true,
       blanketAllowIneligible: true,
+      autonomyFloor: true,
       returnsUntrustedContent: true,
       networkEgress: true,
     },

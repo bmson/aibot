@@ -1,4 +1,5 @@
 import {
+  buildAutonomyGrant,
   buildSystemPrompt,
   createChatTask,
   encodeMessageCursor,
@@ -170,10 +171,19 @@ export async function POST(req: Request) {
   if (!parsedBody || typeof parsedBody !== 'object' || Array.isArray(parsedBody)) {
     return Response.json({ error: 'body must be an object' }, { status: 400 });
   }
-  const body = parsedBody as { messages?: UIMessage[]; conversationId?: string };
+  const body = parsedBody as {
+    messages?: UIMessage[];
+    conversationId?: string;
+    autonomous?: boolean;
+  };
   if (body.conversationId && !UUID_RE.test(body.conversationId)) {
     return Response.json({ error: 'invalid conversationId' }, { status: 400 });
   }
+  // The composer's "Autonomous" toggle. This POST is an authenticated owner
+  // action (isAuthed above), so it is a valid grant-arming surface: the toggle
+  // IS the approval, and the task runs free-range (subject to the dispatcher's
+  // hard floor). A forced action request always runs through the executor.
+  const autonomousRequested = body.autonomous === true;
   const uiMessages = body.messages ?? [];
   if (!Array.isArray(uiMessages)) {
     return Response.json({ error: 'messages must be an array' }, { status: 400 });
@@ -238,7 +248,12 @@ export async function POST(req: Request) {
   const priorAssistantText = [...modelHistory.slice(0, -1)]
     .reverse()
     .find((message) => message.role === 'assistant');
-  if (looksLikeActionRequest(userText, priorAssistantText ? textOf(priorAssistantText) : '')) {
+  if (
+    autonomousRequested ||
+    looksLikeActionRequest(userText, priorAssistantText ? textOf(priorAssistantText) : '')
+  ) {
+    // A free-range request must run through the executor (which honors the grant
+    // and its floor) — never the tool-less streaming path.
     needsAction = true;
   } else {
     try {
@@ -295,6 +310,9 @@ export async function POST(req: Request) {
         // An answer typed into a goal's work chat belongs to that goal, so the
         // goal's own sessions can see it was answered.
         goalId: await goalIdForConversation(db, conversation.id),
+        ...(autonomousRequested
+          ? { autonomyGrant: buildAutonomyGrant({ grantedVia: 'composer', nowMs: Date.now() }) }
+          : {}),
       });
       return acceptedStreamResponse(task.id, {
         'x-conversation-id': conversation.id,

@@ -110,10 +110,13 @@ export function registerCodeTools(registry: ToolRegistry, deps: CodeDeps): ToolR
       },
     },
     // Model-authored code that can reach the network acts on the outside world;
-    // never blanket-allowable, and its output may carry untrusted content.
+    // never blanket-allowable, and part of the free-range floor — an autonomy
+    // grant never auto-approves network-enabled code. Its output may carry
+    // untrusted content.
     {
       outwardFacing: true,
       blanketAllowIneligible: true,
+      autonomyFloor: true,
       returnsUntrustedContent: true,
       networkEgress: true,
     },

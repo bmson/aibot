@@ -102,6 +102,15 @@ export interface ToolFlags {
   /** Never eligible for a blanket "always allow" policy. */
   blanketAllowIneligible?: boolean;
   /**
+   * Part of the free-range hard floor: even an owner-armed autonomy grant never
+   * downgrades this tool's approval to autonomous. Set on the highest-consequence
+   * capabilities (interactive/logged-in browser sessions, network-enabled code)
+   * so "approve everything for this task" still stops at them. The read-only
+   * variants of these tools are already autonomous, so the grant is never needed
+   * for those; this only keeps the dangerous variant gated.
+   */
+  autonomyFloor?: boolean;
+  /**
    * The tool's ONLY sink is the owner's own dashboard/conversation — it cannot
    * reach a third party or the network. Such a tool stays autonomous even under
    * taint: gating a message the owner sends to themselves behind the owner's own

@@ -3,6 +3,7 @@ import { and, eq, gt, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-
 import type { InboundEvent, Plan } from '../events.js';
 import { type TaskState, TaskStateSchema } from '../events.js';
 import { getQueueNotifier } from '../queue.js';
+import type { AutonomyGrant } from './autonomy.js';
 
 export type TaskType = TaskRow['type'];
 
@@ -72,6 +73,12 @@ export async function enqueueTask(
      * reply) whose next action is fixed rather than model-decided.
      */
     plan?: Plan;
+    /**
+     * Owner-armed free-range grant, set atomically at creation (composer toggle,
+     * goal automation). Arming is always an authenticated owner action; enqueue
+     * callers must never derive this from task content.
+     */
+    autonomyGrant?: AutonomyGrant;
     /** Caller is inside a larger transaction and will notify only after commit. */
     deferNotification?: boolean;
   },
@@ -91,6 +98,7 @@ export async function enqueueTask(
     ...(input.budgetUsdLimit ? { budgetUsdLimit: input.budgetUsdLimit } : {}),
     ...(input.maxSteps ? { maxSteps: input.maxSteps } : {}),
     ...(input.plan ? { plan: input.plan } : {}),
+    ...(input.autonomyGrant ? { autonomyGrant: input.autonomyGrant } : {}),
   };
 
   if (input.event.externalEventId) {

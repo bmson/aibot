@@ -129,6 +129,10 @@ export function ChatClient({
   const [asyncNote, setAsyncNote] = useState<string | null>(null);
   /** Live provenance for the current streaming turn (the persisted part covers reloads). */
   const [liveRecall, setLiveRecall] = useState<RecallSource[] | null>(null);
+  /** "Autonomous" composer toggle: this turn runs free-range (approve-once). */
+  const [autonomous, setAutonomous] = useState(false);
+  const autonomousRef = useRef(false);
+  autonomousRef.current = autonomous;
   const formRef = useRef<HTMLFormElement>(null);
   const messageScrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
@@ -142,7 +146,15 @@ export function ChatClient({
         // size flat and prevents a client from selecting model context.
         prepareSendMessagesRequest: ({ messages, body }) => {
           const latestUser = [...messages].reverse().find((message) => message.role === 'user');
-          return { body: { ...body, messages: latestUser ? [latestUser] : [] } };
+          // Read the toggle through a ref so the memoized transport always sees
+          // its current value without re-creating on every keystroke.
+          return {
+            body: {
+              ...body,
+              autonomous: autonomousRef.current,
+              messages: latestUser ? [latestUser] : [],
+            },
+          };
         },
         // Wrap fetch to capture the routing headers set by the chat route.
         fetch: (async (info, init) => {
@@ -455,29 +467,43 @@ export function ChatClient({
           event.preventDefault();
           submitCurrentMessage();
         }}
-        className="mobile-safe-bottom flex gap-2 border-t border-slate-200 pt-4 dark:border-zinc-800"
+        className="mobile-safe-bottom flex flex-col gap-2 border-t border-slate-200 pt-4 dark:border-zinc-800"
       >
-        <textarea
-          aria-label="Message"
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              formRef.current?.requestSubmit();
-            }
-          }}
-          placeholder="Ask anything…"
-          rows={2}
-          className="max-h-40 flex-1 resize-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-base outline-none transition-shadow placeholder:text-slate-400 focus:border-indigo-400 focus:ring-3 focus:ring-indigo-100 sm:text-sm dark:border-zinc-700 dark:bg-zinc-900"
-        />
-        <button
-          type="submit"
-          disabled={busy || input.trim() === ''}
-          className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-50"
+        <label
+          className="flex cursor-pointer select-none items-center gap-2 self-start text-xs text-slate-500 dark:text-zinc-400"
+          title="Run this request free-range: I act without asking for each approval. Sensitive steps (memory from web content, unknown recipients, logged-in browsing, networked code) still ask, and budget caps still apply."
         >
-          {busy ? '…' : 'Send'}
-        </button>
+          <input
+            type="checkbox"
+            checked={autonomous}
+            onChange={(event) => setAutonomous(event.target.checked)}
+            className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-400 dark:border-zinc-600"
+          />
+          Autonomous — act without asking me to approve each step
+        </label>
+        <div className="flex gap-2">
+          <textarea
+            aria-label="Message"
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                formRef.current?.requestSubmit();
+              }
+            }}
+            placeholder="Ask anything…"
+            rows={2}
+            className="max-h-40 flex-1 resize-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-base outline-none transition-shadow placeholder:text-slate-400 focus:border-indigo-400 focus:ring-3 focus:ring-indigo-100 sm:text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          />
+          <button
+            type="submit"
+            disabled={busy || input.trim() === ''}
+            className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {busy ? '…' : 'Send'}
+          </button>
+        </div>
       </form>
     </div>
   );
