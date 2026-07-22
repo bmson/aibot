@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { markdownToEmailHtml, markdownToPlainText } from '../markdown-email.js';
 import type { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolContext, ToolFlags } from '../types.js';
 import {
@@ -112,12 +113,23 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
   const outboundSchema = z.object({
     to: z.array(z.string().email()).min(1).max(10),
     subject: z.string().min(1).max(200),
-    body: z.string().min(1).max(20000),
+    body: z
+      .string()
+      .min(1)
+      .max(20000)
+      .describe(
+        'Email body in Markdown — it is rendered as formatted HTML (with a plain-text fallback), so **bold**, lists, and [links](https://…) display correctly. Do not paste raw URLs when a labelled link reads better.',
+      ),
     threadId: z.string().optional(),
+    /** RFC-822 Message-ID of the message being replied to, for cross-client threading. */
+    inReplyToRfcId: z.string().max(998).optional(),
     register: z.enum(['email_professional', 'email_casual']).default('email_casual'),
     /** Set by the voice pipeline when the fact check failed — shown on the approval card. */
     voiceFlag: z.string().optional(),
   });
+
+  const threadingHeaders = (args: z.infer<typeof outboundSchema>) =>
+    args.inReplyToRfcId ? { inReplyTo: args.inReplyToRfcId, references: args.inReplyToRfcId } : {};
 
   const prepareOutbound = async (
     args: z.infer<typeof outboundSchema>,
@@ -151,7 +163,9 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
           from: fromHeader(deps),
           to: args.to,
           subject: args.subject,
-          body: args.body,
+          body: markdownToPlainText(args.body),
+          html: markdownToEmailHtml(args.body),
+          ...threadingHeaders(args),
         });
         const draft = await deps.client.api<{ id: string; message?: { id: string } }>(
           `${GMAIL}/drafts`,
@@ -192,7 +206,9 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
           from: fromHeader(deps),
           to: args.to,
           subject: args.subject,
-          body: args.body,
+          body: markdownToPlainText(args.body),
+          html: markdownToEmailHtml(args.body),
+          ...threadingHeaders(args),
         });
         const sent = await deps.client.api<{ id: string; threadId: string }>(
           `${GMAIL}/messages/send`,

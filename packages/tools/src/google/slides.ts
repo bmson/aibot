@@ -3,6 +3,10 @@ import { z } from 'zod';
 import type { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolFlags } from '../types.js';
 import type { GoogleClient } from './client.js';
+import { renderSlideBody } from './docs-markdown.js';
+
+const CODE_FONT = 'Courier New';
+const LINK_COLOR = { red: 0.06, green: 0.45, blue: 0.8 };
 
 const SLIDES = 'https://slides.googleapis.com/v1/presentations';
 const DRIVE = 'https://www.googleapis.com/drive/v3/files';
@@ -11,7 +15,13 @@ const DRIVE = 'https://www.googleapis.com/drive/v3/files';
 const presentationId = z.string().regex(/^[a-zA-Z0-9_-]{10,200}$/, 'not a Google presentation id');
 const slide = z.object({
   title: z.string().min(1).max(300),
-  body: z.string().max(15_000).default(''),
+  body: z
+    .string()
+    .max(15_000)
+    .default('')
+    .describe(
+      'Slide body in Markdown — `-`/`*` bullets, **bold**, *italic*, `code`, and [links](https://…) render as real formatting. Keep it concise; one idea per bullet.',
+    ),
 });
 const slideList = z.array(slide).min(1).max(30);
 
@@ -89,6 +99,7 @@ export function buildSlideRequests(
       },
     );
     if (content.body) {
+      const rendered = renderSlideBody(content.body);
       requests.push(
         {
           createShape: {
@@ -104,7 +115,7 @@ export function buildSlideRequests(
             },
           },
         },
-        { insertText: { objectId: bodyId, insertionIndex: 0, text: content.body } },
+        { insertText: { objectId: bodyId, insertionIndex: 0, text: rendered.text } },
         {
           updateTextStyle: {
             objectId: bodyId,
@@ -114,6 +125,49 @@ export function buildSlideRequests(
           },
         },
       );
+      // Bullets first (they only tag paragraphs), then per-run emphasis over
+      // FIXED_RANGE spans computed against the stripped body text.
+      for (const range of rendered.bulletRanges) {
+        requests.push({
+          createParagraphBullets: {
+            objectId: bodyId,
+            textRange: { type: 'FIXED_RANGE', startIndex: range.start, endIndex: range.end },
+            bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+          },
+        });
+      }
+      for (const span of rendered.spans) {
+        const style: Record<string, unknown> = {};
+        const fields: string[] = [];
+        if (span.bold) {
+          style.bold = true;
+          fields.push('bold');
+        }
+        if (span.italic) {
+          style.italic = true;
+          fields.push('italic');
+        }
+        if (span.code) {
+          style.fontFamily = CODE_FONT;
+          fields.push('fontFamily');
+        }
+        if (span.link) {
+          style.link = { url: span.link };
+          style.underline = true;
+          style.foregroundColor = { opaqueColor: { rgbColor: LINK_COLOR } };
+          fields.push('link', 'underline', 'foregroundColor');
+        }
+        if (fields.length > 0) {
+          requests.push({
+            updateTextStyle: {
+              objectId: bodyId,
+              style,
+              textRange: { type: 'FIXED_RANGE', startIndex: span.start, endIndex: span.end },
+              fields: fields.join(','),
+            },
+          });
+        }
+      }
     }
   }
   return requests;
@@ -134,7 +188,7 @@ export function registerSlidesTools(registry: ToolRegistry, deps: SlidesToolDeps
     {
       name: 'slides.create',
       description:
-        "Create a Google Slides presentation in the assistant's Drive, populate it with a concise deck, and share it with the owner. Use this when the owner asks for a presentation, slide deck, briefing, or pitch. Each slide has a title and plain body text.",
+        "Create a Google Slides presentation in the assistant's Drive, populate it with a concise deck, and share it with the owner. Use this when the owner asks for a presentation, slide deck, briefing, or pitch. Each slide has a title and a Markdown body (bullets, bold, links render as real formatting).",
       inputSchema: createSchema,
       risk: 'autonomous',
       acceptsUntrustedInput: true,
@@ -175,7 +229,7 @@ export function registerSlidesTools(registry: ToolRegistry, deps: SlidesToolDeps
     {
       name: 'slides.append',
       description:
-        'Append one or more plain-text slides to a Google Slides presentation the assistant can access.',
+        'Append one or more slides (title + Markdown body) to a Google Slides presentation the assistant can access.',
       inputSchema: appendSchema,
       risk: 'autonomous',
       acceptsUntrustedInput: true,

@@ -63,11 +63,12 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * v12: forwarding/quoting something IS a request to handle it — act, don't just summarize;
  * v13: a persona/voice block — warm, human, no filler, channel-appropriate register;
  * v14: a learned-skills advice block (Phase 26);
- * v15: an ambient-context line — the owner's current location when fresh (Phase 15)).
+ * v15: an ambient-context line — the owner's current location when fresh (Phase 15);
+ * v16: email renders Markdown as rich text — the email channel note invites simple Markdown.
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 15;
+export const PROMPT_VERSION = 16;
 
 export function buildSystemPrompt(
   agent: AgentRow,

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import {
+  appendSignature,
   CloudRunDocumentJobLauncher,
   type DocumentProcessorConfig,
   LocalDocumentProcessLauncher,
@@ -154,7 +155,9 @@ export function buildDeps(): AgentDeps {
       prepareOutbound: async (text, register) => {
         const context = await loadVoiceContext(db, router, register, text);
         const result = await rewriteInVoice(router, { draft: text, register, context });
-        return { text: result.text, flagged: result.flagged };
+        // Sign the outbound email (idempotent); the model's Markdown body is
+        // rendered to HTML downstream, so a plain signature line is fine.
+        return { text: appendSignature(result.text, context.signature), flagged: result.flagged };
       },
     });
     registerCalendarTools(registry, {

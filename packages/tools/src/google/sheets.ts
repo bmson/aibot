@@ -65,6 +65,10 @@ export function registerSheetsTools(registry: ToolRegistry, deps: SheetsToolDeps
     title: z.string().min(1).max(300),
     sheetName: sheetName.default('Sheet1'),
     rows: rows.default([]),
+    headerRow: z
+      .boolean()
+      .default(false)
+      .describe('When the first row is column headings, bold and freeze it. Values stay literal.'),
   });
 
   register(
@@ -72,7 +76,7 @@ export function registerSheetsTools(registry: ToolRegistry, deps: SheetsToolDeps
     {
       name: 'sheets.create',
       description:
-        "Create a Google Sheet in the assistant's Drive, fill its first tab with a table, and share it with the owner. Use this for trackers, tabular data, budgets, lists, or anything the owner should sort or calculate in a spreadsheet. Cell values are written literally, not as formulas.",
+        "Create a Google Sheet in the assistant's Drive, fill its first tab with a table, and share it with the owner. Use this for trackers, tabular data, budgets, lists, or anything the owner should sort or calculate in a spreadsheet. Cell values are written literally, not as formulas. Pass headerRow:true when the first row is column titles.",
       inputSchema: createSchema,
       risk: 'autonomous',
       acceptsUntrustedInput: true,
@@ -81,16 +85,17 @@ export function registerSheetsTools(registry: ToolRegistry, deps: SheetsToolDeps
         return `sheets-create-${ctx.taskId}-${a.title}`;
       },
       execute: async (args) => {
-        const created = await deps.client.api<{ spreadsheetId?: string; spreadsheetUrl?: string }>(
-          SHEETS,
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              properties: { title: args.title },
-              sheets: [{ properties: { title: args.sheetName } }],
-            }),
-          },
-        );
+        const created = await deps.client.api<{
+          spreadsheetId?: string;
+          spreadsheetUrl?: string;
+          sheets?: Array<{ properties?: { sheetId?: number } }>;
+        }>(SHEETS, {
+          method: 'POST',
+          body: JSON.stringify({
+            properties: { title: args.title },
+            sheets: [{ properties: { title: args.sheetName } }],
+          }),
+        });
         const id = created.spreadsheetId;
         if (!id) throw new Error('Sheets API did not return a spreadsheetId');
 
@@ -102,6 +107,31 @@ export function registerSheetsTools(registry: ToolRegistry, deps: SheetsToolDeps
               body: JSON.stringify({ majorDimension: 'ROWS', values: values(args.rows) }),
             },
           );
+          if (args.headerRow) {
+            // Formatting only — the RAW value write above is untouched, so a
+            // leading '=' still stays text. Bold + freeze make the table readable.
+            const sheetId = created.sheets?.[0]?.properties?.sheetId ?? 0;
+            await deps.client.api(`${SHEETS}/${encodeURIComponent(id)}:batchUpdate`, {
+              method: 'POST',
+              body: JSON.stringify({
+                requests: [
+                  {
+                    repeatCell: {
+                      range: { sheetId, startRowIndex: 0, endRowIndex: 1 },
+                      cell: { userEnteredFormat: { textFormat: { bold: true } } },
+                      fields: 'userEnteredFormat.textFormat.bold',
+                    },
+                  },
+                  {
+                    updateSheetProperties: {
+                      properties: { sheetId, gridProperties: { frozenRowCount: 1 } },
+                      fields: 'gridProperties.frozenRowCount',
+                    },
+                  },
+                ],
+              }),
+            });
+          }
         }
         await shareWithOwner(deps.client, id, deps.ownerEmail);
         return {

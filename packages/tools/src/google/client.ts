@@ -386,12 +386,17 @@ function assertGoogleApiUrl(value: string): void {
   }
 }
 
-/** Build an RFC 2822 plain-text email and encode base64url for the Gmail API. */
+/**
+ * Build an RFC 2822 email and encode base64url for the Gmail API. When `html` is
+ * supplied the message is multipart/alternative — a plain-text part (for clients
+ * that can't render HTML) plus the rich HTML part — otherwise it stays text/plain.
+ */
 export function buildRawEmail(input: {
   from: string;
   to: string[];
   subject: string;
   body: string;
+  html?: string;
   inReplyTo?: string;
   references?: string;
 }): string {
@@ -399,16 +404,40 @@ export function buildRawEmail(input: {
     if (/[\r\n]/.test(value)) throw new Error(`${name} contains a forbidden line break`);
     return `${name}: ${value}`;
   };
-  const headers = [
+  const baseHeaders = [
     header('From', input.from),
     header('To', input.to.join(', ')),
     header('Subject', input.subject),
     'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset=UTF-8',
     ...(input.inReplyTo ? [header('In-Reply-To', input.inReplyTo)] : []),
     ...(input.references ? [header('References', input.references)] : []),
   ];
-  const message = `${headers.join('\r\n')}\r\n\r\n${input.body}`;
+
+  let message: string;
+  if (input.html) {
+    // A fixed boundary token is fine — the parts are our own content and the
+    // boundary string cannot appear in base64-independent UTF-8 bodies here.
+    const boundary = 'asst_alt_boundary_7f3c9e';
+    const parts = [
+      `--${boundary}`,
+      'Content-Type: text/plain; charset=UTF-8',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      input.body,
+      `--${boundary}`,
+      'Content-Type: text/html; charset=UTF-8',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      input.html,
+      `--${boundary}--`,
+      '',
+    ];
+    const headers = [...baseHeaders, `Content-Type: multipart/alternative; boundary="${boundary}"`];
+    message = `${headers.join('\r\n')}\r\n\r\n${parts.join('\r\n')}`;
+  } else {
+    const headers = [...baseHeaders, 'Content-Type: text/plain; charset=UTF-8'];
+    message = `${headers.join('\r\n')}\r\n\r\n${input.body}`;
+  }
   return Buffer.from(message).toString('base64url');
 }
 

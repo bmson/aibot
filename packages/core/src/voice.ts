@@ -108,6 +108,19 @@ export async function loadVoiceContext(
   };
 }
 
+/**
+ * Append the assistant's signature block to an outbound body, unless the text
+ * already ends with it (idempotent across a retry or a model that signed off).
+ * Empty signature → text unchanged.
+ */
+export function appendSignature(text: string, signature: string): string {
+  const sig = signature.trim();
+  if (!sig) return text;
+  const body = text.trimEnd();
+  if (body.endsWith(sig)) return body;
+  return `${body}\n\n${sig}`;
+}
+
 export interface VoiceResult {
   text: string;
   rewritten: boolean;

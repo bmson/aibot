@@ -2,6 +2,9 @@ import { z } from 'zod';
 import type { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolFlags } from '../types.js';
 import type { GoogleClient } from './client.js';
+import { buildContentRequests } from './docs-markdown.js';
+
+export { buildContentRequests, type DocsBatchRequest } from './docs-markdown.js';
 
 const DOCS = 'https://docs.googleapis.com/v1/documents';
 const DRIVE = 'https://www.googleapis.com/drive/v3/files';
@@ -22,99 +25,6 @@ function register<S extends z.ZodType, Out>(
   flags: ToolFlags = {},
 ) {
   registry.register(tool as unknown as AssistantTool, flags);
-}
-
-/** The subset of the Docs batchUpdate request shapes this tool emits. */
-export interface DocsBatchRequest {
-  [request: string]: unknown;
-}
-
-const HEADING_STYLE: Record<number, string> = {
-  1: 'HEADING_1',
-  2: 'HEADING_2',
-  3: 'HEADING_3',
-  4: 'HEADING_4',
-  5: 'HEADING_5',
-  6: 'HEADING_6',
-};
-
-interface ParsedLine {
-  text: string;
-  heading?: number;
-  bullet?: boolean;
-}
-
-/** Interpret one line of lightweight Markdown: ATX headings and `-`/`*` bullets. */
-function parseLine(raw: string): ParsedLine {
-  const heading = /^(#{1,6})\s+(.*)$/.exec(raw);
-  if (heading) return { text: heading[2] ?? '', heading: heading[1]?.length };
-  const bullet = /^\s*[-*]\s+(.*)$/.exec(raw);
-  if (bullet) return { text: bullet[1] ?? '', bullet: true };
-  return { text: raw };
-}
-
-/**
- * Turn Markdown-ish text into Docs `batchUpdate` requests that insert it at
- * `startIndex`. One `insertText` lays the whole block down first; the paragraph
- * styling and bullet requests that follow only set attributes (they never shift
- * text), so every index below is computed once against the inserted block.
- *
- * Docs indices count UTF-16 code units, which is exactly what JavaScript string
- * length reports — so surrogate-pair characters stay aligned. `leadingNewline`
- * pushes the content onto a fresh paragraph when appending after existing text.
- */
-export function buildContentRequests(
-  content: string,
-  startIndex: number,
-  opts: { leadingNewline?: boolean } = {},
-): { requests: DocsBatchRequest[]; insertedLength: number } {
-  const lines = content.replace(/\r\n?/g, '\n').split('\n').map(parseLine);
-  const prefix = opts.leadingNewline ? '\n' : '';
-  const text = prefix + lines.map((line) => line.text).join('\n');
-  if (text.length === 0) return { requests: [], insertedLength: 0 };
-
-  const requests: DocsBatchRequest[] = [{ insertText: { location: { index: startIndex }, text } }];
-  const bulletRanges: Array<{ startIndex: number; endIndex: number }> = [];
-  let openBullets: { startIndex: number; endIndex: number } | null = null;
-
-  // The first line starts after any leading newline; each subsequent line is
-  // separated from the previous by exactly one '\n'.
-  let cursor = startIndex + prefix.length;
-  for (const line of lines) {
-    const lineStart = cursor;
-    const lineEnd = lineStart + line.text.length;
-
-    if (line.heading && line.text.length > 0) {
-      requests.push({
-        updateParagraphStyle: {
-          range: { startIndex: lineStart, endIndex: lineEnd },
-          paragraphStyle: { namedStyleType: HEADING_STYLE[line.heading] },
-          fields: 'namedStyleType',
-        },
-      });
-    }
-
-    if (line.bullet && line.text.length > 0) {
-      // Consecutive bullet lines share one createParagraphBullets request.
-      if (openBullets && openBullets.endIndex === lineStart - 1) {
-        openBullets.endIndex = lineEnd;
-      } else {
-        openBullets = { startIndex: lineStart, endIndex: lineEnd };
-        bulletRanges.push(openBullets);
-      }
-    } else {
-      openBullets = null;
-    }
-
-    cursor = lineEnd + 1; // + 1 for the '\n' that separates paragraphs
-  }
-
-  for (const range of bulletRanges) {
-    requests.push({
-      createParagraphBullets: { range, bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE' },
-    });
-  }
-  return { requests, insertedLength: text.length };
 }
 
 export interface DocsDocument {
@@ -163,7 +73,7 @@ export function registerDocsTools(registry: ToolRegistry, deps: DocsToolDeps): T
       .max(100_000)
       .default('')
       .describe(
-        'Document body. Lightweight Markdown is supported: `#`..`######` headings and `-`/`*` bullet lines; everything else becomes a paragraph.',
+        'Document body in Markdown — rendered as real rich text: `#`..`######` headings, `-`/`*` bullets, `1.` numbered lists, **bold**, *italic*, `code`, [links](https://…), > blockquotes, fenced ``` code blocks, and | tables |. Write natural Markdown; do not paste raw URLs when a [label](url) link reads better.',
       ),
   });
 
@@ -229,7 +139,7 @@ export function registerDocsTools(registry: ToolRegistry, deps: DocsToolDeps): T
     {
       name: 'docs.append',
       description:
-        'Append content to an existing Google Doc (same lightweight Markdown as docs.create). The document must be one the assistant created.',
+        'Append content to an existing Google Doc (same Markdown rich text as docs.create). The document must be one the assistant created.',
       inputSchema: appendSchema,
       risk: 'autonomous',
       acceptsUntrustedInput: true,

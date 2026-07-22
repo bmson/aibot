@@ -1,11 +1,13 @@
-import { getAgent } from '@assistant/core';
+import { appendSignature, getAgent } from '@assistant/core';
 import type { TaskRow } from '@assistant/db';
-import { channelBindings, conversations, tasks } from '@assistant/db';
+import { channelBindings, conversations, tasks, voiceProfile } from '@assistant/db';
 import {
   buildRawEmail,
   type GmailPayload,
   gmailHeader,
   isAmbiguousGoogleMutationError,
+  markdownToEmailHtml,
+  markdownToPlainText,
 } from '@assistant/tools';
 import { and, asc, eq } from 'drizzle-orm';
 import type { AgentDeps } from './deps.js';
@@ -119,6 +121,14 @@ export async function deliverEmailFinal(
   }
 
   const agent = await getAgent(deps.db);
+  const [profile] = await deps.db
+    .select({ signature: voiceProfile.signature })
+    .from(voiceProfile)
+    .where(eq(voiceProfile.id, 1));
+  // The final answer is the model's Markdown — render it to HTML (with a
+  // plain-text fallback) and sign it, so an emailed reply reads as rich text
+  // rather than raw asterisks.
+  const signed = appendSignature(text, profile?.signature ?? '');
   const raw = buildRawEmail({
     // explicit display name — otherwise recipients see the Google account's
     // profile name, which nothing in this stack controls
@@ -127,7 +137,8 @@ export async function deliverEmailFinal(
     subject: /^re:/i.test(target.subject)
       ? target.subject
       : `Re: ${target.subject || '(no subject)'}`,
-    body: text,
+    body: markdownToPlainText(signed),
+    html: markdownToEmailHtml(signed),
     ...(inReplyTo ? { inReplyTo, references: inReplyTo } : {}),
   });
   try {

@@ -44,7 +44,7 @@ export function channelContext(task: TaskRow): string {
       return [
         `\nThis task was triggered by an email from ${from}${subject ? ` (subject: "${subject}")` : ''}.`,
         task.trust === 'owner'
-          ? 'When you finish with a text answer, it is AUTOMATICALLY emailed back to the sender on the same thread — write your final message as that email reply (a short greeting, the substance, and a brief sign-off as yourself), and complete any needed tool actions (calendar, lookups) BEFORE finishing.'
+          ? 'When you finish with a text answer, it is AUTOMATICALLY emailed back to the sender on the same thread — write your final message as that email reply (a short greeting, the substance, and a brief sign-off as yourself), and complete any needed tool actions (calendar, lookups) BEFORE finishing. Email renders simple Markdown as rich text, so you may use **bold**, bullet lists, and [labelled links](https://…); do not paste bare URLs mid-sentence.'
           : 'The sender is not the owner: nothing is auto-sent. If a reply is warranted, use gmail.create_draft (or gmail.send, which needs owner approval).',
       ].join('\n');
     }
