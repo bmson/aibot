@@ -46,7 +46,7 @@ for ROLE in roles/artifactregistry.writer roles/run.admin roles/cloudscheduler.a
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:${DEPLOY_SA}" --role="$ROLE"
 done
-for RUNTIME_SA in assistant-agent assistant-web assistant-browser assistant-internal-invoker; do
+for RUNTIME_SA in assistant-agent assistant-web assistant-browser assistant-code assistant-internal-invoker; do
   gcloud iam service-accounts add-iam-policy-binding \
     "${RUNTIME_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
     --member="serviceAccount:${DEPLOY_SA}" --role=roles/iam.serviceAccountUser
