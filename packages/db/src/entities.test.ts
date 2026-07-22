@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, type Db } from './client.js';
 import {
   deleteContact,
+  findContactsByName,
   findDuplicateContactSuggestions,
   mergeContacts,
   normalizeContactAliases,
@@ -173,6 +174,30 @@ describe('contact names', () => {
     expect(referringFact?.supersededById).toBeNull();
 
     await expect(deleteContact(db, ownerId)).rejects.toThrow('cannot be deleted');
+  });
+});
+
+describe('findContactsByName', () => {
+  it('resolves a person by name prefix and returns their saved emails, but not a stranger', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [person] = await db
+      .insert(contacts)
+      .values({
+        name: 'Xtest Anna Jónsdóttir',
+        emails: ['anna@example.com'],
+        phones: ['+15551234567'],
+        trust: 'known',
+      })
+      .returning();
+    if (!person) throw new Error('failed to create test person');
+    createdContactIds.push(person.id);
+
+    const byPrefix = await findContactsByName(db, 'Xtest Anna');
+    expect(byPrefix.map((c) => c.id)).toContain(person.id);
+    expect(byPrefix.find((c) => c.id === person.id)?.emails).toContain('anna@example.com');
+
+    const noMatch = await findContactsByName(db, 'Zzz Nonexistent Person');
+    expect(noMatch.map((c) => c.id)).not.toContain(person.id);
   });
 });
 

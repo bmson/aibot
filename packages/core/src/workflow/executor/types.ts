@@ -49,6 +49,8 @@ export interface ToolContextLike {
   conversationId?: string;
   trust: Trust;
   tainted: boolean;
+  /** Owner/thread-provided recipients used by the dispatcher's provenance guard. */
+  knownAddresses?: { emails: string[]; phones: string[] };
   db: Db;
   now: () => Date;
   signal: AbortSignal;

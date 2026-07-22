@@ -137,7 +137,20 @@ export type StepCallOutcome =
 
 export type ObjectOutcome<T> =
   | { ok: false; decision: Extract<BudgetDecision, { mode: 'park' | 'block' }> }
-  | { ok: true; modelId: string; degraded: boolean; object: T };
+  | { ok: true; modelId: string; degraded: boolean; object: T; finishReason?: string };
+
+/**
+ * A structured-output call whose response was cut off at the token limit
+ * (finishReason 'length') even after a fallback retry. The object still parses
+ * (a truncated string is schema-valid), so without this the caller would accept
+ * a half-formed value — the source of the truncated "Are you" clarify question.
+ */
+export class TruncatedObjectError extends Error {
+  constructor(role: string) {
+    super(`structured output for role '${role}' was truncated at the token limit`);
+    this.name = 'TruncatedObjectError';
+  }
+}
 
 export type StreamOutcome =
   | { ok: false; decision: Extract<BudgetDecision, { mode: 'park' | 'block' }> }
@@ -768,10 +781,14 @@ export class ModelRouter {
   ): Promise<ObjectOutcome<T>> {
     if (role === 'embed') throw new Error('object() cannot use the embed role');
 
-    const runOnce = async (forceFallback: boolean): Promise<ObjectOutcome<T>> => {
+    const runOnce = async (
+      forceFallback: boolean,
+      maxTokensOverride?: number,
+    ): Promise<ObjectOutcome<T>> => {
       const prepared = await this.prepareModelCall(role, {
         ...opts,
         forceFallback: forceFallback || opts.forceFallback,
+        ...(maxTokensOverride ? { maxOutputTokens: maxTokensOverride } : {}),
       });
       if (!prepared.ok) return prepared;
       const { route, reservationId, maxOutputTokens, providerOptions } = prepared;
@@ -804,6 +821,7 @@ export class ModelRouter {
             modelId: route.modelId,
             degraded: route.degraded,
             object: result.object as T,
+            finishReason: result.finishReason,
           };
         });
       } catch (err) {
@@ -812,11 +830,12 @@ export class ModelRouter {
       }
     };
 
-    const attempt = (forceFallback: boolean) =>
-      this.withTimeoutRetry(opts, () => runOnce(forceFallback));
+    const attempt = (forceFallback: boolean, maxTokensOverride?: number) =>
+      this.withTimeoutRetry(opts, () => runOnce(forceFallback, maxTokensOverride));
 
+    let outcome: ObjectOutcome<T>;
     try {
-      return await attempt(false);
+      outcome = await attempt(false);
     } catch (err) {
       // Two error classes get one shot on the role's fallback model before
       // surfacing, because both are properties of the primary model rather
@@ -834,13 +853,32 @@ export class ModelRouter {
         throw err;
       }
       try {
-        return await attempt(true);
+        outcome = await attempt(true);
       } catch {
         // No usable fallback, or it also failed: surface the original
         // failure so the caller can skip this item.
         throw err;
       }
     }
+
+    // Truncation guard: a schema-valid object can still be cut off at the token
+    // limit (finishReason 'length') — the parse succeeds on a half-formed value.
+    // Retry once on the fallback model with the largest allowed budget; if it
+    // truncates again, fail typed so callers never render the fragment (the
+    // "Are you" clarify bug — the plan role's 1024-token default was the cause).
+    if (outcome.ok && outcome.finishReason === 'length') {
+      const retryTokens = Math.max(opts.maxOutputTokens ?? 0, HARD_MAX_OUTPUT_TOKENS);
+      let retried: ObjectOutcome<T> | undefined;
+      try {
+        retried = await attempt(true, retryTokens);
+      } catch {
+        throw new TruncatedObjectError(role);
+      }
+      if (retried.ok && retried.finishReason !== 'length') return retried;
+      if (!retried.ok) return retried; // budget park/block — let the caller handle it
+      throw new TruncatedObjectError(role);
+    }
+    return outcome;
   }
 
   /** Embeddings via the embed role. */

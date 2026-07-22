@@ -4,15 +4,17 @@ import type { ModelMessage } from 'ai';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { type Plan, PlanSchema } from '../events.js';
-import type { ModelRouter } from '../model-router/router.js';
+import { type ModelRouter, TruncatedObjectError } from '../model-router/router.js';
 
 /**
  * Bump whenever planner prompting changes behavior — recorded in
  * tool_calls.decision.
  * v4: the planner is told the channel/trust and whether external content was
  * forwarded, and that the owner forwarding something IS a request to handle it.
+ * v5: choose 'clarify' when a required outward-facing fact (recipient address,
+ * name, exact date/time, link) is absent — never let the executor guess it.
  */
-export const PLANNER_VERSION = 4;
+export const PLANNER_VERSION = 5;
 
 // Widened from 6000: the tighter window dropped the owner's earlier answers out
 // of planner context on longer threads, making it re-derive 'clarify'. This is
@@ -75,7 +77,7 @@ export function plannerSystem(agent: AgentRow, task: TaskRow, tainted: boolean):
     "- 'schedule': a one-off or recurring future action",
     "- 'clarify': you cannot act without more information from the owner — list missingInfo",
     'Never ask for something the owner already answered earlier in the context, and never re-ask a question you already asked. Re-read the conversation for the answer before choosing clarify.',
-    'Prefer acting on a reasonable default over asking. Choose clarify only when a wrong guess would be costly or irreversible.',
+    "Prefer acting on a reasonable default for reversible, internal choices. But choose clarify (and list missingInfo) when the request needs a specific outward-facing fact you do not have — a recipient email address, a person's exact name, a precise date/time, or a link — and it is not in the context, memory, or contacts. The executor must never guess these, so surface the gap here.",
     'Keep steps short and concrete. Do not invent goals.',
     // A "keep doing X as you go" request has no executable step *now*, so
     // planning it as a workflow produced steps that were really intentions
@@ -116,12 +118,22 @@ export async function planTask(
     if (!triage.ok || triage.object.trivial) return null;
   }
 
-  const planned = await deps.router.object<Plan>('plan', {
-    taskId: task.id,
-    schema: PlanSchema,
-    system: plannerSystem(agent, task, opts.tainted === true),
-    prompt: contextText,
-  });
+  let planned: Awaited<ReturnType<typeof deps.router.object<Plan>>>;
+  try {
+    planned = await deps.router.object<Plan>('plan', {
+      taskId: task.id,
+      schema: PlanSchema,
+      system: plannerSystem(agent, task, opts.tainted === true),
+      prompt: contextText,
+    });
+  } catch (err) {
+    // A truncated plan/clarify (the half-sentence "Are you" bug) must never be
+    // rendered. Proceed plan-less: the executor runs the request directly, and
+    // the model — told not to guess and to ask complete questions — handles it
+    // honestly rather than surfacing a cut-off fragment.
+    if (err instanceof TruncatedObjectError) return null;
+    throw err;
+  }
   if (!planned.ok) return null;
 
   const plan = PlanSchema.parse(planned.object);

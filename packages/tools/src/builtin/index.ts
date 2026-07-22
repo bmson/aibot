@@ -6,6 +6,7 @@ import { isIP, type LookupFunction } from 'node:net';
 import { saveOccasion, searchDocumentChunks, upcomingOccasions } from '@assistant/core';
 import {
   conversations,
+  findContactsByName,
   goals,
   isTombstoned,
   memories,
@@ -399,7 +400,8 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     registry,
     {
       name: 'memory.recall',
-      description: 'Recall memories relevant to a query (semantic similarity).',
+      description:
+        'Recall memories relevant to a query (semantic similarity). Each result carries a confidence and, when known, a validity window. Treat a low-confidence or expired-validity fact as unconfirmed — verify or ask rather than acting on it as certain, especially for a name, date, address, or link.',
       inputSchema: z.object({
         query: z.string().min(2).max(500),
         limit: z.number().int().min(1).max(20).default(5),
@@ -415,6 +417,8 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
             kind: memories.kind,
             importance: memories.importance,
             confidence: memories.confidence,
+            validFrom: memories.validFrom,
+            validUntil: memories.validUntil,
             createdAt: memories.createdAt,
             similarity: sql<number>`1 - (${memories.embedding} <=> ${JSON.stringify(embedding)}::vector)`,
           })
@@ -428,7 +432,17 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
           )
           .orderBy(sql`${memories.embedding} <=> ${JSON.stringify(embedding)}::vector`)
           .limit(args.limit);
-        return { memories: rows };
+        const now = Date.now();
+        return {
+          memories: rows.map((r) => ({
+            ...r,
+            // Flag a fact the model must not treat as settled: low confidence, or
+            // a validity window that has lapsed (stale but not yet superseded).
+            unconfirmed:
+              Number(r.confidence) < 0.5 ||
+              (r.validUntil ? new Date(r.validUntil).getTime() < now : false),
+          })),
+        };
       },
     },
     { confidentialRead: true, returnsUntrustedContent: true },
@@ -560,6 +574,42 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
             date: o.nextDate,
             daysUntil: o.daysUntil,
             notes: o.notes || undefined,
+          })),
+        };
+      },
+    },
+    { confidentialRead: true },
+  );
+
+  // ── contacts ─────────────────────────────────────────────────────────────────
+  register(
+    registry,
+    {
+      name: 'contacts.lookup',
+      description:
+        "Resolve a person's saved email address(es) and phone number(s) by name BEFORE emailing or texting them. Returns only matching saved contacts. If it returns no contact (or no address for the person), you do NOT know how to reach them — ask the owner instead of guessing an address. Never invent a recipient.",
+      inputSchema: z.object({
+        name: z
+          .string()
+          .min(2)
+          .max(120)
+          .describe('The person to look up, e.g. "Anna" or "Dr. Smith".'),
+      }),
+      risk: 'autonomous',
+      // Owner-curated identifier rows, sanitized below to email/phone/name only
+      // — NOT free third-party prose. Unlike memory.recall this deliberately does
+      // NOT set returnsUntrustedContent, so resolving an address never taints the
+      // session or forfeits a goal session's one autonomous outward action.
+      acceptsUntrustedInput: true,
+      execute: async (args, ctx) => {
+        const matches = await findContactsByName(ctx.db, args.name);
+        return {
+          query: args.name,
+          contacts: matches.map((c) => ({
+            name: c.name,
+            emails: c.emails.filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)).slice(0, 5),
+            phones: c.phones.filter((p) => /^\+?\d[\d\s().-]{5,}$/.test(p)).slice(0, 5),
+            relationship: c.relationship || undefined,
           })),
         };
       },

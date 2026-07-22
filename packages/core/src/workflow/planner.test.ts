@@ -1,7 +1,9 @@
 import type { AgentRow, TaskRow } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { describe, expect, it } from 'vitest';
-import { PLANNER_VERSION, plannerContext, plannerSystem } from './planner.js';
+import type { ModelRouter } from '../model-router/router.js';
+import { TruncatedObjectError } from '../model-router/router.js';
+import { PLANNER_VERSION, plannerContext, plannerSystem, planTask } from './planner.js';
 
 /**
  * Regression for the goal-clarification loop: repeated assistant questions
@@ -62,5 +64,26 @@ describe('plannerSystem channel/taint awareness (D10)', () => {
 
   it('bumps PLANNER_VERSION for the provenance-recording change', () => {
     expect(PLANNER_VERSION).toBeGreaterThanOrEqual(4);
+  });
+
+  it('tells the planner to clarify a missing outward-facing fact (v5)', () => {
+    const prompt = plannerSystem(agent, task('email_triage'), false);
+    expect(prompt).toMatch(/recipient email address/i);
+    expect(prompt).toMatch(/executor must never guess/i);
+  });
+});
+
+describe('planTask truncation handling', () => {
+  it('returns null (plan-less) instead of surfacing a truncated plan fragment', async () => {
+    const router = {
+      object: async () => {
+        throw new TruncatedObjectError('plan');
+      },
+    } as unknown as ModelRouter;
+    // email_triage skips the trivial-classify branch, so the plan call runs first.
+    const task = { id: 't-trunc', type: 'email_triage' } as TaskRow;
+    const agent = { name: 'AI Bot' } as AgentRow;
+    const result = await planTask({ db: {} as never, router }, task, agent, [], { tainted: false });
+    expect(result).toBeNull();
   });
 });

@@ -240,6 +240,24 @@ export async function resolveSubjectContact(
 }
 
 /**
+ * Look up saved contacts by name for outbound addressing (contacts.lookup).
+ * Word-boundary prefix match against each contact's name and aliases, so
+ * "Anna" finds "Anna Jónsdóttir". Read-only — never creates a contact (unlike
+ * resolveSubjectContact). An empty result means the assistant does NOT know
+ * this person's address and must ask rather than guess.
+ */
+export async function findContactsByName(db: Db, query: string): Promise<ContactRow[]> {
+  const lower = query.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+  if (lower.length < 2) return [];
+  const rows = await db.select().from(contacts);
+  return rows.filter((contact) =>
+    [contact.name, ...(contact.aliases ?? [])].some((candidate) =>
+      namePrefixMatch(lower, candidate.toLocaleLowerCase()),
+    ),
+  );
+}
+
+/**
  * Merge one contact into another: memories move to the target, emails/phones
  * union, the fuller relationship survives, the source row is deleted.
  */

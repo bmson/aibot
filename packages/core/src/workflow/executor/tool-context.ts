@@ -14,6 +14,40 @@ type BrowserStageSnapshots = Map<
   { contextWindow: TaskState['contextWindow']; pendingJob: TaskState['pendingJob'] }
 >;
 
+const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+const PHONE_RE = /\+\d[\d\s().-]{6,}\d/g;
+
+/**
+ * Harvest the recipient addresses the owner/thread actually provided — the seed
+ * conversation window (the owner's message and any original email thread) plus
+ * the trigger payload's from/to/cc. This is the provenance whitelist the
+ * dispatcher checks a send against; deliberately scoped to the SEED context, not
+ * addresses that later arrive inside a fetched page or tool result (those are
+ * untrusted and a send to them should be owner-confirmed).
+ */
+export function harvestKnownAddresses(
+  state: TaskState,
+  trigger: TaskLease['trigger'],
+): { emails: string[]; phones: string[] } {
+  const emails = new Set<string>();
+  const phones = new Set<string>();
+  const scan = (text: string) => {
+    for (const m of text.match(EMAIL_RE) ?? []) emails.add(m.toLowerCase());
+    for (const m of text.match(PHONE_RE) ?? []) phones.add(m.replace(/[^\d+]/g, ''));
+  };
+  for (const message of state.contextWindow ?? []) {
+    const content = (message as { content?: unknown }).content;
+    scan(typeof content === 'string' ? content : JSON.stringify(content ?? ''));
+  }
+  const payload = (trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
+  for (const key of ['from', 'to', 'cc', 'replyTo', 'sender']) {
+    const value = payload[key];
+    if (typeof value === 'string') scan(value);
+    else if (Array.isArray(value)) for (const v of value) if (typeof v === 'string') scan(v);
+  }
+  return { emails: [...emails], phones: [...phones] };
+}
+
 /**
  * Build the tool-execution context handed to the dispatcher. The browser-job
  * staging closures need the LIVE step-loop window and the calls queued after the
@@ -36,6 +70,7 @@ export function createToolContext(args: {
     conversationId: task.conversationId ?? undefined,
     trust: task.trust as Trust,
     tainted: state.untrustedContext,
+    knownAddresses: harvestKnownAddresses(state, task.trigger),
     db,
     now: () => new Date(),
     signal: args.signal,

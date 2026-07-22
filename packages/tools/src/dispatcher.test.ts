@@ -528,6 +528,57 @@ describe('ToolDispatcher (integration)', () => {
     expect(decision.model).toBe('test/model');
   });
 
+  it('parks a send to an unverified recipient but executes one the owner provided', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // A RECIPIENT_TOOL: an unfamiliar 'to' is held for owner confirmation so the
+    // model cannot silently email a fabricated address; a thread/owner-provided
+    // address goes straight through.
+    const registry = new ToolRegistry().register(
+      {
+        name: 'gmail.create_draft',
+        description: 'test draft',
+        inputSchema: z.object({ to: z.array(z.string()).min(1) }),
+        risk: 'autonomous',
+        acceptsUntrustedInput: true,
+        execute: async () => {
+          executions['gmail.create_draft'] = (executions['gmail.create_draft'] ?? 0) + 1;
+          return { drafted: true };
+        },
+      } as AssistantTool,
+      { privateWrite: true },
+    );
+    const dispatcher = new ToolDispatcher(db, registry);
+    const task = await makeTask('owner');
+
+    const fabricated = await dispatcher.dispatch({
+      task,
+      step: 1,
+      toolName: 'gmail.create_draft',
+      args: { to: ['made-up-person-xyz@nowhere.invalid'] },
+      ctx: ctxFor(task),
+      provenance,
+    });
+    expect(fabricated.kind).toBe('awaiting_approval');
+    if (fabricated.kind === 'awaiting_approval') {
+      const [row] = await db
+        .select()
+        .from(toolCalls)
+        .where(eq(toolCalls.id, fabricated.toolCallId));
+      const reason = (row?.decision as { reason?: string } | undefined)?.reason ?? '';
+      expect(reason).toMatch(/unverified recipient/i);
+    }
+
+    const provided = await dispatcher.dispatch({
+      task,
+      step: 2,
+      toolName: 'gmail.create_draft',
+      args: { to: ['knownfriend@example.com'] },
+      ctx: { ...ctxFor(task), knownAddresses: { emails: ['knownfriend@example.com'], phones: [] } },
+      provenance,
+    });
+    expect(provided.kind).toBe('executed');
+  });
+
   it('conservatively meters an ambiguous SMS outcome and suppresses retries', async (ctx) => {
     if (!dbUp) return ctx.skip();
     let attempts = 0;

@@ -86,23 +86,33 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     }
   }
 
-  // Long-running-chat auto-recall (Phase 1). Action-routed chat turns run here
-  // instead of the streaming route, so recall is wired at both entry points.
-  // Owner-private, so it mirrors the owner-card gate; best-effort by design.
+  // Auto-recall. Chat, email, and SMS turns each get memory about the sender
+  // and subject injected BEFORE the model runs, so an owner request is grounded
+  // in prior discussion without the model having to call memory.recall (which
+  // would taint the session). Email is the least-grounded actionable path, so
+  // extending recall to it directly supports "consult past discussion, don't
+  // guess". Owner-private + untainted only, mirroring the owner-card gate;
+  // best-effort by design. A forwarded (tainted) email skips this — the model
+  // can still use contacts.lookup / memory.recall there.
   let recallBlock: string | undefined;
   if (
     loadConfig().CHAT_RECALL_ENABLED &&
     privilegedTask &&
     !state.untrustedContext &&
-    task.type === 'chat_turn' &&
+    (task.type === 'chat_turn' || task.type === 'email_triage' || task.type === 'sms_turn') &&
     task.conversationId
   ) {
     const conversationId = task.conversationId;
     const lastUser = [...rc.window].reverse().find((m) => m.role === 'user');
-    const trigger = task.trigger as { payload?: { text?: unknown } } | null;
-    const queryText =
+    const payload = (task.trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
+    const emailMeta =
+      task.type === 'email_triage'
+        ? [payload.subject, payload.from].filter((v) => typeof v === 'string').join(' ')
+        : '';
+    const baseText =
       (typeof lastUser?.content === 'string' && lastUser.content) ||
-      (typeof trigger?.payload?.text === 'string' ? trigger.payload.text : '');
+      (typeof payload.text === 'string' ? payload.text : '');
+    const queryText = `${emailMeta} ${baseText}`.trim();
     if (queryText) {
       try {
         const since = (await recentWindowStart(db, conversationId, 20)) ?? new Date();

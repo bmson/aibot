@@ -8,7 +8,15 @@ import {
   reserveCost,
 } from '@assistant/core';
 import type { Db, TaskRow } from '@assistant/db';
-import { approvals, conversations, rateLimits, tasks, toolCache, toolCalls } from '@assistant/db';
+import {
+  approvals,
+  contacts,
+  conversations,
+  rateLimits,
+  tasks,
+  toolCache,
+  toolCalls,
+} from '@assistant/db';
 import { and, eq, gte, sql } from 'drizzle-orm';
 import { isAmbiguousGoogleMutationError } from './google/client.js';
 import { matchPolicies } from './policies.js';
@@ -105,6 +113,33 @@ export function approvalFallbackSummary(toolName: string, args: Record<string, u
     default:
       return `Allow the assistant to ${toolName.replaceAll('.', ' ').replaceAll('_', ' ')}`;
   }
+}
+
+/** Tools whose recipient must be provenance-checked before an autonomous send. */
+const RECIPIENT_TOOLS = new Set([
+  'gmail.send',
+  'gmail.create_draft',
+  'calendar.create_event',
+  'sms.send',
+]);
+
+const normalizeEmail = (value: string): string => value.trim().toLowerCase();
+const normalizePhone = (value: string): string => value.replace(/[^\d+]/g, '');
+
+/** The email/phone recipients a send-style tool call would actually reach. */
+function recipientsFrom(
+  toolName: string,
+  args: Record<string, unknown>,
+): { emails: string[]; phones: string[] } {
+  const strings = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+  if (toolName === 'sms.send') {
+    return { emails: [], phones: typeof args.to === 'string' ? [args.to] : [] };
+  }
+  if (toolName === 'calendar.create_event') {
+    return { emails: strings(args.attendees), phones: [] };
+  }
+  return { emails: strings(args.to), phones: [] };
 }
 
 type ToolReservation =
@@ -361,6 +396,34 @@ export class ToolDispatcher {
     }
   }
 
+  /**
+   * Recipients a send would reach that are neither in the owner/thread-provided
+   * set nor a saved contact. An empty result means every recipient is accounted
+   * for. Contacts are queried per call (small, single-agent table); this only
+   * runs for RECIPIENT_TOOLS on the non-policy-allow path.
+   */
+  private async unverifiedRecipients(
+    toolName: string,
+    args: Record<string, unknown>,
+    ctx: ToolContext,
+  ): Promise<string[]> {
+    const { emails, phones } = recipientsFrom(toolName, args);
+    if (emails.length === 0 && phones.length === 0) return [];
+    const verifiedEmails = new Set((ctx.knownAddresses?.emails ?? []).map(normalizeEmail));
+    const verifiedPhones = new Set((ctx.knownAddresses?.phones ?? []).map(normalizePhone));
+    const rows = await this.db
+      .select({ emails: contacts.emails, phones: contacts.phones })
+      .from(contacts);
+    for (const row of rows) {
+      for (const e of row.emails) verifiedEmails.add(normalizeEmail(e));
+      for (const p of row.phones) verifiedPhones.add(normalizePhone(p));
+    }
+    const unverified: string[] = [];
+    for (const e of emails) if (!verifiedEmails.has(normalizeEmail(e))) unverified.push(e);
+    for (const p of phones) if (!verifiedPhones.has(normalizePhone(p))) unverified.push(p);
+    return unverified;
+  }
+
   async dispatch(input: DispatchInput): Promise<DispatchOutcome> {
     const registered = this.registry.get(input.toolName);
     const allowedForTrust = this.registry
@@ -556,7 +619,23 @@ export class ToolDispatcher {
     // extends the same closed-fail to the untainted path.
     const policyAllows =
       policyMatch?.effect === 'allow' && registered.flags.blanketAllowIneligible !== true;
-    const tier: RiskTier = taintNeedsApproval ? 'approval' : policyAllows ? 'autonomous' : baseTier;
+    // Provenance guard: a send to a recipient the owner/thread never provided
+    // (and that is not a saved contact) is held for owner confirmation, so the
+    // model cannot autonomously email or text a fabricated address. A matching
+    // allow policy is recipient-specific, so it still wins. Never a hard block —
+    // the owner approving the card IS the confirmation.
+    const unverifiedRecipients =
+      !policyAllows && RECIPIENT_TOOLS.has(input.toolName)
+        ? await this.unverifiedRecipients(input.toolName, args, input.ctx)
+        : [];
+    const recipientUnverified = unverifiedRecipients.length > 0;
+    const tier: RiskTier = taintNeedsApproval
+      ? 'approval'
+      : policyAllows
+        ? 'autonomous'
+        : recipientUnverified
+          ? 'approval'
+          : baseTier;
 
     const decision = {
       riskTier: tier,
@@ -564,7 +643,9 @@ export class ToolDispatcher {
         ? 'owner approval required because untrusted content entered this workflow'
         : policyAllows
           ? `allowed by policy ${policyMatch?.policy.templateKey}`
-          : `tool default (${baseTier})`,
+          : recipientUnverified
+            ? `owner approval required: unverified recipient (${unverifiedRecipients.join(', ')}) — not in this conversation or your contacts`
+            : `tool default (${baseTier})`,
       policyId: policyMatch?.policy.id,
       policyVersion: policyMatch?.policy.version,
       plannerVersion: input.provenance.plannerVersion,

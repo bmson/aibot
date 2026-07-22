@@ -21,6 +21,13 @@ export interface ToolContext {
   trust: Trust;
   /** True once externally controlled content has entered this workflow's model context. */
   tainted: boolean;
+  /**
+   * Email addresses and phone numbers the owner/thread actually provided (from
+   * the seed conversation window + trigger payload). The dispatcher treats a
+   * recipient outside this set ∪ contacts as unverified and escalates the send
+   * to owner approval, so the model cannot silently email a fabricated address.
+   */
+  knownAddresses?: { emails: string[]; phones: string[] };
   db: Db;
   now: () => Date;
   signal: AbortSignal;
