@@ -227,6 +227,31 @@ export async function getOrCreatePrimaryConversation(
 }
 
 /**
+ * The assistant-owned "Notifications" thread: the fallback sink for messages the
+ * bot generates without an inbound conversation to reply into (owner.notify with
+ * no ctx.conversationId, and conversation-less scheduled task finals). Owner-
+ * visible on the dashboard, never a third party or the network. Idempotent:
+ * concurrent callers converge on the single per-agent thread.
+ */
+export async function getOrCreateNotificationsConversation(
+  db: Db,
+  agentId: string,
+): Promise<string> {
+  const [existing] = await db
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(and(eq(conversations.agentId, agentId), eq(conversations.title, 'Notifications')))
+    .limit(1);
+  if (existing) return existing.id;
+  const [created] = await db
+    .insert(conversations)
+    .values({ agentId, channel: 'chat', trust: 'assistant', title: 'Notifications' })
+    .returning({ id: conversations.id });
+  if (!created) throw new Error('failed to create Notifications conversation');
+  return created.id;
+}
+
+/**
  * Mirror an opted-in goal's mission update into the owner's primary chat thread
  * (long-running-chat design, option B), so background work shows up in the one
  * discussion. No-op unless the goal has `mirrorToPrimary` set and a primary

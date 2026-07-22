@@ -1,6 +1,6 @@
 import { type Db, type TaskRow, tasks } from '@assistant/db';
 import { and, inArray, isNull, lte, sql } from 'drizzle-orm';
-import { persistMessage } from '../chat.js';
+import { getOrCreateNotificationsConversation, persistMessage } from '../chat.js';
 import { markAttentionNotified } from './machine.js';
 
 /** Best-effort out-of-band push (SMS today; a no-op when unconfigured). */
@@ -53,9 +53,17 @@ export async function renotifyStalledAttention(
     try {
       const text = attentionText(task);
       let notified = false;
-      if (task.conversationId) {
+      // Deliver to the task's own thread, or — for a conversation-less assistant
+      // task — the Notifications sink, so the owner has an on-dashboard copy even
+      // when the out-of-band push is unconfigured.
+      const conversationId =
+        task.conversationId ??
+        (task.trust === 'assistant'
+          ? await getOrCreateNotificationsConversation(db, task.agentId)
+          : null);
+      if (conversationId) {
         await persistMessage(db, {
-          conversationId: task.conversationId,
+          conversationId,
           taskId: task.id,
           role: 'assistant',
           origin: 'assistant',

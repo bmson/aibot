@@ -3,9 +3,13 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { isIP, type LookupFunction } from 'node:net';
-import { saveOccasion, searchDocumentChunks, upcomingOccasions } from '@assistant/core';
 import {
-  conversations,
+  getOrCreateNotificationsConversation,
+  saveOccasion,
+  searchDocumentChunks,
+  upcomingOccasions,
+} from '@assistant/core';
+import {
   findContactsByName,
   goals,
   isTombstoned,
@@ -774,29 +778,8 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (args, ctx) => {
-        let conversationId = ctx.conversationId;
-        if (!conversationId) {
-          const [existing] = await ctx.db
-            .select()
-            .from(conversations)
-            .where(
-              and(eq(conversations.agentId, ctx.agentId), eq(conversations.title, 'Notifications')),
-            );
-          if (existing) {
-            conversationId = existing.id;
-          } else {
-            const [created] = await ctx.db
-              .insert(conversations)
-              .values({
-                agentId: ctx.agentId,
-                channel: 'chat',
-                trust: 'assistant',
-                title: 'Notifications',
-              })
-              .returning();
-            conversationId = created?.id;
-          }
-        }
+        const conversationId =
+          ctx.conversationId ?? (await getOrCreateNotificationsConversation(ctx.db, ctx.agentId));
         if (!conversationId) throw new Error('no conversation available for notification');
         await ctx.db.insert(messages).values({
           conversationId,

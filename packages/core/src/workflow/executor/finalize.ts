@@ -2,7 +2,11 @@ import type { Db, TaskRow } from '@assistant/db';
 import { messages, tasks, toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { and, eq, inArray, ne } from 'drizzle-orm';
-import { assistantMessageParts, persistMessage } from '../../chat.js';
+import {
+  assistantMessageParts,
+  getOrCreateNotificationsConversation,
+  persistMessage,
+} from '../../chat.js';
 import type { PendingFinal, TaskState } from '../../events.js';
 import type { RecallSource } from '../../memory/recall.js';
 import { type ArtifactIntent, artifactExecutionFailure } from '../artifact-intent.js';
@@ -63,14 +67,30 @@ export async function stopForUnsavedGoalProgress(
   });
 }
 
-/** A retry must not duplicate the dashboard/chat copy of a final response. */
+/**
+ * A retry must not duplicate the dashboard/chat copy of a final response.
+ *
+ * A conversation-less assistant-trust task (a scheduled/goalless automation)
+ * would otherwise deliver its answer NOWHERE — deliverFinal no-ops for non-owner
+ * trust and there is no thread to write into. Route those into the assistant's
+ * Notifications thread so the owner always sees the result on the dashboard.
+ */
 async function persistFinalConversationOnce(
   db: Db,
   task: TaskRow,
   text: string,
   recall?: RecallSource[],
-): Promise<void> {
-  if (!task.conversationId) return;
+): Promise<boolean> {
+  let conversationId = task.conversationId;
+  let body = text;
+  if (!conversationId) {
+    if (task.trust !== 'assistant' || !text.trim()) return false;
+    conversationId = await getOrCreateNotificationsConversation(db, task.agentId);
+    // The Notifications thread mixes many tasks — title the entry so the owner
+    // can tell what produced it.
+    const title = task.title?.trim() || 'Scheduled task';
+    body = `**${title}**\n\n${text}`;
+  }
   const [existing] = await db
     .select({ id: messages.id })
     .from(messages)
@@ -79,19 +99,21 @@ async function persistFinalConversationOnce(
         eq(messages.taskId, task.id),
         eq(messages.role, 'assistant'),
         eq(messages.origin, 'assistant'),
-        eq(messages.text, text),
+        eq(messages.text, body),
       ),
     )
     .limit(1);
-  if (existing) return;
+  // A duplicate from an earlier attempt still means an owner-visible copy exists.
+  if (existing) return true;
   await persistMessage(db, {
-    conversationId: task.conversationId,
+    conversationId,
     taskId: task.id,
     role: 'assistant',
     origin: 'assistant',
-    parts: assistantMessageParts(text, recall),
-    text,
+    parts: assistantMessageParts(body, recall),
+    text: body,
   });
+  return true;
 }
 
 /** Deliver a previously checkpointed final response, then finish under CAS. */
@@ -103,7 +125,12 @@ export async function finalizePendingResponse(
 ): Promise<ExecuteResult> {
   if (!(await renewTaskLease(deps.db, task))) return LOST_LEASE;
   const recallSources = (checkpointState ?? taskState(task)).recall ?? undefined;
-  await persistFinalConversationOnce(deps.db, task, pending.text, recallSources);
+  const conversationDelivered = await persistFinalConversationOnce(
+    deps.db,
+    task,
+    pending.text,
+    recallSources,
+  );
 
   // Check cancellation/reclaim immediately before the external side effect.
   if (deps.deliverFinal && !pending.deliveryAttempted) {
@@ -138,11 +165,11 @@ export async function finalizePendingResponse(
           progress: pending.progress,
         });
   if (!completed) return LOST_LEASE;
-  // A needs_attention final has already delivered its text (dashboard row above
-  // and/or the owner channel via deliverFinal), so stamp it as notified and keep
-  // the re-notify sweep off it. A conversation-less task delivered nowhere yet —
-  // leave it unstamped so the sweep (and Phase-2's Notifications sink) reach it.
-  if (pending.terminalStatus === 'needs_attention' && task.conversationId) {
+  // A needs_attention final that reached an owner-visible thread (the task's own
+  // conversation or the Notifications sink) is already notified — stamp it so the
+  // re-notify sweep leaves it alone. If it delivered nowhere, leave it unstamped
+  // so the sweep keeps trying.
+  if (pending.terminalStatus === 'needs_attention' && conversationDelivered) {
     await markAttentionNotified(deps.db, task.id).catch((err) =>
       console.error('attention stamp failed', err),
     );

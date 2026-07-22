@@ -1,5 +1,5 @@
 import { conversations, createDb, type Db, messages, tasks } from '@assistant/db';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import { renotifyStalledAttention } from './attention.js';
@@ -22,6 +22,7 @@ describe('renotifyStalledAttention', () => {
     updatedMinutesAgo: number;
     notified: boolean;
     withConversation?: boolean;
+    trust?: 'owner' | 'assistant';
   }): Promise<string> {
     const { task } = await enqueueTask(db, {
       event: { source: 'internal', agentId, trust: 'assistant', payload: { note: 'xtest-attn' } },
@@ -33,6 +34,7 @@ describe('renotifyStalledAttention', () => {
         status: opts.status,
         progress: opts.progress,
         title: 'xtest task',
+        trust: opts.trust ?? 'assistant',
         conversationId: opts.withConversation === false ? null : conversationId,
         attentionNotifiedAt: opts.notified ? sql`now()` : null,
         updatedAt: sql`now() - make_interval(mins => ${opts.updatedMinutesAgo})`,
@@ -83,6 +85,21 @@ describe('renotifyStalledAttention', () => {
       await db.delete(messages).where(eq(messages.conversationId, conversationId));
       await db.delete(conversations).where(eq(conversations.id, conversationId));
     }
+    // The Notifications sink may have been created by the fallback test; drop it
+    // if it is now empty so the suite stays self-cleaning.
+    const [notif] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(eq(conversations.agentId, agentId), eq(conversations.title, 'Notifications')));
+    if (notif) {
+      const remaining = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(eq(messages.conversationId, notif.id))
+        .limit(1);
+      if (remaining.length === 0)
+        await db.delete(conversations).where(eq(conversations.id, notif.id));
+    }
   });
 
   it('notifies and stamps a stale, unnotified needs_attention task', async () => {
@@ -126,13 +143,15 @@ describe('renotifyStalledAttention', () => {
 
   it('leaves the row unstamped when delivery throws', async () => {
     if (!dbUp) return;
-    // No conversation and a throwing owner push → nothing reached the owner.
+    // No conversation, owner trust (so no Notifications-sink fallback), and a
+    // throwing owner push → nothing reached the owner.
     const id = await parkedTask({
       status: 'needs_attention',
       progress: 'undeliverable',
       updatedMinutesAgo: 30,
       notified: false,
       withConversation: false,
+      trust: 'owner',
     });
     const count = await renotifyStalledAttention(
       db,
@@ -144,6 +163,31 @@ describe('renotifyStalledAttention', () => {
     // This task contributed nothing and stays sweep-eligible.
     expect(await stamp(id)).toBeNull();
     expect(count).toBeGreaterThanOrEqual(0);
+  });
+
+  it('delivers a conversation-less assistant task into the Notifications thread', async () => {
+    if (!dbUp) return;
+    const id = await parkedTask({
+      status: 'needs_attention',
+      progress: 'scheduled work needs you',
+      updatedMinutesAgo: 30,
+      notified: false,
+      withConversation: false,
+      trust: 'assistant',
+    });
+    const count = await renotifyStalledAttention(db, undefined, { olderThanMinutes: 5 });
+    expect(count).toBeGreaterThanOrEqual(1);
+    expect(await stamp(id)).not.toBeNull();
+    const [notif] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(eq(conversations.agentId, agentId), eq(conversations.title, 'Notifications')));
+    expect(notif).toBeTruthy();
+    const [row] = await db
+      .select({ conversationId: messages.conversationId })
+      .from(messages)
+      .where(eq(messages.taskId, id));
+    expect(row?.conversationId).toBe(notif?.id);
   });
 
   it('uses a paused-mission message for waiting_event', async () => {

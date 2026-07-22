@@ -491,6 +491,58 @@ describe('executor end-to-end (integration, scripted model)', () => {
     expect(delivered.filter((id) => id === task.id)).toHaveLength(1);
   });
 
+  it('routes a conversation-less assistant final into the Notifications thread', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const dispatcher = new ToolDispatcher(db, makeRegistry(`t-sink-${Date.now()}`));
+    // A scheduled, assistant-trust task with NO conversation: deliverFinal no-ops
+    // and there is no thread to reply into — the answer must reach Notifications.
+    const { task } = await enqueueTask(db, {
+      event: { source: 'internal', agentId, trust: 'assistant', payload: {} },
+      type: 'scheduled',
+    });
+    createdTaskIds.push(task.id);
+    await db.update(tasks).set({ title: 'Nightly summary' }).where(eq(tasks.id, task.id));
+
+    const proseRouter = {
+      async object() {
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          object: { action: 'reply', reasoning: '', steps: [], missingInfo: [] },
+        };
+      },
+      async step(): Promise<StepCallOutcome> {
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: 'Your scheduled summary is ready.',
+          toolCalls: [],
+        };
+      },
+    } as unknown as ModelRouter;
+
+    const run = await executeTask({ db, router: proseRouter, dispatcher }, task.id);
+    expect(run.outcome).toBe('done');
+
+    const [notif] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(eq(conversations.agentId, agentId), eq(conversations.title, 'Notifications')));
+    expect(notif).toBeTruthy();
+    if (notif) createdConversationIds.push(notif.id);
+    const rows = await db
+      .select({ text: messages.text, conversationId: messages.conversationId })
+      .from(messages)
+      .where(eq(messages.taskId, task.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.conversationId).toBe(notif?.id);
+    // Titled so the owner can tell what produced it, and carries the answer.
+    expect(rows[0]?.text).toContain('Nightly summary');
+    expect(rows[0]?.text).toContain('Your scheduled summary is ready.');
+  });
+
   it('retries a failed final delivery from the exact checkpoint without rerunning the model', async (ctx) => {
     if (!dbUp) return ctx.skip();
     let stepCalls = 0;
