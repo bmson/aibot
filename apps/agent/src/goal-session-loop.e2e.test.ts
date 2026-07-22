@@ -12,7 +12,7 @@ import {
   toolCalls,
 } from '@assistant/db';
 import { ToolDispatcher, ToolRegistry } from '@assistant/tools';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -397,7 +397,7 @@ describe('unattended goal sessions never report silent success', () => {
     expect(goal?.progress).toBe('Finished phase 1');
   });
 
-  it('stops immediately when the required progress write is rejected', async (ctx) => {
+  it('binds a malformed model progress ID to the task goal', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const { goalId, conversationId } = await seedGoal('Rejected goal progress');
     const { task } = await enqueueTask(db, {
@@ -416,23 +416,34 @@ describe('unattended goal sessions never report silent success', () => {
       async step(_role: string, opts: { messages?: unknown[] }): Promise<StepCallOutcome> {
         stepCalls += 1;
         const transcript = JSON.stringify(opts.messages ?? []);
-        return transcript.includes('goal.test_work')
-          ? {
-              ok: true,
-              modelId: 'fake/model',
-              degraded: false,
-              text: '',
-              toolCalls: [progressCall('00000000-0000-4000-8000-000000000000', 1)],
-            }
-          : {
-              ok: true,
-              modelId: 'fake/model',
-              degraded: false,
-              text: '',
-              toolCalls: [
-                { toolCallId: 'work-rejected', toolName: 'goal.test_work', input: { phase: 1 } },
-              ],
-            };
+        if (transcript.includes('"updated"')) {
+          return {
+            ok: true,
+            modelId: 'fake/model',
+            degraded: false,
+            text: 'Finished.',
+            toolCalls: [],
+            finishReason: 'stop',
+          };
+        }
+        if (transcript.includes('goal.test_work')) {
+          return {
+            ok: true,
+            modelId: 'fake/model',
+            degraded: false,
+            text: '',
+            toolCalls: [progressCall('not-the-bound-goal', 1)],
+          };
+        }
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: '',
+          toolCalls: [
+            { toolCallId: 'work-rejected', toolName: 'goal.test_work', input: { phase: 1 } },
+          ],
+        };
       },
     } as unknown as ModelRouter;
 
@@ -441,11 +452,17 @@ describe('unattended goal sessions never report silent success', () => {
       task.id,
     );
 
-    expect(outcome.outcome).toBe('needs_attention');
-    expect(stepCalls).toBe(2);
+    expect(outcome.outcome).toBe('done');
+    expect(stepCalls).toBe(3);
     const [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
-    expect(row?.status).toBe('needs_attention');
+    expect(row?.status).toBe('done');
     const [goal] = await db.select().from(goals).where(eq(goals.id, goalId));
-    expect(goal?.nextAction).toContain("couldn't save the progress update");
+    expect(goal?.progress).toBe('Finished phase 1');
+    const progressRows = await db
+      .select()
+      .from(toolCalls)
+      .where(and(eq(toolCalls.taskId, task.id), eq(toolCalls.toolName, 'goals.update_progress')));
+    expect(progressRows).toHaveLength(1);
+    expect(progressRows[0]?.args).toMatchObject({ goalId });
   });
 });

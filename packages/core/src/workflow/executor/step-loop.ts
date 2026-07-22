@@ -425,6 +425,21 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       );
       if (requiredCall) stepResult = { ...stepResult, toolCalls: [requiredCall] };
     }
+    if (task.goalId) {
+      // Goal identity is runtime-owned. The model supplies the progress prose,
+      // but it must not be responsible for copying an opaque UUID out of the
+      // prompt. Bind every progress call to this task's durable goal before the
+      // call is recorded or dispatched. The dispatcher's independent binding
+      // check remains in place as defense in depth for every other caller.
+      stepResult = {
+        ...stepResult,
+        toolCalls: stepResult.toolCalls.map((toolCall) =>
+          toolCall.toolName === 'goals.update_progress'
+            ? { ...toolCall, input: { ...toolCall.input, goalId: task.goalId } }
+            : toolCall,
+        ),
+      };
+    }
 
     // 'length' means the model was cut off at the token budget. With no tool
     // calls we still hold a (possibly truncated) text answer that is far better
