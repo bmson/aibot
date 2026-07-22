@@ -230,11 +230,24 @@ for secret in database-url openrouter-api-key google-oauth-client-id google-oaut
   revoke_legacy_secret_access "$secret"
 done
 
-echo "── building images (Cloud Build)"
-gcloud builds submit --config=infra/gcp/cloudbuild.yaml \
-  --substitutions="_REGION=${REGION},_REPO=${REPO}" --quiet .
+if [ "${SKIP_BUILD:-}" = "1" ]; then
+  echo "── skipping image build (SKIP_BUILD=1) — reusing the :latest images already in Artifact Registry"
+else
+  echo "── building images (Cloud Build)"
+  gcloud builds submit --config=infra/gcp/cloudbuild.yaml \
+    --substitutions="_REGION=${REGION},_REPO=${REPO}" --quiet .
+fi
 
 echo "── deploying agent service"
+# The container runs validateProdConfig() at boot and exits if AGENT_URL is empty
+# while QUEUE_DRIVER=cloudtasks. Because --set-env-vars REPLACES the whole env set,
+# the first pass must carry the service's own (revision-stable) URL forward rather
+# than wait for the second pass — otherwise the new revision exits on boot and the
+# deploy fails before the Cloud Run Jobs below are created. Empty only on a
+# brand-new service's very first create (no prior URL yet).
+SELF_URL="$(gcloud run services describe assistant-agent --region "$REGION" --format='value(status.url)' 2>/dev/null || true)"
+SELF_URL_ENV=""
+[ -n "$SELF_URL" ] && SELF_URL_ENV=",AGENT_URL=${SELF_URL},PUBLIC_URL=${SELF_URL},INTERNAL_OIDC_AUDIENCE=${SELF_URL}"
 TWILIO_ENV=""
 AGENT_SECRETS="DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,GOOGLE_OAUTH_CLIENT_ID=google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,BOT_GOOGLE_REFRESH_TOKEN=bot-google-refresh-token:latest"
 if [ -n "$TWILIO_ACCOUNT_SID" ] && [ -n "$TWILIO_AUTH_TOKEN" ]; then
@@ -245,7 +258,7 @@ gcloud run deploy assistant-agent \
   --image "${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/agent:latest" \
   --region "$REGION" --allow-unauthenticated --service-account "$AGENT_SA" \
   --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3 --concurrency 4 --timeout 900 \
-  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=gcs,WORKSPACE_BUCKET=${PROJECT}-workspace,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},GMAIL_PUBSUB_TOPIC=projects/${PROJECT}/topics/${TOPIC},GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_SA},INTERNAL_AUTH_MODE=oidc,INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA},BROWSER_DRIVER=cloudrun,BROWSER_JOB_NAME=assistant-browser,CODE_DRIVER=cloudrun,CODE_JOB_NAME=assistant-code,PROCESSOR_DRIVER=cloudrun,PROCESSOR_JOB_NAME=assistant-processor,TRACES_BUCKET=${TRACES_BUCKET},CANARY_ENABLED=true,CANARY_MAX_COST_USD=0.03,CHAT_RECALL_ENABLED=true,OTEL_EXPORTER=none${TWILIO_ENV}" \
+  --set-env-vars "QUEUE_DRIVER=cloudtasks,FILES_DRIVER=gcs,WORKSPACE_BUCKET=${PROJECT}-workspace,GCP_PROJECT=${PROJECT},GCP_LOCATION=${REGION},CLOUD_TASKS_QUEUE=${QUEUE},OWNER_EMAIL=${OWNER_EMAIL},GMAIL_PUBSUB_TOPIC=projects/${PROJECT}/topics/${TOPIC},GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_SA},INTERNAL_AUTH_MODE=oidc,INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA},BROWSER_DRIVER=cloudrun,BROWSER_JOB_NAME=assistant-browser,CODE_DRIVER=cloudrun,CODE_JOB_NAME=assistant-code,PROCESSOR_DRIVER=cloudrun,PROCESSOR_JOB_NAME=assistant-processor,TRACES_BUCKET=${TRACES_BUCKET},CANARY_ENABLED=true,CANARY_MAX_COST_USD=0.03,CHAT_RECALL_ENABLED=true,OTEL_EXPORTER=none${TWILIO_ENV}${SELF_URL_ENV}" \
   --set-secrets "$AGENT_SECRETS" \
   --quiet
 
