@@ -51,6 +51,8 @@ jobs:
           docker push "${IMAGE_ROOT}/browser:${IMAGE_TAG}"
           docker build --file infra/docker/code-runner.Dockerfile --tag "${IMAGE_ROOT}/code:${IMAGE_TAG}" .
           docker push "${IMAGE_ROOT}/code:${IMAGE_TAG}"
+          docker build --file infra/docker/document-processor.Dockerfile --tag "${IMAGE_ROOT}/processor:${IMAGE_TAG}" .
+          docker push "${IMAGE_ROOT}/processor:${IMAGE_TAG}"
       - name: Release immutable images
         env:
           GCP_PROJECT: bmson-assistant

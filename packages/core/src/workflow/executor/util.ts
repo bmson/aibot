@@ -70,11 +70,22 @@ export function replaceToolResultMessage(
   window.push(toolResultMessage(toolCallId, toolName, value));
 }
 
-/** Drop-oldest compaction (v1): the storage bound and the model context bound in one. */
+/**
+ * Drop-oldest compaction: the storage bound and the model context bound in one.
+ *
+ * The slice must never begin on an orphaned tool-result — a `tool` message whose
+ * originating tool-call (in an earlier assistant message) was dropped. Strict
+ * providers (Azure, Anthropic) require one-to-one tool_use/tool_result pairing
+ * and reject an unpaired leading tool-result, which dead-lettered resumed tasks.
+ * A retained assistant tool-call is always safe: its result comes AFTER it, so it
+ * is retained too. So it is sufficient to advance the cut past any leading `tool`
+ * messages until the window starts on a real turn (or an assistant tool-call).
+ */
 export function compact(window: ModelMessage[]): ModelMessage[] {
-  return window.length <= CONTEXT_WINDOW_LIMIT
-    ? window
-    : window.slice(window.length - CONTEXT_WINDOW_LIMIT);
+  if (window.length <= CONTEXT_WINDOW_LIMIT) return window;
+  let start = window.length - CONTEXT_WINDOW_LIMIT;
+  while (start < window.length && window[start]?.role === 'tool') start += 1;
+  return window.slice(start);
 }
 
 /** Latest direct owner wording, used only for deterministic artifact routing. */

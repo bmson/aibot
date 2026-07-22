@@ -18,6 +18,7 @@ IMAGE_ROOT="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}"
 AGENT_SERVICE_ACCOUNT="assistant-agent@${PROJECT}.iam.gserviceaccount.com"
 BROWSER_SERVICE_ACCOUNT="assistant-browser@${PROJECT}.iam.gserviceaccount.com"
 CODE_SERVICE_ACCOUNT="assistant-code@${PROJECT}.iam.gserviceaccount.com"
+PROCESSOR_SERVICE_ACCOUNT="assistant-processor@${PROJECT}.iam.gserviceaccount.com"
 INTERNAL_INVOKER_SERVICE_ACCOUNT="assistant-internal-invoker@${PROJECT}.iam.gserviceaccount.com"
 
 if [[ "${SKIP_IMAGE_BUILD:-false}" != "true" ]]; then
@@ -154,6 +155,17 @@ if gcloud run jobs describe assistant-code --project "$PROJECT" --region "$REGIO
     --service-account "$CODE_SERVICE_ACCOUNT" --quiet
 else
   echo "  assistant-code not provisioned yet — run infra/gcp/deploy.sh; skipping"
+fi
+
+# Same tolerance for the document-processor job (Phase 14): skip until deploy.sh
+# has created it, otherwise roll it to the new image so it never drifts stale.
+if gcloud run jobs describe assistant-processor --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
+  gcloud run jobs update assistant-processor \
+    --project "$PROJECT" --region "$REGION" \
+    --image "${IMAGE_ROOT}/processor:${TAG}" \
+    --service-account "$PROCESSOR_SERVICE_ACCOUNT" --quiet
+else
+  echo "  assistant-processor not provisioned yet — run infra/gcp/deploy.sh; skipping"
 fi
 
 echo "Rolling out web"
