@@ -212,7 +212,7 @@ export default async function DashboardPage() {
                   data-mobile-touch-target="true"
                   className="mobile-touch-target inline-flex items-center text-sm font-medium hover:underline"
                 >
-                  {taskTypeLabel(task.type)}
+                  {task.title || taskTypeLabel(task.type)}
                 </Link>
                 <p className="truncate text-xs text-zinc-600 dark:text-zinc-400">
                   {task.progress || 'no progress recorded'}
@@ -254,7 +254,7 @@ export default async function DashboardPage() {
                     data-mobile-touch-target="true"
                     className="mobile-touch-target inline-flex items-center text-sm font-medium hover:underline"
                   >
-                    {taskTypeLabel(task.type)}
+                    {task.title || taskTypeLabel(task.type)}
                   </Link>
                   <p className="text-xs text-zinc-600 dark:text-zinc-400">{line}</p>
                   {task.nextAction ? (
@@ -297,7 +297,7 @@ export default async function DashboardPage() {
                   data-mobile-touch-target="true"
                   className="mobile-touch-target inline-flex items-center text-sm font-medium hover:underline"
                 >
-                  {taskTypeLabel(task.type)}
+                  {task.title || taskTypeLabel(task.type)}
                 </Link>
                 <span className="truncate text-xs text-zinc-500 dark:text-zinc-400">
                   {task.progress}

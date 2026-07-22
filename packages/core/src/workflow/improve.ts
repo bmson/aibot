@@ -227,7 +227,7 @@ export async function runSelfImprove(
       await notifyOwnerInNotifications(
         db,
         agentId,
-        `🔧 I drafted ${proposalsDrafted} improvement proposal${proposalsDrafted === 1 ? '' : 's'} from this week's reliability review. Review them on the Improvements page — nothing changes until you approve.`,
+        `🔧 I drafted ${proposalsDrafted} improvement proposal${proposalsDrafted === 1 ? '' : 's'} from this week's reliability review. Review them on the [Improvements page](/improvements) — nothing changes until you approve.`,
         opts.taskId,
       ).catch((err) => console.error('self-improve: owner notify failed', err));
     }

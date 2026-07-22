@@ -427,7 +427,7 @@ export async function emitBudgetNotices(db: Db, agentId: string): Promise<string
 
     const text =
       crossed >= 100
-        ? `Budget: the ${period.name} cap is exhausted ($${period.spent.toFixed(2)} of $${period.limit.toFixed(2)}). Non-critical work is parked as waiting_budget and resumes when the ${period.name} period resets; owner chat keeps a small carve-out. Raise the cap on the Costs page if you want work to continue now.`
+        ? `Budget: the ${period.name} cap is exhausted ($${period.spent.toFixed(2)} of $${period.limit.toFixed(2)}). Non-critical work is parked as waiting_budget and resumes when the ${period.name} period resets; owner chat keeps a small carve-out. Raise the cap on the [Costs page](/costs) if you want work to continue now.`
         : `Budget: ${Math.round(pct)}% of the ${period.name} cap used ($${period.spent.toFixed(2)} of $${period.limit.toFixed(2)}).`;
     await notifyOwner(db, agentId, text);
     emitted.push(cacheKey);

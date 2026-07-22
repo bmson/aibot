@@ -4,10 +4,24 @@ import type { ApprovalRow, TaskRow } from '@assistant/db';
 import { formatDateTime, prettyJson, relativeTime } from '@/lib/format';
 
 /** Plain-serializable props for the pending-approval client card. */
+export interface ApprovalField {
+  label: string;
+  value: string;
+  /** Render in a pre-wrap block (email/SMS body, event description). */
+  block?: boolean;
+}
+
 export interface PendingApprovalView {
   id: string;
   shortCode: string;
   summary: string;
+  /**
+   * Human-readable rendering of exactly what will happen — the email recipient
+   * and body, the event time and attendees, the SMS text — so the owner does not
+   * have to read raw JSON to know what they are approving. Empty for tools with
+   * no structured renderer (the JSON stays available under "Review exact details").
+   */
+  fields: ApprovalField[];
   payloadJson: string;
   requestedLabel: string;
   expiresLabel: string;
@@ -17,6 +31,54 @@ export interface PendingApprovalView {
   taskId: string;
   /** Set when the voice-rewrite pipeline failed its fact-preservation check. */
   voiceFlag: string | null;
+}
+
+const asText = (value: unknown): string =>
+  typeof value === 'string'
+    ? value
+    : Array.isArray(value)
+      ? value.filter((v) => typeof v === 'string').join(', ')
+      : value == null
+        ? ''
+        : String(value);
+
+/** Turn a gated tool's payload into readable fields — what the owner is approving. */
+export function approvalFields(toolName: string, payload: unknown): ApprovalField[] {
+  const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+  const field = (label: string, value: unknown, block = false): ApprovalField | null => {
+    const text = asText(value).trim();
+    return text ? { label, value: text, block } : null;
+  };
+  let fields: (ApprovalField | null)[] = [];
+  switch (toolName) {
+    case 'gmail.send':
+    case 'gmail.create_draft':
+      fields = [field('To', p.to), field('Subject', p.subject), field('Message', p.body, true)];
+      break;
+    case 'calendar.create_event':
+      fields = [
+        field('Event', p.summary),
+        field('Start', p.start),
+        field('End', p.end),
+        field('Attendees', p.attendees),
+        field('Location', p.location),
+        field('Details', p.description, true),
+      ];
+      break;
+    case 'sms.send':
+      fields = [field('To', p.to), field('Message', p.body, true)];
+      break;
+    case 'docs.share':
+      fields = [
+        field('Document', p.documentId),
+        field('Share with', p.email),
+        field('Access', p.role),
+      ];
+      break;
+    default:
+      fields = [];
+  }
+  return fields.filter((f): f is ApprovalField => f !== null);
 }
 
 function approvalReason(decision: unknown): string {
@@ -113,6 +175,7 @@ export function toPendingApprovalView(
     id: approval.id,
     shortCode: approval.shortCode,
     summary: approval.summary,
+    fields: approvalFields(toolCall.toolName, approval.payload),
     payloadJson: prettyJson(approval.payload),
     requestedLabel: `requested ${relativeTime(approval.requestedAt, now)} (${formatDateTime(approval.requestedAt)})`,
     expiresLabel: `expires ${relativeTime(approval.expiresAt, now)} (${formatDateTime(approval.expiresAt)})`,

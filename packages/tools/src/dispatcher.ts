@@ -112,6 +112,37 @@ export function approvalFallbackSummary(toolName: string, args: Record<string, u
       return 'Send you an assistant update';
     case 'task.schedule':
       return 'Schedule the requested follow-up work';
+    case 'contacts.lookup':
+      return `Look up ${quoted(args.name, 'a saved contact')}`;
+    case 'documents.search':
+      return `Search your filed documents for ${quoted(args.query, 'this topic')}`;
+    case 'occasions.save':
+      return 'Save an occasion (birthday/anniversary) for a contact';
+    case 'occasions.list':
+      return 'List upcoming occasions';
+    case 'goals.create':
+      return `Create the goal ${quoted(args.title, '')}`.trim();
+    case 'mission.update':
+      return 'Update this mission’s progress';
+    case 'drive.search':
+      return `Search your Google Drive for ${quoted(args.query, 'matching files')}`;
+    case 'drive.read':
+    case 'drive.download':
+      return 'Read the selected Google Drive file';
+    case 'drive.ingest':
+      return 'File a Google Drive document into your searchable library';
+    case 'watch.create':
+      return 'Set up an inbox watch for a matching message';
+    case 'watch.cancel':
+      return 'Cancel the selected inbox watch';
+    case 'watch.list':
+      return 'List your active inbox watches';
+    case 'applications.apply_confirmation':
+    case 'applications.append_confirmation_doc':
+    case 'applications.cancel_confirmation':
+    case 'applications.list_confirmations':
+    case 'applications.watch_confirmation':
+      return 'Act on a job-application confirmation';
     default:
       return `Allow the assistant to ${toolName.replaceAll('.', ' ').replaceAll('_', ' ')}`;
   }

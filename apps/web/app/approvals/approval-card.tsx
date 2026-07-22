@@ -43,6 +43,26 @@ export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
           <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-300">{approval.voiceFlag}</p>
         </div>
       ) : null}
+      {approval.fields.length > 0 ? (
+        <dl className="mt-2 rounded-md border border-amber-200/70 bg-white/60 p-2.5 text-xs dark:border-amber-900/50 dark:bg-zinc-900/40">
+          {approval.fields.map((f) => (
+            <div key={f.label} className="flex gap-2 py-0.5">
+              <dt className="w-20 shrink-0 font-medium text-zinc-500 dark:text-zinc-400">
+                {f.label}
+              </dt>
+              <dd
+                className={
+                  f.block
+                    ? 'min-w-0 flex-1 whitespace-pre-wrap break-words text-slate-800 dark:text-zinc-200'
+                    : 'min-w-0 flex-1 break-words text-slate-800 dark:text-zinc-200'
+                }
+              >
+                {f.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
       <details className="mt-2">
         <summary className="cursor-pointer text-xs text-zinc-600 select-none dark:text-zinc-400">
           Review exact details

@@ -7,6 +7,7 @@ import {
   checkpointTask,
   claimTask,
   completeTask,
+  deriveTaskTitle,
   enqueueTask,
   findDueTasks,
   markTaskNeedsAttention,
@@ -16,6 +17,20 @@ import {
   taskState,
   wakeTask,
 } from './machine.js';
+
+describe('deriveTaskTitle', () => {
+  const event = (payload: Record<string, unknown>) =>
+    ({ agentId: 'a', trust: 'owner', payload }) as unknown as InboundEvent;
+
+  it('prefers subject, then message text, trimmed to one line', () => {
+    expect(deriveTaskTitle(event({ subject: 'Dinner Friday?' }))).toBe('Dinner Friday?');
+    expect(deriveTaskTitle(event({ text: 'add lunch\nFriday noon' }))).toBe(
+      'add lunch Friday noon',
+    );
+    expect(deriveTaskTitle(event({}))).toBeUndefined();
+    expect(deriveTaskTitle(event({ text: 'x'.repeat(200) }))?.length).toBe(80);
+  });
+});
 
 const { notifyTask } = vi.hoisted(() => ({ notifyTask: vi.fn() }));
 vi.mock('../queue.js', () => ({ getQueueNotifier: () => ({ notify: notifyTask }) }));

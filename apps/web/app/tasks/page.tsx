@@ -93,7 +93,7 @@ export default async function TasksPage({
               >
                 <Link href={`/tasks/${task.id}`} className="block">
                   <div className="flex items-start justify-between gap-3">
-                    <span className="font-medium">{taskTypeLabel(task.type)}</span>
+                    <span className="font-medium">{task.title || taskTypeLabel(task.type)}</span>
                     <StatusChip status={task.status} />
                   </div>
                   <p className="mt-2 line-clamp-2 text-xs text-zinc-600 dark:text-zinc-400">
@@ -142,7 +142,7 @@ export default async function TasksPage({
                   <tr key={task.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
                     <td className="px-3 py-2">
                       <Link href={`/tasks/${task.id}`} className="font-medium hover:underline">
-                        {taskTypeLabel(task.type)}
+                        {task.title || taskTypeLabel(task.type)}
                       </Link>
                     </td>
                     <td className="px-3 py-2">

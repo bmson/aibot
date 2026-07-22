@@ -7,6 +7,21 @@ import type { AutonomyGrant } from './autonomy.js';
 
 export type TaskType = TaskRow['type'];
 
+/**
+ * A short human title from the trigger, so activity/approval UIs show "Reply to
+ * Anna about the venue" instead of the generic type bucket "Inbox request".
+ * Deterministic (no model) and always present. Prefers the email subject, then
+ * the message/instruction text; trimmed to a single line.
+ */
+export function deriveTaskTitle(event: InboundEvent): string | undefined {
+  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '');
+  const raw =
+    str(payload.subject) || str(payload.text) || str(payload.instruction) || str(payload.schedule);
+  if (!raw) return undefined;
+  return raw.length > 80 ? `${raw.slice(0, 79)}…` : raw;
+}
+
 const CLAIMABLE = ['pending', 'sleeping', 'waiting_budget'] as const;
 const WAKEABLE = [
   'waiting_approval',
@@ -87,6 +102,7 @@ export async function enqueueTask(
     agentId: input.event.agentId,
     conversationId: input.event.conversationId,
     type: input.type,
+    title: deriveTaskTitle(input.event),
     status: input.runAfter ? ('sleeping' as const) : ('pending' as const),
     trust: input.event.trust,
     trigger: input.event as unknown as Record<string, unknown>,

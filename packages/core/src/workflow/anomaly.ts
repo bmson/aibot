@@ -252,7 +252,7 @@ export async function runAnomalyScan(
       [
         `⚠️ ${inserted.length} approval ${inserted.length === 1 ? 'anomaly' : 'anomalies'} detected:`,
         ...lines,
-        'Review or suspend the policy on the Anomalies page.',
+        'Review or suspend the policy on the [Anomalies page](/anomalies).',
       ].join('\n'),
       opts.taskId,
     );
