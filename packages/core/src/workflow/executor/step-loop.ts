@@ -348,6 +348,32 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
     }
 
+    // A 'required' tool choice is advisory for some providers. If a step we forced
+    // to act still returned no tool call, give it one constrained retry on the
+    // tool-capable fallback before letting it fall through to prose — otherwise a
+    // forwarded/planned action silently no-ops. (forcedArtifact and goal-progress
+    // have their own dedicated retries above; the simulated-approval retry covers
+    // its own case, so it is excluded here to avoid retrying twice.)
+    if (
+      stepResult.ok &&
+      mustAct &&
+      !mustRecordGoalProgress &&
+      stepResult.toolCalls.length === 0 &&
+      !isSimulatedApprovalNotice(stepResult.text)
+    ) {
+      console.warn('retrying forced action step with no tool call', { taskId: task.id });
+      stepResult = await router.step(role, {
+        taskId: task.id,
+        system: `${system}\n\nThis request needs an action, not a summary. Emit the appropriate tool call now; do not answer in prose until you have.`,
+        messages: rc.window,
+        tools: toolSet as never,
+        toolChoice: 'required',
+        forceFallback: useForcedToolFallback,
+        critical,
+      });
+      if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+    }
+
     if (!stepResult.ok) {
       if (stepResult.decision.mode === 'block') {
         // daily/monthly exhausted — park as waiting_budget until the period

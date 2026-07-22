@@ -415,6 +415,22 @@ export async function runPlanPhase(rc: RunContext): Promise<ExecuteResult | { pl
       tainted: state.untrustedContext === true,
     });
     if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+    // A forwarded or quoting owner email is tainted, and the planner often
+    // summarizes it as a 'reply' instead of acting on the instruction inside the
+    // forward — the recurring "forwarded action request does nothing" bug. Coerce
+    // such a plan to 'workflow' so the step loop forces a step-0 tool call. This
+    // is safe under taint: the dispatcher parks every outward action from a
+    // tainted context for owner approval, so forcing a tool here can never act
+    // autonomously — the worst case is a spurious approval card. 'clarify' is
+    // left untouched so a genuinely ambiguous forward still asks.
+    if (
+      plan?.action === 'reply' &&
+      task.type === 'email_triage' &&
+      task.trust === 'owner' &&
+      state.untrustedContext === true
+    ) {
+      plan = { ...plan, action: 'workflow' };
+    }
     if (plan?.action === 'mission') {
       if (state.untrustedContext || (task.trust !== 'owner' && task.trust !== 'assistant')) {
         const refused = 'I did not start a long-running mission from an external request.';

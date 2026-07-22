@@ -1,6 +1,14 @@
 import type { InboundEvent, ModelRouter, StepCallOutcome } from '@assistant/core';
 import { enqueueTask, executeTask, getAgent } from '@assistant/core';
-import { conversations, createDb, type Db, messages, tasks, toolCalls } from '@assistant/db';
+import {
+  approvals,
+  conversations,
+  createDb,
+  type Db,
+  messages,
+  tasks,
+  toolCalls,
+} from '@assistant/db';
 import { ToolDispatcher, ToolRegistry } from '@assistant/tools';
 import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -24,15 +32,18 @@ const workflowPlan = {
   missingInfo: [],
 };
 
-function registry() {
-  return new ToolRegistry().register({
-    name: 'calendar.test_create',
-    description: 'Create a test calendar event.',
-    inputSchema: z.object({ title: z.string() }),
-    risk: 'autonomous',
-    acceptsUntrustedInput: true,
-    execute: async (args) => ({ created: true, title: (args as { title: string }).title }),
-  });
+function registry(flags: { outwardFacing?: boolean } = {}) {
+  return new ToolRegistry().register(
+    {
+      name: 'calendar.test_create',
+      description: 'Create a test calendar event.',
+      inputSchema: z.object({ title: z.string() }),
+      risk: 'autonomous',
+      acceptsUntrustedInput: true,
+      execute: async (args) => ({ created: true, title: (args as { title: string }).title }),
+    },
+    flags,
+  );
 }
 
 function emailEvent(conversationId: string): InboundEvent {
@@ -69,6 +80,13 @@ afterAll(async () => {
     await db.delete(messages).where(inArray(messages.conversationId, createdConversationIds));
   }
   if (dbUp && createdTaskIds.length) {
+    // approvals <-> tool_calls have a circular FK (tool_calls.approval_id and
+    // approvals.tool_call_id), so break the cycle before deleting either.
+    await db
+      .update(toolCalls)
+      .set({ approvalId: null })
+      .where(inArray(toolCalls.taskId, createdTaskIds));
+    await db.delete(approvals).where(inArray(approvals.taskId, createdTaskIds));
     await db.delete(toolCalls).where(inArray(toolCalls.taskId, createdTaskIds));
     await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
   }
@@ -147,5 +165,101 @@ describe('email action routing (integration, scripted model)', () => {
     expect(
       calls.some((c) => c.toolName === 'calendar.test_create' && c.status === 'succeeded'),
     ).toBe(true);
+  });
+
+  // Regression: a forwarded (tainted) owner email whose planner returned 'reply'
+  // used to make ZERO tool calls — the model summarized the forward instead of
+  // acting on the instruction inside it. Fix 1 coerces that plan to 'workflow' so
+  // the step is forced to act; the taint defense then parks the outward action
+  // for approval rather than executing it or silently doing nothing.
+  it('forces an approval-gated action on a forwarded owner email the planner tried to only reply to', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'email', trust: 'owner', title: 'Fwd: lunch friday' })
+      .returning({ id: conversations.id });
+    const conversationId = (conversation as NonNullable<typeof conversation>).id;
+    createdConversationIds.push(conversationId);
+
+    const event: InboundEvent = {
+      source: 'email',
+      externalEventId: `gmail:fwd-action-${Date.now()}`,
+      agentId,
+      conversationId,
+      trust: 'owner',
+      payload: {
+        threadId: 'thread-fwd',
+        messageId: 'msg-fwd',
+        from: 'owner@example.com',
+        subject: 'Fwd: lunch friday',
+        // A forward → tainted; the planner may summarize instead of acting.
+        quotesExternalContent: true,
+      },
+    };
+    const { task } = await enqueueTask(db, { type: 'email_triage', event, maxSteps: 8 });
+    createdTaskIds.push(task.id);
+
+    const step0ToolChoice: Array<string | undefined> = [];
+    let step = 0;
+    // The mis-route: the planner summarizes the forward as a 'reply'.
+    const replyPlan = {
+      action: 'reply',
+      reasoning: 'summarize the forwarded email',
+      steps: [],
+      missingInfo: [],
+    };
+    const router = {
+      async object() {
+        return { ok: true, modelId: 'fake/model', degraded: false, object: replyPlan };
+      },
+      async step(
+        _role: string,
+        opts: { toolChoice?: { type?: string; toolName?: string } | string },
+      ): Promise<StepCallOutcome> {
+        const current = step;
+        step += 1;
+        const choice = typeof opts.toolChoice === 'string' ? opts.toolChoice : undefined;
+        if (current === 0) step0ToolChoice.push(choice);
+        // Behave like a real model: emit the action only when forced. Without the
+        // fix the plan is 'reply' → toolChoice undefined → prose → zero tools.
+        if (choice === 'required') {
+          return {
+            ok: true,
+            modelId: 'fake/model',
+            degraded: false,
+            text: '',
+            toolCalls: [
+              { toolCallId: 'cal-1', toolName: 'calendar.test_create', input: { title: 'Lunch' } },
+            ],
+          };
+        }
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: 'Added lunch to your calendar for Friday.',
+          toolCalls: [],
+          finishReason: 'stop',
+        };
+      },
+    } as unknown as ModelRouter;
+
+    const outcome = await executeTask(
+      { db, router, dispatcher: new ToolDispatcher(db, registry({ outwardFacing: true })) },
+      task.id,
+    );
+
+    // Fix 1: the 'reply' plan on a tainted owner email is coerced to 'workflow',
+    // so step 0 is forced to act instead of silently summarizing.
+    expect(step0ToolChoice[0]).toBe('required');
+    // The taint defense holds: an outward action from a forward parks for
+    // approval — never a silent no-op, never an autonomous send.
+    expect(outcome.outcome).toBe('parked');
+    const calls = await db.select().from(toolCalls).where(eq(toolCalls.taskId, task.id));
+    const cal = calls.find((c) => c.toolName === 'calendar.test_create');
+    expect(cal).toBeTruthy();
+    expect(cal?.status).toBe('awaiting_approval'); // parked, not autonomously executed
+    const appr = await db.select().from(approvals).where(eq(approvals.taskId, task.id));
+    expect(appr.length).toBeGreaterThan(0);
   });
 });
