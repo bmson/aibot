@@ -2,6 +2,7 @@ export * from './anomaly.js';
 export * from './approvals.js';
 export * from './browser.js';
 export * from './code-job.js';
+export * from './dream.js';
 export * from './executor.js';
 export * from './goal-evidence.js';
 export * from './improve.js';

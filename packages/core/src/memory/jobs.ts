@@ -1,6 +1,7 @@
 import type { Db, TaskRow } from '@assistant/db';
 import type { ModelRouter } from '../model-router/router.js';
 import { runAnomalyScan } from '../workflow/anomaly.js';
+import { runDream } from '../workflow/dream.js';
 import { runSelfImprove } from '../workflow/improve.js';
 import { refreshAmbientSnapshot } from './ambient.js';
 import { runMemoryConsolidation } from './consolidation.js';
@@ -28,7 +29,8 @@ export type CodeJobName =
   | 'skill.reflect'
   | 'self.improve'
   | 'documents.extract'
-  | 'ambient.refresh';
+  | 'ambient.refresh'
+  | 'dream.run';
 
 const CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.extract',
@@ -41,6 +43,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'self.improve',
   'documents.extract',
   'ambient.refresh',
+  'dream.run',
 ]);
 
 export interface CodeJobOutcome {
@@ -134,6 +137,14 @@ export async function runCodeJob(
         summary: r.computed
           ? `ambient: refreshed (location${r.hasWeather ? ' + weather' : ', no weather'})`
           : 'ambient: no fresh location — snapshot cleared',
+      };
+    }
+    case 'dream.run': {
+      await deps.heartbeat?.();
+      const r = await runDream(deps, { taskId: task.id });
+      return {
+        done: true,
+        summary: `dream: ${r.footnotes} footnote(s), ${r.hypotheses} hypothesis(es), ${r.anticipations} anticipation(s)`,
       };
     }
   }

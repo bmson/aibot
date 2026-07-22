@@ -358,6 +358,13 @@ const scheduleSeed = [
     cron: '*/30 * * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.02', job: 'ambient.refresh' },
   },
+  // Dreaming (Phase 20): a budget-capped nightly reflection after extraction —
+  // counterfactual footnotes, behavioral hypotheses, tomorrow's anticipations.
+  {
+    name: 'dream',
+    cron: '30 0 * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'dream.run' },
+  },
 ] as const;
 
 /** Schedules whose definition the seed owns — updated in place on re-seed (prod picks up changes on deploy). */
@@ -369,6 +376,7 @@ const SEED_OWNED_SCHEDULES = new Set([
   'skill-reflection',
   'self-improve',
   'ambient-refresh',
+  'dream',
 ]);
 
 for (const s of scheduleSeed) {

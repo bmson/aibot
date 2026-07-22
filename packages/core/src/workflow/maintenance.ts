@@ -4,6 +4,7 @@ import { loadConfig } from '../config.js';
 import { releaseStaleReservations } from '../cost.js';
 import { purgeStaleLocations } from '../memory/location.js';
 import type { ModelRouter } from '../model-router/router.js';
+import { purgeStaleDreamNotes } from './dream.js';
 
 /**
  * Backfill embeddings for recent messages that lack them — this is what makes
@@ -43,7 +44,13 @@ export async function backfillMessageEmbeddings(
 export async function purgeExpired(
   db: Db,
   batch = 500,
-): Promise<{ cache: number; memories: number; reservations: number; locations: number }> {
+): Promise<{
+  cache: number;
+  memories: number;
+  reservations: number;
+  locations: number;
+  dreamNotes: number;
+}> {
   const expiredCache = db
     .select({ id: toolCache.cacheKey })
     .from(toolCache)
@@ -54,7 +61,7 @@ export async function purgeExpired(
     .from(memories)
     .where(and(isNotNull(memories.expiresAt), lte(memories.expiresAt, sql`now()`)))
     .limit(batch);
-  const [cacheRows, memoryRows, reservations, locations] = await Promise.all([
+  const [cacheRows, memoryRows, reservations, locations, dreamNotes] = await Promise.all([
     db
       .delete(toolCache)
       .where(inArray(toolCache.cacheKey, expiredCache))
@@ -63,11 +70,14 @@ export async function purgeExpired(
     releaseStaleReservations(db, 120, batch),
     // Phase 15: location pings are transient — purge past the retention window.
     purgeStaleLocations(db, loadConfig().LOCATION_RETENTION_DAYS, batch),
+    // Phase 20: dream notes are kept 7 days for inspection, then purged.
+    purgeStaleDreamNotes(db, batch),
   ]);
   return {
     cache: cacheRows.length,
     memories: memoryRows.length,
     reservations,
     locations,
+    dreamNotes,
   };
 }

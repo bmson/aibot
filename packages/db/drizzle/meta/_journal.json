@@ -239,6 +239,13 @@
       "when": 1784683680495,
       "tag": "0033_sticky_anthem",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1784685076389,
+      "tag": "0034_lush_deadpool",
+      "breakpoints": true
     }
   ]
 }

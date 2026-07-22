@@ -1276,6 +1276,33 @@ export const ambientSnapshots = pgTable('ambient_snapshots', {
   computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * Dream notes (Phase 20 — offline cognition). A budget-capped nightly session
+ * replays the day's failures (counterfactual footnotes), spots behavioral
+ * patterns (→ quarantined low-confidence memories, stored in `memories`, not
+ * here), and anticipates likely-tomorrow needs. The owner-facing observations
+ * land here as short notes surfaced in the morning brief, kept 7 days for
+ * inspection then purged by the sweep. Internal-only: the job dispatches no
+ * tools, so it can never act outward.
+ */
+export const dreamNotes = pgTable(
+  'dream_notes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    /** 'footnote' (while-you-slept observation) | 'anticipation' (likely-tomorrow prep). */
+    kind: text('kind').notNull(),
+    content: text('content').notNull(),
+    /** task/tool_call ids that evidence the note. */
+    refIds: text('ref_ids').array().notNull().default([]),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('dream_notes_agent_idx').on(t.agentId, t.createdAt)],
+);
+
 // ── Inferred row types ───────────────────────────────────────────────────────
 
 export type AgentRow = typeof agents.$inferSelect;
@@ -1305,6 +1332,7 @@ export type DocumentRow = typeof documents.$inferSelect;
 export type DocumentChunkRow = typeof documentChunks.$inferSelect;
 export type LocationPingRow = typeof locationPings.$inferSelect;
 export type AmbientSnapshotRow = typeof ambientSnapshots.$inferSelect;
+export type DreamNoteRow = typeof dreamNotes.$inferSelect;
 export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;
