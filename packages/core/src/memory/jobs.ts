@@ -3,6 +3,7 @@ import type { ModelRouter } from '../model-router/router.js';
 import { runAnomalyScan } from '../workflow/anomaly.js';
 import { runDream } from '../workflow/dream.js';
 import { runSelfImprove } from '../workflow/improve.js';
+import { runSelfMaintenance } from '../workflow/self-maintenance.js';
 import { refreshAmbientSnapshot } from './ambient.js';
 import { runMemoryConsolidation } from './consolidation.js';
 import { runDocumentExtraction } from './documents.js';
@@ -30,7 +31,8 @@ export type CodeJobName =
   | 'self.improve'
   | 'documents.extract'
   | 'ambient.refresh'
-  | 'dream.run';
+  | 'dream.run'
+  | 'self.maintain';
 
 const CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.extract',
@@ -44,6 +46,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'documents.extract',
   'ambient.refresh',
   'dream.run',
+  'self.maintain',
 ]);
 
 export interface CodeJobOutcome {
@@ -145,6 +148,14 @@ export async function runCodeJob(
       return {
         done: true,
         summary: `dream: ${r.footnotes} footnote(s), ${r.hypotheses} hypothesis(es), ${r.anticipations} anticipation(s)`,
+      };
+    }
+    case 'self.maintain': {
+      await deps.heartbeat?.();
+      const r = await runSelfMaintenance(deps, { taskId: task.id });
+      return {
+        done: true,
+        summary: `self-maintain: ${r.backlog} backlog item(s), ${r.blocked} blocked by the fence`,
       };
     }
   }

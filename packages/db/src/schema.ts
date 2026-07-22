@@ -1303,6 +1303,45 @@ export const dreamNotes = pgTable(
   (t) => [index('dream_notes_agent_idx').on(t.agentId, t.createdAt)],
 );
 
+/**
+ * Self-maintenance backlog (Phase 21). Code-shaped findings the bot proposes to
+ * fix in its OWN repo. Hard fences live in code (see workflow/self-maintenance.ts):
+ * PR-only (never push to main / trigger a deploy), NEVER edit infra/ or the
+ * approval/policy/trust code paths (the bot cannot widen its own autonomy), one
+ * open self-PR at a time, self-labeled so anomaly detection watches the pattern,
+ * and the MERGE IS ALWAYS the owner's. This table only tracks the backlog + PR
+ * status; it grants no capability on its own.
+ */
+export const selfMaintenance = pgTable(
+  'self_maintenance',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    /** The self-improvement proposal (Phase 12) this came from, if any. */
+    proposalId: uuid('proposal_id'),
+    title: text('title').notNull(),
+    diagnosis: text('diagnosis').notNull().default(''),
+    /** The file/area the fix targets — validated against the fence before any PR. */
+    targetArea: text('target_area').notNull().default(''),
+    status: text('status').notNull().default('backlog'),
+    /** Why a blocked item can't proceed (e.g. touches a protected path). */
+    blockedReason: text('blocked_reason'),
+    prNumber: integer('pr_number'),
+    prUrl: text('pr_url'),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      'self_maintenance_status_check',
+      sql`${t.status} IN ('backlog','blocked','pr_open','merged','dismissed')`,
+    ),
+    uniqueIndex('self_maintenance_dedup_idx').on(t.agentId, t.title),
+    index('self_maintenance_status_idx').on(t.agentId, t.status),
+  ],
+);
+
 // ── Inferred row types ───────────────────────────────────────────────────────
 
 export type AgentRow = typeof agents.$inferSelect;
@@ -1333,6 +1372,7 @@ export type DocumentChunkRow = typeof documentChunks.$inferSelect;
 export type LocationPingRow = typeof locationPings.$inferSelect;
 export type AmbientSnapshotRow = typeof ambientSnapshots.$inferSelect;
 export type DreamNoteRow = typeof dreamNotes.$inferSelect;
+export type SelfMaintenanceRow = typeof selfMaintenance.$inferSelect;
 export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;

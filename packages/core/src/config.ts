@@ -69,6 +69,9 @@ const ConfigSchema = z.object({
   LOCATION_PING_SECRET: z.string().default(''),
   /** How many days a location ping is kept before the sweep purges it. */
   LOCATION_RETENTION_DAYS: z.coerce.number().min(1).max(90).default(3),
+  /** Self-maintenance (Phase 21): a GitHub token the bot opens self-PRs with; empty disables PRs. */
+  GITHUB_TOKEN: z.string().default(''),
+  GITHUB_REPO: z.string().default('bmson/aibot'),
   /** Trace-archive bucket (30-day lifecycle); empty = store traces in the workspace. */
   TRACES_BUCKET: z.string().default(''),
   /** Explicit opt-in: canaries send one real email/SMS and launch one browser job. */

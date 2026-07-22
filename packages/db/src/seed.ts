@@ -365,6 +365,14 @@ const scheduleSeed = [
     cron: '30 0 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'dream.run' },
   },
+  // Self-maintenance (Phase 21): after self-improve drafts proposals, turn the
+  // code-shaped ones into a fenced backlog (diagnosis only; never touches
+  // protected paths, never opens a PR without the owner's GitHub token).
+  {
+    name: 'self-maintain',
+    cron: '0 1 * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'self.maintain' },
+  },
 ] as const;
 
 /** Schedules whose definition the seed owns — updated in place on re-seed (prod picks up changes on deploy). */
@@ -377,6 +385,7 @@ const SEED_OWNED_SCHEDULES = new Set([
   'self-improve',
   'ambient-refresh',
   'dream',
+  'self-maintain',
 ]);
 
 for (const s of scheduleSeed) {
