@@ -1,7 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { getAgent } from '@assistant/core';
+import { createDb, type Db, documentChunks, documents, files, tasks } from '@assistant/db';
+import { eq, like } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolContext } from '../types.js';
 import { registerDriveTools, safeAttachmentName } from './drive.js';
+
+const DATABASE_URL =
+  process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
 
 function tool(registry: ToolRegistry, name: string): AssistantTool {
   const registered = registry.get(name);
@@ -98,5 +104,131 @@ describe('Drive attachment tools', () => {
       tool(registry, 'drive.download').execute({ fileId: 'file_1234567890' }, context),
     ).rejects.toThrow(/exceeds 8 MB/);
     expect(writeBytes).not.toHaveBeenCalled();
+  });
+});
+
+describe('Drive read + ingest (Phase 24)', () => {
+  it('drive.read exports a Google Doc to text and refuses binary types', async () => {
+    const registry = registerDriveTools(new ToolRegistry(), {
+      client: {
+        api: vi.fn(async () => ({
+          id: 'doc_1234567890',
+          name: 'Project brief',
+          mimeType: 'application/vnd.google-apps.document',
+        })),
+        apiBytes: vi.fn(async () => ({
+          body: Buffer.from('The Reykjavik launch is set for March.', 'utf8'),
+          contentType: 'text/plain',
+        })),
+      } as never,
+      workspace: { writeBytes: vi.fn() } as never,
+    });
+    const out = (await tool(registry, 'drive.read').execute(
+      { fileId: 'doc_1234567890', maxChars: 20000 },
+      context,
+    )) as { text: string; mimeType: string };
+    expect(out.text).toContain('Reykjavik launch');
+    expect(out.mimeType).toBe('application/vnd.google-apps.document');
+
+    const binaryRegistry = registerDriveTools(new ToolRegistry(), {
+      client: {
+        api: vi.fn(async () => ({ id: 'img_1234567890', name: 'scan.png', mimeType: 'image/png' })),
+        apiBytes: vi.fn(),
+      } as never,
+      workspace: { writeBytes: vi.fn() } as never,
+    });
+    await expect(
+      tool(binaryRegistry, 'drive.read').execute({ fileId: 'img_1234567890' }, context),
+    ).rejects.toThrow(/not readable as text/);
+  });
+
+  it('registers drive.ingest only when a db is provided', () => {
+    const withoutDb = registerDriveTools(new ToolRegistry(), {
+      client: { api: vi.fn(), apiBytes: vi.fn() } as never,
+      workspace: { writeBytes: vi.fn() } as never,
+    });
+    expect(withoutDb.get('drive.ingest')).toBeUndefined();
+    const withDb = registerDriveTools(new ToolRegistry(), {
+      client: { api: vi.fn(), apiBytes: vi.fn() } as never,
+      workspace: { writeBytes: vi.fn() } as never,
+      db: {} as never,
+    });
+    expect(withDb.get('drive.ingest')).toBeDefined();
+  });
+});
+
+describe('drive.ingest → document library (integration)', () => {
+  let db: Db;
+  let dbUp = false;
+  let agentId: string;
+
+  async function cleanup() {
+    const docs = await db
+      .select({ id: documents.id })
+      .from(documents)
+      .where(like(documents.title, 'XTESTDRIVE%'));
+    for (const d of docs)
+      await db.delete(documentChunks).where(eq(documentChunks.documentId, d.id));
+    if (docs.length) {
+      await db.delete(documents).where(like(documents.title, 'XTESTDRIVE%'));
+      await db.delete(files).where(like(files.workspacePath, 'documents/drive/xtestdrive%'));
+      await db.delete(tasks).where(like(tasks.progress, 'extract XTESTDRIVE%'));
+    }
+  }
+
+  beforeAll(async () => {
+    db = createDb(DATABASE_URL);
+    try {
+      agentId = (await getAgent(db)).id;
+      dbUp = true;
+      await cleanup();
+    } catch {
+      console.warn('drive.test: database unreachable — skipping');
+    }
+  });
+
+  afterAll(async () => {
+    if (dbUp) await cleanup();
+    await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
+  });
+
+  it('files a Drive text file as a searchable document with source=drive', async (ctx2) => {
+    if (!dbUp) return ctx2.skip();
+    const store = new Map<string, Buffer>();
+    const registry = registerDriveTools(new ToolRegistry(), {
+      client: {
+        api: vi.fn(async () => ({
+          id: 'xtestdrive0000',
+          name: 'XTESTDRIVE notes.txt',
+          mimeType: 'text/plain',
+          webViewLink: 'https://drive.google.com/file/d/xtestdrive0000',
+        })),
+        apiBytes: vi.fn(async () => ({
+          body: Buffer.from('Quarterly revenue was 4.2 million.', 'utf8'),
+          contentType: 'text/plain',
+        })),
+      } as never,
+      workspace: {
+        writeBytes: async (p: string, b: Buffer) => {
+          store.set(p, b);
+          return { bytes: b.length };
+        },
+        delete: async (p: string) => {
+          store.delete(p);
+        },
+      } as never,
+      db,
+    });
+    const out = (await tool(registry, 'drive.ingest').execute(
+      { fileId: 'xtestdrive0000', title: 'XTESTDRIVE notes' },
+      { ...context, agentId } as unknown as ToolContext,
+    )) as { documentId: string; duplicate: boolean };
+    expect(out.duplicate).toBe(false);
+
+    const [doc] = await db.select().from(documents).where(eq(documents.id, out.documentId));
+    expect(doc?.source).toBe('drive');
+    expect(doc?.trust).toBe('known');
+    expect(doc?.extractor).toBe('text');
+    expect(store.size).toBe(1);
   });
 });

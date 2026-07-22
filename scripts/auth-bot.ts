@@ -33,6 +33,11 @@ const SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
   'https://www.googleapis.com/auth/presentations',
   'https://www.googleapis.com/auth/drive.file',
+  // Read/search files the OWNER shares with the bot (Phase 24 shared-with-me).
+  // drive.file alone only reaches bot-created files; drive.readonly lets
+  // drive.search/drive.read/drive.ingest reach invited files. Re-run
+  // `pnpm auth:bot` after adding this so the new consent grants it.
+  'https://www.googleapis.com/auth/drive.readonly',
   'openid',
   'email',
 ].join(' ');

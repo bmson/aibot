@@ -32,7 +32,7 @@ import type { WorkspaceReader } from './import.js';
 
 export type DocumentExtractor = 'text' | 'pdf' | 'pending_processor' | 'unsupported';
 export type DocumentTrust = 'owner' | 'known' | 'unknown' | 'assistant';
-export type DocumentSource = 'upload' | 'email';
+export type DocumentSource = 'upload' | 'email' | 'drive';
 
 const CHUNK_CHARS = 1200;
 const CHUNK_OVERLAP = 150;

@@ -55,8 +55,13 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{doc.title}</p>
           <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-            {doc.bytesLabel} · {doc.source === 'email' ? 'from an attachment' : 'uploaded'} ·{' '}
-            {doc.createdLabel}
+            {doc.bytesLabel} ·{' '}
+            {doc.source === 'email'
+              ? 'from an attachment'
+              : doc.source === 'drive'
+                ? 'from Drive'
+                : 'uploaded'}{' '}
+            · {doc.createdLabel}
             {doc.status === 'ready'
               ? ` · ${doc.chunkCount} passage${doc.chunkCount === 1 ? '' : 's'}`
               : ''}

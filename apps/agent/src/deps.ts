@@ -139,7 +139,7 @@ export function buildDeps(): AgentDeps {
       botEmail,
       ownerEmail: config.OWNER_EMAIL,
     });
-    registerDriveTools(registry, { client: googleClient, workspace });
+    registerDriveTools(registry, { client: googleClient, workspace, db });
     registerSheetsTools(registry, {
       client: googleClient,
       ownerEmail: config.OWNER_EMAIL,
