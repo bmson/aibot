@@ -187,6 +187,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         tainted: state.untrustedContext,
       }),
       channelContext(task),
+      isUnattendedGoalSession(task)
+        ? `\nThis automatic session is bound to Goal ID ${task.goalId}. Every goals.update_progress call must use exactly this Goal ID.`
+        : '',
       plan
         ? `\nCurrent plan (follow it; deviate only with good reason):\n${JSON.stringify(plan)}`
         : '',

@@ -3,7 +3,16 @@ import { messages } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { and, eq } from 'drizzle-orm';
 import { listMessages } from '../../chat.js';
-import { isKnownSenderReplyTask } from './context-helpers.js';
+import { isKnownSenderReplyTask, isUnattendedGoalSession } from './context-helpers.js';
+
+function triggerInstruction(task: TaskRow): string | undefined {
+  const trigger = task.trigger as { payload?: { text?: unknown; instruction?: unknown } } | null;
+  return typeof trigger?.payload?.text === 'string'
+    ? trigger.payload.text
+    : typeof trigger?.payload?.instruction === 'string'
+      ? trigger.payload.instruction
+      : undefined;
+}
 
 export async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]> {
   if (task.conversationId) {
@@ -57,19 +66,22 @@ export async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]
         (m) =>
           ({ role: m.role as 'user' | 'assistant', content: m.text || '(empty)' }) as ModelMessage,
       );
+    const initialInstruction = triggerInstruction(task);
+
+    // A goal's work chat is intentionally reused across automatic sessions.
+    // Conversation history supplies useful continuity, but it is not the task
+    // instruction and does not contain the durable Goal ID. Always append the
+    // generated session instruction so progress writes target the bound goal
+    // instead of forcing the model to guess an ID from old chat messages.
+    if (isUnattendedGoalSession(task) && initialInstruction) {
+      return [...conversationWindow, { role: 'user', content: initialInstruction } as ModelMessage];
+    }
     if (conversationWindow.length > 0) return conversationWindow;
 
     // A newly-created Goal work chat deliberately does not render the
     // system-generated opening instruction as if the owner had written it.
     // Its durable task trigger remains the source of truth for the first
     // model step, so the work can begin without a misleading chat bubble.
-    const trigger = task.trigger as { payload?: { text?: unknown; instruction?: unknown } } | null;
-    const initialInstruction =
-      typeof trigger?.payload?.text === 'string'
-        ? trigger.payload.text
-        : typeof trigger?.payload?.instruction === 'string'
-          ? trigger.payload.instruction
-          : undefined;
     if (initialInstruction) {
       return [{ role: 'user', content: initialInstruction } as ModelMessage];
     }
