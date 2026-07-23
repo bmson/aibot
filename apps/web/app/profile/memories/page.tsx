@@ -140,7 +140,7 @@ export default async function MemoryLibraryPage({
       </Link>
       <PageHeader title={viewCopy[view].title} intro={viewCopy[view].intro} />
 
-      <div className="mt-6 flex flex-col gap-3">
+      <div className="mt-6 grid min-w-0 gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
         <nav className={segmentedControlClass} aria-label="Memory views">
           {VIEWS.map((item) => (
             <Link
@@ -155,7 +155,7 @@ export default async function MemoryLibraryPage({
             </Link>
           ))}
         </nav>
-        <form action="/profile/memories" method="get" className="flex gap-2">
+        <form action="/profile/memories" method="get" className="flex min-w-0 gap-2">
           <input type="hidden" name="view" value={view} />
           <label className="relative min-w-0 flex-1">
             <span className="sr-only">Search memories</span>
@@ -197,7 +197,7 @@ export default async function MemoryLibraryPage({
           </p>
         </div>
       ) : (
-        <div className="mt-3 flex flex-col gap-2">
+        <div className="mt-3 flex flex-col gap-3">
           {rows.map(({ memory, subjectLabel }) => (
             <FactRow
               key={memory.id}

@@ -19,6 +19,7 @@ import { getDb } from '@/lib/server';
 import {
   btn,
   btnSm,
+  cardShellClass,
   EmptyState,
   PageHeader,
   PageShell,
@@ -209,7 +210,7 @@ export default async function TasksPage({
               <h2 className="mb-3 text-xs font-semibold tracking-[0.1em] text-muted uppercase">
                 {group.label}
               </h2>
-              <div className="overflow-hidden rounded-2xl bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.06)]">
+              <div className={cardShellClass}>
                 {group.items.map((task, index) => {
                   const Icon = taskIcon[task.status as keyof typeof taskIcon] ?? Clock3;
                   const terminal = TERMINAL_TASK_STATUSES.includes(
@@ -218,7 +219,7 @@ export default async function TasksPage({
                   return (
                     <article
                       key={task.id}
-                      className={`grid gap-3 px-4 py-4 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-center sm:px-5 ${
+                      className={`grid grid-cols-[2rem_minmax(0,1fr)] gap-3 px-4 py-4 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-center sm:px-5 ${
                         index > 0 ? 'border-t border-edge' : ''
                       }`}
                     >
@@ -245,12 +246,19 @@ export default async function TasksPage({
                         <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-muted">
                           {truncate(stripMarkdown(task.progress), 180) || 'No update recorded yet.'}
                         </p>
-                        <p className="mt-1 text-xs text-muted">
-                          {trustLabel(task.trust)} · {formatUsd(task.spentUsd)} of{' '}
-                          {formatUsd(task.budgetUsdLimit)} · {relativeTime(task.updatedAt, now)}
-                        </p>
+                        <div className="mt-2 flex flex-wrap gap-1.5 text-2xs text-muted">
+                          <span className="rounded-md bg-sunken/65 px-2 py-1">
+                            Started by {trustLabel(task.trust)}
+                          </span>
+                          <span className="rounded-md bg-sunken/65 px-2 py-1">
+                            Spent {formatUsd(task.spentUsd)} / {formatUsd(task.budgetUsdLimit)}
+                          </span>
+                          <span className="rounded-md bg-sunken/65 px-2 py-1">
+                            Updated {relativeTime(task.updatedAt, now)}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 sm:justify-end">
+                      <div className="col-start-2 flex items-center gap-2 sm:col-start-auto sm:justify-end">
                         <Link href={`/tasks/${task.id}`} className={btnSm.outline}>
                           Open
                         </Link>

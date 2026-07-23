@@ -1,11 +1,12 @@
 import { getAgent, listConversations } from '@assistant/core';
 import { conversations, tasks } from '@assistant/db';
 import { and, count, eq, isNotNull, notInArray } from 'drizzle-orm';
+import { MessageSquareText } from 'lucide-react';
 import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn, EmptyState, PageHeader, PageShell } from '@/lib/ui';
+import { btn, cardShellClass, EmptyState, PageHeader, PageShell } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import {
   archiveConversation,
@@ -106,28 +107,42 @@ export default async function ChatListPage({
           {archived ? 'No archived chats.' : 'No chats yet — start one with “New chat”.'}
         </EmptyState>
       ) : (
-        <ul className="mt-6 flex flex-col gap-2">
+        <ul className="mt-6 grid gap-3">
           {chatRows.map((conversation) => (
-            <li key={conversation.id} className="flex items-center gap-2">
+            <li
+              key={conversation.id}
+              className={`${cardShellClass} grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2`}
+            >
               <Link
                 href={`/chat/${conversation.id}`}
                 data-mobile-touch-target="true"
-                className="mobile-touch-target flex min-w-0 flex-1 items-center justify-between rounded-xl bg-raised px-3.5 py-3 text-sm shadow-[0_1px_2px_rgb(23_25_35/0.04)] motion-safe:transition-transform hover:-translate-y-px"
+                className={`mobile-touch-target flex min-w-0 items-center gap-3 rounded-xl px-2 py-2 motion-safe:transition-colors hover:bg-sunken/65 ${
+                  conversation.isPrimary ? 'col-span-2' : ''
+                }`}
               >
-                <span className="flex min-w-0 items-center gap-2">
-                  {conversation.isPrimary ? (
-                    <span className="shrink-0 rounded bg-indigo-100 px-1.5 py-0.5 text-2xs font-semibold tracking-wide text-indigo-700 uppercase dark:bg-indigo-950 dark:text-indigo-300">
-                      Main
-                    </span>
-                  ) : null}
-                  <span className="truncate">
-                    {conversation.title && conversation.title !== 'Untitled'
-                      ? conversation.title
-                      : 'New conversation'}
-                  </span>
+                <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-sunken text-muted">
+                  <MessageSquareText className="size-4" aria-hidden="true" />
                 </span>
-                <span className="ml-4 shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
-                  {relativeTime(conversation.updatedAt, now)}
+                <span className="min-w-0 flex-1">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-[14px] font-semibold">
+                      {conversation.title && conversation.title !== 'Untitled'
+                        ? conversation.title
+                        : 'New conversation'}
+                    </span>
+                    {conversation.isPrimary ? (
+                      <span className="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-2xs font-semibold tracking-wide text-indigo-700 uppercase dark:bg-indigo-950 dark:text-indigo-300">
+                        Main
+                      </span>
+                    ) : activeConversationIds.has(conversation.id) ? (
+                      <span className="shrink-0 rounded-full bg-blue-100 px-1.5 py-0.5 text-2xs font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+                        Work active
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted">
+                    Last active {relativeTime(conversation.updatedAt, now)}
+                  </span>
                 </span>
               </Link>
               {conversation.isPrimary ? null : archived ? (
@@ -140,11 +155,7 @@ export default async function ChatListPage({
                     Restore
                   </SubmitButton>
                 </form>
-              ) : activeConversationIds.has(conversation.id) ? (
-                <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
-                  Work active
-                </span>
-              ) : (
+              ) : activeConversationIds.has(conversation.id) ? null : (
                 <form action={archiveConversation.bind(null, conversation.id)}>
                   <SubmitButton
                     variant="outline"
