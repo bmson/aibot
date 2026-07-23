@@ -23,7 +23,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { CountBadge, focusRing } from '@/lib/ui';
 import { signOutAction } from './actions';
-import { BrandLockup } from './brand-mark';
+import { type AssistantPresence, BrandLockup } from './brand-mark';
 import { ThemeToggle } from './theme-toggle';
 
 interface NavItem {
@@ -59,13 +59,15 @@ export function AppNav({
   pendingApprovals,
   signedIn,
   agentName,
-  working,
+  presence,
+  memoryBacklogCount,
 }: {
   navItems: NavItem[];
   pendingApprovals: number;
   signedIn: boolean;
   agentName: string;
-  working: boolean;
+  presence: AssistantPresence;
+  memoryBacklogCount: number;
 }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -160,6 +162,8 @@ export function AppNav({
           </span>
           {item.href === '/approvals' && pendingApprovals > 0 ? (
             <CountBadge tone="amber">{pendingApprovals}</CountBadge>
+          ) : item.href === '/profile' && memoryBacklogCount > 0 ? (
+            <CountBadge>{memoryBacklogCount}</CountBadge>
           ) : null}
         </Link>
       );
@@ -204,15 +208,23 @@ export function AppNav({
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden w-60 shrink-0 flex-col bg-zinc-950 text-white lg:flex">
+      <aside className="hidden w-60 shrink-0 flex-col bg-[#0b0d12] text-white lg:flex">
         <div className="px-5 pt-6 pb-7">
           <Link href="/" className={`inline-flex rounded-lg ${focusRing}`}>
             <BrandLockup
               name={agentName}
-              active={working}
+              presence={presence}
               subtitle={
-                <span className="text-2xs font-medium tracking-[0.14em] text-indigo-300 uppercase">
-                  {working ? 'Working' : 'Personal assistant'}
+                <span
+                  className={`text-2xs font-medium tracking-[0.14em] uppercase ${
+                    presence === 'attention' ? 'text-amber-300' : 'text-indigo-300'
+                  }`}
+                >
+                  {presence === 'attention'
+                    ? 'Needs your attention'
+                    : presence === 'working'
+                      ? 'Working'
+                      : 'Ready when you are'}
                 </span>
               }
             />
@@ -235,7 +247,7 @@ export function AppNav({
       </aside>
 
       {/* Mobile top bar */}
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-zinc-800 bg-zinc-950/95 px-4 text-white backdrop-blur lg:hidden">
+      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-zinc-800 bg-[#0b0d12]/95 px-4 text-white backdrop-blur lg:hidden">
         <Link
           href="/"
           data-mobile-touch-target="true"
@@ -243,7 +255,7 @@ export function AppNav({
         >
           <span className="inline-flex items-center gap-2">
             <span className="scale-90">
-              <BrandLockup name={agentName} active={working} />
+              <BrandLockup name={agentName} presence={presence} />
             </span>
           </span>
         </Link>

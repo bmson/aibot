@@ -1,16 +1,15 @@
-import { evaluateCanaryHealth } from '@assistant/core';
+import { evaluateCanaryHealth, getAgent, getMemoryHealth } from '@assistant/core';
 import { approvals, canaryRuns, goals, tasks, toolCalls } from '@assistant/db';
-import { and, asc, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
-import { CircleCheck, CircleX } from 'lucide-react';
+import { and, asc, desc, eq, gt, inArray, isNull, notInArray, sql } from 'drizzle-orm';
+import { ArrowRight, Brain, CircleCheck, CircleX, Clock3, Sparkles } from 'lucide-react';
 import Link from 'next/link';
-import type { ReactNode } from 'react';
 import { ApprovalCard } from '@/app/approvals/approval-card';
 import { AutoRefresh } from '@/app/auto-refresh';
 import { cancelTask, retryTask } from '@/app/tasks/actions';
 import { requireOwner } from '@/auth';
-import { formatFriendlyDateTime, relativeTime, stripMarkdown, truncate } from '@/lib/format';
+import { relativeTime, stripMarkdown, truncate } from '@/lib/format';
 import { getAgentTimezone, getDb, getOwnerFirstName } from '@/lib/server';
-import { btnSm, CountBadge, focusRing, PageHeader, SectionHeading } from '@/lib/ui';
+import { btn, btnSm, CountBadge, focusRing, PageHeader, PageShell, Panel } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, toPendingApprovalView } from '@/lib/views';
 
 /** "Good morning/afternoon/evening" in the agent's timezone. */
@@ -30,30 +29,6 @@ const notHousekeeping = sql`${tasks.trigger}->'payload'->>'job' IS NULL`;
 
 export const dynamic = 'force-dynamic';
 
-/** A dashboard section renders only when it has content — empty ones stay out of the way. */
-function Section({
-  title,
-  subtitle,
-  count,
-  children,
-}: {
-  title: string;
-  subtitle: string;
-  count: number;
-  children?: ReactNode;
-}) {
-  if (count === 0) return null;
-  return (
-    <section className="rounded-xl border border-edge bg-raised p-5 shadow-sm">
-      <div className="flex items-baseline gap-2">
-        <SectionHeading title={title} hint={subtitle} />
-        <CountBadge>{count}</CountBadge>
-      </div>
-      <div className="mt-3 flex flex-col gap-3">{children}</div>
-    </section>
-  );
-}
-
 const waitingLine: Record<string, string> = {
   waiting_approval: 'Needs a decision from you. Open Approvals to continue it.',
   waiting_event: 'Waiting for a reply or another external event.',
@@ -72,7 +47,11 @@ export default async function DashboardPage() {
   await requireOwner();
   const db = getDb();
   const now = new Date();
-  const [tz, ownerFirstName] = await Promise.all([getAgentTimezone(), getOwnerFirstName()]);
+  const [tz, ownerFirstName, agent] = await Promise.all([
+    getAgentTimezone(),
+    getOwnerFirstName(),
+    getAgent(db),
+  ]);
 
   const dashboardData = await Promise.all([
     db
@@ -86,18 +65,25 @@ export default async function DashboardPage() {
       .from(approvals)
       .innerJoin(tasks, eq(approvals.taskId, tasks.id))
       .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
-      .where(eq(approvals.status, 'pending'))
+      .where(
+        and(
+          eq(tasks.agentId, agent.id),
+          eq(approvals.status, 'pending'),
+          gt(approvals.expiresAt, sql`now()`),
+        ),
+      )
       .orderBy(asc(approvals.requestedAt)),
     db
       .select()
       .from(tasks)
-      .where(eq(tasks.status, 'needs_attention'))
+      .where(and(eq(tasks.agentId, agent.id), eq(tasks.status, 'needs_attention')))
       .orderBy(desc(tasks.updatedAt)),
     db
       .select()
       .from(tasks)
       .where(
         and(
+          eq(tasks.agentId, agent.id),
           inArray(tasks.status, [
             'waiting_approval',
             'waiting_event',
@@ -112,7 +98,12 @@ export default async function DashboardPage() {
       .select()
       .from(tasks)
       .where(
-        and(inArray(tasks.status, ['done', 'failed']), isNull(tasks.archivedAt), notHousekeeping),
+        and(
+          eq(tasks.agentId, agent.id),
+          inArray(tasks.status, ['done', 'failed']),
+          isNull(tasks.archivedAt),
+          notHousekeeping,
+        ),
       )
       .orderBy(desc(tasks.updatedAt))
       .limit(10),
@@ -120,7 +111,11 @@ export default async function DashboardPage() {
       .select()
       .from(tasks)
       .where(
-        and(eq(tasks.type, 'mission'), notInArray(tasks.status, ['done', 'failed', 'cancelled'])),
+        and(
+          eq(tasks.agentId, agent.id),
+          eq(tasks.type, 'mission'),
+          notInArray(tasks.status, ['done', 'failed', 'cancelled']),
+        ),
       )
       .orderBy(desc(tasks.updatedAt)),
     db
@@ -131,26 +126,35 @@ export default async function DashboardPage() {
         priority: goals.priority,
       })
       .from(goals)
-      .where(isNull(goals.archivedAt))
+      .where(and(eq(goals.agentId, agent.id), isNull(goals.archivedAt)))
       .orderBy(asc(goals.priority), desc(goals.updatedAt)),
     db.select().from(canaryRuns).orderBy(desc(canaryRuns.startedAt)).limit(1),
+    getMemoryHealth(db, agent.id),
   ]).catch((error: unknown) => {
     console.error('[dashboard] failed to load page data', error);
     return null;
   });
   if (!dashboardData) {
     return (
-      <div className="mx-auto max-w-4xl">
+      <PageShell size="reading">
         <PageHeader title="Home" />
         <p className="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
           The dashboard is having trouble loading live data right now. The app shell is still up,
           and we are treating this as a data-layer failure rather than a full outage.
         </p>
-      </div>
+      </PageShell>
     );
   }
-  const [pendingApprovals, attention, waiting, recentDone, missions, goalRows, [latestCanary]] =
-    dashboardData;
+  const [
+    pendingApprovals,
+    attention,
+    waiting,
+    recentDone,
+    missions,
+    goalRows,
+    [latestCanary],
+    memoryHealth,
+  ] = dashboardData;
   const canaryHealth = evaluateCanaryHealth(latestCanary, { now });
   const failedCanaryChecks = Object.entries(
     (latestCanary?.checks ?? {}) as Record<string, { ok?: boolean }>,
@@ -161,36 +165,35 @@ export default async function DashboardPage() {
 
   const needsYou = pendingApprovals.length + attention.length;
 
+  const visibleAttention = attention.slice(0, 3);
+  const inMotionPreviewSlots = Math.max(0, 3 - visibleAttention.length);
+  const visibleWaiting = waiting.slice(0, inMotionPreviewSlots);
+  const visibleMissions = missions.slice(
+    0,
+    Math.max(0, inMotionPreviewSlots - visibleWaiting.length),
+  );
+  const inMotionCount = waiting.length + missions.length;
+  const visibleInMotionCount = visibleWaiting.length + visibleMissions.length;
+  const visibleResults = recentDone.slice(0, 4);
+  const visibleGoals = goalRows.slice(0, 3);
+
   return (
-    <div className="mx-auto max-w-4xl">
+    <PageShell>
       <AutoRefresh />
-      <PageHeader
-        title={ownerFirstName ? `${greetingFor(now, tz)}, ${ownerFirstName}` : greetingFor(now, tz)}
-        intro="Start in chat. Come back here when the assistant needs a decision or has a verified update to show you."
-      />
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 dark:border-indigo-900/60 dark:bg-indigo-950/30">
-        <div>
-          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-            {needsYou === 0
-              ? 'You’re all caught up.'
-              : `${needsYou} item${needsYou === 1 ? '' : 's'} need your attention.`}
-          </p>
-          <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-            {needsYou === 0
-              ? 'The assistant will ask when it needs approval or a decision.'
-              : 'Review approvals or unblock a task to keep work moving.'}
-          </p>
-        </div>
-        <Link
-          href="/chat"
-          data-mobile-touch-target="true"
-          className={`mobile-touch-target inline-flex items-center rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white shadow-sm motion-safe:transition-colors hover:bg-accent-hover ${focusRing}`}
-        >
-          Ask assistant
+      <div className="flex flex-wrap items-start justify-between gap-5">
+        <PageHeader
+          title={
+            ownerFirstName ? `${greetingFor(now, tz)}, ${ownerFirstName}` : greetingFor(now, tz)
+          }
+          intro="A short briefing on what needs you, what is moving, and what changed."
+        />
+        <Link href="/chat" className={`${btn.primary} mt-1`}>
+          <Sparkles className="size-4" aria-hidden="true" />
+          Ask AI Bot
         </Link>
       </div>
       {showServiceWarning ? (
-        <section className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/20">
+        <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/20">
           <h2 className="text-sm font-medium text-amber-950 dark:text-amber-200">
             An assistant service check needs attention
           </h2>
@@ -206,217 +209,326 @@ export default async function DashboardPage() {
           </p>
         </section>
       ) : null}
-      <div className="mt-6 flex flex-col gap-4">
-        <Section
-          title="Needs approval"
-          subtitle="Actions awaiting your sign-off"
-          count={pendingApprovals.length}
-        >
-          {pendingApprovals.map(({ approval, taskType, taskTrust, toolName, decision }) => (
-            <ApprovalCard
-              key={approval.id}
-              approval={toPendingApprovalView(
-                approval,
-                { type: taskType, trust: taskTrust },
-                { toolName, decision },
-                now,
-                tz,
-              )}
-            />
-          ))}
-        </Section>
 
-        <Section
-          title="Needs your help"
-          subtitle="A decision or retry will unblock this work"
-          count={attention.length}
-        >
-          {attention.map((task) => (
-            <div
-              key={task.id}
-              className="flex items-center justify-between gap-3 rounded-md border border-orange-200 bg-orange-50/50 px-3 py-2 dark:border-orange-900/60 dark:bg-orange-950/20"
-            >
-              <div className="min-w-0">
-                <Link
-                  href={`/tasks/${task.id}`}
-                  data-mobile-touch-target="true"
-                  className="mobile-touch-target inline-flex items-center text-sm font-medium hover:underline"
-                >
-                  {task.title || taskTypeLabel(task.type)}
-                </Link>
-                <p className="truncate text-xs text-zinc-600 dark:text-zinc-400">
-                  {stripMarkdown(task.progress) || 'no progress recorded'}
+      <div className="mt-8 grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)]">
+        <div className="flex min-w-0 flex-col gap-5">
+          <Panel>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-lg font-semibold tracking-[-0.02em]">Needs you</h2>
+                  {needsYou > 0 ? <CountBadge tone="amber">{needsYou}</CountBadge> : null}
+                </div>
+                <p className="mt-1 text-[13px] leading-5 text-muted">
+                  Decisions that keep work moving.
                 </p>
               </div>
-              <div className="flex shrink-0 gap-2">
-                <form action={retryTask.bind(null, task.id)}>
-                  <button type="submit" className={btnSm.outline}>
-                    Retry
-                  </button>
-                </form>
-                <form action={cancelTask.bind(null, task.id)}>
-                  <button type="submit" className={btnSm.outline}>
-                    Cancel
-                  </button>
-                </form>
-              </div>
-            </div>
-          ))}
-        </Section>
-
-        <Section
-          title="Up next"
-          subtitle="Work that will continue on its own — no action is needed from you"
-          count={waiting.length}
-        >
-          {waiting.map((task) => {
-            const line =
-              task.status === 'sleeping'
-                ? task.runAfter
-                  ? `Next check ${relativeTime(task.runAfter, now)} (${formatFriendlyDateTime(task.runAfter, tz, now)})`
-                  : 'Its next check is being scheduled.'
-                : (waitingLine[task.status] ?? task.status);
-            return (
-              <div key={task.id} className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <Link
-                    href={`/tasks/${task.id}`}
-                    data-mobile-touch-target="true"
-                    className="mobile-touch-target inline-flex items-center text-sm font-medium hover:underline"
-                  >
-                    {task.title || taskTypeLabel(task.type)}
-                  </Link>
-                  <p className="text-xs text-zinc-600 dark:text-zinc-400">{line}</p>
-                  {task.nextAction ? (
-                    <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
-                      next: {task.nextAction}
-                    </p>
-                  ) : null}
-                  {task.progress ? (
-                    <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
-                      {stripMarkdown(task.progress)}
-                    </p>
-                  ) : null}
-                </div>
-                <StatusChip status={task.status} />
-              </div>
-            );
-          })}
-        </Section>
-
-        <Section
-          title="Recent results"
-          subtitle="The latest finished work"
-          count={recentDone.length}
-        >
-          {recentDone.map((task) => (
-            <div key={task.id} className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                {task.status === 'done' ? (
-                  <CircleCheck
-                    aria-hidden="true"
-                    className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
-                  />
-                ) : (
-                  <CircleX
-                    aria-hidden="true"
-                    className="size-4 shrink-0 text-red-500 dark:text-red-400"
-                  />
-                )}
+              {needsYou > 0 ? (
                 <Link
-                  href={`/tasks/${task.id}`}
-                  data-mobile-touch-target="true"
-                  className="mobile-touch-target inline-flex items-center text-sm font-medium hover:underline"
+                  href={pendingApprovals.length > 0 ? '/approvals' : '/tasks?filter=needs-you'}
+                  className={`inline-flex items-center gap-1 text-[13px] font-medium text-accent hover:underline ${focusRing}`}
                 >
-                  {task.title || taskTypeLabel(task.type)}
+                  Review all
+                  <ArrowRight className="size-3.5" aria-hidden="true" />
                 </Link>
-                <span className="truncate text-xs text-zinc-500 dark:text-zinc-400">
-                  {stripMarkdown(task.progress)}
-                </span>
-              </div>
-              <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
-                {relativeTime(task.updatedAt, now)}
-              </span>
+              ) : null}
             </div>
-          ))}
-        </Section>
 
-        <Section
-          title="Automatic work"
-          subtitle="Longer-running work the assistant checks on a schedule"
-          count={missions.length}
-        >
-          {missions.map((task) => {
-            const percent =
-              task.progressPercent ??
-              (task.deadline
-                ? Math.min(
-                    100,
-                    Math.max(
-                      0,
-                      Math.round(
-                        ((now.getTime() - task.createdAt.getTime()) /
-                          (task.deadline.getTime() - task.createdAt.getTime())) *
-                          100,
-                      ),
-                    ),
-                  )
-                : null);
-            return (
-              <div key={task.id}>
-                <div className="flex items-center justify-between gap-3">
-                  <Link
-                    href={`/tasks/${task.id}`}
-                    className="min-w-0 truncate text-sm font-medium hover:underline"
-                  >
-                    {truncate(
-                      stripMarkdown(task.progress || task.nextAction) || 'Ongoing task',
-                      80,
-                    )}
-                  </Link>
-                  <StatusChip status={task.status} />
-                </div>
-                {percent !== null ? (
-                  <div className="mt-2 flex items-center gap-2">
-                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-                      <div
-                        className="h-full rounded-full bg-blue-500 dark:bg-blue-400"
-                        style={{ width: `${percent}%` }}
-                      />
-                    </div>
-                    <span className="text-xs text-zinc-500 dark:text-zinc-500">{percent}%</span>
-                  </div>
-                ) : null}
-                {task.deadline ? (
-                  <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-                    target {formatFriendlyDateTime(task.deadline, tz, now)} (
-                    {relativeTime(task.deadline, now)})
+            {needsYou === 0 ? (
+              <div className="mt-5 flex items-center gap-3 rounded-xl bg-sunken/55 p-4">
+                <CircleCheck
+                  className="size-5 shrink-0 text-emerald-600 dark:text-emerald-400"
+                  aria-hidden="true"
+                />
+                <p className="text-[15px] text-muted">
+                  You’re caught up. AI Bot will ask when it needs a decision.
+                </p>
+              </div>
+            ) : null}
+
+            {pendingApprovals[0] ? (
+              <div className="mt-5">
+                <p className="mb-2 text-xs font-semibold tracking-[0.1em] text-muted uppercase">
+                  Oldest approval
+                </p>
+                {(() => {
+                  const { approval, taskType, taskTrust, toolName, decision } = pendingApprovals[0];
+                  return (
+                    <ApprovalCard
+                      approval={toPendingApprovalView(
+                        approval,
+                        { type: taskType, trust: taskTrust },
+                        { toolName, decision },
+                        now,
+                        tz,
+                      )}
+                      compact
+                    />
+                  );
+                })()}
+                {pendingApprovals.length > 1 ? (
+                  <p className="mt-3 text-[13px] text-muted">
+                    {pendingApprovals.length - 1} more waiting in{' '}
+                    <Link href="/approvals" className="font-medium text-accent hover:underline">
+                      Approvals
+                    </Link>
+                    .
                   </p>
                 ) : null}
               </div>
-            );
-          })}
-        </Section>
+            ) : null}
 
-        <Section
-          title="Goals"
-          subtitle="Outcomes you want the assistant to keep moving forward"
-          count={goalRows.length}
-        >
-          {goalRows.map((goal) => (
-            <div key={goal.id} className="flex items-center justify-between gap-3">
-              <Link
-                href={`/goals#goal-${goal.id}`}
-                className="min-w-0 truncate text-sm font-medium hover:underline"
+            {visibleAttention.length > 0 ? (
+              <div
+                className={pendingApprovals.length > 0 ? 'mt-5 border-t border-edge pt-5' : 'mt-5'}
               >
-                {goal.title}
+                <p className="mb-2 text-xs font-semibold tracking-[0.1em] text-muted uppercase">
+                  Blocked work
+                </p>
+                <div className="flex flex-col gap-2">
+                  {visibleAttention.map((task) => (
+                    <div
+                      key={task.id}
+                      data-home-work-preview="true"
+                      className="flex flex-col gap-3 rounded-xl bg-amber-50/70 p-3.5 sm:flex-row sm:items-center sm:justify-between dark:bg-amber-950/20"
+                    >
+                      <div className="min-w-0">
+                        <Link
+                          href={`/tasks/${task.id}`}
+                          className="text-[15px] font-medium hover:underline"
+                        >
+                          {task.title || taskTypeLabel(task.type)}
+                        </Link>
+                        <p className="mt-0.5 line-clamp-2 text-[13px] leading-5 text-muted">
+                          {stripMarkdown(task.progress) || 'No update recorded yet.'}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <form action={retryTask.bind(null, task.id)}>
+                          <button type="submit" className={btnSm.outline}>
+                            Retry
+                          </button>
+                        </form>
+                        <form action={cancelTask.bind(null, task.id)}>
+                          <button type="submit" className={btnSm.outline}>
+                            Cancel
+                          </button>
+                        </form>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {attention.length > visibleAttention.length ? (
+                  <p className="mt-3 text-[13px] text-muted">
+                    {attention.length - visibleAttention.length} more blocked item
+                    {attention.length - visibleAttention.length === 1 ? '' : 's'} in{' '}
+                    <Link
+                      href="/tasks?filter=needs-you"
+                      className="font-medium text-accent hover:underline"
+                    >
+                      Activity
+                    </Link>
+                    .
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </Panel>
+
+          <Panel>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Clock3 className="size-4 text-accent" aria-hidden="true" />
+                  <h2 className="text-lg font-semibold tracking-[-0.02em]">In motion</h2>
+                </div>
+                <p className="mt-1 text-[13px] leading-5 text-muted">
+                  Work continuing without another decision from you.
+                </p>
+              </div>
+              <Link
+                href="/tasks?filter=working"
+                className="text-[13px] font-medium text-accent hover:underline"
+              >
+                Activity
               </Link>
-              <StatusChip status={goal.status} />
             </div>
-          ))}
-        </Section>
+            {inMotionCount === 0 ? (
+              <p className="mt-5 text-[15px] text-muted">Nothing is running or scheduled.</p>
+            ) : visibleInMotionCount === 0 ? (
+              <p className="mt-5 text-[15px] leading-6 text-muted">
+                {inMotionCount} item{inMotionCount === 1 ? '' : 's'} continue quietly. Blocked work
+                takes priority in today’s preview.
+              </p>
+            ) : (
+              <div className="mt-5 divide-y divide-edge">
+                {visibleWaiting.map((task) => {
+                  const line =
+                    task.status === 'sleeping'
+                      ? task.runAfter
+                        ? `Next check ${relativeTime(task.runAfter, now)}`
+                        : 'Its next check is being scheduled.'
+                      : (waitingLine[task.status] ?? task.status);
+                  return (
+                    <div
+                      key={task.id}
+                      data-home-work-preview="true"
+                      className="grid gap-2 py-3 first:pt-0 last:pb-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                    >
+                      <div className="min-w-0">
+                        <Link
+                          href={`/tasks/${task.id}`}
+                          className="text-[15px] font-medium hover:underline"
+                        >
+                          {task.title || taskTypeLabel(task.type)}
+                        </Link>
+                        <p className="mt-0.5 line-clamp-2 text-[13px] leading-5 text-muted">
+                          {line}
+                        </p>
+                      </div>
+                      <StatusChip status={task.status} />
+                    </div>
+                  );
+                })}
+                {visibleMissions.map((task) => (
+                  <div
+                    key={task.id}
+                    data-home-work-preview="true"
+                    className="grid gap-2 py-3 first:pt-0 last:pb-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                  >
+                    <div className="min-w-0">
+                      <Link
+                        href={`/tasks/${task.id}`}
+                        className="text-[15px] font-medium hover:underline"
+                      >
+                        {task.title ||
+                          truncate(stripMarkdown(task.progress || task.nextAction), 80) ||
+                          'Ongoing work'}
+                      </Link>
+                      <p className="mt-0.5 line-clamp-2 text-[13px] leading-5 text-muted">
+                        {task.nextAction ||
+                          task.progress ||
+                          'The assistant will post an update here.'}
+                      </p>
+                    </div>
+                    <StatusChip status={task.status} />
+                  </div>
+                ))}
+              </div>
+            )}
+            {visibleInMotionCount > 0 && inMotionCount > visibleInMotionCount ? (
+              <p className="mt-4 border-t border-edge pt-4 text-[13px] text-muted">
+                {inMotionCount - visibleInMotionCount} more item
+                {inMotionCount - visibleInMotionCount === 1 ? '' : 's'} continue quietly in
+                Activity.
+              </p>
+            ) : null}
+          </Panel>
+        </div>
+
+        <aside className="flex min-w-0 flex-col gap-5">
+          <Panel tone="sunken" className="motion-safe:animate-[presence-arrive_320ms_ease-out]">
+            <div className="flex items-center gap-2">
+              <Brain className="size-4 text-accent" aria-hidden="true" />
+              <h2 className="text-[15px] font-semibold">Memory care</h2>
+            </div>
+            <p className="mt-4 text-lg leading-7 font-medium tracking-[-0.02em]">
+              {memoryHealth.notYetOrganized === 0
+                ? 'Memory is organized.'
+                : `${memoryHealth.notYetOrganized} memor${
+                    memoryHealth.notYetOrganized === 1 ? 'y is' : 'ies are'
+                  } waiting to be organized.`}
+            </p>
+            <div className="mt-4 grid grid-cols-3 gap-3 border-t border-edge pt-4">
+              <div>
+                <p className="text-base font-semibold">{memoryHealth.totalUsable}</p>
+                <p className="text-xs text-muted">usable</p>
+              </div>
+              <div>
+                <p className="text-base font-semibold">{memoryHealth.awaitingReview}</p>
+                <p className="text-xs text-muted">to review</p>
+              </div>
+              <div>
+                <p className="text-base font-semibold">{memoryHealth.ownerConfirmed}</p>
+                <p className="text-xs text-muted">confirmed</p>
+              </div>
+            </div>
+            <Link
+              href="/profile"
+              className="mt-4 inline-flex items-center gap-1 text-[13px] font-medium text-accent hover:underline"
+            >
+              Open memory
+              <ArrowRight className="size-3.5" aria-hidden="true" />
+            </Link>
+          </Panel>
+
+          <Panel>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-[15px] font-semibold">Latest outcomes</h2>
+              <Link
+                href="/tasks?filter=completed"
+                className="text-[13px] font-medium text-accent hover:underline"
+              >
+                See all
+              </Link>
+            </div>
+            {visibleResults.length === 0 ? (
+              <p className="mt-4 text-[13px] leading-5 text-muted">No finished work yet.</p>
+            ) : (
+              <div className="mt-4 flex flex-col gap-3">
+                {visibleResults.map((task) => (
+                  <div key={task.id} className="flex items-start gap-2.5">
+                    {task.status === 'done' ? (
+                      <CircleCheck
+                        className="mt-0.5 size-4 shrink-0 text-emerald-600"
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <CircleX className="mt-0.5 size-4 shrink-0 text-red-500" aria-hidden="true" />
+                    )}
+                    <div className="min-w-0">
+                      <Link
+                        href={`/tasks/${task.id}`}
+                        className="line-clamp-1 text-[13px] font-medium hover:underline"
+                      >
+                        {task.title || taskTypeLabel(task.type)}
+                      </Link>
+                      <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-muted">
+                        {stripMarkdown(task.progress) || relativeTime(task.updatedAt, now)}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+
+          {visibleGoals.length > 0 ? (
+            <Panel>
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-[15px] font-semibold">Goals</h2>
+                <Link href="/goals" className="text-[13px] font-medium text-accent hover:underline">
+                  Open goals
+                </Link>
+              </div>
+              <div className="mt-4 flex flex-col gap-3">
+                {visibleGoals.map((goal) => (
+                  <div key={goal.id} className="flex items-center justify-between gap-3">
+                    <Link
+                      href={`/goals#goal-${goal.id}`}
+                      className="min-w-0 line-clamp-1 text-[13px] font-medium hover:underline"
+                    >
+                      {goal.title}
+                    </Link>
+                    <StatusChip status={goal.status} />
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          ) : null}
+        </aside>
       </div>
-      <p className="mt-4 text-xs text-muted">
+      <p className="mt-6 text-xs text-muted">
         Routine housekeeping (memory upkeep, document processing) runs quietly on schedule — find it
         under{' '}
         <Link href="/tasks" className="underline hover:no-underline">
@@ -424,6 +536,6 @@ export default async function DashboardPage() {
         </Link>
         .
       </p>
-    </div>
+    </PageShell>
   );
 }

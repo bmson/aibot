@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { mergeContactAction } from '@/app/profile/actions';
+import { btnSm, inputClass } from '@/lib/ui';
 
 /** Fold a duplicate person into another contact (facts move, duplicate disappears). */
 export function MergeControl({
@@ -37,7 +38,7 @@ export function MergeControl({
           setTargetId(e.target.value);
           setConfirming(false);
         }}
-        className="rounded-md border border-zinc-300 bg-white px-1.5 py-0.5 text-2xs dark:border-zinc-700 dark:bg-zinc-900"
+        className={`${inputClass} min-w-36 text-xs`}
       >
         <option value="">merge into…</option>
         {options.map((o) => (
@@ -53,16 +54,12 @@ export function MergeControl({
             type="button"
             disabled={pending}
             onClick={() => startTransition(() => mergeContactAction(contactId, targetId))}
-            className="rounded-md bg-red-600 px-2 py-0.5 text-2xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+            className={btnSm.danger}
           >
             {pending ? 'Merging…' : `Confirm merge into ${targetLabel}`}
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={() => setConfirming(true)}
-            className="rounded-md border border-zinc-300 px-2 py-0.5 text-2xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
+          <button type="button" onClick={() => setConfirming(true)} className={btnSm.outline}>
             Merge
           </button>
         )

@@ -11,7 +11,7 @@ import {
   rejectQuarantined,
   setFactPinned,
 } from '@/app/profile/actions';
-import { btnSm } from '@/lib/ui';
+import { btnSm, textareaClass } from '@/lib/ui';
 
 /** Plain-serializable fact view, built server-side in page.tsx. */
 export interface FactView {
@@ -44,7 +44,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
   const confidencePct = Math.round(fact.confidence * 100);
 
   return (
-    <div className="rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+    <div className="rounded-xl bg-sunken/55 px-3 py-3">
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-sm">{fact.content}</p>
         <span className="flex shrink-0 items-center gap-1.5">
@@ -199,7 +199,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             rows={2}
-            className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            className={textareaClass}
           />
           {error ? <p className="text-xs text-red-600 dark:text-red-400">{error}</p> : null}
           <div>

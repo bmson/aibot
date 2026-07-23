@@ -12,7 +12,21 @@ const browserChannel = process.env.SMOKE_BROWSER_CHANNEL ?? 'chrome';
 const createFixture = process.env.SMOKE_CREATE_FIXTURE === 'true';
 const databaseUrl =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
-const testedRoutes = ['/', '/chat', '/goals', '/tasks', '/profile', '/settings'];
+const testedRoutes = [
+  '/',
+  '/chat',
+  '/approvals',
+  '/goals',
+  '/tasks',
+  '/profile',
+  '/documents',
+  '/skills',
+  '/settings',
+  '/import',
+  '/costs',
+  '/anomalies',
+  '/improvements',
+];
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -27,7 +41,7 @@ async function targetSize(locator: Locator, label: string) {
   );
 }
 
-async function assertMobileContract(page: Page, label: string) {
+async function assertResponsiveContract(page: Page, label: string, mobile: boolean) {
   const metrics = await page.evaluate(() => {
     const root = document.documentElement;
     const selectors = [
@@ -76,23 +90,25 @@ async function assertMobileContract(page: Page, label: string) {
     metrics.scrollWidth <= metrics.viewportWidth,
     `${label} overflows horizontally: ${metrics.scrollWidth}px document in ${metrics.viewportWidth}px viewport`,
   );
-  const undersized = metrics.controls.filter(
-    (control) => control.width < 44 || control.height < 44,
-  );
-  assert(
-    undersized.length === 0,
-    `${label} has undersized controls: ${JSON.stringify(undersized)}`,
-  );
-  const zoomingFields = metrics.controls.filter(
-    (control) => control.formField && control.fontSize < 16,
-  );
-  assert(
-    zoomingFields.length === 0,
-    `${label} has form text below 16px, which triggers iOS focus zoom: ${JSON.stringify(zoomingFields)}`,
-  );
+  if (mobile) {
+    const undersized = metrics.controls.filter(
+      (control) => control.width < 44 || control.height < 44,
+    );
+    assert(
+      undersized.length === 0,
+      `${label} has undersized controls: ${JSON.stringify(undersized)}`,
+    );
+    const zoomingFields = metrics.controls.filter(
+      (control) => control.formField && control.fontSize < 16,
+    );
+    assert(
+      zoomingFields.length === 0,
+      `${label} has form text below 16px, which triggers iOS focus zoom: ${JSON.stringify(zoomingFields)}`,
+    );
+  }
 }
 
-async function openRoute(page: Page, path: string) {
+async function openRoute(page: Page, path: string, mobile = true) {
   const response = await page.goto(`${baseUrl}${path}`, { waitUntil: 'domcontentloaded' });
   assert(response?.ok(), `${path} returned HTTP ${response?.status() ?? 'unknown'}`);
   assert(
@@ -100,7 +116,7 @@ async function openRoute(page: Page, path: string) {
     `${path} unexpectedly left the smoke-test origin: ${page.url()}`,
   );
   await page.waitForLoadState('networkidle');
-  await assertMobileContract(page, path);
+  await assertResponsiveContract(page, path, mobile);
 }
 
 async function createConversationFixture(): Promise<{ db: Db; id: string } | undefined> {
@@ -154,6 +170,18 @@ try {
   });
 
   await openRoute(page, '/');
+  assert(
+    (await page.locator('main article').count()) <= 1,
+    'Home rendered more than one full approval card',
+  );
+  assert(
+    (await page.locator('[data-home-work-preview="true"]').count()) <= 3,
+    'Home rendered more than three blocked/in-progress previews',
+  );
+  assert(
+    await page.getByText('Memory care', { exact: true }).isVisible(),
+    'Home did not surface memory health',
+  );
   const menuTrigger = page.getByRole('button', { name: 'Open navigation menu' });
   await targetSize(menuTrigger, 'mobile navigation trigger');
   await menuTrigger.click();
@@ -209,6 +237,12 @@ try {
   );
 
   for (const route of testedRoutes.slice(1)) await openRoute(page, route);
+  await openRoute(page, '/tasks');
+  assert((await page.locator('main table').count()) === 0, 'Activity regressed to a table');
+  assert(
+    await page.getByRole('navigation', { name: 'Filter activity' }).isVisible(),
+    'Activity filters are missing',
+  );
 
   if (fixture) {
     await openRoute(page, `/chat/${fixture.id}`);
@@ -219,7 +253,7 @@ try {
     await targetSize(send, 'chat send button');
     await targetSize(model, 'chat model menu');
     await message.fill('A long mobile draft '.repeat(40));
-    await assertMobileContract(page, 'populated chat composer');
+    await assertResponsiveContract(page, 'populated chat composer', true);
     const composer = await message.boundingBox();
     assert(
       composer && composer.y + composer.height <= 844,
@@ -227,13 +261,36 @@ try {
     );
   }
 
+  for (const viewport of [
+    { width: 768, height: 900, label: 'tablet' },
+    { width: 1440, height: 900, label: 'desktop' },
+  ]) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    for (const route of testedRoutes) {
+      await openRoute(page, route, false);
+    }
+    assert(
+      (await page.locator('main').count()) === 1,
+      `${viewport.label} shell did not render exactly one main region`,
+    );
+  }
+
   assert(errors.length === 0, `browser errors were reported: ${errors.join(' | ')}`);
   console.log(
     JSON.stringify({
       ok: true,
-      viewport: '390x844',
-      routes: testedRoutes.length + (fixture ? 1 : 0),
-      checks: ['no horizontal overflow', '44px targets', '16px fields', 'drawer focus trap'],
+      viewports: ['390x844', '768x900', '1440x900'],
+      routes: testedRoutes.length * 3 + (fixture ? 1 : 0),
+      checks: [
+        'no horizontal overflow',
+        '44px mobile targets',
+        '16px mobile fields',
+        'drawer focus trap',
+        'bounded Home approvals',
+        'bounded Home work previews',
+        'memory health visible',
+        'activity feed and filters',
+      ],
     }),
   );
 } finally {

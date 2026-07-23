@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { updateContactRelationship } from '@/app/profile/actions';
+import { btnSm, inputClass } from '@/lib/ui';
 
 /**
  * Relationship editor with explicit save feedback: Saving… while the server
@@ -23,7 +24,7 @@ export function RelationshipForm({ contactId, initial }: { contactId: string; in
           setSaved(false);
         }}
         placeholder="relationship"
-        className="w-32 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+        className={`${inputClass} w-36`}
       />
       <button
         type="button"
@@ -34,7 +35,7 @@ export function RelationshipForm({ contactId, initial }: { contactId: string; in
             setSaved(true);
           })
         }
-        className="rounded-md border border-zinc-300 px-2 py-0.5 text-2xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+        className={btnSm.outline}
       >
         {pending ? 'Saving…' : 'Save'}
       </button>

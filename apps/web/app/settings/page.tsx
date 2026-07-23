@@ -7,7 +7,7 @@ import { AgentForm } from '@/app/settings/agent-form';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn, Card, CountBadge, EmptyState, PageHeader, SectionHeading } from '@/lib/ui';
+import { btn, Card, CountBadge, EmptyState, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
 
 export const metadata = { title: 'Settings' };
 
@@ -64,7 +64,7 @@ export default async function SettingsPage() {
   const goalAutomationCount = scheduleRows.length - directScheduleRows.length;
 
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-8">
+    <PageShell size="reading" className="flex flex-col gap-8">
       <PageHeader
         title="Settings"
         intro="Configure the assistant — identity, proactive schedules, spend caps, and standing approval rules."
@@ -204,6 +204,6 @@ export default async function SettingsPage() {
           </div>
         )}
       </section>
-    </div>
+    </PageShell>
   );
 }

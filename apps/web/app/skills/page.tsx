@@ -3,7 +3,7 @@ import { SkillsPanel, type SkillView } from '@/app/skills/skills-panel';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { PageHeader } from '@/lib/ui';
+import { PageHeader, PageShell } from '@/lib/ui';
 
 export const metadata = { title: 'Skills' };
 
@@ -31,12 +31,12 @@ export default async function SkillsPage() {
   }));
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <PageShell size="reading">
       <PageHeader
         title="Skills"
         intro="Procedures the assistant has learned from experience, plus any you add yourself. They're read as advice before the assistant plans — never run automatically — and every action they suggest still follows the normal approval rules."
       />
       <SkillsPanel skills={skills} />
-    </div>
+    </PageShell>
   );
 }

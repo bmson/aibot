@@ -8,9 +8,9 @@ import type { ReactNode } from 'react';
 export const focusRing =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-1 focus-visible:ring-offset-surface';
 
-const btnBase = `mobile-touch-target inline-flex items-center justify-center gap-1.5 font-medium motion-safe:transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
-const btnMd = 'rounded-lg px-3 py-1.5 text-sm';
-const btnXs = 'rounded-md px-2.5 py-1 text-xs';
+const btnBase = `mobile-touch-target inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap font-medium motion-safe:transition-[background-color,border-color,color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
+const btnMd = 'h-9 rounded-lg px-3.5 text-[13px]';
+const btnXs = 'h-8 rounded-lg px-3 text-xs';
 
 const btnVariants = {
   outline:
@@ -52,9 +52,12 @@ export function Skeleton({ className = '' }: { className?: string }) {
 }
 
 export const inputClass =
-  'rounded-lg border border-edge bg-raised px-2.5 py-1.5 text-base outline-none motion-safe:transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/20 sm:text-sm';
+  'h-9 rounded-lg border border-edge bg-raised px-3 text-base text-strong outline-none placeholder:text-muted/70 motion-safe:transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/20 sm:text-sm';
 
-export const labelClass = 'text-xs font-medium text-zinc-600 dark:text-zinc-400';
+export const textareaClass =
+  'rounded-xl border border-edge bg-raised px-3 py-2.5 text-base text-strong outline-none placeholder:text-muted/70 motion-safe:transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/20 sm:text-sm';
+
+export const labelClass = 'text-[13px] font-medium text-muted';
 
 /** Collapsible-section summary row (native <details>). */
 export const summaryClass =
@@ -63,19 +66,55 @@ export const summaryClass =
 export function PageHeader({ title, intro }: { title: string; intro?: ReactNode }) {
   return (
     <header>
-      <h1 className="font-display text-2xl font-semibold tracking-[-0.02em] text-strong">
+      <h1 className="font-display text-[1.875rem] leading-9 font-semibold tracking-[-0.035em] text-strong sm:text-[2rem] sm:leading-10">
         {title}
       </h1>
-      {intro ? <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">{intro}</p> : null}
+      {intro ? <p className="mt-2 max-w-[68ch] text-[15px] leading-6 text-muted">{intro}</p> : null}
     </header>
+  );
+}
+
+export function PageShell({
+  children,
+  size = 'wide',
+  className = '',
+}: {
+  children: ReactNode;
+  size?: 'wide' | 'reading';
+  className?: string;
+}) {
+  return (
+    <div className={`mx-auto w-full ${size === 'wide' ? 'max-w-6xl' : 'max-w-4xl'} ${className}`}>
+      {children}
+    </div>
   );
 }
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`rounded-xl border border-edge bg-raised p-4 shadow-sm ${className}`}>
+    <div className={`rounded-2xl bg-raised p-5 shadow-[0_1px_2px_rgb(23_25_35/0.06)] ${className}`}>
       {children}
     </div>
+  );
+}
+
+export function Panel({
+  children,
+  className = '',
+  tone = 'raised',
+}: {
+  children: ReactNode;
+  className?: string;
+  tone?: 'raised' | 'sunken';
+}) {
+  return (
+    <section
+      className={`rounded-2xl p-5 sm:p-6 ${
+        tone === 'raised' ? 'bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.06)]' : 'bg-sunken/70'
+      } ${className}`}
+    >
+      {children}
+    </section>
   );
 }
 
@@ -112,7 +151,7 @@ export function SectionHeading({
   hint?: string;
 }) {
   return (
-    <h2 className="flex min-w-0 flex-wrap items-baseline gap-2 text-sm font-medium">
+    <h2 className="flex min-w-0 flex-wrap items-baseline gap-2 text-[15px] font-semibold tracking-[-0.01em]">
       {title}
       {count !== undefined ? <CountBadge>{count}</CountBadge> : null}
       {hint ? <span className="text-xs font-normal text-muted">{hint}</span> : null}
@@ -129,16 +168,23 @@ export function EmptyState({
   icon?: ReactNode;
   action?: ReactNode;
 }) {
-  if (!icon && !action) return <p className="mt-3 text-sm text-muted">{children}</p>;
+  if (!icon && !action) return <p className="mt-3 text-[15px] leading-6 text-muted">{children}</p>;
   return (
-    <div className="mt-3 flex flex-col items-start gap-2 rounded-xl border border-dashed border-edge px-4 py-5">
+    <div className="mt-3 flex flex-col items-start gap-2 rounded-2xl bg-sunken/55 px-5 py-6">
       {icon ? (
         <span aria-hidden="true" className="text-muted">
           {icon}
         </span>
       ) : null}
-      <p className="text-sm leading-6 text-muted">{children}</p>
+      <p className="text-[15px] leading-6 text-muted">{children}</p>
       {action}
     </div>
   );
 }
+
+export const segmentedControlClass =
+  'inline-flex flex-wrap items-center gap-1 rounded-xl bg-sunken/80 p-1';
+
+export const segmentedItemClass = `mobile-touch-target inline-flex h-8 items-center justify-center rounded-lg px-3 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-raised hover:text-strong ${focusRing}`;
+
+export const iconButtonClass = `mobile-touch-target inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-edge bg-raised text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong ${focusRing}`;

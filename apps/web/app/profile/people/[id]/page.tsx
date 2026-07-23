@@ -11,7 +11,7 @@ import { RelationshipForm } from '@/app/profile/relationship-form';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { countBadgeClass, PageHeader } from '@/lib/ui';
+import { countBadgeClass, PageHeader, PageShell } from '@/lib/ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -89,7 +89,7 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
   );
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <PageShell size="reading">
       <Link
         href="/profile"
         className="text-sm font-medium text-blue-700 hover:underline dark:text-blue-400"
@@ -151,6 +151,6 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
           </div>
         )}
       </section>
-    </div>
+    </PageShell>
   );
 }

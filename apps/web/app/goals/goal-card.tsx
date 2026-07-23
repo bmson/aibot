@@ -10,7 +10,12 @@ import {
   startGoalWork,
   updateGoal,
 } from '@/app/goals/actions';
-import { btn } from '@/lib/ui';
+import {
+  btn,
+  inputClass as sharedInputClass,
+  labelClass as sharedLabelClass,
+  textareaClass,
+} from '@/lib/ui';
 import { StatusChip } from '@/lib/views';
 
 /** Plain-serializable props built server-side in page.tsx (labels precomputed there). */
@@ -56,9 +61,8 @@ export interface GoalView {
 const outlineButton = btn.outline;
 const dangerOutlineButton = btn.dangerOutline;
 const dangerButton = btn.danger;
-const inputClass =
-  'w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900';
-const labelClass = 'flex flex-col gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400';
+const inputClass = `${sharedInputClass} w-full`;
+const labelClass = `flex flex-col gap-1 ${sharedLabelClass}`;
 
 const priorityChipClasses: Record<number, string> = {
   1: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
@@ -280,7 +284,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
               name="description"
               rows={2}
               defaultValue={value('description', goal.description)}
-              className={inputClass}
+              className={`${textareaClass} w-full`}
             />
           </label>
           <div className="flex flex-wrap gap-3">

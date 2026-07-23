@@ -1,6 +1,8 @@
 import {
   CARD_AUTO_FACTS_PER_DOMAIN,
   CARD_AUTO_MIN_IMPORTANCE,
+  getAgent,
+  getMemoryHealth,
   voiceSampleStats,
 } from '@assistant/core';
 import {
@@ -12,6 +14,7 @@ import {
   ownerCard,
 } from '@assistant/db';
 import { and, count, desc, eq, gt, inArray, isNull, like, or, sql } from 'drizzle-orm';
+import { Brain, CheckCircle2, ShieldQuestion, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { consolidateNow, recompileCard } from '@/app/profile/actions';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
@@ -19,7 +22,7 @@ import { type VoiceImportView, VoiceSamplesPanel } from '@/app/profile/voice-sam
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn, countBadgeClass, PageHeader, summaryClass } from '@/lib/ui';
+import { btn, countBadgeClass, PageHeader, PageShell, Panel, summaryClass } from '@/lib/ui';
 
 export const metadata = { title: 'Memory' };
 
@@ -65,35 +68,41 @@ export default async function ProfilePage() {
   await requireOwner();
   const db = getDb();
   const now = new Date();
+  const agent = await getAgent(db);
 
   const active = and(
+    eq(memories.agentId, agent.id),
     eq(memories.category, 'knowledge'),
     eq(memories.quarantined, false),
     or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
   );
 
-  const [allContacts, quarantined, [card], voiceStats, voiceImports] = await Promise.all([
-    db.select().from(contacts).orderBy(contacts.name).limit(PROFILE_CONTACT_LIMIT),
-    db
-      .select()
-      .from(memories)
-      .where(
-        and(
-          eq(memories.quarantined, true),
-          or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-        ),
-      )
-      .orderBy(desc(memories.createdAt))
-      .limit(QUARANTINE_LIMIT),
-    db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
-    voiceSampleStats(db),
-    db
-      .select()
-      .from(importSources)
-      .where(like(importSources.source, 'voice-samples%'))
-      .orderBy(desc(importSources.updatedAt))
-      .limit(VOICE_IMPORT_LIMIT),
-  ]);
+  const [allContacts, quarantined, [card], voiceStats, voiceImports, memoryHealth] =
+    await Promise.all([
+      db.select().from(contacts).orderBy(contacts.name).limit(PROFILE_CONTACT_LIMIT),
+      db
+        .select()
+        .from(memories)
+        .where(
+          and(
+            eq(memories.agentId, agent.id),
+            eq(memories.category, 'knowledge'),
+            eq(memories.quarantined, true),
+            or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
+          ),
+        )
+        .orderBy(desc(memories.createdAt))
+        .limit(QUARANTINE_LIMIT),
+      db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
+      voiceSampleStats(db),
+      db
+        .select()
+        .from(importSources)
+        .where(like(importSources.source, 'voice-samples%'))
+        .orderBy(desc(importSources.updatedAt))
+        .limit(VOICE_IMPORT_LIMIT),
+      getMemoryHealth(db, agent.id),
+    ]);
   const voiceImportViews: VoiceImportView[] = voiceImports.map((row) => ({
     source: row.source,
     status: row.status,
@@ -154,17 +163,67 @@ export default async function ProfilePage() {
   const pinnedCount = ownerFacts.filter((m) => m.pinned).length;
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <PageShell size="reading">
       <PageHeader
         title="What I remember"
-        intro={`Review what the assistant remembers about ${owner?.name ?? 'you'} and the people around you. Keep the important things accurate; everything else stays available when needed.`}
+        intro={`See what shapes AI Bot’s understanding of ${owner?.name ?? 'you'}, what still needs care, and what stays available for recall.`}
       />
+
+      <Panel tone="sunken" className="mt-8">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-xl">
+            <div className="flex items-center gap-2">
+              <Brain className="size-4 text-accent" aria-hidden="true" />
+              <h2 className="text-lg font-semibold tracking-[-0.02em]">Memory health</h2>
+            </div>
+            <p className="mt-2 text-[15px] leading-6 text-muted">
+              {memoryHealth.notYetOrganized === 0
+                ? 'Everything usable has passed through memory organization.'
+                : `${memoryHealth.notYetOrganized} usable memor${
+                    memoryHealth.notYetOrganized === 1 ? 'y has' : 'ies have'
+                  } not been organized yet.`}
+            </p>
+          </div>
+          {memoryHealth.notYetOrganized > 0 ? (
+            <form action={consolidateNow}>
+              <button type="submit" className={btn.primary}>
+                <Sparkles className="size-4" aria-hidden="true" />
+                Organize memory
+              </button>
+            </form>
+          ) : null}
+        </div>
+        <div className="mt-6 grid grid-cols-2 gap-x-5 gap-y-4 border-t border-edge pt-5 sm:grid-cols-4">
+          {[
+            { value: memoryHealth.totalUsable, label: 'Usable memories' },
+            { value: memoryHealth.notYetOrganized, label: 'Not yet organized' },
+            { value: memoryHealth.awaitingReview, label: 'Awaiting review' },
+            { value: memoryHealth.ownerConfirmed, label: 'Owner-confirmed' },
+          ].map((item) => (
+            <div key={item.label}>
+              <p className="font-display text-2xl font-semibold tracking-[-0.03em]">{item.value}</p>
+              <p className="mt-0.5 text-xs leading-5 text-muted">{item.label}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-5 text-xs leading-5 text-muted">
+          {memoryHealth.lastOrganizedAt
+            ? `Last organized ${relativeTime(memoryHealth.lastOrganizedAt, now)}.`
+            : 'Memory organization has not completed yet.'}{' '}
+          Isolated facts may not need merging, but the count always reflects whether they have been
+          reviewed by the organization pass.
+        </p>
+      </Panel>
 
       {/* Quarantine review — the inbox; the only section that needs attention */}
       {quarantined.length > 0 ? (
-        <section className="mt-8 rounded-lg border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-900 dark:bg-amber-950/20">
-          <h2 className="flex items-baseline gap-2 text-sm font-medium">
-            Review saved information
+        <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/65 p-5 dark:border-amber-900 dark:bg-amber-950/20">
+          <h2 className="flex items-center gap-2 text-[15px] font-semibold">
+            <ShieldQuestion
+              className="size-4 text-amber-700 dark:text-amber-300"
+              aria-hidden="true"
+            />
+            Awaiting your review
             <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-2xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
               {quarantined.length}
             </span>
@@ -182,51 +241,42 @@ export default async function ProfilePage() {
       ) : null}
 
       {/* The compiled chat context is useful for auditing, but secondary to the facts themselves. */}
-      <section className="mt-8">
-        <details>
+      <Panel className="mt-6">
+        <details open>
           <summary className={summaryClass}>
-            Quick context used in chat
+            Used in conversations
             <span className={countBadge}>{pinnedCount} pinned</span>
             <span className="text-xs font-normal text-zinc-500 dark:text-zinc-500">
               {card ? `refreshed ${relativeTime(card.compiledAt, now)}` : 'not prepared yet'}
             </span>
           </summary>
           {card?.content ? (
-            <pre className="mt-3 overflow-x-auto rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-xs whitespace-pre-wrap dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="mt-4 max-h-52 overflow-y-auto rounded-xl bg-sunken/60 p-4 text-[13px] leading-6 whitespace-pre-wrap text-strong">
               {card.content}
-            </pre>
+            </div>
           ) : (
             <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
               Nothing is selected yet. Pin a fact below or refresh this summary after adding one.
             </p>
           )}
-          <div className="mt-2 flex items-center gap-1.5">
+          <div className="mt-4 flex flex-wrap items-center gap-2">
             <form action={recompileCard}>
               <button type="submit" className={btn.outline}>
                 Refresh summary
               </button>
             </form>
-            <form action={consolidateNow}>
-              <button
-                type="submit"
-                title="Queues a cleanup that deduplicates, resolves contradictions, and combines fragmented facts."
-                className={btn.outline}
-              >
-                Organize memory
-              </button>
-            </form>
-            <span className="text-2xs text-zinc-500 dark:text-zinc-500">
-              Combines duplicate or fragmented facts. You can keep using the app while it runs.
+            <span className="text-xs text-muted">
+              This compact context is what AI Bot sees before it searches deeper memory.
             </span>
           </div>
         </details>
-      </section>
+      </Panel>
 
       {/* Owner facts by domain — collapsed archive, browse when needed */}
-      <section className="mt-8">
+      <Panel className="mt-6">
         <details>
           <summary className={summaryClass}>
-            Details about {owner?.name ?? 'you'}
+            About {owner?.name ?? 'you'}
             <span className={countBadge}>{ownerFacts.length} facts</span>
             <span className="text-xs font-normal text-zinc-500 dark:text-zinc-500">
               Open when you need to edit or verify something.
@@ -241,10 +291,7 @@ export default async function ProfilePage() {
               {ownerByDomain.map((group) => {
                 const pinnedInDomain = group.facts.filter((m) => m.pinned).length;
                 return (
-                  <details
-                    key={group.domain}
-                    className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
-                  >
+                  <details key={group.domain} className="rounded-xl bg-sunken/55 p-3.5">
                     <summary className={summaryClass}>
                       <span className="text-xs font-medium text-zinc-600 uppercase tracking-wide dark:text-zinc-400">
                         {group.domain}
@@ -267,7 +314,7 @@ export default async function ProfilePage() {
             </div>
           )}
         </details>
-      </section>
+      </Panel>
 
       {/* Writing voice — sample corpus + one-time batch upload */}
       <VoiceSamplesPanel
@@ -279,7 +326,8 @@ export default async function ProfilePage() {
 
       {/* People — one collapsed card per person */}
       <section className="mt-8">
-        <h2 className="flex items-baseline gap-2 text-sm font-medium">
+        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-[-0.02em]">
+          <CheckCircle2 className="size-4 text-accent" aria-hidden="true" />
           People
           <span className={countBadge}>{people.length}</span>
         </h2>
@@ -291,12 +339,12 @@ export default async function ProfilePage() {
             No people yet — new names in conversations become contacts automatically.
           </p>
         ) : (
-          <div className="mt-3 flex flex-col gap-2">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
             {people.map(({ contact, factCount }) => (
               <Link
                 key={contact.id}
                 href={`/profile/people/${contact.id}`}
-                className="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 p-3 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900/50"
+                className="flex items-center justify-between gap-3 rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] motion-safe:transition-transform hover:-translate-y-0.5"
               >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
@@ -330,6 +378,6 @@ export default async function ProfilePage() {
           </div>
         )}
       </section>
-    </div>
+    </PageShell>
   );
 }

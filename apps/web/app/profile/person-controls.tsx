@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { deleteContactAction, updateContactIdentityAction } from '@/app/profile/actions';
-import { btn } from '@/lib/ui';
+import { btn, inputClass } from '@/lib/ui';
 
 export function PersonControls({
   contactId,
@@ -63,7 +63,7 @@ export function PersonControls({
         onKeyDown={(event) => {
           if (event.key === 'Enter') save();
         }}
-        className="w-48 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+        className={`${inputClass} w-48`}
       />
       <input
         type="text"
@@ -80,7 +80,7 @@ export function PersonControls({
         onKeyDown={(event) => {
           if (event.key === 'Enter') save();
         }}
-        className="w-56 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+        className={`${inputClass} w-56`}
       />
       <button type="button" disabled={pending} onClick={save} className={btn.outline}>
         {pending && !confirmingDelete ? 'Saving…' : 'Save identity'}

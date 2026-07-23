@@ -6,7 +6,7 @@ import {
   forgetOccasionAction,
   reviewOccasionAction,
 } from '@/app/profile/actions';
-import { btn } from '@/lib/ui';
+import { btn, inputClass, labelClass } from '@/lib/ui';
 
 /** Plain-serializable occasion view built in the page. */
 export interface OccasionView {
@@ -140,28 +140,24 @@ export function OccasionsPanel({
           }
         >
           <div className="flex flex-wrap items-end gap-3">
-            <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+            <label className={`flex flex-col gap-1 ${labelClass}`}>
               Type
-              <select
-                name="kind"
-                defaultValue="birthday"
-                className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-              >
+              <select name="kind" defaultValue="birthday" className={inputClass}>
                 <option value="birthday">Birthday</option>
                 <option value="anniversary">Anniversary</option>
                 <option value="custom">Custom</option>
               </select>
             </label>
-            <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+            <label className={`flex flex-col gap-1 ${labelClass}`}>
               Label (if custom)
               <input
                 name="label"
                 type="text"
                 placeholder="e.g. graduation"
-                className="w-36 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                className={`${inputClass} w-40`}
               />
             </label>
-            <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+            <label className={`flex flex-col gap-1 ${labelClass}`}>
               Month
               <input
                 name="month"
@@ -169,10 +165,10 @@ export function OccasionsPanel({
                 min={1}
                 max={12}
                 required
-                className="w-16 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                className={`${inputClass} w-20`}
               />
             </label>
-            <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+            <label className={`flex flex-col gap-1 ${labelClass}`}>
               Day
               <input
                 name="day"
@@ -180,20 +176,20 @@ export function OccasionsPanel({
                 min={1}
                 max={31}
                 required
-                className="w-16 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                className={`${inputClass} w-20`}
               />
             </label>
-            <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+            <label className={`flex flex-col gap-1 ${labelClass}`}>
               Year (optional)
               <input
                 name="year"
                 type="number"
                 min={1900}
                 max={2200}
-                className="w-20 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                className={`${inputClass} w-24`}
               />
             </label>
-            <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+            <label className={`flex flex-col gap-1 ${labelClass}`}>
               Remind (days before)
               <input
                 name="leadDays"
@@ -201,17 +197,13 @@ export function OccasionsPanel({
                 min={0}
                 max={60}
                 defaultValue={7}
-                className="w-20 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                className={`${inputClass} w-24`}
               />
             </label>
           </div>
-          <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+          <label className={`flex flex-col gap-1 ${labelClass}`}>
             Notes / gift ideas (optional)
-            <input
-              name="notes"
-              type="text"
-              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-            />
+            <input name="notes" type="text" className={inputClass} />
           </label>
           <div className="flex items-center gap-2">
             <button type="submit" disabled={pending} className={btn.primary}>

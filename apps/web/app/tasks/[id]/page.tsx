@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, prettyJson, relativeTime, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn } from '@/lib/ui';
+import { btn, PageShell } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 import {
   archiveTask,
@@ -218,7 +218,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   const activeGrant = activeAutonomyGrant(task, Date.now());
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <PageShell size="reading">
       <Link
         href="/tasks"
         className="text-xs font-medium text-indigo-700 hover:underline dark:text-indigo-300"
@@ -456,6 +456,6 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           </ol>
         )}
       </details>
-    </div>
+    </PageShell>
   );
 }

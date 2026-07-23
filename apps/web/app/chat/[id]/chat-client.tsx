@@ -3,13 +3,17 @@
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import {
+  CalendarDays,
   ChevronDown,
   CircleCheck,
   CircleX,
   Hand,
   History,
+  Inbox,
   Loader2,
+  Route,
   ShieldCheck,
+  Sparkles,
   Square,
   Zap,
 } from 'lucide-react';
@@ -476,6 +480,7 @@ export function ChatClient({
   }, [asyncTurn, conversationId, setMessages]);
 
   const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
+  const displayTitle = title === 'Untitled' ? 'New conversation' : title;
 
   useEffect(() => {
     if (!stickToBottomRef.current) return;
@@ -496,16 +501,19 @@ export function ChatClient({
   };
 
   return (
-    <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-4xl flex-col lg:h-[calc(100vh-4rem)]">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 pb-4 dark:border-zinc-800">
+    <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-5xl flex-col lg:h-[calc(100vh-5rem)]">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-edge pb-4">
         <div className="flex min-w-0 items-center gap-3">
           <AvatarMark name={agentName} active={busy} />
           <div className="min-w-0">
             <p className="text-2xs font-semibold tracking-[0.14em] text-indigo-700 uppercase dark:text-indigo-300">
               {agentName}
             </p>
-            <h1 className="truncate text-xl font-semibold tracking-[-0.03em]" title={title}>
-              {title}
+            <h1
+              className="truncate font-display text-xl font-semibold tracking-[-0.035em]"
+              title={displayTitle}
+            >
+              {displayTitle}
             </h1>
             {goalTitle ? (
               <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">
@@ -601,29 +609,53 @@ export function ChatClient({
           stickToBottomRef.current =
             element.scrollHeight - element.scrollTop - element.clientHeight < 120;
         }}
-        className="flex-1 overflow-y-auto py-4"
+        className="flex-1 overflow-y-auto py-5"
       >
         {messages.length === 0 ? (
-          <div className="mx-auto mt-12 flex max-w-md flex-col items-center gap-3 text-center">
-            <p className="text-base font-medium text-strong">What can I get moving for you?</p>
-            <p className="text-sm leading-6 text-muted">
-              Ask for a plan, a document, research — or hand me something to chase down.
+          <div className="mx-auto mt-8 flex max-w-xl flex-col items-center text-center sm:mt-14">
+            <span className="inline-flex size-12 items-center justify-center rounded-2xl bg-sunken text-accent">
+              <Sparkles className="size-5" aria-hidden="true" />
+            </span>
+            <p className="mt-4 font-display text-2xl font-semibold tracking-[-0.035em] text-strong">
+              What should we move forward?
             </p>
-            <div className="mt-1 flex flex-wrap justify-center gap-2">
+            <p className="mt-2 max-w-md text-[15px] leading-6 text-muted">
+              Start with an outcome. AI Bot can research, plan, draft, schedule, and keep following
+              up when the work takes time.
+            </p>
+            <div className="mt-6 grid w-full gap-2 sm:grid-cols-3">
               {[
-                'Summarize my unread email',
-                'What’s on my calendar this week?',
-                'Draft a plan for my next trip',
-              ].map((suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  onClick={() => setInput(suggestion)}
-                  className={btnSm.outline}
-                >
-                  {suggestion}
-                </button>
-              ))}
+                {
+                  text: 'Summarize my unread email',
+                  label: 'Clear the inbox',
+                  icon: Inbox,
+                },
+                {
+                  text: 'What’s on my calendar this week?',
+                  label: 'Review the week',
+                  icon: CalendarDays,
+                },
+                {
+                  text: 'Draft a plan for my next trip',
+                  label: 'Plan a trip',
+                  icon: Route,
+                },
+              ].map((suggestion) => {
+                const SuggestionIcon = suggestion.icon;
+                return (
+                  <button
+                    key={suggestion.text}
+                    type="button"
+                    onClick={() => setInput(suggestion.text)}
+                    className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left shadow-[0_1px_2px_rgb(23_25_35/0.06)] motion-safe:transition-transform hover:-translate-y-0.5 ${focusRing}`}
+                  >
+                    <SuggestionIcon className="size-4 text-accent" aria-hidden="true" />
+                    <span className="mt-3 text-[13px] font-medium text-strong">
+                      {suggestion.label}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         ) : (
@@ -761,9 +793,9 @@ export function ChatClient({
           event.preventDefault();
           submitCurrentMessage();
         }}
-        className="mobile-safe-bottom flex flex-col gap-2 border-t border-zinc-200 pt-4 dark:border-zinc-800"
+        className="mobile-safe-bottom sticky bottom-0 flex flex-col gap-2 border-t border-edge bg-surface/95 pt-3 backdrop-blur"
       >
-        <div className="flex items-end gap-2">
+        <div className="flex items-end gap-2 rounded-2xl bg-raised p-2 shadow-[0_8px_30px_rgb(23_25_35/0.09)] ring-1 ring-edge">
           <textarea
             aria-label="Message"
             value={input}
@@ -776,14 +808,14 @@ export function ChatClient({
             }}
             placeholder="Ask anything…"
             rows={2}
-            className="max-h-40 flex-1 resize-none rounded-xl border border-edge bg-raised px-3 py-2.5 text-base outline-none placeholder:text-zinc-400 focus:border-accent focus:ring-3 focus:ring-accent/15 motion-safe:transition-shadow sm:text-sm"
+            className="max-h-40 min-h-11 flex-1 resize-none border-0 bg-transparent px-2 py-2 text-base outline-none placeholder:text-muted/70 sm:text-sm"
           />
           {status === 'submitted' || status === 'streaming' ? (
             <button
               type="button"
               onClick={() => stop()}
               title="Stop generating"
-              className={`inline-flex items-center gap-1.5 rounded-xl border border-edge bg-raised px-4 py-2.5 text-sm font-medium text-zinc-700 motion-safe:transition-colors hover:bg-sunken dark:text-zinc-300 ${focusRing}`}
+              className={`inline-flex h-11 items-center gap-1.5 rounded-xl border border-edge bg-raised px-4 text-sm font-medium text-strong motion-safe:transition-colors hover:bg-sunken ${focusRing}`}
             >
               <Square className="size-3 fill-current" aria-hidden="true" />
               Stop
@@ -792,13 +824,13 @@ export function ChatClient({
             <button
               type="submit"
               disabled={busy || input.trim() === ''}
-              className={`rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-white shadow-sm motion-safe:transition-colors hover:bg-accent-hover disabled:opacity-50 ${focusRing}`}
+              className={`h-11 rounded-xl bg-accent px-4 text-sm font-medium text-white shadow-sm motion-safe:transition-colors hover:bg-accent-hover disabled:opacity-50 ${focusRing}`}
             >
               Send
             </button>
           )}
         </div>
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center justify-between gap-3 px-1 pb-1">
           <button
             type="button"
             aria-pressed={autonomous}

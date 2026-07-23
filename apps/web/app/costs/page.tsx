@@ -6,7 +6,7 @@ import { updateCaps } from '@/app/costs/actions';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, truncate } from '@/lib/format';
 import { getAgentTimezone, getDb } from '@/lib/server';
-import { btn, PageHeader } from '@/lib/ui';
+import { btn, inputClass, PageHeader, PageShell } from '@/lib/ui';
 import { taskTypeLabel } from '@/lib/views';
 
 export const metadata = { title: 'Costs' };
@@ -73,7 +73,7 @@ export default async function CostsPage() {
   const parked = Number(parkedCount?.n ?? 0);
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <PageShell size="reading">
       <PageHeader
         title="Costs"
         intro="See what the assistant has spent and set limits that keep costs under control."
@@ -123,7 +123,7 @@ export default async function CostsPage() {
               step="0.05"
               min="0.05"
               defaultValue={taskDefault ? Number(taskDefault.limitUsd) : ''}
-              className="w-28 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              className={`${inputClass} w-28`}
             />
           </label>
           <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">
@@ -134,7 +134,7 @@ export default async function CostsPage() {
               step="0.5"
               min="0.5"
               defaultValue={Number.isFinite(totals.dailyLimitUsd) ? totals.dailyLimitUsd : ''}
-              className="w-28 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              className={`${inputClass} w-28`}
             />
           </label>
           <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">
@@ -145,7 +145,7 @@ export default async function CostsPage() {
               step="1"
               min="1"
               defaultValue={Number.isFinite(totals.monthlyLimitUsd) ? totals.monthlyLimitUsd : ''}
-              className="w-28 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              className={`${inputClass} w-28`}
             />
           </label>
           <button type="submit" className={btn.outline}>
@@ -272,6 +272,6 @@ export default async function CostsPage() {
           </section>
         </div>
       </details>
-    </div>
+    </PageShell>
   );
 }

@@ -12,7 +12,7 @@ import { GoalCreateForm } from '@/app/goals/goal-create-form';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn, EmptyState, PageHeader, SectionHeading } from '@/lib/ui';
+import { btn, EmptyState, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
 import { archiveInactiveGoals } from './actions';
 
 export const metadata = { title: 'Goals' };
@@ -169,7 +169,7 @@ export default async function GoalsPage({
   })).filter((group) => group.items.length > 0);
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <PageShell size="reading">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <PageHeader
           title={archived ? 'Archived goals' : 'Goals'}
@@ -242,6 +242,6 @@ export default async function GoalsPage({
           ))}
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

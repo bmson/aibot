@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { purgeVoiceSamplesAction } from '@/app/profile/actions';
-import { btn } from '@/lib/ui';
+import { btn, inputClass } from '@/lib/ui';
 
 /** Plain-serializable view built in page.tsx. */
 export interface VoiceImportView {
@@ -51,8 +51,8 @@ export function VoiceSamplesPanel({
   const purgeable = auto + uploaded;
 
   return (
-    <section className="mt-8">
-      <h2 className="flex items-baseline gap-2 text-sm font-medium">
+    <section className="mt-6 rounded-2xl bg-raised p-5 shadow-[0_1px_2px_rgb(23_25_35/0.06)]">
+      <h2 className="flex items-baseline gap-2 text-[15px] font-semibold">
         Your writing voice
         <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
           {total} {total === 1 ? 'sample' : 'samples'}
@@ -81,15 +81,11 @@ export function VoiceSamplesPanel({
             name="file"
             required
             accept=".mbox,.txt,.json,.md,text/plain,application/json"
-            className="text-xs text-zinc-600 file:mr-3 file:rounded-md file:border file:border-zinc-300 file:bg-white file:px-2.5 file:py-1 file:text-xs file:font-medium file:text-zinc-700 hover:file:bg-zinc-100 dark:text-zinc-400 dark:file:border-zinc-700 dark:file:bg-zinc-900 dark:file:text-zinc-300"
+            className="text-[13px] text-muted file:mr-3 file:h-9 file:rounded-lg file:border file:border-edge file:bg-raised file:px-3 file:text-[13px] file:font-medium file:text-strong hover:file:bg-sunken"
           />
           <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
             Style
-            <select
-              name="register"
-              defaultValue="email_casual"
-              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-            >
+            <select name="register" defaultValue="email_casual" className={inputClass}>
               {registerOptions.map((opt) => (
                 <option key={opt.value} value={opt.value}>
                   {opt.label}
@@ -97,10 +93,7 @@ export function VoiceSamplesPanel({
               ))}
             </select>
           </label>
-          <button
-            type="submit"
-            className="rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700"
-          >
+          <button type="submit" className={btn.primary}>
             Upload sent mail
           </button>
         </div>

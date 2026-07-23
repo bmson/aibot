@@ -2,10 +2,7 @@
 
 import { useActionState } from 'react';
 import { createGoal } from '@/app/goals/actions';
-
-const inputClass =
-  'w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900';
-const labelClass = 'flex flex-col gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400';
+import { btn, inputClass, labelClass, textareaClass } from '@/lib/ui';
 
 export function GoalCreateForm() {
   const [state, formAction, pending] = useActionState(createGoal, { error: null });
@@ -13,7 +10,7 @@ export function GoalCreateForm() {
   return (
     <form
       action={formAction}
-      className="mt-6 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+      className="mt-6 rounded-2xl bg-raised p-5 shadow-[0_1px_2px_rgb(23_25_35/0.06)]"
     >
       <h2 className="text-sm font-medium">Create a goal</h2>
       <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-400">
@@ -28,7 +25,7 @@ export function GoalCreateForm() {
             required
             placeholder="What should the assistant work toward?"
             defaultValue={state.values?.title ?? ''}
-            className={inputClass}
+            className={`${inputClass} w-full`}
           />
         </label>
         <label className={labelClass}>
@@ -38,7 +35,7 @@ export function GoalCreateForm() {
             rows={2}
             placeholder="Context, constraints, definition of done…"
             defaultValue={state.values?.description ?? ''}
-            className={inputClass}
+            className={`${textareaClass} w-full`}
           />
         </label>
         <details className="rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
@@ -52,7 +49,7 @@ export function GoalCreateForm() {
                 <select
                   name="priority"
                   defaultValue={state.values?.priority || '3'}
-                  className={inputClass}
+                  className={`${inputClass} w-full`}
                 >
                   <option value="1">Every 6 hours</option>
                   <option value="2">Daily</option>
@@ -67,7 +64,7 @@ export function GoalCreateForm() {
                   type="date"
                   name="targetDate"
                   defaultValue={state.values?.targetDate ?? ''}
-                  className={inputClass}
+                  className={`${inputClass} w-full`}
                 />
               </label>
             </div>
@@ -81,11 +78,7 @@ export function GoalCreateForm() {
       {state.error ? (
         <p className="mt-2 text-xs text-red-600 dark:text-red-400">{state.error}</p>
       ) : null}
-      <button
-        type="submit"
-        disabled={pending}
-        className="mt-3 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-      >
+      <button type="submit" disabled={pending} className={`${btn.primary} mt-3`}>
         {pending ? 'Starting…' : 'Create goal and start work'}
       </button>
     </form>

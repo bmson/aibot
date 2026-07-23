@@ -7,7 +7,11 @@ import {
   editSkillAction,
   toggleSkillDeprecatedAction,
 } from '@/app/skills/actions';
-import { btn } from '@/lib/ui';
+import {
+  btn,
+  inputClass as sharedInputClass,
+  textareaClass as sharedTextareaClass,
+} from '@/lib/ui';
 
 export interface SkillView {
   id: string;
@@ -23,8 +27,7 @@ export interface SkillView {
   createdLabel: string;
 }
 
-const inputClass =
-  'w-full rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900';
+const inputClass = `${sharedInputClass} w-full`;
 
 function SkillForm({
   initial,
@@ -46,7 +49,7 @@ function SkillForm({
         defaultValue={initial?.name ?? ''}
         placeholder="Name (e.g. Booking flights)"
         required
-        className={inputClass}
+        className={`${sharedTextareaClass} w-full`}
       />
       <input
         name="preconditions"

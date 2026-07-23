@@ -57,7 +57,7 @@ export function SourceCard({ view }: { view: SourceView }) {
   const rerunnable = view.status === 'done' || view.status === 'failed' || view.status === 'purged';
 
   return (
-    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+    <div className="rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)]">
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-sm font-medium">{view.source}</p>
         <span

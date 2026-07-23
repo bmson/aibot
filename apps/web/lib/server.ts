@@ -42,12 +42,12 @@ export const getAgentTimezone = cache(async (): Promise<string> => {
  * the dashboard displays it wherever the assistant "speaks".
  */
 export const getAgentIdentity = cache(
-  async (): Promise<{ name: string; avatarUrl: string | null }> => {
+  async (): Promise<{ id: string; name: string; avatarUrl: string | null }> => {
     try {
       const agent = await getAgent(getDb());
-      return { name: agent.name || 'Assistant', avatarUrl: agent.avatarUrl ?? null };
+      return { id: agent.id, name: agent.name || 'Assistant', avatarUrl: agent.avatarUrl ?? null };
     } catch {
-      return { name: 'Assistant', avatarUrl: null };
+      return { id: '', name: 'Assistant', avatarUrl: null };
     }
   },
 );

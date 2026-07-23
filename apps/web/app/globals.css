@@ -10,24 +10,24 @@
    text-strong, bg-accent) instead of raw palette classes, so light and dark stay
    in sync from this one block. */
 :root {
-  --surface: #fafafa; /* zinc-50 page background */
-  --surface-raised: #ffffff; /* cards */
-  --surface-sunken: #f4f4f5; /* zinc-100 wells, code, receipts */
-  --edge: #e4e4e7; /* zinc-200 borders */
-  --content-strong: #09090b; /* zinc-950 */
-  --content-muted: #71717a; /* zinc-500 */
-  --accent: #4f46e5; /* indigo-600 — constant across modes: white-on-accent stays ≥4.5:1 */
-  --accent-hover: #4338ca; /* indigo-700 */
+  --surface: #f4f6fa; /* Canvas — cool, quiet, never beige */
+  --surface-raised: #ffffff; /* Panel */
+  --surface-sunken: #e9edf5; /* Tonal wells and receipts */
+  --edge: #dce1ea;
+  --content-strong: #171923; /* Ink */
+  --content-muted: #667085;
+  --accent: #5b5ce2; /* Iris */
+  --accent-hover: #4b4cc9;
 }
 .dark {
-  --surface: #09090b; /* zinc-950 */
-  --surface-raised: #101014; /* a half-step above the page — cards get lift */
-  --surface-sunken: #18181b; /* zinc-900 */
-  --edge: #27272a; /* zinc-800 */
-  --content-strong: #f4f4f5; /* zinc-100 */
-  --content-muted: #a1a1aa; /* zinc-400 */
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
+  --surface: #0b0d12; /* Night */
+  --surface-raised: #12151c;
+  --surface-sunken: #1a1e27;
+  --edge: #292e39;
+  --content-strong: #f4f5f7;
+  --content-muted: #9ca3b2;
+  --accent: #7375ee;
+  --accent-hover: #8385f4;
 }
 
 @theme {
@@ -100,10 +100,21 @@
 @keyframes presence-breathe {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgb(79 70 229 / 0.5);
+    box-shadow: 0 0 0 0 rgb(91 92 226 / 0.45);
   }
   50% {
-    box-shadow: 0 0 0 6px rgb(79 70 229 / 0);
+    box-shadow: 0 0 0 7px rgb(91 92 226 / 0);
+  }
+}
+
+@keyframes presence-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 

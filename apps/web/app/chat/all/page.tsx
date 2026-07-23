@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn, btnSm, EmptyState } from '@/lib/ui';
+import { btn, btnSm, EmptyState, PageHeader, PageShell } from '@/lib/ui';
 import {
   archiveConversation,
   archiveInactiveConversations,
@@ -61,16 +61,16 @@ export default async function ChatListPage({
   const now = new Date();
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <PageShell size="reading">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">{archived ? 'Archived chats' : 'All chats'}</h1>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            {archived
-              ? 'Archived chats are kept intact and can be restored at any time.'
-              : 'Your main thread stitches these together — recall pulls in older topics as they come up.'}
-          </p>
-        </div>
+        <PageHeader
+          title={archived ? 'Archived chats' : 'All chats'}
+          intro={
+            archived
+              ? 'Archived chats stay intact and can be restored at any time.'
+              : 'Your main thread brings older topics back when they become relevant.'
+          }
+        />
         <div className="flex flex-wrap items-center gap-2">
           <Link href="/chat" className={btn.outline}>
             Main thread
@@ -146,6 +146,6 @@ export default async function ChatListPage({
           ))}
         </ul>
       )}
-    </div>
+    </PageShell>
   );
 }

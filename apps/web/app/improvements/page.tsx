@@ -3,7 +3,7 @@ import { ProposalCard, type ProposalView } from '@/app/improvements/proposal-car
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { EmptyState, PageHeader } from '@/lib/ui';
+import { EmptyState, PageHeader, PageShell } from '@/lib/ui';
 
 export const metadata = { title: 'Improvements' };
 
@@ -31,7 +31,7 @@ export default async function ImprovementsPage() {
   });
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <PageShell size="reading">
       <PageHeader
         title="Improvements"
         intro="Changes the assistant proposes for itself after reviewing its own failures, retries, and costs — a model swap, a suggested rule, or an observation. Nothing is applied automatically: approve what helps, dismiss the rest."
@@ -49,6 +49,6 @@ export default async function ImprovementsPage() {
           </div>
         )}
       </section>
-    </div>
+    </PageShell>
   );
 }

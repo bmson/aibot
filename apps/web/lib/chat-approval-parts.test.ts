@@ -9,6 +9,7 @@ describe('withApprovalStatuses', () => {
       {
         id: '11111111-1111-4111-8111-111111111111',
         status: 'approved',
+        expiresAt: new Date('2027-01-01T00:00:00.000Z'),
         payload: {
           to: ['owner@example.com'],
           subject: 'Trip details',
@@ -57,6 +58,38 @@ describe('withApprovalStatuses', () => {
       },
       { type: 'approval', status: 'missing' },
     ]);
+  });
+
+  it('renders a stale pending approval as expired', async () => {
+    const where = vi.fn().mockResolvedValue([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        status: 'pending',
+        expiresAt: new Date('2026-07-22T17:59:59.000Z'),
+        payload: { to: ['owner@example.com'] },
+      },
+    ]);
+    const from = vi.fn(() => ({ where }));
+    const select = vi.fn(() => ({ from }));
+    const db = { select } as unknown as Db;
+    const messages = [
+      {
+        id: 'message-1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'approval',
+            approvalId: '11111111-1111-4111-8111-111111111111',
+            shortCode: 'A1',
+            summary: 'Send the email',
+          },
+        ] as unknown as UIMessage['parts'],
+      },
+    ] satisfies UIMessage[];
+
+    const hydrated = await withApprovalStatuses(db, messages, new Date('2026-07-22T18:00:00.000Z'));
+
+    expect(hydrated[0]?.parts).toMatchObject([{ type: 'approval', status: 'expired' }]);
   });
 
   it('hydrates a budget request from the task cap and status', async () => {

@@ -8,7 +8,7 @@ import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btnSm, EmptyState, PageHeader } from '@/lib/ui';
+import { btn, btnSm, EmptyState, inputClass, PageHeader, PageShell, Panel } from '@/lib/ui';
 import { DocumentCard, type DocumentCardView } from './document-card';
 
 export const metadata = { title: 'Documents' };
@@ -50,7 +50,7 @@ export default async function DocumentsPage() {
   }));
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <PageShell size="reading">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <PageHeader
           title="Documents"
@@ -61,8 +61,8 @@ export default async function DocumentsPage() {
         </Link>
       </div>
 
-      <section className="mt-8">
-        <h2 className="text-sm font-medium">Upload a document</h2>
+      <Panel tone="sunken" className="mt-8">
+        <h2 className="text-[15px] font-semibold">Upload a document</h2>
         <form
           action="/api/documents/upload"
           method="post"
@@ -74,12 +74,9 @@ export default async function DocumentsPage() {
               type="file"
               name="file"
               required
-              className="text-xs text-zinc-600 file:mr-3 file:rounded-md file:border file:border-zinc-300 file:bg-white file:px-2.5 file:py-1 file:text-xs file:font-medium file:text-zinc-700 hover:file:bg-zinc-100 dark:text-zinc-400 dark:file:border-zinc-700 dark:file:bg-zinc-900 dark:file:text-zinc-300"
+              className="text-[13px] text-muted file:mr-3 file:h-9 file:rounded-lg file:border file:border-edge file:bg-raised file:px-3 file:text-[13px] file:font-medium file:text-strong hover:file:bg-sunken"
             />
-            <button
-              type="submit"
-              className="rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700"
-            >
+            <button type="submit" className={btn.primary}>
               Upload
             </button>
           </div>
@@ -91,13 +88,13 @@ export default async function DocumentsPage() {
                 type="text"
                 name="title"
                 placeholder="For example, Apartment lease"
-                className="w-64 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                className={`${inputClass} w-64`}
               />
             </label>
           </details>
         </form>
         <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">Files can be up to 25MB.</p>
-      </section>
+      </Panel>
 
       <section className="mt-8">
         <div className="flex items-baseline justify-between">
@@ -124,6 +121,6 @@ export default async function DocumentsPage() {
           </div>
         )}
       </section>
-    </div>
+    </PageShell>
   );
 }

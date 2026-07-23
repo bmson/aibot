@@ -5,7 +5,7 @@ import { SourceCard, type SourceView, StartImportButton } from '@/app/import/sou
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb, getWorkspace } from '@/lib/server';
-import { PageHeader } from '@/lib/ui';
+import { btn, inputClass, PageHeader, PageShell, Panel } from '@/lib/ui';
 
 export const metadata = { title: 'Import' };
 
@@ -51,15 +51,15 @@ export default async function ImportPage() {
   const unstartedFiles = importFiles.filter((f) => !f.dir && !knownPaths.has(`import/${f.name}`));
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <PageShell size="reading">
       <PageHeader
         title="Backstory import"
         intro="Add email archives, chat exports, or notes to help the assistant understand your history. You can review anything it learns about other people before it is remembered."
       />
 
       {/* Upload */}
-      <section className="mt-8">
-        <h2 className="text-sm font-medium">Upload an archive</h2>
+      <Panel tone="sunken" className="mt-8">
+        <h2 className="text-[15px] font-semibold">Upload an archive</h2>
         <form
           action="/api/import/upload"
           method="post"
@@ -71,12 +71,9 @@ export default async function ImportPage() {
               type="file"
               name="file"
               required
-              className="text-xs text-zinc-600 file:mr-3 file:rounded-md file:border file:border-zinc-300 file:bg-white file:px-2.5 file:py-1 file:text-xs file:font-medium file:text-zinc-700 hover:file:bg-zinc-100 dark:text-zinc-400 dark:file:border-zinc-700 dark:file:bg-zinc-900 dark:file:text-zinc-300"
+              className="text-[13px] text-muted file:mr-3 file:h-9 file:rounded-lg file:border file:border-edge file:bg-raised file:px-3 file:text-[13px] file:font-medium file:text-strong hover:file:bg-sunken"
             />
-            <button
-              type="submit"
-              className="rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700"
-            >
+            <button type="submit" className={btn.primary}>
               Upload and import
             </button>
           </div>
@@ -88,7 +85,7 @@ export default async function ImportPage() {
                 type="text"
                 name="source"
                 placeholder="For example, old work email"
-                className="w-64 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                className={`${inputClass} w-64`}
               />
             </label>
           </details>
@@ -98,7 +95,7 @@ export default async function ImportPage() {
           <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">import/</code> and start them
           from the list below.
         </p>
-      </section>
+      </Panel>
 
       {/* Unstarted workspace files */}
       {unstartedFiles.length > 0 ? (
@@ -137,6 +134,6 @@ export default async function ImportPage() {
           </div>
         )}
       </section>
-    </div>
+    </PageShell>
   );
 }

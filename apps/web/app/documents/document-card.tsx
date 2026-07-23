@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
+import { btnSm } from '@/lib/ui';
 import { purgeDocumentAction } from './actions';
 
 export interface DocumentCardView {
@@ -50,7 +51,7 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
   const waitingForProcessor = doc.status === 'pending' && doc.extractor === 'pending_processor';
 
   return (
-    <div className="rounded-md border border-zinc-200 px-3 py-2.5 dark:border-zinc-800">
+    <div className="rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{doc.title}</p>
@@ -86,10 +87,7 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
 
       <div className="mt-2.5 flex items-center gap-2">
         {doc.status === 'ready' ? (
-          <Link
-            href={doc.askHref}
-            className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-          >
+          <Link href={doc.askHref} className={btnSm.outline}>
             Ask about this
           </Link>
         ) : null}
@@ -99,7 +97,7 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
               type="button"
               disabled={pending}
               onClick={() => startTransition(() => purgeDocumentAction(doc.id))}
-              className="rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+              className={btnSm.danger}
             >
               {pending ? 'Deleting…' : 'Confirm delete'}
             </button>
@@ -107,17 +105,13 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
               type="button"
               disabled={pending}
               onClick={() => setConfirming(false)}
-              className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
+              className={btnSm.outline}
             >
               Cancel
             </button>
           </>
         ) : (
-          <button
-            type="button"
-            onClick={() => setConfirming(true)}
-            className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
-          >
+          <button type="button" onClick={() => setConfirming(true)} className={btnSm.dangerOutline}>
             Delete
           </button>
         )}

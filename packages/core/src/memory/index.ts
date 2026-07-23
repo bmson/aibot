@@ -3,6 +3,7 @@ export * from './consolidation.js';
 export * from './document-processor.js';
 export * from './documents.js';
 export * from './extraction.js';
+export * from './health.js';
 export * from './import.js';
 export * from './import-parsers.js';
 export * from './jobs.js';

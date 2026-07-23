@@ -1,7 +1,7 @@
 // Server-side mappers turning DB rows into plain serializable view props for
 // client components (approval cards) and shared status-chip styling.
 import type { ApprovalRow, TaskRow } from '@assistant/db';
-import { formatFriendlyDateTime, prettyJson, relativeTime } from '@/lib/format';
+import { formatFriendlyDateTime, prettyJson, relativeTime } from './format';
 
 /** Plain-serializable props for the pending-approval client card. */
 export interface ApprovalField {
@@ -31,6 +31,8 @@ export interface PendingApprovalView {
   taskId: string;
   /** Set when the voice-rewrite pipeline failed its fact-preservation check. */
   voiceFlag: string | null;
+  actionKind: 'email' | 'calendar' | 'message' | 'document' | 'browser' | 'action';
+  expired: boolean;
 }
 
 const asText = (value: unknown): string =>
@@ -93,6 +95,15 @@ function approvalReason(decision: unknown): string {
     return 'A standing approval rule applies to this action.';
   }
   return 'This action can affect someone or something outside the assistant’s private workspace.';
+}
+
+function approvalActionKind(toolName: string): PendingApprovalView['actionKind'] {
+  if (toolName.startsWith('gmail.')) return 'email';
+  if (toolName.startsWith('calendar.')) return 'calendar';
+  if (toolName.startsWith('sms.')) return 'message';
+  if (toolName.startsWith('docs.') || toolName.startsWith('drive.')) return 'document';
+  if (toolName.startsWith('browser.')) return 'browser';
+  return 'action';
 }
 
 function rememberLabel(toolName: string, payload: unknown): string | null {
@@ -233,6 +244,8 @@ export function toPendingApprovalView(
     rememberLabel: rememberLabel(toolCall.toolName, approval.payload),
     taskId: approval.taskId,
     voiceFlag: extractVoiceFlag(approval.payload),
+    actionKind: approvalActionKind(toolCall.toolName),
+    expired: approval.expiresAt <= now,
   };
 }
 

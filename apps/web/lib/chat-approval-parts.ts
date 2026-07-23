@@ -69,7 +69,11 @@ function approvalDetails(payload: unknown): InlineApprovalDetail[] {
 }
 
 /** Attach live approval state to persisted custom message parts in one query. */
-export async function withApprovalStatuses(db: Db, messages: UIMessage[]): Promise<UIMessage[]> {
+export async function withApprovalStatuses(
+  db: Db,
+  messages: UIMessage[],
+  now: Date = new Date(),
+): Promise<UIMessage[]> {
   const approvalIds = [
     ...new Set(
       messages.flatMap((message) =>
@@ -89,7 +93,12 @@ export async function withApprovalStatuses(db: Db, messages: UIMessage[]): Promi
   const [rows, budgetTasks] = await Promise.all([
     approvalIds.length > 0
       ? db
-          .select({ id: approvals.id, status: approvals.status, payload: approvals.payload })
+          .select({
+            id: approvals.id,
+            status: approvals.status,
+            payload: approvals.payload,
+            expiresAt: approvals.expiresAt,
+          })
           .from(approvals)
           .where(inArray(approvals.id, approvalIds))
       : [],
@@ -124,7 +133,10 @@ export async function withApprovalStatuses(db: Db, messages: UIMessage[]): Promi
       return approval
         ? {
             ...part,
-            status: approval.status as Exclude<InlineApprovalStatus, 'missing'>,
+            status:
+              approval.status === 'pending' && approval.expiresAt <= now
+                ? 'expired'
+                : (approval.status as Exclude<InlineApprovalStatus, 'missing'>),
             details: approvalDetails(approval.payload),
           }
         : { ...part, status: 'missing' };

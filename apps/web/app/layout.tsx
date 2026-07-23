@@ -1,5 +1,6 @@
+import { getMemoryHealth } from '@assistant/core';
 import { approvals, tasks } from '@assistant/db';
-import { count, eq } from 'drizzle-orm';
+import { and, count, eq, gt, inArray, sql } from 'drizzle-orm';
 import type { Metadata, Viewport } from 'next';
 import { Bricolage_Grotesque, Inter, JetBrains_Mono } from 'next/font/google';
 import type { ReactNode } from 'react';
@@ -58,13 +59,21 @@ const navItems = [
 ];
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const [pendingApprovals, session, identity, working] = await Promise.all([
+  const identity = await getAgentIdentity();
+  const [pendingApprovals, session, presenceRows, memoryHealth] = await Promise.all([
     (async () => {
       try {
         const [pendingRow] = await getDb()
           .select({ value: count() })
           .from(approvals)
-          .where(eq(approvals.status, 'pending'));
+          .innerJoin(tasks, eq(approvals.taskId, tasks.id))
+          .where(
+            and(
+              eq(tasks.agentId, identity.id),
+              eq(approvals.status, 'pending'),
+              gt(approvals.expiresAt, sql`now()`),
+            ),
+          );
         return pendingRow?.value ?? 0;
       } catch (error) {
         console.error('[layout] failed to load pending approval count', error);
@@ -80,21 +89,45 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         return null;
       }
     })(),
-    getAgentIdentity(),
-    // Presence: the brand mark breathes while anything is actively running.
-    // Refreshes with every route render/AutoRefresh — no extra poller.
     (async () => {
       try {
-        const [runningRow] = await getDb()
-          .select({ value: count() })
+        return await getDb()
+          .select({ status: tasks.status, value: count() })
           .from(tasks)
-          .where(eq(tasks.status, 'running'));
-        return (runningRow?.value ?? 0) > 0;
+          .where(
+            and(
+              eq(tasks.agentId, identity.id),
+              inArray(tasks.status, ['running', 'needs_attention']),
+            ),
+          )
+          .groupBy(tasks.status);
       } catch {
-        return false;
+        return [];
       }
     })(),
+    identity.id
+      ? getMemoryHealth(getDb(), identity.id).catch(() => ({
+          totalUsable: 0,
+          notYetOrganized: 0,
+          awaitingReview: 0,
+          ownerConfirmed: 0,
+          lastOrganizedAt: null,
+        }))
+      : Promise.resolve({
+          totalUsable: 0,
+          notYetOrganized: 0,
+          awaitingReview: 0,
+          ownerConfirmed: 0,
+          lastOrganizedAt: null,
+        }),
   ]);
+  const presence =
+    pendingApprovals > 0 ||
+    presenceRows.some((row) => row.status === 'needs_attention' && row.value > 0)
+      ? 'attention'
+      : presenceRows.some((row) => row.status === 'running' && row.value > 0)
+        ? 'working'
+        : 'idle';
 
   return (
     <html
@@ -118,9 +151,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             pendingApprovals={pendingApprovals}
             signedIn={!!session?.user}
             agentName={identity.name}
-            working={working}
+            presence={presence}
+            memoryBacklogCount={memoryHealth.notYetOrganized}
           />
-          <main className="min-w-0 flex-1 px-4 py-6 lg:px-10 lg:py-9">{children}</main>
+          <main className="min-w-0 flex-1 px-4 py-7 sm:px-6 lg:px-10 lg:py-10">{children}</main>
         </div>
       </body>
     </html>

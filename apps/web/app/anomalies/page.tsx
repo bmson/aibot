@@ -3,7 +3,7 @@ import { AnomalyCard, type AnomalyView } from '@/app/anomalies/anomaly-card';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { EmptyState, PageHeader } from '@/lib/ui';
+import { EmptyState, PageHeader, PageShell } from '@/lib/ui';
 
 export const metadata = { title: 'Anomalies' };
 
@@ -29,7 +29,7 @@ export default async function AnomaliesPage() {
   }));
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <PageShell size="reading">
       <PageHeader
         title="Anomalies"
         intro="Unusual approval-policy activity the nightly scan flagged — a policy auto-executing far above its baseline, an outward action overnight, or a burst. Suspend a policy to make its actions wait for your approval, or dismiss a false positive."
@@ -46,6 +46,6 @@ export default async function AnomaliesPage() {
           </div>
         )}
       </section>
-    </div>
+    </PageShell>
   );
 }
