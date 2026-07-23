@@ -163,9 +163,15 @@ export function validateProdConfig(config: Config = loadConfig()): string[] {
     // Gmail push 403s (the outage that blacked out email for two days).
     problems.push('GMAIL_PUSH_SERVICE_ACCOUNT is required when GMAIL_PUBSUB_TOPIC is set');
   }
-  if (config.BROWSER_DRIVER === 'cloudrun' && !config.PROFILE_ENC_KEY) {
-    problems.push('PROFILE_ENC_KEY is required when BROWSER_DRIVER=cloudrun');
-  }
+  // No PROFILE_ENC_KEY check here, deliberately. Under BROWSER_DRIVER=cloudrun
+  // the agent never reads that key: CloudRunJobLauncher overrides only
+  // BROWSER_JOB_INPUT, and the browser Cloud Run Job gets the key from its own
+  // Secret Manager binding — which is the least-privilege split deploy.sh
+  // documents ("the browser can read only its profile key"). Requiring it here
+  // demanded a secret the agent has no way to use and no grant to read, and it
+  // was boot-fatal: the agent crash-looped on startup and Cloud Run held every
+  // release on the previous revision. Only BROWSER_DRIVER=local passes the key
+  // through (LocalLauncher), and that path is not production.
   return problems;
 }
 
