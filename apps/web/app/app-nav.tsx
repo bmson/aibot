@@ -77,9 +77,14 @@ export function AppNav({
     };
   }, [open]);
 
+  // Longest matching nav href wins, so /chat/all doesn't also light up /chat.
+  const activeHref = navItems
+    .filter((item) => (item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
+
   const renderLinks = (items: NavItem[], tone: 'rail' | 'drawer') =>
     items.map((item) => {
-      const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
+      const active = item.href === activeHref;
       return (
         <Link
           key={item.href}

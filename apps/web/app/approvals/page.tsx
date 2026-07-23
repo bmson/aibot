@@ -3,7 +3,7 @@ import { asc, desc, eq, inArray } from 'drizzle-orm';
 import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
-import { getDb } from '@/lib/server';
+import { getAgentTimezone, getDb } from '@/lib/server';
 import { EmptyState, PageHeader, SectionHeading } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, toPendingApprovalView } from '@/lib/views';
 import { ApprovalCard } from './approval-card';
@@ -14,6 +14,7 @@ export default async function ApprovalsPage() {
   await requireOwner();
   const db = getDb();
   const now = new Date();
+  const tz = await getAgentTimezone();
 
   const [pending, resolved] = await Promise.all([
     db
@@ -62,6 +63,7 @@ export default async function ApprovalsPage() {
                 { type: taskType, trust: taskTrust },
                 { toolName, decision },
                 now,
+                tz,
               )}
             />
           ))}
@@ -93,9 +95,9 @@ export default async function ApprovalsPage() {
                 <Link href={`/tasks/${approval.taskId}`} className="hover:underline">
                   {taskTypeLabel(taskType)}
                 </Link>
-                {' · '}requested {formatDateTime(approval.requestedAt)}
+                {' · '}requested {formatDateTime(approval.requestedAt, tz)}
                 {approval.resolvedAt
-                  ? ` · resolved ${formatDateTime(approval.resolvedAt)} (${relativeTime(approval.resolvedAt, now)})`
+                  ? ` · resolved ${formatDateTime(approval.resolvedAt, tz)} (${relativeTime(approval.resolvedAt, now)})`
                   : ''}
                 {approval.resolvedVia ? ` via ${approval.resolvedVia}` : ''}
                 {approval.resolutionPayload ? ' · payload edited' : ''}

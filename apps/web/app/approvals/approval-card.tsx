@@ -1,5 +1,6 @@
 'use client';
 
+import { TriangleAlert } from 'lucide-react';
 import Link from 'next/link';
 import { useActionState, useState } from 'react';
 import {
@@ -9,6 +10,7 @@ import {
   editAndApprove,
 } from '@/app/approvals/actions';
 import { btn } from '@/lib/ui';
+import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 import type { PendingApprovalView } from '@/lib/views';
 
 export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
@@ -37,8 +39,9 @@ export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
       </p>
       {approval.voiceFlag ? (
         <div className="mt-2 rounded-md border border-amber-500 bg-amber-100 px-2.5 py-1.5 dark:border-amber-600 dark:bg-amber-900/50">
-          <p className="text-xs font-semibold text-amber-900 dark:text-amber-200">
-            <span aria-hidden="true">⚠ </span>Voice rewrite failed fact-check — original draft shown
+          <p className="flex items-center gap-1 text-xs font-semibold text-amber-900 dark:text-amber-200">
+            <TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+            Voice rewrite failed fact-check — original draft shown
           </p>
           <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-300">{approval.voiceFlag}</p>
         </div>
@@ -97,23 +100,21 @@ export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
       ) : (
         <div className="mt-3 flex flex-wrap gap-2">
           <form action={approveApproval.bind(null, approval.id)}>
-            <button type="submit" className={btn.success}>
+            <SubmitButton variant="success" pendingLabel="Approving…">
               Approve
-            </button>
+            </SubmitButton>
           </form>
           <form action={denyApproval.bind(null, approval.id)}>
-            <button type="submit" className={btn.danger}>
+            <ConfirmButton variant="danger" pendingLabel="Denying…" confirmLabel="Confirm deny">
               Deny
-            </button>
+            </ConfirmButton>
           </form>
           <button type="button" onClick={() => setEditing(true)} className={btn.outline}>
             Edit details
           </button>
           {approval.rememberLabel ? (
             <form action={approveAndRemember.bind(null, approval.id)}>
-              <button type="submit" className={btn.outline}>
-                {approval.rememberLabel}
-              </button>
+              <SubmitButton variant="outline">{approval.rememberLabel}</SubmitButton>
             </form>
           ) : null}
         </div>

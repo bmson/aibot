@@ -7,7 +7,7 @@ import { ApprovalCard } from '@/app/approvals/approval-card';
 import { cancelTask, retryTask } from '@/app/tasks/actions';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime, truncate } from '@/lib/format';
-import { getDb } from '@/lib/server';
+import { getAgentTimezone, getDb } from '@/lib/server';
 import { btn, CountBadge, PageHeader, SectionHeading } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, toPendingApprovalView } from '@/lib/views';
 
@@ -55,6 +55,7 @@ export default async function DashboardPage() {
   await requireOwner();
   const db = getDb();
   const now = new Date();
+  const tz = await getAgentTimezone();
 
   const dashboardData = await Promise.all([
     db
@@ -191,6 +192,7 @@ export default async function DashboardPage() {
                 { type: taskType, trust: taskTrust },
                 { toolName, decision },
                 now,
+                tz,
               )}
             />
           ))}
@@ -243,7 +245,7 @@ export default async function DashboardPage() {
             const line =
               task.status === 'sleeping'
                 ? task.runAfter
-                  ? `Next check ${relativeTime(task.runAfter, now)} (${formatDateTime(task.runAfter)})`
+                  ? `Next check ${relativeTime(task.runAfter, now)} (${formatDateTime(task.runAfter, tz)})`
                   : 'Its next check is being scheduled.'
                 : (waitingLine[task.status] ?? task.status);
             return (
@@ -355,7 +357,7 @@ export default async function DashboardPage() {
                 ) : null}
                 {task.deadline ? (
                   <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-                    target {formatDateTime(task.deadline)} ({relativeTime(task.deadline, now)})
+                    target {formatDateTime(task.deadline, tz)} ({relativeTime(task.deadline, now)})
                   </p>
                 ) : null}
               </div>

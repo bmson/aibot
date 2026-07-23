@@ -176,7 +176,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
               {approval.shortCode}
               {approval.resolvedVia ? ` · resolved via ${approval.resolvedVia}` : ''}
-              {approval.resolvedAt ? ` at ${formatDateTime(approval.resolvedAt)}` : ''}
+              {approval.resolvedAt
+                ? ` at ${formatDateTime(approval.resolvedAt, agent.timezone)}`
+                : ''}
             </p>
           </div>
         ),
@@ -306,14 +308,14 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           <div>
             <dt className="text-xs text-zinc-500 dark:text-zinc-400">Updated</dt>
             <dd>
-              {formatDateTime(task.updatedAt)} ({relativeTime(task.updatedAt, now)})
+              {formatDateTime(task.updatedAt, agent.timezone)} ({relativeTime(task.updatedAt, now)})
             </dd>
           </div>
           {task.deadline ? (
             <div>
               <dt className="text-xs text-zinc-500 dark:text-zinc-400">Target date</dt>
               <dd>
-                {formatDateTime(task.deadline)} ({relativeTime(task.deadline, now)})
+                {formatDateTime(task.deadline, agent.timezone)} ({relativeTime(task.deadline, now)})
               </dd>
             </div>
           ) : null}
@@ -433,7 +435,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                       {entry.label}
                     </span>
                     <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
-                      {formatDateTime(entry.at)}
+                      {formatDateTime(entry.at, agent.timezone)}
                     </span>
                   </div>
                   <div className="mt-1">{entry.content}</div>

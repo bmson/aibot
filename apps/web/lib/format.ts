@@ -18,9 +18,22 @@ export function relativeTime(date: Date, now: Date = new Date()): string {
   return diff < 0 ? `${unit} ago` : `in ${unit}`;
 }
 
-/** Compact UTC timestamp: "2026-07-15 09:41". */
-export function formatDateTime(date: Date): string {
-  return date.toISOString().slice(0, 16).replace('T', ' ');
+/**
+ * Compact timestamp "2026-07-15 09:41" in the owner's timezone. The sv-SE locale
+ * renders ISO-style YYYY-MM-DD HH:mm; pass the agent's stored timezone so the
+ * owner sees local time (dates were 7–8h off when this rendered UTC). Falls back
+ * to UTC only if no timezone is given.
+ */
+export function formatDateTime(date: Date, timeZone?: string): string {
+  if (!timeZone) return date.toISOString().slice(0, 16).replace('T', ' ');
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
 }
 
 /** "$0.25" — numeric strings from drizzle, trailing zeros trimmed. */

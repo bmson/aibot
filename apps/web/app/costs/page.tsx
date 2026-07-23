@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { updateCaps } from '@/app/costs/actions';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, truncate } from '@/lib/format';
-import { getDb } from '@/lib/server';
+import { getAgentTimezone, getDb } from '@/lib/server';
 import { btn, PageHeader } from '@/lib/ui';
 import { taskTypeLabel } from '@/lib/views';
 
@@ -27,6 +27,7 @@ function Bar({ spent, held, limit }: { spent: number; held: number; limit: numbe
 export default async function CostsPage() {
   await requireOwner();
   const db = getDb();
+  const tz = await getAgentTimezone();
 
   const monthStart = sql`date_trunc('month', now())`;
   const [totals, bySource, byModel, topTasks, held, recent, [parkedCount], [taskDefault]] =
@@ -250,7 +251,7 @@ export default async function CostsPage() {
                 {recent.map((e) => (
                   <tr key={e.id} className="border-t border-zinc-100 dark:border-zinc-900">
                     <td className="py-1.5 text-xs text-zinc-500 whitespace-nowrap">
-                      {formatDateTime(e.createdAt)}
+                      {formatDateTime(e.createdAt, tz)}
                     </td>
                     <td className="px-2 py-1.5">{e.source}</td>
                     <td className="max-w-0 truncate px-2 py-1.5 text-xs text-zinc-500">

@@ -110,7 +110,7 @@ export default async function SettingsPage() {
                   </p>
                   <p className="text-xs text-zinc-500 dark:text-zinc-500">
                     {s.nextRunAt && s.enabled
-                      ? `Next ${relativeTime(s.nextRunAt, now)} (${formatDateTime(s.nextRunAt)})`
+                      ? `Next ${relativeTime(s.nextRunAt, now)} (${formatDateTime(s.nextRunAt, agent.timezone)})`
                       : 'Not currently scheduled'}
                     {s.lastRunAt ? ` · last ${relativeTime(s.lastRunAt, now)}` : ''}
                   </p>

@@ -170,6 +170,7 @@ export function toPendingApprovalView(
   task: Pick<TaskRow, 'type' | 'trust'>,
   toolCall: { toolName: string; decision: unknown },
   now: Date = new Date(),
+  timeZone?: string,
 ): PendingApprovalView {
   return {
     id: approval.id,
@@ -177,8 +178,8 @@ export function toPendingApprovalView(
     summary: approval.summary,
     fields: approvalFields(toolCall.toolName, approval.payload),
     payloadJson: prettyJson(approval.payload),
-    requestedLabel: `requested ${relativeTime(approval.requestedAt, now)} (${formatDateTime(approval.requestedAt)})`,
-    expiresLabel: `expires ${relativeTime(approval.expiresAt, now)} (${formatDateTime(approval.expiresAt)})`,
+    requestedLabel: `requested ${relativeTime(approval.requestedAt, now)} (${formatDateTime(approval.requestedAt, timeZone)})`,
+    expiresLabel: `expires ${relativeTime(approval.expiresAt, now)} (${formatDateTime(approval.expiresAt, timeZone)})`,
     provenance: `${taskTypeLabel(task.type)} · requested by ${trustLabel(task.trust)}`,
     reason: approvalReason(toolCall.decision),
     rememberLabel: rememberLabel(toolCall.toolName, approval.payload),

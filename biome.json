@@ -9,7 +9,8 @@
       "!**/.cache",
       "!**/node_modules",
       "!**/drizzle",
-      "!apps/web/app/globals.css"
+      "!apps/web/app/globals.css",
+      "!apps/web/next-env.d.ts"
     ]
   },
   "formatter": {
