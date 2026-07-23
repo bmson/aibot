@@ -151,11 +151,20 @@ export function buildDeps(): AgentDeps {
   registerReminderTools(registry);
 
   // Web search: registered only when a provider + key are configured (like SMS).
-  if (config.SEARCH_PROVIDER !== 'none' && config.SEARCH_API_KEY) {
+  // The 'google' (Custom Search JSON API) provider also needs a search-engine id.
+  const searchProvider = config.SEARCH_PROVIDER;
+  if (
+    searchProvider !== 'none' &&
+    config.SEARCH_API_KEY &&
+    (searchProvider !== 'google' || config.SEARCH_ENGINE_ID)
+  ) {
     registerSearchTools(registry, {
-      provider: config.SEARCH_PROVIDER,
+      provider: searchProvider,
       apiKey: config.SEARCH_API_KEY,
+      engineId: config.SEARCH_ENGINE_ID || undefined,
     });
+  } else if (searchProvider === 'google' && config.SEARCH_API_KEY && !config.SEARCH_ENGINE_ID) {
+    console.warn('web.search google provider needs SEARCH_ENGINE_ID (the cx) — disabled');
   } else {
     console.warn('web.search disabled — set SEARCH_PROVIDER + SEARCH_API_KEY to enable');
   }
