@@ -834,7 +834,7 @@ describe('executor end-to-end (integration, scripted model)', () => {
       .select()
       .from(messages)
       .where(sql`${messages.taskId} = ${task.id} and ${messages.role} = 'assistant'`);
-    expect(reply?.text).toContain("I can't claim that work was completed");
+    expect(reply?.text).toContain("I couldn't verify this completed");
     expect(reply?.text).not.toContain('I created a shared spreadsheet');
   });
 

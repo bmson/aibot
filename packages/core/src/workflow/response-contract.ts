@@ -420,15 +420,11 @@ function failureDetails(evidence: ActionEvidence[]): string[] {
 
 export function transparentFailureResponse(evidence: ActionEvidence[]): string {
   const failures = failureDetails(evidence);
-  const detail = failures.length
-    ? ` The attempted action did not complete (${failures.join('; ')}).`
-    : ' No supporting tool action completed.';
-  return [
-    "I can't claim that work was completed.",
-    detail,
-    'I have not created, sent, submitted, researched, or updated anything outside this chat for this request.',
-    'I can only report an action after the required tool is available and returns a successful result.',
-  ].join(' ');
+  const detail = failures.length ? ` What stopped it: ${failures.join('; ')}.` : '';
+  // Keep the opening sentence stable — the web chat matches on it to render
+  // these as system notices (apps/web/lib/chat-notices.ts), alongside the
+  // structured `contractNotice` flag.
+  return `I couldn't verify this completed, so I'm not claiming it did.${detail} Nothing was sent or changed outside this chat — say the word and I'll retry, or adjust the request.`;
 }
 
 const UNSUPPORTED_LABEL: Record<ActionKind, string> = {
@@ -491,10 +487,9 @@ function partialFailureResponse(
   if (verified.length === 0) return undefined;
   const missing = [...new Set(unsupported.map((kind) => UNSUPPORTED_LABEL[kind]))];
   const failures = failureDetails(evidence);
-  const failureDetail = failures.length
-    ? ` The incomplete action reported: ${failures.join('; ')}.`
-    : '';
-  return `I can verify that ${verified.join('; ')}. I cannot verify ${missing.join(' or ')} from successful tool evidence, so I am not claiming it completed.${failureDetail}`;
+  const failureDetail = failures.length ? ` What stopped it: ${failures.join('; ')}.` : '';
+  // Opening kept stable for the web chat's notice matcher (chat-notices.ts).
+  return `Here's what I can confirm: ${verified.join('; ')}. I can't yet confirm ${missing.join(' or ')}, so I'm not claiming that part.${failureDetail}`;
 }
 
 // Google surfaces the model legitimately constructs from an id it already has

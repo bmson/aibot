@@ -80,6 +80,7 @@ async function persistFinalConversationOnce(
   task: TaskRow,
   text: string,
   recall?: RecallSource[],
+  contractNotice?: boolean,
 ): Promise<boolean> {
   let conversationId = task.conversationId;
   let body = text;
@@ -110,7 +111,7 @@ async function persistFinalConversationOnce(
     taskId: task.id,
     role: 'assistant',
     origin: 'assistant',
-    parts: assistantMessageParts(body, recall),
+    parts: assistantMessageParts(body, recall, { contractNotice }),
     text: body,
   });
   return true;
@@ -130,6 +131,7 @@ export async function finalizePendingResponse(
     task,
     pending.text,
     recallSources,
+    pending.contractNotice,
   );
 
   // Check cancellation/reclaim immediately before the external side effect.
@@ -275,6 +277,7 @@ export async function stageModelFinalResponse(
       progress: text.slice(0, 200),
       terminalStatus: 'needs_attention',
       outcome: 'needs_attention',
+      contractNotice: checked.blocked || undefined,
     });
   }
   // A known contact's plain answer would otherwise dead-end in the dashboard;
@@ -284,6 +287,7 @@ export async function stageModelFinalResponse(
     ...pending,
     text,
     progress: text.slice(0, 200),
+    contractNotice: checked.blocked || undefined,
   });
 }
 

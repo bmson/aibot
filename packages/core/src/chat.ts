@@ -19,9 +19,16 @@ import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
  * chat UI can show a "recalled from earlier" affordance (Phase 4). The recall
  * part is UI-only: model history is rebuilt from `messages.text`, never parts.
  */
-export function assistantMessageParts(text: string, recall?: RecallSource[]): unknown[] {
+export function assistantMessageParts(
+  text: string,
+  recall?: RecallSource[],
+  opts?: { contractNotice?: boolean },
+): unknown[] {
   const parts: unknown[] = [{ type: 'text', text }];
   if (recall && recall.length > 0) parts.push({ type: 'recall', sources: recall });
+  // Structured marker (parts are jsonb — no migration): the chat UI styles the
+  // message as an honesty-check system notice instead of assistant prose.
+  if (opts?.contractNotice) parts.push({ type: 'notice', notice: 'response-contract' });
   return parts;
 }
 

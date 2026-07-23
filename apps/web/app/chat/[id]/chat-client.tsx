@@ -16,7 +16,7 @@ import {
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { AvatarMark } from '@/app/brand-mark';
-import { isApprovalProseNotice, isContractNotice } from '@/lib/chat-notices';
+import { hasContractNoticePart, isApprovalProseNotice, isContractNotice } from '@/lib/chat-notices';
 import { btn, btnSm, focusRing } from '@/lib/ui';
 import { toolLabel } from '@/lib/views';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
@@ -654,7 +654,7 @@ export function ChatClient({
                 approvalParts.length === 0 &&
                 budgetParts.length === 0 &&
                 fullText !== '' &&
-                isContractNotice(fullText);
+                (hasContractNoticePart(parts) || isContractNotice(fullText));
               const date = messageDate(message);
               const previousDate =
                 messageIndex > 0 ? messageDate(messages[messageIndex - 1] as UIMessage) : null;

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { chatNoticeMessage, isApprovalProseNotice, isContractNotice } from './chat-notices.js';
+import {
+  chatNoticeMessage,
+  hasContractNoticePart,
+  isApprovalProseNotice,
+  isContractNotice,
+} from './chat-notices.js';
 
 describe('chat notices', () => {
   it('turns the archive race into owner-readable feedback', () => {
@@ -47,6 +52,38 @@ describe('isContractNotice', () => {
       false,
     );
     expect(isContractNotice('Done — the sheet is updated.')).toBe(false);
+  });
+
+  it('matches the current transparent-failure copy', () => {
+    expect(
+      isContractNotice(
+        "I couldn't verify this completed, so I'm not claiming it did. Nothing was sent or " +
+          "changed outside this chat — say the word and I'll retry, or adjust the request.",
+      ),
+    ).toBe(true);
+  });
+
+  it('matches the current partial-confirmation copy', () => {
+    expect(
+      isContractNotice(
+        "Here's what I can confirm: the Google Sheet action completed earlier in this " +
+          "conversation. I can't yet confirm the requested calendar action, so I'm not claiming " +
+          'that part.',
+      ),
+    ).toBe(true);
+    expect(isContractNotice("Here's what I can confirm: your flight lands at 6pm.")).toBe(false);
+  });
+});
+
+describe('hasContractNoticePart', () => {
+  it('detects the structured marker and ignores other parts', () => {
+    expect(
+      hasContractNoticePart([
+        { type: 'text', text: 'x' },
+        { type: 'notice', notice: 'response-contract' },
+      ]),
+    ).toBe(true);
+    expect(hasContractNoticePart([{ type: 'text', text: 'x' }, { type: 'recall' }])).toBe(false);
   });
 });
 

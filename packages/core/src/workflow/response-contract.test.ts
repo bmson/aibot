@@ -9,7 +9,7 @@ describe('response execution contract', () => {
     );
     expect(result.blocked).toBe(true);
     expect(result.unsupported).toEqual(expect.arrayContaining(['spreadsheet', 'background']));
-    expect(result.text).toContain("I can't claim that work was completed");
+    expect(result.text).toContain("I couldn't verify this completed");
   });
 
   it('blocks tracker status reports that have no durable work behind them', () => {
@@ -172,9 +172,9 @@ describe('response execution contract', () => {
     );
     expect(result.blocked).toBe(true);
     expect(result.unsupported).toEqual(expect.arrayContaining(['spreadsheet', 'outbound']));
-    expect(result.text).toContain('I can verify that the Google Doc action completed');
-    expect(result.text).toContain('I cannot verify');
-    expect(result.text).not.toContain('I have not created');
+    expect(result.text).toContain("Here's what I can confirm: the Google Doc action completed");
+    expect(result.text).toContain("I can't yet confirm");
+    expect(result.text).not.toContain("I couldn't verify this completed");
   });
 
   it('preserves a verified submission when a later document claim is unsupported', () => {
@@ -198,7 +198,7 @@ describe('response execution contract', () => {
     );
     expect(result).toMatchObject({ blocked: true, unsupported: ['workspace'] });
     expect(result.text).toContain('portal returned an explicit application confirmation');
-    expect(result.text).toContain('cannot verify the requested document or file action');
+    expect(result.text).toContain("can't yet confirm the requested document or file action");
     expect(result.text).not.toContain('I have not submitted');
   });
 

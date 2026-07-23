@@ -390,7 +390,7 @@ describe('continuous job-application context across delayed external events', ()
     const [sourceTask] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(sourceTask?.progress).toContain('submitted the application');
     expect(sourceTask?.progress).toContain('confirmation watcher is active');
-    expect(sourceTask?.progress).not.toContain("I can't claim that work was completed");
+    expect(sourceTask?.progress).not.toContain("I couldn't verify this completed");
 
     const [watch] = await db
       .select()
@@ -586,7 +586,7 @@ describe('continuous job-application context across delayed external events', ()
     const [finished] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(finished?.progress).toContain('portal confirmed the application submission');
     expect(finished?.progress).toContain('did not create the confirmation watch');
-    expect(finished?.progress).not.toContain("I can't claim that work was completed");
+    expect(finished?.progress).not.toContain("I couldn't verify this completed");
     const records = await db
       .select()
       .from(applicationConfirmations)

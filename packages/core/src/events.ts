@@ -91,6 +91,12 @@ export const PendingFinalSchema = z.object({
   outcome: z.enum(['done', 'clarify', 'failed', 'needs_attention']),
   /** Persisted before channel send; retries never duplicate an ambiguous accepted delivery. */
   deliveryAttempted: z.boolean().optional(),
+  /**
+   * The response contract replaced the model's draft with its own honest
+   * fallback — the chat UI renders such messages as a compact system notice
+   * instead of assistant prose. Additive: old checkpoints parse unchanged.
+   */
+  contractNotice: z.boolean().optional(),
 });
 export type PendingFinal = z.infer<typeof PendingFinalSchema>;
 
