@@ -14,6 +14,7 @@ import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import { btn, EmptyState, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
+import { statusLabel } from '@/lib/views';
 import { archiveInactiveGoals } from './actions';
 
 export const metadata = { title: 'Goals' };
@@ -21,10 +22,12 @@ export const metadata = { title: 'Goals' };
 export const dynamic = 'force-dynamic';
 
 const STATUS_ORDER = ['active', 'paused', 'done', 'abandoned'] as const;
+// Headings match the status chip vocabulary (statusLabel), so a goal is never
+// filed under one word and labelled with another.
 const statusHeadings: Record<(typeof STATUS_ORDER)[number], string> = {
-  active: 'In progress',
+  active: 'Active',
   paused: 'Paused',
-  done: 'Finished',
+  done: 'Completed',
   abandoned: 'Stopped',
 };
 
@@ -41,6 +44,7 @@ function toGoalView(
   workActive: boolean,
   automation: { enabled: boolean; nextRunAt: Date | null } | undefined,
   stalled: boolean,
+  lastSession: { id: string; status: string; updatedAt: Date } | undefined,
 ): GoalView {
   const targetDateInput = goal.targetDate ? goal.targetDate.toISOString().slice(0, 10) : '';
   const blockedQuestion = goal.nextAction.startsWith(GOAL_BLOCKED_PREFIX)
@@ -48,6 +52,8 @@ function toGoalView(
     : '';
   const blocked =
     goal.status === 'active' && !goal.archivedAt && (blockedQuestion !== '' || stalled);
+  const isAutomating = goal.status === 'active' && !goal.archivedAt;
+  const cadence = goalAutomationCadence(goal, now).label;
   return {
     id: goal.id,
     title: goal.title,
@@ -58,22 +64,25 @@ function toGoalView(
     nextAction: goal.nextAction,
     targetDateInput,
     targetLabel: goal.targetDate
-      ? `target ${relativeTime(goal.targetDate, now)} (${targetDateInput})`
+      ? `${relativeTime(goal.targetDate, now)} (${targetDateInput})`
       : '',
-    updatedLabel: `updated ${relativeTime(goal.updatedAt, now)}`,
+    updatedLabel: relativeTime(goal.updatedAt, now),
     conversationId,
     archived: goal.archivedAt !== null,
     workActive,
-    automationLabel:
-      goal.status === 'active' && !goal.archivedAt
-        ? `Automatic work: ${goalAutomationCadence(goal, now).label}`
-        : 'Automatic work is paused',
+    paceLabel: isAutomating ? cadence.charAt(0).toUpperCase() + cadence.slice(1) : 'Paused',
     automationNextLabel:
-      goal.status === 'active' && !goal.archivedAt && automation?.enabled && automation.nextRunAt
+      isAutomating && automation?.enabled && automation.nextRunAt
         ? `next ${relativeTime(automation.nextRunAt, now)}`
         : '',
+    lastSessionLabel: lastSession
+      ? `${relativeTime(lastSession.updatedAt, now)} — ${statusLabel(lastSession.status)}`
+      : '',
+    lastSessionHref: lastSession ? `/tasks/${lastSession.id}` : undefined,
     blockedLabel: blocked
-      ? `Blocked — needs you: ${blockedQuestion || 'the last automatic session stopped and needs review (see the work chat)'}`
+      ? blockedQuestion
+        ? `Waiting on you: ${blockedQuestion}`
+        : 'Waiting on you — the last session stopped and needs review.'
       : '',
     mirrorToPrimary: goal.mirrorToPrimary,
     autonomy: goal.autonomy,
@@ -93,56 +102,74 @@ export default async function GoalsPage({
   const now = new Date();
 
   const agent = await getAgent(db);
-  const [rows, chatRows, archivedCountRows, activeTaskRows, automationRows, stalledTaskRows] =
-    await Promise.all([
-      db
-        .select()
-        .from(goals)
-        .where(
-          and(
-            eq(goals.agentId, agent.id),
-            archived ? isNotNull(goals.archivedAt) : isNull(goals.archivedAt),
-          ),
-        )
-        .orderBy(asc(goals.priority), desc(goals.updatedAt)),
-      db
-        .select({ id: conversations.id, metadata: conversations.metadata })
-        .from(conversations)
-        .where(and(eq(conversations.agentId, agent.id), eq(conversations.channel, 'chat')))
-        .orderBy(desc(conversations.updatedAt)),
-      db
-        .select({ value: count() })
-        .from(goals)
-        .where(and(eq(goals.agentId, agent.id), isNotNull(goals.archivedAt))),
-      db
-        .selectDistinct({ goalId: tasks.goalId })
-        .from(tasks)
-        .where(
-          and(
-            eq(tasks.agentId, agent.id),
-            isNotNull(tasks.goalId),
-            notInArray(tasks.status, ['done', 'failed', 'cancelled']),
-          ),
+  const [
+    rows,
+    chatRows,
+    archivedCountRows,
+    activeTaskRows,
+    automationRows,
+    stalledTaskRows,
+    sessionRows,
+  ] = await Promise.all([
+    db
+      .select()
+      .from(goals)
+      .where(
+        and(
+          eq(goals.agentId, agent.id),
+          archived ? isNotNull(goals.archivedAt) : isNull(goals.archivedAt),
         ),
-      db
-        .select({
-          name: schedules.name,
-          enabled: schedules.enabled,
-          nextRunAt: schedules.nextRunAt,
-        })
-        .from(schedules)
-        .where(eq(schedules.agentId, agent.id)),
-      db
-        .selectDistinct({ goalId: tasks.goalId })
-        .from(tasks)
-        .where(
-          and(
-            eq(tasks.agentId, agent.id),
-            isNotNull(tasks.goalId),
-            eq(tasks.status, 'needs_attention'),
-          ),
+      )
+      .orderBy(asc(goals.priority), desc(goals.updatedAt)),
+    db
+      .select({ id: conversations.id, metadata: conversations.metadata })
+      .from(conversations)
+      .where(and(eq(conversations.agentId, agent.id), eq(conversations.channel, 'chat')))
+      .orderBy(desc(conversations.updatedAt)),
+    db
+      .select({ value: count() })
+      .from(goals)
+      .where(and(eq(goals.agentId, agent.id), isNotNull(goals.archivedAt))),
+    db
+      .selectDistinct({ goalId: tasks.goalId })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.agentId, agent.id),
+          isNotNull(tasks.goalId),
+          notInArray(tasks.status, ['done', 'failed', 'cancelled']),
         ),
-    ]);
+      ),
+    db
+      .select({
+        name: schedules.name,
+        enabled: schedules.enabled,
+        nextRunAt: schedules.nextRunAt,
+      })
+      .from(schedules)
+      .where(eq(schedules.agentId, agent.id)),
+    db
+      .selectDistinct({ goalId: tasks.goalId })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.agentId, agent.id),
+          isNotNull(tasks.goalId),
+          eq(tasks.status, 'needs_attention'),
+        ),
+      ),
+    // Most-recent-first; reduced to the latest session per goal below.
+    db
+      .select({
+        goalId: tasks.goalId,
+        id: tasks.id,
+        status: tasks.status,
+        updatedAt: tasks.updatedAt,
+      })
+      .from(tasks)
+      .where(and(eq(tasks.agentId, agent.id), isNotNull(tasks.goalId)))
+      .orderBy(desc(tasks.updatedAt)),
+  ]);
   const chatByGoalId = new Map<string, string>();
   for (const chat of chatRows) {
     const goalId = goalIdFromMetadata(chat.metadata);
@@ -156,6 +183,16 @@ export default async function GoalsPage({
       .map((task) => task.goalId)
       .filter((goalId): goalId is string => goalId !== null),
   );
+  const lastSessionByGoalId = new Map<string, { id: string; status: string; updatedAt: Date }>();
+  for (const session of sessionRows) {
+    if (session.goalId && !lastSessionByGoalId.has(session.goalId)) {
+      lastSessionByGoalId.set(session.goalId, {
+        id: session.id,
+        status: session.status,
+        updatedAt: session.updatedAt,
+      });
+    }
+  }
   const archivedCount = archivedCountRows[0]?.value ?? 0;
   const automationByGoalId = new Map<string, { enabled: boolean; nextRunAt: Date | null }>();
   for (const goal of rows) {
@@ -224,7 +261,7 @@ export default async function GoalsPage({
           {groups.map((group) => (
             <section key={group.status}>
               <SectionHeading title={statusHeadings[group.status]} count={group.items.length} />
-              <div className="mt-3 flex flex-col gap-3">
+              <div className="mt-3 flex flex-col gap-4">
                 {group.items.map((goal) => (
                   <GoalCard
                     key={`${goal.id}:${goal.updatedAt.getTime()}`}
@@ -235,6 +272,7 @@ export default async function GoalsPage({
                       activeGoalIds.has(goal.id),
                       automationByGoalId.get(goal.id),
                       stalledGoalIds.has(goal.id),
+                      lastSessionByGoalId.get(goal.id),
                     )}
                   />
                 ))}

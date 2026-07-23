@@ -3,6 +3,7 @@
 import { useActionState } from 'react';
 import { createGoal } from '@/app/goals/actions';
 import { btn, cardShellClass, inputClass, labelClass, textareaClass } from '@/lib/ui';
+import { PACE_OPTIONS } from './pace';
 
 export function GoalCreateForm() {
   const [state, formAction, pending] = useActionState(createGoal, { error: null });
@@ -37,22 +38,22 @@ export function GoalCreateForm() {
         </label>
         <details className="rounded-xl bg-sunken/55 px-3 py-2">
           <summary className="cursor-pointer text-xs font-medium text-zinc-600 dark:text-zinc-400">
-            Schedule and notification options
+            Pace, target date, and updates
           </summary>
           <div className="mt-3 flex flex-col gap-3">
             <div className="flex flex-wrap gap-3">
               <label className={labelClass}>
-                How often should it work?
+                Pace
                 <select
                   name="priority"
                   defaultValue={state.values?.priority || '3'}
                   className={`${inputClass} w-full`}
                 >
-                  <option value="1">Every 6 hours</option>
-                  <option value="2">Daily</option>
-                  <option value="3">Twice a week</option>
-                  <option value="4">Weekly</option>
-                  <option value="5">Monthly</option>
+                  {PACE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label className={labelClass}>
@@ -76,7 +77,7 @@ export function GoalCreateForm() {
         <p className="mt-2 text-xs text-red-600 dark:text-red-400">{state.error}</p>
       ) : null}
       <button type="submit" disabled={pending} className={`${btn.primary} mt-3`}>
-        {pending ? 'Starting…' : 'Create goal and start work'}
+        {pending ? 'Starting…' : 'Start this goal'}
       </button>
     </form>
   );

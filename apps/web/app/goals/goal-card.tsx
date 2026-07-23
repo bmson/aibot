@@ -11,11 +11,13 @@ import {
   updateGoal,
 } from '@/app/goals/actions';
 import {
+  Badge,
   btn,
   cardBodyClass,
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
+  cardTitleClass,
   InfoGrid,
   InfoItem,
   inputClass as sharedInputClass,
@@ -23,7 +25,7 @@ import {
   textareaClass,
 } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
-import { StatusChip } from '@/lib/views';
+import { PACE_OPTIONS } from './pace';
 
 /** Plain-serializable props built server-side in page.tsx (labels precomputed there). */
 export interface GoalView {
@@ -46,10 +48,14 @@ export interface GoalView {
   archived: boolean;
   /** Archive is unavailable while the linked goal still has unfinished work. */
   workActive: boolean;
-  /** A human-readable recurrence; cron expressions stay out of the Goals UI. */
-  automationLabel: string;
+  /** How often the goal works on its own — a plain label, never cron. */
+  paceLabel: string;
   /** e.g. 'next in 4h', empty if automation is not running. */
   automationNextLabel: string;
+  /** e.g. '2h ago — Completed', '' when no session has run yet. */
+  lastSessionLabel: string;
+  /** Link to the most recent session's task detail, if any. */
+  lastSessionHref?: string;
   /**
    * 'Blocked — needs you: …' when automatic work is stalled on the owner
    * (unanswered question or a needs_attention session); '' when healthy.
@@ -70,34 +76,6 @@ const dangerOutlineButton = btn.dangerOutline;
 const inputClass = `${sharedInputClass} w-full`;
 const labelClass = `flex flex-col gap-1 ${sharedLabelClass}`;
 
-const priorityChipClasses: Record<number, string> = {
-  1: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
-  2: 'bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300',
-  3: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
-  4: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400',
-  5: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
-};
-
-const priorityLabels: Record<number, string> = {
-  1: 'Urgent',
-  2: 'High',
-  3: 'Normal',
-  4: 'Low',
-  5: 'Later',
-};
-
-function PriorityBadge({ priority }: { priority: number }) {
-  const classes = priorityChipClasses[priority] ?? priorityChipClasses[3];
-  return (
-    <span
-      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${classes}`}
-      title={`Priority: ${priorityLabels[priority] ?? 'Normal'}`}
-    >
-      {priorityLabels[priority] ?? 'Normal'}
-    </span>
-  );
-}
-
 export function GoalCard({ goal }: { goal: GoalView }) {
   // The parent keys this card by goal.updatedAt, so a successful save/status change
   // remounts it with editing/confirming reset — no effects needed.
@@ -113,49 +91,59 @@ export function GoalCard({ goal }: { goal: GoalView }) {
       <div className={cardBodyClass}>
         <div className={cardHeaderClass}>
           <div className="min-w-0">
-            <h3 className="text-[16px] leading-6 font-semibold tracking-[-0.015em]">
-              {goal.title}
-            </h3>
+            <h3 className={cardTitleClass}>{goal.title}</h3>
             {goal.description ? (
               <p className="mt-1 text-[13px] leading-5 text-muted">{goal.description}</p>
             ) : null}
           </div>
-          <span className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-            <PriorityBadge priority={goal.priority} />
-            <StatusChip status={goal.status} />
-          </span>
+          {goal.blockedLabel ? (
+            <Badge tone="amber">Needs you</Badge>
+          ) : goal.workActive ? (
+            <Badge tone="blue">Working</Badge>
+          ) : null}
         </div>
 
-        <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(15rem,0.72fr)]">
-          <section className="min-w-0">
-            <h4 className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
-              Current progress
-            </h4>
-            <p className="mt-1 text-[14px] leading-6 text-strong">
-              {goal.progress || 'No progress update yet.'}
+        <section className="min-w-0">
+          <h4 className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+            Current progress
+          </h4>
+          <p className="mt-1 text-[14px] leading-6 text-strong">
+            {goal.progress || 'No progress update yet.'}
+          </p>
+          {goal.blockedLabel ? (
+            <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2.5 text-xs leading-5 font-medium text-amber-800 dark:bg-amber-950/35 dark:text-amber-300">
+              {goal.blockedLabel}
             </p>
-            {goal.blockedLabel ? (
-              <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2.5 text-xs leading-5 font-medium text-amber-800 dark:bg-amber-950/35 dark:text-amber-300">
-                {goal.blockedLabel}
+          ) : goal.nextAction ? (
+            <div className="mt-3 border-l-2 border-accent/50 pl-3">
+              <p className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+                Next action
               </p>
-            ) : goal.nextAction ? (
-              <div className="mt-3 border-l-2 border-accent/50 pl-3">
-                <p className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
-                  Next action
-                </p>
-                <p className="mt-0.5 text-[13px] leading-5 text-strong">{goal.nextAction}</p>
-              </div>
-            ) : null}
-          </section>
-          <InfoGrid>
-            <InfoItem label="Target">{goal.targetLabel || 'No target date'}</InfoItem>
-            <InfoItem label="Updated">{goal.updatedLabel}</InfoItem>
-            <InfoItem label="Automation" className="col-span-2">
-              {goal.automationLabel}
-              {goal.automationNextLabel ? ` · ${goal.automationNextLabel}` : ''}
-            </InfoItem>
-          </InfoGrid>
-        </div>
+              <p className="mt-0.5 text-[13px] leading-5 text-strong">{goal.nextAction}</p>
+            </div>
+          ) : null}
+        </section>
+
+        <InfoGrid>
+          <InfoItem label="Pace">
+            {goal.paceLabel}
+            {goal.automationNextLabel ? ` · ${goal.automationNextLabel}` : ''}
+          </InfoItem>
+          <InfoItem label="Target">{goal.targetLabel || 'No target date'}</InfoItem>
+          <InfoItem label="Last session">
+            {goal.lastSessionHref ? (
+              <Link
+                href={goal.lastSessionHref}
+                className="underline decoration-edge underline-offset-2 hover:decoration-current"
+              >
+                {goal.lastSessionLabel}
+              </Link>
+            ) : (
+              'None yet'
+            )}
+          </InfoItem>
+          <InfoItem label="Updated">{goal.updatedLabel}</InfoItem>
+        </InfoGrid>
 
         {goal.mirrorToPrimary || goal.autonomy ? (
           <div className="grid gap-2 sm:grid-cols-2">
@@ -166,7 +154,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
             ) : null}
             {goal.autonomy ? (
               <p className="rounded-xl bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-                ⚡ Free-range sessions handle routine approvals; sensitive actions still ask.
+                ⚡ Runs autonomously — routine approvals are handled. Sensitive actions still ask.
               </p>
             ) : null}
           </div>
@@ -208,18 +196,6 @@ export function GoalCard({ goal }: { goal: GoalView }) {
                 </SubmitButton>
               </form>
             ) : null}
-            {!goal.taintedOrigin ? (
-              <form action={setGoalAutonomy.bind(null, goal.id, !goal.autonomy)}>
-                <SubmitButton variant="outline" pendingLabel="Updating…">
-                  {goal.autonomy ? 'Turn off free-range' : 'Make free-range'}
-                </SubmitButton>
-              </form>
-            ) : null}
-            {goal.workActive ? (
-              <span className="self-center text-xs text-zinc-500 dark:text-zinc-500">
-                Work active
-              </span>
-            ) : null}
             <details className="relative">
               <summary className={`${outlineButton} cursor-pointer list-none`}>More</summary>
               <div className="absolute top-full right-0 z-10 mt-2 flex w-52 flex-col gap-2 rounded-xl border border-edge bg-raised p-3 shadow-lg">
@@ -233,6 +209,18 @@ export function GoalCard({ goal }: { goal: GoalView }) {
                 >
                   {editing ? 'Close editor' : 'Edit goal'}
                 </button>
+                {goal.taintedOrigin ? (
+                  <p className="px-1 text-2xs leading-4 text-muted">
+                    Autonomy is unavailable — this goal came from outside content, so every action
+                    asks you first.
+                  </p>
+                ) : (
+                  <form action={setGoalAutonomy.bind(null, goal.id, !goal.autonomy)}>
+                    <SubmitButton variant="outline" pendingLabel="Updating…" className="w-full">
+                      {goal.autonomy ? 'Require approvals' : 'Run autonomously'}
+                    </SubmitButton>
+                  </form>
+                )}
                 {open ? (
                   <form action={setGoalStatus.bind(null, goal.id, 'done')}>
                     <SubmitButton variant="outline" pendingLabel="Finishing…" className="w-full">
@@ -309,17 +297,17 @@ export function GoalCard({ goal }: { goal: GoalView }) {
           </label>
           <div className="flex flex-wrap gap-3">
             <label className={labelClass}>
-              Automation pace
+              Pace
               <select
                 name="priority"
                 defaultValue={value('priority', String(goal.priority))}
                 className={inputClass}
               >
-                <option value="1">Urgent — every 6 hours</option>
-                <option value="2">High — daily</option>
-                <option value="3">Normal — twice a week</option>
-                <option value="4">Low — weekly</option>
-                <option value="5">Later — monthly</option>
+                {PACE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </label>
             <label className={labelClass}>
