@@ -239,7 +239,18 @@ export async function stageModelFinalResponse(
       outcome: 'failed',
     });
   }
-  const checked = enforceResponseContract(pending.text, evidence);
+  // Corpus for the URL-provenance rule: every tool result (both scopes), the
+  // trigger, and the owner/tool turns — but NOT the assistant's own final, which
+  // is already in the window and must not evidence its own fabricated link.
+  const urlCorpus = [
+    JSON.stringify(evidence),
+    JSON.stringify(task.trigger ?? {}),
+    window
+      .filter((m) => m.role === 'user' || m.role === 'tool')
+      .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+      .join('\n'),
+  ].join('\n');
+  const checked = enforceResponseContract(pending.text, evidence, { urlCorpus });
   const text = checked.text;
   if (checked.blocked) {
     console.warn('blocked unsupported assistant action claim', {

@@ -170,7 +170,17 @@ afterAll(async () => {
     if (createdConversationIds.length) {
       await db.delete(messages).where(inArray(messages.conversationId, createdConversationIds));
     }
-    if (createdTaskIds.length) await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
+    if (createdTaskIds.length) {
+      // Break the approvals<->tool_calls FK cycle, then clear every tool_call for
+      // these tasks (not just exec.*) before deleting the tasks themselves.
+      await db
+        .update(toolCalls)
+        .set({ approvalId: null })
+        .where(inArray(toolCalls.taskId, createdTaskIds));
+      await db.delete(approvals).where(inArray(approvals.taskId, createdTaskIds));
+      await db.delete(toolCalls).where(inArray(toolCalls.taskId, createdTaskIds));
+      await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
+    }
     if (createdConversationIds.length) {
       await db.delete(conversations).where(inArray(conversations.id, createdConversationIds));
     }
@@ -897,6 +907,72 @@ describe('executor end-to-end (integration, scripted model)', () => {
       args: { documentId: '1SLbcTqOwMMQG3QmD7gj755xzOKwQtVyv5cvaPjSwGSs' },
     });
     await db.delete(toolCalls).where(eq(toolCalls.taskId, task.id));
+  });
+
+  it('strips a fabricated link from the final answer but keeps a tool-sourced one', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const realUrl = 'https://docs.example/report/verified-123';
+    const registry = new ToolRegistry();
+    registry.register(
+      {
+        name: 'web.lookup',
+        description: 'returns a source URL',
+        inputSchema: z.object({}),
+        risk: 'autonomous',
+        acceptsUntrustedInput: true,
+        execute: async () => ({ url: realUrl }),
+      },
+      { returnsUntrustedContent: true },
+    );
+    const dispatcher = new ToolDispatcher(db, registry);
+    const router = {
+      async object() {
+        return { ok: true, modelId: 'fake/model', degraded: false, object: { trivial: true } };
+      },
+      async step(_role: string, opts: { messages?: ModelMessage[] }): Promise<StepCallOutcome> {
+        const transcript = JSON.stringify(opts.messages ?? []);
+        if (!transcript.includes(realUrl)) {
+          return {
+            ok: true,
+            modelId: 'fake/model',
+            degraded: false,
+            text: '',
+            toolCalls: [{ toolCallId: 'l1', toolName: 'web.lookup', input: {} }],
+          };
+        }
+        // Final: cite the real (tool-sourced) URL AND invent a second one.
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: `Source: ${realUrl} — also booked here: https://fabricated.example/booking/zzz`,
+          toolCalls: [],
+          finishReason: 'stop',
+        };
+      },
+    } as unknown as ModelRouter;
+
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner', title: 'url-provenance' })
+      .returning();
+    const conversationId = (conversation as NonNullable<typeof conversation>).id;
+    createdConversationIds.push(conversationId);
+    const { task } = await enqueueTask(db, {
+      event: { ...event(), conversationId },
+      type: 'chat_turn',
+    });
+    createdTaskIds.push(task.id);
+
+    const outcome = await executeTask({ db, router, dispatcher }, task.id);
+    expect(outcome.outcome).toBe('done');
+    const [reply] = await db
+      .select()
+      .from(messages)
+      .where(sql`${messages.taskId} = ${task.id} and ${messages.role} = 'assistant'`);
+    expect(reply?.text).toContain(realUrl); // tool-sourced link survives
+    expect(reply?.text).not.toContain('fabricated.example'); // invented link stripped
+    expect(reply?.text).toContain("couldn't trace");
   });
 
   it('resumes partial approvals in strict proposal order', async (ctx) => {

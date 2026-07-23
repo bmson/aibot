@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { enforceResponseContract } from './response-contract.js';
+import { enforceResponseContract, enforceUrlProvenance } from './response-contract.js';
 
 describe('response execution contract', () => {
   it('blocks a fabricated spreadsheet and silent background-work claim', () => {
@@ -372,5 +372,78 @@ describe('response execution contract', () => {
     ]);
     expect(result.blocked).toBe(true);
     expect(result.text).toContain('gmail.send');
+  });
+});
+
+describe('enforceUrlProvenance', () => {
+  it('strips a fabricated bare URL and appends one note', () => {
+    const { text, strippedUrls } = enforceUrlProvenance(
+      'All set — confirmation here: https://acme.example/booking/9f3a',
+      'the corpus mentions nothing relevant',
+    );
+    expect(strippedUrls).toEqual(['https://acme.example/booking/9f3a']);
+    expect(text).not.toContain('acme.example');
+    expect(text).toContain("couldn't trace");
+  });
+
+  it('keeps a URL that appears in the corpus (and its query-stripped form)', () => {
+    const corpus = 'web.fetch finalUrl https://news.example/article/42';
+    const kept = enforceUrlProvenance(
+      'See https://news.example/article/42?utm=x for details.',
+      corpus,
+    );
+    expect(kept.strippedUrls).toEqual([]);
+    expect(kept.text).toContain('https://news.example/article/42?utm=x');
+  });
+
+  it('preserves the label of a stripped markdown link', () => {
+    const { text, strippedUrls } = enforceUrlProvenance(
+      'Read the [full report](https://fake.example/r/xyz) now.',
+      'no evidence here',
+    );
+    expect(strippedUrls).toHaveLength(1);
+    expect(text).toContain('full report');
+    expect(text).not.toContain('fake.example');
+  });
+
+  it('allows a Google Doc link only when its id is in the corpus', () => {
+    const id = '1AbCdEfGhIjKlMnOpQrStUvWxYz012345';
+    const evidenced = enforceUrlProvenance(
+      `Doc: https://docs.google.com/document/d/${id}/edit`,
+      `docs.create returned {"documentId":"${id}"}`,
+    );
+    expect(evidenced.strippedUrls).toEqual([]);
+
+    const fabricated = enforceUrlProvenance(
+      'Doc: https://docs.google.com/document/d/9zzzzzzzzzzzzzzzzzzzzzzzzz999999/edit',
+      'no such id anywhere',
+    );
+    expect(fabricated.strippedUrls).toHaveLength(1);
+  });
+
+  it('allows a composed Google Maps link', () => {
+    const { strippedUrls } = enforceUrlProvenance(
+      'Directions: https://www.google.com/maps/search/?api=1&query=1600+Amphitheatre+Pkwy',
+      'the owner asked for directions to 1600 Amphitheatre Pkwy',
+    );
+    expect(strippedUrls).toEqual([]);
+  });
+
+  it('emits a single note for multiple strips', () => {
+    const { text } = enforceUrlProvenance('A https://a.example/x and B https://b.example/y', '');
+    expect(text.match(/couldn't trace/g)).toHaveLength(1);
+  });
+
+  it('is skipped by enforceResponseContract when no corpus is provided', () => {
+    const result = enforceResponseContract('Link: https://fabricated.example/z', []);
+    expect(result.text).toContain('https://fabricated.example/z');
+  });
+
+  it('runs inside enforceResponseContract on an otherwise-clean answer with a corpus', () => {
+    const result = enforceResponseContract('Here you go: https://fabricated.example/z', [], {
+      urlCorpus: 'nothing matching',
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.text).not.toContain('fabricated.example');
   });
 });

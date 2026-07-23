@@ -497,10 +497,103 @@ function partialFailureResponse(
   return `I can verify that ${verified.join('; ')}. I cannot verify ${missing.join(' or ')} from successful tool evidence, so I am not claiming it completed.${failureDetail}`;
 }
 
+// Google surfaces the model legitimately constructs from an id it already has
+// (a docs.create returned the id; the model rebuilds the shareable URL). These
+// are allowed only when the id in the path is itself present in the evidence.
+const CONSTRUCTIBLE_GOOGLE_HOSTS = new Set([
+  'docs.google.com',
+  'drive.google.com',
+  'calendar.google.com',
+  'mail.google.com',
+]);
+
+const BARE_URL_RE = /https?:\/\/[^\s<>"'`)\]]+/gi;
+const MARKDOWN_LINK_RE = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi;
+
+interface NormalizedUrl {
+  normalized: string;
+  noQuery: string;
+  host: string;
+  idSegments: string[];
+}
+
+function normalizeUrl(raw: string): NormalizedUrl | null {
+  const cleaned = raw.replace(/[.,;:!?'")\]]+$/, '');
+  try {
+    const u = new URL(cleaned);
+    const host = u.hostname.toLowerCase();
+    const path = u.pathname.replace(/\/+$/, '');
+    const base = `${u.protocol}//${host}${path}`.toLowerCase();
+    return {
+      normalized: `${base}${u.search}`.toLowerCase(),
+      noQuery: base,
+      host,
+      // Lowercased to match the lowercased corpus. Google ids are technically
+      // case-sensitive, but rewrite-not-block tolerates that tiny leniency.
+      idSegments: path
+        .split('/')
+        .filter((s) => s.length >= 16)
+        .map((s) => s.toLowerCase()),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Strip http(s) links from a final answer that never appeared in the task's
+ * sources — a fabricated "confirmation here: https://…" the response contract's
+ * action rules don't catch (they only inspect Google-artifact mutation claims).
+ *
+ * Rewrite, not block: an unevidenced markdown link keeps its label text and
+ * loses the href; a bare URL is removed; one trailing note explains the strip.
+ * This keeps the false-positive cost to a single link rather than a blanked
+ * answer. A link is evidenced when the corpus (tool results + trigger + the
+ * owner/tool turns) contains it (with or without its query string). Google
+ * doc/drive/calendar/mail links the model reconstructs from an id are allowed
+ * only when that id is itself in the corpus; a Google Maps link the model
+ * composes from an address is always allowed.
+ */
+export function enforceUrlProvenance(
+  text: string,
+  corpus: string,
+): { text: string; strippedUrls: string[] } {
+  const haystack = corpus.toLowerCase();
+  const stripped: string[] = [];
+  const isEvidenced = (raw: string): boolean => {
+    const n = normalizeUrl(raw);
+    if (!n) return true; // unparseable — leave it rather than mangle the text
+    if (haystack.includes(n.normalized) || haystack.includes(n.noQuery)) return true;
+    if (n.host === 'www.google.com' && n.noQuery.includes('/maps')) return true;
+    if (CONSTRUCTIBLE_GOOGLE_HOSTS.has(n.host)) {
+      // A bare app link (no id) is harmless; an id-bearing link must cite an
+      // id the evidence actually produced.
+      return n.idSegments.length === 0 || n.idSegments.every((seg) => haystack.includes(seg));
+    }
+    return false;
+  };
+
+  let out = text.replace(MARKDOWN_LINK_RE, (match, label: string, url: string) => {
+    if (isEvidenced(url)) return match;
+    stripped.push(url);
+    return label;
+  });
+  out = out.replace(BARE_URL_RE, (match) => {
+    if (isEvidenced(match)) return match;
+    stripped.push(match);
+    return '';
+  });
+  if (stripped.length > 0) {
+    out = `${out.replace(/[ \t]{2,}/g, ' ').trimEnd()}\n\n(I removed a link I couldn't trace to this task's sources.)`;
+  }
+  return { text: out, strippedUrls: stripped };
+}
+
 /** Replace unsupported action claims with a deterministic, evidence-based reply. */
 export function enforceResponseContract(
   text: string,
   evidence: ActionEvidence[],
+  opts?: { urlCorpus?: string },
 ): ResponseContractResult {
   const unsupported = claimedKinds(text).filter(
     (kind) =>
@@ -511,7 +604,19 @@ export function enforceResponseContract(
           freshArtifactEditClaim(text, kind),
       ),
   );
-  if (unsupported.length === 0) return { text, blocked: false, unsupported: [] };
+  if (unsupported.length === 0) {
+    // The action-claim rules passed, but a fabricated link can still ride along
+    // in an otherwise-honest answer. Only meaningful with a corpus (the finalize
+    // call site provides one; existing unit callers omit it and skip the rule).
+    if (opts?.urlCorpus !== undefined) {
+      const { text: cleaned, strippedUrls } = enforceUrlProvenance(text, opts.urlCorpus);
+      if (strippedUrls.length > 0) {
+        console.warn('stripped unverifiable url(s) from final answer', { strippedUrls });
+      }
+      return { text: cleaned, blocked: false, unsupported: [] };
+    }
+    return { text, blocked: false, unsupported: [] };
+  }
   if (unsupported.includes('approval')) {
     return {
       text: 'I did not create a real approval request, so nothing is waiting on the Approvals page. I stopped instead of showing an unverified approval code.',
