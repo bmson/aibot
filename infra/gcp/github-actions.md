@@ -58,6 +58,44 @@ path. GitHub Actions pushes directly to Artifact Registry, so the deployer
 does not receive Cloud Build or Cloud Storage permissions. If this is a new
 project, finish the bootstrap deploy before enabling GitHub deployments.
 
+## Why a web change reaches production
+
+Every release proves itself: `infra/gcp/release.sh` polls `/api/health` on the
+live `assistant-web` URL and fails unless it reports the commit being released.
+The commit is baked into the image by the `GIT_SHA` build arg (passed by both
+the GitHub workflow and `cloudbuild.yaml`), so "the image was pushed" can no
+longer be mistaken for "production is serving it".
+
+Three things used to break that chain silently, and are now closed:
+
+- **The web rollout was last, behind fail-fast gates it did not depend on.** An
+  agent env var only `deploy.sh` sets, or one absent Cloud Scheduler job, exited
+  the script before web was ever updated. Rollout steps are now attempted
+  independently and their failures reported together at the end, so unrelated
+  drift still fails the release without stranding a component.
+- **Traffic could stay pinned to an old revision.** A manual rollback pins the
+  traffic split, after which every `services update --image` creates a revision
+  serving 0% of requests. Each rollout now re-asserts `--to-latest`.
+- **A skipped or unrelated-red CI run blocked deploys entirely.** Deployment
+  keys off a successful `CI` run, so a `[skip ci]` commit produces no deploy,
+  and CI can go red for reasons unrelated to the commit (a newly published
+  advisory failing `pnpm audit`, a fresh HIGH CVE failing Trivy). Use the
+  manual path below rather than pushing an empty commit.
+
+### Forcing a release
+
+`Deploy production` accepts `workflow_dispatch`, with an optional `sha` input
+that defaults to the tip of `main`:
+
+```sh
+gh workflow run "Deploy production" --ref main
+gh workflow run "Deploy production" --ref main -f sha=<commit>
+```
+
+This still builds from the given commit and still runs the full verification,
+so it is a way to bypass a stuck *trigger* — not to bypass the release's own
+checks.
+
 ## GitHub configuration
 
 No GitHub secret or repository variable is needed. The workflow names the

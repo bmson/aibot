@@ -2,11 +2,24 @@ name: Deploy production
 
 # The CI workflow runs for each push. This workflow starts only after that
 # main-branch run succeeds, so an untested merge never reaches Cloud Run.
+#
+# workflow_dispatch is the escape hatch for the cases where that chain never
+# fires at all: a commit pushed with [skip ci] produces no CI run, so no
+# workflow_run event, so no deploy — and CI can also go red for reasons that
+# have nothing to do with the commit (a freshly published advisory failing
+# `pnpm audit`, a new HIGH CVE failing Trivy). Without a manual path the only
+# way to ship a finished web change was an empty commit.
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit SHA to release (defaults to the tip of main)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -18,13 +31,20 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment: production
+    env:
+      # One resolved commit for the whole job: the CI run's head on the
+      # automatic path, the requested (or tip-of-main) commit on the manual one.
+      # Everything downstream — checkout, image tags, the /api/health assertion
+      # in release.sh — keys off this single value, so the revision that goes
+      # live is always the revision that was built and verified.
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.event.inputs.sha || github.sha }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ env.RELEASE_SHA }}
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
@@ -40,12 +60,12 @@ jobs:
           GCP_PROJECT: bmson-assistant
           GCP_REGION: us-west1
           ARTIFACT_REPOSITORY: assistant
-          IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+          IMAGE_TAG: ${{ env.RELEASE_SHA }}
         run: |
           IMAGE_ROOT="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${ARTIFACT_REPOSITORY}"
           docker build --file infra/docker/agent.Dockerfile --tag "${IMAGE_ROOT}/agent:${IMAGE_TAG}" .
           docker push "${IMAGE_ROOT}/agent:${IMAGE_TAG}"
-          docker build --file infra/docker/web.Dockerfile --tag "${IMAGE_ROOT}/web:${IMAGE_TAG}" .
+          docker build --file infra/docker/web.Dockerfile --build-arg "GIT_SHA=${IMAGE_TAG}" --tag "${IMAGE_ROOT}/web:${IMAGE_TAG}" .
           docker push "${IMAGE_ROOT}/web:${IMAGE_TAG}"
           docker build --file infra/docker/browser-job.Dockerfile --tag "${IMAGE_ROOT}/browser:${IMAGE_TAG}" .
           docker push "${IMAGE_ROOT}/browser:${IMAGE_TAG}"
@@ -58,6 +78,6 @@ jobs:
           GCP_PROJECT: bmson-assistant
           GCP_REGION: us-west1
           ARTIFACT_REPOSITORY: assistant
-          IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+          IMAGE_TAG: ${{ env.RELEASE_SHA }}
           SKIP_IMAGE_BUILD: 'true'
         run: bash infra/gcp/release.sh
