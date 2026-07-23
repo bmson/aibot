@@ -33,7 +33,10 @@ import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import {
+  Badge,
   btn,
+  CountBadge,
+  cardInteractiveClass,
   cardShellClass,
   countBadgeClass,
   PageHeader,
@@ -322,9 +325,7 @@ export default async function ProfilePage() {
               aria-hidden="true"
             />
             Awaiting your review
-            <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-2xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-              {quarantined.length}
-            </span>
+            <CountBadge tone="amber">{quarantined.length}</CountBadge>
           </h2>
           <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
             These came from unverified sources. The assistant will not use them until you approve
@@ -442,7 +443,7 @@ export default async function ProfilePage() {
               <Link
                 key={contact.id}
                 href={`/profile/people/${contact.id}`}
-                className={`${cardShellClass} group grid grid-cols-[minmax(0,1fr)_auto] gap-3 p-4 motion-safe:transition-transform hover:-translate-y-0.5`}
+                className={`${cardShellClass} ${cardInteractiveClass} group grid grid-cols-[minmax(0,1fr)_auto] gap-3 p-4`}
               >
                 <div className="min-w-0">
                   <h3 className="truncate text-[15px] font-semibold tracking-[-0.01em]">
@@ -464,12 +465,13 @@ export default async function ProfilePage() {
                     {factCount} fact{factCount === 1 ? '' : 's'}
                   </span>
                   {contact.trust === 'unknown' ? (
-                    <span
-                      className="rounded-full bg-amber-100 px-1.5 py-0.5 text-2xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                    <Badge
+                      tone="amber"
+                      size="xs"
                       title="The assistant doesn't know who this is yet, so content from them is treated as untrusted. Saving a relationship marks them as known."
                     >
                       Unverified
-                    </span>
+                    </Badge>
                   ) : (
                     <span className="text-2xs font-medium text-muted">Known contact</span>
                   )}

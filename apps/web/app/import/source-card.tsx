@@ -9,11 +9,14 @@ import {
   startImportAction,
 } from '@/app/import/actions';
 import {
+  Badge,
+  type BadgeTone,
   btn,
   cardBodyClass,
   cardFooterChromeClass,
   cardHeaderClass,
   cardShellClass,
+  cardTitleClass,
   InfoGrid,
   InfoItem,
 } from '@/lib/ui';
@@ -37,12 +40,14 @@ const outlineButton = btn.outline;
 const dangerOutlineButton = btn.dangerOutline;
 const dangerButton = btn.danger;
 
-const statusChipClasses: Record<string, string> = {
-  pending: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
-  running: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
-  done: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300',
-  failed: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
-  purged: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
+// Import keeps its own labels (Importing/Complete/Removed read better here than
+// the generic task vocabulary), rendered through the shared Badge tones.
+const statusTone: Record<string, BadgeTone> = {
+  pending: 'neutral',
+  running: 'blue',
+  done: 'green',
+  failed: 'red',
+  purged: 'muted',
 };
 
 const statusLabels: Record<string, string> = {
@@ -69,14 +74,12 @@ export function SourceCard({ view }: { view: SourceView }) {
       <div className={cardBodyClass}>
         <div className={cardHeaderClass}>
           <div className="min-w-0">
-            <h3 className="truncate text-[15px] font-semibold tracking-[-0.01em]">{view.source}</h3>
+            <h3 className={`truncate ${cardTitleClass}`}>{view.source}</h3>
             <p className="mt-0.5 text-xs text-muted">{view.updatedLabel}</p>
           </div>
-          <span
-            className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusChipClasses[view.status] ?? statusChipClasses.pending}`}
-          >
+          <Badge tone={statusTone[view.status] ?? 'neutral'}>
             {statusLabels[view.status] ?? 'Queued'}
-          </span>
+          </Badge>
         </div>
 
         <InfoGrid className="sm:grid-cols-3">

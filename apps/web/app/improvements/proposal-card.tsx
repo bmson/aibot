@@ -4,11 +4,13 @@ import { LoaderCircle } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { applyProposalAction, dismissProposalAction } from '@/app/improvements/actions';
 import {
+  Badge,
   btn,
   cardBodyClass,
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
+  cardTitleClass,
   InfoGrid,
   InfoItem,
 } from '@/lib/ui';
@@ -50,14 +52,12 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
       <div className={`${cardBodyClass} flex-1`}>
         <div className={cardHeaderClass}>
           <div className="min-w-0">
-            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-2xs font-semibold tracking-wide text-zinc-600 uppercase dark:bg-zinc-800 dark:text-zinc-400">
+            <Badge tone="neutral" uppercase>
               {kindLabels[proposal.kind] ?? proposal.kind}
-            </span>
-            <h3 className="mt-2 text-[15px] leading-5 font-semibold tracking-[-0.01em]">
-              {proposal.title}
-            </h3>
+            </Badge>
+            <h3 className={`mt-2 ${cardTitleClass}`}>{proposal.title}</h3>
           </div>
-          <span className="text-xs text-muted">{proposal.createdLabel}</span>
+          <span className="shrink-0 text-xs text-muted">{proposal.createdLabel}</span>
         </div>
         <div className="grid min-w-0 gap-3 sm:grid-cols-2">
           {proposal.rationale ? (

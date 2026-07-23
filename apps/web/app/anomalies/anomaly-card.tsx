@@ -4,14 +4,18 @@ import { LoaderCircle } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { dismissAnomalyAction, suspendPolicyAction } from '@/app/anomalies/actions';
 import {
+  Badge,
+  type BadgeTone,
   btn,
   cardBodyClass,
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
+  cardTitleClass,
   InfoGrid,
   InfoItem,
 } from '@/lib/ui';
+import { toolLabel } from '@/lib/views';
 
 export interface AnomalyView {
   id: string;
@@ -31,10 +35,10 @@ const kindLabels: Record<string, string> = {
   off_hours: 'Off-hours',
 };
 
-const kindTone: Record<string, string> = {
-  burst: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
-  frequency: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
-  off_hours: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
+const kindBadgeTone: Record<string, BadgeTone> = {
+  burst: 'red',
+  frequency: 'amber',
+  off_hours: 'blue',
 };
 
 export function AnomalyCard({ anomaly }: { anomaly: AnomalyView }) {
@@ -56,19 +60,13 @@ export function AnomalyCard({ anomaly }: { anomaly: AnomalyView }) {
       <div className={`${cardBodyClass} flex-1`}>
         <div className={cardHeaderClass}>
           <div className="min-w-0">
-            <span
-              className={`rounded-full px-2 py-0.5 text-2xs font-semibold tracking-wide uppercase ${
-                kindTone[anomaly.kind] ??
-                'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
-              }`}
-            >
+            <Badge tone={kindBadgeTone[anomaly.kind] ?? 'neutral'} uppercase>
               {kindLabels[anomaly.kind] ?? anomaly.kind}
-            </span>
-            <h3 className="mt-2 truncate font-mono text-xs font-medium text-strong">
-              {anomaly.toolName}
-            </h3>
+            </Badge>
+            <h3 className={`mt-2 truncate ${cardTitleClass}`}>{toolLabel(anomaly.toolName)}</h3>
+            <p className="mt-0.5 truncate font-mono text-2xs text-muted">{anomaly.toolName}</p>
           </div>
-          <span className="text-xs text-muted">{anomaly.createdLabel}</span>
+          <span className="shrink-0 text-xs text-muted">{anomaly.createdLabel}</span>
         </div>
         <p className="text-[14px] leading-6 text-strong">{anomaly.detail}</p>
         <InfoGrid columns={3}>

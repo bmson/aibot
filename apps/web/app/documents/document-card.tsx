@@ -4,6 +4,8 @@ import { FileText } from 'lucide-react';
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import {
+  Badge,
+  type BadgeTone,
   btn,
   cardBodyClass,
   cardFooterClass,
@@ -29,27 +31,12 @@ export interface DocumentCardView {
   askHref: string;
 }
 
-const STATUS: Record<string, { label: string; className: string }> = {
-  ready: {
-    label: 'Ready',
-    className: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200',
-  },
-  extracting: {
-    label: 'Reading…',
-    className: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200',
-  },
-  pending: {
-    label: 'Queued',
-    className: 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200',
-  },
-  unsupported: {
-    label: 'Unsupported',
-    className: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
-  },
-  failed: {
-    label: 'Failed',
-    className: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200',
-  },
+const STATUS: Record<string, { label: string; tone: BadgeTone }> = {
+  ready: { label: 'Ready', tone: 'green' },
+  extracting: { label: 'Reading…', tone: 'blue' },
+  pending: { label: 'Queued', tone: 'amber' },
+  unsupported: { label: 'Unsupported', tone: 'neutral' },
+  failed: { label: 'Failed', tone: 'red' },
 };
 
 export function DocumentCard({ doc }: { doc: DocumentCardView }) {
@@ -78,11 +65,7 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
               </p>
             </div>
           </div>
-          <span
-            className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-medium ${status?.className ?? ''}`}
-          >
-            {status?.label}
-          </span>
+          <Badge tone={status.tone}>{status.label}</Badge>
         </div>
 
         <InfoGrid className="sm:grid-cols-4">

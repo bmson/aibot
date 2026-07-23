@@ -13,6 +13,7 @@ import {
   setFactPinned,
 } from '@/app/profile/actions';
 import {
+  Badge,
   btnSm,
   cardFooterClass,
   cardShellClass,
@@ -75,34 +76,36 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
         </p>
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {fact.pinned ? (
-            <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-2xs font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-300">
+            <Badge tone="blue" size="xs">
               Pinned
-            </span>
+            </Badge>
           ) : fact.inCard ? (
-            <span
-              className="rounded-full border border-blue-200 px-1.5 py-0.5 text-2xs font-medium text-blue-700 dark:border-blue-900 dark:text-blue-400"
+            <Badge
+              tone="blue"
+              size="xs"
               title="Auto-selected into the compiled owner card (high importance)"
             >
               In profile
-            </span>
+            </Badge>
           ) : null}
           {fact.ownerConfirmed ? (
-            <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-2xs font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+            <Badge tone="green" size="xs">
               Verified
-            </span>
+            </Badge>
           ) : null}
           {!quarantine && !fact.organized ? (
-            <span
-              className="rounded-full bg-violet-100 px-1.5 py-0.5 text-2xs font-medium text-violet-700 dark:bg-violet-950 dark:text-violet-300"
+            <Badge
+              tone="violet"
+              size="xs"
               title="This fact has not been checked for repetition or conflicts yet."
             >
               Cleanup pending
-            </span>
+            </Badge>
           ) : null}
           {!quarantine && fact.importance <= 1 ? (
-            <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+            <Badge tone="neutral" size="xs">
               Minor detail
-            </span>
+            </Badge>
           ) : null}
           {fact.validityLabel ? (
             <span className="text-2xs text-muted">{fact.validityLabel}</span>

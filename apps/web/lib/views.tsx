@@ -250,29 +250,7 @@ export function toPendingApprovalView(
   };
 }
 
-/** Tailwind classes for task/approval status chips, dark-mode friendly. */
-export const statusChipClasses: Record<string, string> = {
-  pending: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
-  running: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
-  waiting_approval: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
-  waiting_event: 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300',
-  waiting_budget: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
-  sleeping: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300',
-  done: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300',
-  failed: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
-  needs_attention: 'bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300',
-  cancelled: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
-  // approval statuses
-  approved: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300',
-  denied: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
-  expired: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
-  // goal statuses ('done' shared with tasks above)
-  active: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
-  paused: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
-  abandoned: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
-};
-
-/** Status → Badge tone. Colours match statusChipClasses exactly (visual no-op). */
+/** Task/approval/goal status → shared Badge tone. */
 const statusTone: Record<string, BadgeTone> = {
   pending: 'neutral',
   running: 'blue',

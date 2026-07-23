@@ -8,7 +8,9 @@ import {
   toggleSkillDeprecatedAction,
 } from '@/app/skills/actions';
 import {
+  Badge,
   btn,
+  CountBadge,
   cardBodyClass,
   cardFooterClass,
   cardHeaderClass,
@@ -110,9 +112,7 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
       <div className="flex items-center justify-between gap-2">
         <h2 className="flex items-baseline gap-2 text-sm font-medium">
           Skills
-          <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-            {skills.length}
-          </span>
+          <CountBadge>{skills.length}</CountBadge>
         </h2>
         {!adding ? (
           <button type="button" onClick={() => setAdding(true)} className={btn.outline}>
@@ -185,13 +185,9 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
                         </p>
                       </div>
                       {s.deprecated ? (
-                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-2xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                          Retired
-                        </span>
+                        <Badge tone="amber">Retired</Badge>
                       ) : (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-2xs font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                          Active
-                        </span>
+                        <Badge tone="green">Active</Badge>
                       )}
                     </div>
                     <section>
