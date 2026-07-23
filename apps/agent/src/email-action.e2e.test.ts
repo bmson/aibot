@@ -262,4 +262,60 @@ describe('email action routing (integration, scripted model)', () => {
     const appr = await db.select().from(approvals).where(eq(approvals.taskId, task.id));
     expect(appr.length).toBeGreaterThan(0);
   });
+
+  // A2: when a forced-action step produces only prose even after its retry (a
+  // provider ignoring toolChoice 'required'), the task must NOT be staged as
+  // done — it parks needs_attention with an honest, retryable message instead of
+  // fabricating success.
+  it('parks needs_attention when a forced action yields only prose after the retry', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'email', trust: 'owner', title: 'stubborn action' })
+      .returning({ id: conversations.id });
+    const conversationId = (conversation as NonNullable<typeof conversation>).id;
+    createdConversationIds.push(conversationId);
+
+    const { task } = await enqueueTask(db, {
+      type: 'email_triage',
+      event: emailEvent(conversationId),
+      maxSteps: 8,
+    });
+    createdTaskIds.push(task.id);
+
+    let stepCalls = 0;
+    const router = {
+      async object() {
+        return { ok: true, modelId: 'fake/model', degraded: false, object: workflowPlan };
+      },
+      async step(): Promise<StepCallOutcome> {
+        // Ignore toolChoice 'required' on every call — never emit a tool.
+        stepCalls += 1;
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: "Here's what I would do to add the event…",
+          toolCalls: [],
+          finishReason: 'stop',
+        };
+      },
+    } as unknown as ModelRouter;
+
+    const outcome = await executeTask(
+      { db, router, dispatcher: new ToolDispatcher(db, registry()) },
+      task.id,
+    );
+
+    expect(outcome.outcome).toBe('needs_attention');
+    // The forced step retried once before giving up.
+    expect(stepCalls).toBeGreaterThanOrEqual(2);
+    const [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(row?.status).toBe('needs_attention');
+    // Nothing ran, and the honest message — not a fabricated "done" — landed.
+    const calls = await db.select().from(toolCalls).where(eq(toolCalls.taskId, task.id));
+    expect(calls).toHaveLength(0);
+    const msgs = await db.select().from(messages).where(eq(messages.taskId, task.id));
+    expect(msgs.some((m) => /stopped rather than pretend/i.test(m.text ?? ''))).toBe(true);
+  });
 });

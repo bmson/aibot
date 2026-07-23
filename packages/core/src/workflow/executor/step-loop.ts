@@ -31,7 +31,12 @@ import {
 } from '../machine.js';
 import { PLANNER_VERSION } from '../planner.js';
 import { isSimulatedApprovalNotice } from '../response-contract.js';
-import { budgetResumeAt, channelContext, isUnattendedGoalSession } from './context-helpers.js';
+import {
+  budgetResumeAt,
+  channelContext,
+  isMissionSessionTask,
+  isUnattendedGoalSession,
+} from './context-helpers.js';
 import {
   SCHEDULE_DIRECTIVE,
   stageFinalResponse,
@@ -223,8 +228,12 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     ]
       .filter(Boolean)
       .join('\n');
+    // A mission work session carries the mission id in its trigger payload
+    // (isMissionSessionTask). Keying off that — rather than "any adhoc child" —
+    // stops unrelated adhoc children (e.g. the D9 known-sender-reply child) from
+    // being offered mission.update, which they can only ever call in error.
     const toolDefs = dispatcher.toolDefs(task.trust as Trust, {
-      isMissionSession: task.type === 'adhoc' && task.parentTaskId !== null,
+      isMissionSession: isMissionSessionTask(task),
     });
     const toolSet = Object.fromEntries(
       toolDefs.map((def) => [
@@ -679,6 +688,35 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
 
       if (!(await checkpointTask(db, lease, state))) return LOST_LEASE;
       continue;
+    }
+
+    // A forced-action step (mustAct) that produced only prose — even after its
+    // one constrained retry above — did NOT do the work it was planned to do.
+    // On an unattended path, staging that prose as `done` is the "zero tool
+    // calls, looks handled, wasn't" bug (A2): the forwarded/planned action
+    // silently no-ops. Park needs_attention with an honest message the owner can
+    // retry instead. chat_turn/sms_turn deliberately keep prose-as-done — the
+    // owner is watching live and the honest message IS the reply. Unattended
+    // goal sessions are handled just below by stageModelFinalResponse, which
+    // already converts a no-verified-evidence final to needs_attention.
+    if (
+      mustAct &&
+      !isUnattendedGoalSession(task) &&
+      task.type !== 'chat_turn' &&
+      task.type !== 'sms_turn'
+    ) {
+      const honest =
+        "I planned to act on this but couldn't produce a concrete action, so I've stopped rather than pretend it's done. Retry it from Activity, or tell me exactly what to do.";
+      rc.window.push({ role: 'assistant', content: honest } as ModelMessage);
+      // stageFinalResponse delivers the honest text through the task's channel
+      // (email reply / Notifications) and, being a needs_attention final, stamps
+      // it notified via the Phase-1/2 path — so no separate notify is needed.
+      return stageFinalResponse(deps, lease, state, rc.window, {
+        text: honest,
+        progress: 'forced action produced no tool call',
+        terminalStatus: 'needs_attention',
+        outcome: 'needs_attention',
+      });
     }
 
     // no tool calls → final answer

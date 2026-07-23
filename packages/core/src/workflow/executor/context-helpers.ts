@@ -15,6 +15,18 @@ export function isKnownSenderReplyTask(task: Pick<TaskRow, 'trigger'>): boolean 
 }
 
 /**
+ * A mission work session, identified by the mission id its trigger carries
+ * (missions.ts stamps it). Only such a session may see the mission.update tool;
+ * keying off this — rather than "any adhoc child" — stops unrelated adhoc
+ * children (e.g. the D9 known-sender-reply child) from being offered a tool they
+ * can only ever call in error.
+ */
+export function isMissionSessionTask(task: Pick<TaskRow, 'trigger'>): boolean {
+  const trigger = task.trigger as { payload?: { missionId?: unknown } } | null;
+  return typeof trigger?.payload?.missionId === 'string';
+}
+
+/**
  * A goal's automatic work session runs with nobody watching it. A run that
  * ends without a single verified tool result therefore must not complete as
  * 'done': the owner sees a green task, the goal keeps its old progress line,
