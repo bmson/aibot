@@ -50,49 +50,63 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
     });
   };
 
+  // Same card language as pending approvals: an amber-banded object the
+  // assistant placed in the conversation, waiting on the owner.
   return (
-    <section className="mt-3 ml-3 min-w-0 max-w-full border-l-2 border-amber-400 py-1 pl-4 break-words text-strong [overflow-wrap:anywhere] dark:border-amber-600">
-      <p className="flex items-center gap-1.5 text-2xs font-semibold tracking-[0.1em] text-amber-700 uppercase dark:text-amber-300">
-        <CircleDollarSign className="size-3.5" aria-hidden="true" />
-        Spending permission needed
-      </p>
-      <p className="mt-1 text-sm font-medium">
-        Raise this task’s cap from ${part.currentBudgetUsd.toFixed(2)} to $
-        {part.proposedBudgetUsd.toFixed(2)}?
-      </p>
-      <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
-        ${part.spentUsd.toFixed(4)} has been spent. Approval applies only to this task.
-      </p>
-      {status === 'approved' ? (
-        <p className="mt-2 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-          Approved — work is resuming.
+    <section className="min-w-0 max-w-3xl overflow-hidden rounded-xl bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.05)] ring-1 ring-amber-300/80 sm:ml-9 dark:ring-amber-700/70">
+      <div className="flex items-center gap-1.5 border-b border-amber-200/70 bg-amber-50/80 px-4 py-2.5 dark:border-amber-900/60 dark:bg-amber-950/40">
+        <CircleDollarSign
+          className="size-3.5 shrink-0 text-amber-800 dark:text-amber-300"
+          aria-hidden="true"
+        />
+        <p className="text-2xs font-semibold tracking-[0.1em] text-amber-800 uppercase dark:text-amber-300">
+          Spending permission needed
         </p>
-      ) : status === 'denied' ? (
-        <p className="mt-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
-          Declined — the task was cancelled.
+      </div>
+      <div className="min-w-0 break-words px-4 py-3 text-strong [overflow-wrap:anywhere]">
+        <p className="text-sm font-medium">
+          Raise this task’s cap from ${part.currentBudgetUsd.toFixed(2)} to $
+          {part.proposedBudgetUsd.toFixed(2)}?
         </p>
-      ) : status === 'missing' ? (
-        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-          This request is no longer available.
+        <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+          ${part.spentUsd.toFixed(4)} has been spent. Approval applies only to this task.
         </p>
-      ) : (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <button type="button" disabled={pending} onClick={approve} className={btn.success}>
-            {pending ? (
-              <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-            ) : null}
-            {pending ? 'Working…' : `Approve $${part.proposedBudgetUsd.toFixed(2)}`}
-          </button>
-          <button type="button" disabled={pending} onClick={decline} className={btn.dangerOutline}>
-            Decline
-          </button>
-          <Link href={`/tasks/${part.taskId}`} className={btn.outline}>
-            Review task
-            <ArrowUpRight className="size-3.5" aria-hidden="true" />
-          </Link>
-        </div>
-      )}
-      {error ? <p className="mt-2 text-xs text-red-700 dark:text-red-300">{error}</p> : null}
+        {status === 'approved' ? (
+          <p className="mt-2 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+            Approved — work is resuming.
+          </p>
+        ) : status === 'denied' ? (
+          <p className="mt-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
+            Declined — the task was cancelled.
+          </p>
+        ) : status === 'missing' ? (
+          <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+            This request is no longer available.
+          </p>
+        ) : (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button type="button" disabled={pending} onClick={approve} className={btn.success}>
+              {pending ? (
+                <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+              ) : null}
+              {pending ? 'Working…' : `Approve $${part.proposedBudgetUsd.toFixed(2)}`}
+            </button>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={decline}
+              className={btn.dangerOutline}
+            >
+              Decline
+            </button>
+            <Link href={`/tasks/${part.taskId}`} className={btn.outline}>
+              Review task
+              <ArrowUpRight className="size-3.5" aria-hidden="true" />
+            </Link>
+          </div>
+        )}
+        {error ? <p className="mt-2 text-xs text-red-700 dark:text-red-300">{error}</p> : null}
+      </div>
     </section>
   );
 }

@@ -14,13 +14,13 @@ const btnXs = 'h-8 rounded-lg px-3 text-xs';
 
 const btnVariants = {
   outline:
-    'border border-edge text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800',
+    'border border-edge text-zinc-700 hover:bg-sunken/70 hover:text-strong active:bg-sunken dark:text-zinc-300',
   dangerOutline:
-    'border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40',
+    'border border-red-300 text-red-700 hover:bg-red-50 active:bg-red-100 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40 dark:active:bg-red-950/70',
   primary:
-    'bg-accent text-white shadow-sm hover:bg-accent-hover hover:shadow-[0_5px_14px_rgb(91_92_226/0.22)]',
-  danger: 'bg-red-600 text-white hover:bg-red-700',
-  success: 'bg-emerald-600 text-white hover:bg-emerald-700',
+    'bg-accent text-white shadow-sm hover:bg-accent-hover hover:shadow-[0_5px_14px_rgb(91_92_226/0.22)] active:shadow-none',
+  danger: 'bg-red-600 text-white hover:bg-red-700 active:bg-red-800',
+  success: 'bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800',
 } as const;
 
 /** Default button scale — comfortable for primary actions and card controls. */
@@ -45,10 +45,14 @@ export const btnSm = {
 export const countBadgeClass =
   'rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 whitespace-nowrap dark:bg-zinc-800 dark:text-zinc-400';
 
-/** A loading placeholder block — used by route-level loading.tsx skeletons. */
+/** A loading placeholder block — used by route-level loading.tsx skeletons.
+ *  A light sheen sweeps across it while motion is allowed; reduced-motion
+ *  readers get the plain static block. */
 export function Skeleton({ className = '' }: { className?: string }) {
   return (
-    <div className={`animate-pulse rounded-md bg-zinc-200/70 dark:bg-zinc-800/70 ${className}`} />
+    <div
+      className={`relative overflow-hidden rounded-md bg-zinc-200/70 after:absolute after:inset-0 after:-translate-x-full after:bg-gradient-to-r after:from-transparent after:via-white/50 after:to-transparent motion-safe:after:animate-[skeleton-sheen_1.5s_ease-in-out_infinite] dark:bg-zinc-800/70 dark:after:via-white/10 ${className}`}
+    />
   );
 }
 
@@ -80,6 +84,14 @@ export const cardTitleClass = 'text-[15px] leading-6 font-semibold tracking-[-0.
 /** Lift-on-hover for cards that are a link or have one dominant action. */
 export const cardInteractiveClass =
   'motion-safe:transition-[box-shadow,transform] hover:-translate-y-0.5 hover:shadow-[0_10px_30px_rgb(23_25_35/0.08)]';
+
+/**
+ * Timeline event cards (chat): approvals, budget asks, system checks. A
+ * wrapped, outlined object distinct from speech bubbles — process moments
+ * should read as things the assistant placed in the conversation, not prose.
+ */
+export const eventCardClass =
+  'min-w-0 max-w-full overflow-hidden rounded-xl bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.05)] ring-1 ring-edge/70';
 
 /** Two grid recipes, so pages stop inventing their own breakpoints. */
 export const cardGridClass = 'grid min-w-0 items-stretch gap-4 lg:grid-cols-2';
@@ -312,4 +324,4 @@ export const segmentedControlClass =
 
 export const segmentedItemClass = `mobile-touch-target inline-flex h-8 items-center justify-center rounded-lg px-3 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-raised hover:text-strong ${focusRing}`;
 
-export const iconButtonClass = `mobile-touch-target inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-edge bg-raised text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong ${focusRing}`;
+export const iconButtonClass = `mobile-touch-target inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-edge bg-raised text-muted motion-safe:transition-[background-color,color,transform] hover:bg-sunken hover:text-strong active:bg-sunken/80 motion-safe:active:translate-y-px ${focusRing}`;

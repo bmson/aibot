@@ -140,11 +140,45 @@
 @keyframes message-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(5px);
   }
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+/* Route content eases in on navigation — template.tsx remounts per route, so
+   this runs once per page change. Behind motion-safe: reduced-motion users
+   get an instant swap. */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Loading placeholders: a light sheen sweeps across the static block
+   (replaces the old opacity pulse — calmer, reads as "content arriving"). */
+@keyframes skeleton-sheen {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Hand-drawn accent strokes (chat empty state) draw themselves in.
+   Pair with [stroke-dasharray:N] [stroke-dashoffset:N] on the path;
+   reduced-motion users get the finished stroke via motion-reduce. */
+@keyframes draw-in {
+  to {
+    stroke-dashoffset: 0;
   }
 }
 

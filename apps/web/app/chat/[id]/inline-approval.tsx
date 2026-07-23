@@ -69,7 +69,7 @@ export function ApprovalRow({
   }
 
   return (
-    <div className="py-1">
+    <div className="py-2">
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere]">
           {part.summary}

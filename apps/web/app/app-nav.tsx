@@ -139,14 +139,18 @@ export function AppNav({
           href={item.href}
           data-mobile-touch-target="true"
           aria-current={active ? 'page' : undefined}
-          className={`mobile-touch-target flex items-center justify-between rounded-lg px-3 py-2 text-sm motion-safe:transition-colors ${focusRing} ${
+          className={`mobile-touch-target relative flex items-center justify-between rounded-lg px-3 py-2 text-sm motion-safe:transition-colors ${focusRing} ${
+            active
+              ? 'before:absolute before:top-1/2 before:-left-3 before:h-4 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent'
+              : ''
+          } ${
             tone === 'rail'
               ? active
                 ? 'bg-white/12 font-medium text-white shadow-sm'
-                : 'text-zinc-300 hover:bg-white/7 hover:text-white'
+                : 'text-zinc-300 hover:bg-white/7 hover:text-white active:bg-white/10'
               : active
                 ? 'bg-zinc-900 font-medium text-white'
-                : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100'
+                : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 active:bg-zinc-200/70 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100 dark:active:bg-zinc-800'
           }`}
         >
           <span className="flex min-w-0 items-center gap-2.5">

@@ -23,7 +23,7 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { AvatarMark } from '@/app/brand-mark';
 import { hasContractNoticePart, isApprovalProseNotice, isContractNotice } from '@/lib/chat-notices';
-import { focusRing } from '@/lib/ui';
+import { eventCardClass, focusRing } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { toolLabel } from '@/lib/views';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
@@ -53,6 +53,15 @@ interface ChatClientProps {
 }
 
 const ASYNC_ACK_TEXT = 'Got it — I’m working on this now. I’ll post the result here.';
+
+/**
+ * Composer slash commands. Typing "/" lists them so nobody has to know the
+ * vocabulary up front; picking one completes it into the composer, where the
+ * command's own palette (e.g. /model) takes over.
+ */
+const SLASH_COMMANDS = [
+  { command: '/model', hint: 'Switch which model answers this chat', icon: Sparkles },
+] as const;
 
 interface RecallSource {
   date: string;
@@ -106,13 +115,15 @@ function timeLabel(date: Date): string {
 }
 
 function DayDivider({ label }: { label: string }) {
+  // Generous vertical air: dividers are chapter breaks, not rules on a form.
+  // The hairlines fade toward the edges so the floating chip carries the date.
   return (
-    <div aria-hidden="true" className="flex items-center gap-3 py-1">
-      <span className="h-px flex-1 bg-edge" />
-      <span className="rounded-full bg-sunken/70 px-2.5 py-0.5 text-2xs font-medium text-muted">
+    <div aria-hidden="true" className="flex items-center gap-4 pt-7 pb-3 [div:first-child>&]:pt-1">
+      <span className="h-px flex-1 bg-gradient-to-r from-transparent to-edge" />
+      <span className="rounded-full bg-raised px-3 py-1 text-2xs font-semibold tracking-[0.08em] text-muted uppercase shadow-[0_1px_2px_rgb(23_25_35/0.05)] ring-1 ring-edge/70">
         {label}
       </span>
-      <span className="h-px flex-1 bg-edge" />
+      <span className="h-px flex-1 bg-gradient-to-l from-transparent to-edge" />
     </div>
   );
 }
@@ -162,14 +173,20 @@ function PresenceRow({
  */
 function ContractNotice({ text }: { text: string }) {
   return (
-    <div className="ml-3 min-w-0 max-w-3xl border-l-2 border-zinc-300 py-1 pl-4 break-words [overflow-wrap:anywhere] dark:border-zinc-700">
-      <div>
-        <p className="flex items-center gap-1.5 text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
-          <ShieldCheck className="size-3.5 shrink-0" aria-hidden="true" />
+    <div className={`${eventCardClass} max-w-3xl sm:ml-9`}>
+      <div className="flex items-center gap-2.5 border-b border-edge/60 bg-sunken/40 px-4 py-2">
+        <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-sunken text-muted">
+          <ShieldCheck className="size-3.5" aria-hidden="true" />
+        </span>
+        <p className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
           System check
         </p>
-        <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-300">{text}</p>
-        <details className="mt-1">
+      </div>
+      <div className="px-4 py-3">
+        <p className="break-words text-[13px] leading-5 text-zinc-600 [overflow-wrap:anywhere] dark:text-zinc-300">
+          {text}
+        </p>
+        <details className="mt-2">
           <summary className="cursor-pointer text-2xs text-muted select-none">
             Why am I seeing this?
           </summary>
@@ -195,22 +212,40 @@ function AssistantUpdate({ text, sources }: { text: string; sources: RecallSourc
   const Icon = attention ? TriangleAlert : reflection ? MoonStar : Sparkles;
   const label = attention ? 'Needs attention' : reflection ? 'Quiet update' : 'Update';
   const tone = attention
-    ? 'border-amber-400 text-amber-700 dark:border-amber-700 dark:text-amber-300'
+    ? {
+        edge: 'border-l-amber-400 dark:border-l-amber-600',
+        chip: 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300',
+        label: 'text-amber-700 dark:text-amber-300',
+      }
     : reflection
-      ? 'border-violet-400 text-violet-700 dark:border-violet-700 dark:text-violet-300'
-      : 'border-accent/60 text-accent';
+      ? {
+          edge: 'border-l-violet-400 dark:border-l-violet-600',
+          chip: 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300',
+          label: 'text-violet-700 dark:text-violet-300',
+        }
+      : {
+          edge: 'border-l-accent/70',
+          chip: 'bg-accent/10 text-accent',
+          label: 'text-accent',
+        };
 
   return (
-    <section
-      className={`relative ml-3 min-w-0 max-w-3xl border-l-2 py-1 pl-5 break-words [overflow-wrap:anywhere] ${tone}`}
-    >
-      <span className="absolute top-0.5 -left-[0.82rem] inline-flex size-6 items-center justify-center rounded-full bg-surface">
-        <Icon className="size-3.5" aria-hidden="true" />
-      </span>
-      <p className="mb-1.5 text-2xs font-semibold tracking-[0.1em] uppercase">{label}</p>
-      <RecallNote sources={sources} />
-      <div className="text-[14px] leading-6 text-strong">
-        <MessageMarkdown text={text} />
+    <section className={`${eventCardClass} max-w-3xl border-l-[3px] sm:ml-9 ${tone.edge}`}>
+      <div className="min-w-0 px-4 py-3">
+        <div className="mb-2 flex items-center gap-2.5">
+          <span
+            className={`inline-flex size-6 shrink-0 items-center justify-center rounded-md ${tone.chip}`}
+          >
+            <Icon className="size-3.5" aria-hidden="true" />
+          </span>
+          <p className={`text-2xs font-semibold tracking-[0.1em] uppercase ${tone.label}`}>
+            {label}
+          </p>
+        </div>
+        <RecallNote sources={sources} />
+        <div className="break-words text-[14px] leading-6 text-strong [overflow-wrap:anywhere]">
+          <MessageMarkdown text={text} />
+        </div>
       </div>
     </section>
   );
@@ -224,34 +259,38 @@ function ActivityTrail({
 }) {
   if (activity.length === 0) return null;
   return (
-    <section className="ml-3 border-l border-edge py-1 pl-5" aria-label="AI Bot activity">
+    <section
+      className="min-w-0 max-w-full rounded-xl bg-sunken/50 px-4 py-3 ring-1 ring-edge/50"
+      aria-label="AI Bot activity"
+    >
       <p className="mb-2 text-2xs font-semibold tracking-[0.1em] text-muted uppercase">
         Work trail
       </p>
       <ol className="space-y-2">
         {activity.map((item) => (
-          <li
-            key={`${item.step}-${item.toolName}`}
-            className="relative flex min-w-0 items-center gap-2"
-          >
-            <span className="absolute -left-[1.56rem] inline-flex size-4 items-center justify-center rounded-full bg-surface">
-              {item.status === 'succeeded' ? (
-                <CircleCheck
-                  className="size-3.5 text-emerald-600 dark:text-emerald-400"
-                  aria-hidden="true"
-                />
-              ) : item.status === 'failed' || item.status === 'denied' ? (
-                <CircleX className="size-3.5 text-red-500 dark:text-red-400" aria-hidden="true" />
-              ) : item.status === 'awaiting_approval' ? (
-                <Hand className="size-3.5 text-amber-600 dark:text-amber-400" aria-hidden="true" />
-              ) : (
-                <Loader2
-                  className="size-3.5 text-accent motion-safe:animate-spin"
-                  aria-hidden="true"
-                />
-              )}
-            </span>
-            <span className="min-w-0 break-words text-[13px] text-strong [overflow-wrap:anywhere]">
+          <li key={`${item.step}-${item.toolName}`} className="flex min-w-0 items-center gap-2.5">
+            {item.status === 'succeeded' ? (
+              <CircleCheck
+                className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+                aria-hidden="true"
+              />
+            ) : item.status === 'failed' || item.status === 'denied' ? (
+              <CircleX
+                className="size-3.5 shrink-0 text-red-500 dark:text-red-400"
+                aria-hidden="true"
+              />
+            ) : item.status === 'awaiting_approval' ? (
+              <Hand
+                className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
+                aria-hidden="true"
+              />
+            ) : (
+              <Loader2
+                className="size-3.5 shrink-0 text-accent motion-safe:animate-spin"
+                aria-hidden="true"
+              />
+            )}
+            <span className="min-w-0 flex-1 break-words text-[13px] text-strong [overflow-wrap:anywhere]">
               {toolLabel(item.toolName)}
             </span>
             <span className="shrink-0 text-2xs text-muted">
@@ -575,6 +614,26 @@ export function ChatClient({
       ? 'Auto'
       : (models.find((model) => model.id === selectedModel)?.label ?? selectedModel);
 
+  // The "/" affordance: a bare slash token lists the available commands, so
+  // nobody has to already know "/model". Once the token completes into a real
+  // command, that command's own palette takes over (modelCommandOpen above).
+  const slashToken =
+    /^\/\S*$/.test(commandInput) && !modelCommandOpen ? commandInput.slice(1).toLowerCase() : null;
+  const commandMatches =
+    slashToken !== null
+      ? SLASH_COMMANDS.filter((entry) => entry.command.slice(1).startsWith(slashToken))
+      : [];
+  const commandPaletteOpen = commandMatches.length > 0;
+  const [commandHighlight, setCommandHighlight] = useState(0);
+  // Clamp instead of resetting via effect — the list is tiny and refilters
+  // on every keystroke, so an out-of-range cursor just snaps to the end.
+  const safeCommandHighlight = Math.min(commandHighlight, Math.max(0, commandMatches.length - 1));
+
+  const completeCommand = (command: string) => {
+    setInput(command);
+    textareaRef.current?.focus();
+  };
+
   // Opening the palette (or refiltering it) lands the cursor on the current
   // model, or the top match when it's filtered out.
   useEffect(() => {
@@ -632,6 +691,7 @@ export function ChatClient({
     if (!text || busy) return;
     // Slash commands are local composer controls, never conversation messages.
     if (/^\/model(?:\s.*)?$/i.test(text)) return;
+    if (commandPaletteOpen) return;
     stickToBottomRef.current = true;
     setInput('');
     setLiveRecall(null);
@@ -711,7 +771,7 @@ export function ChatClient({
           setAtBottom(bottom);
           if (bottom) setUnseenCount(0);
         }}
-        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto py-5"
+        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto py-6 sm:py-8"
       >
         {messages.length === 0 ? (
           <div className="mx-auto mt-8 flex max-w-xl flex-col items-center text-center sm:mt-14">
@@ -721,6 +781,18 @@ export function ChatClient({
             <p className="mt-4 font-display text-2xl font-semibold tracking-[-0.035em] text-strong">
               What should we move forward?
             </p>
+            {/* A small hand-drawn stroke that sketches itself in under the
+                greeting — the page's one flourish. Static for reduced motion. */}
+            <svg aria-hidden="true" viewBox="0 0 140 10" fill="none" className="mt-2 h-2.5 w-36">
+              <path
+                d="M3 7 C 28 3, 55 8.5, 82 5 S 125 3.5, 137 5.5"
+                stroke="var(--accent)"
+                strokeOpacity="0.65"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                className="[stroke-dasharray:160] [stroke-dashoffset:160] motion-safe:animate-[draw-in_700ms_ease-out_250ms_forwards] motion-reduce:[stroke-dashoffset:0]"
+              />
+            </svg>
             <p className="mt-2 max-w-md text-[15px] leading-6 text-muted">
               Start with an outcome. AI Bot can research, plan, draft, schedule, and keep following
               up when the work takes time.
@@ -755,7 +827,7 @@ export function ChatClient({
                       void sendMessage({ text: suggestion.text });
                     }}
                     style={{ animationDelay: `${index * 60}ms` }}
-                    className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left shadow-[0_1px_2px_rgb(23_25_35/0.06)] motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-transform hover:-translate-y-0.5 disabled:opacity-60 ${focusRing}`}
+                    className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.10)] active:translate-y-0 disabled:opacity-60 ${focusRing}`}
                   >
                     <SuggestionIcon className="size-4 text-accent" aria-hidden="true" />
                     <span className="mt-3 text-[13px] font-medium text-strong">
@@ -823,8 +895,8 @@ export function ChatClient({
               return (
                 <div
                   key={message.id}
-                  className={`flex min-w-0 flex-col gap-2 first:mt-0 ${startsRun ? 'mt-5' : 'mt-1.5'} ${
-                    isNewMessage ? 'motion-safe:animate-[message-in_200ms_ease-out]' : ''
+                  className={`flex min-w-0 flex-col gap-2 first:mt-0 ${startsRun ? 'mt-7' : 'mt-2'} ${
+                    isNewMessage ? 'motion-safe:animate-[message-in_220ms_ease-out]' : ''
                   }`}
                 >
                   {showDivider && date ? <DayDivider label={dayLabel(date, new Date())} /> : null}
@@ -841,26 +913,30 @@ export function ChatClient({
                       {message.role === 'assistant' ? (
                         <div className="flex w-full max-w-3xl items-start gap-3">
                           {startsRun ? (
-                            <AvatarMark name={agentName} size="sm" />
+                            <AvatarMark name={agentName} size="sm" className="mt-1.5" />
                           ) : (
                             <span aria-hidden="true" className="w-6 shrink-0" />
                           )}
-                          <div
-                            className={`min-w-0 flex-1 pt-0.5 text-[15px] leading-6 ${
-                              streamingCaret ? 'chat-caret' : ''
-                            }`}
-                          >
-                            <RecallNote sources={recallSources} />
-                            {visibleTextParts.map((part, index) => (
-                              <MessageMarkdown
-                                key={`${message.id}-${index.toString()}`}
-                                text={part.text}
-                              />
-                            ))}
+                          {/* The reply is speech, so it gets a bubble: raised
+                              and outlined against the canvas, sized to fit. */}
+                          <div className="min-w-0 flex-1">
+                            <div
+                              className={`w-fit min-w-0 max-w-full rounded-2xl bg-raised px-4 py-3 text-[15px] leading-6 shadow-[0_1px_2px_rgb(23_25_35/0.05)] ring-1 ring-edge/60 ${
+                                startsRun ? 'rounded-tl-md' : ''
+                              } ${streamingCaret ? 'chat-caret' : ''}`}
+                            >
+                              <RecallNote sources={recallSources} />
+                              {visibleTextParts.map((part, index) => (
+                                <MessageMarkdown
+                                  key={`${message.id}-${index.toString()}`}
+                                  text={part.text}
+                                />
+                              ))}
+                            </div>
                           </div>
                         </div>
                       ) : (
-                        <div className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-accent px-3.5 py-2.5 text-[14px] leading-5 text-white shadow-sm sm:max-w-[76%]">
+                        <div className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-accent px-4 py-2.5 text-[14px] leading-5 text-white shadow-sm sm:max-w-[76%]">
                           {visibleTextParts.map((part, index) => (
                             <p
                               key={`${message.id}-${index.toString()}`}
@@ -881,7 +957,7 @@ export function ChatClient({
                     <p
                       title={date.toLocaleString()}
                       className={`text-2xs text-muted ${
-                        message.role === 'user' ? 'self-end' : 'self-start'
+                        message.role === 'user' ? 'self-end' : 'ml-9 self-start'
                       }`}
                     >
                       {timeLabel(date)}
@@ -945,6 +1021,49 @@ export function ChatClient({
               ) : null}
             </button>
           </div>
+        ) : null}
+        {commandPaletteOpen ? (
+          <section
+            aria-label="Commands"
+            className="mb-2 min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_6px_24px_rgb(23_25_35/0.08)] ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
+          >
+            <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-2.5">
+              <p className="text-[13px] font-semibold text-strong">Commands</p>
+              <span className="hidden shrink-0 text-2xs text-muted sm:block">
+                ↑↓ choose · Enter complete · Esc dismiss
+              </span>
+            </div>
+            <div id="command-listbox" role="listbox" aria-label="Commands" className="p-1.5">
+              {commandMatches.map((entry, index) => {
+                const highlighted = index === safeCommandHighlight;
+                const EntryIcon = entry.icon;
+                return (
+                  <button
+                    key={entry.command}
+                    id={`command-option-${index}`}
+                    type="button"
+                    role="option"
+                    aria-selected={highlighted}
+                    onMouseMove={() => setCommandHighlight(index)}
+                    onClick={() => completeCommand(entry.command)}
+                    className={`mobile-touch-target flex min-h-11 w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2 text-left motion-safe:transition-colors ${focusRing} ${
+                      highlighted ? 'bg-sunken text-strong' : 'text-strong hover:bg-sunken'
+                    }`}
+                  >
+                    <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+                      <EntryIcon className="size-3.5" aria-hidden="true" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-mono text-[13px] font-medium">
+                        {entry.command}
+                      </span>
+                      <span className="block truncate text-2xs text-muted">{entry.hint}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
         ) : null}
         {modelCommandOpen ? (
           <section
@@ -1025,13 +1144,25 @@ export function ChatClient({
         ) : null}
         <div
           data-testid="chat-composer-surface"
-          className="min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_6px_24px_rgb(23_25_35/0.08)] ring-1 ring-edge"
+          className="min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_6px_24px_rgb(23_25_35/0.08)] ring-1 ring-edge motion-safe:transition-shadow focus-within:shadow-[0_10px_32px_rgb(91_92_226/0.12)] focus-within:ring-accent/40"
         >
           <textarea
             ref={textareaRef}
             aria-label="Message"
-            aria-controls={modelCommandOpen ? 'model-listbox' : undefined}
-            aria-activedescendant={modelCommandOpen ? `model-option-${modelHighlight}` : undefined}
+            aria-controls={
+              modelCommandOpen
+                ? 'model-listbox'
+                : commandPaletteOpen
+                  ? 'command-listbox'
+                  : undefined
+            }
+            aria-activedescendant={
+              modelCommandOpen
+                ? `model-option-${modelHighlight}`
+                : commandPaletteOpen
+                  ? `command-option-${safeCommandHighlight}`
+                  : undefined
+            }
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
@@ -1063,12 +1194,36 @@ export function ChatClient({
                 }
                 return;
               }
+              // The "/" palette: arrows move the cursor, Enter or Tab complete
+              // the highlighted command, Escape dismisses.
+              if (commandPaletteOpen) {
+                if (event.key === 'ArrowDown') {
+                  event.preventDefault();
+                  setCommandHighlight((h) => (h + 1) % commandMatches.length);
+                } else if (event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  setCommandHighlight(
+                    (h) => (h - 1 + commandMatches.length) % commandMatches.length,
+                  );
+                } else if (
+                  event.key === 'Tab' ||
+                  (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing)
+                ) {
+                  event.preventDefault();
+                  const choice = commandMatches[safeCommandHighlight];
+                  if (choice) completeCommand(choice.command);
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setInput('');
+                }
+                return;
+              }
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 formRef.current?.requestSubmit();
               }
             }}
-            placeholder="Ask anything… Type /model to switch models"
+            placeholder="Ask anything… type / for commands"
             rows={1}
             className="block max-h-40 min-h-12 w-full min-w-0 resize-none border-0 bg-transparent px-4 pt-3 pb-2 text-base outline-none placeholder:text-muted/70 sm:text-sm"
           />
@@ -1116,7 +1271,7 @@ export function ChatClient({
                   type="button"
                   onClick={() => stop()}
                   title="Stop generating"
-                  className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-edge bg-raised px-4 text-sm font-medium text-strong motion-safe:transition-colors hover:bg-sunken ${focusRing}`}
+                  className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-edge bg-raised px-4 text-sm font-medium text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
                 >
                   <Square className="size-3 fill-current" aria-hidden="true" />
                   Stop
@@ -1124,11 +1279,15 @@ export function ChatClient({
               ) : (
                 <button
                   type="submit"
-                  disabled={busy || input.trim() === '' || modelCommandOpen}
-                  aria-label="Send"
-                  className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-accent text-white shadow-sm motion-safe:transition-colors hover:bg-accent-hover disabled:opacity-50 ${focusRing}`}
+                  disabled={busy || input.trim() === '' || modelCommandOpen || commandPaletteOpen}
+                  aria-label={asyncTurn ? 'Working on your request' : 'Send'}
+                  className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-accent text-white shadow-sm motion-safe:transition-[transform,background-color,box-shadow] hover:bg-accent-hover hover:shadow-[0_5px_14px_rgb(91_92_226/0.35)] motion-safe:hover:scale-105 motion-safe:active:scale-95 disabled:opacity-50 disabled:shadow-sm motion-safe:disabled:hover:scale-100 ${focusRing}`}
                 >
-                  <ArrowUp className="size-4" aria-hidden="true" />
+                  {asyncTurn ? (
+                    <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+                  ) : (
+                    <ArrowUp className="size-4" aria-hidden="true" />
+                  )}
                 </button>
               )}
             </div>
@@ -1137,7 +1296,9 @@ export function ChatClient({
         <span aria-live="polite" className="sr-only">
           {modelCommandOpen && modelOptions[modelHighlight]
             ? `${modelOptions[modelHighlight].label}, ${modelOptions[modelHighlight].detail}`
-            : ''}
+            : commandPaletteOpen && commandMatches[safeCommandHighlight]
+              ? `${commandMatches[safeCommandHighlight].command}, ${commandMatches[safeCommandHighlight].hint}`
+              : ''}
         </span>
         {fallbackNote ? (
           <p className="px-1 pt-2 pb-1 text-right text-2xs text-muted">{fallbackNote}</p>

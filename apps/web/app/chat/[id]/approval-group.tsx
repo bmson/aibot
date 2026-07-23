@@ -56,8 +56,9 @@ export function ApprovalGroup({ parts }: { parts: InlineApprovalPart[] }) {
   };
 
   if (allSettled) {
+    // Resolved ceremony collapses into a quiet receipt strip.
     return (
-      <div className="ml-3 min-w-0 max-w-full border-l-2 border-edge py-1 pl-4">
+      <div className="min-w-0 max-w-3xl rounded-xl bg-sunken/45 px-4 py-2 ring-1 ring-edge/50 sm:ml-9">
         {parts.map((part) => (
           <ApprovalRow
             key={part.approvalId}
@@ -72,18 +73,17 @@ export function ApprovalGroup({ parts }: { parts: InlineApprovalPart[] }) {
     );
   }
 
+  // A decision the assistant placed in the conversation: a real card with an
+  // amber header band, not loose text on the timeline.
   return (
-    <section className="ml-3 min-w-0 max-w-full border-l-2 border-amber-400 py-1 pl-4 dark:border-amber-600">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="flex items-center gap-1.5 text-2xs font-semibold tracking-[0.1em] text-amber-700 uppercase dark:text-amber-300">
-            <Hand className="size-3.5" aria-hidden="true" />
-            {pendingParts.length > 1
-              ? `${pendingParts.length} decisions waiting`
-              : 'Your decision is needed'}
-          </p>
-          <p className="mt-1 text-xs text-muted">AI Bot paused here before taking action.</p>
-        </div>
+    <section className="min-w-0 max-w-3xl overflow-hidden rounded-xl bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.05)] ring-1 ring-amber-300/80 sm:ml-9 dark:ring-amber-700/70">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200/70 bg-amber-50/80 px-4 py-2.5 dark:border-amber-900/60 dark:bg-amber-950/40">
+        <p className="flex min-w-0 items-center gap-1.5 text-2xs font-semibold tracking-[0.1em] text-amber-800 uppercase dark:text-amber-300">
+          <Hand className="size-3.5 shrink-0" aria-hidden="true" />
+          {pendingParts.length > 1
+            ? `${pendingParts.length} decisions waiting`
+            : 'Your decision is needed'}
+        </p>
         <span className="flex items-center gap-2">
           {pendingParts.length > 1 ? (
             <button type="button" disabled={busy} onClick={approveAll} className={btnSm.success}>
@@ -99,19 +99,22 @@ export function ApprovalGroup({ parts }: { parts: InlineApprovalPart[] }) {
           </Link>
         </span>
       </div>
-      <div className="mt-3 divide-y divide-edge">
-        {parts.map((part) => (
-          <ApprovalRow
-            key={part.approvalId}
-            part={part}
-            resolution={resolutions[part.approvalId]}
-            busy={busy}
-            detailsOpenByDefault={pendingParts.length === 1 && statusOf(part) === 'pending'}
-            onResolve={resolveOne}
-          />
-        ))}
+      <div className="px-4 pt-2 pb-3">
+        <p className="text-xs text-muted">AI Bot paused here before taking action.</p>
+        <div className="mt-1 divide-y divide-edge/70">
+          {parts.map((part) => (
+            <ApprovalRow
+              key={part.approvalId}
+              part={part}
+              resolution={resolutions[part.approvalId]}
+              busy={busy}
+              detailsOpenByDefault={pendingParts.length === 1 && statusOf(part) === 'pending'}
+              onResolve={resolveOne}
+            />
+          ))}
+        </div>
+        {error ? <p className="mt-2 text-xs text-red-700 dark:text-red-300">{error}</p> : null}
       </div>
-      {error ? <p className="mt-2 text-xs text-red-700 dark:text-red-300">{error}</p> : null}
     </section>
   );
 }
