@@ -2,7 +2,16 @@
 
 import { useState, useTransition } from 'react';
 import { purgeVoiceSamplesAction } from '@/app/profile/actions';
-import { btn, inputClass } from '@/lib/ui';
+import {
+  btn,
+  cardBodyClass,
+  cardFooterClass,
+  cardHeaderClass,
+  cardShellClass,
+  InfoGrid,
+  InfoItem,
+  inputClass,
+} from '@/lib/ui';
 
 /** Plain-serializable view built in page.tsx. */
 export interface VoiceImportView {
@@ -51,82 +60,92 @@ export function VoiceSamplesPanel({
   const purgeable = auto + uploaded;
 
   return (
-    <section className="mt-6 rounded-2xl bg-raised p-5 shadow-[0_1px_2px_rgb(23_25_35/0.06)]">
-      <h2 className="flex items-baseline gap-2 text-[15px] font-semibold">
-        Your writing voice
-        <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-          {total} {total === 1 ? 'sample' : 'samples'}
-        </span>
-      </h2>
-      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-        The assistant mirrors how you write when it drafts messages for you. It already learns a
-        little from the mail you send it; upload a batch of your own sent messages to teach it
-        faster. Only your own words are kept — forwarded and quoted text is skipped.
-      </p>
-      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-        {auto} learned automatically · {uploaded} uploaded
-      </p>
+    <section className={`${cardShellClass} mt-6`}>
+      <div className={cardBodyClass}>
+        <div className={cardHeaderClass}>
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-semibold">Your writing voice</h2>
+            <p className="mt-1 max-w-2xl text-xs leading-5 text-muted">
+              The assistant learns from your own sent messages so its drafts sound more like you.
+              Forwarded and quoted text is skipped.
+            </p>
+          </div>
+          <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+            {total} {total === 1 ? 'sample' : 'samples'}
+          </span>
+        </div>
+        <InfoGrid columns={3}>
+          <InfoItem label="Total">{total}</InfoItem>
+          <InfoItem label="Learned">{auto}</InfoItem>
+          <InfoItem label="Uploaded">{uploaded}</InfoItem>
+        </InfoGrid>
 
-      {/* Upload */}
-      <form
-        action="/api/import/upload"
-        method="post"
-        encType="multipart/form-data"
-        className="mt-3 flex flex-col items-start gap-3"
-      >
-        <input type="hidden" name="voice" value="1" />
-        <div className="flex flex-wrap items-center gap-3">
-          <input
-            type="file"
-            name="file"
-            required
-            accept=".mbox,.txt,.json,.md,text/plain,application/json"
-            className="text-[13px] text-muted file:mr-3 file:h-9 file:rounded-lg file:border file:border-edge file:bg-raised file:px-3 file:text-[13px] file:font-medium file:text-strong hover:file:bg-sunken"
-          />
-          <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
-            Style
-            <select name="register" defaultValue="email_casual" className={inputClass}>
-              {registerOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </label>
+        {/* Upload */}
+        <form
+          action="/api/import/upload"
+          method="post"
+          encType="multipart/form-data"
+          className="grid gap-3 rounded-xl bg-sunken/55 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
+        >
+          <input type="hidden" name="voice" value="1" />
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold text-strong">Add sent messages</p>
+            <div className="mt-2 flex min-w-0 flex-wrap items-center gap-3">
+              <input
+                type="file"
+                name="file"
+                required
+                accept=".mbox,.txt,.json,.md,text/plain,application/json"
+                className="min-w-0 text-[13px] text-muted file:mr-3 file:h-9 file:rounded-lg file:border file:border-edge file:bg-raised file:px-3 file:text-[13px] file:font-medium file:text-strong hover:file:bg-sunken"
+              />
+              <label className="flex items-center gap-1.5 text-xs text-muted">
+                Style
+                <select name="register" defaultValue="email_casual" className={inputClass}>
+                  {registerOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-muted">
+              Gmail Takeout <code>.mbox</code>, plain text, or JSON · up to 25MB
+            </p>
+          </div>
           <button type="submit" className={btn.primary}>
             Upload sent mail
           </button>
-        </div>
-        <p className="text-xs text-zinc-500 dark:text-zinc-500">
-          A Gmail Takeout <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">.mbox</code>{' '}
-          of your Sent mail works well, as does a plain text or JSON export. Up to 25MB.
-        </p>
-      </form>
+        </form>
 
-      {/* In-flight / failed voice imports */}
-      {imports.length > 0 ? (
-        <div className="mt-3 flex flex-col gap-1.5">
-          {imports.map((imp) => (
-            <div
-              key={imp.source}
-              className="flex flex-wrap items-center gap-2 rounded-xl bg-sunken/55 px-3 py-2 text-xs"
-            >
-              <span className="font-medium">{statusLabels[imp.status] ?? imp.status}</span>
-              <span className="text-zinc-500 dark:text-zinc-500">
-                {imp.memoriesSaved} {imp.memoriesSaved === 1 ? 'sample' : 'samples'}
-                {imp.itemsTotal ? ` · ${imp.itemsProcessed}/${imp.itemsTotal} messages` : ''}
-              </span>
-              {imp.error ? (
-                <span className="text-red-600 dark:text-red-400">{imp.error}</span>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
+        {/* In-flight / failed voice imports */}
+        {imports.length > 0 ? (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {imports.map((imp) => (
+              <div key={imp.source} className="rounded-xl bg-sunken/55 px-3 py-2.5 text-xs">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium">{statusLabels[imp.status] ?? imp.status}</span>
+                  <span className="text-muted">
+                    {imp.memoriesSaved} {imp.memoriesSaved === 1 ? 'sample' : 'samples'}
+                  </span>
+                </div>
+                {imp.itemsTotal ? (
+                  <p className="mt-1 text-muted">
+                    {imp.itemsProcessed} of {imp.itemsTotal} messages
+                  </p>
+                ) : null}
+                {imp.error ? (
+                  <p className="mt-1 text-red-600 dark:text-red-400">{imp.error}</p>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
 
       {/* Purge */}
       {purgeable > 0 ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <footer className={cardFooterClass}>
           {confirming ? (
             <>
               <button
@@ -151,7 +170,7 @@ export function VoiceSamplesPanel({
               Clear learned & uploaded samples
             </button>
           )}
-        </div>
+        </footer>
       ) : null}
     </section>
   );

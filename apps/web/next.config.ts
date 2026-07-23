@@ -4,6 +4,9 @@ const nextConfig: NextConfig = {
   transpilePackages: ['@assistant/db', '@assistant/core', '@assistant/tools'],
   // unauthorized() in auth.ts renders app/unauthorized.tsx with a real 401 status.
   experimental: { authInterrupts: true },
+  async redirects() {
+    return [{ source: '/', destination: '/chat', permanent: false }];
+  },
   async headers() {
     return [
       {

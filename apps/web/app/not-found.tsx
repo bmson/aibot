@@ -8,8 +8,8 @@ export default function NotFound() {
       <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
         That page doesn’t exist or has moved.
       </p>
-      <Link href="/" className={`${btn.primary} mt-5`}>
-        Back to home
+      <Link href="/chat" className={`${btn.primary} mt-5`}>
+        Back to chat
       </Link>
     </div>
   );

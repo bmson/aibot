@@ -7,7 +7,17 @@ import { AgentForm } from '@/app/settings/agent-form';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn, Card, CountBadge, EmptyState, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
+import {
+  btn,
+  Card,
+  CountBadge,
+  EmptyState,
+  InfoGrid,
+  InfoItem,
+  PageHeader,
+  PageShell,
+  SectionHeading,
+} from '@/lib/ui';
 import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 
 export const metadata = { title: 'Settings' };
@@ -106,20 +116,27 @@ export default async function SettingsPage() {
         ) : (
           <div className="mt-3 flex flex-col gap-2">
             {directScheduleRows.map((s) => (
-              <Card key={s.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+              <Card
+                key={s.id}
+                className="grid min-w-0 gap-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+              >
                 <div className="min-w-0">
-                  <p className="flex items-center gap-2 text-sm font-medium">
+                  <p className="flex flex-wrap items-center gap-2 text-[15px] font-semibold">
                     {scheduleLabels[s.name] ?? s.name.replaceAll('-', ' ')}
                     {s.enabled ? null : <CountBadge tone="amber">paused</CountBadge>}
                   </p>
-                  <p className="text-xs text-zinc-500 dark:text-zinc-500">
-                    {s.nextRunAt && s.enabled
-                      ? `Next ${relativeTime(s.nextRunAt, now)} (${formatDateTime(s.nextRunAt, agent.timezone)})`
-                      : 'Not currently scheduled'}
-                    {s.lastRunAt ? ` · last ${relativeTime(s.lastRunAt, now)}` : ''}
-                  </p>
+                  <InfoGrid className="mt-3 sm:grid-cols-2">
+                    <InfoItem label="Next run">
+                      {s.nextRunAt && s.enabled
+                        ? `${relativeTime(s.nextRunAt, now)} · ${formatDateTime(s.nextRunAt, agent.timezone)}`
+                        : 'Not scheduled'}
+                    </InfoItem>
+                    <InfoItem label="Last run">
+                      {s.lastRunAt ? relativeTime(s.lastRunAt, now) : 'Not run yet'}
+                    </InfoItem>
+                  </InfoGrid>
                   <details className="mt-1 text-2xs text-zinc-500">
-                    <summary className="cursor-pointer">Technical schedule</summary>
+                    <summary className="cursor-pointer py-1">Technical schedule</summary>
                     <code>{s.cron}</code>
                   </details>
                 </div>
@@ -164,20 +181,25 @@ export default async function SettingsPage() {
             {policyRows.map((p) => {
               const scope = policyScope(p.templateKey, p.match);
               return (
-                <Card key={p.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                <Card
+                  key={p.id}
+                  className="grid min-w-0 gap-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                >
                   <div className="min-w-0">
-                    <p className="flex items-center gap-2 text-sm font-medium">
+                    <p className="text-[15px] font-semibold">
                       {policyLabels[p.templateKey] ?? 'Custom approval rule'}
-                      <CountBadge tone={p.effect === 'allow' ? 'green' : 'amber'}>
-                        {p.effect === 'allow' ? 'Allowed' : 'Blocked'}
-                      </CountBadge>
-                      {p.enabled ? null : <CountBadge>Paused</CountBadge>}
                     </p>
-                    {scope ? (
-                      <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{scope}</p>
-                    ) : null}
+                    <InfoGrid className="mt-3 sm:grid-cols-3">
+                      <InfoItem label="Decision">
+                        {p.effect === 'allow' ? 'Allowed' : 'Blocked'}
+                      </InfoItem>
+                      <InfoItem label="Status">{p.enabled ? 'In use' : 'Paused'}</InfoItem>
+                      <InfoItem label="Applies to" className="col-span-2 sm:col-span-1">
+                        {scope ?? 'Custom scope'}
+                      </InfoItem>
+                    </InfoGrid>
                     <details className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-                      <summary className="cursor-pointer">Technical details</summary>
+                      <summary className="cursor-pointer py-1">Technical details</summary>
                       <code>{p.toolName}</code> · {p.templateKey}
                     </details>
                   </div>

@@ -8,7 +8,15 @@ import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btnSm, EmptyState, inputClass, PageHeader, PageShell, Panel } from '@/lib/ui';
+import {
+  btnSm,
+  cardGridClass,
+  EmptyState,
+  inputClass,
+  PageHeader,
+  PageShell,
+  Panel,
+} from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { DocumentCard, type DocumentCardView } from './document-card';
 
@@ -115,7 +123,7 @@ export default async function DocumentsPage() {
             </EmptyState>
           </div>
         ) : (
-          <div className="mt-3 flex flex-col gap-2.5">
+          <div className={`${cardGridClass} mt-3`}>
             {views.map((doc) => (
               <DocumentCard key={doc.id} doc={doc} />
             ))}

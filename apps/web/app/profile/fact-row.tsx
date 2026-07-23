@@ -12,7 +12,14 @@ import {
   rejectQuarantined,
   setFactPinned,
 } from '@/app/profile/actions';
-import { btnSm, textareaClass } from '@/lib/ui';
+import {
+  btnSm,
+  cardFooterClass,
+  cardShellClass,
+  InfoGrid,
+  InfoItem,
+  textareaClass,
+} from '@/lib/ui';
 
 /** Plain-serializable fact view, built server-side in page.tsx. */
 export interface FactView {
@@ -61,25 +68,27 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
   );
 
   return (
-    <div className="rounded-xl bg-sunken/55 px-3 py-3">
-      <div className="flex items-start justify-between gap-3">
-        <p className="min-w-0 text-sm">{fact.content}</p>
-        <span className="flex shrink-0 items-center gap-1.5">
+    <article className={cardShellClass}>
+      <div className="grid min-w-0 gap-3 p-4">
+        <p className="min-w-0 break-words text-[14px] leading-6 text-strong [overflow-wrap:anywhere]">
+          {fact.content}
+        </p>
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {fact.pinned ? (
             <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-2xs font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-300">
-              pinned
+              Pinned
             </span>
           ) : fact.inCard ? (
             <span
               className="rounded-full border border-blue-200 px-1.5 py-0.5 text-2xs font-medium text-blue-700 dark:border-blue-900 dark:text-blue-400"
               title="Auto-selected into the compiled owner card (high importance)"
             >
-              in card
+              In profile
             </span>
           ) : null}
           {fact.ownerConfirmed ? (
             <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-2xs font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-              confirmed
+              Verified
             </span>
           ) : null}
           {!quarantine && !fact.organized ? (
@@ -87,39 +96,38 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
               className="rounded-full bg-violet-100 px-1.5 py-0.5 text-2xs font-medium text-violet-700 dark:bg-violet-950 dark:text-violet-300"
               title="This fact has not been checked for repetition or conflicts yet."
             >
-              cleanup pending
+              Cleanup pending
             </span>
           ) : null}
-          <span
-            className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-            title={`Confidence ${confidencePct}%`}
-          >
-            {confidencePct}%
-          </span>
-        </span>
-      </div>
-      <p className="mt-1 text-2xs text-zinc-500 dark:text-zinc-500">
-        {fact.subjectLabel ? `${fact.subjectLabel} · ` : ''}
-        {fact.kind}
-        {fact.domain ? ` · ${fact.domain}` : ''}
-        {!quarantine && fact.importance <= 1 ? ' · minor' : ''}
-        {fact.validityLabel ? ` · ${fact.validityLabel}` : ''}
-        {` · ${fact.createdLabel}`}
-        {quarantine ? ` · from ${fact.originTrust} source` : ''}
-        {fact.sourceTaskId ? (
-          <>
-            {' · '}
+          {!quarantine && fact.importance <= 1 ? (
+            <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+              Minor detail
+            </span>
+          ) : null}
+          {fact.validityLabel ? (
+            <span className="text-2xs text-muted">{fact.validityLabel}</span>
+          ) : null}
+          {fact.sourceTaskId ? (
             <Link
               href={`/tasks/${fact.sourceTaskId}`}
-              className="underline hover:text-zinc-800 dark:hover:text-zinc-200"
+              className="text-2xs font-medium text-muted underline hover:text-strong"
             >
-              source
+              View source
             </Link>
-          </>
-        ) : null}
-      </p>
+          ) : null}
+        </div>
+        <InfoGrid className="sm:grid-cols-4">
+          <InfoItem label={quarantine ? 'Source' : 'About'}>
+            {quarantine ? `${fact.originTrust} source` : fact.subjectLabel || 'You'}
+          </InfoItem>
+          <InfoItem label="Type">{fact.kind}</InfoItem>
+          <InfoItem label="Topic">{fact.domain || 'General'}</InfoItem>
+          <InfoItem label="Confidence">{confidencePct}%</InfoItem>
+        </InfoGrid>
+        <p className="text-2xs text-muted">Saved {fact.createdLabel}</p>
+      </div>
 
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      <footer className={cardFooterClass}>
         {quarantine ? (
           <>
             <button
@@ -229,10 +237,10 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
             )}
           </>
         )}
-      </div>
+      </footer>
 
       {editing ? (
-        <div className="mt-2 flex flex-col gap-2">
+        <div className="flex flex-col gap-2 border-t border-edge p-4">
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -259,6 +267,6 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
           </div>
         </div>
       ) : null}
-    </div>
+    </article>
   );
 }

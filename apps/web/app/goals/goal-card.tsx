@@ -12,6 +12,12 @@ import {
 } from '@/app/goals/actions';
 import {
   btn,
+  cardBodyClass,
+  cardFooterClass,
+  cardHeaderClass,
+  cardShellClass,
+  InfoGrid,
+  InfoItem,
   inputClass as sharedInputClass,
   labelClass as sharedLabelClass,
   textareaClass,
@@ -103,54 +109,71 @@ export function GoalCard({ goal }: { goal: GoalView }) {
   const value = (name: string, fallback: string) => editState.values?.[name] ?? fallback;
 
   return (
-    <div
-      id={`goal-${goal.id}`}
-      className="scroll-mt-20 rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] sm:p-5"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <p className="min-w-0 text-sm font-medium">{goal.title}</p>
-        <span className="flex shrink-0 items-center gap-2">
-          <PriorityBadge priority={goal.priority} />
-          <StatusChip status={goal.status} />
-        </span>
-      </div>
-      {goal.description ? (
-        <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{goal.description}</p>
-      ) : null}
-      {goal.progress ? (
-        <p className="mt-2 text-sm leading-5 text-zinc-700 dark:text-zinc-300">{goal.progress}</p>
-      ) : null}
-      {goal.blockedLabel ? (
-        <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs leading-5 font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-          {goal.blockedLabel}
-        </p>
-      ) : null}
-      {goal.nextAction && !goal.blockedLabel ? (
-        <p className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-          <span className="font-medium">Next:</span> {goal.nextAction}
-        </p>
-      ) : null}
-      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-        {goal.targetLabel ? `${goal.targetLabel} · ` : ''}
-        {goal.updatedLabel}
-      </p>
-      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-        {goal.automationLabel}
-        {goal.automationNextLabel ? ` · ${goal.automationNextLabel}` : ''}
-      </p>
-      {goal.mirrorToPrimary ? (
-        <p className="mt-0.5 text-xs text-indigo-700 dark:text-indigo-300">
-          ↩ Updates mirrored to your main chat thread
-        </p>
-      ) : null}
-      {goal.autonomy ? (
-        <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-300">
-          ⚡ Free-range: sessions act without asking (memory-from-web, unknown recipients, logged-in
-          browsing, and networked code still ask)
-        </p>
-      ) : null}
+    <div id={`goal-${goal.id}`} className={`${cardShellClass} scroll-mt-20`}>
+      <div className={cardBodyClass}>
+        <div className={cardHeaderClass}>
+          <div className="min-w-0">
+            <h3 className="text-[16px] leading-6 font-semibold tracking-[-0.015em]">
+              {goal.title}
+            </h3>
+            {goal.description ? (
+              <p className="mt-1 text-[13px] leading-5 text-muted">{goal.description}</p>
+            ) : null}
+          </div>
+          <span className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <PriorityBadge priority={goal.priority} />
+            <StatusChip status={goal.status} />
+          </span>
+        </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(15rem,0.72fr)]">
+          <section className="min-w-0">
+            <h4 className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+              Current progress
+            </h4>
+            <p className="mt-1 text-[14px] leading-6 text-strong">
+              {goal.progress || 'No progress update yet.'}
+            </p>
+            {goal.blockedLabel ? (
+              <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2.5 text-xs leading-5 font-medium text-amber-800 dark:bg-amber-950/35 dark:text-amber-300">
+                {goal.blockedLabel}
+              </p>
+            ) : goal.nextAction ? (
+              <div className="mt-3 border-l-2 border-accent/50 pl-3">
+                <p className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+                  Next action
+                </p>
+                <p className="mt-0.5 text-[13px] leading-5 text-strong">{goal.nextAction}</p>
+              </div>
+            ) : null}
+          </section>
+          <InfoGrid>
+            <InfoItem label="Target">{goal.targetLabel || 'No target date'}</InfoItem>
+            <InfoItem label="Updated">{goal.updatedLabel}</InfoItem>
+            <InfoItem label="Automation" className="col-span-2">
+              {goal.automationLabel}
+              {goal.automationNextLabel ? ` · ${goal.automationNextLabel}` : ''}
+            </InfoItem>
+          </InfoGrid>
+        </div>
+
+        {goal.mirrorToPrimary || goal.autonomy ? (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {goal.mirrorToPrimary ? (
+              <p className="rounded-xl bg-indigo-50 px-3 py-2.5 text-xs leading-5 text-indigo-800 dark:bg-indigo-950/30 dark:text-indigo-300">
+                ↩ Updates also appear in your main chat.
+              </p>
+            ) : null}
+            {goal.autonomy ? (
+              <p className="rounded-xl bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                ⚡ Free-range sessions handle routine approvals; sensitive actions still ask.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className={cardFooterClass}>
         {goal.conversationId ? (
           <Link href={`/chat/${goal.conversationId}`} className={outlineButton}>
             Open work chat
@@ -263,7 +286,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
       </div>
 
       {editing && !goal.archived ? (
-        <form action={editAction} className="mt-4 flex flex-col gap-3 border-t border-edge pt-4">
+        <form action={editAction} className="flex flex-col gap-3 border-t border-edge p-4 sm:p-5">
           <input type="hidden" name="goalId" value={goal.id} />
           <label className={labelClass}>
             Title

@@ -3,7 +3,15 @@
 import { LoaderCircle } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { dismissAnomalyAction, suspendPolicyAction } from '@/app/anomalies/actions';
-import { btn } from '@/lib/ui';
+import {
+  btn,
+  cardBodyClass,
+  cardFooterClass,
+  cardHeaderClass,
+  cardShellClass,
+  InfoGrid,
+  InfoItem,
+} from '@/lib/ui';
 
 export interface AnomalyView {
   id: string;
@@ -44,28 +52,32 @@ export function AnomalyCard({ anomaly }: { anomaly: AnomalyView }) {
   };
 
   return (
-    <div className="rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] sm:p-5">
-      <div className="flex flex-wrap items-center gap-2">
-        <span
-          className={`rounded-full px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide ${
-            kindTone[anomaly.kind] ??
-            'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
-          }`}
-        >
-          {kindLabels[anomaly.kind] ?? anomaly.kind}
-        </span>
-        <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">
-          {anomaly.toolName}
-        </span>
-        <span className="ml-auto text-xs text-zinc-500 dark:text-zinc-500">
-          {anomaly.createdLabel}
-        </span>
+    <article className={`${cardShellClass} flex h-full flex-col`}>
+      <div className={`${cardBodyClass} flex-1`}>
+        <div className={cardHeaderClass}>
+          <div className="min-w-0">
+            <span
+              className={`rounded-full px-2 py-0.5 text-2xs font-semibold tracking-wide uppercase ${
+                kindTone[anomaly.kind] ??
+                'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
+              }`}
+            >
+              {kindLabels[anomaly.kind] ?? anomaly.kind}
+            </span>
+            <h3 className="mt-2 truncate font-mono text-xs font-medium text-strong">
+              {anomaly.toolName}
+            </h3>
+          </div>
+          <span className="text-xs text-muted">{anomaly.createdLabel}</span>
+        </div>
+        <p className="text-[14px] leading-6 text-strong">{anomaly.detail}</p>
+        <InfoGrid columns={3}>
+          <InfoItem label="Observed">{anomaly.observed}</InfoItem>
+          <InfoItem label="Expected">{anomaly.expected}</InfoItem>
+          <InfoItem label="Evidence">{anomaly.citationCount} calls</InfoItem>
+        </InfoGrid>
       </div>
-      <p className="mt-2 text-sm text-zinc-800 dark:text-zinc-200">{anomaly.detail}</p>
-      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-        Cites {anomaly.citationCount} tool call{anomaly.citationCount === 1 ? '' : 's'}.
-      </p>
-      <div className="mt-3 flex flex-wrap gap-2">
+      <footer className={cardFooterClass}>
         {anomaly.hasPolicy ? (
           <button
             type="button"
@@ -92,7 +104,7 @@ export function AnomalyCard({ anomaly }: { anomaly: AnomalyView }) {
           ) : null}
           {pendingAction === 'dismiss' ? 'Updating…' : 'Dismiss'}
         </button>
-      </div>
-    </div>
+      </footer>
+    </article>
   );
 }

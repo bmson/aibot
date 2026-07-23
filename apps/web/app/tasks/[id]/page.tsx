@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, prettyJson, relativeTime, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { PageShell } from '@/lib/ui';
+import { cardShellClass, InfoGrid, InfoItem, PageShell } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 import {
@@ -226,48 +226,52 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       >
         ← Activity
       </Link>
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-semibold tracking-[-0.03em]">
-          {task.title || taskTypeLabel(task.type)}
-        </h1>
-        <StatusChip status={task.status} />
-        {activeGrant ? (
-          <>
+      <header className="mt-3 grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="font-display text-2xl font-semibold tracking-[-0.035em]">
+              {task.title || taskTypeLabel(task.type)}
+            </h1>
+            <StatusChip status={task.status} />
+          </div>
+          {activeGrant ? (
             <span
-              className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+              className="mt-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
               title={`Free-range granted via ${activeGrant.grantedVia}. I act without asking, except the hard floor (memory from web content, unknown recipients, logged-in browsing, networked code) and budget caps.`}
             >
               ⚡ Free-range
             </span>
-            {!TERMINAL_TASK_STATUSES.has(task.status) ? (
-              <form action={revokeAutonomyGrant.bind(null, task.id)}>
-                <SubmitButton pendingLabel="Revoking…">Revoke free-range</SubmitButton>
-              </form>
-            ) : null}
-          </>
-        ) : null}
-        {task.status === 'needs_attention' && !stoppedForTaskBudget ? (
-          <form action={retryTask.bind(null, task.id)}>
-            <SubmitButton variant="primary" pendingLabel="Retrying…">
-              Retry
-            </SubmitButton>
-          </form>
-        ) : null}
-        {task.status === 'needs_attention' ? (
-          <form action={cancelTask.bind(null, task.id)}>
-            <SubmitButton pendingLabel="Cancelling…">Cancel</SubmitButton>
-          </form>
-        ) : null}
-        {task.archivedAt ? (
-          <form action={restoreTask.bind(null, task.id)}>
-            <SubmitButton pendingLabel="Restoring…">Restore to Activity</SubmitButton>
-          </form>
-        ) : TERMINAL_TASK_STATUSES.has(task.status) ? (
-          <form action={archiveTask.bind(null, task.id)}>
-            <SubmitButton pendingLabel="Archiving…">Archive</SubmitButton>
-          </form>
-        ) : null}
-      </div>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          {activeGrant && !TERMINAL_TASK_STATUSES.has(task.status) ? (
+            <form action={revokeAutonomyGrant.bind(null, task.id)}>
+              <SubmitButton pendingLabel="Revoking…">Revoke free-range</SubmitButton>
+            </form>
+          ) : null}
+          {task.status === 'needs_attention' && !stoppedForTaskBudget ? (
+            <form action={retryTask.bind(null, task.id)}>
+              <SubmitButton variant="primary" pendingLabel="Retrying…">
+                Retry
+              </SubmitButton>
+            </form>
+          ) : null}
+          {task.status === 'needs_attention' ? (
+            <form action={cancelTask.bind(null, task.id)}>
+              <SubmitButton pendingLabel="Cancelling…">Cancel</SubmitButton>
+            </form>
+          ) : null}
+          {task.archivedAt ? (
+            <form action={restoreTask.bind(null, task.id)}>
+              <SubmitButton pendingLabel="Restoring…">Restore to Activity</SubmitButton>
+            </form>
+          ) : TERMINAL_TASK_STATUSES.has(task.status) ? (
+            <form action={archiveTask.bind(null, task.id)}>
+              <SubmitButton pendingLabel="Archiving…">Archive</SubmitButton>
+            </form>
+          ) : null}
+        </div>
+      </header>
 
       {stoppedForTaskBudget ? (
         <form
@@ -296,51 +300,33 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         </form>
       ) : null}
 
-      <div className="mt-5 rounded-xl border border-edge bg-raised p-5 shadow-sm">
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm sm:grid-cols-3">
-          <div>
-            <dt className="text-xs text-zinc-500 dark:text-zinc-400">Started by</dt>
-            <dd>{trustLabel(task.trust)}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-zinc-500 dark:text-zinc-400">Cost</dt>
-            <dd>
-              {formatUsd(task.spentUsd)} of {formatUsd(task.budgetUsdLimit)}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-zinc-500 dark:text-zinc-400">Updated</dt>
-            <dd>
-              {formatDateTime(task.updatedAt, agent.timezone)} ({relativeTime(task.updatedAt, now)})
-            </dd>
-          </div>
-          {task.deadline ? (
-            <div>
-              <dt className="text-xs text-zinc-500 dark:text-zinc-400">Target date</dt>
-              <dd>
-                {formatDateTime(task.deadline, agent.timezone)} ({relativeTime(task.deadline, now)})
-              </dd>
-            </div>
-          ) : null}
-          {task.nextAction ? (
-            <div className="sm:col-span-2">
-              <dt className="text-xs text-zinc-500 dark:text-zinc-400">What happens next</dt>
-              <dd>{task.nextAction}</dd>
-            </div>
-          ) : null}
-          {task.progress ? (
-            <div className="sm:col-span-3">
-              <dt className="text-xs text-zinc-500 dark:text-zinc-400">Latest update</dt>
-              <dd>
-                {task.progress}
-                {task.progressPercent != null ? ` (${task.progressPercent}%)` : ''}
-              </dd>
-            </div>
-          ) : null}
-        </dl>
-      </div>
+      <InfoGrid className="mt-5 sm:grid-cols-3">
+        <InfoItem label="Started by">{trustLabel(task.trust)}</InfoItem>
+        <InfoItem label="Cost">
+          {formatUsd(task.spentUsd)} of {formatUsd(task.budgetUsdLimit)}
+        </InfoItem>
+        <InfoItem label="Updated">
+          {relativeTime(task.updatedAt, now)} · {formatDateTime(task.updatedAt, agent.timezone)}
+        </InfoItem>
+        {task.deadline ? (
+          <InfoItem label="Target date">
+            {relativeTime(task.deadline, now)} · {formatDateTime(task.deadline, agent.timezone)}
+          </InfoItem>
+        ) : null}
+        {task.nextAction ? (
+          <InfoItem label="What happens next" className="sm:col-span-2">
+            {task.nextAction}
+          </InfoItem>
+        ) : null}
+        {task.progress ? (
+          <InfoItem label="Latest update" className="col-span-2 sm:col-span-3">
+            {task.progress}
+            {task.progressPercent != null ? ` (${task.progressPercent}%)` : ''}
+          </InfoItem>
+        ) : null}
+      </InfoGrid>
 
-      <section className="mt-5 rounded-xl border border-edge bg-raised p-5 shadow-sm">
+      <section className={`${cardShellClass} mt-5 p-5`}>
         <h2 className="text-sm font-semibold">What actually happened</h2>
         <p className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
           This list is built from completed tool results, not from the assistant’s wording.
@@ -387,7 +373,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       </section>
 
       {downloadableFiles.length > 0 ? (
-        <section className="mt-5 rounded-xl border border-edge bg-raised p-5 shadow-sm">
+        <section className={`${cardShellClass} mt-5 p-5`}>
           <h2 className="text-sm font-semibold">Files produced</h2>
           <p className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
             Artifacts this task saved to the workspace — click to download.
@@ -410,7 +396,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         </section>
       ) : null}
 
-      <details className="mt-5 rounded-xl border border-edge bg-raised p-5 shadow-sm">
+      <details className={`${cardShellClass} mt-5 p-5`}>
         <summary className="cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">
           Full technical record
         </summary>

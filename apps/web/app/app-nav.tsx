@@ -6,7 +6,6 @@ import {
   CircleDollarSign,
   FileText,
   Gauge,
-  House,
   Lightbulb,
   ListChecks,
   Menu,
@@ -34,8 +33,7 @@ interface NavItem {
 }
 
 /** Icons live here (client side) — nav data stays serializable in layout.tsx. */
-const navIcons: Record<string, typeof House> = {
-  '/': House,
+const navIcons: Record<string, typeof MessageCircle> = {
   '/chat': MessageCircle,
   '/approvals': ShieldCheck,
   '/tasks': ListChecks,
@@ -218,7 +216,7 @@ export function AppNav({
       {/* Desktop sidebar */}
       <aside className="hidden w-60 shrink-0 flex-col bg-[#0b0d12] text-white lg:flex">
         <div className="px-5 pt-6 pb-7">
-          <Link href="/" className={`inline-flex rounded-lg ${focusRing}`}>
+          <Link href="/chat" className={`inline-flex rounded-lg ${focusRing}`}>
             <BrandLockup
               name={agentName}
               presence={presence}
@@ -257,7 +255,7 @@ export function AppNav({
       {/* Mobile top bar */}
       <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-zinc-800 bg-[#0b0d12]/95 px-4 text-white backdrop-blur lg:hidden">
         <Link
-          href="/"
+          href="/chat"
           data-mobile-touch-target="true"
           className={`mobile-touch-target inline-flex items-center rounded-lg text-sm font-semibold tracking-[-0.02em] ${focusRing}`}
         >

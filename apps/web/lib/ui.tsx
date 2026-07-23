@@ -60,6 +60,19 @@ export const textareaClass =
 
 export const labelClass = 'text-[13px] font-medium text-muted';
 
+/**
+ * Cards use one shared information architecture:
+ * identity at the top, primary content in the body, structured facts in a
+ * compact grid, and actions in a quiet footer.
+ */
+export const cardShellClass =
+  'min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60';
+export const cardBodyClass = 'grid min-w-0 gap-4 p-4 sm:p-5';
+export const cardHeaderClass = 'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3';
+export const cardFooterClass =
+  'flex min-w-0 flex-wrap items-center gap-2 border-t border-edge/70 bg-sunken/35 px-4 py-3 sm:px-5';
+export const cardGridClass = 'grid min-w-0 gap-3 lg:grid-cols-2';
+
 /** Collapsible-section summary row (native <details>). */
 export const summaryClass =
   'flex cursor-pointer list-none items-baseline gap-2 text-sm font-medium [&::-webkit-details-marker]:hidden';
@@ -92,9 +105,48 @@ export function PageShell({
 }
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <div className={`${cardShellClass} p-5 ${className}`}>{children}</div>;
+}
+
+export function InfoGrid({
+  children,
+  columns = 2,
+  className = '',
+}: {
+  children: ReactNode;
+  columns?: 1 | 2 | 3 | 4;
+  className?: string;
+}) {
+  const columnClass = {
+    1: 'grid-cols-1',
+    2: 'grid-cols-2',
+    3: 'grid-cols-3',
+    4: 'grid-cols-4',
+  }[columns];
   return (
-    <div className={`rounded-2xl bg-raised p-5 shadow-[0_1px_2px_rgb(23_25_35/0.06)] ${className}`}>
+    <dl
+      className={`grid min-w-0 ${columnClass} gap-px overflow-hidden rounded-xl bg-edge/70 ${className}`}
+    >
       {children}
+    </dl>
+  );
+}
+
+export function InfoItem({
+  label,
+  children,
+  className = '',
+}: {
+  label: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`min-w-0 bg-sunken/65 px-3 py-2.5 ${className}`}>
+      <dt className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">{label}</dt>
+      <dd className="mt-0.5 min-w-0 break-words text-[13px] leading-5 font-medium text-strong [overflow-wrap:anywhere]">
+        {children}
+      </dd>
     </div>
   );
 }

@@ -51,7 +51,7 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
   };
 
   return (
-    <section className="mt-3 ml-3 border-l-2 border-amber-400 py-1 pl-4 text-strong dark:border-amber-600">
+    <section className="mt-3 ml-3 min-w-0 max-w-full border-l-2 border-amber-400 py-1 pl-4 break-words text-strong [overflow-wrap:anywhere] dark:border-amber-600">
       <p className="flex items-center gap-1.5 text-2xs font-semibold tracking-[0.1em] text-amber-700 uppercase dark:text-amber-300">
         <CircleDollarSign className="size-3.5" aria-hidden="true" />
         Spending permission needed

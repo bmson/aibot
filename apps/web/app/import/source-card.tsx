@@ -8,7 +8,7 @@ import {
   reviewSourceAction,
   startImportAction,
 } from '@/app/import/actions';
-import { btn } from '@/lib/ui';
+import { btn, cardBodyClass, cardHeaderClass, cardShellClass, InfoGrid, InfoItem } from '@/lib/ui';
 
 /** Plain-serializable source view built in page.tsx. */
 export interface SourceView {
@@ -57,59 +57,82 @@ export function SourceCard({ view }: { view: SourceView }) {
   const rerunnable = view.status === 'done' || view.status === 'failed' || view.status === 'purged';
 
   return (
-    <div className="rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)]">
-      <div className="flex items-start justify-between gap-3">
-        <p className="min-w-0 text-sm font-medium">{view.source}</p>
-        <span
-          className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusChipClasses[view.status] ?? statusChipClasses.pending}`}
-        >
-          {statusLabels[view.status] ?? 'Queued'}
-        </span>
+    <article className={cardShellClass}>
+      <div className={cardBodyClass}>
+        <div className={cardHeaderClass}>
+          <div className="min-w-0">
+            <h3 className="truncate text-[15px] font-semibold tracking-[-0.01em]">{view.source}</h3>
+            <p className="mt-0.5 text-xs text-muted">{view.updatedLabel}</p>
+          </div>
+          <span
+            className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusChipClasses[view.status] ?? statusChipClasses.pending}`}
+          >
+            {statusLabels[view.status] ?? 'Queued'}
+          </span>
+        </div>
+
+        <InfoGrid className="sm:grid-cols-3">
+          <InfoItem label="Processed">
+            {pct !== null ? `${view.itemsProcessed} of ${view.itemsTotal}` : 'Waiting'}
+          </InfoItem>
+          <InfoItem label="Memories">{view.memoriesSaved}</InfoItem>
+          <InfoItem label="Needs review">{view.quarantinedNow}</InfoItem>
+        </InfoGrid>
+        {pct !== null && view.status === 'running' ? (
+          <div>
+            <div className="flex items-center justify-between gap-3 text-xs text-muted">
+              <span>Import progress</span>
+              <span>{pct}%</span>
+            </div>
+            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-sunken">
+              <div className="h-full rounded-full bg-blue-500" style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        ) : null}
+        {view.error ? (
+          <p className="rounded-xl bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-700 dark:bg-red-950/35 dark:text-red-300">
+            {view.error}
+          </p>
+        ) : null}
+
+        {view.quarantinedNow > 0 ? (
+          <div className="grid gap-3 rounded-xl bg-amber-50 px-3 py-3 dark:bg-amber-950/25 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+            <div>
+              <p className="text-[13px] font-semibold text-amber-900 dark:text-amber-200">
+                Review what this import learned
+              </p>
+              <p className="mt-0.5 text-xs leading-5 text-amber-800 dark:text-amber-300">
+                {view.quarantinedNow} memories are held back until you approve or reject them.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => startTransition(() => reviewSourceAction(view.source, 'approve'))}
+                className={outlineButton}
+                title="Release every quarantined fact from this source into normal memory"
+              >
+                Approve all
+              </button>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => startTransition(() => reviewSourceAction(view.source, 'reject'))}
+                className={dangerOutlineButton}
+                title="Delete and tombstone every quarantined fact from this source"
+              >
+                Reject all
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {error ? <p className="text-xs text-red-600 dark:text-red-400">{error}</p> : null}
       </div>
-      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">{view.updatedLabel}</p>
 
-      <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
-        {pct !== null
-          ? `${view.itemsProcessed} of ${view.itemsTotal} sections processed (${pct}%)`
-          : 'Waiting to start'}
-        {` · ${view.memoriesSaved} ${view.memoriesSaved === 1 ? 'memory' : 'memories'} saved`}
-        {view.quarantinedNow > 0 ? ` · ${view.quarantinedNow} awaiting review` : ''}
-      </p>
-      {pct !== null && view.status === 'running' ? (
-        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
-          <div className="h-full rounded-full bg-blue-500" style={{ width: `${pct}%` }} />
-        </div>
-      ) : null}
-      {view.error ? (
-        <p className="mt-1 text-xs text-red-600 dark:text-red-400">{view.error}</p>
-      ) : null}
-
-      {view.quarantinedNow > 0 ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => startTransition(() => reviewSourceAction(view.source, 'approve'))}
-            className={outlineButton}
-            title="Release every quarantined fact from this source into normal memory"
-          >
-            Approve all ({view.quarantinedNow})
-          </button>
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => startTransition(() => reviewSourceAction(view.source, 'reject'))}
-            className={dangerOutlineButton}
-            title="Delete and tombstone every quarantined fact from this source"
-          >
-            Reject all
-          </button>
-        </div>
-      ) : null}
-
-      <details className="mt-3 border-t border-zinc-100 pt-3 text-xs dark:border-zinc-900">
-        <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">More actions</summary>
-        <p className="mt-2 text-zinc-500 dark:text-zinc-500">
+      <details className="border-t border-edge/70 bg-sunken/35 px-4 py-3 text-xs sm:px-5">
+        <summary className="cursor-pointer font-medium text-muted">File and actions</summary>
+        <p className="mt-2 break-words text-muted [overflow-wrap:anywhere]">
           {view.workspacePath} · {view.kind}
           {view.taskId ? (
             <>
@@ -188,8 +211,7 @@ export function SourceCard({ view }: { view: SourceView }) {
           )}
         </div>
       </details>
-      {error ? <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p> : null}
-    </div>
+    </article>
   );
 }
 

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { agents, conversations, createDb, type Db } from '@assistant/db';
+import { agents, conversations, createDb, type Db, messages } from '@assistant/db';
 import { eq } from 'drizzle-orm';
 import { type Browser, type BrowserContext, chromium, type Locator, type Page } from 'playwright';
 
@@ -135,6 +135,28 @@ async function createConversationFixture(): Promise<{ db: Db; id: string } | und
     })
     .returning({ id: conversations.id });
   assert(conversation, 'failed to create the mobile chat fixture');
+  const longToken = 'unbroken-mobile-overflow-regression-'.repeat(10);
+  await db.insert(messages).values([
+    {
+      conversationId: conversation.id,
+      role: 'user',
+      origin: 'owner',
+      text: longToken,
+      parts: [{ type: 'text', text: longToken }],
+    },
+    {
+      conversationId: conversation.id,
+      role: 'assistant',
+      origin: 'assistant',
+      text: `A long inline value: \`${longToken}\``,
+      parts: [
+        {
+          type: 'text',
+          text: `A long inline value: \`${longToken}\`\n\n| Detail | Value |\n| --- | --- |\n| Token | ${longToken} |`,
+        },
+      ],
+    },
+  ]);
   return { db, id: conversation.id };
 }
 
@@ -172,17 +194,10 @@ try {
 
   await openRoute(page, '/');
   assert(
-    (await page.locator('main article').count()) <= 1,
-    'Home rendered more than one full approval card',
+    new URL(page.url()).pathname === '/chat',
+    `Root did not open the primary chat: ${page.url()}`,
   );
-  assert(
-    (await page.locator('[data-home-work-preview="true"]').count()) <= 3,
-    'Home rendered more than three blocked/in-progress previews',
-  );
-  assert(
-    await page.getByText('Memory care', { exact: true }).isVisible(),
-    'Home did not surface memory health',
-  );
+  assert(await page.getByRole('textbox', { name: 'Message' }).isVisible(), 'Chat is not ready');
   const menuTrigger = page.getByRole('button', { name: 'Open navigation menu' });
   await targetSize(menuTrigger, 'mobile navigation trigger');
   await menuTrigger.click();
@@ -249,10 +264,27 @@ try {
     await openRoute(page, `/chat/${fixture.id}`);
     const message = page.getByRole('textbox', { name: 'Message' });
     const send = page.getByRole('button', { name: 'Send' });
-    const model = page.getByRole('button', { name: 'Model' });
+    const composerSurface = page.getByTestId('chat-composer-surface');
+    const autonomyMode = page.getByTestId('chat-autonomy-mode');
     await targetSize(message, 'chat message field');
     await targetSize(send, 'chat send button');
-    await targetSize(model, 'chat model menu');
+    await targetSize(autonomyMode, 'chat autonomy mode');
+    assert(
+      (await page.getByRole('link', { name: 'All chats', exact: true }).count()) === 0,
+      'All chats still occupies the chat header',
+    );
+    assert(
+      (await page.getByRole('button', { name: 'Model', exact: true }).count()) === 0,
+      'Model still occupies the chat header',
+    );
+    assert(
+      (await composerSurface.locator('[data-testid="chat-autonomy-mode"]').count()) === 1,
+      'autonomy mode is not integrated into the composer surface',
+    );
+    await message.fill('/model');
+    const modelList = page.getByRole('listbox', { name: 'Response model' });
+    await modelList.waitFor();
+    await targetSize(modelList.getByRole('option').first(), 'slash-command model option');
     await message.fill('A long mobile draft '.repeat(40));
     await assertResponsiveContract(page, 'populated chat composer', true);
     const composer = await message.boundingBox();
@@ -287,9 +319,7 @@ try {
         '44px mobile targets',
         '16px mobile fields',
         'drawer focus trap',
-        'bounded Home approvals',
-        'bounded Home work previews',
-        'memory health visible',
+        'root opens the primary chat',
         'activity feed and filters',
       ],
     }),
@@ -298,6 +328,7 @@ try {
   await context?.close();
   await browser?.close();
   if (fixture) {
+    await fixture.db.delete(messages).where(eq(messages.conversationId, fixture.id));
     await fixture.db.delete(conversations).where(eq(conversations.id, fixture.id));
     await (fixture.db as unknown as { $client: { end: () => Promise<void> } }).$client.end();
   }

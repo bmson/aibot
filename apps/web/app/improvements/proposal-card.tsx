@@ -3,7 +3,15 @@
 import { LoaderCircle } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { applyProposalAction, dismissProposalAction } from '@/app/improvements/actions';
-import { btn } from '@/lib/ui';
+import {
+  btn,
+  cardBodyClass,
+  cardFooterClass,
+  cardHeaderClass,
+  cardShellClass,
+  InfoGrid,
+  InfoItem,
+} from '@/lib/ui';
 
 export interface ProposalView {
   id: string;
@@ -38,29 +46,47 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
   };
 
   return (
-    <div className="rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] sm:p-5">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-          {kindLabels[proposal.kind] ?? proposal.kind}
-        </span>
-        <span className="text-sm font-medium">{proposal.title}</span>
-        <span className="ml-auto text-xs text-zinc-500 dark:text-zinc-500">
-          {proposal.createdLabel}
-        </span>
+    <article className={`${cardShellClass} flex h-full flex-col`}>
+      <div className={`${cardBodyClass} flex-1`}>
+        <div className={cardHeaderClass}>
+          <div className="min-w-0">
+            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-2xs font-semibold tracking-wide text-zinc-600 uppercase dark:bg-zinc-800 dark:text-zinc-400">
+              {kindLabels[proposal.kind] ?? proposal.kind}
+            </span>
+            <h3 className="mt-2 text-[15px] leading-5 font-semibold tracking-[-0.01em]">
+              {proposal.title}
+            </h3>
+          </div>
+          <span className="text-xs text-muted">{proposal.createdLabel}</span>
+        </div>
+        <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+          {proposal.rationale ? (
+            <section className="min-w-0">
+              <h4 className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+                Why this came up
+              </h4>
+              <p className="mt-1 text-[13px] leading-5 text-strong">{proposal.rationale}</p>
+            </section>
+          ) : null}
+          {proposal.suggestion ? (
+            <section className="min-w-0 rounded-xl bg-sunken/65 px-3 py-2.5">
+              <h4 className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+                Proposed change
+              </h4>
+              <p className="mt-1 text-[13px] leading-5 text-strong">{proposal.suggestion}</p>
+            </section>
+          ) : null}
+        </div>
+        <InfoGrid>
+          <InfoItem label="Evidence">
+            {proposal.evidenceCount} pattern{proposal.evidenceCount === 1 ? '' : 's'}
+          </InfoItem>
+          <InfoItem label="Outcome">
+            {proposal.applyable ? 'Can apply directly' : 'Advisory'}
+          </InfoItem>
+        </InfoGrid>
       </div>
-      {proposal.rationale ? (
-        <p className="mt-2 text-sm text-zinc-700 dark:text-zinc-300">{proposal.rationale}</p>
-      ) : null}
-      {proposal.suggestion ? (
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{proposal.suggestion}</p>
-      ) : null}
-      {proposal.evidenceCount > 0 ? (
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-          From {proposal.evidenceCount} observed pattern
-          {proposal.evidenceCount === 1 ? '' : 's'}.
-        </p>
-      ) : null}
-      <div className="mt-3 flex flex-wrap gap-2">
+      <footer className={cardFooterClass}>
         <button
           type="button"
           disabled={pending}
@@ -92,7 +118,7 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
           ) : null}
           {pendingAction === 'dismiss' ? 'Updating…' : 'Dismiss'}
         </button>
-      </div>
-    </div>
+      </footer>
+    </article>
   );
 }

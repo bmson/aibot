@@ -7,7 +7,7 @@ import { AutoRefresh } from '@/app/auto-refresh';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getAgentTimezone, getDb } from '@/lib/server';
-import { EmptyState, PageHeader, PageShell, Panel, SectionHeading } from '@/lib/ui';
+import { EmptyState, InfoGrid, InfoItem, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, toPendingApprovalView } from '@/lib/views';
 import { ApprovalCard } from './approval-card';
 
@@ -66,7 +66,7 @@ export default async function ApprovalsPage() {
         intro="Review and approve or reject actions the assistant wants to take on your behalf."
       />
 
-      <Panel className="mt-8">
+      <section className="mt-8">
         <SectionHeading title="Waiting for you" count={pending.length} />
         <p className="mt-1 text-[13px] leading-5 text-muted">
           Each card shows the real-world effect first. Policy and raw payload details stay available
@@ -92,7 +92,7 @@ export default async function ApprovalsPage() {
             ))}
           </div>
         )}
-      </Panel>
+      </section>
 
       <details className="group mt-6 rounded-2xl bg-sunken/55 p-5">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[15px] font-semibold [&::-webkit-details-marker]:hidden">
@@ -121,17 +121,21 @@ export default async function ApprovalsPage() {
                       <StatusChip status={displayStatus} />
                     </span>
                   </div>
-                  <p className="mt-1 text-xs leading-5 text-muted">
-                    <Link href={`/tasks/${approval.taskId}`} className="hover:underline">
-                      {taskTypeLabel(taskType)}
-                    </Link>
-                    {' · '}requested {formatDateTime(approval.requestedAt, tz)}
-                    {approval.resolvedAt
-                      ? ` · resolved ${formatDateTime(approval.resolvedAt, tz)} (${relativeTime(approval.resolvedAt, now)})`
-                      : ` · expired ${relativeTime(approval.expiresAt, now)}`}
-                    {approval.resolvedVia ? ` via ${approval.resolvedVia}` : ''}
-                    {approval.resolutionPayload ? ' · payload edited' : ''}
-                  </p>
+                  <InfoGrid className="mt-2 sm:grid-cols-3">
+                    <InfoItem label="Activity">
+                      <Link href={`/tasks/${approval.taskId}`} className="hover:underline">
+                        {taskTypeLabel(taskType)}
+                      </Link>
+                    </InfoItem>
+                    <InfoItem label="Requested">
+                      {formatDateTime(approval.requestedAt, tz)}
+                    </InfoItem>
+                    <InfoItem label="Outcome">
+                      {approval.resolvedAt
+                        ? `${relativeTime(approval.resolvedAt, now)}${approval.resolvedVia ? ` via ${approval.resolvedVia}` : ''}${approval.resolutionPayload ? ' · edited' : ''}`
+                        : `Expired ${relativeTime(approval.expiresAt, now)}`}
+                    </InfoItem>
+                  </InfoGrid>
                 </div>
               );
             })}

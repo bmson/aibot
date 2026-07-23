@@ -2,16 +2,13 @@
 
 import { useActionState } from 'react';
 import { createGoal } from '@/app/goals/actions';
-import { btn, inputClass, labelClass, textareaClass } from '@/lib/ui';
+import { btn, cardShellClass, inputClass, labelClass, textareaClass } from '@/lib/ui';
 
 export function GoalCreateForm() {
   const [state, formAction, pending] = useActionState(createGoal, { error: null });
 
   return (
-    <form
-      action={formAction}
-      className="mt-6 rounded-2xl bg-raised p-5 shadow-[0_1px_2px_rgb(23_25_35/0.06)]"
-    >
+    <form action={formAction} className={`${cardShellClass} mt-6 p-5`}>
       <h2 className="text-sm font-medium">Create a goal</h2>
       <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-400">
         Tell the assistant what outcome you want. It will start now and keep the work moving.

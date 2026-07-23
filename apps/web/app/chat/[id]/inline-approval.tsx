@@ -71,7 +71,9 @@ export function ApprovalRow({
   return (
     <div className="py-1">
       <div className="flex items-start justify-between gap-3">
-        <p className="min-w-0 text-sm font-medium">{part.summary}</p>
+        <p className="min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere]">
+          {part.summary}
+        </p>
         <span
           className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sunken px-2 py-1 font-mono text-2xs font-medium text-muted"
           title="Reference code used for this same request in chat, notifications, and activity."
@@ -91,7 +93,7 @@ export function ApprovalRow({
                 <dt className="text-2xs font-medium text-zinc-500 dark:text-zinc-400">
                   {detail.label}
                 </dt>
-                <dd className="mt-0.5 text-xs break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-200">
+                <dd className="mt-0.5 text-xs break-words whitespace-pre-wrap text-zinc-800 [overflow-wrap:anywhere] dark:text-zinc-200">
                   {detail.value}
                 </dd>
               </div>

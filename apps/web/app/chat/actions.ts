@@ -42,7 +42,7 @@ export async function newConversation(): Promise<void> {
   redirect(`/chat/${conversation.id}`);
 }
 
-/** Chat header model switcher — modelId null means "Auto (role default)". */
+/** Composer `/model` command — modelId null means "Auto (role default)". */
 export async function changeConversationModel(
   conversationId: string,
   modelId: string | null,

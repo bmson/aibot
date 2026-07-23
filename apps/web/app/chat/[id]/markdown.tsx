@@ -64,17 +64,17 @@ const components: Components = {
   code: ({ node: _node, ...props }) => (
     <code
       {...props}
-      className="rounded bg-zinc-200 px-1 py-0.5 font-mono text-[0.85em] dark:bg-zinc-800"
+      className="break-words rounded bg-zinc-200 px-1 py-0.5 font-mono text-[0.85em] [overflow-wrap:anywhere] dark:bg-zinc-800"
     />
   ),
   pre: ({ node: _node, ...props }) => (
     <pre
       {...props}
-      className="my-3 overflow-x-auto rounded-xl bg-[#10131a] p-4 font-mono text-xs leading-5 text-zinc-100 shadow-inner first:mt-0 last:mb-0 dark:bg-black/40 [&_code]:rounded-none [&_code]:bg-transparent [&_code]:p-0"
+      className="my-3 max-w-full overflow-x-auto rounded-xl bg-[#10131a] p-4 font-mono text-xs leading-5 text-zinc-100 shadow-inner first:mt-0 last:mb-0 dark:bg-black/40 [&_code]:break-normal [&_code]:rounded-none [&_code]:bg-transparent [&_code]:p-0 [&_code]:whitespace-pre [&_code]:[overflow-wrap:normal]"
     />
   ),
   table: ({ node: _node, children, ...props }) => (
-    <div className="my-3 overflow-x-auto rounded-xl border border-edge first:mt-0 last:mb-0">
+    <div className="my-3 max-w-full overflow-x-auto rounded-xl border border-edge first:mt-0 last:mb-0">
       <table {...props} className="w-full border-collapse text-[13px]">
         {children}
       </table>
@@ -83,13 +83,13 @@ const components: Components = {
   th: ({ node: _node, ...props }) => (
     <th
       {...props}
-      className="border-b border-edge bg-sunken/70 px-3 py-2 text-left font-semibold"
+      className="border-b border-edge bg-sunken/70 px-3 py-2 text-left font-semibold break-words [overflow-wrap:anywhere]"
     />
   ),
   td: ({ node: _node, ...props }) => (
     <td
       {...props}
-      className="border-b border-edge/70 px-3 py-2 last:[tr:last-child_&]:border-b-0"
+      className="border-b border-edge/70 px-3 py-2 break-words [overflow-wrap:anywhere] last:[tr:last-child_&]:border-b-0"
     />
   ),
 };
@@ -97,7 +97,7 @@ const components: Components = {
 /** Assistant-message markdown (GFM: tables, strikethrough, task lists, autolinks). */
 export function MessageMarkdown({ text }: { text: string }) {
   return (
-    <div className="leading-6">
+    <div className="min-w-0 max-w-full break-words leading-6 [overflow-wrap:anywhere]">
       <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
         {text}
       </ReactMarkdown>
