@@ -3,6 +3,8 @@
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import {
+  ArrowDown,
+  ArrowUp,
   CalendarDays,
   CircleCheck,
   CircleX,
@@ -18,7 +20,7 @@ import {
   TriangleAlert,
   Zap,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { AvatarMark } from '@/app/brand-mark';
 import { hasContractNoticePart, isApprovalProseNotice, isContractNotice } from '@/lib/chat-notices';
 import { focusRing } from '@/lib/ui';
@@ -107,27 +109,47 @@ function DayDivider({ label }: { label: string }) {
   return (
     <div aria-hidden="true" className="flex items-center gap-3 py-1">
       <span className="h-px flex-1 bg-edge" />
-      <span className="text-2xs font-medium text-muted">{label}</span>
+      <span className="rounded-full bg-sunken/70 px-2.5 py-0.5 text-2xs font-medium text-muted">
+        {label}
+      </span>
       <span className="h-px flex-1 bg-edge" />
     </div>
   );
 }
 
-/** Three-dot typing indicator; reduced-motion users get static text instead. */
-function TypingDots({ name }: { name: string }) {
+/**
+ * One presence row for every "assistant is busy" state — the pre-stream think,
+ * the async hand-off, and live tool work — so they read as one voice instead of
+ * three different indicators. The label shimmers while motion is allowed;
+ * reduced-motion readers get plain muted text.
+ */
+function PresenceRow({
+  name,
+  phase,
+  activity,
+}: {
+  name: string;
+  phase: 'thinking' | 'starting' | 'working';
+  activity: Array<{ toolName: string; status: string; step: number }>;
+}) {
+  const label =
+    phase === 'thinking' ? 'Thinking…' : phase === 'starting' ? 'Starting the work…' : 'Working…';
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex w-full max-w-3xl items-start gap-3">
       <AvatarMark name={name} size="sm" active />
-      <div className="flex items-center gap-2 py-1">
-        <span className="sr-only">The assistant is thinking</span>
-        <span aria-hidden="true" className="hidden items-center gap-1 motion-safe:flex">
-          <span className="size-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" />
-          <span className="size-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" />
-          <span className="size-1.5 animate-bounce rounded-full bg-accent" />
+      <div className="min-w-0 flex-1 pt-1">
+        <span className="sr-only">The assistant is working</span>
+        <span
+          aria-hidden="true"
+          className="text-[13px] text-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--content-muted),var(--content-strong),var(--content-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent"
+        >
+          {label}
         </span>
-        <span aria-hidden="true" className="text-[13px] text-muted">
-          Thinking…
-        </span>
+        {activity.length > 0 ? (
+          <div className="mt-2">
+            <ActivityTrail activity={activity} />
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -344,6 +366,10 @@ export function ChatClient({
   const [modelError, setModelError] = useState<string | null>(null);
   /** Keyboard cursor into the /model palette (arrow keys move it, Enter picks). */
   const [modelHighlight, setModelHighlight] = useState(0);
+  /** Whether the scroller is pinned near the bottom (drives the jump pill). */
+  const [atBottom, setAtBottom] = useState(true);
+  /** New messages that arrived while scrolled up (the pill shows a dot). */
+  const [unseenCount, setUnseenCount] = useState(0);
   /** Set when the route handed the turn to the executor — we poll until it settles. */
   const [asyncTurn, setAsyncTurn] = useState<{ taskId: string; cursor: string } | null>(
     initialAsyncTurn ?? null,
@@ -359,8 +385,10 @@ export function ChatClient({
   const autonomousRef = useRef(false);
   autonomousRef.current = autonomous;
   const formRef = useRef<HTMLFormElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messageScrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const previousMessageCountRef = useRef(initialMessages.length);
   /** Messages present at mount render static; only genuinely new ones animate in. */
   const initialMessageIdsRef = useRef<Set<string> | null>(null);
   initialMessageIdsRef.current ??= new Set(initialMessages.map((message) => message.id));
@@ -570,6 +598,35 @@ export function ChatClient({
     return () => window.cancelAnimationFrame(frame);
   });
 
+  // A message landed while the reader was scrolled up — count it so the jump
+  // pill can show there's something new below.
+  useEffect(() => {
+    if (messages.length > previousMessageCountRef.current && !stickToBottomRef.current) {
+      setUnseenCount((count) => count + (messages.length - previousMessageCountRef.current));
+    }
+    previousMessageCountRef.current = messages.length;
+  }, [messages.length]);
+
+  // Grow the composer with its content, up to the CSS max-height cap. `input`
+  // is the trigger; the new height is read from the DOM, not from `input`.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: input drives the re-measure
+  useLayoutEffect(() => {
+    const element = textareaRef.current;
+    if (!element) return;
+    element.style.height = '0px';
+    element.style.height = `${Math.min(element.scrollHeight, 160)}px`;
+  }, [input]);
+
+  const jumpToLatest = () => {
+    stickToBottomRef.current = true;
+    setAtBottom(true);
+    setUnseenCount(0);
+    const scroller = messageScrollerRef.current;
+    if (!scroller) return;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' });
+  };
+
   const submitCurrentMessage = () => {
     const text = input.trim();
     if (!text || busy) return;
@@ -649,8 +706,10 @@ export function ChatClient({
         ref={messageScrollerRef}
         onScroll={(event) => {
           const element = event.currentTarget;
-          stickToBottomRef.current =
-            element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+          const bottom = element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+          stickToBottomRef.current = bottom;
+          setAtBottom(bottom);
+          if (bottom) setUnseenCount(0);
         }}
         className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto py-5"
       >
@@ -683,14 +742,20 @@ export function ChatClient({
                   label: 'Plan a trip',
                   icon: Route,
                 },
-              ].map((suggestion) => {
+              ].map((suggestion, index) => {
                 const SuggestionIcon = suggestion.icon;
                 return (
                   <button
                     key={suggestion.text}
                     type="button"
-                    onClick={() => setInput(suggestion.text)}
-                    className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left shadow-[0_1px_2px_rgb(23_25_35/0.06)] motion-safe:transition-transform hover:-translate-y-0.5 ${focusRing}`}
+                    disabled={busy}
+                    onClick={() => {
+                      stickToBottomRef.current = true;
+                      setAtBottom(true);
+                      void sendMessage({ text: suggestion.text });
+                    }}
+                    style={{ animationDelay: `${index * 60}ms` }}
+                    className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left shadow-[0_1px_2px_rgb(23_25_35/0.06)] motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-transform hover:-translate-y-0.5 disabled:opacity-60 ${focusRing}`}
                   >
                     <SuggestionIcon className="size-4 text-accent" aria-hidden="true" />
                     <span className="mt-3 text-[13px] font-medium text-strong">
@@ -702,7 +767,7 @@ export function ChatClient({
             </div>
           </div>
         ) : (
-          <div className="flex min-w-0 flex-col gap-4">
+          <div className="flex min-w-0 flex-col">
             {messages.map((message, messageIndex) => {
               const parts = message.parts as Array<
                 UIMessage['parts'][number] | InlineApprovalPart | InlineBudgetRequestPart
@@ -746,10 +811,19 @@ export function ChatClient({
               const recallSources = recallSourcesOf(message);
               const hasBubble = visibleTextParts.length > 0 && !isNotice;
               const isNewMessage = !initialMessageIdsRef.current?.has(message.id);
+              const previousMessage = messageIndex > 0 ? messages[messageIndex - 1] : undefined;
+              // A "run" is a streak of turns from the same speaker — the avatar
+              // shows once at the top and the follow-ons tuck in under it.
+              const startsRun =
+                !previousMessage || previousMessage.role !== message.role || showDivider;
+              const streamingCaret =
+                status === 'streaming' &&
+                message.role === 'assistant' &&
+                messageIndex === messages.length - 1;
               return (
                 <div
                   key={message.id}
-                  className={`flex min-w-0 flex-col gap-2 ${
+                  className={`flex min-w-0 flex-col gap-2 first:mt-0 ${startsRun ? 'mt-5' : 'mt-1.5'} ${
                     isNewMessage ? 'motion-safe:animate-[message-in_200ms_ease-out]' : ''
                   }`}
                 >
@@ -766,8 +840,16 @@ export function ChatClient({
                     >
                       {message.role === 'assistant' ? (
                         <div className="flex w-full max-w-3xl items-start gap-3">
-                          <AvatarMark name={agentName} size="sm" />
-                          <div className="min-w-0 flex-1 pt-0.5 text-[15px] leading-6">
+                          {startsRun ? (
+                            <AvatarMark name={agentName} size="sm" />
+                          ) : (
+                            <span aria-hidden="true" className="w-6 shrink-0" />
+                          )}
+                          <div
+                            className={`min-w-0 flex-1 pt-0.5 text-[15px] leading-6 ${
+                              streamingCaret ? 'chat-caret' : ''
+                            }`}
+                          >
                             <RecallNote sources={recallSources} />
                             {visibleTextParts.map((part, index) => (
                               <MessageMarkdown
@@ -797,6 +879,7 @@ export function ChatClient({
                   ))}
                   {showTime && date ? (
                     <p
+                      title={date.toLocaleString()}
                       className={`text-2xs text-muted ${
                         message.role === 'user' ? 'self-end' : 'self-start'
                       }`}
@@ -807,18 +890,20 @@ export function ChatClient({
                 </div>
               );
             })}
-            {status === 'submitted' ? <TypingDots name={agentName} /> : null}
-            {asyncTurn ? (
-              <div className="flex flex-col gap-2">
-                {activity.length === 0 ? (
-                  <p className="ml-3 border-l border-edge py-1 pl-5 text-[13px] text-muted motion-safe:animate-pulse">
-                    Starting the work…
-                  </p>
-                ) : null}
-                <ActivityTrail activity={activity} />
+            {status === 'submitted' ? (
+              <div className="mt-5">
+                <PresenceRow name={agentName} phase="thinking" activity={[]} />
+              </div>
+            ) : asyncTurn ? (
+              <div className="mt-5">
+                <PresenceRow
+                  name={agentName}
+                  phase={activity.length > 0 ? 'working' : 'starting'}
+                  activity={activity}
+                />
               </div>
             ) : null}
-            {asyncNote ? <p className="text-xs text-muted">{asyncNote}</p> : null}
+            {asyncNote ? <p className="mt-3 text-xs text-muted">{asyncNote}</p> : null}
             {liveRecall ? <RecallNote sources={liveRecall} /> : null}
           </div>
         )}
@@ -843,8 +928,24 @@ export function ChatClient({
           event.preventDefault();
           submitCurrentMessage();
         }}
-        className="mobile-safe-bottom sticky bottom-0 min-w-0 border-t border-edge bg-surface/95 pt-3 backdrop-blur sm:pb-3"
+        className="mobile-safe-bottom sticky bottom-0 min-w-0 border-t border-edge bg-surface/95 pt-3 backdrop-blur sm:pb-3 relative"
       >
+        {!atBottom && messages.length > 0 ? (
+          <div className="pointer-events-none absolute inset-x-0 -top-14 flex justify-center">
+            <button
+              type="button"
+              onClick={jumpToLatest}
+              aria-label="Jump to latest"
+              className={`pointer-events-auto mobile-touch-target inline-flex h-9 items-center gap-1.5 rounded-full bg-raised px-3.5 text-xs font-medium text-strong shadow-[0_4px_16px_rgb(23_25_35/0.14)] ring-1 ring-edge motion-safe:animate-[pop-in_140ms_ease-out] ${focusRing}`}
+            >
+              <ArrowDown className="size-3.5" aria-hidden="true" />
+              Jump to latest
+              {unseenCount > 0 ? (
+                <span aria-hidden="true" className="size-1.5 rounded-full bg-accent" />
+              ) : null}
+            </button>
+          </div>
+        ) : null}
         {modelCommandOpen ? (
           <section
             aria-label="Choose response model"
@@ -927,6 +1028,7 @@ export function ChatClient({
           className="min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_6px_24px_rgb(23_25_35/0.08)] ring-1 ring-edge"
         >
           <textarea
+            ref={textareaRef}
             aria-label="Message"
             aria-controls={modelCommandOpen ? 'model-listbox' : undefined}
             aria-activedescendant={modelCommandOpen ? `model-option-${modelHighlight}` : undefined}
@@ -967,8 +1069,8 @@ export function ChatClient({
               }
             }}
             placeholder="Ask anything… Type /model to switch models"
-            rows={2}
-            className="block max-h-40 min-h-16 w-full min-w-0 resize-none border-0 bg-transparent px-4 pt-3 pb-2 text-base outline-none placeholder:text-muted/70 sm:text-sm"
+            rows={1}
+            className="block max-h-40 min-h-12 w-full min-w-0 resize-none border-0 bg-transparent px-4 pt-3 pb-2 text-base outline-none placeholder:text-muted/70 sm:text-sm"
           />
           <div className="flex min-w-0 items-center justify-between gap-2 border-t border-edge/70 px-2 py-2">
             <button
@@ -995,25 +1097,41 @@ export function ChatClient({
                 budget caps still apply.
               </span>
             </button>
-            {status === 'submitted' || status === 'streaming' ? (
+            <div className="flex shrink-0 items-center gap-2">
               <button
                 type="button"
-                onClick={() => stop()}
-                title="Stop generating"
-                className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-edge bg-raised px-4 text-sm font-medium text-strong motion-safe:transition-colors hover:bg-sunken ${focusRing}`}
+                onClick={() => {
+                  setInput('/model');
+                  textareaRef.current?.focus();
+                }}
+                aria-label={`Response model: ${selectedModelLabel}. Tap to change.`}
+                title="Switch response model"
+                className={`hidden h-10 items-center gap-1.5 rounded-xl px-3 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong sm:inline-flex ${focusRing}`}
               >
-                <Square className="size-3 fill-current" aria-hidden="true" />
-                Stop
+                <Sparkles className="size-3.5 shrink-0" aria-hidden="true" />
+                <span className="max-w-[14ch] truncate">{selectedModelLabel}</span>
               </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={busy || input.trim() === '' || modelCommandOpen}
-                className={`h-10 shrink-0 rounded-xl bg-accent px-4 text-sm font-medium text-white shadow-sm motion-safe:transition-colors hover:bg-accent-hover disabled:opacity-50 ${focusRing}`}
-              >
-                Send
-              </button>
-            )}
+              {status === 'submitted' || status === 'streaming' ? (
+                <button
+                  type="button"
+                  onClick={() => stop()}
+                  title="Stop generating"
+                  className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-edge bg-raised px-4 text-sm font-medium text-strong motion-safe:transition-colors hover:bg-sunken ${focusRing}`}
+                >
+                  <Square className="size-3 fill-current" aria-hidden="true" />
+                  Stop
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={busy || input.trim() === '' || modelCommandOpen}
+                  aria-label="Send"
+                  className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-accent text-white shadow-sm motion-safe:transition-colors hover:bg-accent-hover disabled:opacity-50 ${focusRing}`}
+                >
+                  <ArrowUp className="size-4" aria-hidden="true" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
         <span aria-live="polite" className="sr-only">

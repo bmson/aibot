@@ -172,7 +172,7 @@
 /* A soft caret trailing the assistant's last line while a reply streams in.
    Pure decoration — off entirely for reduced motion. */
 @media (prefers-reduced-motion: no-preference) {
-  .chat-caret > div > :is(p, li):last-child::after {
+  .chat-caret > div:last-of-type > :is(p, li):last-child::after {
     content: "";
     display: inline-block;
     width: 2px;
