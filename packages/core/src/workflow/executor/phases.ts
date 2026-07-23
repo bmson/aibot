@@ -230,6 +230,16 @@ export async function resumePendingApprovals(rc: RunContext): Promise<ExecuteRes
 
     for (let i = 0; i < state.pendingApprovals.length; i += 1) {
       const pending = state.pendingApprovals[i] as (typeof state.pendingApprovals)[number];
+      // Strict proposal order: once an earlier call in this batch is still
+      // undecided, every later call waits too — a later-approved docs.share must
+      // not execute before its docs.create is decided. Approvals proposed in one
+      // model step usually stand alone, but ordering matters when they don't, and
+      // the 24h approval expiry guarantees the batch eventually drains rather than
+      // deadlocking on one un-actioned card.
+      if (stillPending.length > 0) {
+        stillPending.push(pending);
+        continue;
+      }
       const approval = byId.get(pending.approvalId);
       if (!approval || approval.status === 'pending') {
         stillPending.push(pending);
@@ -423,6 +433,13 @@ export async function runPlanPhase(rc: RunContext): Promise<ExecuteResult | { pl
     // tainted context for owner approval, so forcing a tool here can never act
     // autonomously — the worst case is a spurious approval card. 'clarify' is
     // left untouched so a genuinely ambiguous forward still asks.
+    //
+    // Owner-only by design. A known (non-owner) sender's email is the sender's
+    // OWN message, not an owner instruction to act — coercing it into an action
+    // would let a third party populate the owner's approval queue, and would
+    // route the common "known contact asks a question" case (a prose answer,
+    // zero tools) into A2's needs_attention park instead of D9, which already
+    // proposes that reply for the owner to approve. Known senders stay on D9.
     if (
       plan?.action === 'reply' &&
       task.type === 'email_triage' &&

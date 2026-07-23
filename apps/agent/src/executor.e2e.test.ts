@@ -898,4 +898,100 @@ describe('executor end-to-end (integration, scripted model)', () => {
     });
     await db.delete(toolCalls).where(eq(toolCalls.taskId, task.id));
   });
+
+  it('resumes partial approvals in strict proposal order', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const order: string[] = [];
+    const registry = new ToolRegistry();
+    for (const name of ['exec.first', 'exec.second']) {
+      registry.register(
+        {
+          name,
+          description: `approval-gated ${name}`,
+          inputSchema: z.object({}),
+          risk: 'approval',
+          acceptsUntrustedInput: true,
+          approvalSummary: () => `run ${name}`,
+          execute: async () => {
+            order.push(name);
+            return { ran: name };
+          },
+        },
+        { outwardFacing: true },
+      );
+    }
+    const dispatcher = new ToolDispatcher(db, registry);
+    const router = {
+      async object() {
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          object: { action: 'workflow', reasoning: '', steps: ['a', 'b'], missingInfo: [] },
+        };
+      },
+      async step(_role: string, opts: { messages?: ModelMessage[] }): Promise<StepCallOutcome> {
+        const transcript = JSON.stringify(opts.messages ?? []);
+        // Propose both gated calls in one step; once both results are in, finish.
+        if (transcript.includes('"ran":"exec.second"')) {
+          return {
+            ok: true,
+            modelId: 'fake/model',
+            degraded: false,
+            text: 'both done',
+            toolCalls: [],
+            finishReason: 'stop',
+          };
+        }
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          text: '',
+          toolCalls: [
+            { toolCallId: 'c1', toolName: 'exec.first', input: {} },
+            { toolCallId: 'c2', toolName: 'exec.second', input: {} },
+          ],
+        };
+      },
+    } as unknown as ModelRouter;
+
+    const { task } = await enqueueTask(db, { event: event(), type: 'adhoc' });
+    createdTaskIds.push(task.id);
+
+    const parked = await executeTask({ db, router, dispatcher }, task.id);
+    expect(parked.outcome).toBe('parked');
+
+    const rows = await db
+      .select({ id: approvals.id, name: toolCalls.toolName })
+      .from(approvals)
+      .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
+      .where(eq(approvals.taskId, task.id));
+    const first = rows.find((r) => r.name === 'exec.first');
+    const second = rows.find((r) => r.name === 'exec.second');
+    expect(first && second).toBeTruthy();
+
+    // Approve only the SECOND call. Strict order means nothing runs yet: the
+    // first is still undecided, so the second waits behind it.
+    await resolveApproval(db, {
+      approvalId: (second as NonNullable<typeof second>).id,
+      decision: 'approved',
+      via: 'web',
+      deferNotification: true,
+    });
+    const stillParked = await executeTask({ db, router, dispatcher }, task.id);
+    expect(stillParked.outcome).toBe('parked');
+    expect(order).toEqual([]); // neither ran — the first is still pending
+
+    // Approve the FIRST too → both run, first before second.
+    await resolveApproval(db, {
+      approvalId: (first as NonNullable<typeof first>).id,
+      decision: 'approved',
+      via: 'web',
+      deferNotification: true,
+    });
+    const done = await executeTask({ db, router, dispatcher }, task.id);
+    expect(done.outcome).toBe('done');
+    expect(order).toEqual(['exec.first', 'exec.second']);
+  });
 });
