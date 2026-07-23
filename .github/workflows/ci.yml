@@ -53,7 +53,7 @@ jobs:
       - name: Exercise the mobile UI in a real browser
         env:
           AUTH_DEV_BYPASS: 'true'
-          SMOKE_BASE_URL: http://127.0.0.1:3000
+          SMOKE_BASE_URL: http://localhost:3000
           SMOKE_BROWSER_CHANNEL: chrome
           SMOKE_CREATE_FIXTURE: 'true'
         run: |
