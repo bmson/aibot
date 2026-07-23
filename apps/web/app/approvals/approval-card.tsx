@@ -25,7 +25,7 @@ export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
           {approval.shortCode}
         </span>
       </div>
-      <p className="mt-2 text-xs leading-5 text-slate-700 dark:text-zinc-300">
+      <p className="mt-2 text-xs leading-5 text-zinc-700 dark:text-zinc-300">
         <span className="font-medium">Why I’m asking:</span> {approval.reason}
       </p>
       <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
@@ -56,8 +56,8 @@ export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
               <dd
                 className={
                   f.block
-                    ? 'min-w-0 flex-1 whitespace-pre-wrap break-words text-slate-800 dark:text-zinc-200'
-                    : 'min-w-0 flex-1 break-words text-slate-800 dark:text-zinc-200'
+                    ? 'min-w-0 flex-1 whitespace-pre-wrap break-words text-zinc-800 dark:text-zinc-200'
+                    : 'min-w-0 flex-1 break-words text-zinc-800 dark:text-zinc-200'
                 }
               >
                 {f.value}

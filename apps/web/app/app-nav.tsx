@@ -95,10 +95,10 @@ export function AppNav({
             tone === 'rail'
               ? active
                 ? 'bg-white/12 font-medium text-white shadow-sm'
-                : 'text-slate-300 hover:bg-white/7 hover:text-white'
+                : 'text-zinc-300 hover:bg-white/7 hover:text-white'
               : active
-                ? 'bg-slate-900 font-medium text-white'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100'
+                ? 'bg-zinc-900 font-medium text-white'
+                : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100'
           }`}
         >
           {item.label}
@@ -111,7 +111,7 @@ export function AppNav({
 
   const signOut = signedIn ? (
     <form action={signOutAction}>
-      <button type="submit" className="text-xs text-slate-400 hover:text-white hover:underline">
+      <button type="submit" className="text-xs text-zinc-400 hover:text-white hover:underline">
         Sign out
       </button>
     </form>
@@ -123,7 +123,7 @@ export function AppNav({
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden w-60 shrink-0 flex-col bg-slate-950 text-white lg:flex">
+      <aside className="hidden w-60 shrink-0 flex-col bg-zinc-950 text-white lg:flex">
         <div className="px-5 pt-6 pb-7">
           <Link href="/" className="group inline-flex flex-col gap-1">
             <span className="text-[10px] font-semibold tracking-[0.18em] text-indigo-300 uppercase">
@@ -135,7 +135,7 @@ export function AppNav({
         <nav className="flex flex-col gap-1 px-3">{renderLinks(primaryItems, 'rail')}</nav>
         {utilityItems.length > 0 ? (
           <div className="mt-6 px-3">
-            <p className="px-3 text-[10px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+            <p className="px-3 text-[10px] font-semibold tracking-[0.14em] text-zinc-500 uppercase">
               Manage
             </p>
             <nav className="mt-2 flex flex-col gap-1">{renderLinks(utilityItems, 'rail')}</nav>
@@ -148,7 +148,7 @@ export function AppNav({
       </aside>
 
       {/* Mobile top bar */}
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-800 bg-slate-950/95 px-4 text-white backdrop-blur lg:hidden">
+      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-zinc-800 bg-zinc-950/95 px-4 text-white backdrop-blur lg:hidden">
         <Link
           href="/"
           data-mobile-touch-target="true"
@@ -165,7 +165,7 @@ export function AppNav({
             aria-label="Open navigation menu"
             aria-expanded={open}
             aria-controls="mobile-nav"
-            className="relative -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-slate-200 hover:bg-white/10"
+            className="relative -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-zinc-200 hover:bg-white/10"
           >
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
               <title>Menu</title>
@@ -195,7 +195,7 @@ export function AppNav({
             aria-hidden="true"
             tabIndex={-1}
             onClick={() => setOpen(false)}
-            className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm"
+            className="absolute inset-0 bg-zinc-950/50 backdrop-blur-sm"
           />
           <div
             ref={drawerRef}
@@ -203,7 +203,7 @@ export function AppNav({
             role="dialog"
             aria-modal="true"
             aria-labelledby="mobile-nav-title"
-            className="absolute inset-y-0 right-0 flex w-72 max-w-[84%] flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950"
+            className="absolute inset-y-0 right-0 flex w-72 max-w-[84%] flex-col border-l border-edge bg-raised shadow-2xl"
           >
             <div className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
               <span id="mobile-nav-title" className="text-sm font-semibold tracking-[-0.02em]">
@@ -214,7 +214,7 @@ export function AppNav({
                 type="button"
                 onClick={() => setOpen(false)}
                 aria-label="Close navigation menu"
-                className="-mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                className="-mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
               >
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
                   <title>Close</title>
@@ -231,7 +231,7 @@ export function AppNav({
               {renderLinks(primaryItems, 'drawer')}
               {utilityItems.length > 0 ? (
                 <>
-                  <p className="mt-5 px-3 text-[10px] font-semibold tracking-[0.14em] text-slate-400 uppercase">
+                  <p className="mt-5 px-3 text-[10px] font-semibold tracking-[0.14em] text-zinc-400 uppercase">
                     Manage
                   </p>
                   {renderLinks(utilityItems, 'drawer')}
@@ -243,7 +243,7 @@ export function AppNav({
                 <form action={signOutAction}>
                   <button
                     type="submit"
-                    className="inline-flex min-h-11 items-center text-xs text-slate-500 hover:text-slate-950 hover:underline dark:text-zinc-500 dark:hover:text-zinc-100"
+                    className="inline-flex min-h-11 items-center text-xs text-zinc-500 hover:text-zinc-950 hover:underline dark:text-zinc-500 dark:hover:text-zinc-100"
                   >
                     Sign out
                   </button>

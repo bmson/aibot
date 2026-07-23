@@ -5,6 +5,31 @@
    before first paint, so OS-dark users still get dark by default. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Semantic surface/text values. One gray family (zinc) everywhere; components
+   use the token utilities below (bg-surface, bg-raised, border-edge, text-muted,
+   text-strong, bg-accent) instead of raw palette classes, so light and dark stay
+   in sync from this one block. */
+:root {
+  --surface: #fafafa; /* zinc-50 page background */
+  --surface-raised: #ffffff; /* cards */
+  --surface-sunken: #f4f4f5; /* zinc-100 wells, code, receipts */
+  --edge: #e4e4e7; /* zinc-200 borders */
+  --content-strong: #09090b; /* zinc-950 */
+  --content-muted: #71717a; /* zinc-500 */
+  --accent: #4f46e5; /* indigo-600 — constant across modes: white-on-accent stays ≥4.5:1 */
+  --accent-hover: #4338ca; /* indigo-700 */
+}
+.dark {
+  --surface: #09090b; /* zinc-950 */
+  --surface-raised: #101014; /* a half-step above the page — cards get lift */
+  --surface-sunken: #18181b; /* zinc-900 */
+  --edge: #27272a; /* zinc-800 */
+  --content-strong: #f4f4f5; /* zinc-100 */
+  --content-muted: #a1a1aa; /* zinc-400 */
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+}
+
 @theme {
   /* next/font wires these CSS vars; fall back to the system stack. */
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
@@ -12,6 +37,19 @@
   /* One step below text-xs (12px) — replaces the scattered text-[10px]/[11px]. */
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
+}
+
+/* `inline` keeps the generated utilities pointing at the var() itself, so the
+   .dark overrides above flip them without duplicate dark: classes. */
+@theme inline {
+  --color-surface: var(--surface);
+  --color-raised: var(--surface-raised);
+  --color-sunken: var(--surface-sunken);
+  --color-edge: var(--edge);
+  --color-strong: var(--content-strong);
+  --color-muted: var(--content-muted);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
 }
 
 /* Phone controls share one physical rhythm: large enough to tap without

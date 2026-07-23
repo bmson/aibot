@@ -50,7 +50,7 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
   };
 
   return (
-    <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-slate-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-zinc-100">
+    <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-zinc-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-zinc-100">
       <p className="text-[10px] font-semibold tracking-[0.12em] text-amber-700 uppercase dark:text-amber-300">
         Spending permission needed
       </p>
@@ -58,7 +58,7 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
         Raise this task’s cap from ${part.currentBudgetUsd.toFixed(2)} to $
         {part.proposedBudgetUsd.toFixed(2)}?
       </p>
-      <p className="mt-1 text-xs text-slate-600 dark:text-zinc-300">
+      <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
         ${part.spentUsd.toFixed(4)} has been spent. Approval applies only to this task.
       </p>
       {status === 'approved' ? (
@@ -66,11 +66,11 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
           Approved — work is resuming.
         </p>
       ) : status === 'denied' ? (
-        <p className="mt-2 text-xs font-medium text-slate-600 dark:text-zinc-300">
+        <p className="mt-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
           Declined — the task was cancelled.
         </p>
       ) : status === 'missing' ? (
-        <p className="mt-2 text-xs text-slate-500 dark:text-zinc-400">
+        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
           This request is no longer available.
         </p>
       ) : (

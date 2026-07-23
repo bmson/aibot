@@ -28,7 +28,7 @@ function Section({
 }) {
   if (count === 0) return null;
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="rounded-xl border border-edge bg-raised p-5 shadow-sm">
       <div className="flex items-baseline gap-2">
         <SectionHeading title={title} hint={subtitle} />
         <CountBadge>{count}</CountBadge>
@@ -144,12 +144,12 @@ export default async function DashboardPage() {
       />
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 dark:border-indigo-900/60 dark:bg-indigo-950/30">
         <div>
-          <p className="text-sm font-medium text-slate-900 dark:text-zinc-100">
+          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
             {needsYou === 0
               ? 'You’re all caught up.'
               : `${needsYou} item${needsYou === 1 ? '' : 's'} need your attention.`}
           </p>
-          <p className="mt-1 text-xs text-slate-600 dark:text-zinc-400">
+          <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
             {needsYou === 0
               ? 'The assistant will ask when it needs approval or a decision.'
               : 'Review approvals or unblock a task to keep work moving.'}

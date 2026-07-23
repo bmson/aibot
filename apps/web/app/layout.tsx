@@ -76,7 +76,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: static no-flash theme script */}
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
-      <body className="min-h-screen bg-[#f5f7fb] font-sans text-zinc-950 antialiased dark:bg-zinc-950 dark:text-zinc-100">
+      <body className="min-h-screen bg-surface font-sans text-strong antialiased">
         {authMode === 'dev-bypass' ? (
           <div className="bg-amber-100 px-4 py-1 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
             dev mode — auth disabled

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn, EmptyState } from '@/lib/ui';
+import { btn, btnSm, EmptyState } from '@/lib/ui';
 import {
   archiveConversation,
   archiveInactiveConversations,
@@ -125,7 +125,7 @@ export default async function ChatListPage({
               </Link>
               {conversation.isPrimary ? null : archived ? (
                 <form action={restoreConversation.bind(null, conversation.id)}>
-                  <button type="submit" className={btn.outline}>
+                  <button type="submit" className={btnSm.outline}>
                     Restore
                   </button>
                 </form>
@@ -135,7 +135,7 @@ export default async function ChatListPage({
                 </span>
               ) : (
                 <form action={archiveConversation.bind(null, conversation.id)}>
-                  <button type="submit" className={btn.outline}>
+                  <button type="submit" className={btnSm.outline}>
                     Archive
                   </button>
                 </form>

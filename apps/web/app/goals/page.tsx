@@ -193,7 +193,7 @@ export default async function GoalsPage({
                 <summary className={`${btn.outline} cursor-pointer list-none`}>More</summary>
                 <form
                   action={archiveInactiveGoals}
-                  className="absolute top-full right-0 z-10 mt-2 w-64 rounded-lg border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-800 dark:bg-zinc-950"
+                  className="absolute top-full right-0 z-10 mt-2 w-64 rounded-lg border border-edge bg-raised p-2 shadow-lg"
                 >
                   <button type="submit" className={`${btn.outline} w-full`}>
                     Archive old finished goals

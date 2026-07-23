@@ -11,7 +11,7 @@ import {
   rejectQuarantined,
   setFactPinned,
 } from '@/app/profile/actions';
-import { btn } from '@/lib/ui';
+import { btnSm } from '@/lib/ui';
 
 /** Plain-serializable fact view, built server-side in page.tsx. */
 export interface FactView {
@@ -31,8 +31,8 @@ export interface FactView {
   validityLabel: string;
 }
 
-const outlineButton = btn.outline;
-const dangerOutlineButton = btn.dangerOutline;
+const outlineButton = btnSm.outline;
+const dangerOutlineButton = btnSm.dangerOutline;
 
 export function FactRow({ fact, quarantine = false }: { fact: FactView; quarantine?: boolean }) {
   const [editing, setEditing] = useState(false);
@@ -166,7 +166,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
                   type="button"
                   disabled={pending}
                   onClick={() => startTransition(() => forgetFact(fact.id))}
-                  className={btn.danger}
+                  className={btnSm.danger}
                 >
                   Really forget
                 </button>
@@ -213,7 +213,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
                   else setEditing(false);
                 })
               }
-              className={btn.primary}
+              className={btnSm.primary}
             >
               {pending ? 'Saving…' : 'Save correction'}
             </button>

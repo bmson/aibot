@@ -293,7 +293,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         </form>
       ) : null}
 
-      <div className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="mt-5 rounded-xl border border-edge bg-raised p-5 shadow-sm">
         <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm sm:grid-cols-3">
           <div>
             <dt className="text-xs text-zinc-500 dark:text-zinc-400">Started by</dt>
@@ -337,23 +337,23 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         </dl>
       </div>
 
-      <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="mt-5 rounded-xl border border-edge bg-raised p-5 shadow-sm">
         <h2 className="text-sm font-semibold">What actually happened</h2>
-        <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-zinc-400">
+        <p className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
           This list is built from completed tool results, not from the assistant’s wording.
         </p>
         {completedActions.length === 0 ? (
-          <p className="mt-4 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:bg-zinc-900 dark:text-zinc-400">
+          <p className="mt-4 rounded-lg bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
             No external action completed for this item.
           </p>
         ) : (
-          <ul className="mt-4 divide-y divide-slate-100 dark:divide-zinc-800">
+          <ul className="mt-4 divide-y divide-zinc-100 dark:divide-zinc-800">
             {completedActions.map((call) => (
               <li key={call.id} className="py-3 first:pt-0 last:pb-0">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-medium">{actionLabel(call.toolName)}</p>
-                    <p className="mt-0.5 text-xs text-slate-500 dark:text-zinc-400">
+                    <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
                       {relativeTime(call.finishedAt ?? call.createdAt, now)}
                     </p>
                   </div>
@@ -384,12 +384,12 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       </section>
 
       {downloadableFiles.length > 0 ? (
-        <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+        <section className="mt-5 rounded-xl border border-edge bg-raised p-5 shadow-sm">
           <h2 className="text-sm font-semibold">Files produced</h2>
-          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-zinc-400">
+          <p className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
             Artifacts this task saved to the workspace — click to download.
           </p>
-          <ul className="mt-4 divide-y divide-slate-100 dark:divide-zinc-800">
+          <ul className="mt-4 divide-y divide-zinc-100 dark:divide-zinc-800">
             {downloadableFiles.map((file) => (
               <li key={file.id} className="flex items-center justify-between gap-3 py-2">
                 <a
@@ -398,7 +398,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                 >
                   {file.workspacePath.split('/').pop()}
                 </a>
-                <span className="shrink-0 text-xs text-slate-500 dark:text-zinc-400">
+                <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
                   {file.bytes > 0 ? `${Math.max(1, Math.round(file.bytes / 1024))} KB` : ''}
                 </span>
               </li>
@@ -407,11 +407,11 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         </section>
       ) : null}
 
-      <details className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-zinc-300">
+      <details className="mt-5 rounded-xl border border-edge bg-raised p-5 shadow-sm">
+        <summary className="cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">
           Full technical record
         </summary>
-        <p className="mt-1 text-xs text-slate-500 dark:text-zinc-400">
+        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
           Tool calls, approvals, messages, and model activity for troubleshooting.
         </p>
         {task.plan != null ? <JsonDetails summary="Plan" value={task.plan} /> : null}

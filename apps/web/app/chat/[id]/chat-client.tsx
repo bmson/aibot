@@ -57,12 +57,12 @@ function recallSourcesOf(message: UIMessage): RecallSource[] {
 function RecallChip({ sources }: { sources: RecallSource[] }) {
   if (sources.length === 0) return null;
   return (
-    <div className="mb-1.5 flex flex-wrap items-center gap-1 text-[11px] text-slate-500 dark:text-zinc-400">
+    <div className="mb-1.5 flex flex-wrap items-center gap-1 text-[11px] text-zinc-500 dark:text-zinc-400">
       <span className="font-medium">↩ Recalled from earlier:</span>
       {sources.map((source, index) => (
         <span
           key={`${source.date}-${index.toString()}`}
-          className="rounded bg-slate-100 px-1.5 py-0.5 dark:bg-zinc-800"
+          className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800"
           title={source.label}
         >
           {source.date} · {source.label}
@@ -304,14 +304,14 @@ export function ChatClient({
 
   return (
     <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-4xl flex-col lg:h-[calc(100vh-4rem)]">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4 dark:border-zinc-800">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 pb-4 dark:border-zinc-800">
         <div className="min-w-0">
           <p className="text-[10px] font-semibold tracking-[0.14em] text-indigo-700 uppercase dark:text-indigo-300">
             Chat
           </p>
           <h1 className="mt-1 truncate text-xl font-semibold tracking-[-0.03em]">{title}</h1>
           {goalTitle ? (
-            <p className="mt-1 truncate text-xs text-slate-500 dark:text-zinc-400">
+            <p className="mt-1 truncate text-xs text-zinc-500 dark:text-zinc-400">
               Working toward: {goalTitle}
             </p>
           ) : null}
@@ -339,13 +339,13 @@ export function ChatClient({
             <span className="text-xs text-zinc-500 dark:text-zinc-500">{fallbackNote}</span>
           ) : null}
           <details className="relative">
-            <summary className="inline-flex cursor-pointer list-none items-center rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+            <summary className="inline-flex cursor-pointer list-none items-center rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
               Model
             </summary>
-            <div className="absolute top-full right-0 z-10 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-950">
+            <div className="absolute top-full right-0 z-10 mt-2 w-56 rounded-xl border border-edge bg-raised p-2 shadow-lg">
               <label
                 htmlFor="conversation-model"
-                className="px-1 text-[10px] font-semibold tracking-[0.12em] text-slate-500 uppercase dark:text-zinc-400"
+                className="px-1 text-[10px] font-semibold tracking-[0.12em] text-zinc-500 uppercase dark:text-zinc-400"
               >
                 Response model
               </label>
@@ -358,7 +358,7 @@ export function ChatClient({
                   const value = event.target.value;
                   startTransition(() => changeConversationModel(conversationId, value || null));
                 }}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-base sm:text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-2 py-1.5 text-base sm:text-sm dark:border-zinc-700 dark:bg-zinc-900"
               >
                 <option value="">Auto</option>
                 {models.map((model) => (
@@ -390,7 +390,7 @@ export function ChatClient({
         className="flex-1 overflow-y-auto py-4"
       >
         {messages.length === 0 ? (
-          <p className="mt-8 text-sm leading-6 text-slate-500 dark:text-zinc-400">
+          <p className="mt-8 text-sm leading-6 text-zinc-500 dark:text-zinc-400">
             Ask for a plan, a document, a summary, or help with something you need to get done.
           </p>
         ) : (
@@ -404,7 +404,7 @@ export function ChatClient({
                   className={
                     message.role === 'user'
                       ? 'max-w-[88%] rounded-2xl rounded-br-md bg-indigo-600 px-3 py-2 text-sm text-white shadow-sm sm:max-w-[80%]'
-                      : 'max-w-[88%] rounded-2xl rounded-bl-md border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm sm:max-w-[80%] dark:border-zinc-800 dark:bg-zinc-900'
+                      : 'max-w-[88%] rounded-2xl rounded-bl-md border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm sm:max-w-[80%] dark:border-zinc-800 dark:bg-zinc-900'
                   }
                 >
                   {message.role === 'assistant' ? (
@@ -443,7 +443,7 @@ export function ChatClient({
             ) : null}
             {asyncTurn ? (
               <div>
-                <p className="animate-pulse text-sm text-slate-500 dark:text-zinc-400">
+                <p className="animate-pulse text-sm text-zinc-500 dark:text-zinc-400">
                   Working on it…
                 </p>
                 {activity.length > 0 ? (
@@ -482,17 +482,17 @@ export function ChatClient({
           event.preventDefault();
           submitCurrentMessage();
         }}
-        className="mobile-safe-bottom flex flex-col gap-2 border-t border-slate-200 pt-4 dark:border-zinc-800"
+        className="mobile-safe-bottom flex flex-col gap-2 border-t border-zinc-200 pt-4 dark:border-zinc-800"
       >
         <label
-          className="flex cursor-pointer select-none items-center gap-2 self-start text-xs text-slate-500 dark:text-zinc-400"
+          className="flex cursor-pointer select-none items-center gap-2 self-start text-xs text-zinc-500 dark:text-zinc-400"
           title="Run this request free-range: I act without asking for each approval. Sensitive steps (memory from web content, unknown recipients, logged-in browsing, networked code) still ask, and budget caps still apply."
         >
           <input
             type="checkbox"
             checked={autonomous}
             onChange={(event) => setAutonomous(event.target.checked)}
-            className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-400 dark:border-zinc-600"
+            className="h-3.5 w-3.5 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-400 dark:border-zinc-600"
           />
           Autonomous — act without asking me to approve each step
         </label>
@@ -509,7 +509,7 @@ export function ChatClient({
             }}
             placeholder="Ask anything…"
             rows={2}
-            className="max-h-40 flex-1 resize-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-base outline-none transition-shadow placeholder:text-slate-400 focus:border-indigo-400 focus:ring-3 focus:ring-indigo-100 sm:text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            className="max-h-40 flex-1 resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-base outline-none transition-shadow placeholder:text-zinc-400 focus:border-indigo-400 focus:ring-3 focus:ring-indigo-100 sm:text-sm dark:border-zinc-700 dark:bg-zinc-900"
           />
           <button
             type="submit"

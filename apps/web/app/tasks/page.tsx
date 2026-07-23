@@ -6,7 +6,7 @@ import { AutoRefresh } from '@/app/auto-refresh';
 import { requireOwner } from '@/auth';
 import { formatUsd, relativeTime, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn, EmptyState, PageHeader } from '@/lib/ui';
+import { btn, btnSm, EmptyState, PageHeader } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 import { archiveOldTasks, archiveTask, restoreTask } from './actions';
 
@@ -165,13 +165,13 @@ export default async function TasksPage({
                     <td className="px-3 py-2 text-right">
                       {archived ? (
                         <form action={restoreTask.bind(null, task.id)}>
-                          <button type="submit" className={btn.outline}>
+                          <button type="submit" className={btnSm.outline}>
                             Restore
                           </button>
                         </form>
                       ) : TERMINAL_TASK_STATUSES.has(task.status) ? (
                         <form action={archiveTask.bind(null, task.id)}>
-                          <button type="submit" className={btn.outline}>
+                          <button type="submit" className={btnSm.outline}>
                             Archive
                           </button>
                         </form>

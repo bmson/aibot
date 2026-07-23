@@ -134,7 +134,7 @@ export default async function SettingsPage() {
       <section>
         <SectionHeading title="Spending" hint="usage and limits live in one place" />
         <Card className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-slate-700 dark:text-zinc-300">
+          <p className="text-sm text-zinc-700 dark:text-zinc-300">
             Review today’s usage, the monthly total, and adjust spending limits.
           </p>
           <Link href="/costs" className={btn.outline}>

@@ -111,7 +111,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
         <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{goal.description}</p>
       ) : null}
       {goal.progress ? (
-        <p className="mt-2 text-sm leading-5 text-slate-700 dark:text-zinc-300">{goal.progress}</p>
+        <p className="mt-2 text-sm leading-5 text-zinc-700 dark:text-zinc-300">{goal.progress}</p>
       ) : null}
       {goal.blockedLabel ? (
         <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs leading-5 font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
@@ -192,7 +192,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
             ) : null}
             <details className="relative">
               <summary className={`${outlineButton} cursor-pointer list-none`}>More</summary>
-              <div className="absolute top-full right-0 z-10 mt-2 flex w-52 flex-col gap-2 rounded-xl border border-zinc-200 bg-white p-3 shadow-lg dark:border-zinc-700 dark:bg-zinc-950">
+              <div className="absolute top-full right-0 z-10 mt-2 flex w-52 flex-col gap-2 rounded-xl border border-edge bg-raised p-3 shadow-lg">
                 <button
                   type="button"
                   onClick={(event) => {

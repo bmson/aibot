@@ -36,6 +36,45 @@ export function formatDateTime(date: Date, timeZone?: string): string {
   }).format(date);
 }
 
+/**
+ * Friendly timestamp for owner-facing surfaces: "Today 9:41 AM", "Yesterday
+ * 4:02 PM", "Jul 15 · 9:41 AM", and "Jul 15, 2025 · 9:41 AM" once the year
+ * differs. Keep `formatDateTime` for technical contexts (task timelines,
+ * approval expiry parentheticals) where the compact ISO form scans better.
+ * Falls back to UTC like `formatDateTime` when no timezone is given.
+ */
+export function formatFriendlyDateTime(
+  date: Date,
+  timeZone?: string,
+  now: Date = new Date(),
+): string {
+  const tz = timeZone ?? 'UTC';
+  const time = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+  // en-CA gives YYYY-MM-DD — a sortable per-timezone calendar-day key.
+  const dayKey = (d: Date) =>
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(d);
+  const day = dayKey(date);
+  const today = dayKey(now);
+  if (day === today) return `Today ${time}`;
+  if (day === dayKey(new Date(now.getTime() - DAY))) return `Yesterday ${time}`;
+  const dayLabel = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    month: 'short',
+    day: 'numeric',
+    ...(day.slice(0, 4) === today.slice(0, 4) ? {} : { year: 'numeric' }),
+  }).format(date);
+  return `${dayLabel} · ${time}`;
+}
+
 /** "$0.25" — numeric strings from drizzle, trailing zeros trimmed. */
 export function formatUsd(value: string | null | undefined): string {
   const n = Number.parseFloat(value ?? '0');

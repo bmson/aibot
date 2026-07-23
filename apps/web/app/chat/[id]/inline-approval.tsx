@@ -38,7 +38,7 @@ export function InlineApproval({ part }: { part: InlineApprovalPart }) {
   };
 
   return (
-    <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-slate-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-zinc-100">
+    <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-zinc-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-zinc-100">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[10px] font-semibold tracking-[0.12em] text-amber-700 uppercase dark:text-amber-300">
@@ -55,16 +55,16 @@ export function InlineApproval({ part }: { part: InlineApprovalPart }) {
           open={!currentResolution && part.status !== 'missing'}
           className="mt-3 rounded-lg border border-amber-200 bg-white/70 p-2.5 dark:border-amber-900 dark:bg-zinc-950/50"
         >
-          <summary className="cursor-pointer text-[10px] font-semibold tracking-[0.1em] text-slate-500 uppercase dark:text-zinc-400">
+          <summary className="cursor-pointer text-[10px] font-semibold tracking-[0.1em] text-zinc-500 uppercase dark:text-zinc-400">
             Exact details
           </summary>
           <dl className="mt-2 flex max-h-64 flex-col gap-2 overflow-y-auto">
             {part.details.map((detail, index) => (
               <div key={`${detail.label}-${index.toString()}`}>
-                <dt className="text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+                <dt className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
                   {detail.label}
                 </dt>
-                <dd className="mt-0.5 break-words whitespace-pre-wrap text-xs text-slate-800 dark:text-zinc-200">
+                <dd className="mt-0.5 break-words whitespace-pre-wrap text-xs text-zinc-800 dark:text-zinc-200">
                   {detail.value}
                 </dd>
               </div>
@@ -73,7 +73,7 @@ export function InlineApproval({ part }: { part: InlineApprovalPart }) {
         </details>
       ) : null}
       {currentResolution ? (
-        <p className="mt-2 text-xs font-medium text-slate-600 dark:text-zinc-300">
+        <p className="mt-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
           {currentResolution === 'approved'
             ? 'Approved — work is resuming.'
             : currentResolution === 'expired'
@@ -81,7 +81,7 @@ export function InlineApproval({ part }: { part: InlineApprovalPart }) {
               : 'Declined.'}
         </p>
       ) : part.status === 'missing' ? (
-        <p className="mt-2 text-xs text-slate-500 dark:text-zinc-400">
+        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
           This approval is no longer available.
         </p>
       ) : (
