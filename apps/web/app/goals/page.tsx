@@ -214,7 +214,7 @@ export default async function GoalsPage({
         <EmptyState>
           {archived
             ? 'No archived goals.'
-            : 'No goals yet — create one above when you want to start an outcome with a real task.'}
+            : 'No goals yet. Give me an outcome to keep moving — a trip to plan, a search to run — and I check in on it on a schedule.'}
         </EmptyState>
       ) : (
         <div className="mt-8 flex flex-col gap-6">

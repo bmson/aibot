@@ -1,5 +1,6 @@
 import { approvals, tasks, toolCalls } from '@assistant/db';
 import { asc, desc, eq, inArray } from 'drizzle-orm';
+import { ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { AutoRefresh } from '@/app/auto-refresh';
 import { requireOwner } from '@/auth';
@@ -52,8 +53,9 @@ export default async function ApprovalsPage() {
         <SectionHeading title="Pending" count={pending.length} />
       </div>
       {pending.length === 0 ? (
-        <EmptyState>
-          Nothing to approve — actions that need your sign-off will appear here.
+        <EmptyState icon={<ShieldCheck className="size-5" />}>
+          Nothing waiting on you. I ask here before anything leaves my workspace — emails, invites,
+          purchases, browsing that clicks things.
         </EmptyState>
       ) : (
         <div className="mt-3 flex flex-col gap-3">

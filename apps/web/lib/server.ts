@@ -2,8 +2,9 @@
 // leak postgres connection pools on every recompile.
 import path from 'node:path';
 import { getAgent, loadConfig, ModelRouter, repoRoot } from '@assistant/core';
-import { createDb, type Db } from '@assistant/db';
+import { contacts, createDb, type Db } from '@assistant/db';
 import { GcsWorkspaceStore, LocalWorkspaceStore, type WorkspaceStore } from '@assistant/tools';
+import { eq } from 'drizzle-orm';
 import { cache } from 'react';
 
 const globalCache = globalThis as unknown as {
@@ -32,6 +33,23 @@ export const getAgentTimezone = cache(async (): Promise<string> => {
     return (await getAgent(getDb())).timezone || 'UTC';
   } catch {
     return 'UTC';
+  }
+});
+
+/**
+ * The owner's first name for greetings, from the owner-trust contact row.
+ * Null (never a placeholder) when unset so callers can fall back gracefully.
+ */
+export const getOwnerFirstName = cache(async (): Promise<string | null> => {
+  try {
+    const [owner] = await getDb()
+      .select({ name: contacts.name })
+      .from(contacts)
+      .where(eq(contacts.trust, 'owner'))
+      .limit(1);
+    return owner?.name.trim().split(/\s+/)[0] || null;
+  } catch {
+    return null;
   }
 });
 

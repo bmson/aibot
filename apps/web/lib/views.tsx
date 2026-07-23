@@ -1,7 +1,7 @@
 // Server-side mappers turning DB rows into plain serializable view props for
 // client components (approval cards) and shared status-chip styling.
 import type { ApprovalRow, TaskRow } from '@assistant/db';
-import { formatDateTime, prettyJson, relativeTime } from '@/lib/format';
+import { formatFriendlyDateTime, prettyJson, relativeTime } from '@/lib/format';
 
 /** Plain-serializable props for the pending-approval client card. */
 export interface ApprovalField {
@@ -226,8 +226,8 @@ export function toPendingApprovalView(
     summary: approval.summary,
     fields: approvalFields(toolCall.toolName, approval.payload),
     payloadJson: prettyJson(approval.payload),
-    requestedLabel: `requested ${relativeTime(approval.requestedAt, now)} (${formatDateTime(approval.requestedAt, timeZone)})`,
-    expiresLabel: `expires ${relativeTime(approval.expiresAt, now)} (${formatDateTime(approval.expiresAt, timeZone)})`,
+    requestedLabel: `requested ${relativeTime(approval.requestedAt, now)} (${formatFriendlyDateTime(approval.requestedAt, timeZone, now)})`,
+    expiresLabel: `expires ${relativeTime(approval.expiresAt, now)} (${formatFriendlyDateTime(approval.expiresAt, timeZone, now)})`,
     provenance: `${taskTypeLabel(task.type)} · requested by ${trustLabel(task.trust)}`,
     reason: approvalReason(toolCall.decision),
     rememberLabel: rememberLabel(toolCall.toolName, approval.payload),

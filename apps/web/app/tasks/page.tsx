@@ -1,10 +1,11 @@
 import { getAgent } from '@assistant/core';
 import { tasks } from '@assistant/db';
 import { and, count, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
+import { ListChecks } from 'lucide-react';
 import Link from 'next/link';
 import { AutoRefresh } from '@/app/auto-refresh';
 import { requireOwner } from '@/auth';
-import { formatUsd, relativeTime, truncate } from '@/lib/format';
+import { formatUsd, relativeTime, stripMarkdown, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import { btn, btnSm, EmptyState, PageHeader } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
@@ -80,11 +81,20 @@ export default async function TasksPage({
       </div>
 
       {rows.length === 0 ? (
-        <EmptyState>
-          {archived
-            ? 'No archived activity.'
-            : 'No activity yet — work the assistant picks up appears here.'}
-        </EmptyState>
+        archived ? (
+          <EmptyState>No archived activity.</EmptyState>
+        ) : (
+          <EmptyState
+            icon={<ListChecks className="size-5" />}
+            action={
+              <Link href="/chat" className={btnSm.outline}>
+                Start in chat
+              </Link>
+            }
+          >
+            Nothing yet. Hand me something in chat and the factual record of the work lands here.
+          </EmptyState>
+        )
       ) : (
         <>
           <div className="mt-6 flex flex-col gap-3 sm:hidden">
@@ -99,7 +109,7 @@ export default async function TasksPage({
                     <StatusChip status={task.status} />
                   </div>
                   <p className="mt-2 line-clamp-2 text-xs text-zinc-600 dark:text-zinc-400">
-                    {truncate(task.progress, 140) || 'No update recorded yet.'}
+                    {truncate(stripMarkdown(task.progress), 140) || 'No update recorded yet.'}
                   </p>
                   <div className="mt-3 flex items-center justify-between gap-3 text-xs text-zinc-500 dark:text-zinc-500">
                     <span>{formatUsd(task.spentUsd)} spent</span>
@@ -154,7 +164,9 @@ export default async function TasksPage({
                       {trustLabel(task.trust)}
                     </td>
                     <td className="max-w-64 px-3 py-2 text-zinc-600 dark:text-zinc-400">
-                      <span className="block truncate">{truncate(task.progress, 120) || '—'}</span>
+                      <span className="block truncate">
+                        {truncate(stripMarkdown(task.progress), 120) || '—'}
+                      </span>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap text-zinc-600 dark:text-zinc-400">
                       {formatUsd(task.spentUsd)} / {formatUsd(task.budgetUsdLimit)}

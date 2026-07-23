@@ -118,6 +118,25 @@ export function SectionHeading({
   );
 }
 
-export function EmptyState({ children }: { children: ReactNode }) {
-  return <p className="mt-3 text-sm text-muted">{children}</p>;
+export function EmptyState({
+  children,
+  icon,
+  action,
+}: {
+  children: ReactNode;
+  icon?: ReactNode;
+  action?: ReactNode;
+}) {
+  if (!icon && !action) return <p className="mt-3 text-sm text-muted">{children}</p>;
+  return (
+    <div className="mt-3 flex flex-col items-start gap-2 rounded-xl border border-dashed border-edge px-4 py-5">
+      {icon ? (
+        <span aria-hidden="true" className="text-muted">
+          {icon}
+        </span>
+      ) : null}
+      <p className="text-sm leading-6 text-muted">{children}</p>
+      {action}
+    </div>
+  );
 }

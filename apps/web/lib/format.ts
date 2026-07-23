@@ -86,6 +86,27 @@ export function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
+/**
+ * Flatten markdown to plain text for one-line snippets (task progress rows).
+ * Task.progress strings come straight from model output, so Home was showing
+ * literal `**bold**`/`[label](url)` syntax. Not a full parser — just the
+ * constructs models actually emit in progress lines.
+ */
+export function stripMarkdown(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\(([^)]*)\)/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, '')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/(\*\*|__)(.*?)\1/g, '$2')
+    .replace(/([*_])(?=\S)([^*_]*\S)\1/g, '$2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function prettyJson(value: unknown): string {
   return JSON.stringify(value, null, 2) ?? 'null';
 }

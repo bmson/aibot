@@ -1,16 +1,32 @@
 import { evaluateCanaryHealth } from '@assistant/core';
 import { approvals, canaryRuns, goals, tasks, toolCalls } from '@assistant/db';
-import { and, asc, desc, eq, inArray, isNull, notInArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
+import { CircleCheck, CircleX } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { ApprovalCard } from '@/app/approvals/approval-card';
 import { AutoRefresh } from '@/app/auto-refresh';
 import { cancelTask, retryTask } from '@/app/tasks/actions';
 import { requireOwner } from '@/auth';
-import { formatDateTime, relativeTime, truncate } from '@/lib/format';
-import { getAgentTimezone, getDb } from '@/lib/server';
-import { btn, CountBadge, PageHeader, SectionHeading } from '@/lib/ui';
+import { formatFriendlyDateTime, relativeTime, stripMarkdown, truncate } from '@/lib/format';
+import { getAgentTimezone, getDb, getOwnerFirstName } from '@/lib/server';
+import { btnSm, CountBadge, focusRing, PageHeader, SectionHeading } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, toPendingApprovalView } from '@/lib/views';
+
+/** "Good morning/afternoon/evening" in the agent's timezone. */
+function greetingFor(now: Date, timeZone: string): string {
+  const hour = Number(
+    new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', hourCycle: 'h23' }).format(now),
+  );
+  if (Number.isNaN(hour)) return 'Hello';
+  if (hour < 5) return 'Up late';
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
+/** Scheduled code jobs (memory upkeep, document sweeps) are routine housekeeping — Activity, not Home. */
+const notHousekeeping = sql`${tasks.trigger}->'payload'->>'job' IS NULL`;
 
 export const dynamic = 'force-dynamic';
 
@@ -56,7 +72,7 @@ export default async function DashboardPage() {
   await requireOwner();
   const db = getDb();
   const now = new Date();
-  const tz = await getAgentTimezone();
+  const [tz, ownerFirstName] = await Promise.all([getAgentTimezone(), getOwnerFirstName()]);
 
   const dashboardData = await Promise.all([
     db
@@ -81,13 +97,23 @@ export default async function DashboardPage() {
       .select()
       .from(tasks)
       .where(
-        inArray(tasks.status, ['waiting_approval', 'waiting_event', 'waiting_budget', 'sleeping']),
+        and(
+          inArray(tasks.status, [
+            'waiting_approval',
+            'waiting_event',
+            'waiting_budget',
+            'sleeping',
+          ]),
+          notHousekeeping,
+        ),
       )
       .orderBy(desc(tasks.updatedAt)),
     db
       .select()
       .from(tasks)
-      .where(and(inArray(tasks.status, ['done', 'failed']), isNull(tasks.archivedAt)))
+      .where(
+        and(inArray(tasks.status, ['done', 'failed']), isNull(tasks.archivedAt), notHousekeeping),
+      )
       .orderBy(desc(tasks.updatedAt))
       .limit(10),
     db
@@ -139,7 +165,7 @@ export default async function DashboardPage() {
     <div className="mx-auto max-w-4xl">
       <AutoRefresh />
       <PageHeader
-        title="Your assistant"
+        title={ownerFirstName ? `${greetingFor(now, tz)}, ${ownerFirstName}` : greetingFor(now, tz)}
         intro="Start in chat. Come back here when the assistant needs a decision or has a verified update to show you."
       />
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 dark:border-indigo-900/60 dark:bg-indigo-950/30">
@@ -158,7 +184,7 @@ export default async function DashboardPage() {
         <Link
           href="/chat"
           data-mobile-touch-target="true"
-          className="mobile-touch-target inline-flex items-center rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700"
+          className={`mobile-touch-target inline-flex items-center rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white shadow-sm motion-safe:transition-colors hover:bg-accent-hover ${focusRing}`}
         >
           Ask assistant
         </Link>
@@ -219,17 +245,17 @@ export default async function DashboardPage() {
                   {task.title || taskTypeLabel(task.type)}
                 </Link>
                 <p className="truncate text-xs text-zinc-600 dark:text-zinc-400">
-                  {task.progress || 'no progress recorded'}
+                  {stripMarkdown(task.progress) || 'no progress recorded'}
                 </p>
               </div>
               <div className="flex shrink-0 gap-2">
                 <form action={retryTask.bind(null, task.id)}>
-                  <button type="submit" className={btn.outline}>
+                  <button type="submit" className={btnSm.outline}>
                     Retry
                   </button>
                 </form>
                 <form action={cancelTask.bind(null, task.id)}>
-                  <button type="submit" className={btn.outline}>
+                  <button type="submit" className={btnSm.outline}>
                     Cancel
                   </button>
                 </form>
@@ -247,7 +273,7 @@ export default async function DashboardPage() {
             const line =
               task.status === 'sleeping'
                 ? task.runAfter
-                  ? `Next check ${relativeTime(task.runAfter, now)} (${formatDateTime(task.runAfter, tz)})`
+                  ? `Next check ${relativeTime(task.runAfter, now)} (${formatFriendlyDateTime(task.runAfter, tz, now)})`
                   : 'Its next check is being scheduled.'
                 : (waitingLine[task.status] ?? task.status);
             return (
@@ -268,7 +294,7 @@ export default async function DashboardPage() {
                   ) : null}
                   {task.progress ? (
                     <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
-                      {task.progress}
+                      {stripMarkdown(task.progress)}
                     </p>
                   ) : null}
                 </div>
@@ -285,17 +311,18 @@ export default async function DashboardPage() {
         >
           {recentDone.map((task) => (
             <div key={task.id} className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 items-baseline gap-2">
-                <span
-                  aria-hidden="true"
-                  className={
-                    task.status === 'done'
-                      ? 'text-green-600 dark:text-green-400'
-                      : 'text-red-600 dark:text-red-400'
-                  }
-                >
-                  {task.status === 'done' ? '✓' : '✗'}
-                </span>
+              <div className="flex min-w-0 items-center gap-2">
+                {task.status === 'done' ? (
+                  <CircleCheck
+                    aria-hidden="true"
+                    className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                  />
+                ) : (
+                  <CircleX
+                    aria-hidden="true"
+                    className="size-4 shrink-0 text-red-500 dark:text-red-400"
+                  />
+                )}
                 <Link
                   href={`/tasks/${task.id}`}
                   data-mobile-touch-target="true"
@@ -304,7 +331,7 @@ export default async function DashboardPage() {
                   {task.title || taskTypeLabel(task.type)}
                 </Link>
                 <span className="truncate text-xs text-zinc-500 dark:text-zinc-400">
-                  {task.progress}
+                  {stripMarkdown(task.progress)}
                 </span>
               </div>
               <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
@@ -342,7 +369,10 @@ export default async function DashboardPage() {
                     href={`/tasks/${task.id}`}
                     className="min-w-0 truncate text-sm font-medium hover:underline"
                   >
-                    {truncate(task.progress || task.nextAction || 'Ongoing task', 80)}
+                    {truncate(
+                      stripMarkdown(task.progress || task.nextAction) || 'Ongoing task',
+                      80,
+                    )}
                   </Link>
                   <StatusChip status={task.status} />
                 </div>
@@ -359,7 +389,8 @@ export default async function DashboardPage() {
                 ) : null}
                 {task.deadline ? (
                   <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-                    target {formatDateTime(task.deadline, tz)} ({relativeTime(task.deadline, now)})
+                    target {formatFriendlyDateTime(task.deadline, tz, now)} (
+                    {relativeTime(task.deadline, now)})
                   </p>
                 ) : null}
               </div>
@@ -374,7 +405,10 @@ export default async function DashboardPage() {
         >
           {goalRows.map((goal) => (
             <div key={goal.id} className="flex items-center justify-between gap-3">
-              <Link href="/goals" className="min-w-0 truncate text-sm font-medium hover:underline">
+              <Link
+                href={`/goals#goal-${goal.id}`}
+                className="min-w-0 truncate text-sm font-medium hover:underline"
+              >
                 {goal.title}
               </Link>
               <StatusChip status={goal.status} />
@@ -382,6 +416,14 @@ export default async function DashboardPage() {
           ))}
         </Section>
       </div>
+      <p className="mt-4 text-xs text-muted">
+        Routine housekeeping (memory upkeep, document processing) runs quietly on schedule — find it
+        under{' '}
+        <Link href="/tasks" className="underline hover:no-underline">
+          Activity
+        </Link>
+        .
+      </p>
     </div>
   );
 }

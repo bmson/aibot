@@ -99,7 +99,10 @@ export function GoalCard({ goal }: { goal: GoalView }) {
   const value = (name: string, fallback: string) => editState.values?.[name] ?? fallback;
 
   return (
-    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+    <div
+      id={`goal-${goal.id}`}
+      className="scroll-mt-20 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+    >
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-sm font-medium">{goal.title}</p>
         <span className="flex shrink-0 items-center gap-2">
