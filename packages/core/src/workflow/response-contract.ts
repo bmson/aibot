@@ -26,6 +26,7 @@ type ActionKind =
   | 'calendar'
   | 'research'
   | 'background'
+  | 'memory'
   | 'approval';
 
 export interface ResponseContractResult {
@@ -112,6 +113,11 @@ const countedTracker =
 // it does not fire on ordinary prose.
 const passiveOutbound =
   /\b(?:has|have|was|were)\s+been\s+(?:contacted|emailed|texted|messaged|notified|pinged|reached\s+out\s+to)\b/i;
+// A completed claim that a fact was written to long-term memory/the owner
+// profile. Requires a completion verb near the memory/profile object, so a
+// future-tense "I'll keep that in mind" does not trip it.
+const memoryClaim =
+  /\b(?:saved|stored|recorded|noted|logged|updated|corrected|remembered|memoriz(?:e|ed)|committed|kept|added|confirmed)\b[^.\n]{0,40}\b(?:in|to|into)?\s*(?:your\s+)?(?:memory|profile|the\s+record)\b/i;
 
 /**
  * Approval rows and short codes are created only by the dispatcher. A model
@@ -187,7 +193,14 @@ function browserApplicationConfirmed(evidence: ActionEvidence): boolean {
  * truthfully mentioning a doc created two turns ago was being rewritten into
  * "I have not created anything outside this chat".
  */
-const CURRENT_TASK_ONLY: ReadonlySet<ActionKind> = new Set(['outbound', 'application', 'calendar']);
+const CURRENT_TASK_ONLY: ReadonlySet<ActionKind> = new Set([
+  'outbound',
+  'application',
+  'calendar',
+  // "I saved that to memory" is a claim about THIS turn — an earlier save
+  // doesn't authorise narrating a fresh one.
+  'memory',
+]);
 
 function inScope(kind: ActionKind, item: ActionEvidence): boolean {
   return !CURRENT_TASK_ONLY.has(kind) || item.fromCurrentTask !== false;
@@ -233,6 +246,11 @@ function supports(kind: ActionKind, evidence: ActionEvidence[], currentTaskOnly 
           name === 'task.schedule' ||
           name === 'applications.watch_confirmation',
       );
+    // memory.save is the only tool that persists a fact. Claiming a fact was
+    // saved/remembered/corrected requires it — otherwise the model is narrating
+    // a memory write it never made.
+    case 'memory':
+      return names.some((name) => name === 'memory.save');
     case 'approval':
       // Genuine approval notices are posted by the executor when it parks the
       // task and do not pass through the model-final response contract.
@@ -403,6 +421,7 @@ function claimedKinds(text: string): ActionKind[] {
   ) {
     kinds.add('background');
   }
+  if (memoryClaim.test(text)) kinds.add('memory');
   if (isSimulatedApprovalNotice(text)) kinds.add('approval');
 
   return [...kinds];
@@ -436,8 +455,35 @@ const UNSUPPORTED_LABEL: Record<ActionKind, string> = {
   calendar: 'the requested calendar action',
   research: 'the requested research',
   background: 'the promised background work',
+  memory: 'the requested memory update',
   approval: 'the claimed approval request',
 };
+
+/** Map a tool name to the action-kind it evidences (mirror of `supports`). */
+function toolKind(name: string): ActionKind | undefined {
+  if (
+    name === 'drive.download' ||
+    name === 'workspace.write' ||
+    /^docs\.(?:create|append|replace_text|share)$/.test(name)
+  ) {
+    return 'workspace';
+  }
+  if (/^sheets\.(?:create|append_rows|write_rows)$/.test(name)) return 'spreadsheet';
+  if (/^slides\.(?:create|append)$/.test(name)) return 'presentation';
+  if (/^(gmail\.send|sms\.send|email\.send)$/.test(name)) return 'outbound';
+  if (name === 'application.submit') return 'application';
+  if (/^calendar\.(create|update|cancel|delete)/.test(name)) return 'calendar';
+  if (name === 'web.fetch' || name === 'browser.execute') return 'research';
+  if (name === 'memory.save') return 'memory';
+  if (
+    name === 'mission.update' ||
+    name === 'task.schedule' ||
+    name === 'applications.watch_confirmation'
+  ) {
+    return 'background';
+  }
+  return undefined;
+}
 
 function describeTool(name: string): string | undefined {
   if (name === 'drive.download') return 'the requested Drive file was staged';
@@ -453,6 +499,7 @@ function describeTool(name: string): string | undefined {
   if (name === 'sms.send' || name === 'email.send') return 'the message was sent';
   if (/^calendar\.(create|update|cancel|delete)/.test(name)) return 'the calendar action completed';
   if (name === 'web.fetch') return 'the web request completed';
+  if (name === 'memory.save') return 'the fact was saved to memory';
   if (name === 'application.submit') return 'the application was submitted';
   if (name === 'applications.watch_confirmation') return 'the confirmation watch was created';
   if (name === 'mission.update' || name === 'task.schedule') {
@@ -462,17 +509,30 @@ function describeTool(name: string): string | undefined {
 }
 
 /**
- * Prior-turn evidence is real, but reporting it unqualified would imply the
- * work happened in response to *this* request. Say when it happened.
+ * Describe what actually happened, without reprinting the whole conversation.
+ * Current-task actions genuinely ran this turn, so they're always reportable.
+ * A prior-turn artifact (a doc that still exists) is reported with "earlier in
+ * this conversation" only when THIS turn actually referred to that kind and the
+ * kind may be cited across turns — so a "save this to memory" turn never lists
+ * every earlier Drive/Sheet/calendar action, and a prior outbound/calendar
+ * (CURRENT_TASK_ONLY) is never passed off as confirmation of a fresh one.
  */
-function verifiedActionDescriptions(evidence: ActionEvidence[]): string[] {
+function verifiedActionDescriptions(
+  evidence: ActionEvidence[],
+  claimedSet: ReadonlySet<ActionKind>,
+): string[] {
   const descriptions = new Set<string>();
+  const citable = (kind: ActionKind, item: ActionEvidence): boolean =>
+    item.fromCurrentTask !== false || (claimedSet.has(kind) && inScope(kind, item));
   for (const item of evidence) {
     if (!successful(item)) continue;
     const when = item.fromCurrentTask === false ? ' earlier in this conversation' : '';
-    const described = describeTool(item.toolName);
-    if (described) descriptions.add(`${described}${when}`);
-    if (browserApplicationConfirmed(item)) {
+    const kind = toolKind(item.toolName);
+    if (kind !== undefined && citable(kind, item)) {
+      const described = describeTool(item.toolName);
+      if (described) descriptions.add(`${described}${when}`);
+    }
+    if (citable('application', item) && browserApplicationConfirmed(item)) {
       descriptions.add(`the portal returned an explicit application confirmation${when}`);
     }
   }
@@ -482,8 +542,9 @@ function verifiedActionDescriptions(evidence: ActionEvidence[]): string[] {
 function partialFailureResponse(
   evidence: ActionEvidence[],
   unsupported: ActionKind[],
+  claimedSet: ReadonlySet<ActionKind>,
 ): string | undefined {
-  const verified = verifiedActionDescriptions(evidence);
+  const verified = verifiedActionDescriptions(evidence, claimedSet);
   if (verified.length === 0) return undefined;
   const missing = [...new Set(unsupported.map((kind) => UNSUPPORTED_LABEL[kind]))];
   const failures = failureDetails(evidence);
@@ -590,7 +651,8 @@ export function enforceResponseContract(
   evidence: ActionEvidence[],
   opts?: { urlCorpus?: string },
 ): ResponseContractResult {
-  const unsupported = claimedKinds(text).filter(
+  const claimed = claimedKinds(text);
+  const unsupported = claimed.filter(
     (kind) =>
       !supports(
         kind,
@@ -619,8 +681,13 @@ export function enforceResponseContract(
       unsupported,
     };
   }
+  // The confirm-list is scoped to what THIS turn claimed (in-scope only), so an
+  // unrelated turn never reprints the whole conversation's ledger of artifacts.
+  const claimedSet = new Set(claimed);
   return {
-    text: partialFailureResponse(evidence, unsupported) ?? transparentFailureResponse(evidence),
+    text:
+      partialFailureResponse(evidence, unsupported, claimedSet) ??
+      transparentFailureResponse(evidence),
     blocked: true,
     unsupported,
   };

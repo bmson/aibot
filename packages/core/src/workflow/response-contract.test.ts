@@ -352,6 +352,44 @@ describe('response execution contract', () => {
     expect(result.text).not.toContain('I have not created');
   });
 
+  it('blocks a memory write the model only narrated (no memory.save)', () => {
+    const result = enforceResponseContract("Got it — I've corrected the birthdate in memory.", []);
+    expect(result.blocked).toBe(true);
+    expect(result.unsupported).toContain('memory');
+    expect(result.text).not.toContain('saved to memory');
+  });
+
+  it('confirms a memory write backed by a memory.save result', () => {
+    const result = enforceResponseContract('Saved that correction to memory.', [
+      { toolName: 'memory.save', status: 'succeeded', result: { ok: true } },
+    ]);
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe('Saved that correction to memory.');
+  });
+
+  it('does not reprint unrelated prior-turn artifacts for an off-topic claim', () => {
+    // The "update the memory" incident: a turn that claims one thing (calendar,
+    // here) must not list every earlier Drive/Doc action as "confirmed".
+    const result = enforceResponseContract('Added it to your calendar.', [
+      {
+        toolName: 'drive.download',
+        status: 'succeeded',
+        result: { ok: true },
+        fromCurrentTask: false,
+      },
+      {
+        toolName: 'docs.create',
+        status: 'succeeded',
+        result: { documentId: 'd1' },
+        fromCurrentTask: false,
+      },
+    ]);
+    expect(result.blocked).toBe(true);
+    expect(result.unsupported).toContain('calendar');
+    expect(result.text).not.toContain('Drive file');
+    expect(result.text).not.toContain('Google Doc');
+  });
+
   it('does not report an earlier turn failure as this attempt failing', () => {
     const result = enforceResponseContract('I emailed the client.', [
       {
