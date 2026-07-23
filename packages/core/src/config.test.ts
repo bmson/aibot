@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadConfig, resetConfigForTest, validateProdConfig } from './config.js';
+import { gmailSyncEnabled, loadConfig, resetConfigForTest, validateProdConfig } from './config.js';
 
 describe('config', () => {
   afterEach(() => resetConfigForTest());
@@ -75,7 +75,73 @@ describe('config', () => {
       CLOUD_TASKS_QUEUE: 'agent-steps',
       INTERNAL_OIDC_AUDIENCE: 'https://agent.example',
       INTERNAL_OIDC_SERVICE_ACCOUNT: 'invoker@proj.iam.gserviceaccount.com',
+      OPENROUTER_API_KEY: 'sk-or-x',
+      PUBLIC_URL: 'https://agent.example',
     });
     expect(validateProdConfig(config)).toEqual([]);
+  });
+
+  it('flags an empty OpenRouter key and a still-localhost PUBLIC_URL in prod', () => {
+    resetConfigForTest();
+    const problems = validateProdConfig(
+      loadConfig({
+        QUEUE_DRIVER: 'cloudtasks',
+        INTERNAL_AUTH_MODE: 'oidc',
+        AGENT_URL: 'https://agent.example',
+        GCP_PROJECT: 'proj',
+        INTERNAL_OIDC_AUDIENCE: 'https://agent.example',
+        INTERNAL_OIDC_SERVICE_ACCOUNT: 'invoker@proj.iam.gserviceaccount.com',
+        // OPENROUTER_API_KEY empty; PUBLIC_URL left at the localhost default.
+      }),
+    );
+    expect(problems).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('OPENROUTER_API_KEY'),
+        expect.stringContaining('PUBLIC_URL'),
+      ]),
+    );
+  });
+
+  it('requires the Gmail push SA when a push topic is set', () => {
+    resetConfigForTest();
+    const problems = validateProdConfig(
+      loadConfig({
+        QUEUE_DRIVER: 'cloudtasks',
+        INTERNAL_AUTH_MODE: 'oidc',
+        AGENT_URL: 'https://agent.example',
+        GCP_PROJECT: 'proj',
+        INTERNAL_OIDC_AUDIENCE: 'https://agent.example',
+        INTERNAL_OIDC_SERVICE_ACCOUNT: 'invoker@proj.iam.gserviceaccount.com',
+        OPENROUTER_API_KEY: 'sk-or-x',
+        PUBLIC_URL: 'https://agent.example',
+        GMAIL_PUBSUB_TOPIC: 'projects/proj/topics/gmail',
+        // GMAIL_PUSH_SERVICE_ACCOUNT deliberately empty → the 403 outage.
+      }),
+    );
+    expect(problems).toEqual(
+      expect.arrayContaining([expect.stringContaining('GMAIL_PUSH_SERVICE_ACCOUNT')]),
+    );
+  });
+});
+
+describe('gmailSyncEnabled', () => {
+  afterEach(() => resetConfigForTest());
+
+  it('honors an explicit true/false regardless of environment', () => {
+    expect(gmailSyncEnabled(loadConfig({ GMAIL_SYNC_ENABLED: 'true' }))).toBe(true);
+    resetConfigForTest();
+    expect(gmailSyncEnabled(loadConfig({ GMAIL_SYNC_ENABLED: 'false' }))).toBe(false);
+  });
+
+  it('defaults on only in production when unset', () => {
+    const prev = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+      expect(gmailSyncEnabled(loadConfig({}))).toBe(true);
+      process.env.NODE_ENV = 'development';
+      expect(gmailSyncEnabled(loadConfig({}))).toBe(false);
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
   });
 });

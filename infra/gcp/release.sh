@@ -66,7 +66,10 @@ gcloud run jobs execute assistant-migrate --project "$PROJECT" --region "$REGION
 echo "Verifying agent configuration"
 REQUIRED_AGENT_ENV=(
   AGENT_URL
+  BROWSER_JOB_NAME
   CLOUD_TASKS_QUEUE
+  CODE_JOB_NAME
+  GCP_LOCATION
   GCP_PROJECT
   GMAIL_PUBSUB_TOPIC
   GMAIL_PUSH_SERVICE_ACCOUNT
@@ -74,8 +77,11 @@ REQUIRED_AGENT_ENV=(
   INTERNAL_OIDC_AUDIENCE
   INTERNAL_OIDC_SERVICE_ACCOUNT
   OWNER_EMAIL
+  PROCESSOR_DRIVER
+  PROCESSOR_JOB_NAME
   PUBLIC_URL
   QUEUE_DRIVER
+  WORKSPACE_BUCKET
 )
 # env[].name yields names only, semicolon separated — never the values, so this
 # stays safe to run with the release log attached to a public build.

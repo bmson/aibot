@@ -122,6 +122,9 @@ BUCKET="${PROJECT}-workspace"
 gcloud storage buckets describe "gs://${BUCKET}" >/dev/null 2>&1 ||
   gcloud storage buckets create "gs://${BUCKET}" --location="$REGION" \
     --uniform-bucket-level-access --quiet
+# Object versioning: a bad overwrite (bot code or a compromised worker) keeps a
+# recoverable prior generation of imports, profiles, and documents. Idempotent.
+gcloud storage buckets update "gs://${BUCKET}" --versioning --quiet
 
 # Runtimes can access objects, not bucket IAM/configuration. The browser job
 # gets the same object-level access only because profiles live in this bucket.

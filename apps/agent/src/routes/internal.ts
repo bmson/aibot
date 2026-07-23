@@ -169,6 +169,10 @@ internal.post('/gmail/watch', async (c) => {
 });
 
 internal.post('/gmail/sync', async (c) => {
+  const { gmailSyncEnabled } = await import('@assistant/core');
+  if (!gmailSyncEnabled()) {
+    return c.json({ skipped: true, reason: 'gmail sync disabled (GMAIL_SYNC_ENABLED)' });
+  }
   const deps = buildDeps();
   const { syncMailbox } = await import('../email-sync.js');
   const result = await syncMailbox(deps);

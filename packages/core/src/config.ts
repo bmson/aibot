@@ -72,6 +72,12 @@ const ConfigSchema = z.object({
   LOCATION_PING_SECRET: z.string().default(''),
   /** How many days a location ping is kept before the sweep purges it. */
   LOCATION_RETENTION_DAYS: z.coerce.number().min(1).max(90).default(3),
+  /**
+   * Gmail sync (poll + push) on/off. Explicit 'true'/'false' wins; unset it is
+   * ON only in production. Stops a local dev agent that shares the prod bot
+   * refresh token from double-triaging the live mailbox.
+   */
+  GMAIL_SYNC_ENABLED: z.enum(['true', 'false']).optional(),
   /** Web search: which provider backs the web.search tool; 'none' disables it. */
   SEARCH_PROVIDER: z.enum(['none', 'brave', 'tavily', 'serper']).default('none'),
   /** API key for SEARCH_PROVIDER; web.search is unregistered without it. */
@@ -133,7 +139,40 @@ export function validateProdConfig(config: Config = loadConfig()): string[] {
       problems.push('INTERNAL_OIDC_SERVICE_ACCOUNT is required when INTERNAL_AUTH_MODE=oidc');
     }
   }
+  // More keys that otherwise fail only at first use in prod. These are all
+  // boot-fatal on purpose — validateProdConfig's caller exits — so only include
+  // checks that can actually trip (empty-default or a bad-in-prod value) AND
+  // whose absence genuinely breaks the service. Google OAuth is deliberately NOT
+  // here: the agent runs degraded without it (Google tools just don't register).
+  if (!config.OPENROUTER_API_KEY) {
+    problems.push('OPENROUTER_API_KEY is required (every model call fails without it)');
+  }
+  if (config.PUBLIC_URL.includes('localhost')) {
+    problems.push('PUBLIC_URL still points at localhost — set the public service URL for webhooks');
+  }
+  if (config.FILES_DRIVER === 'gcs' && !config.WORKSPACE_BUCKET) {
+    problems.push('WORKSPACE_BUCKET is required when FILES_DRIVER=gcs');
+  }
+  if (config.GMAIL_PUBSUB_TOPIC && !config.GMAIL_PUSH_SERVICE_ACCOUNT) {
+    // A push topic without the SA to authenticate its notifications means every
+    // Gmail push 403s (the outage that blacked out email for two days).
+    problems.push('GMAIL_PUSH_SERVICE_ACCOUNT is required when GMAIL_PUBSUB_TOPIC is set');
+  }
+  if (config.BROWSER_DRIVER === 'cloudrun' && !config.PROFILE_ENC_KEY) {
+    problems.push('PROFILE_ENC_KEY is required when BROWSER_DRIVER=cloudrun');
+  }
   return problems;
+}
+
+/**
+ * Whether this process should sync the bot's Gmail. Explicit GMAIL_SYNC_ENABLED
+ * wins; unset, it is on only in production — so a local dev agent booted with
+ * the prod bot refresh token does not double-triage the live mailbox.
+ */
+export function gmailSyncEnabled(config: Config = loadConfig()): boolean {
+  if (config.GMAIL_SYNC_ENABLED === 'true') return true;
+  if (config.GMAIL_SYNC_ENABLED === 'false') return false;
+  return process.env.NODE_ENV === 'production';
 }
 
 /** Test seam — clears the config cache. */

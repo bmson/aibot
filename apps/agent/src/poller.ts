@@ -4,6 +4,7 @@ import {
   expireStaleApprovals,
   findDueTasks,
   getAgent,
+  gmailSyncEnabled,
   purgeExpired,
   renotifyStalledApprovals,
   renotifyStalledAttention,
@@ -82,7 +83,11 @@ export function startPoller(deps: AgentDeps): () => void {
         await runStep('reapExpiredApplicationWatches', () => reapExpiredApplicationWatches(deps));
         await runStep('reapExpiredWatches', () => reapExpiredWatches(deps));
       }
-      if (tick % EMAIL_SYNC_EVERY_TICKS === 0 && deps.googleClient.configured()) {
+      if (
+        tick % EMAIL_SYNC_EVERY_TICKS === 0 &&
+        deps.googleClient.configured() &&
+        gmailSyncEnabled()
+      ) {
         await syncMailbox(deps).catch((err) => console.error('email-sync error', err));
       }
       const due = await findDueTasks(deps.db, 5);
