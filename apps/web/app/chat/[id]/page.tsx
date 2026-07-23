@@ -83,6 +83,7 @@ export default async function ChatConversationPage({
         id: row.id,
         role: row.role as 'user' | 'assistant',
         parts: row.parts as UIMessage['parts'],
+        metadata: { createdAt: row.createdAt.toISOString() },
       })),
   );
 

@@ -105,8 +105,12 @@ export function ApprovalCard({ approval }: { approval: PendingApprovalView }) {
             </SubmitButton>
           </form>
           <form action={denyApproval.bind(null, approval.id)}>
-            <ConfirmButton variant="danger" pendingLabel="Denying…" confirmLabel="Confirm deny">
-              Deny
+            <ConfirmButton
+              variant="danger"
+              pendingLabel="Declining…"
+              confirmLabel="Confirm decline"
+            >
+              Decline
             </ConfirmButton>
           </form>
           <button type="button" onClick={() => setEditing(true)} className={btn.outline}>

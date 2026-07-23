@@ -124,6 +124,54 @@ export function taskTypeLabel(type: string): string {
   return taskTypeLabels[type] ?? type.replaceAll('_', ' ');
 }
 
+/**
+ * Human labels for tool names, shared by the task-detail "What actually
+ * happened" list and the chat's live activity chips. Falls back to the dotted
+ * name with the dot spelled as a space.
+ */
+const toolLabels: Record<string, string> = {
+  'docs.create': 'Creating a document',
+  'docs.append': 'Updating a document',
+  'docs.get': 'Reading a document',
+  'docs.share': 'Sharing a document',
+  'sheets.create': 'Creating a spreadsheet',
+  'sheets.append_rows': 'Updating a spreadsheet',
+  'sheets.write_rows': 'Updating a spreadsheet',
+  'sheets.get_rows': 'Reading a spreadsheet',
+  'slides.create': 'Creating a presentation',
+  'slides.append': 'Updating a presentation',
+  'calendar.create_event': 'Creating a calendar event',
+  'calendar.update_event': 'Updating a calendar event',
+  'calendar.search_events': 'Checking the calendar',
+  'calendar.list_events': 'Checking the calendar',
+  'gmail.send': 'Sending an email',
+  'gmail.create_draft': 'Drafting an email',
+  'gmail.search': 'Searching email',
+  'gmail.modify': 'Tidying email',
+  'sms.send': 'Sending a text',
+  'web.fetch': 'Reading a web page',
+  'web.search': 'Searching the web',
+  'browser.plan': 'Planning a browser task',
+  'browser.execute': 'Running a browser task',
+  'code.execute': 'Running code',
+  'drive.search': 'Searching Drive',
+  'drive.read': 'Reading a Drive file',
+  'drive.ingest': 'Filing a Drive document',
+  'documents.search': 'Searching documents',
+  'memory.recall': 'Recalling memory',
+  'memory.save': 'Saving a note to memory',
+  'contacts.lookup': 'Looking up a contact',
+  'conversations.search': 'Searching past chats',
+  'goals.update_progress': 'Updating goal progress',
+  'mission.update': 'Updating ongoing work',
+  'task.schedule': 'Scheduling follow-up work',
+  'owner.notify': 'Leaving you a note',
+};
+
+export function toolLabel(toolName: string): string {
+  return toolLabels[toolName] ?? toolName.replaceAll('.', ' ');
+}
+
 const trustLabels: Record<string, string> = {
   owner: 'You',
   assistant: 'Assistant',

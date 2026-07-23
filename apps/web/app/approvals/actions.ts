@@ -36,6 +36,27 @@ export async function resolveApprovalInline(
   return result.ok ? { ok: true } : { ok: false, error: result.reason };
 }
 
+/**
+ * Resolve several approvals in one server round trip ("Approve all" on a
+ * grouped chat card). Sequential on purpose — resolveApproval wakes the parked
+ * task per approval — and per-id failures are reported, not thrown, so one
+ * expired approval doesn't strand the rest.
+ */
+export async function resolveApprovalsInline(
+  approvalIds: string[],
+  decision: 'approved' | 'denied',
+): Promise<{ failures: Array<{ approvalId: string; error: string }> }> {
+  await requireOwner();
+  const db = getDb();
+  const failures: Array<{ approvalId: string; error: string }> = [];
+  for (const approvalId of approvalIds.slice(0, 20)) {
+    const result = await resolveApproval(db, { approvalId, decision, via: 'web' });
+    if (!result.ok) failures.push({ approvalId, error: result.reason });
+  }
+  revalidateApprovalViews();
+  return { failures };
+}
+
 /** Approve and create the one currently supported recipient-scoped standing rule. */
 export async function approveAndRemember(approvalId: string): Promise<void> {
   await requireOwner();

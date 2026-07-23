@@ -16,7 +16,7 @@ const components: Components = {
       {...props}
       target="_blank"
       rel="noopener noreferrer"
-      className="font-medium underline decoration-zinc-400 underline-offset-2 hover:decoration-current"
+      className="font-medium [overflow-wrap:anywhere] underline decoration-zinc-400 underline-offset-2 hover:decoration-current"
     >
       {children}
     </a>

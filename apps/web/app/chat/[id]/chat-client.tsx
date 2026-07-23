@@ -2,10 +2,24 @@
 
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
+import {
+  ChevronDown,
+  CircleCheck,
+  CircleX,
+  Hand,
+  History,
+  Loader2,
+  ShieldCheck,
+  Square,
+  Zap,
+} from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
-import { btn } from '@/lib/ui';
+import { isApprovalProseNotice, isContractNotice } from '@/lib/chat-notices';
+import { btn, btnSm, focusRing } from '@/lib/ui';
+import { toolLabel } from '@/lib/views';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
-import { InlineApproval, type InlineApprovalPart } from './inline-approval';
+import { ApprovalGroup } from './approval-group';
+import type { InlineApprovalPart } from './inline-approval';
 import { InlineBudgetRequest, type InlineBudgetRequestPart } from './inline-budget-request';
 import { MessageMarkdown } from './markdown';
 
@@ -41,6 +55,143 @@ function messageText(message: UIMessage): string {
     .join('');
 }
 
+/** Persisted send time, carried on message.metadata by the server mappers. */
+function messageDate(message: UIMessage): Date | null {
+  const meta = message.metadata as { createdAt?: unknown } | undefined;
+  if (meta && typeof meta.createdAt === 'string') {
+    const date = new Date(meta.createdAt);
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+  return null;
+}
+
+// Chat renders times in the browser's timezone — it's a live surface the owner
+// is looking at right now, unlike the server-rendered dashboards which use the
+// agent timezone. Labels are gated behind `mounted` to avoid SSR/client drift.
+function sameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function dayLabel(date: Date, now: Date): string {
+  if (sameDay(date, now)) return 'Today';
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (sameDay(date, yesterday)) return 'Yesterday';
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+  }).format(date);
+}
+
+function timeLabel(date: Date): string {
+  return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(date);
+}
+
+function DayDivider({ label }: { label: string }) {
+  return (
+    <div aria-hidden="true" className="flex items-center gap-3 py-1">
+      <span className="h-px flex-1 bg-edge" />
+      <span className="text-2xs font-medium text-muted">{label}</span>
+      <span className="h-px flex-1 bg-edge" />
+    </div>
+  );
+}
+
+/** Three-dot typing indicator; reduced-motion users get static text instead. */
+function TypingDots() {
+  return (
+    <div className="flex justify-start">
+      <div className="rounded-2xl rounded-bl-md border border-edge bg-raised px-3 py-2.5 shadow-sm">
+        <span className="sr-only">The assistant is thinking</span>
+        <span aria-hidden="true" className="hidden items-center gap-1 motion-safe:flex">
+          <span className="size-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.3s] dark:bg-zinc-500" />
+          <span className="size-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.15s] dark:bg-zinc-500" />
+          <span className="size-1.5 animate-bounce rounded-full bg-zinc-400 dark:bg-zinc-500" />
+        </span>
+        <span aria-hidden="true" className="text-sm text-muted motion-safe:hidden">
+          Thinking…
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Core's response contract blanked an unverifiable reply and substituted this
+ * deterministic copy — render it as a system notice, not assistant prose, so
+ * honesty enforcement stops reading like the assistant talking strangely.
+ */
+function ContractNotice({ text }: { text: string }) {
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[88%] rounded-xl border border-edge bg-sunken/60 px-3 py-2 sm:max-w-[80%]">
+        <p className="flex items-center gap-1.5 text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+          <ShieldCheck className="size-3.5 shrink-0" aria-hidden="true" />
+          Honesty check
+        </p>
+        <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-300">{text}</p>
+        <details className="mt-1">
+          <summary className="cursor-pointer text-2xs text-muted select-none">
+            Why am I seeing this?
+          </summary>
+          <p className="mt-1 max-w-prose text-2xs leading-4 text-muted">
+            The assistant only reports actions backed by a completed tool result. This notice
+            replaced a reply that claimed more than the evidence supported — nothing was sent or
+            changed outside this chat.
+          </p>
+        </details>
+      </div>
+    </div>
+  );
+}
+
+/** Live tool activity for an executor turn, as readable chips instead of mono text. */
+function ActivityChips({
+  activity,
+}: {
+  activity: Array<{ toolName: string; status: string; step: number }>;
+}) {
+  if (activity.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {activity.map((item) => (
+        <span
+          key={`${item.step}-${item.toolName}`}
+          className="inline-flex items-center gap-1.5 rounded-full border border-edge bg-raised px-2.5 py-1 text-2xs font-medium text-zinc-600 dark:text-zinc-300"
+        >
+          {item.status === 'succeeded' ? (
+            <CircleCheck
+              className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400"
+              aria-hidden="true"
+            />
+          ) : item.status === 'failed' || item.status === 'denied' ? (
+            <CircleX
+              className="size-3 shrink-0 text-red-500 dark:text-red-400"
+              aria-hidden="true"
+            />
+          ) : item.status === 'awaiting_approval' ? (
+            <Hand
+              className="size-3 shrink-0 text-amber-600 dark:text-amber-400"
+              aria-hidden="true"
+            />
+          ) : (
+            <Loader2
+              className="size-3 shrink-0 text-muted motion-safe:animate-spin"
+              aria-hidden="true"
+            />
+          )}
+          {toolLabel(item.toolName)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** Auto-recall provenance carried on an assistant message's custom `recall` part. */
 function recallSourcesOf(message: UIMessage): RecallSource[] {
   for (const part of message.parts as Array<{ type?: string; sources?: unknown }>) {
@@ -53,19 +204,27 @@ function recallSourcesOf(message: UIMessage): RecallSource[] {
   return [];
 }
 
+/** "2026-07-12" → "Jul 12" (falls back to the raw string on parse failure). */
+function friendlyRecallDate(isoDay: string): string {
+  const date = new Date(`${isoDay}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return isoDay;
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date);
+}
+
 /** The "recalled from earlier" affordance: what auto-recall drew on for a turn. */
 function RecallChip({ sources }: { sources: RecallSource[] }) {
   if (sources.length === 0) return null;
   return (
-    <div className="mb-1.5 flex flex-wrap items-center gap-1 text-[11px] text-zinc-500 dark:text-zinc-400">
-      <span className="font-medium">↩ Recalled from earlier:</span>
+    <div className="mb-1.5 flex flex-wrap items-center gap-1 text-2xs text-muted">
+      <History className="size-3 shrink-0" aria-hidden="true" />
+      <span className="font-medium">Remembered:</span>
       {sources.map((source, index) => (
         <span
           key={`${source.date}-${index.toString()}`}
-          className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800"
-          title={source.label}
+          className="inline-block max-w-56 truncate rounded bg-sunken px-1.5 py-0.5 align-bottom"
+          title={`From ${source.date} — ${source.label}`}
         >
-          {source.date} · {source.label}
+          {friendlyRecallDate(source.date)} — {source.label}
         </span>
       ))}
     </div>
@@ -176,11 +335,37 @@ export function ChatClient({
     [conversationId],
   );
 
-  const { messages, sendMessage, setMessages, status, error, clearError } = useChat({
+  const { messages, sendMessage, setMessages, status, error, clearError, stop } = useChat({
     id: conversationId,
     messages: initialMessages,
     transport,
   });
+
+  // Timestamps and day dividers use the browser timezone, so they render only
+  // after mount — the server-rendered HTML must not bake in the server's zone.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Model-picker popover: closes on outside pointerdown, Escape, or selection.
+  const [modelOpen, setModelOpen] = useState(false);
+  const modelMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!modelOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!modelMenuRef.current?.contains(event.target as Node)) setModelOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setModelOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [modelOpen]);
 
   // Action turns run in the executor (tools, approvals) — poll the thread
   // until the task settles, then replace the local ack with the real answer.
@@ -306,7 +491,7 @@ export function ChatClient({
     <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-4xl flex-col lg:h-[calc(100vh-4rem)]">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 pb-4 dark:border-zinc-800">
         <div className="min-w-0">
-          <p className="text-[10px] font-semibold tracking-[0.14em] text-indigo-700 uppercase dark:text-indigo-300">
+          <p className="text-2xs font-semibold tracking-[0.14em] text-indigo-700 uppercase dark:text-indigo-300">
             Chat
           </p>
           <h1 className="mt-1 truncate text-xl font-semibold tracking-[-0.03em]">{title}</h1>
@@ -338,37 +523,50 @@ export function ChatClient({
           {fallbackNote ? (
             <span className="text-xs text-zinc-500 dark:text-zinc-500">{fallbackNote}</span>
           ) : null}
-          <details className="relative">
-            <summary className="inline-flex cursor-pointer list-none items-center rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+          <div ref={modelMenuRef} className="relative">
+            <button
+              type="button"
+              aria-haspopup="true"
+              aria-expanded={modelOpen}
+              onClick={() => setModelOpen((open) => !open)}
+              className={`inline-flex items-center gap-1 rounded-lg border border-edge bg-raised px-2.5 py-1.5 text-xs font-medium text-zinc-600 motion-safe:transition-colors hover:bg-sunken dark:text-zinc-300 ${focusRing}`}
+            >
               Model
-            </summary>
-            <div className="absolute top-full right-0 z-10 mt-2 w-56 rounded-xl border border-edge bg-raised p-2 shadow-lg">
-              <label
-                htmlFor="conversation-model"
-                className="px-1 text-[10px] font-semibold tracking-[0.12em] text-zinc-500 uppercase dark:text-zinc-400"
-              >
-                Response model
-              </label>
-              <select
-                id="conversation-model"
-                aria-label="Model"
-                defaultValue={modelOverride ?? ''}
-                disabled={isSwitching}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  startTransition(() => changeConversationModel(conversationId, value || null));
-                }}
-                className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-2 py-1.5 text-base sm:text-sm dark:border-zinc-700 dark:bg-zinc-900"
-              >
-                <option value="">Auto</option>
-                {models.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </details>
+              <ChevronDown
+                className={`size-3.5 motion-safe:transition-transform ${modelOpen ? 'rotate-180' : ''}`}
+                aria-hidden="true"
+              />
+            </button>
+            {modelOpen ? (
+              <div className="absolute top-full right-0 z-10 mt-2 w-56 rounded-xl border border-edge bg-raised p-2 shadow-lg motion-safe:animate-[pop-in_120ms_ease-out]">
+                <label
+                  htmlFor="conversation-model"
+                  className="px-1 text-2xs font-semibold tracking-[0.12em] text-zinc-500 uppercase dark:text-zinc-400"
+                >
+                  Response model
+                </label>
+                <select
+                  id="conversation-model"
+                  aria-label="Model"
+                  defaultValue={modelOverride ?? ''}
+                  disabled={isSwitching}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    startTransition(() => changeConversationModel(conversationId, value || null));
+                    setModelOpen(false);
+                  }}
+                  className="mt-1 w-full rounded-lg border border-edge bg-raised px-2 py-1.5 text-base sm:text-sm"
+                >
+                  <option value="">Auto</option>
+                  {models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+          </div>
         </div>
       </header>
       {initialNotice ? (
@@ -390,74 +588,133 @@ export function ChatClient({
         className="flex-1 overflow-y-auto py-4"
       >
         {messages.length === 0 ? (
-          <p className="mt-8 text-sm leading-6 text-zinc-500 dark:text-zinc-400">
-            Ask for a plan, a document, a summary, or help with something you need to get done.
-          </p>
+          <div className="mx-auto mt-12 flex max-w-md flex-col items-center gap-3 text-center">
+            <p className="text-base font-medium text-strong">What can I get moving for you?</p>
+            <p className="text-sm leading-6 text-muted">
+              Ask for a plan, a document, research — or hand me something to chase down.
+            </p>
+            <div className="mt-1 flex flex-wrap justify-center gap-2">
+              {[
+                'Summarize my unread email',
+                'What’s on my calendar this week?',
+                'Draft a plan for my next trip',
+              ].map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  onClick={() => setInput(suggestion)}
+                  className={btnSm.outline}
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          </div>
         ) : (
           <div className="flex flex-col gap-4">
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}
-              >
-                <div
-                  className={
-                    message.role === 'user'
-                      ? 'max-w-[88%] rounded-2xl rounded-br-md bg-indigo-600 px-3 py-2 text-sm text-white shadow-sm sm:max-w-[80%]'
-                      : 'max-w-[88%] rounded-2xl rounded-bl-md border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm sm:max-w-[80%] dark:border-zinc-800 dark:bg-zinc-900'
-                  }
-                >
-                  {message.role === 'assistant' ? (
-                    <RecallChip sources={recallSourcesOf(message)} />
-                  ) : null}
-                  {(
-                    message.parts as Array<
-                      UIMessage['parts'][number] | InlineApprovalPart | InlineBudgetRequestPart
+            {messages.map((message, messageIndex) => {
+              const parts = message.parts as Array<
+                UIMessage['parts'][number] | InlineApprovalPart | InlineBudgetRequestPart
+              >;
+              const approvalParts = parts.filter(
+                (part): part is InlineApprovalPart => part.type === 'approval',
+              );
+              const budgetParts = parts.filter(
+                (part): part is InlineBudgetRequestPart => part.type === 'budget-request',
+              );
+              const textParts = parts.filter(
+                (part): part is Extract<UIMessage['parts'][number], { type: 'text' }> =>
+                  part.type === 'text',
+              );
+              // The grouped card repeats the executor's prose approval list —
+              // hide the duplicate text, never the persisted message itself.
+              const visibleTextParts =
+                approvalParts.length > 0
+                  ? textParts.filter((part) => !isApprovalProseNotice(part.text))
+                  : textParts;
+              const fullText = visibleTextParts
+                .map((part) => part.text)
+                .join('')
+                .trim();
+              const isNotice =
+                message.role === 'assistant' &&
+                approvalParts.length === 0 &&
+                budgetParts.length === 0 &&
+                fullText !== '' &&
+                isContractNotice(fullText);
+              const date = messageDate(message);
+              const previousDate =
+                messageIndex > 0 ? messageDate(messages[messageIndex - 1] as UIMessage) : null;
+              const showDivider =
+                mounted && date !== null && (previousDate === null || !sameDay(previousDate, date));
+              const nextMessage = messages[messageIndex + 1];
+              const showTime =
+                mounted && date !== null && (!nextMessage || nextMessage.role !== message.role);
+              const recallSources = recallSourcesOf(message);
+              const hasBubble = visibleTextParts.length > 0 && !isNotice;
+              return (
+                <div key={message.id} className="flex flex-col gap-2">
+                  {showDivider && date ? <DayDivider label={dayLabel(date, new Date())} /> : null}
+                  {isNotice ? (
+                    <ContractNotice text={fullText} />
+                  ) : hasBubble ? (
+                    <div
+                      className={
+                        message.role === 'user' ? 'flex justify-end' : 'flex justify-start'
+                      }
                     >
-                  ).map((part, index) =>
-                    part.type === 'text' ? (
-                      message.role === 'assistant' ? (
-                        <MessageMarkdown
-                          key={`${message.id}-${index.toString()}`}
-                          text={part.text}
-                        />
-                      ) : (
-                        <p
-                          key={`${message.id}-${index.toString()}`}
-                          className="whitespace-pre-wrap"
-                        >
-                          {part.text}
-                        </p>
-                      )
-                    ) : part.type === 'approval' ? (
-                      <InlineApproval key={part.approvalId} part={part} />
-                    ) : part.type === 'budget-request' ? (
-                      <InlineBudgetRequest key={part.taskId} part={part} />
-                    ) : null,
-                  )}
+                      <div
+                        className={
+                          message.role === 'user'
+                            ? 'max-w-[88%] rounded-2xl rounded-br-md bg-accent px-3 py-2 text-sm text-white shadow-sm sm:max-w-[80%]'
+                            : 'max-w-[88%] rounded-2xl rounded-bl-md border border-edge bg-raised px-3 py-2 text-sm shadow-sm sm:max-w-[80%]'
+                        }
+                      >
+                        {message.role === 'assistant' ? (
+                          <RecallChip sources={recallSources} />
+                        ) : null}
+                        {visibleTextParts.map((part, index) =>
+                          message.role === 'assistant' ? (
+                            <MessageMarkdown
+                              key={`${message.id}-${index.toString()}`}
+                              text={part.text}
+                            />
+                          ) : (
+                            <p
+                              key={`${message.id}-${index.toString()}`}
+                              className="whitespace-pre-wrap"
+                            >
+                              {part.text}
+                            </p>
+                          ),
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                  {approvalParts.length > 0 ? <ApprovalGroup parts={approvalParts} /> : null}
+                  {budgetParts.map((part) => (
+                    <InlineBudgetRequest key={part.taskId} part={part} />
+                  ))}
+                  {showTime && date ? (
+                    <p
+                      className={`text-2xs text-muted ${
+                        message.role === 'user' ? 'self-end' : 'self-start'
+                      }`}
+                    >
+                      {timeLabel(date)}
+                    </p>
+                  ) : null}
                 </div>
-              </div>
-            ))}
-            {status === 'submitted' ? (
-              <p className="animate-pulse text-sm text-zinc-500 dark:text-zinc-400">Thinking…</p>
-            ) : null}
+              );
+            })}
+            {status === 'submitted' ? <TypingDots /> : null}
             {asyncTurn ? (
-              <div>
-                <p className="animate-pulse text-sm text-zinc-500 dark:text-zinc-400">
-                  Working on it…
-                </p>
-                {activity.length > 0 ? (
-                  <p className="mt-1 font-mono text-2xs text-zinc-500 dark:text-zinc-500">
-                    {activity
-                      .map((a) => `${a.toolName.replace('.', ' ')} — ${a.status}`)
-                      .join(' · ')}
-                  </p>
-                ) : null}
+              <div className="flex flex-col gap-2">
+                <p className="text-sm text-muted motion-safe:animate-pulse">Working on it…</p>
+                <ActivityChips activity={activity} />
               </div>
             ) : null}
-            {asyncNote ? (
-              <p className="text-xs text-zinc-500 dark:text-zinc-500">{asyncNote}</p>
-            ) : null}
+            {asyncNote ? <p className="text-xs text-muted">{asyncNote}</p> : null}
             {liveRecall ? <RecallChip sources={liveRecall} /> : null}
           </div>
         )}
@@ -484,19 +741,7 @@ export function ChatClient({
         }}
         className="mobile-safe-bottom flex flex-col gap-2 border-t border-zinc-200 pt-4 dark:border-zinc-800"
       >
-        <label
-          className="flex cursor-pointer select-none items-center gap-2 self-start text-xs text-zinc-500 dark:text-zinc-400"
-          title="Run this request free-range: I act without asking for each approval. Sensitive steps (memory from web content, unknown recipients, logged-in browsing, networked code) still ask, and budget caps still apply."
-        >
-          <input
-            type="checkbox"
-            checked={autonomous}
-            onChange={(event) => setAutonomous(event.target.checked)}
-            className="h-3.5 w-3.5 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-400 dark:border-zinc-600"
-          />
-          Autonomous — act without asking me to approve each step
-        </label>
-        <div className="flex gap-2">
+        <div className="flex items-end gap-2">
           <textarea
             aria-label="Message"
             value={input}
@@ -509,15 +754,50 @@ export function ChatClient({
             }}
             placeholder="Ask anything…"
             rows={2}
-            className="max-h-40 flex-1 resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-base outline-none transition-shadow placeholder:text-zinc-400 focus:border-indigo-400 focus:ring-3 focus:ring-indigo-100 sm:text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            className="max-h-40 flex-1 resize-none rounded-xl border border-edge bg-raised px-3 py-2.5 text-base outline-none placeholder:text-zinc-400 focus:border-accent focus:ring-3 focus:ring-accent/15 motion-safe:transition-shadow sm:text-sm"
           />
+          {status === 'submitted' || status === 'streaming' ? (
+            <button
+              type="button"
+              onClick={() => stop()}
+              title="Stop generating"
+              className={`inline-flex items-center gap-1.5 rounded-xl border border-edge bg-raised px-4 py-2.5 text-sm font-medium text-zinc-700 motion-safe:transition-colors hover:bg-sunken dark:text-zinc-300 ${focusRing}`}
+            >
+              <Square className="size-3 fill-current" aria-hidden="true" />
+              Stop
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={busy || input.trim() === ''}
+              className={`rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-white shadow-sm motion-safe:transition-colors hover:bg-accent-hover disabled:opacity-50 ${focusRing}`}
+            >
+              Send
+            </button>
+          )}
+        </div>
+        <div className="flex items-center justify-between gap-3">
           <button
-            type="submit"
-            disabled={busy || input.trim() === ''}
-            className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-50"
+            type="button"
+            aria-pressed={autonomous}
+            onClick={() => setAutonomous((value) => !value)}
+            title="Run this request free-range: I act without asking for each approval. Sensitive steps (memory from web content, unknown recipients, logged-in browsing, networked code) still ask, and budget caps still apply."
+            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-2xs font-medium motion-safe:transition-colors ${focusRing} ${
+              autonomous
+                ? 'border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-600 dark:bg-amber-950 dark:text-amber-300'
+                : 'border-edge text-muted hover:bg-sunken'
+            }`}
           >
-            {busy ? '…' : 'Send'}
+            <Zap className="size-3" aria-hidden="true" />
+            Autonomous
+            <span className="sr-only">
+              — act without asking me to approve each step; sensitive steps and budget caps still
+              apply
+            </span>
           </button>
+          <span className="hidden text-2xs text-muted sm:block">
+            Enter to send · Shift+Enter for a new line
+          </span>
         </div>
       </form>
     </div>
