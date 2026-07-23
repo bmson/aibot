@@ -107,6 +107,7 @@ export async function renderChatConversation(id: string, query: ChatPageQuery) {
       modelOverride={conversation.modelOverride}
       goalTitle={linkedGoal?.title}
       archived={conversation.archivedAt !== null}
+      isPrimary={conversation.isPrimary}
       canArchive={!conversation.isPrimary && (activeTasks[0]?.value ?? 0) === 0}
       initialNotice={chatNoticeMessage(query.notice)}
       initialInput={typeof query.ask === 'string' ? query.ask.slice(0, 500) : undefined}

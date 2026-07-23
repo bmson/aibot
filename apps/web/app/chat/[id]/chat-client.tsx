@@ -42,6 +42,8 @@ interface ChatClientProps {
   /** A task created by the goal form before this page opened. */
   initialAsyncTurn?: { taskId: string; cursor: string };
   archived: boolean;
+  /** The one forever thread at /chat — it needs no title header of its own. */
+  isPrimary: boolean;
   canArchive: boolean;
   initialNotice?: string;
   /** Pre-fills the composer (e.g. an "ask about this document" deep-link). */
@@ -330,6 +332,7 @@ export function ChatClient({
   goalTitle,
   initialAsyncTurn,
   archived,
+  isPrimary,
   canArchive,
   initialNotice,
   initialInput,
@@ -339,6 +342,8 @@ export function ChatClient({
   const [isSwitching, startTransition] = useTransition();
   const [selectedModel, setSelectedModel] = useState(modelOverride);
   const [modelError, setModelError] = useState<string | null>(null);
+  /** Keyboard cursor into the /model palette (arrow keys move it, Enter picks). */
+  const [modelHighlight, setModelHighlight] = useState(0);
   /** Set when the route handed the turn to the executor — we poll until it settles. */
   const [asyncTurn, setAsyncTurn] = useState<{ taskId: string; cursor: string } | null>(
     initialAsyncTurn ?? null,
@@ -524,19 +529,37 @@ export function ChatClient({
         .trim()
         .toLowerCase()
     : '';
-  const modelOptions = [
-    { id: null, label: 'Auto', detail: 'Use the best model for the request' },
-    ...models.map((model) => ({ ...model, detail: model.id })),
-  ].filter(
-    (model) =>
-      modelQuery === '' ||
-      model.label.toLowerCase().includes(modelQuery) ||
-      model.detail.toLowerCase().includes(modelQuery),
+  const modelOptions = useMemo(
+    () =>
+      [
+        { id: null, label: 'Auto', detail: 'Use the best model for the request' },
+        ...models.map((model) => ({ ...model, detail: model.id })),
+      ].filter(
+        (model) =>
+          modelQuery === '' ||
+          model.label.toLowerCase().includes(modelQuery) ||
+          model.detail.toLowerCase().includes(modelQuery),
+      ),
+    [models, modelQuery],
   );
   const selectedModelLabel =
     selectedModel === null
       ? 'Auto'
       : (models.find((model) => model.id === selectedModel)?.label ?? selectedModel);
+
+  // Opening the palette (or refiltering it) lands the cursor on the current
+  // model, or the top match when it's filtered out.
+  useEffect(() => {
+    if (!modelCommandOpen) return;
+    const selectedIndex = modelOptions.findIndex((model) => model.id === selectedModel);
+    setModelHighlight(selectedIndex >= 0 ? selectedIndex : 0);
+  }, [modelCommandOpen, modelOptions, selectedModel]);
+
+  // Keep the highlighted option in view as the arrows walk the list.
+  useEffect(() => {
+    if (!modelCommandOpen) return;
+    document.getElementById(`model-option-${modelHighlight}`)?.scrollIntoView({ block: 'nearest' });
+  }, [modelCommandOpen, modelHighlight]);
 
   useEffect(() => {
     if (!stickToBottomRef.current) return;
@@ -573,53 +596,46 @@ export function ChatClient({
   };
 
   return (
-    <div className="mx-auto flex h-[calc(100dvh-6.5rem)] w-full min-w-0 max-w-5xl flex-col overflow-x-clip lg:h-[calc(100vh-5rem)]">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-edge pb-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <AvatarMark name={agentName} active={busy} />
+    <div className="mx-auto flex h-[calc(100dvh-6.5rem)] w-full min-w-0 max-w-5xl flex-col lg:h-[calc(100vh-5rem)]">
+      {/* The primary thread is the whole surface — it needs no title. Side and
+          goal chats keep a slim header so you know which one you're in. */}
+      {!isPrimary ? (
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-edge pb-3">
           <div className="min-w-0">
-            <p className="text-2xs font-semibold tracking-[0.14em] text-indigo-700 uppercase dark:text-indigo-300">
-              {agentName}
-            </p>
             <h1
-              className="truncate font-display text-xl font-semibold tracking-[-0.035em]"
+              className="truncate font-display text-lg font-semibold tracking-[-0.03em]"
               title={displayTitle}
             >
               {displayTitle}
             </h1>
             {goalTitle ? (
-              <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">
-                Working toward: {goalTitle}
-              </p>
+              <p className="mt-0.5 truncate text-xs text-muted">Working toward: {goalTitle}</p>
             ) : null}
             {archived ? (
-              <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="mt-0.5 text-xs text-muted">
                 Archived — sending a message restores this chat.
               </p>
             ) : null}
           </div>
-        </div>
-        {archived || canArchive || fallbackNote ? (
-          <div className="flex min-w-0 items-center gap-2">
-            {archived ? (
-              <form action={restoreConversation.bind(null, conversationId)}>
-                <SubmitButton variant="outline" pendingLabel="Restoring…">
-                  Restore
-                </SubmitButton>
-              </form>
-            ) : canArchive ? (
-              <form action={archiveConversation.bind(null, conversationId)}>
-                <SubmitButton variant="outline" pendingLabel="Archiving…">
-                  Archive
-                </SubmitButton>
-              </form>
-            ) : null}
-            {fallbackNote ? (
-              <span className="text-xs text-zinc-500 dark:text-zinc-500">{fallbackNote}</span>
-            ) : null}
-          </div>
-        ) : null}
-      </header>
+          {archived || canArchive ? (
+            <div className="flex min-w-0 items-center gap-2">
+              {archived ? (
+                <form action={restoreConversation.bind(null, conversationId)}>
+                  <SubmitButton variant="outline" pendingLabel="Restoring…">
+                    Restore
+                  </SubmitButton>
+                </form>
+              ) : canArchive ? (
+                <form action={archiveConversation.bind(null, conversationId)}>
+                  <SubmitButton variant="outline" pendingLabel="Archiving…">
+                    Archive
+                  </SubmitButton>
+                </form>
+              ) : null}
+            </div>
+          ) : null}
+        </header>
+      ) : null}
       {initialNotice ? (
         <div
           role="alert"
@@ -636,7 +652,7 @@ export function ChatClient({
           stickToBottomRef.current =
             element.scrollHeight - element.scrollTop - element.clientHeight < 120;
         }}
-        className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto py-5"
+        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto py-5"
       >
         {messages.length === 0 ? (
           <div className="mx-auto mt-8 flex max-w-xl flex-col items-center text-center sm:mt-14">
@@ -827,12 +843,12 @@ export function ChatClient({
           event.preventDefault();
           submitCurrentMessage();
         }}
-        className="mobile-safe-bottom sticky bottom-0 min-w-0 border-t border-edge bg-surface/95 pt-3 backdrop-blur"
+        className="mobile-safe-bottom sticky bottom-0 min-w-0 border-t border-edge bg-surface/95 pt-3 backdrop-blur sm:pb-3"
       >
         {modelCommandOpen ? (
           <section
             aria-label="Choose response model"
-            className="mb-2 min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_8px_30px_rgb(23_25_35/0.09)] ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
+            className="mb-2 min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_6px_24px_rgb(23_25_35/0.08)] ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
           >
             <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-3">
               <div className="min-w-0">
@@ -845,30 +861,38 @@ export function ChatClient({
                   Switching…
                 </span>
               ) : (
-                <kbd className="shrink-0 rounded-md bg-sunken px-1.5 py-1 font-mono text-2xs text-muted">
-                  /model
-                </kbd>
+                <span className="hidden shrink-0 text-2xs text-muted sm:block">
+                  ↑↓ choose · Enter select · Esc close
+                </span>
               )}
             </div>
             <div
+              id="model-listbox"
               role="listbox"
               aria-label="Response model"
               className="max-h-56 overflow-y-auto p-1.5"
             >
               {modelOptions.length > 0 ? (
-                modelOptions.map((model) => {
+                modelOptions.map((model, index) => {
                   const active = selectedModel === model.id;
+                  const highlighted = index === modelHighlight;
                   return (
                     <button
                       key={model.id ?? 'auto'}
+                      id={`model-option-${index}`}
                       type="button"
                       role="option"
                       aria-selected={active}
                       disabled={isSwitching}
+                      onMouseMove={() => setModelHighlight(index)}
                       onClick={() => chooseModel(model.id)}
                       className={`mobile-touch-target flex min-h-11 w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2 text-left motion-safe:transition-colors ${focusRing} ${
-                        active ? 'bg-accent/10 text-accent' : 'text-strong hover:bg-sunken'
-                      }`}
+                        active
+                          ? 'bg-accent/10 text-accent'
+                          : highlighted
+                            ? 'bg-sunken text-strong'
+                            : 'text-strong hover:bg-sunken'
+                      } ${active && highlighted ? 'ring-1 ring-accent/40' : ''}`}
                     >
                       <span
                         aria-hidden="true"
@@ -900,13 +924,43 @@ export function ChatClient({
         ) : null}
         <div
           data-testid="chat-composer-surface"
-          className="min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_8px_30px_rgb(23_25_35/0.09)] ring-1 ring-edge"
+          className="min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_6px_24px_rgb(23_25_35/0.08)] ring-1 ring-edge"
         >
           <textarea
             aria-label="Message"
+            aria-controls={modelCommandOpen ? 'model-listbox' : undefined}
+            aria-activedescendant={modelCommandOpen ? `model-option-${modelHighlight}` : undefined}
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
+              // While the /model palette is open the arrows drive it, Enter picks
+              // the highlighted model, and Escape closes it — so none of those
+              // reach the send handler.
+              if (modelCommandOpen) {
+                if (event.key === 'ArrowDown') {
+                  event.preventDefault();
+                  setModelHighlight((h) =>
+                    modelOptions.length ? (h + 1) % modelOptions.length : 0,
+                  );
+                } else if (event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  setModelHighlight((h) =>
+                    modelOptions.length ? (h - 1 + modelOptions.length) % modelOptions.length : 0,
+                  );
+                } else if (
+                  event.key === 'Enter' &&
+                  !event.shiftKey &&
+                  !event.nativeEvent.isComposing
+                ) {
+                  event.preventDefault();
+                  const choice = modelOptions[modelHighlight];
+                  if (choice && !isSwitching) chooseModel(choice.id);
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setInput('');
+                }
+                return;
+              }
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 formRef.current?.requestSubmit();
@@ -954,7 +1008,7 @@ export function ChatClient({
             ) : (
               <button
                 type="submit"
-                disabled={busy || input.trim() === ''}
+                disabled={busy || input.trim() === '' || modelCommandOpen}
                 className={`h-10 shrink-0 rounded-xl bg-accent px-4 text-sm font-medium text-white shadow-sm motion-safe:transition-colors hover:bg-accent-hover disabled:opacity-50 ${focusRing}`}
               >
                 Send
@@ -962,9 +1016,14 @@ export function ChatClient({
             )}
           </div>
         </div>
-        <p className="hidden px-1 pt-2 pb-1 text-right text-2xs text-muted sm:block">
-          Enter to send · Shift+Enter for a new line
-        </p>
+        <span aria-live="polite" className="sr-only">
+          {modelCommandOpen && modelOptions[modelHighlight]
+            ? `${modelOptions[modelHighlight].label}, ${modelOptions[modelHighlight].detail}`
+            : ''}
+        </span>
+        {fallbackNote ? (
+          <p className="px-1 pt-2 pb-1 text-right text-2xs text-muted">{fallbackNote}</p>
+        ) : null}
       </form>
     </div>
   );
