@@ -116,7 +116,7 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
       </div>
 
       {adding ? (
-        <div className="mt-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+        <div className="mt-3 rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)]">
           <SkillForm
             submitting={pending}
             error={error}
@@ -146,8 +146,8 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
           {skills.map((s) => (
             <div
               key={s.id}
-              className={`rounded-lg border p-3 dark:border-zinc-800 ${
-                s.deprecated ? 'border-zinc-200 opacity-60 dark:border-zinc-800' : 'border-zinc-200'
+              className={`rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] ${
+                s.deprecated ? 'opacity-60' : ''
               }`}
             >
               {editingId === s.id ? (

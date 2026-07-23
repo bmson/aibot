@@ -8,7 +8,8 @@ import type { ReactNode } from 'react';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, prettyJson, relativeTime, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn, PageShell } from '@/lib/ui';
+import { PageShell } from '@/lib/ui';
+import { SubmitButton } from '@/lib/ui-client';
 import { StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 import {
   archiveTask,
@@ -240,38 +241,30 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             </span>
             {!TERMINAL_TASK_STATUSES.has(task.status) ? (
               <form action={revokeAutonomyGrant.bind(null, task.id)}>
-                <button type="submit" className={btn.outline}>
-                  Revoke free-range
-                </button>
+                <SubmitButton pendingLabel="Revoking…">Revoke free-range</SubmitButton>
               </form>
             ) : null}
           </>
         ) : null}
         {task.status === 'needs_attention' && !stoppedForTaskBudget ? (
           <form action={retryTask.bind(null, task.id)}>
-            <button type="submit" className={btn.primary}>
+            <SubmitButton variant="primary" pendingLabel="Retrying…">
               Retry
-            </button>
+            </SubmitButton>
           </form>
         ) : null}
         {task.status === 'needs_attention' ? (
           <form action={cancelTask.bind(null, task.id)}>
-            <button type="submit" className={btn.outline}>
-              Cancel
-            </button>
+            <SubmitButton pendingLabel="Cancelling…">Cancel</SubmitButton>
           </form>
         ) : null}
         {task.archivedAt ? (
           <form action={restoreTask.bind(null, task.id)}>
-            <button type="submit" className={btn.outline}>
-              Restore to Activity
-            </button>
+            <SubmitButton pendingLabel="Restoring…">Restore to Activity</SubmitButton>
           </form>
         ) : TERMINAL_TASK_STATUSES.has(task.status) ? (
           <form action={archiveTask.bind(null, task.id)}>
-            <button type="submit" className={btn.outline}>
-              Archive
-            </button>
+            <SubmitButton pendingLabel="Archiving…">Archive</SubmitButton>
           </form>
         ) : null}
       </div>
@@ -294,9 +287,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
               className="w-32 rounded-md border border-amber-300 bg-white px-2 py-1 text-base text-zinc-900 sm:text-sm dark:border-amber-800 dark:bg-zinc-900 dark:text-zinc-100"
             />
           </label>
-          <button type="submit" className={btn.primary}>
+          <SubmitButton variant="primary" pendingLabel="Raising budget…">
             Raise budget and retry
-          </button>
+          </SubmitButton>
           <p className="w-full text-xs text-amber-800 dark:text-amber-300">
             The task resumes from its saved checkpoint; completed actions are not repeated.
           </p>

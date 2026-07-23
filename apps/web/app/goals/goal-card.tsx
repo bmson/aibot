@@ -16,6 +16,7 @@ import {
   labelClass as sharedLabelClass,
   textareaClass,
 } from '@/lib/ui';
+import { SubmitButton } from '@/lib/ui-client';
 import { StatusChip } from '@/lib/views';
 
 /** Plain-serializable props built server-side in page.tsx (labels precomputed there). */
@@ -60,7 +61,6 @@ export interface GoalView {
 
 const outlineButton = btn.outline;
 const dangerOutlineButton = btn.dangerOutline;
-const dangerButton = btn.danger;
 const inputClass = `${sharedInputClass} w-full`;
 const labelClass = `flex flex-col gap-1 ${sharedLabelClass}`;
 
@@ -105,7 +105,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
   return (
     <div
       id={`goal-${goal.id}`}
-      className="scroll-mt-20 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+      className="scroll-mt-20 rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] sm:p-5"
     >
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-sm font-medium">{goal.title}</p>
@@ -158,38 +158,38 @@ export function GoalCard({ goal }: { goal: GoalView }) {
         ) : null}
         {goal.archived ? (
           <form action={restoreGoal.bind(null, goal.id)}>
-            <button type="submit" className={outlineButton}>
+            <SubmitButton variant="outline" pendingLabel="Restoring…">
               Restore goal
-            </button>
+            </SubmitButton>
           </form>
         ) : (
           <>
             {!goal.conversationId ? (
               <form action={startGoalWork.bind(null, goal.id)}>
-                <button type="submit" className={outlineButton}>
+                <SubmitButton variant="outline" pendingLabel="Starting…">
                   Start work now
-                </button>
+                </SubmitButton>
               </form>
             ) : null}
             {goal.status === 'active' ? (
               <form action={setGoalStatus.bind(null, goal.id, 'paused')}>
-                <button type="submit" className={outlineButton}>
+                <SubmitButton variant="outline" pendingLabel="Pausing…">
                   Pause automation
-                </button>
+                </SubmitButton>
               </form>
             ) : null}
             {goal.status === 'paused' ? (
               <form action={setGoalStatus.bind(null, goal.id, 'active')}>
-                <button type="submit" className={outlineButton}>
+                <SubmitButton variant="outline" pendingLabel="Resuming…">
                   Resume automation
-                </button>
+                </SubmitButton>
               </form>
             ) : null}
             {!goal.taintedOrigin ? (
               <form action={setGoalAutonomy.bind(null, goal.id, !goal.autonomy)}>
-                <button type="submit" className={outlineButton}>
+                <SubmitButton variant="outline" pendingLabel="Updating…">
                   {goal.autonomy ? 'Turn off free-range' : 'Make free-range'}
-                </button>
+                </SubmitButton>
               </form>
             ) : null}
             {goal.workActive ? (
@@ -212,31 +212,31 @@ export function GoalCard({ goal }: { goal: GoalView }) {
                 </button>
                 {open ? (
                   <form action={setGoalStatus.bind(null, goal.id, 'done')}>
-                    <button type="submit" className={`${outlineButton} w-full`}>
+                    <SubmitButton variant="outline" pendingLabel="Finishing…" className="w-full">
                       Mark done
-                    </button>
+                    </SubmitButton>
                   </form>
                 ) : (
                   <form action={setGoalStatus.bind(null, goal.id, 'active')}>
-                    <button type="submit" className={`${outlineButton} w-full`}>
+                    <SubmitButton variant="outline" pendingLabel="Reactivating…" className="w-full">
                       Reactivate
-                    </button>
+                    </SubmitButton>
                   </form>
                 )}
                 {!goal.workActive ? (
                   <form action={archiveGoal.bind(null, goal.id)}>
-                    <button type="submit" className={`${outlineButton} w-full`}>
+                    <SubmitButton variant="outline" pendingLabel="Archiving…" className="w-full">
                       Archive
-                    </button>
+                    </SubmitButton>
                   </form>
                 ) : null}
                 {goal.status !== 'abandoned' ? (
                   confirmingAbandon ? (
                     <div className="flex flex-col gap-2">
                       <form action={setGoalStatus.bind(null, goal.id, 'abandoned')}>
-                        <button type="submit" className={`${dangerButton} w-full`}>
+                        <SubmitButton variant="danger" pendingLabel="Stopping…" className="w-full">
                           Confirm stop
-                        </button>
+                        </SubmitButton>
                       </form>
                       <button
                         type="button"
@@ -263,10 +263,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
       </div>
 
       {editing && !goal.archived ? (
-        <form
-          action={editAction}
-          className="mt-3 flex flex-col gap-3 border-t border-zinc-200 pt-3 dark:border-zinc-800"
-        >
+        <form action={editAction} className="mt-4 flex flex-col gap-3 border-t border-edge pt-4">
           <input type="hidden" name="goalId" value={goal.id} />
           <label className={labelClass}>
             Title

@@ -1,5 +1,6 @@
 'use client';
 
+import { LoaderCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import {
@@ -23,10 +24,12 @@ export interface FactView {
   importance: number;
   ownerConfirmed: boolean;
   pinned: boolean;
+  organized: boolean;
   /** Whether the compile rules put this fact in the owner card right now. */
   inCard: boolean;
   originTrust: string;
   sourceTaskId: string | null;
+  subjectLabel?: string | null;
   createdLabel: string;
   validityLabel: string;
 }
@@ -39,9 +42,23 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
   const [confirmingForget, setConfirmingForget] = useState(false);
   const [draft, setDraft] = useState(fact.content);
   const [error, setError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const confidencePct = Math.round(fact.confidence * 100);
+  const runAction = (name: string, action: () => Promise<unknown>) => {
+    setPendingAction(name);
+    startTransition(async () => {
+      try {
+        await action();
+      } finally {
+        setPendingAction(null);
+      }
+    });
+  };
+  const pendingIcon = (
+    <LoaderCircle className="size-3 motion-safe:animate-spin" aria-hidden="true" />
+  );
 
   return (
     <div className="rounded-xl bg-sunken/55 px-3 py-3">
@@ -65,6 +82,14 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
               confirmed
             </span>
           ) : null}
+          {!quarantine && !fact.organized ? (
+            <span
+              className="rounded-full bg-violet-100 px-1.5 py-0.5 text-2xs font-medium text-violet-700 dark:bg-violet-950 dark:text-violet-300"
+              title="This fact has not been checked for repetition or conflicts yet."
+            >
+              cleanup pending
+            </span>
+          ) : null}
           <span
             className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
             title={`Confidence ${confidencePct}%`}
@@ -74,6 +99,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
         </span>
       </div>
       <p className="mt-1 text-2xs text-zinc-500 dark:text-zinc-500">
+        {fact.subjectLabel ? `${fact.subjectLabel} · ` : ''}
         {fact.kind}
         {fact.domain ? ` · ${fact.domain}` : ''}
         {!quarantine && fact.importance <= 1 ? ' · minor' : ''}
@@ -99,18 +125,20 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
             <button
               type="button"
               disabled={pending}
-              onClick={() => startTransition(() => approveQuarantined(fact.id))}
+              onClick={() => runAction('approve', () => approveQuarantined(fact.id))}
               className={outlineButton}
             >
-              Approve
+              {pendingAction === 'approve' ? pendingIcon : null}
+              {pendingAction === 'approve' ? 'Approving…' : 'Approve'}
             </button>
             <button
               type="button"
               disabled={pending}
-              onClick={() => startTransition(() => rejectQuarantined(fact.id))}
+              onClick={() => runAction('reject', () => rejectQuarantined(fact.id))}
               className={dangerOutlineButton}
             >
-              Reject
+              {pendingAction === 'reject' ? pendingIcon : null}
+              {pendingAction === 'reject' ? 'Rejecting…' : 'Reject'}
             </button>
           </>
         ) : (
@@ -119,16 +147,17 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
               <button
                 type="button"
                 disabled={pending}
-                onClick={() => startTransition(() => confirmFact(fact.id))}
+                onClick={() => runAction('confirm', () => confirmFact(fact.id))}
                 className={outlineButton}
               >
-                Confirm
+                {pendingAction === 'confirm' ? pendingIcon : null}
+                {pendingAction === 'confirm' ? 'Confirming…' : 'Confirm'}
               </button>
             ) : null}
             <button
               type="button"
               disabled={pending}
-              onClick={() => startTransition(() => setFactPinned(fact.id, !fact.pinned))}
+              onClick={() => runAction('pin', () => setFactPinned(fact.id, !fact.pinned))}
               className={outlineButton}
               title={
                 fact.pinned
@@ -136,17 +165,25 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
                   : 'Always include in the compiled owner card'
               }
             >
-              {fact.pinned ? 'Unpin' : 'Pin to card'}
+              {pendingAction === 'pin' ? pendingIcon : null}
+              {pendingAction === 'pin'
+                ? fact.pinned
+                  ? 'Unpinning…'
+                  : 'Pinning…'
+                : fact.pinned
+                  ? 'Unpin'
+                  : 'Pin to card'}
             </button>
             {fact.importance > 1 ? (
               <button
                 type="button"
                 disabled={pending}
-                onClick={() => startTransition(() => demoteFact(fact.id))}
+                onClick={() => runAction('demote', () => demoteFact(fact.id))}
                 className={outlineButton}
                 title="Minor detail: stays in memory for recall but never auto-appears in the card"
               >
-                Demote
+                {pendingAction === 'demote' ? pendingIcon : null}
+                {pendingAction === 'demote' ? 'Demoting…' : 'Demote'}
               </button>
             ) : null}
             <button
@@ -165,10 +202,11 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
                 <button
                   type="button"
                   disabled={pending}
-                  onClick={() => startTransition(() => forgetFact(fact.id))}
+                  onClick={() => runAction('forget', () => forgetFact(fact.id))}
                   className={btnSm.danger}
                 >
-                  Really forget
+                  {pendingAction === 'forget' ? pendingIcon : null}
+                  {pendingAction === 'forget' ? 'Forgetting…' : 'Really forget'}
                 </button>
                 <button
                   type="button"
@@ -207,7 +245,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
               type="button"
               disabled={pending}
               onClick={() =>
-                startTransition(async () => {
+                runAction('save', async () => {
                   const result = await correctFact(fact.id, draft);
                   if (result.error) setError(result.error);
                   else setEditing(false);
@@ -215,7 +253,8 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
               }
               className={btnSm.primary}
             >
-              {pending ? 'Saving…' : 'Save correction'}
+              {pendingAction === 'save' ? pendingIcon : null}
+              {pendingAction === 'save' ? 'Saving…' : 'Save correction'}
             </button>
           </div>
         </div>

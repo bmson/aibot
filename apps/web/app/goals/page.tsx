@@ -13,6 +13,7 @@ import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import { btn, EmptyState, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
+import { SubmitButton } from '@/lib/ui-client';
 import { archiveInactiveGoals } from './actions';
 
 export const metadata = { title: 'Goals' };
@@ -197,9 +198,9 @@ export default async function GoalsPage({
                   action={archiveInactiveGoals}
                   className="absolute top-full right-0 z-10 mt-2 w-64 rounded-lg border border-edge bg-raised p-2 shadow-lg"
                 >
-                  <button type="submit" className={`${btn.outline} w-full`}>
+                  <SubmitButton pendingLabel="Archiving…" className="w-full">
                     Archive old finished goals
-                  </button>
+                  </SubmitButton>
                   <p className="mt-2 px-1 text-xs text-zinc-500">
                     Hides goals finished more than 30 days ago. Their history is kept.
                   </p>

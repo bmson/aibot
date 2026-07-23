@@ -1,5 +1,6 @@
 'use client';
 
+import { LoaderCircle } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { useFormStatus } from 'react-dom';
@@ -18,16 +19,31 @@ export function SubmitButton({
   pendingLabel = 'Working…',
   variant = 'outline',
   className = '',
+  title,
 }: {
   children: ReactNode;
   pendingLabel?: string;
   variant?: BtnVariant;
   className?: string;
+  title?: string;
 }) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending} className={`${btn[variant]} ${className}`}>
-      {pending ? pendingLabel : children}
+    <button
+      type="submit"
+      disabled={pending}
+      aria-busy={pending}
+      title={title}
+      className={`${btn[variant]} ${className}`}
+    >
+      {pending ? (
+        <>
+          <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+          {pendingLabel}
+        </>
+      ) : (
+        children
+      )}
     </button>
   );
 }
@@ -43,19 +59,28 @@ export function ConfirmButton({
   pendingLabel = 'Working…',
   variant = 'dangerOutline',
   className = '',
+  title,
 }: {
   children: ReactNode;
   confirmLabel?: string;
   pendingLabel?: string;
   variant?: BtnVariant;
   className?: string;
+  title?: string;
 }) {
   const { pending } = useFormStatus();
   const [armed, setArmed] = useState(false);
 
   if (pending) {
     return (
-      <button type="submit" disabled className={`${btn[variant]} ${className}`}>
+      <button
+        type="submit"
+        disabled
+        aria-busy="true"
+        title={title}
+        className={`${btn[variant]} ${className}`}
+      >
+        <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
         {pendingLabel}
       </button>
     );
@@ -64,6 +89,7 @@ export function ConfirmButton({
     return (
       <button
         type="button"
+        title={title}
         onClick={() => {
           setArmed(true);
           setTimeout(() => setArmed(false), 3000);
@@ -75,7 +101,7 @@ export function ConfirmButton({
     );
   }
   return (
-    <button type="submit" className={`${btn[variant]} ${className}`}>
+    <button type="submit" title={title} className={`${btn[variant]} ${className}`}>
       {confirmLabel}
     </button>
   );

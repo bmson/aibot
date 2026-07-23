@@ -1,6 +1,6 @@
 'use client';
 
-import { CircleCheck, CircleX, Clock } from 'lucide-react';
+import { Check, CircleCheck, CircleHelp, CircleX, Clock, LoaderCircle, X } from 'lucide-react';
 import type { InlineApprovalDetail, InlineApprovalStatus } from '@/lib/chat-approval-parts';
 import { btnSm } from '@/lib/ui';
 
@@ -72,15 +72,16 @@ export function ApprovalRow({
     <div className="py-1">
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-sm font-medium">{part.summary}</p>
-        <span className="shrink-0 rounded bg-amber-200 px-1.5 py-0.5 font-mono text-xs font-semibold text-amber-900 dark:bg-amber-900 dark:text-amber-200">
-          {part.shortCode}
+        <span
+          className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sunken px-2 py-1 font-mono text-2xs font-medium text-muted"
+          title="Reference code used for this same request in chat, notifications, and activity."
+        >
+          Ref {part.shortCode}
+          <CircleHelp className="size-3" aria-hidden="true" />
         </span>
       </div>
       {part.details && part.details.length > 0 ? (
-        <details
-          open={detailsOpenByDefault}
-          className="mt-2 rounded-lg border border-amber-200 bg-white/70 p-2.5 dark:border-amber-900 dark:bg-zinc-950/50"
-        >
+        <details open={detailsOpenByDefault} className="mt-2 border-y border-edge py-2.5">
           <summary className="cursor-pointer text-2xs font-semibold tracking-[0.1em] text-zinc-500 uppercase select-none dark:text-zinc-400">
             Exact details
           </summary>
@@ -105,7 +106,12 @@ export function ApprovalRow({
           onClick={() => onResolve(part.approvalId, 'approved')}
           className={btnSm.success}
         >
-          Approve
+          {busy ? (
+            <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
+          ) : (
+            <Check className="size-3.5" aria-hidden="true" />
+          )}
+          {busy ? 'Working…' : 'Approve and continue'}
         </button>
         <button
           type="button"
@@ -113,6 +119,7 @@ export function ApprovalRow({
           onClick={() => onResolve(part.approvalId, 'denied')}
           className={btnSm.dangerOutline}
         >
+          <X className="size-3.5" aria-hidden="true" />
           Decline
         </button>
       </div>

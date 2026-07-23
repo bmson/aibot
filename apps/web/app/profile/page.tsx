@@ -12,17 +12,28 @@ import {
   type MemoryRow,
   memories,
   ownerCard,
+  tasks,
 } from '@assistant/db';
 import { and, count, desc, eq, gt, inArray, isNull, like, or, sql } from 'drizzle-orm';
-import { Brain, CheckCircle2, ShieldQuestion, Sparkles } from 'lucide-react';
+import {
+  ArrowRight,
+  CheckCircle2,
+  CircleCheck,
+  Clock3,
+  Library,
+  ShieldQuestion,
+} from 'lucide-react';
 import Link from 'next/link';
-import { consolidateNow, recompileCard } from '@/app/profile/actions';
+import { AutoRefresh } from '@/app/auto-refresh';
+import { recompileCard } from '@/app/profile/actions';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
+import { MemoryOrganizer } from '@/app/profile/memory-organizer';
 import { type VoiceImportView, VoiceSamplesPanel } from '@/app/profile/voice-samples';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import { btn, countBadgeClass, PageHeader, PageShell, Panel, summaryClass } from '@/lib/ui';
+import { SubmitButton } from '@/lib/ui-client';
 
 export const metadata = { title: 'Memory' };
 
@@ -56,6 +67,7 @@ function toFactView(m: MemoryRow, now: Date, inCard = false): FactView {
     importance: m.importance,
     ownerConfirmed: m.ownerConfirmed,
     pinned: m.pinned,
+    organized: m.lastConsolidatedAt !== null,
     inCard,
     originTrust: m.originTrust,
     sourceTaskId: m.sourceTaskId,
@@ -77,32 +89,56 @@ export default async function ProfilePage() {
     or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
   );
 
-  const [allContacts, quarantined, [card], voiceStats, voiceImports, memoryHealth] =
-    await Promise.all([
-      db.select().from(contacts).orderBy(contacts.name).limit(PROFILE_CONTACT_LIMIT),
-      db
-        .select()
-        .from(memories)
-        .where(
-          and(
-            eq(memories.agentId, agent.id),
-            eq(memories.category, 'knowledge'),
-            eq(memories.quarantined, true),
-            or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-          ),
-        )
-        .orderBy(desc(memories.createdAt))
-        .limit(QUARANTINE_LIMIT),
-      db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
-      voiceSampleStats(db),
-      db
-        .select()
-        .from(importSources)
-        .where(like(importSources.source, 'voice-samples%'))
-        .orderBy(desc(importSources.updatedAt))
-        .limit(VOICE_IMPORT_LIMIT),
-      getMemoryHealth(db, agent.id),
-    ]);
+  const [
+    allContacts,
+    quarantined,
+    [card],
+    voiceStats,
+    voiceImports,
+    memoryHealth,
+    latestOrganizerRows,
+  ] = await Promise.all([
+    db.select().from(contacts).orderBy(contacts.name).limit(PROFILE_CONTACT_LIMIT),
+    db
+      .select()
+      .from(memories)
+      .where(
+        and(
+          eq(memories.agentId, agent.id),
+          eq(memories.category, 'knowledge'),
+          eq(memories.quarantined, true),
+          or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
+        ),
+      )
+      .orderBy(desc(memories.createdAt))
+      .limit(QUARANTINE_LIMIT),
+    db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
+    voiceSampleStats(db),
+    db
+      .select()
+      .from(importSources)
+      .where(like(importSources.source, 'voice-samples%'))
+      .orderBy(desc(importSources.updatedAt))
+      .limit(VOICE_IMPORT_LIMIT),
+    getMemoryHealth(db, agent.id),
+    db
+      .select({
+        id: tasks.id,
+        status: tasks.status,
+        progress: tasks.progress,
+        updatedAt: tasks.updatedAt,
+      })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.agentId, agent.id),
+          sql`${tasks.trigger} #>> '{payload,job}' = 'memory.consolidate'`,
+        ),
+      )
+      .orderBy(desc(tasks.createdAt))
+      .limit(1),
+  ]);
+  const latestOrganizer = latestOrganizerRows[0] ?? null;
   const voiceImportViews: VoiceImportView[] = voiceImports.map((row) => ({
     source: row.source,
     status: row.status,
@@ -164,56 +200,110 @@ export default async function ProfilePage() {
 
   return (
     <PageShell size="reading">
+      <AutoRefresh intervalMs={8_000} />
       <PageHeader
         title="What I remember"
         intro={`See what shapes AI Bot’s understanding of ${owner?.name ?? 'you'}, what still needs care, and what stays available for recall.`}
       />
 
-      <Panel tone="sunken" className="mt-8">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="max-w-xl">
-            <div className="flex items-center gap-2">
-              <Brain className="size-4 text-accent" aria-hidden="true" />
-              <h2 className="text-lg font-semibold tracking-[-0.02em]">Memory health</h2>
-            </div>
-            <p className="mt-2 text-[15px] leading-6 text-muted">
-              {memoryHealth.notYetOrganized === 0
-                ? 'Everything usable has passed through memory organization.'
-                : `${memoryHealth.notYetOrganized} usable memor${
-                    memoryHealth.notYetOrganized === 1 ? 'y has' : 'ies have'
-                  } not been organized yet.`}
+      <section className="mt-8">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold tracking-[-0.025em]">Your memory library</h2>
+            <p className="mt-1 text-[13px] leading-5 text-muted">
+              Each number opens the exact memories behind it, with controls to verify, correct, pin,
+              or forget them.
             </p>
           </div>
-          {memoryHealth.notYetOrganized > 0 ? (
-            <form action={consolidateNow}>
-              <button type="submit" className={btn.primary}>
-                <Sparkles className="size-4" aria-hidden="true" />
-                Organize memory
-              </button>
-            </form>
-          ) : null}
+          <Link href="/profile/memories" className={`${btn.outline} group`}>
+            Browse all
+            <ArrowRight
+              className="size-3.5 motion-safe:transition-transform group-hover:translate-x-0.5"
+              aria-hidden="true"
+            />
+          </Link>
         </div>
-        <div className="mt-6 grid grid-cols-2 gap-x-5 gap-y-4 border-t border-edge pt-5 sm:grid-cols-4">
+        <div className="mt-4 grid grid-cols-2 gap-3">
           {[
-            { value: memoryHealth.totalUsable, label: 'Usable memories' },
-            { value: memoryHealth.notYetOrganized, label: 'Not yet organized' },
-            { value: memoryHealth.awaitingReview, label: 'Awaiting review' },
-            { value: memoryHealth.ownerConfirmed, label: 'Owner-confirmed' },
-          ].map((item) => (
-            <div key={item.label}>
-              <p className="font-display text-2xl font-semibold tracking-[-0.03em]">{item.value}</p>
-              <p className="mt-0.5 text-xs leading-5 text-muted">{item.label}</p>
-            </div>
-          ))}
+            {
+              value: memoryHealth.totalUsable,
+              label: 'Available to AI Bot',
+              description: 'Active facts that can be recalled in conversations.',
+              href: '/profile/memories?view=available',
+              icon: Library,
+              tone: 'bg-accent/10 text-accent',
+            },
+            {
+              value: memoryHealth.notYetOrganized,
+              label: 'Waiting for a pass',
+              description: 'Saved facts not yet checked for repetition or conflicts.',
+              href: '/profile/memories?view=waiting',
+              icon: Clock3,
+              tone: 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300',
+            },
+            {
+              value: memoryHealth.awaitingReview,
+              label: 'Needs your review',
+              description: 'Held back because the source was not verified.',
+              href: '/profile/memories?view=review',
+              icon: ShieldQuestion,
+              tone: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
+            },
+            {
+              value: memoryHealth.ownerConfirmed,
+              label: 'Verified by you',
+              description: 'Facts protected by your confirmation or correction.',
+              href: '/profile/memories?view=verified',
+              icon: CircleCheck,
+              tone: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300',
+            },
+          ].map((item) => {
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.label}
+                href={item.href}
+                className="group rounded-2xl bg-raised p-3 shadow-[0_1px_2px_rgb(23_25_35/0.06)] motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.08)] sm:p-4"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <span
+                    className={`inline-flex size-9 items-center justify-center rounded-xl ${item.tone}`}
+                  >
+                    <Icon className="size-4" aria-hidden="true" />
+                  </span>
+                  <span className="font-display text-2xl font-semibold tracking-[-0.04em]">
+                    {item.value}
+                  </span>
+                </div>
+                <p className="mt-3 text-[13px] font-semibold sm:mt-4">{item.label}</p>
+                <p className="mt-1 text-xs leading-5 text-muted">{item.description}</p>
+                <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-accent">
+                  View <span className="hidden sm:inline">and manage</span>
+                  <ArrowRight
+                    className="size-3 motion-safe:transition-transform group-hover:translate-x-0.5"
+                    aria-hidden="true"
+                  />
+                </span>
+              </Link>
+            );
+          })}
         </div>
-        <p className="mt-5 text-xs leading-5 text-muted">
-          {memoryHealth.lastOrganizedAt
-            ? `Last organized ${relativeTime(memoryHealth.lastOrganizedAt, now)}.`
-            : 'Memory organization has not completed yet.'}{' '}
-          Isolated facts may not need merging, but the count always reflects whether they have been
-          reviewed by the organization pass.
-        </p>
-      </Panel>
+        <div className="mt-4">
+          <MemoryOrganizer
+            remaining={memoryHealth.notYetOrganized}
+            latest={
+              latestOrganizer
+                ? {
+                    id: latestOrganizer.id,
+                    status: latestOrganizer.status,
+                    progress: latestOrganizer.progress,
+                    updatedLabel: relativeTime(latestOrganizer.updatedAt, now),
+                  }
+                : null
+            }
+          />
+        </div>
+      </section>
 
       {/* Quarantine review — the inbox; the only section that needs attention */}
       {quarantined.length > 0 ? (
@@ -261,9 +351,9 @@ export default async function ProfilePage() {
           )}
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <form action={recompileCard}>
-              <button type="submit" className={btn.outline}>
+              <SubmitButton variant="outline" pendingLabel="Refreshing…">
                 Refresh summary
-              </button>
+              </SubmitButton>
             </form>
             <span className="text-xs text-muted">
               This compact context is what AI Bot sees before it searches deeper memory.

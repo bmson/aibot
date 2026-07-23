@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { contacts, type Db, isTombstoned, memories, ownerCard } from '@assistant/db';
-import { and, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, ne, notInArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
 import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
@@ -66,12 +66,13 @@ interface FactLite {
   domain: string | null;
   ownerConfirmed: boolean;
   pinned: boolean;
+  lastConsolidatedAt: Date | null;
   createdAt: Date;
   validFrom: Date | null;
   validUntil: Date | null;
 }
 
-const MAX_ENTITIES_PER_RUN = 12;
+const MAX_WINDOWS_PER_RUN = 12;
 const MAX_FACTS_PER_ENTITY = 60;
 
 /**
@@ -96,6 +97,9 @@ function parseIsoDate(value: string): Date | null {
 
 export interface ConsolidationResult {
   entities: number;
+  batches: number;
+  memoriesReviewed: number;
+  standaloneReviewed: number;
   duplicatesExpired: number;
   contradictionsResolved: number;
   factsUnified: number;
@@ -105,12 +109,15 @@ export interface ConsolidationResult {
 
 export async function runMemoryConsolidation(
   deps: { db: Db; router: ModelRouter; heartbeat?: () => Promise<void> },
-  opts: { taskId?: string } = {},
+  opts: { taskId?: string; agentId?: string } = {},
 ): Promise<ConsolidationResult> {
   const { db, router } = deps;
   return withSpan('memory.consolidate', {}, async () => {
     const result: ConsolidationResult = {
       entities: 0,
+      batches: 0,
+      memoriesReviewed: 0,
+      standaloneReviewed: 0,
       duplicatesExpired: 0,
       contradictionsResolved: 0,
       factsUnified: 0,
@@ -119,25 +126,73 @@ export async function runMemoryConsolidation(
     };
 
     const activeFacts = and(
+      opts.agentId ? eq(memories.agentId, opts.agentId) : undefined,
       eq(memories.category, 'knowledge'),
       eq(memories.quarantined, false),
       or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
     );
 
-    const entityRows = await db
+    // A fact with no subject, or the only fact about a person, has nothing it
+    // can be compared with. Treat it as organized instead of leaving it in the
+    // owner's backlog forever. This is a lifecycle stamp, not a content rewrite.
+    const singletonEntities = await db
       .select({ subjectContactId: memories.subjectContactId, n: sql<number>`count(*)` })
       .from(memories)
       .where(and(activeFacts, sql`${memories.subjectContactId} IS NOT NULL`))
       .groupBy(memories.subjectContactId)
-      .having(sql`count(*) >= 2`)
-      // rotation: the entity whose facts have waited longest goes first, so
-      // a handful of big entities can never starve the rest
-      .orderBy(sql`min(${memories.lastConsolidatedAt}) asc nulls first`, sql`count(*) desc`)
-      .limit(MAX_ENTITIES_PER_RUN);
+      .having(sql`count(*) = 1`);
+    const singletonIds = singletonEntities
+      .map((row) => row.subjectContactId)
+      .filter((id): id is string => Boolean(id));
+    const standaloneReviewed = await db
+      .update(memories)
+      .set({ lastConsolidatedAt: sql`now()` })
+      .where(
+        and(
+          activeFacts,
+          isNull(memories.lastConsolidatedAt),
+          or(
+            isNull(memories.subjectContactId),
+            singletonIds.length > 0 ? inArray(memories.subjectContactId, singletonIds) : undefined,
+          ),
+        ),
+      )
+      .returning({ id: memories.id });
+    result.standaloneReviewed = standaloneReviewed.length;
 
-    for (const entity of entityRows) {
+    // Work in bounded windows rather than taking one window per person. A
+    // large owner profile can otherwise take dozens of manual clicks while
+    // small profiles consume the rest of the run. Re-querying after each
+    // window keeps null (never-reviewed) facts at the front of the queue.
+    const processedEntities = new Set<string>();
+    const failedEntities = new Set<string>();
+    for (let window = 0; window < MAX_WINDOWS_PER_RUN; window += 1) {
       await deps.heartbeat?.();
+      const [entity] = await db
+        .select({ subjectContactId: memories.subjectContactId })
+        .from(memories)
+        .where(
+          and(
+            activeFacts,
+            sql`${memories.subjectContactId} IS NOT NULL`,
+            failedEntities.size > 0
+              ? notInArray(memories.subjectContactId, [...failedEntities])
+              : undefined,
+          ),
+        )
+        .groupBy(memories.subjectContactId)
+        .having(
+          sql`count(*) >= 2 AND count(*) FILTER (WHERE ${memories.lastConsolidatedAt} IS NULL) > 0`,
+        )
+        .orderBy(
+          sql`min(${memories.lastConsolidatedAt}) asc nulls first`,
+          sql`count(*) FILTER (WHERE ${memories.lastConsolidatedAt} IS NULL) desc`,
+        )
+        .limit(1);
+      if (!entity) break;
       if (!entity.subjectContactId) continue;
+      processedEntities.add(entity.subjectContactId);
+      result.entities = processedEntities.size;
       const facts: FactLite[] = await db
         .select({
           id: memories.id,
@@ -149,6 +204,7 @@ export async function runMemoryConsolidation(
           domain: memories.domain,
           ownerConfirmed: memories.ownerConfirmed,
           pinned: memories.pinned,
+          lastConsolidatedAt: memories.lastConsolidatedAt,
           createdAt: memories.createdAt,
           validFrom: memories.validFrom,
           validUntil: memories.validUntil,
@@ -199,7 +255,10 @@ export async function runMemoryConsolidation(
           );
           return null;
         });
-      if (outcome === null) continue;
+      if (outcome === null) {
+        failedEntities.add(entity.subjectContactId);
+        continue;
+      }
       await deps.heartbeat?.();
       if (!outcome.ok) {
         throw new BudgetReservationError(
@@ -264,6 +323,7 @@ export async function runMemoryConsolidation(
             subjectContactId: entity.subjectContactId,
             domain: mostCommon(members.map((m) => m.domain)),
             sourceTaskId: opts.taskId,
+            lastConsolidatedAt: sql`now()`,
           })
           .onConflictDoNothing({ target: memories.contentHash })
           .returning();
@@ -310,6 +370,8 @@ export async function runMemoryConsolidation(
             facts.map((f) => f.id),
           ),
         );
+      result.batches += 1;
+      result.memoriesReviewed += facts.filter((fact) => fact.lastConsolidatedAt === null).length;
     }
 
     await deps.heartbeat?.();

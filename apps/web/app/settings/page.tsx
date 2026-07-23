@@ -8,6 +8,7 @@ import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import { btn, Card, CountBadge, EmptyState, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
+import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 
 export const metadata = { title: 'Settings' };
 
@@ -123,9 +124,9 @@ export default async function SettingsPage() {
                   </details>
                 </div>
                 <form action={setScheduleEnabled.bind(null, s.id, !s.enabled)}>
-                  <button type="submit" className={btn.outline}>
+                  <SubmitButton pendingLabel={s.enabled ? 'Pausing…' : 'Resuming…'}>
                     {s.enabled ? 'Pause' : 'Resume'}
-                  </button>
+                  </SubmitButton>
                 </form>
               </Card>
             ))}
@@ -182,19 +183,19 @@ export default async function SettingsPage() {
                   </div>
                   <div className="flex shrink-0 gap-1.5">
                     <form action={setPolicyEnabled.bind(null, p.id, !p.enabled)}>
-                      <button type="submit" className={btn.outline}>
+                      <SubmitButton pendingLabel={p.enabled ? 'Pausing…' : 'Enabling…'}>
                         {p.enabled ? 'Pause rule' : 'Use rule'}
-                      </button>
+                      </SubmitButton>
                     </form>
                     {p.createdVia !== 'seed' ? (
                       <form action={deletePolicy.bind(null, p.id)}>
-                        <button
-                          type="submit"
-                          className={btn.dangerOutline}
+                        <ConfirmButton
+                          pendingLabel="Deleting…"
+                          confirmLabel="Confirm delete"
                           title="Remove the rule — this tool goes back to asking for approval"
                         >
                           Delete
-                        </button>
+                        </ConfirmButton>
                       </form>
                     ) : null}
                   </div>

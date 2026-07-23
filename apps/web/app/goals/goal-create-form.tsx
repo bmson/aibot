@@ -38,7 +38,7 @@ export function GoalCreateForm() {
             className={`${textareaClass} w-full`}
           />
         </label>
-        <details className="rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+        <details className="rounded-xl bg-sunken/55 px-3 py-2">
           <summary className="cursor-pointer text-xs font-medium text-zinc-600 dark:text-zinc-400">
             Schedule and notification options
           </summary>

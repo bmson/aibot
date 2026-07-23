@@ -121,7 +121,7 @@ export function OccasionsPanel({
 
       {adding ? (
         <form
-          className="mt-3 flex flex-col gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+          className="mt-3 flex flex-col gap-3 rounded-2xl bg-sunken/55 p-4"
           action={(formData) =>
             startTransition(async () => {
               setError(null);

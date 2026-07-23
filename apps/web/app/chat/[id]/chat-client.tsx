@@ -11,17 +11,20 @@ import {
   History,
   Inbox,
   Loader2,
+  MoonStar,
   Route,
   ShieldCheck,
   Sparkles,
   Square,
+  TriangleAlert,
   Zap,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { AvatarMark } from '@/app/brand-mark';
 import { hasContractNoticePart, isApprovalProseNotice, isContractNotice } from '@/lib/chat-notices';
-import { btn, btnSm, focusRing } from '@/lib/ui';
+import { btnSm, focusRing } from '@/lib/ui';
+import { SubmitButton } from '@/lib/ui-client';
 import { toolLabel } from '@/lib/views';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
 import { ApprovalGroup } from './approval-group';
@@ -111,17 +114,18 @@ function DayDivider({ label }: { label: string }) {
 }
 
 /** Three-dot typing indicator; reduced-motion users get static text instead. */
-function TypingDots() {
+function TypingDots({ name }: { name: string }) {
   return (
-    <div className="flex justify-start">
-      <div className="rounded-2xl rounded-bl-md border border-edge bg-raised px-3 py-2.5 shadow-sm">
+    <div className="flex items-center gap-3">
+      <AvatarMark name={name} size="sm" active />
+      <div className="flex items-center gap-2 py-1">
         <span className="sr-only">The assistant is thinking</span>
         <span aria-hidden="true" className="hidden items-center gap-1 motion-safe:flex">
-          <span className="size-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.3s] dark:bg-zinc-500" />
-          <span className="size-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.15s] dark:bg-zinc-500" />
-          <span className="size-1.5 animate-bounce rounded-full bg-zinc-400 dark:bg-zinc-500" />
+          <span className="size-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" />
+          <span className="size-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" />
+          <span className="size-1.5 animate-bounce rounded-full bg-accent" />
         </span>
-        <span aria-hidden="true" className="text-sm text-muted motion-safe:hidden">
+        <span aria-hidden="true" className="text-[13px] text-muted">
           Thinking…
         </span>
       </div>
@@ -136,11 +140,11 @@ function TypingDots() {
  */
 function ContractNotice({ text }: { text: string }) {
   return (
-    <div className="flex justify-start">
-      <div className="max-w-[88%] rounded-xl border border-edge bg-sunken/60 px-3 py-2 sm:max-w-[80%]">
+    <div className="ml-3 max-w-3xl border-l-2 border-zinc-300 py-1 pl-4 dark:border-zinc-700">
+      <div>
         <p className="flex items-center gap-1.5 text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
           <ShieldCheck className="size-3.5 shrink-0" aria-hidden="true" />
-          Honesty check
+          System check
         </p>
         <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-300">{text}</p>
         <details className="mt-1">
@@ -158,45 +162,82 @@ function ContractNotice({ text }: { text: string }) {
   );
 }
 
-/** Live tool activity for an executor turn, as readable chips instead of mono text. */
-function ActivityChips({
+/**
+ * Proactive notifications are part of the assistant's activity stream, not a
+ * conversational reply. Give them a compact editorial treatment so a string
+ * of updates remains scannable without hiding any of the original detail.
+ */
+function AssistantUpdate({ text, sources }: { text: string; sources: RecallSource[] }) {
+  const attention = /(?:⚠️|anomaly|waiting for you|needs? (?:your )?attention)/i.test(text);
+  const reflection = /(?:🌙|while you slept|reflected)/i.test(text);
+  const Icon = attention ? TriangleAlert : reflection ? MoonStar : Sparkles;
+  const label = attention ? 'Needs attention' : reflection ? 'Quiet update' : 'Update';
+  const tone = attention
+    ? 'border-amber-400 text-amber-700 dark:border-amber-700 dark:text-amber-300'
+    : reflection
+      ? 'border-violet-400 text-violet-700 dark:border-violet-700 dark:text-violet-300'
+      : 'border-accent/60 text-accent';
+
+  return (
+    <section className={`relative ml-3 max-w-3xl border-l-2 py-1 pl-5 ${tone}`}>
+      <span className="absolute top-0.5 -left-[0.82rem] inline-flex size-6 items-center justify-center rounded-full bg-surface">
+        <Icon className="size-3.5" aria-hidden="true" />
+      </span>
+      <p className="mb-1.5 text-2xs font-semibold tracking-[0.1em] uppercase">{label}</p>
+      <RecallNote sources={sources} />
+      <div className="text-[14px] leading-6 text-strong">
+        <MessageMarkdown text={text} />
+      </div>
+    </section>
+  );
+}
+
+/** Live tool activity as a small work trail — events are not chat bubbles. */
+function ActivityTrail({
   activity,
 }: {
   activity: Array<{ toolName: string; status: string; step: number }>;
 }) {
   if (activity.length === 0) return null;
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {activity.map((item) => (
-        <span
-          key={`${item.step}-${item.toolName}`}
-          className="inline-flex items-center gap-1.5 rounded-full border border-edge bg-raised px-2.5 py-1 text-2xs font-medium text-zinc-600 dark:text-zinc-300"
-        >
-          {item.status === 'succeeded' ? (
-            <CircleCheck
-              className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400"
-              aria-hidden="true"
-            />
-          ) : item.status === 'failed' || item.status === 'denied' ? (
-            <CircleX
-              className="size-3 shrink-0 text-red-500 dark:text-red-400"
-              aria-hidden="true"
-            />
-          ) : item.status === 'awaiting_approval' ? (
-            <Hand
-              className="size-3 shrink-0 text-amber-600 dark:text-amber-400"
-              aria-hidden="true"
-            />
-          ) : (
-            <Loader2
-              className="size-3 shrink-0 text-muted motion-safe:animate-spin"
-              aria-hidden="true"
-            />
-          )}
-          {toolLabel(item.toolName)}
-        </span>
-      ))}
-    </div>
+    <section className="ml-3 border-l border-edge py-1 pl-5" aria-label="AI Bot activity">
+      <p className="mb-2 text-2xs font-semibold tracking-[0.1em] text-muted uppercase">
+        Work trail
+      </p>
+      <ol className="space-y-2">
+        {activity.map((item) => (
+          <li key={`${item.step}-${item.toolName}`} className="relative flex items-center gap-2">
+            <span className="absolute -left-[1.56rem] inline-flex size-4 items-center justify-center rounded-full bg-surface">
+              {item.status === 'succeeded' ? (
+                <CircleCheck
+                  className="size-3.5 text-emerald-600 dark:text-emerald-400"
+                  aria-hidden="true"
+                />
+              ) : item.status === 'failed' || item.status === 'denied' ? (
+                <CircleX className="size-3.5 text-red-500 dark:text-red-400" aria-hidden="true" />
+              ) : item.status === 'awaiting_approval' ? (
+                <Hand className="size-3.5 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+              ) : (
+                <Loader2
+                  className="size-3.5 text-accent motion-safe:animate-spin"
+                  aria-hidden="true"
+                />
+              )}
+            </span>
+            <span className="text-[13px] text-strong">{toolLabel(item.toolName)}</span>
+            <span className="text-2xs text-muted">
+              {item.status === 'succeeded'
+                ? 'Done'
+                : item.status === 'awaiting_approval'
+                  ? 'Waiting for you'
+                  : item.status === 'failed' || item.status === 'denied'
+                    ? 'Stopped'
+                    : 'Working'}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -220,18 +261,19 @@ function friendlyRecallDate(isoDay: string): string {
 }
 
 /** The "recalled from earlier" affordance: what auto-recall drew on for a turn. */
-function RecallChip({ sources }: { sources: RecallSource[] }) {
+function RecallNote({ sources }: { sources: RecallSource[] }) {
   if (sources.length === 0) return null;
   return (
-    <div className="mb-1.5 flex flex-wrap items-center gap-1 text-2xs text-muted">
+    <div className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-2xs text-muted">
       <History className="size-3 shrink-0" aria-hidden="true" />
-      <span className="font-medium">Remembered:</span>
+      <span className="font-medium">Drawing on</span>
       {sources.map((source, index) => (
         <span
           key={`${source.date}-${index.toString()}`}
-          className="inline-block max-w-56 truncate rounded bg-sunken px-1.5 py-0.5 align-bottom"
+          className="inline-block max-w-56 truncate align-bottom"
           title={`From ${source.date} — ${source.label}`}
         >
+          {index > 0 ? '· ' : ''}
           {friendlyRecallDate(source.date)} — {source.label}
         </span>
       ))}
@@ -481,6 +523,7 @@ export function ChatClient({
 
   const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
   const displayTitle = title === 'Untitled' ? 'New conversation' : title;
+  const notificationMode = displayTitle.toLowerCase() === 'notifications';
 
   useEffect(() => {
     if (!stickToBottomRef.current) return;
@@ -533,15 +576,15 @@ export function ChatClient({
           </Link>
           {archived ? (
             <form action={restoreConversation.bind(null, conversationId)}>
-              <button type="submit" className={btn.outline}>
+              <SubmitButton variant="outline" pendingLabel="Restoring…">
                 Restore
-              </button>
+              </SubmitButton>
             </form>
           ) : canArchive ? (
             <form action={archiveConversation.bind(null, conversationId)}>
-              <button type="submit" className={btn.outline}>
+              <SubmitButton variant="outline" pendingLabel="Archiving…">
                 Archive
-              </button>
+              </SubmitButton>
             </form>
           ) : null}
           {fallbackNote ? (
@@ -594,12 +637,12 @@ export function ChatClient({
         </div>
       </header>
       {initialNotice ? (
-        <p
+        <div
           role="alert"
-          className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-100"
+          className="mt-3 border-l-2 border-amber-400 py-1 pl-4 text-[13px] leading-5 text-amber-900 dark:border-amber-700 dark:text-amber-100"
         >
           {initialNotice}
-        </p>
+        </div>
       ) : null}
 
       <div
@@ -697,7 +740,9 @@ export function ChatClient({
                 mounted && date !== null && (previousDate === null || !sameDay(previousDate, date));
               const nextMessage = messages[messageIndex + 1];
               const showTime =
-                mounted && date !== null && (!nextMessage || nextMessage.role !== message.role);
+                mounted &&
+                date !== null &&
+                (notificationMode || !nextMessage || nextMessage.role !== message.role);
               const recallSources = recallSourcesOf(message);
               const hasBubble = visibleTextParts.length > 0 && !isNotice;
               const isNewMessage = !initialMessageIdsRef.current?.has(message.id);
@@ -711,38 +756,39 @@ export function ChatClient({
                   {showDivider && date ? <DayDivider label={dayLabel(date, new Date())} /> : null}
                   {isNotice ? (
                     <ContractNotice text={fullText} />
+                  ) : notificationMode && message.role === 'assistant' && hasBubble ? (
+                    <AssistantUpdate text={fullText} sources={recallSources} />
                   ) : hasBubble ? (
                     <div
                       className={
                         message.role === 'user' ? 'flex justify-end' : 'flex justify-start'
                       }
                     >
-                      <div
-                        className={
-                          message.role === 'user'
-                            ? 'max-w-[88%] rounded-2xl rounded-br-md bg-accent px-3 py-2 text-sm text-white shadow-sm sm:max-w-[80%]'
-                            : 'max-w-[88%] rounded-2xl rounded-bl-md border border-edge bg-raised px-3 py-2 text-sm shadow-sm sm:max-w-[80%]'
-                        }
-                      >
-                        {message.role === 'assistant' ? (
-                          <RecallChip sources={recallSources} />
-                        ) : null}
-                        {visibleTextParts.map((part, index) =>
-                          message.role === 'assistant' ? (
-                            <MessageMarkdown
-                              key={`${message.id}-${index.toString()}`}
-                              text={part.text}
-                            />
-                          ) : (
+                      {message.role === 'assistant' ? (
+                        <div className="flex w-full max-w-3xl items-start gap-3">
+                          <AvatarMark name={agentName} size="sm" />
+                          <div className="min-w-0 flex-1 pt-0.5 text-[15px] leading-6">
+                            <RecallNote sources={recallSources} />
+                            {visibleTextParts.map((part, index) => (
+                              <MessageMarkdown
+                                key={`${message.id}-${index.toString()}`}
+                                text={part.text}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="max-w-[88%] rounded-2xl rounded-br-md bg-accent px-3.5 py-2.5 text-[14px] leading-5 text-white shadow-sm sm:max-w-[76%]">
+                          {visibleTextParts.map((part, index) => (
                             <p
                               key={`${message.id}-${index.toString()}`}
                               className="whitespace-pre-wrap"
                             >
                               {part.text}
                             </p>
-                          ),
-                        )}
-                      </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ) : null}
                   {approvalParts.length > 0 ? <ApprovalGroup parts={approvalParts} /> : null}
@@ -761,15 +807,19 @@ export function ChatClient({
                 </div>
               );
             })}
-            {status === 'submitted' ? <TypingDots /> : null}
+            {status === 'submitted' ? <TypingDots name={agentName} /> : null}
             {asyncTurn ? (
               <div className="flex flex-col gap-2">
-                <p className="text-sm text-muted motion-safe:animate-pulse">Working on it…</p>
-                <ActivityChips activity={activity} />
+                {activity.length === 0 ? (
+                  <p className="ml-3 border-l border-edge py-1 pl-5 text-[13px] text-muted motion-safe:animate-pulse">
+                    Starting the work…
+                  </p>
+                ) : null}
+                <ActivityTrail activity={activity} />
               </div>
             ) : null}
             {asyncNote ? <p className="text-xs text-muted">{asyncNote}</p> : null}
-            {liveRecall ? <RecallChip sources={liveRecall} /> : null}
+            {liveRecall ? <RecallNote sources={liveRecall} /> : null}
           </div>
         )}
       </div>

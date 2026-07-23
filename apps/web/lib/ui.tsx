@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 export const focusRing =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-1 focus-visible:ring-offset-surface';
 
-const btnBase = `mobile-touch-target inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap font-medium motion-safe:transition-[background-color,border-color,color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
+const btnBase = `mobile-touch-target inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap font-medium motion-safe:transition-[transform,background-color,border-color,color,box-shadow] motion-safe:active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
 const btnMd = 'h-9 rounded-lg px-3.5 text-[13px]';
 const btnXs = 'h-8 rounded-lg px-3 text-xs';
 
@@ -17,7 +17,8 @@ const btnVariants = {
     'border border-edge text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800',
   dangerOutline:
     'border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40',
-  primary: 'bg-accent text-white shadow-sm hover:bg-accent-hover',
+  primary:
+    'bg-accent text-white shadow-sm hover:bg-accent-hover hover:shadow-[0_5px_14px_rgb(91_92_226/0.22)]',
   danger: 'bg-red-600 text-white hover:bg-red-700',
   success: 'bg-emerald-600 text-white hover:bg-emerald-700',
 } as const;

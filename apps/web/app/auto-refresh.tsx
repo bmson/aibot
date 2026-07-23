@@ -15,7 +15,7 @@ export function AutoRefresh({ intervalMs = 12_000 }: { intervalMs?: number }) {
     const tick = () => {
       if (document.visibilityState !== 'visible') return;
       // Don't refresh while the owner is filling in or submitting a form.
-      if (document.querySelector('form [aria-busy="true"], form button[disabled]')) return;
+      if (document.querySelector('form [aria-busy="true"]')) return;
       if (
         document.activeElement?.tagName === 'INPUT' ||
         document.activeElement?.tagName === 'TEXTAREA'

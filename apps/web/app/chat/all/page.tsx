@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn, btnSm, EmptyState, PageHeader, PageShell } from '@/lib/ui';
+import { btn, EmptyState, PageHeader, PageShell } from '@/lib/ui';
+import { SubmitButton } from '@/lib/ui-client';
 import {
   archiveConversation,
   archiveInactiveConversations,
@@ -87,16 +88,16 @@ export default async function ChatListPage({
                 </Link>
               ) : null}
               <form action={archiveInactiveConversations}>
-                <button type="submit" className={btn.outline}>
+                <SubmitButton variant="outline" pendingLabel="Archiving…">
                   Archive inactive chats (30+ days)
-                </button>
+                </SubmitButton>
               </form>
             </>
           )}
           <form action={newConversation}>
-            <button type="submit" className={btn.primary}>
+            <SubmitButton variant="primary" pendingLabel="Creating…">
               New chat
-            </button>
+            </SubmitButton>
           </form>
         </div>
       </div>
@@ -105,13 +106,13 @@ export default async function ChatListPage({
           {archived ? 'No archived chats.' : 'No chats yet — start one with “New chat”.'}
         </EmptyState>
       ) : (
-        <ul className="mt-6 flex flex-col gap-1">
+        <ul className="mt-6 flex flex-col gap-2">
           {chatRows.map((conversation) => (
             <li key={conversation.id} className="flex items-center gap-2">
               <Link
                 href={`/chat/${conversation.id}`}
                 data-mobile-touch-target="true"
-                className="mobile-touch-target flex min-w-0 flex-1 items-center justify-between rounded-md px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900"
+                className="mobile-touch-target flex min-w-0 flex-1 items-center justify-between rounded-xl bg-raised px-3.5 py-3 text-sm shadow-[0_1px_2px_rgb(23_25_35/0.04)] motion-safe:transition-transform hover:-translate-y-px"
               >
                 <span className="flex min-w-0 items-center gap-2">
                   {conversation.isPrimary ? (
@@ -119,7 +120,11 @@ export default async function ChatListPage({
                       Main
                     </span>
                   ) : null}
-                  <span className="truncate">{conversation.title || 'Untitled'}</span>
+                  <span className="truncate">
+                    {conversation.title && conversation.title !== 'Untitled'
+                      ? conversation.title
+                      : 'New conversation'}
+                  </span>
                 </span>
                 <span className="ml-4 shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
                   {relativeTime(conversation.updatedAt, now)}
@@ -127,9 +132,13 @@ export default async function ChatListPage({
               </Link>
               {conversation.isPrimary ? null : archived ? (
                 <form action={restoreConversation.bind(null, conversation.id)}>
-                  <button type="submit" className={btnSm.outline}>
+                  <SubmitButton
+                    variant="outline"
+                    pendingLabel="Restoring…"
+                    className="h-8 px-3 text-xs"
+                  >
                     Restore
-                  </button>
+                  </SubmitButton>
                 </form>
               ) : activeConversationIds.has(conversation.id) ? (
                 <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
@@ -137,9 +146,13 @@ export default async function ChatListPage({
                 </span>
               ) : (
                 <form action={archiveConversation.bind(null, conversation.id)}>
-                  <button type="submit" className={btnSm.outline}>
+                  <SubmitButton
+                    variant="outline"
+                    pendingLabel="Archiving…"
+                    className="h-8 px-3 text-xs"
+                  >
                     Archive
-                  </button>
+                  </SubmitButton>
                 </form>
               )}
             </li>

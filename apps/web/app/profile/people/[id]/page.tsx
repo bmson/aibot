@@ -1,6 +1,7 @@
 import { listOccasionsForContact } from '@assistant/core';
 import { contacts, findDuplicateContactSuggestions, type MemoryRow, memories } from '@assistant/db';
 import { and, count, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
@@ -11,7 +12,7 @@ import { RelationshipForm } from '@/app/profile/relationship-form';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { countBadgeClass, PageHeader, PageShell } from '@/lib/ui';
+import { countBadgeClass, PageHeader, PageShell, Panel } from '@/lib/ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +31,7 @@ function toFactView(memory: MemoryRow, now: Date): FactView {
     importance: memory.importance,
     ownerConfirmed: memory.ownerConfirmed,
     pinned: memory.pinned,
+    organized: memory.lastConsolidatedAt !== null,
     inCard: false,
     originTrust: memory.originTrust,
     sourceTaskId: memory.sourceTaskId,
@@ -92,16 +94,17 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
     <PageShell size="reading">
       <Link
         href="/profile"
-        className="text-sm font-medium text-blue-700 hover:underline dark:text-blue-400"
+        className="mb-5 inline-flex items-center gap-1.5 text-[13px] font-medium text-muted hover:text-strong"
       >
-        ← Back to memory profile
+        <ArrowLeft className="size-3.5" aria-hidden="true" />
+        Memory overview
       </Link>
       <PageHeader
         title={contact.name}
         intro="Review the facts the assistant associates with this person. Update the identity or relationship when needed; changes take effect in future conversations."
       />
 
-      <section className="mt-6 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+      <Panel className="mt-6">
         <h2 className="text-sm font-medium">Person details</h2>
         <div className="mt-3 grid gap-4 lg:grid-cols-2">
           <div>
@@ -121,11 +124,11 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
             </p>
           </div>
         </div>
-        <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+        <div className="mt-4 border-t border-edge pt-4">
           <p className="mb-1 text-xs text-zinc-500 dark:text-zinc-400">Possible duplicate</p>
           <MergeControl contactId={contact.id} options={mergeOptions} suggested={duplicate} />
         </div>
-      </section>
+      </Panel>
 
       <OccasionsPanel contactId={contact.id} personName={contact.name} occasions={occasionViews} />
 
