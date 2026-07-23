@@ -1,12 +1,46 @@
 'use client';
 
-import { useActionState } from 'react';
+import { Plus } from 'lucide-react';
+import { useActionState, useRef, useState } from 'react';
 import { createGoal } from '@/app/goals/actions';
-import { btn, cardShellClass, inputClass, labelClass, textareaClass } from '@/lib/ui';
+import { btn, cardShellClass, focusRing, inputClass, labelClass, textareaClass } from '@/lib/ui';
 import { PACE_OPTIONS } from './pace';
 
-export function GoalCreateForm() {
+/**
+ * Collapsed to one inviting line by default so the goals themselves lead the
+ * page; opens into the full form on click. `startOpen` keeps it expanded when
+ * there is nothing on the page yet.
+ */
+export function GoalCreateForm({ startOpen = false }: { startOpen?: boolean }) {
   const [state, formAction, pending] = useActionState(createGoal, { error: null });
+  const [open, setOpen] = useState(startOpen);
+  const titleRef = useRef<HTMLInputElement | null>(null);
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setOpen(true);
+          // Focus after the form mounts, so typing can start immediately.
+          requestAnimationFrame(() => titleRef.current?.focus());
+        }}
+        className={`${cardShellClass} mt-6 flex w-full items-center justify-between gap-3 px-4 py-3 text-left motion-safe:transition-shadow hover:ring-accent/40 sm:px-5 ${focusRing}`}
+      >
+        <span className="text-[14px] text-muted">
+          Give the assistant a new outcome to work toward…
+        </span>
+        <span
+          className={`${btn.primary} pointer-events-none`}
+          // Presentation only — the whole bar is the real button.
+          aria-hidden="true"
+        >
+          <Plus className="size-4" aria-hidden="true" />
+          New goal
+        </span>
+      </button>
+    );
+  }
 
   return (
     <form action={formAction} className={`${cardShellClass} mt-6 p-5`}>
@@ -18,6 +52,7 @@ export function GoalCreateForm() {
         <label className={labelClass}>
           Title
           <input
+            ref={titleRef}
             type="text"
             name="title"
             required
@@ -76,9 +111,16 @@ export function GoalCreateForm() {
       {state.error ? (
         <p className="mt-2 text-xs text-red-600 dark:text-red-400">{state.error}</p>
       ) : null}
-      <button type="submit" disabled={pending} className={`${btn.primary} mt-3`}>
-        {pending ? 'Starting…' : 'Start this goal'}
-      </button>
+      <div className="mt-3 flex gap-2">
+        <button type="submit" disabled={pending} className={btn.primary}>
+          {pending ? 'Starting…' : 'Start this goal'}
+        </button>
+        {!startOpen ? (
+          <button type="button" onClick={() => setOpen(false)} className={btn.outline}>
+            Cancel
+          </button>
+        ) : null}
+      </div>
     </form>
   );
 }
