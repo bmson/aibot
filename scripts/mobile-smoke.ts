@@ -193,9 +193,8 @@ try {
   });
 
   await openRoute(page, '/');
-  await page.waitForURL((url) => url.pathname.startsWith('/chat/'), { timeout: 10_000 });
   assert(
-    new URL(page.url()).pathname.startsWith('/chat/'),
+    new URL(page.url()).pathname === '/chat',
     `Root did not open the primary chat: ${page.url()}`,
   );
   assert(await page.getByRole('textbox', { name: 'Message' }).isVisible(), 'Chat is not ready');
