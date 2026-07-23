@@ -3,7 +3,7 @@ import { AnomalyCard, type AnomalyView } from '@/app/anomalies/anomaly-card';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { EmptyState, PageHeader, PageShell } from '@/lib/ui';
+import { cardGridClass, EmptyState, PageHeader, PageShell } from '@/lib/ui';
 
 export const metadata = { title: 'Anomalies' };
 
@@ -39,7 +39,7 @@ export default async function AnomaliesPage() {
         {anomalies.length === 0 ? (
           <EmptyState>Nothing unusual. The scan runs nightly and flags anything here.</EmptyState>
         ) : (
-          <div className="flex flex-col gap-3">
+          <div className={cardGridClass}>
             {anomalies.map((anomaly) => (
               <AnomalyCard key={anomaly.id} anomaly={anomaly} />
             ))}

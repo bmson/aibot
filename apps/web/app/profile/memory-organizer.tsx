@@ -4,7 +4,7 @@ import { ArrowUpRight, Brain, Check, CircleAlert, LoaderCircle, Sparkles } from 
 import Link from 'next/link';
 import { useActionState } from 'react';
 import { consolidateNow, type OrganizeMemoryState } from '@/app/profile/actions';
-import { btn, focusRing } from '@/lib/ui';
+import { btn, cardShellClass, focusRing } from '@/lib/ui';
 
 const initialOrganizeMemoryState: OrganizeMemoryState = {
   taskId: null,
@@ -65,7 +65,7 @@ export function MemoryOrganizer({
                 : state.message;
 
   return (
-    <div className="relative overflow-hidden rounded-2xl bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.06)]">
+    <div className={`${cardShellClass} relative`}>
       <div
         className={`h-1 origin-left bg-gradient-to-r from-accent via-violet-400 to-sky-400 ${
           active ? 'motion-safe:animate-pulse' : ''

@@ -57,7 +57,7 @@ export function ApprovalGroup({ parts }: { parts: InlineApprovalPart[] }) {
 
   if (allSettled) {
     return (
-      <div className="ml-3 border-l-2 border-edge py-1 pl-4">
+      <div className="ml-3 min-w-0 max-w-full border-l-2 border-edge py-1 pl-4">
         {parts.map((part) => (
           <ApprovalRow
             key={part.approvalId}
@@ -73,7 +73,7 @@ export function ApprovalGroup({ parts }: { parts: InlineApprovalPart[] }) {
   }
 
   return (
-    <section className="ml-3 border-l-2 border-amber-400 py-1 pl-4 dark:border-amber-600">
+    <section className="ml-3 min-w-0 max-w-full border-l-2 border-amber-400 py-1 pl-4 dark:border-amber-600">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="flex items-center gap-1.5 text-2xs font-semibold tracking-[0.1em] text-amber-700 uppercase dark:text-amber-300">

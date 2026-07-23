@@ -3,7 +3,7 @@ import { ProposalCard, type ProposalView } from '@/app/improvements/proposal-car
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { EmptyState, PageHeader, PageShell } from '@/lib/ui';
+import { cardGridClass, EmptyState, PageHeader, PageShell } from '@/lib/ui';
 
 export const metadata = { title: 'Improvements' };
 
@@ -42,7 +42,7 @@ export default async function ImprovementsPage() {
             No open proposals. The nightly review surfaces suggestions here when it spots a pattern.
           </EmptyState>
         ) : (
-          <div className="flex flex-col gap-3">
+          <div className={cardGridClass}>
             {proposals.map((proposal) => (
               <ProposalCard key={proposal.id} proposal={proposal} />
             ))}

@@ -11,8 +11,8 @@ import './globals.css';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
 const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });
-// Display face for titles, the brand lockup, and the Home greeting only —
-// body/UI text stays Inter. One variable to revert (--font-display in globals).
+// Display face for titles and the brand lockup only — body/UI text stays
+// Inter. One variable to revert (--font-display in globals).
 const display = Bricolage_Grotesque({
   subsets: ['latin'],
   variable: '--font-bricolage',
@@ -39,12 +39,11 @@ export const viewport: Viewport = {
 // The sidebar badge (DB) and session lookup are per-request — never prerender.
 export const dynamic = 'force-dynamic';
 
-// IA (owner-approved): six primary destinations, a small Manage group, and a
+// IA (owner-approved): five primary destinations, a small Manage group, and a
 // collapsed System group for the self-monitoring pages. Routes that left the
 // rail stay alive and linked from their parent surface — /chat/all from the
 // chat header, /import from the Documents page.
 const navItems = [
-  { href: '/', label: 'Home' },
   { href: '/chat', label: 'Chat' },
   { href: '/approvals', label: 'Approvals' },
   { href: '/tasks', label: 'Activity' },

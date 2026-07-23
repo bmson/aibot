@@ -6,7 +6,7 @@ import { updateCaps } from '@/app/costs/actions';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, truncate } from '@/lib/format';
 import { getAgentTimezone, getDb } from '@/lib/server';
-import { inputClass, PageHeader, PageShell } from '@/lib/ui';
+import { cardShellClass, InfoGrid, InfoItem, inputClass, PageHeader, PageShell } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { taskTypeLabel } from '@/lib/views';
 
@@ -99,19 +99,20 @@ export default async function CostsPage() {
             { label: 'Today', spent: totals.dailySpentUsd, limit: totals.dailyLimitUsd },
           ] as const
         ).map((p) => (
-          <div
-            key={p.label}
-            className="rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)]"
-          >
-            <p className="text-xs text-muted">{p.label}</p>
-            <p className="mt-1 text-lg font-semibold">
-              {formatUsd(p.spent.toFixed(4))}
-              <span className="ml-1 text-xs font-normal text-zinc-500">
-                of {Number.isFinite(p.limit) ? formatUsd(p.limit.toFixed(2)) : 'no cap'}
-                {totals.heldUsd > 0 ? ` (+${formatUsd(totals.heldUsd.toFixed(4))} held)` : ''}
-              </span>
-            </p>
+          <div key={p.label} className={`${cardShellClass} p-4`}>
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="text-[13px] font-semibold text-strong">{p.label}</p>
+              <p className="font-display text-2xl font-semibold tracking-[-0.04em]">
+                {formatUsd(p.spent.toFixed(4))}
+              </p>
+            </div>
             <Bar spent={p.spent} held={totals.heldUsd} limit={p.limit} />
+            <InfoGrid className="mt-3">
+              <InfoItem label="Limit">
+                {Number.isFinite(p.limit) ? formatUsd(p.limit.toFixed(2)) : 'No cap'}
+              </InfoItem>
+              <InfoItem label="Reserved">{formatUsd(totals.heldUsd.toFixed(4))}</InfoItem>
+            </InfoGrid>
           </div>
         ))}
       </section>

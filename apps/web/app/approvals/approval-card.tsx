@@ -22,7 +22,7 @@ import {
   denyApproval,
   editAndApprove,
 } from '@/app/approvals/actions';
-import { btn } from '@/lib/ui';
+import { btn, cardBodyClass, cardShellClass, InfoGrid, InfoItem } from '@/lib/ui';
 import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 import type { PendingApprovalView } from '@/lib/views';
 
@@ -57,8 +57,10 @@ export function ApprovalCard({
   const actionLabel = actionLabels[approval.actionKind];
 
   return (
-    <article className="overflow-hidden rounded-2xl border border-edge bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.06)] motion-safe:transition-shadow hover:shadow-[0_10px_30px_rgb(23_25_35/0.08)]">
-      <div className="p-4 sm:p-5">
+    <article
+      className={`${cardShellClass} motion-safe:transition-shadow hover:shadow-[0_10px_30px_rgb(23_25_35/0.08)]`}
+    >
+      <div className={cardBodyClass}>
         <div className="flex items-start gap-3">
           <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-accent/10 text-accent">
             <ActionIcon className="size-4" aria-hidden="true" />
@@ -68,30 +70,37 @@ export function ApprovalCard({
             <h3 className="mt-1 text-[15px] leading-6 font-semibold tracking-[-0.015em]">
               {approval.summary}
             </h3>
-            <p className="mt-1 text-xs leading-5 text-muted">
-              {approval.provenance} ·{' '}
+          </div>
+        </div>
+        <InfoGrid className="sm:grid-cols-4">
+          <InfoItem label="Source">
+            <span className="block truncate" title={approval.provenance}>
+              {approval.provenance}
+            </span>
+            <span className="block font-normal">
               <Link
                 href={`/tasks/${approval.taskId}`}
-                className="inline-flex items-center gap-0.5 font-medium hover:text-strong"
+                className="inline-flex items-center gap-0.5 text-xs text-muted hover:text-strong"
               >
                 View activity
                 <ArrowUpRight className="size-3" aria-hidden="true" />
               </Link>
-            </p>
-            <p className="text-xs leading-5 text-muted">
-              {approval.requestedLabel} · {approval.expiresLabel}
-            </p>
-          </div>
-          <span
-            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sunken px-2 py-1 font-mono text-2xs font-medium text-muted"
-            title="Reference code: a short identifier you can use to recognize this request in chat, text messages, and activity."
-          >
-            Ref {approval.shortCode}
-            <CircleHelp className="size-3" aria-hidden="true" />
-          </span>
-        </div>
+            </span>
+          </InfoItem>
+          <InfoItem label="Requested">{approval.requestedLabel}</InfoItem>
+          <InfoItem label="Expires">{approval.expiresLabel}</InfoItem>
+          <InfoItem label="Reference">
+            <span
+              className="inline-flex items-center gap-1 font-mono"
+              title="A short identifier for recognizing this request in chat, text messages, and activity."
+            >
+              {approval.shortCode}
+              <CircleHelp className="size-3" aria-hidden="true" />
+            </span>
+          </InfoItem>
+        </InfoGrid>
         {approval.voiceFlag ? (
-          <div className="mt-4 rounded-xl bg-amber-100/80 px-3 py-2.5 dark:bg-amber-950/45">
+          <div className="rounded-xl bg-amber-100/80 px-3 py-2.5 dark:bg-amber-950/45">
             <p className="flex items-center gap-1 text-xs font-semibold text-amber-900 dark:text-amber-200">
               <TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />
               Voice rewrite failed fact-check — original draft shown
@@ -102,31 +111,22 @@ export function ApprovalCard({
           </div>
         ) : null}
         {approval.fields.length > 0 && (!compact || approval.fields.length <= 5) ? (
-          <dl className="mt-4 divide-y divide-edge/75 border-y border-edge/75 text-[13px]">
+          <InfoGrid columns={1} className="sm:grid-cols-2">
             {approval.fields.map((f) => (
-              <div key={f.label} className="grid gap-1 py-2.5 sm:grid-cols-[6rem_1fr] sm:gap-3">
-                <dt className="font-medium text-muted">{f.label}</dt>
-                <dd
-                  className={
-                    f.block
-                      ? 'min-w-0 flex-1 whitespace-pre-wrap break-words leading-5 text-strong'
-                      : 'min-w-0 flex-1 break-words leading-5 text-strong'
-                  }
-                >
-                  {f.value}
-                </dd>
-              </div>
+              <InfoItem key={f.label} label={f.label} className={f.block ? 'sm:col-span-2' : ''}>
+                <span className={f.block ? 'whitespace-pre-wrap' : ''}>{f.value}</span>
+              </InfoItem>
             ))}
-          </dl>
+          </InfoGrid>
         ) : null}
-        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1">
-          <details>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <details className="rounded-xl bg-sunken/45 px-3 py-2.5">
             <summary className="cursor-pointer text-xs font-medium text-muted select-none">
               Why AI Bot paused
             </summary>
             <p className="mt-2 max-w-[72ch] text-xs leading-5 text-muted">{approval.reason}</p>
           </details>
-          <details>
+          <details className="rounded-xl bg-sunken/45 px-3 py-2.5">
             <summary className="cursor-pointer text-xs font-medium text-muted select-none">
               Technical details
             </summary>

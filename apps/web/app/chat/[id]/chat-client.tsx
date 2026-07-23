@@ -4,7 +4,6 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import {
   CalendarDays,
-  ChevronDown,
   CircleCheck,
   CircleX,
   Hand,
@@ -19,11 +18,10 @@ import {
   TriangleAlert,
   Zap,
 } from 'lucide-react';
-import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { AvatarMark } from '@/app/brand-mark';
 import { hasContractNoticePart, isApprovalProseNotice, isContractNotice } from '@/lib/chat-notices';
-import { btnSm, focusRing } from '@/lib/ui';
+import { focusRing } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { toolLabel } from '@/lib/views';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
@@ -140,7 +138,7 @@ function TypingDots({ name }: { name: string }) {
  */
 function ContractNotice({ text }: { text: string }) {
   return (
-    <div className="ml-3 max-w-3xl border-l-2 border-zinc-300 py-1 pl-4 dark:border-zinc-700">
+    <div className="ml-3 min-w-0 max-w-3xl border-l-2 border-zinc-300 py-1 pl-4 break-words [overflow-wrap:anywhere] dark:border-zinc-700">
       <div>
         <p className="flex items-center gap-1.5 text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
           <ShieldCheck className="size-3.5 shrink-0" aria-hidden="true" />
@@ -179,7 +177,9 @@ function AssistantUpdate({ text, sources }: { text: string; sources: RecallSourc
       : 'border-accent/60 text-accent';
 
   return (
-    <section className={`relative ml-3 max-w-3xl border-l-2 py-1 pl-5 ${tone}`}>
+    <section
+      className={`relative ml-3 min-w-0 max-w-3xl border-l-2 py-1 pl-5 break-words [overflow-wrap:anywhere] ${tone}`}
+    >
       <span className="absolute top-0.5 -left-[0.82rem] inline-flex size-6 items-center justify-center rounded-full bg-surface">
         <Icon className="size-3.5" aria-hidden="true" />
       </span>
@@ -206,7 +206,10 @@ function ActivityTrail({
       </p>
       <ol className="space-y-2">
         {activity.map((item) => (
-          <li key={`${item.step}-${item.toolName}`} className="relative flex items-center gap-2">
+          <li
+            key={`${item.step}-${item.toolName}`}
+            className="relative flex min-w-0 items-center gap-2"
+          >
             <span className="absolute -left-[1.56rem] inline-flex size-4 items-center justify-center rounded-full bg-surface">
               {item.status === 'succeeded' ? (
                 <CircleCheck
@@ -224,8 +227,10 @@ function ActivityTrail({
                 />
               )}
             </span>
-            <span className="text-[13px] text-strong">{toolLabel(item.toolName)}</span>
-            <span className="text-2xs text-muted">
+            <span className="min-w-0 break-words text-[13px] text-strong [overflow-wrap:anywhere]">
+              {toolLabel(item.toolName)}
+            </span>
+            <span className="shrink-0 text-2xs text-muted">
               {item.status === 'succeeded'
                 ? 'Done'
                 : item.status === 'awaiting_approval'
@@ -332,6 +337,8 @@ export function ChatClient({
   const [input, setInput] = useState(initialInput ?? '');
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   const [isSwitching, startTransition] = useTransition();
+  const [selectedModel, setSelectedModel] = useState(modelOverride);
+  const [modelError, setModelError] = useState<string | null>(null);
   /** Set when the route handed the turn to the executor — we poll until it settles. */
   const [asyncTurn, setAsyncTurn] = useState<{ taskId: string; cursor: string } | null>(
     initialAsyncTurn ?? null,
@@ -402,24 +409,9 @@ export function ChatClient({
     setMounted(true);
   }, []);
 
-  // Model-picker popover: closes on outside pointerdown, Escape, or selection.
-  const [modelOpen, setModelOpen] = useState(false);
-  const modelMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!modelOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!modelMenuRef.current?.contains(event.target as Node)) setModelOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setModelOpen(false);
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [modelOpen]);
+    setSelectedModel(modelOverride);
+  }, [modelOverride]);
 
   // Action turns run in the executor (tools, approvals) — poll the thread
   // until the task settles, then replace the local ack with the real answer.
@@ -524,6 +516,27 @@ export function ChatClient({
   const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
   const displayTitle = title === 'Untitled' ? 'New conversation' : title;
   const notificationMode = displayTitle.toLowerCase() === 'notifications';
+  const commandInput = input.trimStart();
+  const modelCommandOpen = /^\/model(?:\s.*)?$/i.test(commandInput);
+  const modelQuery = modelCommandOpen
+    ? commandInput
+        .replace(/^\/model\s*/i, '')
+        .trim()
+        .toLowerCase()
+    : '';
+  const modelOptions = [
+    { id: null, label: 'Auto', detail: 'Use the best model for the request' },
+    ...models.map((model) => ({ ...model, detail: model.id })),
+  ].filter(
+    (model) =>
+      modelQuery === '' ||
+      model.label.toLowerCase().includes(modelQuery) ||
+      model.detail.toLowerCase().includes(modelQuery),
+  );
+  const selectedModelLabel =
+    selectedModel === null
+      ? 'Auto'
+      : (models.find((model) => model.id === selectedModel)?.label ?? selectedModel);
 
   useEffect(() => {
     if (!stickToBottomRef.current) return;
@@ -537,14 +550,30 @@ export function ChatClient({
   const submitCurrentMessage = () => {
     const text = input.trim();
     if (!text || busy) return;
+    // Slash commands are local composer controls, never conversation messages.
+    if (/^\/model(?:\s.*)?$/i.test(text)) return;
     stickToBottomRef.current = true;
     setInput('');
     setLiveRecall(null);
     void sendMessage({ text });
   };
 
+  const chooseModel = (modelId: string | null) => {
+    if (isSwitching) return;
+    setModelError(null);
+    startTransition(async () => {
+      try {
+        await changeConversationModel(conversationId, modelId);
+        setSelectedModel(modelId);
+        setInput('');
+      } catch {
+        setModelError('Could not switch models. Try again.');
+      }
+    });
+  };
+
   return (
-    <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-5xl flex-col lg:h-[calc(100vh-5rem)]">
+    <div className="mx-auto flex h-[calc(100dvh-6.5rem)] w-full min-w-0 max-w-5xl flex-col overflow-x-clip lg:h-[calc(100vh-5rem)]">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-edge pb-4">
         <div className="flex min-w-0 items-center gap-3">
           <AvatarMark name={agentName} active={busy} />
@@ -570,71 +599,26 @@ export function ChatClient({
             ) : null}
           </div>
         </div>
-        <div className="flex min-w-0 items-center gap-2">
-          <Link href="/chat/all" className={btnSm.outline}>
-            All chats
-          </Link>
-          {archived ? (
-            <form action={restoreConversation.bind(null, conversationId)}>
-              <SubmitButton variant="outline" pendingLabel="Restoring…">
-                Restore
-              </SubmitButton>
-            </form>
-          ) : canArchive ? (
-            <form action={archiveConversation.bind(null, conversationId)}>
-              <SubmitButton variant="outline" pendingLabel="Archiving…">
-                Archive
-              </SubmitButton>
-            </form>
-          ) : null}
-          {fallbackNote ? (
-            <span className="text-xs text-zinc-500 dark:text-zinc-500">{fallbackNote}</span>
-          ) : null}
-          <div ref={modelMenuRef} className="relative">
-            <button
-              type="button"
-              aria-haspopup="true"
-              aria-expanded={modelOpen}
-              onClick={() => setModelOpen((open) => !open)}
-              className={`inline-flex items-center gap-1 rounded-lg border border-edge bg-raised px-2.5 py-1.5 text-xs font-medium text-zinc-600 motion-safe:transition-colors hover:bg-sunken dark:text-zinc-300 ${focusRing}`}
-            >
-              Model
-              <ChevronDown
-                className={`size-3.5 motion-safe:transition-transform ${modelOpen ? 'rotate-180' : ''}`}
-                aria-hidden="true"
-              />
-            </button>
-            {modelOpen ? (
-              <div className="absolute top-full right-0 z-10 mt-2 w-56 rounded-xl border border-edge bg-raised p-2 shadow-lg motion-safe:animate-[pop-in_120ms_ease-out]">
-                <label
-                  htmlFor="conversation-model"
-                  className="px-1 text-2xs font-semibold tracking-[0.12em] text-zinc-500 uppercase dark:text-zinc-400"
-                >
-                  Response model
-                </label>
-                <select
-                  id="conversation-model"
-                  aria-label="Model"
-                  defaultValue={modelOverride ?? ''}
-                  disabled={isSwitching}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    startTransition(() => changeConversationModel(conversationId, value || null));
-                    setModelOpen(false);
-                  }}
-                  className="mt-1 w-full rounded-lg border border-edge bg-raised px-2 py-1.5 text-base sm:text-sm"
-                >
-                  <option value="">Auto</option>
-                  {models.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+        {archived || canArchive || fallbackNote ? (
+          <div className="flex min-w-0 items-center gap-2">
+            {archived ? (
+              <form action={restoreConversation.bind(null, conversationId)}>
+                <SubmitButton variant="outline" pendingLabel="Restoring…">
+                  Restore
+                </SubmitButton>
+              </form>
+            ) : canArchive ? (
+              <form action={archiveConversation.bind(null, conversationId)}>
+                <SubmitButton variant="outline" pendingLabel="Archiving…">
+                  Archive
+                </SubmitButton>
+              </form>
+            ) : null}
+            {fallbackNote ? (
+              <span className="text-xs text-zinc-500 dark:text-zinc-500">{fallbackNote}</span>
             ) : null}
           </div>
-        </div>
+        ) : null}
       </header>
       {initialNotice ? (
         <div
@@ -652,7 +636,7 @@ export function ChatClient({
           stickToBottomRef.current =
             element.scrollHeight - element.scrollTop - element.clientHeight < 120;
         }}
-        className="flex-1 overflow-y-auto py-5"
+        className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto py-5"
       >
         {messages.length === 0 ? (
           <div className="mx-auto mt-8 flex max-w-xl flex-col items-center text-center sm:mt-14">
@@ -702,7 +686,7 @@ export function ChatClient({
             </div>
           </div>
         ) : (
-          <div className="flex flex-col gap-4">
+          <div className="flex min-w-0 flex-col gap-4">
             {messages.map((message, messageIndex) => {
               const parts = message.parts as Array<
                 UIMessage['parts'][number] | InlineApprovalPart | InlineBudgetRequestPart
@@ -749,7 +733,7 @@ export function ChatClient({
               return (
                 <div
                   key={message.id}
-                  className={`flex flex-col gap-2 ${
+                  className={`flex min-w-0 flex-col gap-2 ${
                     isNewMessage ? 'motion-safe:animate-[message-in_200ms_ease-out]' : ''
                   }`}
                 >
@@ -778,11 +762,11 @@ export function ChatClient({
                           </div>
                         </div>
                       ) : (
-                        <div className="max-w-[88%] rounded-2xl rounded-br-md bg-accent px-3.5 py-2.5 text-[14px] leading-5 text-white shadow-sm sm:max-w-[76%]">
+                        <div className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-accent px-3.5 py-2.5 text-[14px] leading-5 text-white shadow-sm sm:max-w-[76%]">
                           {visibleTextParts.map((part, index) => (
                             <p
                               key={`${message.id}-${index.toString()}`}
-                              className="whitespace-pre-wrap"
+                              className="break-words whitespace-pre-wrap [overflow-wrap:anywhere]"
                             >
                               {part.text}
                             </p>
@@ -843,9 +827,81 @@ export function ChatClient({
           event.preventDefault();
           submitCurrentMessage();
         }}
-        className="mobile-safe-bottom sticky bottom-0 flex flex-col gap-2 border-t border-edge bg-surface/95 pt-3 backdrop-blur"
+        className="mobile-safe-bottom sticky bottom-0 min-w-0 border-t border-edge bg-surface/95 pt-3 backdrop-blur"
       >
-        <div className="flex items-end gap-2 rounded-2xl bg-raised p-2 shadow-[0_8px_30px_rgb(23_25_35/0.09)] ring-1 ring-edge">
+        {modelCommandOpen ? (
+          <section
+            aria-label="Choose response model"
+            className="mb-2 min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_8px_30px_rgb(23_25_35/0.09)] ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
+          >
+            <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-[13px] font-semibold text-strong">Response model</p>
+                <p className="truncate text-2xs text-muted">Currently {selectedModelLabel}</p>
+              </div>
+              {isSwitching ? (
+                <span className="inline-flex shrink-0 items-center gap-1.5 text-2xs text-muted">
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                  Switching…
+                </span>
+              ) : (
+                <kbd className="shrink-0 rounded-md bg-sunken px-1.5 py-1 font-mono text-2xs text-muted">
+                  /model
+                </kbd>
+              )}
+            </div>
+            <div
+              role="listbox"
+              aria-label="Response model"
+              className="max-h-56 overflow-y-auto p-1.5"
+            >
+              {modelOptions.length > 0 ? (
+                modelOptions.map((model) => {
+                  const active = selectedModel === model.id;
+                  return (
+                    <button
+                      key={model.id ?? 'auto'}
+                      type="button"
+                      role="option"
+                      aria-selected={active}
+                      disabled={isSwitching}
+                      onClick={() => chooseModel(model.id)}
+                      className={`mobile-touch-target flex min-h-11 w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2 text-left motion-safe:transition-colors ${focusRing} ${
+                        active ? 'bg-accent/10 text-accent' : 'text-strong hover:bg-sunken'
+                      }`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`size-2 shrink-0 rounded-full ${
+                          active ? 'bg-accent' : 'bg-edge'
+                        }`}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-medium">
+                          {model.label}
+                        </span>
+                        <span className="block truncate text-2xs text-muted">{model.detail}</span>
+                      </span>
+                    </button>
+                  );
+                })
+              ) : (
+                <p className="px-3 py-4 text-center text-[13px] text-muted">
+                  No models match “{modelQuery}”
+                </p>
+              )}
+            </div>
+            {modelError ? (
+              <p role="alert" className="border-t border-edge px-4 py-2 text-xs text-red-700">
+                {modelError}
+              </p>
+            ) : null}
+          </section>
+        ) : null}
+        <div
+          data-testid="chat-composer-surface"
+          className="min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_8px_30px_rgb(23_25_35/0.09)] ring-1 ring-edge"
+        >
           <textarea
             aria-label="Message"
             value={input}
@@ -856,53 +912,59 @@ export function ChatClient({
                 formRef.current?.requestSubmit();
               }
             }}
-            placeholder="Ask anything…"
+            placeholder="Ask anything… Type /model to switch models"
             rows={2}
-            className="max-h-40 min-h-11 flex-1 resize-none border-0 bg-transparent px-2 py-2 text-base outline-none placeholder:text-muted/70 sm:text-sm"
+            className="block max-h-40 min-h-16 w-full min-w-0 resize-none border-0 bg-transparent px-4 pt-3 pb-2 text-base outline-none placeholder:text-muted/70 sm:text-sm"
           />
-          {status === 'submitted' || status === 'streaming' ? (
+          <div className="flex min-w-0 items-center justify-between gap-2 border-t border-edge/70 px-2 py-2">
             <button
+              data-testid="chat-autonomy-mode"
               type="button"
-              onClick={() => stop()}
-              title="Stop generating"
-              className={`inline-flex h-11 items-center gap-1.5 rounded-xl border border-edge bg-raised px-4 text-sm font-medium text-strong motion-safe:transition-colors hover:bg-sunken ${focusRing}`}
+              aria-pressed={autonomous}
+              aria-label={
+                autonomous
+                  ? 'Autonomous mode on. Tap to ask before acting.'
+                  : 'Ask before acting. Tap to turn on autonomous mode.'
+              }
+              onClick={() => setAutonomous((value) => !value)}
+              title="Autonomous mode acts without asking for each routine approval. Sensitive steps and budget caps still require permission."
+              className={`inline-flex h-10 min-w-0 items-center gap-1.5 rounded-xl px-3 text-xs font-medium motion-safe:transition-[background-color,color,transform] motion-safe:active:translate-y-px ${focusRing} ${
+                autonomous
+                  ? 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300'
+                  : 'bg-sunken text-muted hover:text-strong'
+              }`}
             >
-              <Square className="size-3 fill-current" aria-hidden="true" />
-              Stop
+              <Zap className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate">{autonomous ? 'Autonomous on' : 'Ask first'}</span>
+              <span className="sr-only">
+                . Sensitive steps including unknown recipients and logged-in browsing still ask, and
+                budget caps still apply.
+              </span>
             </button>
-          ) : (
-            <button
-              type="submit"
-              disabled={busy || input.trim() === ''}
-              className={`h-11 rounded-xl bg-accent px-4 text-sm font-medium text-white shadow-sm motion-safe:transition-colors hover:bg-accent-hover disabled:opacity-50 ${focusRing}`}
-            >
-              Send
-            </button>
-          )}
+            {status === 'submitted' || status === 'streaming' ? (
+              <button
+                type="button"
+                onClick={() => stop()}
+                title="Stop generating"
+                className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-edge bg-raised px-4 text-sm font-medium text-strong motion-safe:transition-colors hover:bg-sunken ${focusRing}`}
+              >
+                <Square className="size-3 fill-current" aria-hidden="true" />
+                Stop
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={busy || input.trim() === ''}
+                className={`h-10 shrink-0 rounded-xl bg-accent px-4 text-sm font-medium text-white shadow-sm motion-safe:transition-colors hover:bg-accent-hover disabled:opacity-50 ${focusRing}`}
+              >
+                Send
+              </button>
+            )}
+          </div>
         </div>
-        <div className="flex items-center justify-between gap-3 px-1 pb-1">
-          <button
-            type="button"
-            aria-pressed={autonomous}
-            onClick={() => setAutonomous((value) => !value)}
-            title="Run this request free-range: I act without asking for each approval. Sensitive steps (memory from web content, unknown recipients, logged-in browsing, networked code) still ask, and budget caps still apply."
-            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-2xs font-medium motion-safe:transition-colors ${focusRing} ${
-              autonomous
-                ? 'border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-600 dark:bg-amber-950 dark:text-amber-300'
-                : 'border-edge text-muted hover:bg-sunken'
-            }`}
-          >
-            <Zap className="size-3" aria-hidden="true" />
-            Autonomous
-            <span className="sr-only">
-              — act without asking me to approve each step; sensitive steps and budget caps still
-              apply
-            </span>
-          </button>
-          <span className="hidden text-2xs text-muted sm:block">
-            Enter to send · Shift+Enter for a new line
-          </span>
-        </div>
+        <p className="hidden px-1 pt-2 pb-1 text-right text-2xs text-muted sm:block">
+          Enter to send · Shift+Enter for a new line
+        </p>
       </form>
     </div>
   );

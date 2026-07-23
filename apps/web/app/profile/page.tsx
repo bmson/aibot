@@ -32,7 +32,15 @@ import { type VoiceImportView, VoiceSamplesPanel } from '@/app/profile/voice-sam
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn, countBadgeClass, PageHeader, PageShell, Panel, summaryClass } from '@/lib/ui';
+import {
+  btn,
+  cardShellClass,
+  countBadgeClass,
+  PageHeader,
+  PageShell,
+  Panel,
+  summaryClass,
+} from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 
 export const metadata = { title: 'Memory' };
@@ -223,7 +231,7 @@ export default async function ProfilePage() {
             />
           </Link>
         </div>
-        <div className="mt-4 grid grid-cols-2 gap-3">
+        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
           {[
             {
               value: memoryHealth.totalUsable,
@@ -263,7 +271,7 @@ export default async function ProfilePage() {
               <Link
                 key={item.label}
                 href={item.href}
-                className="group rounded-2xl bg-raised p-3 shadow-[0_1px_2px_rgb(23_25_35/0.06)] motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.08)] sm:p-4"
+                className="group rounded-2xl bg-raised p-3 shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.08)] sm:p-4"
               >
                 <div className="flex items-start justify-between gap-4">
                   <span
@@ -434,35 +442,38 @@ export default async function ProfilePage() {
               <Link
                 key={contact.id}
                 href={`/profile/people/${contact.id}`}
-                className="flex items-center justify-between gap-3 rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] motion-safe:transition-transform hover:-translate-y-0.5"
+                className={`${cardShellClass} group grid grid-cols-[minmax(0,1fr)_auto] gap-3 p-4 motion-safe:transition-transform hover:-translate-y-0.5`}
               >
                 <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium">{contact.name}</span>
-                    {contact.relationship ? (
-                      <span className="text-xs text-zinc-500 dark:text-zinc-500">
-                        {contact.relationship}
-                      </span>
-                    ) : null}
-                    {contact.trust === 'unknown' ? (
-                      <span
-                        className="rounded-full bg-amber-100 px-1.5 py-0.5 text-2xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-                        title="The assistant doesn't know who this is yet, so content from them is treated as untrusted. Saving a relationship marks them as known."
-                      >
-                        unverified
-                      </span>
-                    ) : null}
-                    <span className={countBadge}>
-                      {factCount} fact{factCount === 1 ? '' : 's'}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-                    Open to review facts and edit this person.
+                  <h3 className="truncate text-[15px] font-semibold tracking-[-0.01em]">
+                    {contact.name}
+                  </h3>
+                  <p className="mt-0.5 truncate text-xs text-muted">
+                    {contact.relationship || 'Relationship not set'}
                   </p>
                 </div>
-                <span className="shrink-0 text-xs font-medium text-blue-700 dark:text-blue-400">
-                  Open
+                <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent">
+                  Manage
+                  <ArrowRight
+                    className="size-3 motion-safe:transition-transform group-hover:translate-x-0.5"
+                    aria-hidden="true"
+                  />
                 </span>
+                <div className="col-span-2 flex flex-wrap items-center gap-2 border-t border-edge/70 pt-3">
+                  <span className={countBadge}>
+                    {factCount} fact{factCount === 1 ? '' : 's'}
+                  </span>
+                  {contact.trust === 'unknown' ? (
+                    <span
+                      className="rounded-full bg-amber-100 px-1.5 py-0.5 text-2xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                      title="The assistant doesn't know who this is yet, so content from them is treated as untrusted. Saving a relationship marks them as known."
+                    >
+                      Unverified
+                    </span>
+                  ) : (
+                    <span className="text-2xs font-medium text-muted">Known contact</span>
+                  )}
+                </div>
               </Link>
             ))}
           </div>

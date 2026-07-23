@@ -9,6 +9,12 @@ import {
 } from '@/app/skills/actions';
 import {
   btn,
+  cardBodyClass,
+  cardFooterClass,
+  cardHeaderClass,
+  cardShellClass,
+  InfoGrid,
+  InfoItem,
   inputClass as sharedInputClass,
   textareaClass as sharedTextareaClass,
 } from '@/lib/ui';
@@ -116,7 +122,7 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
       </div>
 
       {adding ? (
-        <div className="mt-3 rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)]">
+        <div className={`${cardShellClass} mt-3 p-4`}>
           <SkillForm
             submitting={pending}
             error={error}
@@ -142,68 +148,90 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
           can add your own.
         </p>
       ) : (
-        <div className="mt-3 flex flex-col gap-2">
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
           {skills.map((s) => (
-            <div
+            <article
               key={s.id}
-              className={`rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] ${
-                s.deprecated ? 'opacity-60' : ''
-              }`}
+              className={`${cardShellClass} flex h-full flex-col ${s.deprecated ? 'opacity-60' : ''}`}
             >
               {editingId === s.id ? (
-                <SkillForm
-                  initial={s}
-                  submitting={pending}
-                  error={error}
-                  onCancel={() => {
-                    setEditingId(null);
-                    setError(null);
-                  }}
-                  onSubmit={(fd) =>
-                    startTransition(async () => {
+                <div className={cardBodyClass}>
+                  <SkillForm
+                    initial={s}
+                    submitting={pending}
+                    error={error}
+                    onCancel={() => {
+                      setEditingId(null);
                       setError(null);
-                      const result = await editSkillAction(s.id, fields(fd));
-                      if (result.error) setError(result.error);
-                      else setEditingId(null);
-                    })
-                  }
-                />
+                    }}
+                    onSubmit={(fd) =>
+                      startTransition(async () => {
+                        setError(null);
+                        const result = await editSkillAction(s.id, fields(fd));
+                        if (result.error) setError(result.error);
+                        else setEditingId(null);
+                      })
+                    }
+                  />
+                </div>
               ) : (
                 <>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium">{s.name}</span>
-                    {s.ownerAuthored ? (
-                      <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-2xs font-medium text-blue-800 dark:bg-blue-950 dark:text-blue-300">
-                        yours
-                      </span>
-                    ) : (
-                      <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                        learned
-                      </span>
-                    )}
-                    {s.deprecated ? (
-                      <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-2xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                        retired
-                      </span>
+                  <div className={`${cardBodyClass} flex-1`}>
+                    <div className={cardHeaderClass}>
+                      <div className="min-w-0">
+                        <h3 className="text-[15px] font-semibold tracking-[-0.01em]">{s.name}</h3>
+                        <p className="mt-0.5 text-xs text-muted">
+                          {s.ownerAuthored ? 'Written by you' : 'Learned from completed work'}
+                        </p>
+                      </div>
+                      {s.deprecated ? (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-2xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                          Retired
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-2xs font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                          Active
+                        </span>
+                      )}
+                    </div>
+                    <section>
+                      <h4 className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+                        How it works
+                      </h4>
+                      <p className="mt-1 text-[13px] leading-5 whitespace-pre-wrap text-strong">
+                        {s.steps}
+                      </p>
+                    </section>
+                    {s.preconditions || s.gotchas ? (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {s.preconditions ? (
+                          <section className="rounded-xl bg-sunken/65 px-3 py-2.5">
+                            <h4 className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+                              When to use it
+                            </h4>
+                            <p className="mt-1 text-xs leading-5 text-strong">{s.preconditions}</p>
+                          </section>
+                        ) : null}
+                        {s.gotchas ? (
+                          <section className="rounded-xl bg-amber-50 px-3 py-2.5 dark:bg-amber-950/25">
+                            <h4 className="text-2xs font-semibold tracking-[0.08em] text-amber-800 uppercase dark:text-amber-300">
+                              Watch for
+                            </h4>
+                            <p className="mt-1 text-xs leading-5 text-amber-900 dark:text-amber-200">
+                              {s.gotchas}
+                            </p>
+                          </section>
+                        ) : null}
+                      </div>
                     ) : null}
-                    <span className="ml-auto text-2xs text-zinc-500 dark:text-zinc-500">
-                      used {s.useCount}× · {s.successCount}✓ / {s.failureCount}✗
-                    </span>
+                    <InfoGrid className="sm:grid-cols-4">
+                      <InfoItem label="Used">{s.useCount}</InfoItem>
+                      <InfoItem label="Succeeded">{s.successCount}</InfoItem>
+                      <InfoItem label="Failed">{s.failureCount}</InfoItem>
+                      <InfoItem label="Added">{s.createdLabel}</InfoItem>
+                    </InfoGrid>
                   </div>
-                  {s.preconditions ? (
-                    <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                      When: {s.preconditions}
-                    </p>
-                  ) : null}
-                  <p className="mt-1 text-sm whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">
-                    {s.steps}
-                  </p>
-                  {s.gotchas ? (
-                    <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                      Gotchas: {s.gotchas}
-                    </p>
-                  ) : null}
-                  <div className="mt-2 flex flex-wrap gap-2">
+                  <footer className={cardFooterClass}>
                     <button
                       type="button"
                       onClick={() => {
@@ -232,10 +260,10 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
                     >
                       Delete
                     </button>
-                  </div>
+                  </footer>
                 </>
               )}
-            </div>
+            </article>
           ))}
         </div>
       )}
