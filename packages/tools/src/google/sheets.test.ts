@@ -78,6 +78,16 @@ describe('Google Sheets tools', () => {
     );
   });
 
+  it('keys append_rows idempotently: stable per call, distinct per rows', () => {
+    const key = toolsWith(vi.fn()).get('sheets.append_rows')?.tool.idempotencyKey;
+    expect(key).toBeDefined();
+    if (!key) return;
+    const ctx = { taskId: 'task-1' } as never;
+    const base = { spreadsheetId: 'S1', sheetName: 'April', rows: [['a', 'b']] };
+    expect(key(base, ctx)).toBe(key(base, ctx));
+    expect(key(base, ctx)).not.toBe(key({ ...base, rows: [['a', 'c']] }, ctx));
+  });
+
   it('updates a precise range using raw values', async () => {
     const api = vi.fn().mockResolvedValue({});
     const tool = toolsWith(api).get('sheets.write_rows')?.tool;

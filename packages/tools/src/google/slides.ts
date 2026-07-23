@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolFlags } from '../types.js';
-import type { GoogleClient } from './client.js';
+import { contentDigest, type GoogleClient } from './client.js';
 import { renderSlideBody } from './docs-markdown.js';
 
 const CODE_FONT = 'Courier New';
@@ -233,6 +233,11 @@ export function registerSlidesTools(registry: ToolRegistry, deps: SlidesToolDeps
       inputSchema: appendSchema,
       risk: 'autonomous',
       acceptsUntrustedInput: true,
+      // Append is non-idempotent: a crash-retry must not duplicate the slides.
+      idempotencyKey: (args, ctx) => {
+        const a = args as z.infer<typeof appendSchema>;
+        return `slides-append-${ctx.taskId}-${a.presentationId}-${contentDigest(a.slides)}`;
+      },
       execute: async (args) => {
         await deps.client.api(`${SLIDES}/${encodeURIComponent(args.presentationId)}:batchUpdate`, {
           method: 'POST',

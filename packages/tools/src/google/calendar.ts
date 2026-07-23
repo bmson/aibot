@@ -154,6 +154,125 @@ export function registerCalendarTools(
   register(
     registry,
     {
+      name: 'calendar.search_events',
+      description:
+        "Search the assistant's own calendar by keyword (attendee, title, or location). Times are ISO 8601 with offset.",
+      inputSchema: z.object({
+        query: z.string().min(1).max(200),
+        timeMin: z.string().datetime({ offset: true }).optional(),
+        timeMax: z.string().datetime({ offset: true }).optional(),
+        maxResults: z.number().int().min(1).max(50).default(20),
+      }),
+      risk: 'autonomous',
+      acceptsUntrustedInput: true,
+      execute: async (args) => {
+        const params = new URLSearchParams({
+          q: args.query,
+          maxResults: String(args.maxResults),
+          singleEvents: 'true',
+          orderBy: 'startTime',
+        });
+        if (args.timeMin) params.set('timeMin', args.timeMin);
+        if (args.timeMax) params.set('timeMax', args.timeMax);
+        const res = await deps.client.api<{
+          items?: Array<{
+            id: string;
+            summary?: string;
+            location?: string;
+            start?: { dateTime?: string; date?: string };
+            end?: { dateTime?: string; date?: string };
+            attendees?: Array<{ email: string; responseStatus?: string }>;
+          }>;
+        }>(`${CAL}/calendars/primary/events?${params.toString()}`);
+        return {
+          events: (res.items ?? []).map((e) => ({
+            eventId: e.id,
+            summary: e.summary ?? '',
+            location: e.location ?? '',
+            start: e.start?.dateTime ?? e.start?.date ?? '',
+            end: e.end?.dateTime ?? e.end?.date ?? '',
+            attendees: (e.attendees ?? []).map((a) => `${a.email} (${a.responseStatus ?? '?'})`),
+          })),
+        };
+      },
+    },
+    { confidentialRead: true, returnsUntrustedContent: true },
+  );
+
+  const updateSchema = z
+    .object({
+      eventId: z.string().min(3).max(200),
+      summary: z.string().min(1).max(200).optional(),
+      start: z.string().datetime({ offset: true }).optional(),
+      end: z.string().datetime({ offset: true }).optional(),
+      location: z.string().max(300).optional(),
+      description: z.string().max(4000).optional(),
+      addAttendees: z.array(z.string().email()).max(20).optional(),
+    })
+    .refine(
+      (u) =>
+        u.summary !== undefined ||
+        u.start !== undefined ||
+        u.end !== undefined ||
+        u.location !== undefined ||
+        u.description !== undefined ||
+        (u.addAttendees?.length ?? 0) > 0,
+      { message: 'provide at least one field to change' },
+    );
+
+  register(
+    registry,
+    {
+      name: 'calendar.update_event',
+      description:
+        "Reschedule or edit an existing event on the assistant's own calendar (new time, title, location, or added attendees). Attendees are notified.",
+      inputSchema: updateSchema,
+      // Conservative v1: always approval. The risk callback only sees the new
+      // args, not whether the EXISTING event has attendees who'd be notified of a
+      // reschedule, so a dynamic tier would under-gate that case. Revisit if it
+      // proves noisy for solo events.
+      risk: 'approval',
+      acceptsUntrustedInput: false,
+      approvalSummary: (args) => {
+        const a = args as z.infer<typeof updateSchema>;
+        const changes = [
+          a.start ? `move to ${a.start}` : '',
+          a.summary ? `rename to "${a.summary}"` : '',
+          a.location ? `at ${a.location}` : '',
+          a.addAttendees?.length ? `invite ${a.addAttendees.join(', ')}` : '',
+        ].filter(Boolean);
+        return `Update calendar event ${a.eventId}: ${changes.join('; ') || 'edit details'}`;
+      },
+      execute: async (args) => {
+        // Merge added attendees onto the existing set so the PATCH doesn't drop
+        // current invitees (Calendar replaces the attendees array wholesale).
+        const patch: Record<string, unknown> = {};
+        if (args.summary !== undefined) patch.summary = args.summary;
+        if (args.start !== undefined) patch.start = { dateTime: args.start };
+        if (args.end !== undefined) patch.end = { dateTime: args.end };
+        if (args.location !== undefined) patch.location = args.location;
+        if (args.description !== undefined) patch.description = args.description;
+        if (args.addAttendees?.length) {
+          const existing = await deps.client.api<{
+            attendees?: Array<{ email: string }>;
+          }>(`${CAL}/calendars/primary/events/${encodeURIComponent(args.eventId)}`);
+          const emails = new Set((existing.attendees ?? []).map((a) => a.email.toLowerCase()));
+          for (const email of args.addAttendees) emails.add(email.toLowerCase());
+          patch.attendees = [...emails].map((email) => ({ email }));
+        }
+        const updated = await deps.client.api<{ id: string; htmlLink?: string }>(
+          `${CAL}/calendars/primary/events/${encodeURIComponent(args.eventId)}?sendUpdates=all`,
+          { method: 'PATCH', body: JSON.stringify(patch) },
+        );
+        return { eventId: updated.id, link: updated.htmlLink, updated: true };
+      },
+    },
+    { outwardFacing: true },
+  );
+
+  register(
+    registry,
+    {
       name: 'calendar.cancel_event',
       description:
         "Cancel an event on the assistant's calendar. If it has attendees they are notified — hence approval.",

@@ -61,4 +61,59 @@ describe('Gmail outbound security', () => {
     });
     expect(prepareOutbound).toHaveBeenCalledOnce();
   });
+
+  it('keys create_draft idempotently: stable for the same draft, distinct for a different body', () => {
+    const key = registerGmailTools(new ToolRegistry(), {
+      client: {} as never,
+      botEmail: 'bot@example.com',
+    }).get('gmail.create_draft')?.tool.idempotencyKey;
+    expect(key).toBeDefined();
+    if (!key) return;
+    const ctx = context(false);
+    expect(key(outbound, ctx)).toBe(key(outbound, ctx));
+    expect(key(outbound, ctx)).not.toBe(key({ ...outbound, body: 'different' }, ctx));
+  });
+});
+
+describe('gmail.modify', () => {
+  function modifyTool(api = vi.fn()) {
+    return registerGmailTools(new ToolRegistry(), {
+      client: { api } as unknown as never,
+      botEmail: 'bot@example.com',
+    }).get('gmail.modify');
+  }
+
+  it('is autonomous for labels/mark-read and approval for archive', () => {
+    const risk = modifyTool()?.tool.risk;
+    expect(typeof risk).toBe('function');
+    if (typeof risk !== 'function') return;
+    const ctx = context(false);
+    expect(risk({ threadId: 't', addLabels: [], removeLabels: [], archive: false }, ctx)).toBe(
+      'autonomous',
+    );
+    expect(risk({ threadId: 't', addLabels: [], removeLabels: [], archive: true }, ctx)).toBe(
+      'approval',
+    );
+    expect(modifyTool()?.flags).toMatchObject({ privateWrite: true });
+  });
+
+  it('translates markRead and archive into label mutations on the bot mailbox', async () => {
+    const api = vi.fn().mockResolvedValue({});
+    await modifyTool(api)?.tool.execute(
+      {
+        threadId: 'thread-9',
+        addLabels: ['Waiting'],
+        removeLabels: [],
+        markRead: true,
+        archive: true,
+      },
+      {} as never,
+    );
+    const [url, init] = api.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/threads/thread-9/modify');
+    expect(JSON.parse(String(init.body))).toEqual({
+      addLabelIds: ['Waiting'],
+      removeLabelIds: ['UNREAD', 'INBOX'],
+    });
+  });
 });

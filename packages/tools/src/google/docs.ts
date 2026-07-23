@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolFlags } from '../types.js';
-import type { GoogleClient } from './client.js';
+import { contentDigest, type GoogleClient } from './client.js';
 import { buildContentRequests } from './docs-markdown.js';
 
 export { buildContentRequests, type DocsBatchRequest } from './docs-markdown.js';
@@ -143,6 +143,11 @@ export function registerDocsTools(registry: ToolRegistry, deps: DocsToolDeps): T
       inputSchema: appendSchema,
       risk: 'autonomous',
       acceptsUntrustedInput: true,
+      // Append is non-idempotent: a crash-retry must not duplicate the content.
+      idempotencyKey: (args, ctx) => {
+        const a = args as z.infer<typeof appendSchema>;
+        return `docs-append-${ctx.taskId}-${a.documentId}-${contentDigest(a.content)}`;
+      },
       execute: async (args) => {
         const doc = await deps.client.api<DocsDocument>(
           `${DOCS}/${encodeURIComponent(args.documentId)}`,

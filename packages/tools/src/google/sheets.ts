@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolFlags } from '../types.js';
-import type { GoogleClient } from './client.js';
+import { contentDigest, type GoogleClient } from './client.js';
 
 const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets';
 const DRIVE = 'https://www.googleapis.com/drive/v3/files';
@@ -160,6 +160,11 @@ export function registerSheetsTools(registry: ToolRegistry, deps: SheetsToolDeps
       inputSchema: appendSchema,
       risk: 'autonomous',
       acceptsUntrustedInput: true,
+      // Append is non-idempotent: a crash-retry must not duplicate the rows.
+      idempotencyKey: (args, ctx) => {
+        const a = args as z.infer<typeof appendSchema>;
+        return `sheets-append-${ctx.taskId}-${a.spreadsheetId}-${a.sheetName}-${contentDigest(a.rows)}`;
+      },
       execute: async (args) => {
         await deps.client.api(
           `${SHEETS}/${encodeURIComponent(args.spreadsheetId)}/values/${encodeURIComponent(a1StartRange(args.sheetName))}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,

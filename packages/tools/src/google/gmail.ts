@@ -4,6 +4,7 @@ import type { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolContext, ToolFlags } from '../types.js';
 import {
   buildRawEmail,
+  contentDigest,
   extractGmailText,
   type GmailPayload,
   type GoogleClient,
@@ -158,6 +159,13 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
       risk: 'autonomous',
       acceptsUntrustedInput: true,
       prepare: prepareOutbound,
+      // Non-idempotent (each call creates a new draft): a crash-retry of the same
+      // draft must not leave two. Body included so a genuinely different draft to
+      // the same thread keys differently.
+      idempotencyKey: (args, ctx) => {
+        const a = args as z.infer<typeof outboundSchema>;
+        return `gmail-draft-${ctx.taskId}-${a.to.join(',')}-${contentDigest(a.subject, a.body, a.threadId)}`;
+      },
       execute: async (args) => {
         const raw = buildRawEmail({
           from: fromHeader(deps),
@@ -221,6 +229,52 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
       },
     },
     { outwardFacing: true, networkEgress: true, blanketAllowIneligible: true },
+  );
+
+  const modifySchema = z
+    .object({
+      messageId: z.string().min(1).max(200).optional(),
+      threadId: z.string().min(1).max(200).optional(),
+      addLabels: z.array(z.string().min(1).max(200)).max(20).default([]),
+      removeLabels: z.array(z.string().min(1).max(200)).max(20).default([]),
+      markRead: z.boolean().optional(),
+      archive: z.boolean().default(false),
+    })
+    .refine((a) => a.messageId || a.threadId, {
+      message: 'messageId or threadId is required',
+    });
+
+  register(
+    registry,
+    {
+      name: 'gmail.modify',
+      description:
+        "Organize the assistant's OWN inbox: add/remove labels, mark read/unread, or archive a message or thread. Labeling and marking-read are autonomous; archiving (which hides mail from the inbox) needs owner approval.",
+      inputSchema: modifySchema,
+      // Label/mark-read are reversible bookkeeping on the bot's own mailbox.
+      // Archive removes mail from the inbox view, so it gets a card.
+      risk: (args) => ((args as z.infer<typeof modifySchema>).archive ? 'approval' : 'autonomous'),
+      acceptsUntrustedInput: false,
+      approvalSummary: (args) => {
+        const a = args as z.infer<typeof modifySchema>;
+        return `Archive ${a.threadId ? `thread ${a.threadId}` : `message ${a.messageId}`}`;
+      },
+      execute: async (args) => {
+        const addLabelIds = [...args.addLabels];
+        const removeLabelIds = [...args.removeLabels];
+        if (args.markRead === true) removeLabelIds.push('UNREAD');
+        if (args.markRead === false) addLabelIds.push('UNREAD');
+        if (args.archive) removeLabelIds.push('INBOX');
+        const kind = args.threadId ? 'threads' : 'messages';
+        const id = (args.threadId ?? args.messageId) as string;
+        await deps.client.api(`${GMAIL}/${kind}/${encodeURIComponent(id)}/modify`, {
+          method: 'POST',
+          body: JSON.stringify({ addLabelIds, removeLabelIds }),
+        });
+        return { id, addedLabels: addLabelIds, removedLabels: removeLabelIds };
+      },
+    },
+    { privateWrite: true },
   );
 
   return registry;
