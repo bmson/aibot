@@ -103,6 +103,7 @@ export default async function ChatConversationPage({
     <ChatClient
       conversationId={conversation.id}
       title={conversation.title || 'Untitled'}
+      agentName={agent.name || 'Assistant'}
       initialMessages={initialMessages}
       models={enabledModels}
       modelOverride={conversation.modelOverride}

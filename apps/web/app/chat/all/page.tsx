@@ -13,6 +13,8 @@ import {
   restoreConversation,
 } from '../actions';
 
+export const metadata = { title: 'All chats' };
+
 export const dynamic = 'force-dynamic';
 
 const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'];

@@ -9,6 +9,8 @@ import { getAgentTimezone, getDb } from '@/lib/server';
 import { btn, PageHeader } from '@/lib/ui';
 import { taskTypeLabel } from '@/lib/views';
 
+export const metadata = { title: 'Costs' };
+
 export const dynamic = 'force-dynamic';
 
 function Bar({ spent, held, limit }: { spent: number; held: number; limit: number }) {

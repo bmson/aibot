@@ -37,6 +37,22 @@ export const getAgentTimezone = cache(async (): Promise<string> => {
 });
 
 /**
+ * The assistant's display identity (agent row). The name is seed-owned — it
+ * matches the bot's Google-account profile so email From headers agree — and
+ * the dashboard displays it wherever the assistant "speaks".
+ */
+export const getAgentIdentity = cache(
+  async (): Promise<{ name: string; avatarUrl: string | null }> => {
+    try {
+      const agent = await getAgent(getDb());
+      return { name: agent.name || 'Assistant', avatarUrl: agent.avatarUrl ?? null };
+    } catch {
+      return { name: 'Assistant', avatarUrl: null };
+    }
+  },
+);
+
+/**
  * The owner's first name for greetings, from the owner-trust contact row.
  * Null (never a placeholder) when unset so callers can fall back gracefully.
  */

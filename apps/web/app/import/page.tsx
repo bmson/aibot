@@ -7,6 +7,8 @@ import { relativeTime } from '@/lib/format';
 import { getDb, getWorkspace } from '@/lib/server';
 import { PageHeader } from '@/lib/ui';
 
+export const metadata = { title: 'Import' };
+
 export const dynamic = 'force-dynamic';
 
 function toView(row: ImportSourceRow, quarantinedNow: number, now: Date): SourceView {

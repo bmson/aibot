@@ -5,6 +5,8 @@ import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import { PageHeader } from '@/lib/ui';
 
+export const metadata = { title: 'Skills' };
+
 export const dynamic = 'force-dynamic';
 
 export default async function SkillsPage() {

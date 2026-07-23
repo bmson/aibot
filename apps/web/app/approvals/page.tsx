@@ -10,6 +10,8 @@ import { EmptyState, PageHeader, SectionHeading } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, toPendingApprovalView } from '@/lib/views';
 import { ApprovalCard } from './approval-card';
 
+export const metadata = { title: 'Approvals' };
+
 export const dynamic = 'force-dynamic';
 
 export default async function ApprovalsPage() {

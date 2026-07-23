@@ -9,6 +9,8 @@ import { formatDateTime, relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import { btn, Card, CountBadge, EmptyState, PageHeader, SectionHeading } from '@/lib/ui';
 
+export const metadata = { title: 'Settings' };
+
 export const dynamic = 'force-dynamic';
 
 const scheduleLabels: Record<string, string> = {
@@ -74,7 +76,8 @@ export default async function SettingsPage() {
         <Card className="mt-3">
           <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-500">
             {agent.phoneE164 ? `Phone ${agent.phoneE164} · ` : ''}
-            Name, email, and phone are provisioned at deploy time.
+            Name, email, and phone are provisioned at deploy time — the name matches the assistant’s
+            email account so messages it sends agree with what you see here.
           </p>
           <AgentForm
             initial={{ timezone: agent.timezone, locale: agent.locale, signature: agent.signature }}

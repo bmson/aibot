@@ -4,11 +4,14 @@ import {
   getOrCreatePrimaryConversation,
   listDocuments,
 } from '@assistant/core';
+import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { EmptyState, PageHeader } from '@/lib/ui';
+import { btnSm, EmptyState, PageHeader } from '@/lib/ui';
 import { DocumentCard, type DocumentCardView } from './document-card';
+
+export const metadata = { title: 'Documents' };
 
 export const dynamic = 'force-dynamic';
 
@@ -48,10 +51,15 @@ export default async function DocumentsPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      <PageHeader
-        title="Documents"
-        intro="Upload files — PDFs, notes, exports — and I'll read them so you can ask about their contents in chat. Attachments from people you know are filed here automatically. Text and PDFs are read right away; scans and office files wait for the document processor."
-      />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <PageHeader
+          title="Documents"
+          intro="Upload files — PDFs, notes, exports — and I'll read them so you can ask about their contents in chat. Attachments from people you know are filed here automatically. Text and PDFs are read right away; scans and office files wait for the document processor."
+        />
+        <Link href="/import" className={`${btnSm.outline} mt-1 shrink-0`}>
+          Import backstory
+        </Link>
+      </div>
 
       <section className="mt-8">
         <h2 className="text-sm font-medium">Upload a document</h2>

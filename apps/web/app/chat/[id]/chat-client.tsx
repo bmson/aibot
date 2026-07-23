@@ -13,7 +13,9 @@ import {
   Square,
   Zap,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { AvatarMark } from '@/app/brand-mark';
 import { isApprovalProseNotice, isContractNotice } from '@/lib/chat-notices';
 import { btn, btnSm, focusRing } from '@/lib/ui';
 import { toolLabel } from '@/lib/views';
@@ -26,6 +28,8 @@ import { MessageMarkdown } from './markdown';
 interface ChatClientProps {
   conversationId: string;
   title: string;
+  /** The assistant's display name — the chat header shows who you're talking to. */
+  agentName: string;
   initialMessages: UIMessage[];
   models: { id: string; label: string }[];
   modelOverride: string | null;
@@ -268,6 +272,7 @@ function errorText(error: Error): string {
 export function ChatClient({
   conversationId,
   title,
+  agentName,
   initialMessages,
   models,
   modelOverride,
@@ -490,23 +495,31 @@ export function ChatClient({
   return (
     <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-4xl flex-col lg:h-[calc(100vh-4rem)]">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 pb-4 dark:border-zinc-800">
-        <div className="min-w-0">
-          <p className="text-2xs font-semibold tracking-[0.14em] text-indigo-700 uppercase dark:text-indigo-300">
-            Chat
-          </p>
-          <h1 className="mt-1 truncate text-xl font-semibold tracking-[-0.03em]">{title}</h1>
-          {goalTitle ? (
-            <p className="mt-1 truncate text-xs text-zinc-500 dark:text-zinc-400">
-              Working toward: {goalTitle}
+        <div className="flex min-w-0 items-center gap-3">
+          <AvatarMark name={agentName} active={busy} />
+          <div className="min-w-0">
+            <p className="text-2xs font-semibold tracking-[0.14em] text-indigo-700 uppercase dark:text-indigo-300">
+              {agentName}
             </p>
-          ) : null}
-          {archived ? (
-            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-              Archived — sending a message restores this chat.
-            </p>
-          ) : null}
+            <h1 className="truncate text-xl font-semibold tracking-[-0.03em]" title={title}>
+              {title}
+            </h1>
+            {goalTitle ? (
+              <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">
+                Working toward: {goalTitle}
+              </p>
+            ) : null}
+            {archived ? (
+              <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                Archived — sending a message restores this chat.
+              </p>
+            ) : null}
+          </div>
         </div>
         <div className="flex min-w-0 items-center gap-2">
+          <Link href="/chat/all" className={btnSm.outline}>
+            All chats
+          </Link>
           {archived ? (
             <form action={restoreConversation.bind(null, conversationId)}>
               <button type="submit" className={btn.outline}>

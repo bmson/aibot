@@ -11,6 +11,8 @@ import { btn, btnSm, EmptyState, PageHeader } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 import { archiveOldTasks, archiveTask, restoreTask } from './actions';
 
+export const metadata = { title: 'Activity' };
+
 export const dynamic = 'force-dynamic';
 
 const TERMINAL_TASK_STATUSES = new Set(['done', 'failed', 'cancelled']);

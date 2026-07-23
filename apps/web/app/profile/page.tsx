@@ -21,6 +21,8 @@ import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import { btn, countBadgeClass, PageHeader, summaryClass } from '@/lib/ui';
 
+export const metadata = { title: 'Memory' };
+
 export const dynamic = 'force-dynamic';
 
 const DOMAIN_ORDER = [

@@ -1,17 +1,53 @@
 'use client';
 
+import {
+  Brain,
+  ChevronRight,
+  CircleDollarSign,
+  FileText,
+  Gauge,
+  House,
+  Lightbulb,
+  ListChecks,
+  Menu,
+  MessageCircle,
+  Settings,
+  ShieldCheck,
+  Target,
+  TrendingUp,
+  TriangleAlert,
+  X,
+} from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { CountBadge } from '@/lib/ui';
+import { CountBadge, focusRing } from '@/lib/ui';
 import { signOutAction } from './actions';
+import { BrandLockup } from './brand-mark';
 import { ThemeToggle } from './theme-toggle';
 
 interface NavItem {
   href: string;
   label: string;
   utility?: boolean;
+  system?: boolean;
 }
+
+/** Icons live here (client side) — nav data stays serializable in layout.tsx. */
+const navIcons: Record<string, typeof House> = {
+  '/': House,
+  '/chat': MessageCircle,
+  '/approvals': ShieldCheck,
+  '/tasks': ListChecks,
+  '/goals': Target,
+  '/profile': Brain,
+  '/documents': FileText,
+  '/skills': Lightbulb,
+  '/settings': Settings,
+  '/costs': CircleDollarSign,
+  '/anomalies': TriangleAlert,
+  '/improvements': TrendingUp,
+};
 
 /**
  * App navigation. On large screens it's the persistent left sidebar; on small
@@ -22,10 +58,14 @@ export function AppNav({
   navItems,
   pendingApprovals,
   signedIn,
+  agentName,
+  working,
 }: {
   navItems: NavItem[];
   pendingApprovals: number;
   signedIn: boolean;
+  agentName: string;
+  working: boolean;
 }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -51,7 +91,7 @@ export function AppNav({
       if (event.key !== 'Tab') return;
       const focusable = Array.from(
         drawerRef.current?.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          'a[href], button:not([disabled]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
         ) ?? [],
       );
       if (focusable.length === 0) return;
@@ -85,13 +125,14 @@ export function AppNav({
   const renderLinks = (items: NavItem[], tone: 'rail' | 'drawer') =>
     items.map((item) => {
       const active = item.href === activeHref;
+      const Icon = navIcons[item.href];
       return (
         <Link
           key={item.href}
           href={item.href}
           data-mobile-touch-target="true"
           aria-current={active ? 'page' : undefined}
-          className={`mobile-touch-target flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
+          className={`mobile-touch-target flex items-center justify-between rounded-lg px-3 py-2 text-sm motion-safe:transition-colors ${focusRing} ${
             tone === 'rail'
               ? active
                 ? 'bg-white/12 font-medium text-white shadow-sm'
@@ -101,7 +142,15 @@ export function AppNav({
                 : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100'
           }`}
         >
-          {item.label}
+          <span className="flex min-w-0 items-center gap-2.5">
+            {Icon ? (
+              <Icon
+                className={`size-4 shrink-0 ${active ? '' : 'opacity-70'}`}
+                aria-hidden="true"
+              />
+            ) : null}
+            {item.label}
+          </span>
           {item.href === '/approvals' && pendingApprovals > 0 ? (
             <CountBadge tone="amber">{pendingApprovals}</CountBadge>
           ) : null}
@@ -109,38 +158,69 @@ export function AppNav({
       );
     });
 
+  const renderSystemGroup = (items: NavItem[], tone: 'rail' | 'drawer') =>
+    items.length > 0 ? (
+      <details className="group mt-1">
+        <summary
+          className={`mobile-touch-target flex cursor-pointer list-none items-center gap-2.5 rounded-lg px-3 py-2 text-sm select-none [&::-webkit-details-marker]:hidden ${focusRing} ${
+            tone === 'rail'
+              ? 'text-zinc-400 hover:bg-white/7 hover:text-white'
+              : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-950 dark:hover:bg-zinc-900 dark:hover:text-zinc-100'
+          }`}
+        >
+          <Gauge className="size-4 shrink-0 opacity-70" aria-hidden="true" />
+          System
+          <ChevronRight
+            className="ml-auto size-3.5 opacity-60 motion-safe:transition-transform group-open:rotate-90"
+            aria-hidden="true"
+          />
+        </summary>
+        <div className="mt-1 flex flex-col gap-1 pl-3">{renderLinks(items, tone)}</div>
+      </details>
+    ) : null;
+
   const signOut = signedIn ? (
     <form action={signOutAction}>
-      <button type="submit" className="text-xs text-zinc-400 hover:text-white hover:underline">
+      <button
+        type="submit"
+        className={`rounded text-xs text-zinc-400 hover:text-white hover:underline ${focusRing}`}
+      >
         Sign out
       </button>
     </form>
   ) : null;
 
-  const primaryItems = navItems.filter((item) => !item.utility);
+  const primaryItems = navItems.filter((item) => !item.utility && !item.system);
   const utilityItems = navItems.filter((item) => item.utility);
+  const systemItems = navItems.filter((item) => item.system);
 
   return (
     <>
       {/* Desktop sidebar */}
       <aside className="hidden w-60 shrink-0 flex-col bg-zinc-950 text-white lg:flex">
         <div className="px-5 pt-6 pb-7">
-          <Link href="/" className="group inline-flex flex-col gap-1">
-            <span className="text-[10px] font-semibold tracking-[0.18em] text-indigo-300 uppercase">
-              Personal assistant
-            </span>
-            <span className="text-lg font-semibold tracking-[-0.03em]">Assistant</span>
+          <Link href="/" className={`inline-flex rounded-lg ${focusRing}`}>
+            <BrandLockup
+              name={agentName}
+              active={working}
+              subtitle={
+                <span className="text-2xs font-medium tracking-[0.14em] text-indigo-300 uppercase">
+                  {working ? 'Working' : 'Personal assistant'}
+                </span>
+              }
+            />
           </Link>
         </div>
         <nav className="flex flex-col gap-1 px-3">{renderLinks(primaryItems, 'rail')}</nav>
-        {utilityItems.length > 0 ? (
-          <div className="mt-6 px-3">
-            <p className="px-3 text-[10px] font-semibold tracking-[0.14em] text-zinc-500 uppercase">
-              Manage
-            </p>
-            <nav className="mt-2 flex flex-col gap-1">{renderLinks(utilityItems, 'rail')}</nav>
-          </div>
-        ) : null}
+        <div className="mt-6 px-3">
+          <p className="px-3 text-2xs font-semibold tracking-[0.14em] text-zinc-500 uppercase">
+            Manage
+          </p>
+          <nav className="mt-2 flex flex-col gap-1">
+            {renderLinks(utilityItems, 'rail')}
+            {renderSystemGroup(systemItems, 'rail')}
+          </nav>
+        </div>
         <div className="mt-auto flex items-center justify-between border-t border-white/10 px-5 py-4">
           {signOut ?? <span />}
           <ThemeToggle />
@@ -152,9 +232,13 @@ export function AppNav({
         <Link
           href="/"
           data-mobile-touch-target="true"
-          className="mobile-touch-target inline-flex items-center text-sm font-semibold tracking-[-0.02em]"
+          className={`mobile-touch-target inline-flex items-center rounded-lg text-sm font-semibold tracking-[-0.02em] ${focusRing}`}
         >
-          Assistant
+          <span className="inline-flex items-center gap-2">
+            <span className="scale-90">
+              <BrandLockup name={agentName} active={working} />
+            </span>
+          </span>
         </Link>
         <div className="flex items-center gap-1">
           <ThemeToggle />
@@ -165,17 +249,9 @@ export function AppNav({
             aria-label="Open navigation menu"
             aria-expanded={open}
             aria-controls="mobile-nav"
-            className="relative -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-zinc-200 hover:bg-white/10"
+            className={`relative -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-zinc-200 hover:bg-white/10 ${focusRing}`}
           >
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <title>Menu</title>
-              <path
-                d="M3 5h14M3 10h14M3 15h14"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-              />
-            </svg>
+            <Menu className="size-5" aria-hidden="true" />
             {pendingApprovals > 0 ? (
               <span
                 className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-amber-500"
@@ -195,7 +271,7 @@ export function AppNav({
             aria-hidden="true"
             tabIndex={-1}
             onClick={() => setOpen(false)}
-            className="absolute inset-0 bg-zinc-950/50 backdrop-blur-sm"
+            className="absolute inset-0 bg-zinc-950/50 backdrop-blur-sm motion-safe:animate-[fade-in_150ms_ease-out]"
           />
           <div
             ref={drawerRef}
@@ -203,7 +279,7 @@ export function AppNav({
             role="dialog"
             aria-modal="true"
             aria-labelledby="mobile-nav-title"
-            className="absolute inset-y-0 right-0 flex w-72 max-w-[84%] flex-col border-l border-edge bg-raised shadow-2xl"
+            className="absolute inset-y-0 right-0 flex w-72 max-w-[84%] flex-col border-l border-edge bg-raised shadow-2xl motion-safe:animate-[slide-in-right_200ms_ease-out]"
           >
             <div className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
               <span id="mobile-nav-title" className="text-sm font-semibold tracking-[-0.02em]">
@@ -214,36 +290,25 @@ export function AppNav({
                 type="button"
                 onClick={() => setOpen(false)}
                 aria-label="Close navigation menu"
-                className="-mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                className={`-mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900 ${focusRing}`}
               >
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                  <title>Close</title>
-                  <path
-                    d="M5 5l10 10M15 5L5 15"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                  />
-                </svg>
+                <X className="size-5" aria-hidden="true" />
               </button>
             </div>
             <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-3">
               {renderLinks(primaryItems, 'drawer')}
-              {utilityItems.length > 0 ? (
-                <>
-                  <p className="mt-5 px-3 text-[10px] font-semibold tracking-[0.14em] text-zinc-400 uppercase">
-                    Manage
-                  </p>
-                  {renderLinks(utilityItems, 'drawer')}
-                </>
-              ) : null}
+              <p className="mt-5 px-3 text-2xs font-semibold tracking-[0.14em] text-zinc-400 uppercase">
+                Manage
+              </p>
+              {renderLinks(utilityItems, 'drawer')}
+              {renderSystemGroup(systemItems, 'drawer')}
             </nav>
             {signOut ? (
               <div className="shrink-0 border-t border-zinc-200 px-5 py-4 dark:border-zinc-800">
                 <form action={signOutAction}>
                   <button
                     type="submit"
-                    className="inline-flex min-h-11 items-center text-xs text-zinc-500 hover:text-zinc-950 hover:underline dark:text-zinc-500 dark:hover:text-zinc-100"
+                    className={`inline-flex min-h-11 items-center rounded text-xs text-zinc-500 hover:text-zinc-950 hover:underline dark:text-zinc-500 dark:hover:text-zinc-100 ${focusRing}`}
                   >
                     Sign out
                   </button>

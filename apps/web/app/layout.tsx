@@ -1,10 +1,10 @@
-import { approvals } from '@assistant/db';
+import { approvals, tasks } from '@assistant/db';
 import { count, eq } from 'drizzle-orm';
 import type { Metadata, Viewport } from 'next';
 import { Inter, JetBrains_Mono } from 'next/font/google';
 import type { ReactNode } from 'react';
 import { auth, authMode } from '@/auth';
-import { getDb } from '@/lib/server';
+import { getAgentIdentity, getDb } from '@/lib/server';
 import { AppNav } from './app-nav';
 import './globals.css';
 
@@ -15,10 +15,13 @@ const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-geist-mono',
 // there is no light→dark flash and OS-dark users still default to dark.
 const THEME_SCRIPT = `(()=>{try{const t=localStorage.getItem('theme');const d=t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches);document.documentElement.classList.toggle('dark',d);}catch{}})()`;
 
-export const metadata: Metadata = {
-  title: 'Assistant',
-  description: 'Personal AI assistant dashboard',
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const { name } = await getAgentIdentity();
+  return {
+    title: { default: name, template: `%s · ${name}` },
+    description: `${name} — your personal AI assistant`,
+  };
+}
 
 export const viewport: Viewport = {
   width: 'device-width',
@@ -28,25 +31,27 @@ export const viewport: Viewport = {
 // The sidebar badge (DB) and session lookup are per-request — never prerender.
 export const dynamic = 'force-dynamic';
 
+// IA (owner-approved): six primary destinations, a small Manage group, and a
+// collapsed System group for the self-monitoring pages. Routes that left the
+// rail stay alive and linked from their parent surface — /chat/all from the
+// chat header, /import from the Documents page.
 const navItems = [
   { href: '/', label: 'Home' },
   { href: '/chat', label: 'Chat' },
-  { href: '/chat/all', label: 'All chats', utility: true },
   { href: '/approvals', label: 'Approvals' },
   { href: '/tasks', label: 'Activity' },
   { href: '/goals', label: 'Goals' },
   { href: '/profile', label: 'Memory' },
   { href: '/documents', label: 'Documents', utility: true },
   { href: '/skills', label: 'Skills', utility: true },
-  { href: '/import', label: 'Import', utility: true },
-  { href: '/costs', label: 'Costs', utility: true },
-  { href: '/anomalies', label: 'Anomalies', utility: true },
-  { href: '/improvements', label: 'Improvements', utility: true },
   { href: '/settings', label: 'Settings', utility: true },
+  { href: '/costs', label: 'Costs', system: true },
+  { href: '/anomalies', label: 'Anomalies', system: true },
+  { href: '/improvements', label: 'Improvements', system: true },
 ];
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const [pendingApprovals, session] = await Promise.all([
+  const [pendingApprovals, session, identity, working] = await Promise.all([
     (async () => {
       try {
         const [pendingRow] = await getDb()
@@ -68,6 +73,20 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         return null;
       }
     })(),
+    getAgentIdentity(),
+    // Presence: the brand mark breathes while anything is actively running.
+    // Refreshes with every route render/AutoRefresh — no extra poller.
+    (async () => {
+      try {
+        const [runningRow] = await getDb()
+          .select({ value: count() })
+          .from(tasks)
+          .where(eq(tasks.status, 'running'));
+        return (runningRow?.value ?? 0) > 0;
+      } catch {
+        return false;
+      }
+    })(),
   ]);
 
   return (
@@ -87,6 +106,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             navItems={navItems}
             pendingApprovals={pendingApprovals}
             signedIn={!!session?.user}
+            agentName={identity.name}
+            working={working}
           />
           <main className="min-w-0 flex-1 px-4 py-6 lg:px-10 lg:py-9">{children}</main>
         </div>

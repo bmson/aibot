@@ -92,3 +92,33 @@
     transform: none;
   }
 }
+
+/* The assistant's presence: the avatar mark breathes while work is running.
+   Reduced-motion users get the static status dot instead (brand-mark.tsx). */
+@keyframes presence-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(79 70 229 / 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgb(79 70 229 / 0);
+  }
+}
+
+/* Mobile drawer enter (mounted conditionally, so these run on mount). */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: none;
+  }
+}

@@ -15,6 +15,8 @@ import { getDb } from '@/lib/server';
 import { btn, EmptyState, PageHeader, SectionHeading } from '@/lib/ui';
 import { archiveInactiveGoals } from './actions';
 
+export const metadata = { title: 'Goals' };
+
 export const dynamic = 'force-dynamic';
 
 const STATUS_ORDER = ['active', 'paused', 'done', 'abandoned'] as const;
