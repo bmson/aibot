@@ -109,7 +109,7 @@ export function VoiceSamplesPanel({
           {imports.map((imp) => (
             <div
               key={imp.source}
-              className="flex flex-wrap items-center gap-2 rounded-md border border-zinc-200 px-3 py-1.5 text-xs dark:border-zinc-800"
+              className="flex flex-wrap items-center gap-2 rounded-xl bg-sunken/55 px-3 py-2 text-xs"
             >
               <span className="font-medium">{statusLabels[imp.status] ?? imp.status}</span>
               <span className="text-zinc-500 dark:text-zinc-500">

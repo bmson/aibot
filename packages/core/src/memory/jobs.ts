@@ -86,10 +86,10 @@ export async function runCodeJob(
     }
     case 'memory.consolidate': {
       await deps.heartbeat?.();
-      const r = await runMemoryConsolidation(deps, { taskId: task.id });
+      const r = await runMemoryConsolidation(deps, { taskId: task.id, agentId: task.agentId });
       return {
         done: true,
-        summary: `consolidation: ${r.entities} entities, ${r.duplicatesExpired} duplicates expired, ${r.contradictionsResolved} contradictions resolved, ${r.factsUnified} facts unified, ${r.domainsAssigned} domains assigned, owner card recompiled`,
+        summary: `consolidation: ${r.memoriesReviewed + r.standaloneReviewed} memories reviewed in ${r.batches} batch(es) across ${r.entities} people, ${r.duplicatesExpired} duplicates expired, ${r.contradictionsResolved} contradictions resolved, ${r.factsUnified} facts unified, ${r.domainsAssigned} domains assigned, owner card recompiled`,
       };
     }
     case 'chat.segment': {

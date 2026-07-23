@@ -6,7 +6,8 @@ import { updateCaps } from '@/app/costs/actions';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, truncate } from '@/lib/format';
 import { getAgentTimezone, getDb } from '@/lib/server';
-import { btn, inputClass, PageHeader, PageShell } from '@/lib/ui';
+import { inputClass, PageHeader, PageShell } from '@/lib/ui';
+import { SubmitButton } from '@/lib/ui-client';
 import { taskTypeLabel } from '@/lib/views';
 
 export const metadata = { title: 'Costs' };
@@ -17,7 +18,7 @@ function Bar({ spent, held, limit }: { spent: number; held: number; limit: numbe
   if (!Number.isFinite(limit) || limit <= 0) return null;
   const spentPct = Math.min(100, (spent / limit) * 100);
   const heldPct = Math.min(100 - spentPct, (held / limit) * 100);
-  const color = spentPct >= 100 ? 'bg-red-500' : spentPct >= 80 ? 'bg-amber-500' : 'bg-blue-500';
+  const color = spentPct >= 100 ? 'bg-red-500' : spentPct >= 80 ? 'bg-amber-500' : 'bg-accent';
   return (
     <div className="mt-2 flex h-2 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
       <div className={`h-full ${color}`} style={{ width: `${spentPct}%` }} />
@@ -98,8 +99,11 @@ export default async function CostsPage() {
             { label: 'Today', spent: totals.dailySpentUsd, limit: totals.dailyLimitUsd },
           ] as const
         ).map((p) => (
-          <div key={p.label} className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-            <p className="text-xs text-zinc-500 dark:text-zinc-500">{p.label}</p>
+          <div
+            key={p.label}
+            className="rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)]"
+          >
+            <p className="text-xs text-muted">{p.label}</p>
             <p className="mt-1 text-lg font-semibold">
               {formatUsd(p.spent.toFixed(4))}
               <span className="ml-1 text-xs font-normal text-zinc-500">
@@ -148,15 +152,15 @@ export default async function CostsPage() {
               className={`${inputClass} w-28`}
             />
           </label>
-          <button type="submit" className={btn.outline}>
+          <SubmitButton variant="outline" pendingLabel="Updating…">
             Update caps
-          </button>
+          </SubmitButton>
         </form>
       </section>
 
-      <details className="mt-8 rounded-lg border border-zinc-200 dark:border-zinc-800">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Detailed usage</summary>
-        <div className="border-t border-zinc-200 px-4 pb-5 dark:border-zinc-800">
+      <details className="mt-8 rounded-2xl bg-sunken/55">
+        <summary className="cursor-pointer px-5 py-4 text-sm font-medium">Detailed usage</summary>
+        <div className="border-t border-edge px-5 pb-5">
           {held.length > 0 ? (
             <section className="mt-5">
               <h2 className="text-sm font-medium">In-progress work</h2>
@@ -167,7 +171,7 @@ export default async function CostsPage() {
                 {held.map((r) => (
                   <div
                     key={r.id}
-                    className="flex items-center justify-between gap-3 rounded-md border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800"
+                    className="flex items-center justify-between gap-3 rounded-xl bg-raised px-3 py-2 text-sm"
                   >
                     <span className="min-w-0 truncate">
                       {r.source} — {r.description || 'No description'}
@@ -229,7 +233,7 @@ export default async function CostsPage() {
                 <Link
                   key={row.taskId}
                   href={`/tasks/${row.taskId}`}
-                  className="flex items-center justify-between gap-3 rounded-md border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                  className="flex items-center justify-between gap-3 rounded-xl bg-raised px-3 py-2 text-sm motion-safe:transition-transform hover:-translate-y-0.5"
                 >
                   <span className="min-w-0 truncate">
                     <span className="text-xs text-zinc-500">[{taskTypeLabel(row.type)}]</span>{' '}

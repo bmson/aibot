@@ -10,6 +10,7 @@ import { requireOwner } from '@/auth';
 import { relativeTime, stripMarkdown, truncate } from '@/lib/format';
 import { getAgentTimezone, getDb, getOwnerFirstName } from '@/lib/server';
 import { btn, btnSm, CountBadge, focusRing, PageHeader, PageShell, Panel } from '@/lib/ui';
+import { SubmitButton } from '@/lib/ui-client';
 import { StatusChip, taskTypeLabel, toPendingApprovalView } from '@/lib/views';
 
 /** "Good morning/afternoon/evening" in the agent's timezone. */
@@ -305,14 +306,14 @@ export default async function DashboardPage() {
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
                         <form action={retryTask.bind(null, task.id)}>
-                          <button type="submit" className={btnSm.outline}>
+                          <SubmitButton pendingLabel="Retrying…" className={btnSm.outline}>
                             Retry
-                          </button>
+                          </SubmitButton>
                         </form>
                         <form action={cancelTask.bind(null, task.id)}>
-                          <button type="submit" className={btnSm.outline}>
+                          <SubmitButton pendingLabel="Cancelling…" className={btnSm.outline}>
                             Cancel
-                          </button>
+                          </SubmitButton>
                         </form>
                       </div>
                     </div>
@@ -434,30 +435,30 @@ export default async function DashboardPage() {
             </div>
             <p className="mt-4 text-lg leading-7 font-medium tracking-[-0.02em]">
               {memoryHealth.notYetOrganized === 0
-                ? 'Memory is organized.'
+                ? 'Memory is caught up.'
                 : `${memoryHealth.notYetOrganized} memor${
                     memoryHealth.notYetOrganized === 1 ? 'y is' : 'ies are'
-                  } waiting to be organized.`}
+                  } waiting for a cleanup pass.`}
             </p>
             <div className="mt-4 grid grid-cols-3 gap-3 border-t border-edge pt-4">
-              <div>
+              <Link href="/profile/memories?view=available" className="group">
                 <p className="text-base font-semibold">{memoryHealth.totalUsable}</p>
-                <p className="text-xs text-muted">usable</p>
-              </div>
-              <div>
+                <p className="text-xs text-muted group-hover:text-strong">available</p>
+              </Link>
+              <Link href="/profile/memories?view=review" className="group">
                 <p className="text-base font-semibold">{memoryHealth.awaitingReview}</p>
-                <p className="text-xs text-muted">to review</p>
-              </div>
-              <div>
+                <p className="text-xs text-muted group-hover:text-strong">needs review</p>
+              </Link>
+              <Link href="/profile/memories?view=verified" className="group">
                 <p className="text-base font-semibold">{memoryHealth.ownerConfirmed}</p>
-                <p className="text-xs text-muted">confirmed</p>
-              </div>
+                <p className="text-xs text-muted group-hover:text-strong">verified by you</p>
+              </Link>
             </div>
             <Link
               href="/profile"
               className="mt-4 inline-flex items-center gap-1 text-[13px] font-medium text-accent hover:underline"
             >
-              Open memory
+              Open memory desk
               <ArrowRight className="size-3.5" aria-hidden="true" />
             </Link>
           </Panel>

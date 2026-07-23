@@ -1,6 +1,7 @@
 'use client';
 
-import { useTransition } from 'react';
+import { LoaderCircle } from 'lucide-react';
+import { useState, useTransition } from 'react';
 import { dismissAnomalyAction, suspendPolicyAction } from '@/app/anomalies/actions';
 import { btn } from '@/lib/ui';
 
@@ -30,9 +31,20 @@ const kindTone: Record<string, string> = {
 
 export function AnomalyCard({ anomaly }: { anomaly: AnomalyView }) {
   const [pending, startTransition] = useTransition();
+  const [pendingAction, setPendingAction] = useState<'suspend' | 'dismiss' | null>(null);
+  const runAction = (name: 'suspend' | 'dismiss', action: () => Promise<unknown>) => {
+    setPendingAction(name);
+    startTransition(async () => {
+      try {
+        await action();
+      } finally {
+        setPendingAction(null);
+      }
+    });
+  };
 
   return (
-    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+    <div className="rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] sm:p-5">
       <div className="flex flex-wrap items-center gap-2">
         <span
           className={`rounded-full px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide ${
@@ -58,21 +70,27 @@ export function AnomalyCard({ anomaly }: { anomaly: AnomalyView }) {
           <button
             type="button"
             disabled={pending}
-            onClick={() => startTransition(() => suspendPolicyAction(anomaly.id))}
+            onClick={() => runAction('suspend', () => suspendPolicyAction(anomaly.id))}
             className={btn.danger}
             title="Pause the policy behind this — its matching actions will park for your approval instead of auto-executing"
           >
-            Suspend policy
+            {pendingAction === 'suspend' ? (
+              <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+            ) : null}
+            {pendingAction === 'suspend' ? 'Updating…' : 'Suspend policy'}
           </button>
         ) : null}
         <button
           type="button"
           disabled={pending}
-          onClick={() => startTransition(() => dismissAnomalyAction(anomaly.id))}
+          onClick={() => runAction('dismiss', () => dismissAnomalyAction(anomaly.id))}
           className={btn.outline}
           title="Dismiss as a false positive — this level stops re-flagging for this policy"
         >
-          Dismiss
+          {pendingAction === 'dismiss' ? (
+            <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+          ) : null}
+          {pendingAction === 'dismiss' ? 'Updating…' : 'Dismiss'}
         </button>
       </div>
     </div>

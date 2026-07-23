@@ -25,6 +25,7 @@ import {
   segmentedControlClass,
   segmentedItemClass,
 } from '@/lib/ui';
+import { SubmitButton } from '@/lib/ui-client';
 import { StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 import { archiveOldTasks, archiveTask, restoreTask } from './actions';
 
@@ -150,10 +151,10 @@ export default async function TasksPage({
                 </Link>
               ) : null}
               <form action={archiveOldTasks}>
-                <button type="submit" className={btn.outline}>
+                <SubmitButton pendingLabel="Archiving…">
                   <Archive className="size-3.5" aria-hidden="true" />
                   Archive old
-                </button>
+                </SubmitButton>
               </form>
             </>
           )}
@@ -255,15 +256,15 @@ export default async function TasksPage({
                         </Link>
                         {archived ? (
                           <form action={restoreTask.bind(null, task.id)}>
-                            <button type="submit" className={btnSm.outline}>
+                            <SubmitButton pendingLabel="Restoring…" className={btnSm.outline}>
                               Restore
-                            </button>
+                            </SubmitButton>
                           </form>
                         ) : terminal ? (
                           <form action={archiveTask.bind(null, task.id)}>
-                            <button type="submit" className={btnSm.outline}>
+                            <SubmitButton pendingLabel="Archiving…" className={btnSm.outline}>
                               Archive
-                            </button>
+                            </SubmitButton>
                           </form>
                         ) : null}
                       </div>

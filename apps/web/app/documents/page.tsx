@@ -8,7 +8,8 @@ import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn, btnSm, EmptyState, inputClass, PageHeader, PageShell, Panel } from '@/lib/ui';
+import { btnSm, EmptyState, inputClass, PageHeader, PageShell, Panel } from '@/lib/ui';
+import { SubmitButton } from '@/lib/ui-client';
 import { DocumentCard, type DocumentCardView } from './document-card';
 
 export const metadata = { title: 'Documents' };
@@ -76,9 +77,9 @@ export default async function DocumentsPage() {
               required
               className="text-[13px] text-muted file:mr-3 file:h-9 file:rounded-lg file:border file:border-edge file:bg-raised file:px-3 file:text-[13px] file:font-medium file:text-strong hover:file:bg-sunken"
             />
-            <button type="submit" className={btn.primary}>
+            <SubmitButton variant="primary" pendingLabel="Uploading…">
               Upload
-            </button>
+            </SubmitButton>
           </div>
           <details className="text-xs text-zinc-500 dark:text-zinc-400">
             <summary className="cursor-pointer">Give it a title</summary>

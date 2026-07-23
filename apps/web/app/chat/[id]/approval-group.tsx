@@ -1,5 +1,6 @@
 'use client';
 
+import { ArrowUpRight, Hand, LoaderCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { resolveApprovalInline, resolveApprovalsInline } from '@/app/approvals/actions';
@@ -56,7 +57,7 @@ export function ApprovalGroup({ parts }: { parts: InlineApprovalPart[] }) {
 
   if (allSettled) {
     return (
-      <div className="rounded-xl border border-edge bg-sunken/60 px-3 py-1.5">
+      <div className="ml-3 border-l-2 border-edge py-1 pl-4">
         {parts.map((part) => (
           <ApprovalRow
             key={part.approvalId}
@@ -72,25 +73,33 @@ export function ApprovalGroup({ parts }: { parts: InlineApprovalPart[] }) {
   }
 
   return (
-    <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30">
+    <section className="ml-3 border-l-2 border-amber-400 py-1 pl-4 dark:border-amber-600">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-2xs font-semibold tracking-[0.12em] text-amber-700 uppercase dark:text-amber-300">
-          {pendingParts.length > 1
-            ? `${pendingParts.length} actions need your approval`
-            : 'Approval needed'}
-        </p>
+        <div>
+          <p className="flex items-center gap-1.5 text-2xs font-semibold tracking-[0.1em] text-amber-700 uppercase dark:text-amber-300">
+            <Hand className="size-3.5" aria-hidden="true" />
+            {pendingParts.length > 1
+              ? `${pendingParts.length} decisions waiting`
+              : 'Your decision is needed'}
+          </p>
+          <p className="mt-1 text-xs text-muted">AI Bot paused here before taking action.</p>
+        </div>
         <span className="flex items-center gap-2">
           {pendingParts.length > 1 ? (
             <button type="button" disabled={busy} onClick={approveAll} className={btnSm.success}>
+              {busy ? (
+                <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
+              ) : null}
               {busy ? 'Working…' : 'Approve all'}
             </button>
           ) : null}
           <Link href="/approvals" className={btnSm.outline}>
-            Review
+            Review all
+            <ArrowUpRight className="size-3" aria-hidden="true" />
           </Link>
         </span>
       </div>
-      <div className="mt-1 divide-y divide-amber-200/70 dark:divide-amber-900/40">
+      <div className="mt-3 divide-y divide-edge">
         {parts.map((part) => (
           <ApprovalRow
             key={part.approvalId}
@@ -103,6 +112,6 @@ export function ApprovalGroup({ parts }: { parts: InlineApprovalPart[] }) {
         ))}
       </div>
       {error ? <p className="mt-2 text-xs text-red-700 dark:text-red-300">{error}</p> : null}
-    </div>
+    </section>
   );
 }

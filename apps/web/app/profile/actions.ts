@@ -17,9 +17,10 @@ import {
   memories,
   mergeContacts,
   occasions,
+  tasks,
   updateContactIdentity,
 } from '@assistant/db';
-import { eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
 import { getDb, getRouter, getWorkspace } from '@/lib/server';
@@ -211,10 +212,41 @@ export async function recompileCard(): Promise<void> {
  * unified statements. Runs in the background — results show up here and on
  * /tasks when it finishes. Minute-bucket idempotency absorbs double clicks.
  */
-export async function consolidateNow(): Promise<void> {
+export interface OrganizeMemoryState {
+  taskId: string | null;
+  outcome: 'idle' | 'queued' | 'already-running' | 'error';
+  message: string | null;
+}
+
+export async function consolidateNow(
+  _previous: OrganizeMemoryState,
+  _formData: FormData,
+): Promise<OrganizeMemoryState> {
   await requireOwner();
   const db = getDb();
   const agent = await getAgent(db);
+  const [active] = await db
+    .select({ id: tasks.id, status: tasks.status })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.agentId, agent.id),
+        inArray(tasks.status, ['pending', 'running']),
+        sql`${tasks.trigger} #>> '{payload,job}' = 'memory.consolidate'`,
+      ),
+    )
+    .orderBy(desc(tasks.createdAt))
+    .limit(1);
+  if (active) {
+    return {
+      taskId: active.id,
+      outcome: 'already-running',
+      message:
+        active.status === 'running'
+          ? 'Memory organization is already in progress.'
+          : 'Memory organization is already queued.',
+    };
+  }
   const event = InboundEventSchema.parse({
     source: 'internal',
     externalEventId: `profile:consolidate:${new Date().toISOString().slice(0, 16)}`,
@@ -222,8 +254,17 @@ export async function consolidateNow(): Promise<void> {
     trust: 'assistant',
     payload: { job: 'memory.consolidate', instruction: 'owner-requested memory consolidation' },
   });
-  await enqueueTask(db, { event, type: 'scheduled', budgetUsdLimit: '0.10' });
+  const { task } = await enqueueTask(db, {
+    event,
+    type: 'scheduled',
+    budgetUsdLimit: '0.10',
+  });
   revalidateProfile();
+  return {
+    taskId: task.id,
+    outcome: 'queued',
+    message: 'Memory organization is queued. This page will update as it works.',
+  };
 }
 
 /**

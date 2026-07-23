@@ -1,6 +1,7 @@
 'use client';
 
-import { useTransition } from 'react';
+import { LoaderCircle } from 'lucide-react';
+import { useState, useTransition } from 'react';
 import { applyProposalAction, dismissProposalAction } from '@/app/improvements/actions';
 import { btn } from '@/lib/ui';
 
@@ -24,9 +25,20 @@ const kindLabels: Record<string, string> = {
 
 export function ProposalCard({ proposal }: { proposal: ProposalView }) {
   const [pending, startTransition] = useTransition();
+  const [pendingAction, setPendingAction] = useState<'apply' | 'dismiss' | null>(null);
+  const runAction = (name: 'apply' | 'dismiss', action: () => Promise<unknown>) => {
+    setPendingAction(name);
+    startTransition(async () => {
+      try {
+        await action();
+      } finally {
+        setPendingAction(null);
+      }
+    });
+  };
 
   return (
-    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+    <div className="rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] sm:p-5">
       <div className="flex flex-wrap items-center gap-2">
         <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
           {kindLabels[proposal.kind] ?? proposal.kind}
@@ -52,7 +64,7 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
         <button
           type="button"
           disabled={pending}
-          onClick={() => startTransition(() => applyProposalAction(proposal.id))}
+          onClick={() => runAction('apply', () => applyProposalAction(proposal.id))}
           className={btn.primary}
           title={
             proposal.applyable
@@ -60,15 +72,25 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
               : 'Acknowledge this advisory suggestion'
           }
         >
-          {proposal.applyable ? 'Approve & apply' : 'Acknowledge'}
+          {pendingAction === 'apply' ? (
+            <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+          ) : null}
+          {pendingAction === 'apply'
+            ? 'Applying…'
+            : proposal.applyable
+              ? 'Approve & apply'
+              : 'Acknowledge'}
         </button>
         <button
           type="button"
           disabled={pending}
-          onClick={() => startTransition(() => dismissProposalAction(proposal.id))}
+          onClick={() => runAction('dismiss', () => dismissProposalAction(proposal.id))}
           className={btn.outline}
         >
-          Dismiss
+          {pendingAction === 'dismiss' ? (
+            <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+          ) : null}
+          {pendingAction === 'dismiss' ? 'Updating…' : 'Dismiss'}
         </button>
       </div>
     </div>

@@ -28,6 +28,7 @@ async function insertFact(
     ownerConfirmed?: boolean;
     importance?: number;
     pinned?: boolean;
+    subjectContactId?: string | null;
   },
 ) {
   const [row] = await db
@@ -44,7 +45,7 @@ async function insertFact(
       quarantined: input.quarantined ?? false,
       ownerConfirmed: input.ownerConfirmed ?? false,
       pinned: input.pinned ?? false,
-      subjectContactId: ownerId,
+      subjectContactId: input.subjectContactId === undefined ? ownerId : input.subjectContactId,
       domain: input.domain,
       createdAt: input.createdAt,
     })
@@ -149,6 +150,11 @@ beforeAll(async () => {
     domain: 'health',
     ownerConfirmed: true,
   });
+  await insertFact('standalone', {
+    content: `${MARKER}: standalone note with no person attached`,
+    confidence: '0.75',
+    subjectContactId: null,
+  });
 });
 
 afterAll(async () => {
@@ -167,6 +173,7 @@ describe('pickWinner', () => {
     importance: 3,
     domain: null,
     pinned: false,
+    lastConsolidatedAt: null,
     validFrom: null,
     validUntil: null,
   };
@@ -229,6 +236,9 @@ describe('memory consolidation (integration)', () => {
 
     const result = await runMemoryConsolidation({ db, router: fakeRouter });
     expect(result.entities).toBeGreaterThanOrEqual(1);
+    expect(result.batches).toBeGreaterThanOrEqual(1);
+    expect(result.memoriesReviewed).toBeGreaterThanOrEqual(1);
+    expect(result.standaloneReviewed).toBeGreaterThanOrEqual(1);
     expect(result.duplicatesExpired).toBeGreaterThanOrEqual(1);
     expect(result.contradictionsResolved).toBeGreaterThanOrEqual(1);
     expect(result.cardCompiled).toBe(true);
@@ -316,6 +326,11 @@ describe('memory consolidation (integration)', () => {
       .from(memories)
       .where(eq(memories.id, factIds.quarantinedFact as string));
     expect(quarantinedFact?.lastConsolidatedAt).toBeNull();
+    const [standalone] = await db
+      .select()
+      .from(memories)
+      .where(eq(memories.id, factIds.standalone as string));
+    expect(standalone?.lastConsolidatedAt).not.toBeNull();
   });
 });
 

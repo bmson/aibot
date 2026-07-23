@@ -19,6 +19,7 @@ const testedRoutes = [
   '/goals',
   '/tasks',
   '/profile',
+  '/profile/memories',
   '/documents',
   '/skills',
   '/settings',

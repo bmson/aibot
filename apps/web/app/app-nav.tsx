@@ -163,7 +163,15 @@ export function AppNav({
           {item.href === '/approvals' && pendingApprovals > 0 ? (
             <CountBadge tone="amber">{pendingApprovals}</CountBadge>
           ) : item.href === '/profile' && memoryBacklogCount > 0 ? (
-            <CountBadge>{memoryBacklogCount}</CountBadge>
+            <span
+              title={`${memoryBacklogCount.toLocaleString()} memories are waiting for a cleanup pass`}
+            >
+              <CountBadge>
+                {memoryBacklogCount >= 1_000
+                  ? `${(memoryBacklogCount / 1_000).toFixed(1)}k`
+                  : memoryBacklogCount}
+              </CountBadge>
+            </span>
           ) : null}
         </Link>
       );

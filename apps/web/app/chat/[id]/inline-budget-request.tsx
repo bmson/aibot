@@ -1,5 +1,6 @@
 'use client';
 
+import { ArrowUpRight, CircleDollarSign, LoaderCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { cancelTask, raiseTaskBudgetAndRetry } from '@/app/tasks/actions';
@@ -50,8 +51,9 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
   };
 
   return (
-    <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-zinc-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-zinc-100">
-      <p className="text-2xs font-semibold tracking-[0.12em] text-amber-700 uppercase dark:text-amber-300">
+    <section className="mt-3 ml-3 border-l-2 border-amber-400 py-1 pl-4 text-strong dark:border-amber-600">
+      <p className="flex items-center gap-1.5 text-2xs font-semibold tracking-[0.1em] text-amber-700 uppercase dark:text-amber-300">
+        <CircleDollarSign className="size-3.5" aria-hidden="true" />
         Spending permission needed
       </p>
       <p className="mt-1 text-sm font-medium">
@@ -76,6 +78,9 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button type="button" disabled={pending} onClick={approve} className={btn.success}>
+            {pending ? (
+              <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+            ) : null}
             {pending ? 'Working…' : `Approve $${part.proposedBudgetUsd.toFixed(2)}`}
           </button>
           <button type="button" disabled={pending} onClick={decline} className={btn.dangerOutline}>
@@ -83,10 +88,11 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
           </button>
           <Link href={`/tasks/${part.taskId}`} className={btn.outline}>
             Review task
+            <ArrowUpRight className="size-3.5" aria-hidden="true" />
           </Link>
         </div>
       )}
       {error ? <p className="mt-2 text-xs text-red-700 dark:text-red-300">{error}</p> : null}
-    </div>
+    </section>
   );
 }
