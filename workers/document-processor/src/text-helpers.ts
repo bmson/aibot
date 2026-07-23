@@ -116,7 +116,15 @@ export function normalize(text: string): string {
 
 // ── Format routing ───────────────────────────────────────────────────────────
 
-export type Parser = 'docx' | 'xlsx' | 'pptx' | 'opendocument' | 'rtf' | 'unsupported';
+export type Parser =
+  | 'docx'
+  | 'xlsx'
+  | 'pptx'
+  | 'opendocument'
+  | 'rtf'
+  | 'image'
+  | 'pdf'
+  | 'unsupported';
 
 const BY_MIME: Record<string, Parser> = {
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
@@ -127,6 +135,7 @@ const BY_MIME: Record<string, Parser> = {
   'application/vnd.oasis.opendocument.presentation': 'opendocument',
   'application/rtf': 'rtf',
   'text/rtf': 'rtf',
+  'application/pdf': 'pdf',
 };
 
 const BY_EXT: Array<[RegExp, Parser]> = [
@@ -135,9 +144,12 @@ const BY_EXT: Array<[RegExp, Parser]> = [
   [/\.pptx$/i, 'pptx'],
   [/\.(odt|ods|odp)$/i, 'opendocument'],
   [/\.rtf$/i, 'rtf'],
+  [/\.pdf$/i, 'pdf'],
+  [/\.(png|jpe?g|gif|webp|bmp|tiff?)$/i, 'image'],
 ];
 
 export function parserFor(mime: string, filename: string): Parser {
+  if (baseMime(mime).startsWith('image/')) return 'image';
   const byMime = BY_MIME[baseMime(mime)];
   if (byMime) return byMime;
   for (const [re, parser] of BY_EXT) if (re.test(filename)) return parser;

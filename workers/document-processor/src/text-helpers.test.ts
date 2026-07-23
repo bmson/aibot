@@ -49,7 +49,13 @@ describe('document-processor text helpers', () => {
     expect(parserFor('application/octet-stream', 'sheet.xlsx')).toBe('xlsx');
     expect(parserFor('application/vnd.oasis.opendocument.text', 'x.odt')).toBe('opendocument');
     expect(parserFor('application/rtf', 'x.rtf')).toBe('rtf');
-    expect(parserFor('image/png', 'scan.png')).toBe('unsupported');
+    // OCR now handles images and PDFs instead of returning unsupported.
+    expect(parserFor('image/png', 'scan.png')).toBe('image');
+    expect(parserFor('image/jpeg', 'photo.jpg')).toBe('image');
+    expect(parserFor('application/octet-stream', 'receipt.tiff')).toBe('image');
+    expect(parserFor('application/pdf', 'scan.pdf')).toBe('pdf');
+    expect(parserFor('application/octet-stream', 'doc.pdf')).toBe('pdf');
+    // Audio/video remain out of scope.
     expect(parserFor('audio/mpeg', 'voice.mp3')).toBe('unsupported');
   });
 });

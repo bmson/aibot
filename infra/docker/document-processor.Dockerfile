@@ -1,12 +1,15 @@
 # The Workspace document-processor job (Cloud Run Job, Phase 14). Credential-free:
 # no DB URL, no API keys — only the per-run DOCUMENT_JOB_INPUT env. Reads a
-# document's bytes from the Workspace, extracts plain text (office parsing;
-# image/scanned-PDF OCR is a follow-up), writes the text back, and calls home.
-# The office parsers are pure-JS, so the image needs no system libraries.
+# document's bytes from the Workspace, extracts plain text (office parsing plus
+# OCR for images and scanned PDFs), writes the text back, and calls home.
 FROM node:22-slim
 WORKDIR /app
 
-RUN corepack enable
+# tesseract (OCR) + poppler (pdftoppm rasterizes scanned PDFs page-by-page).
+RUN corepack enable \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng poppler-utils \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY workers/document-processor ./workers/document-processor
