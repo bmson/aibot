@@ -3,7 +3,10 @@ import { agents, conversations, createDb, type Db } from '@assistant/db';
 import { eq } from 'drizzle-orm';
 import { type Browser, type BrowserContext, chromium, type Locator, type Page } from 'playwright';
 
-const baseUrl = (process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:3000').replace(/\/$/, '');
+// localhost, not 127.0.0.1: Next 16's dev-origin protection only allows the
+// localhost origin by default — against 127.0.0.1 the dev client never
+// hydrates and every interaction assertion times out.
+const baseUrl = (process.env.SMOKE_BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 const browserPath = process.env.SMOKE_BROWSER_PATH;
 const browserChannel = process.env.SMOKE_BROWSER_CHANNEL ?? 'chrome';
 const createFixture = process.env.SMOKE_CREATE_FIXTURE === 'true';
@@ -174,9 +177,26 @@ try {
   await settingsLink.focus();
   await page.keyboard.press('Tab');
   assert(
+    await page.evaluate(() =>
+      Boolean(document.querySelector('#mobile-nav')?.contains(document.activeElement)),
+    ),
+    'Tab escaped the mobile navigation dialog',
+  );
+  // Wrap check from the true last focusable (the drawer's tail varies —
+  // System group, sign out — so don't assume Settings is last).
+  await page.evaluate(() => {
+    const focusable = [
+      ...(document
+        .querySelector('#mobile-nav')
+        ?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), summary') ?? []),
+    ].filter((element) => element.checkVisibility());
+    focusable[focusable.length - 1]?.focus();
+  });
+  await page.keyboard.press('Tab');
+  assert(
     (await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))) ===
       'Close navigation menu',
-    'Tab escaped the mobile navigation dialog',
+    'Tab from the last drawer control did not wrap to the close control',
   );
   const closeButton = drawer.getByRole('button', { name: 'Close navigation menu' });
   await targetSize(closeButton, 'mobile navigation close button');
@@ -194,7 +214,7 @@ try {
     await openRoute(page, `/chat/${fixture.id}`);
     const message = page.getByRole('textbox', { name: 'Message' });
     const send = page.getByRole('button', { name: 'Send' });
-    const model = page.locator('details summary').filter({ hasText: 'Model' });
+    const model = page.getByRole('button', { name: 'Model' });
     await targetSize(message, 'chat message field');
     await targetSize(send, 'chat send button');
     await targetSize(model, 'chat model menu');

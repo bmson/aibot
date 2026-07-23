@@ -303,6 +303,9 @@ export function ChatClient({
   const formRef = useRef<HTMLFormElement>(null);
   const messageScrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  /** Messages present at mount render static; only genuinely new ones animate in. */
+  const initialMessageIdsRef = useRef<Set<string> | null>(null);
+  initialMessageIdsRef.current ??= new Set(initialMessages.map((message) => message.id));
 
   const transport = useMemo(
     () =>
@@ -665,8 +668,14 @@ export function ChatClient({
                 mounted && date !== null && (!nextMessage || nextMessage.role !== message.role);
               const recallSources = recallSourcesOf(message);
               const hasBubble = visibleTextParts.length > 0 && !isNotice;
+              const isNewMessage = !initialMessageIdsRef.current?.has(message.id);
               return (
-                <div key={message.id} className="flex flex-col gap-2">
+                <div
+                  key={message.id}
+                  className={`flex flex-col gap-2 ${
+                    isNewMessage ? 'motion-safe:animate-[message-in_200ms_ease-out]' : ''
+                  }`}
+                >
                   {showDivider && date ? <DayDivider label={dayLabel(date, new Date())} /> : null}
                   {isNotice ? (
                     <ContractNotice text={fullText} />

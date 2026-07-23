@@ -1,6 +1,7 @@
 import { activeAutonomyGrant, getAgent } from '@assistant/core';
 import { approvals, files, messages, modelCalls, tasks, toolCalls } from '@assistant/db';
 import { and, asc, eq } from 'drizzle-orm';
+import { Brain, Hand, MessageSquare, Wrench } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
@@ -23,10 +24,19 @@ export const dynamic = 'force-dynamic';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TERMINAL_TASK_STATUSES = new Set(['done', 'failed', 'cancelled']);
 
+type TimelineKind = 'tool' | 'model' | 'approval' | 'message';
+
+const timelineIcons: Record<TimelineKind, typeof Wrench> = {
+  tool: Wrench,
+  model: Brain,
+  approval: Hand,
+  message: MessageSquare,
+};
+
 interface TimelineEntry {
   key: string;
   at: Date;
-  icon: string;
+  icon: TimelineKind;
   label: string;
   content: ReactNode;
 }
@@ -118,7 +128,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       return {
         key: `tool-${tc.id}`,
         at: tc.createdAt,
-        icon: '🔧',
+        icon: 'tool',
         label: 'tool call',
         content: (
           <div>
@@ -145,7 +155,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       (mc): TimelineEntry => ({
         key: `model-${mc.id}`,
         at: mc.createdAt,
-        icon: '🧠',
+        icon: 'model',
         label: 'model call',
         content: (
           <p className="text-sm">
@@ -163,7 +173,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       (approval): TimelineEntry => ({
         key: `approval-${approval.id}`,
         at: approval.requestedAt,
-        icon: '✋',
+        icon: 'approval',
         label: 'approval',
         content: (
           <div>
@@ -188,7 +198,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       (message): TimelineEntry => ({
         key: `message-${message.id}`,
         at: message.createdAt,
-        icon: '💬',
+        icon: 'message',
         label: 'message',
         content: (
           <p className="text-sm">
@@ -421,27 +431,28 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           </p>
         ) : (
           <ol className="mt-4 flex flex-col gap-3">
-            {timeline.map((entry) => (
-              <li
-                key={entry.key}
-                className="flex gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
-              >
-                <span aria-hidden="true" className="mt-0.5">
-                  {entry.icon}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">
-                      {entry.label}
-                    </span>
-                    <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
-                      {formatDateTime(entry.at, agent.timezone)}
-                    </span>
+            {timeline.map((entry) => {
+              const EntryIcon = timelineIcons[entry.icon];
+              return (
+                <li
+                  key={entry.key}
+                  className="flex gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+                >
+                  <EntryIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">
+                        {entry.label}
+                      </span>
+                      <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
+                        {formatDateTime(entry.at, agent.timezone)}
+                      </span>
+                    </div>
+                    <div className="mt-1">{entry.content}</div>
                   </div>
-                  <div className="mt-1">{entry.content}</div>
-                </div>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ol>
         )}
       </details>

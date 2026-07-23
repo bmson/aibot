@@ -86,14 +86,12 @@ export function PersonControls({
         {pending && !confirmingDelete ? 'Saving…' : 'Save identity'}
       </button>
       {saved && !pending ? (
-        <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
-          Saved ✓
-        </span>
+        <span className="text-2xs font-medium text-emerald-600 dark:text-emerald-400">Saved ✓</span>
       ) : null}
 
       {confirmingDelete ? (
         <span className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] text-red-700 dark:text-red-400">
+          <span className="text-2xs text-red-700 dark:text-red-400">
             Delete {displayName} and all associated facts permanently?
           </span>
           <button type="button" disabled={pending} onClick={remove} className={btn.danger}>

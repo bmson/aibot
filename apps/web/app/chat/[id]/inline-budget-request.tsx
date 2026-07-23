@@ -51,7 +51,7 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
 
   return (
     <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-zinc-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-zinc-100">
-      <p className="text-[10px] font-semibold tracking-[0.12em] text-amber-700 uppercase dark:text-amber-300">
+      <p className="text-2xs font-semibold tracking-[0.12em] text-amber-700 uppercase dark:text-amber-300">
         Spending permission needed
       </p>
       <p className="mt-1 text-sm font-medium">

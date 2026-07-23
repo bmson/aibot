@@ -48,7 +48,9 @@ export function BrandLockup({
     <span className="inline-flex min-w-0 items-center gap-2.5">
       <AvatarMark name={name} active={active} />
       <span className="flex min-w-0 flex-col">
-        <span className="truncate text-lg font-semibold tracking-[-0.03em]">{name}</span>
+        <span className="truncate font-display text-lg font-semibold tracking-[-0.02em]">
+          {name}
+        </span>
         {subtitle}
       </span>
     </span>

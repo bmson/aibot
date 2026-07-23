@@ -49,31 +49,31 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
         <p className="min-w-0 text-sm">{fact.content}</p>
         <span className="flex shrink-0 items-center gap-1.5">
           {fact.pinned ? (
-            <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-300">
+            <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-2xs font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-300">
               pinned
             </span>
           ) : fact.inCard ? (
             <span
-              className="rounded-full border border-blue-200 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:border-blue-900 dark:text-blue-400"
+              className="rounded-full border border-blue-200 px-1.5 py-0.5 text-2xs font-medium text-blue-700 dark:border-blue-900 dark:text-blue-400"
               title="Auto-selected into the compiled owner card (high importance)"
             >
               in card
             </span>
           ) : null}
           {fact.ownerConfirmed ? (
-            <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+            <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-2xs font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
               confirmed
             </span>
           ) : null}
           <span
-            className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+            className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
             title={`Confidence ${confidencePct}%`}
           >
             {confidencePct}%
           </span>
         </span>
       </div>
-      <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-500">
+      <p className="mt-1 text-2xs text-zinc-500 dark:text-zinc-500">
         {fact.kind}
         {fact.domain ? ` · ${fact.domain}` : ''}
         {!quarantine && fact.importance <= 1 ? ' · minor' : ''}

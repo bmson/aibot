@@ -63,7 +63,9 @@ export const summaryClass =
 export function PageHeader({ title, intro }: { title: string; intro?: ReactNode }) {
   return (
     <header>
-      <h1 className="text-2xl font-semibold tracking-[-0.03em] text-strong">{title}</h1>
+      <h1 className="font-display text-2xl font-semibold tracking-[-0.02em] text-strong">
+        {title}
+      </h1>
       {intro ? <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">{intro}</p> : null}
     </header>
   );

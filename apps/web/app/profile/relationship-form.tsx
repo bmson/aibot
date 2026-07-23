@@ -34,14 +34,12 @@ export function RelationshipForm({ contactId, initial }: { contactId: string; in
             setSaved(true);
           })
         }
-        className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+        className="rounded-md border border-zinc-300 px-2 py-0.5 text-2xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
       >
         {pending ? 'Saving…' : 'Save'}
       </button>
       {saved && !pending ? (
-        <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
-          Saved ✓
-        </span>
+        <span className="text-2xs font-medium text-emerald-600 dark:text-emerald-400">Saved ✓</span>
       ) : null}
     </span>
   );

@@ -165,7 +165,7 @@ export default async function ProfilePage() {
         <section className="mt-8 rounded-lg border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-900 dark:bg-amber-950/20">
           <h2 className="flex items-baseline gap-2 text-sm font-medium">
             Review saved information
-            <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+            <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-2xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
               {quarantined.length}
             </span>
           </h2>
@@ -215,7 +215,7 @@ export default async function ProfilePage() {
                 Organize memory
               </button>
             </form>
-            <span className="text-[11px] text-zinc-500 dark:text-zinc-500">
+            <span className="text-2xs text-zinc-500 dark:text-zinc-500">
               Combines duplicate or fragmented facts. You can keep using the app while it runs.
             </span>
           </div>
@@ -251,7 +251,7 @@ export default async function ProfilePage() {
                       </span>
                       <span className={countBadge}>{group.facts.length}</span>
                       {pinnedInDomain > 0 ? (
-                        <span className="text-[10px] text-blue-700 dark:text-blue-400">
+                        <span className="text-2xs text-blue-700 dark:text-blue-400">
                           {pinnedInDomain} pinned
                         </span>
                       ) : null}
@@ -308,7 +308,7 @@ export default async function ProfilePage() {
                     ) : null}
                     {contact.trust === 'unknown' ? (
                       <span
-                        className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                        className="rounded-full bg-amber-100 px-1.5 py-0.5 text-2xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
                         title="The assistant doesn't know who this is yet, so content from them is treated as untrusted. Saving a relationship marks them as known."
                       >
                         unverified

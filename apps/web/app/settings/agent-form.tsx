@@ -80,11 +80,11 @@ export function AgentForm({
           {pending ? 'Saving…' : 'Save'}
         </button>
         {saved && !pending ? (
-          <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+          <span className="text-2xs font-medium text-emerald-600 dark:text-emerald-400">
             Saved ✓
           </span>
         ) : null}
-        {error ? <span className="text-[11px] text-red-600 dark:text-red-400">{error}</span> : null}
+        {error ? <span className="text-2xs text-red-600 dark:text-red-400">{error}</span> : null}
       </div>
     </div>
   );

@@ -93,6 +93,13 @@ export function AppNav({
         drawerRef.current?.querySelectorAll<HTMLElement>(
           'a[href], button:not([disabled]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
         ) ?? [],
+        // Links inside a closed <details> (the System group) are in the DOM but
+        // not tabbable — counting them as first/last breaks the wrap. Chrome
+        // hides them via content-visibility, which only checkVisibility sees.
+      ).filter((element) =>
+        typeof element.checkVisibility === 'function'
+          ? element.checkVisibility()
+          : element.getClientRects().length > 0,
       );
       if (focusable.length === 0) return;
       const first = focusable[0];

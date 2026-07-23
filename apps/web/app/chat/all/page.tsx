@@ -115,7 +115,7 @@ export default async function ChatListPage({
               >
                 <span className="flex min-w-0 items-center gap-2">
                   {conversation.isPrimary ? (
-                    <span className="shrink-0 rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-indigo-700 uppercase dark:bg-indigo-950 dark:text-indigo-300">
+                    <span className="shrink-0 rounded bg-indigo-100 px-1.5 py-0.5 text-2xs font-semibold tracking-wide text-indigo-700 uppercase dark:bg-indigo-950 dark:text-indigo-300">
                       Main
                     </span>
                   ) : null}

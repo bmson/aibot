@@ -101,7 +101,7 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
       <div className="flex items-center justify-between gap-2">
         <h2 className="flex items-baseline gap-2 text-sm font-medium">
           Skills
-          <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+          <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
             {skills.length}
           </span>
         </h2>
@@ -170,20 +170,20 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-medium">{s.name}</span>
                     {s.ownerAuthored ? (
-                      <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-800 dark:bg-blue-950 dark:text-blue-300">
+                      <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-2xs font-medium text-blue-800 dark:bg-blue-950 dark:text-blue-300">
                         yours
                       </span>
                     ) : (
-                      <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
                         learned
                       </span>
                     )}
                     {s.deprecated ? (
-                      <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                      <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-2xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
                         retired
                       </span>
                     ) : null}
-                    <span className="ml-auto text-[11px] text-zinc-500 dark:text-zinc-500">
+                    <span className="ml-auto text-2xs text-zinc-500 dark:text-zinc-500">
                       used {s.useCount}× · {s.successCount}✓ / {s.failureCount}✗
                     </span>
                   </div>

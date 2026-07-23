@@ -69,7 +69,7 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
           </p>
         </div>
         <span
-          className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${status?.className ?? ''}`}
+          className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-medium ${status?.className ?? ''}`}
         >
           {status?.label}
         </span>

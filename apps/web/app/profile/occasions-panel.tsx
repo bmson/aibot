@@ -49,7 +49,7 @@ export function OccasionsPanel({
     <section className="mt-8">
       <h2 className="flex items-baseline gap-2 text-sm font-medium">
         Occasions
-        <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+        <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
           {occasions.length}
         </span>
       </h2>
@@ -75,7 +75,7 @@ export function OccasionsPanel({
                 <span className="text-xs text-zinc-500 dark:text-zinc-500">— {o.notes}</span>
               ) : null}
               {o.quarantined ? (
-                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-2xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
                   unverified
                 </span>
               ) : null}

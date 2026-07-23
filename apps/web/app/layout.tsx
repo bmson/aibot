@@ -1,7 +1,7 @@
 import { approvals, tasks } from '@assistant/db';
 import { count, eq } from 'drizzle-orm';
 import type { Metadata, Viewport } from 'next';
-import { Inter, JetBrains_Mono } from 'next/font/google';
+import { Bricolage_Grotesque, Inter, JetBrains_Mono } from 'next/font/google';
 import type { ReactNode } from 'react';
 import { auth, authMode } from '@/auth';
 import { getAgentIdentity, getDb } from '@/lib/server';
@@ -10,6 +10,13 @@ import './globals.css';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
 const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });
+// Display face for titles, the brand lockup, and the Home greeting only —
+// body/UI text stays Inter. One variable to revert (--font-display in globals).
+const display = Bricolage_Grotesque({
+  subsets: ['latin'],
+  variable: '--font-bricolage',
+  display: 'swap',
+});
 
 // Sets the .dark class from localStorage or OS preference BEFORE first paint, so
 // there is no light→dark flash and OS-dark users still default to dark.
@@ -90,7 +97,11 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   ]);
 
   return (
-    <html lang="en" className={`${inter.variable} ${mono.variable}`} suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${inter.variable} ${mono.variable} ${display.variable}`}
+      suppressHydrationWarning
+    >
       <head>
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: static no-flash theme script */}
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />

@@ -117,7 +117,7 @@ export default async function SettingsPage() {
                       : 'Not currently scheduled'}
                     {s.lastRunAt ? ` · last ${relativeTime(s.lastRunAt, now)}` : ''}
                   </p>
-                  <details className="mt-1 text-[11px] text-zinc-500">
+                  <details className="mt-1 text-2xs text-zinc-500">
                     <summary className="cursor-pointer">Technical schedule</summary>
                     <code>{s.cron}</code>
                   </details>
