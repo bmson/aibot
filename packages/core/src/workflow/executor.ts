@@ -24,7 +24,7 @@ import {
   runMissionPhase,
   runPlanPhase,
 } from './executor/phases.js';
-import { seedContext } from './executor/seed.js';
+import { foldOwnerRepliesSincePark, seedContext } from './executor/seed.js';
 import { runStepLoop } from './executor/step-loop.js';
 import { createToolContext } from './executor/tool-context.js';
 import {
@@ -168,6 +168,14 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   let window = state.contextWindow as unknown as ModelMessage[];
   if (window.length === 0) {
     window = await seedContext(db, task);
+    // Publish the seeded window into state BEFORE building the tool context, so
+    // harvestKnownAddresses (which scans state.contextWindow) sees the thread's
+    // real recipients on the FIRST run — not just on resume. Without this, the
+    // recipient-provenance whitelist was empty on run 1, so a send to an address
+    // named in the seeded thread flagged as unverified, yet the identical send on
+    // a later resume (window now checkpointed) passed — same request, different
+    // gating by run number.
+    state.contextWindow = window as unknown as TaskState['contextWindow'];
   }
   // A direct document/sheet/slides request skips the generic planner, then forces
   // the matching creation tool. The D9 known-sender reply child is exempt: its
@@ -226,6 +234,11 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     if (!slept) return LOST_LEASE;
     return { outcome: 'sleeping', detail: 'browser job running' };
   }
+
+  // Fold any owner correction typed while this task was parked into the window,
+  // so a resumed task acts on the latest owner intent, not a stale checkpoint.
+  // (First run just baselines the watermark; chat channel only.)
+  await foldOwnerRepliesSincePark(db, task, state, rc.window);
 
   // Read an owner-supplied shared document (step 0) before the model continues.
   const documentReadResult = await runDirectDocumentRead(rc);

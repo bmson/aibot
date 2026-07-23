@@ -80,12 +80,27 @@ export function replaceToolResultMessage(
  * A retained assistant tool-call is always safe: its result comes AFTER it, so it
  * is retained too. So it is sufficient to advance the cut past any leading `tool`
  * messages until the window starts on a real turn (or an assistant tool-call).
+ *
+ * The first user message (the original instruction) is PINNED: a long task must
+ * not lose "what am I doing and why" to drop-oldest. Goal sessions re-seed the
+ * instruction each run, but an adhoc/mission/email task has only this copy in
+ * the window, and without it later steps drift once it ages out. Prepending a
+ * lone user message never breaks pairing (it carries no tool-call).
  */
 export function compact(window: ModelMessage[]): ModelMessage[] {
   if (window.length <= CONTEXT_WINDOW_LIMIT) return window;
-  let start = window.length - CONTEXT_WINDOW_LIMIT;
+  const firstUserIndex = window.findIndex((m) => m.role === 'user');
+  const pin = firstUserIndex >= 0 ? window[firstUserIndex] : undefined;
+
+  // Leave room for the pinned instruction so the total still respects the bound.
+  const tailBudget = pin ? CONTEXT_WINDOW_LIMIT - 1 : CONTEXT_WINDOW_LIMIT;
+  let start = window.length - tailBudget;
   while (start < window.length && window[start]?.role === 'tool') start += 1;
-  return window.slice(start);
+  const tail = window.slice(start);
+
+  // If the instruction already survived inside the tail, return it unchanged.
+  if (!pin || start <= firstUserIndex) return tail;
+  return [pin, ...tail];
 }
 
 /** Latest direct owner wording, used only for deterministic artifact routing. */

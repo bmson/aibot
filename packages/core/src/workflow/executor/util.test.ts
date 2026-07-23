@@ -27,17 +27,39 @@ describe('compact', () => {
     // Cut lands (length-LIMIT) exactly on a tool-result whose tool-call is dropped.
     const window: ModelMessage[] = [
       text('user', 'q'),
-      toolCall('X'), // index 1 — dropped by the slice
-      toolResult('X'), // index 2 — would be the orphaned head
+      toolCall('X'), // dropped by the slice
+      toolResult('X'), // would be the orphaned head
     ];
     for (let i = 3; i < CONTEXT_WINDOW_LIMIT + 2; i += 1) {
       window.push(text(i % 2 === 0 ? 'user' : 'assistant', `m${i}`));
     }
-    // length = LIMIT + 2, so the naive cut starts at index 2 (the orphan).
     const result = compact(window);
+    // Neither the pinned instruction nor the tail starts on an orphaned result.
     expect(result[0]?.role).not.toBe('tool');
-    // The orphaned tool-result was dropped, so the window is one shorter than the cap.
-    expect(result.length).toBe(CONTEXT_WINDOW_LIMIT - 1);
+    expect(result.some((m) => m.role === 'tool')).toBe(false);
+    // The bound still holds: pinned instruction (1) + a tail of LIMIT-1.
+    expect(result.length).toBe(CONTEXT_WINDOW_LIMIT);
+  });
+
+  it('pins the first user message (the instruction) even when it would age out', () => {
+    const window: ModelMessage[] = [text('user', 'ORIGINAL INSTRUCTION')];
+    for (let i = 0; i < CONTEXT_WINDOW_LIMIT + 20; i += 1) {
+      window.push(text(i % 2 === 0 ? 'assistant' : 'user', `later ${i}`));
+    }
+    const result = compact(window);
+    // The instruction survives at the head despite being far past the cut.
+    expect(result[0]).toEqual(text('user', 'ORIGINAL INSTRUCTION'));
+    expect(result.length).toBe(CONTEXT_WINDOW_LIMIT);
+    // And the most recent message is still retained (drop-oldest, not newest).
+    expect(result.at(-1)).toEqual(window.at(-1));
+  });
+
+  it('does not duplicate the instruction when it already survives in the tail', () => {
+    const window: ModelMessage[] = [text('user', 'instr')];
+    for (let i = 0; i < 5; i += 1) window.push(text('assistant', `m${i}`));
+    // Within the limit → returned unchanged (single copy of the instruction).
+    const result = compact(window);
+    expect(result.filter((m) => m.content === 'instr')).toHaveLength(1);
   });
 
   it('keeps a retained assistant tool-call and its following result together', () => {

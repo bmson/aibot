@@ -111,5 +111,12 @@ export const TaskStateSchema = z.object({
   plannerState: z.record(z.string(), z.unknown()).default({}),
   scratchpad: z.string().default(''),
   contextWindow: z.array(z.record(z.string(), z.unknown())).default([]),
+  /**
+   * High-water mark (ISO) for owner messages already folded into the window.
+   * On resume from a park, owner chat messages newer than this are appended so a
+   * correction typed while the task was parked is not stranded in a separate
+   * task. Nullish: old checkpoints simply have no watermark and none is applied.
+   */
+  seenConversationAt: z.string().nullish(),
 });
 export type TaskState = z.infer<typeof TaskStateSchema>;

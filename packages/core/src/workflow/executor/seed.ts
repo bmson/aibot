@@ -1,8 +1,9 @@
 import type { Db, TaskRow } from '@assistant/db';
-import { messages } from '@assistant/db';
+import { conversations, messages } from '@assistant/db';
 import type { ModelMessage } from 'ai';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, gt } from 'drizzle-orm';
 import { listMessages } from '../../chat.js';
+import type { TaskState } from '../../events.js';
 import { isKnownSenderReplyTask, isUnattendedGoalSession } from './context-helpers.js';
 
 function triggerInstruction(task: TaskRow): string | undefined {
@@ -93,4 +94,72 @@ export async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]
       content: `Task trigger (${task.type}):\n\`\`\`json\n${JSON.stringify(task.trigger)}\n\`\`\``,
     } as ModelMessage,
   ];
+}
+
+/**
+ * Fold owner corrections typed while the task was parked into the resumed window.
+ *
+ * A task parks on an approval; the owner adds "actually make it Bob" in the same
+ * chat; that reply becomes its OWN task and the parked task, on resume, would run
+ * from a stale window and act on the pre-correction args. Append owner chat
+ * messages newer than the watermark so the correction shapes the NEXT model step.
+ *
+ * Chat channel ONLY: never re-inject email/SMS conversation content, which can
+ * carry third-party text (the taint boundary). The approved call's exact args
+ * stay authoritative — the owner's Approve click post-dates their correction, so
+ * this shapes what happens next rather than rewriting a decided action; Deny
+ * remains the cancel path. Idempotent: the watermark advances past folded
+ * messages, so a second resume appends nothing. On the first run (no watermark)
+ * it only initializes the mark from the latest existing message — the seed window
+ * already holds those — so nothing is double-counted.
+ */
+export async function foldOwnerRepliesSincePark(
+  db: Db,
+  task: Pick<TaskRow, 'conversationId'>,
+  state: TaskState,
+  window: ModelMessage[],
+): Promise<void> {
+  if (!task.conversationId) return;
+  const [conv] = await db
+    .select({ channel: conversations.channel })
+    .from(conversations)
+    .where(eq(conversations.id, task.conversationId))
+    .limit(1);
+  if (conv?.channel !== 'chat') return;
+
+  if (!state.seenConversationAt) {
+    // First run: baseline the mark at the newest existing message (already seeded).
+    const [latest] = await db
+      .select({ at: messages.createdAt })
+      .from(messages)
+      .where(eq(messages.conversationId, task.conversationId))
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+    state.seenConversationAt = (latest?.at ?? new Date(0)).toISOString();
+    return;
+  }
+
+  const newer = await db
+    .select({ text: messages.text, at: messages.createdAt })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, task.conversationId),
+        eq(messages.role, 'user'),
+        gt(messages.createdAt, new Date(state.seenConversationAt)),
+      ),
+    )
+    .orderBy(asc(messages.createdAt));
+  if (newer.length === 0) return;
+  for (const m of newer) {
+    const text = m.text?.trim();
+    if (text) {
+      window.push({
+        role: 'user',
+        content: `[The owner added this while the task was paused:]\n${text}`,
+      } as ModelMessage);
+    }
+  }
+  const last = newer[newer.length - 1];
+  if (last) state.seenConversationAt = last.at.toISOString();
 }
