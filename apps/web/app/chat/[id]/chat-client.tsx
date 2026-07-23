@@ -127,6 +127,9 @@ export function ChatClient({
     initialAsyncTurn ?? null,
   );
   const [asyncNote, setAsyncNote] = useState<string | null>(null);
+  const [activity, setActivity] = useState<
+    Array<{ toolName: string; status: string; step: number }>
+  >([]);
   /** Live provenance for the current streaming turn (the persisted part covers reloads). */
   const [liveRecall, setLiveRecall] = useState<RecallSource[] | null>(null);
   /** "Autonomous" composer toggle: this turn runs free-range (approve-once). */
@@ -221,6 +224,7 @@ export function ChatClient({
       if (cancelled) return;
       setAsyncNote(note);
       setAsyncTurn(null);
+      setActivity([]);
     };
 
     const tick = async () => {
@@ -238,7 +242,9 @@ export function ChatClient({
             messages: UIMessage[];
             nextCursor: string | null;
             hasMore: boolean;
+            activity?: Array<{ toolName: string; status: string; step: number }>;
           };
+          setActivity(data.activity ?? []);
           mergeMessages(data.messages);
           sawAssistant ||= data.messages.some((message) => message.role === 'assistant');
           if (data.nextCursor) cursor = data.nextCursor;
@@ -436,9 +442,18 @@ export function ChatClient({
               <p className="animate-pulse text-sm text-zinc-500 dark:text-zinc-400">Thinking…</p>
             ) : null}
             {asyncTurn ? (
-              <p className="animate-pulse text-sm text-slate-500 dark:text-zinc-400">
-                Checking the tools and any required approvals…
-              </p>
+              <div>
+                <p className="animate-pulse text-sm text-slate-500 dark:text-zinc-400">
+                  Working on it…
+                </p>
+                {activity.length > 0 ? (
+                  <p className="mt-1 font-mono text-2xs text-zinc-500 dark:text-zinc-500">
+                    {activity
+                      .map((a) => `${a.toolName.replace('.', ' ')} — ${a.status}`)
+                      .join(' · ')}
+                  </p>
+                ) : null}
+              </div>
             ) : null}
             {asyncNote ? (
               <p className="text-xs text-zinc-500 dark:text-zinc-500">{asyncNote}</p>

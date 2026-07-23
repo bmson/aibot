@@ -2,6 +2,7 @@ import { getAgent } from '@assistant/core';
 import { tasks } from '@assistant/db';
 import { and, count, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import Link from 'next/link';
+import { AutoRefresh } from '@/app/auto-refresh';
 import { requireOwner } from '@/auth';
 import { formatUsd, relativeTime, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
@@ -46,6 +47,7 @@ export default async function TasksPage({
 
   return (
     <div className="mx-auto max-w-4xl">
+      {archived ? null : <AutoRefresh />}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <PageHeader
           title={archived ? 'Archived activity' : 'Activity'}

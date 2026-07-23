@@ -1,6 +1,7 @@
 import { approvals, tasks, toolCalls } from '@assistant/db';
 import { asc, desc, eq, inArray } from 'drizzle-orm';
 import Link from 'next/link';
+import { AutoRefresh } from '@/app/auto-refresh';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getAgentTimezone, getDb } from '@/lib/server';
@@ -41,6 +42,7 @@ export default async function ApprovalsPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
+      <AutoRefresh />
       <PageHeader
         title="Approvals"
         intro="Review and approve or reject actions the assistant wants to take on your behalf."

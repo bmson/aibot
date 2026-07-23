@@ -1,10 +1,12 @@
 import { decodeMessageCursor, encodeMessageCursor, listMessages } from '@assistant/core';
-import { tasks } from '@assistant/db';
+import { tasks, toolCalls } from '@assistant/db';
 import type { UIMessage } from 'ai';
-import { eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import { isAuthed } from '@/auth';
 import { withApprovalStatuses } from '@/lib/chat-approval-parts';
 import { getDb } from '@/lib/server';
+
+const SETTLED = new Set(['done', 'failed', 'cancelled', 'needs_attention', 'waiting_approval']);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PAGE_SIZE = 50;
@@ -58,5 +60,18 @@ export async function GET(req: Request) {
 
   const last = page.at(-1);
   const nextCursor = last ? encodeMessageCursor(last) : cursor ? encodeMessageCursor(cursor) : null;
-  return Response.json({ taskStatus: task.status, messages, nextCursor, hasMore });
+
+  // While the task is still working, surface its latest tool activity so the
+  // chat can show what's happening instead of an opaque "working…" pulse.
+  let activity: Array<{ toolName: string; status: string; step: number }> = [];
+  if (!SETTLED.has(task.status)) {
+    const recent = await db
+      .select({ toolName: toolCalls.toolName, status: toolCalls.status, step: toolCalls.step })
+      .from(toolCalls)
+      .where(eq(toolCalls.taskId, taskId))
+      .orderBy(desc(toolCalls.createdAt))
+      .limit(3);
+    activity = recent.reverse();
+  }
+  return Response.json({ taskStatus: task.status, messages, nextCursor, hasMore, activity });
 }

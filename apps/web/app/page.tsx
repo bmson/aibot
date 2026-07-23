@@ -4,6 +4,7 @@ import { and, asc, desc, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { ApprovalCard } from '@/app/approvals/approval-card';
+import { AutoRefresh } from '@/app/auto-refresh';
 import { cancelTask, retryTask } from '@/app/tasks/actions';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime, truncate } from '@/lib/format';
@@ -136,6 +137,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
+      <AutoRefresh />
       <PageHeader
         title="Your assistant"
         intro="Start in chat. Come back here when the assistant needs a decision or has a verified update to show you."
