@@ -69,9 +69,21 @@ export const cardShellClass =
   'min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60';
 export const cardBodyClass = 'grid min-w-0 gap-4 p-4 sm:p-5';
 export const cardHeaderClass = 'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3';
-export const cardFooterClass =
-  'flex min-w-0 flex-wrap items-center gap-2 border-t border-edge/70 bg-sunken/35 px-4 py-3 sm:px-5';
-export const cardGridClass = 'grid min-w-0 gap-3 lg:grid-cols-2';
+/** Footer chrome (divider + tonal well + padding), shared by the button-row
+ *  footer and disclosure-style footers that can't be a flex container. */
+export const cardFooterChromeClass = 'border-t border-edge/70 bg-sunken/35 px-4 py-3 sm:px-5';
+export const cardFooterClass = `flex min-w-0 flex-wrap items-center gap-2 ${cardFooterChromeClass}`;
+
+/** One card-title scale, so every card reads at the same weight. */
+export const cardTitleClass = 'text-[15px] leading-6 font-semibold tracking-[-0.015em] text-strong';
+
+/** Lift-on-hover for cards that are a link or have one dominant action. */
+export const cardInteractiveClass =
+  'motion-safe:transition-[box-shadow,transform] hover:-translate-y-0.5 hover:shadow-[0_10px_30px_rgb(23_25_35/0.08)]';
+
+/** Two grid recipes, so pages stop inventing their own breakpoints. */
+export const cardGridClass = 'grid min-w-0 items-stretch gap-4 lg:grid-cols-2';
+export const tileGridClass = 'grid min-w-0 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3';
 
 /** Collapsible-section summary row (native <details>). */
 export const summaryClass =
@@ -168,6 +180,66 @@ export function Panel({
     >
       {children}
     </section>
+  );
+}
+
+/**
+ * One status/label pill for the whole app. Tones copy the exact light/dark
+ * pairs already used by status chips (views.tsx), so migrating the ~10 bespoke
+ * pills to <Badge> shifts nothing visually. Count pills keep <CountBadge>.
+ */
+export type BadgeTone =
+  | 'neutral'
+  | 'muted'
+  | 'accent'
+  | 'blue'
+  | 'green'
+  | 'amber'
+  | 'red'
+  | 'orange'
+  | 'violet'
+  | 'purple'
+  | 'indigo';
+
+const pillTones: Record<BadgeTone, string> = {
+  neutral: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+  muted: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
+  accent: 'bg-accent/10 text-accent',
+  blue: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
+  green: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300',
+  amber: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
+  red: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
+  orange: 'bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300',
+  violet: 'bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300',
+  purple: 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300',
+  indigo: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300',
+};
+
+export function Badge({
+  children,
+  tone = 'neutral',
+  size = 'sm',
+  uppercase = false,
+  title,
+}: {
+  children: ReactNode;
+  tone?: BadgeTone;
+  size?: 'sm' | 'xs';
+  uppercase?: boolean;
+  title?: string;
+}) {
+  const sizeClass = uppercase
+    ? 'px-2 py-0.5 text-2xs font-semibold tracking-[0.06em] uppercase'
+    : size === 'xs'
+      ? 'px-1.5 py-0.5 text-2xs'
+      : 'px-2 py-0.5 text-xs';
+  return (
+    <span
+      title={title}
+      className={`inline-flex max-w-full items-center gap-1 rounded-full font-medium whitespace-nowrap ${sizeClass} ${pillTones[tone]}`}
+    >
+      {children}
+    </span>
   );
 }
 

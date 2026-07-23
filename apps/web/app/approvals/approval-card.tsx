@@ -22,7 +22,15 @@ import {
   denyApproval,
   editAndApprove,
 } from '@/app/approvals/actions';
-import { btn, cardBodyClass, cardShellClass, InfoGrid, InfoItem } from '@/lib/ui';
+import {
+  btn,
+  cardBodyClass,
+  cardFooterClass,
+  cardInteractiveClass,
+  cardShellClass,
+  InfoGrid,
+  InfoItem,
+} from '@/lib/ui';
 import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 import type { PendingApprovalView } from '@/lib/views';
 
@@ -57,9 +65,7 @@ export function ApprovalCard({
   const actionLabel = actionLabels[approval.actionKind];
 
   return (
-    <article
-      className={`${cardShellClass} motion-safe:transition-shadow hover:shadow-[0_10px_30px_rgb(23_25_35/0.08)]`}
-    >
+    <article className={`${cardShellClass} ${cardInteractiveClass}`}>
       <div className={cardBodyClass}>
         <div className="flex items-start gap-3">
           <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-accent/10 text-accent">
@@ -172,7 +178,7 @@ export function ApprovalCard({
           </div>
         </form>
       ) : (
-        <div className="grid grid-cols-2 items-center gap-2 border-t border-edge bg-sunken/45 p-3.5 sm:flex sm:flex-wrap sm:px-5 sm:py-4">
+        <div className={`${cardFooterClass} max-sm:grid max-sm:grid-cols-2`}>
           <form action={approveApproval.bind(null, approval.id)} className="min-w-0">
             <SubmitButton variant="success" pendingLabel="Approving…" className="w-full sm:w-auto">
               <Check className="size-4" aria-hidden="true" />

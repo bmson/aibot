@@ -187,11 +187,11 @@ export default async function TasksPage({
           icon={<ListChecks className="size-5" />}
           action={
             archived || filter !== 'all' ? (
-              <Link href={archived ? '/tasks' : '/tasks'} className={btnSm.outline}>
+              <Link href={archived ? '/tasks' : '/tasks'} className={btn.outline}>
                 {archived ? 'Current activity' : 'Clear filter'}
               </Link>
             ) : (
-              <Link href="/chat" className={btnSm.outline}>
+              <Link href="/chat" className={btn.outline}>
                 Start in chat
               </Link>
             )
@@ -264,13 +264,13 @@ export default async function TasksPage({
                         </Link>
                         {archived ? (
                           <form action={restoreTask.bind(null, task.id)}>
-                            <SubmitButton pendingLabel="Restoring…" className={btnSm.outline}>
+                            <SubmitButton size="sm" pendingLabel="Restoring…">
                               Restore
                             </SubmitButton>
                           </form>
                         ) : terminal ? (
                           <form action={archiveTask.bind(null, task.id)}>
-                            <SubmitButton pendingLabel="Archiving…" className={btnSm.outline}>
+                            <SubmitButton size="sm" pendingLabel="Archiving…">
                               Archive
                             </SubmitButton>
                           </form>

@@ -2,6 +2,7 @@
 // client components (approval cards) and shared status-chip styling.
 import type { ApprovalRow, TaskRow } from '@assistant/db';
 import { formatFriendlyDateTime, prettyJson, relativeTime } from './format';
+import { Badge, type BadgeTone } from './ui';
 
 /** Plain-serializable props for the pending-approval client card. */
 export interface ApprovalField {
@@ -271,14 +272,26 @@ export const statusChipClasses: Record<string, string> = {
   abandoned: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
 };
 
+/** Status → Badge tone. Colours match statusChipClasses exactly (visual no-op). */
+const statusTone: Record<string, BadgeTone> = {
+  pending: 'neutral',
+  running: 'blue',
+  waiting_approval: 'amber',
+  waiting_event: 'purple',
+  waiting_budget: 'amber',
+  sleeping: 'indigo',
+  done: 'green',
+  failed: 'red',
+  needs_attention: 'orange',
+  cancelled: 'muted',
+  approved: 'green',
+  denied: 'red',
+  expired: 'muted',
+  active: 'blue',
+  paused: 'amber',
+  abandoned: 'muted',
+};
+
 export function StatusChip({ status }: { status: string }) {
-  const classes =
-    statusChipClasses[status] ?? 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300';
-  return (
-    <span
-      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${classes}`}
-    >
-      {statusLabel(status)}
-    </span>
-  );
+  return <Badge tone={statusTone[status] ?? 'neutral'}>{statusLabel(status)}</Badge>;
 }

@@ -147,3 +147,40 @@
     transform: none;
   }
 }
+
+/* Live-conversation motion (chat). Consumed only behind motion-safe: utilities
+   or the reduced-motion media query below, so a reduced-motion reader gets a
+   still page. */
+@keyframes caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes shimmer-text {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* A soft caret trailing the assistant's last line while a reply streams in.
+   Pure decoration — off entirely for reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .chat-caret > div > :is(p, li):last-child::after {
+    content: "";
+    display: inline-block;
+    width: 2px;
+    height: 1.05em;
+    margin-left: 2px;
+    vertical-align: -0.15em;
+    border-radius: 1px;
+    background: var(--accent);
+    animation: caret-blink 1s steps(1) infinite;
+  }
+}

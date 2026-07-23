@@ -8,15 +8,7 @@ import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import {
-  btnSm,
-  cardGridClass,
-  EmptyState,
-  inputClass,
-  PageHeader,
-  PageShell,
-  Panel,
-} from '@/lib/ui';
+import { btn, cardGridClass, EmptyState, inputClass, PageHeader, PageShell, Panel } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { DocumentCard, type DocumentCardView } from './document-card';
 
@@ -65,7 +57,7 @@ export default async function DocumentsPage() {
           title="Documents"
           intro="Upload files — PDFs, notes, exports — and I'll read them so you can ask about their contents in chat. Attachments from people you know are filed here automatically. Text and PDFs are read right away; scans and office files wait for the document processor."
         />
-        <Link href="/import" className={`${btnSm.outline} mt-1 shrink-0`}>
+        <Link href="/import" className={`${btn.outline} mt-1 shrink-0`}>
           Import backstory
         </Link>
       </div>

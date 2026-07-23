@@ -8,7 +8,15 @@ import {
   reviewSourceAction,
   startImportAction,
 } from '@/app/import/actions';
-import { btn, cardBodyClass, cardHeaderClass, cardShellClass, InfoGrid, InfoItem } from '@/lib/ui';
+import {
+  btn,
+  cardBodyClass,
+  cardFooterChromeClass,
+  cardHeaderClass,
+  cardShellClass,
+  InfoGrid,
+  InfoItem,
+} from '@/lib/ui';
 
 /** Plain-serializable source view built in page.tsx. */
 export interface SourceView {
@@ -130,7 +138,7 @@ export function SourceCard({ view }: { view: SourceView }) {
         {error ? <p className="text-xs text-red-600 dark:text-red-400">{error}</p> : null}
       </div>
 
-      <details className="border-t border-edge/70 bg-sunken/35 px-4 py-3 text-xs sm:px-5">
+      <details className={`${cardFooterChromeClass} text-xs`}>
         <summary className="cursor-pointer font-medium text-muted">File and actions</summary>
         <p className="mt-2 break-words text-muted [overflow-wrap:anywhere]">
           {view.workspacePath} · {view.kind}

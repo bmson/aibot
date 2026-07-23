@@ -4,9 +4,14 @@ import { LoaderCircle } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { useFormStatus } from 'react-dom';
-import { btn } from './ui';
+import { btn, btnSm } from './ui';
 
 type BtnVariant = keyof typeof btn;
+
+// Size the button by choosing the scale here — never by passing btnSm.* through
+// className (that stacks h-9 and h-8 utilities on one element and the winner is
+// stylesheet order, not intent). 'md' is the default; 'sm' is for list rows.
+const btnScale = { md: btn, sm: btnSm } as const;
 
 /**
  * A server-action submit button that disables itself and shows a pending label
@@ -18,12 +23,14 @@ export function SubmitButton({
   children,
   pendingLabel = 'Working…',
   variant = 'outline',
+  size = 'md',
   className = '',
   title,
 }: {
   children: ReactNode;
   pendingLabel?: string;
   variant?: BtnVariant;
+  size?: 'md' | 'sm';
   className?: string;
   title?: string;
 }) {
@@ -34,7 +41,7 @@ export function SubmitButton({
       disabled={pending}
       aria-busy={pending}
       title={title}
-      className={`${btn[variant]} ${className}`}
+      className={`${btnScale[size][variant]} ${className}`}
     >
       {pending ? (
         <>
@@ -58,6 +65,7 @@ export function ConfirmButton({
   confirmLabel = 'Confirm?',
   pendingLabel = 'Working…',
   variant = 'dangerOutline',
+  size = 'md',
   className = '',
   title,
 }: {
@@ -65,21 +73,17 @@ export function ConfirmButton({
   confirmLabel?: string;
   pendingLabel?: string;
   variant?: BtnVariant;
+  size?: 'md' | 'sm';
   className?: string;
   title?: string;
 }) {
   const { pending } = useFormStatus();
   const [armed, setArmed] = useState(false);
+  const base = `${btnScale[size][variant]} ${className}`;
 
   if (pending) {
     return (
-      <button
-        type="submit"
-        disabled
-        aria-busy="true"
-        title={title}
-        className={`${btn[variant]} ${className}`}
-      >
+      <button type="submit" disabled aria-busy="true" title={title} className={base}>
         <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
         {pendingLabel}
       </button>
@@ -94,14 +98,14 @@ export function ConfirmButton({
           setArmed(true);
           setTimeout(() => setArmed(false), 3000);
         }}
-        className={`${btn[variant]} ${className}`}
+        className={base}
       >
         {children}
       </button>
     );
   }
   return (
-    <button type="submit" title={title} className={`${btn[variant]} ${className}`}>
+    <button type="submit" title={title} className={base}>
       {confirmLabel}
     </button>
   );

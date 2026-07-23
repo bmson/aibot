@@ -4,7 +4,7 @@ import { FileText } from 'lucide-react';
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import {
-  btnSm,
+  btn,
   cardBodyClass,
   cardFooterClass,
   cardHeaderClass,
@@ -109,7 +109,7 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
       </div>
       <footer className={cardFooterClass}>
         {doc.status === 'ready' ? (
-          <Link href={doc.askHref} className={btnSm.outline}>
+          <Link href={doc.askHref} className={btn.outline}>
             Ask about this
           </Link>
         ) : null}
@@ -119,7 +119,7 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
               type="button"
               disabled={pending}
               onClick={() => startTransition(() => purgeDocumentAction(doc.id))}
-              className={btnSm.danger}
+              className={btn.danger}
             >
               {pending ? 'Deleting…' : 'Confirm delete'}
             </button>
@@ -127,13 +127,13 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
               type="button"
               disabled={pending}
               onClick={() => setConfirming(false)}
-              className={btnSm.outline}
+              className={btn.outline}
             >
               Cancel
             </button>
           </>
         ) : (
-          <button type="button" onClick={() => setConfirming(true)} className={btnSm.dangerOutline}>
+          <button type="button" onClick={() => setConfirming(true)} className={btn.dangerOutline}>
             Delete
           </button>
         )}
