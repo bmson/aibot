@@ -8,8 +8,16 @@ WORKDIR /app
 
 RUN corepack enable \
   && apt-get update \
-  && apt-get install -y --no-install-recommends python3 \
+  && apt-get install -y --no-install-recommends python3 python3-pip \
   && rm -rf /var/lib/apt/lists/*
+
+# Data-analysis toolkit, installed at BUILD time (the runtime has no egress).
+# Pinned for reproducibility; matplotlib uses the headless Agg backend by default.
+RUN pip install --no-cache-dir --break-system-packages \
+  numpy==2.1.3 \
+  pandas==2.2.3 \
+  matplotlib==3.9.2 \
+  openpyxl==3.1.5
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY workers/code-runner ./workers/code-runner

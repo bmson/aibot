@@ -5,13 +5,22 @@
  * copy of core's CodeSpecSchema.
  */
 
+export interface CodeInput {
+  workspacePath: string;
+  as: string;
+}
+
 export interface CodeSpec {
   goal: string;
   language: 'javascript' | 'python';
   source: string;
+  inputs?: CodeInput[];
   allowNetwork: boolean;
   timeoutSeconds: number;
 }
+
+/** Workspace areas an input may be staged from — mirrors core's CODE_INPUT_PREFIXES. */
+export const CODE_INPUT_PREFIXES = ['code/', 'browser/attachments/', 'documents/', 'imports/'];
 
 export interface JobStorageConfig {
   driver: 'gcs' | 'local';

@@ -1,5 +1,5 @@
 import { activeAutonomyGrant, getAgent } from '@assistant/core';
-import { approvals, messages, modelCalls, tasks, toolCalls } from '@assistant/db';
+import { approvals, files, messages, modelCalls, tasks, toolCalls } from '@assistant/db';
 import { and, asc, eq } from 'drizzle-orm';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -90,16 +90,27 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     .where(and(eq(tasks.id, id), eq(tasks.agentId, agent.id)));
   if (!task) notFound();
 
-  const [taskToolCalls, taskModelCalls, taskApprovals, taskMessages] = await Promise.all([
-    db.select().from(toolCalls).where(eq(toolCalls.taskId, id)).orderBy(asc(toolCalls.createdAt)),
-    db
-      .select()
-      .from(modelCalls)
-      .where(eq(modelCalls.taskId, id))
-      .orderBy(asc(modelCalls.createdAt)),
-    db.select().from(approvals).where(eq(approvals.taskId, id)).orderBy(asc(approvals.requestedAt)),
-    db.select().from(messages).where(eq(messages.taskId, id)).orderBy(asc(messages.createdAt)),
-  ]);
+  const [taskToolCalls, taskModelCalls, taskApprovals, taskMessages, taskFiles] = await Promise.all(
+    [
+      db.select().from(toolCalls).where(eq(toolCalls.taskId, id)).orderBy(asc(toolCalls.createdAt)),
+      db
+        .select()
+        .from(modelCalls)
+        .where(eq(modelCalls.taskId, id))
+        .orderBy(asc(modelCalls.createdAt)),
+      db
+        .select()
+        .from(approvals)
+        .where(eq(approvals.taskId, id))
+        .orderBy(asc(approvals.requestedAt)),
+      db.select().from(messages).where(eq(messages.taskId, id)).orderBy(asc(messages.createdAt)),
+      db.select().from(files).where(eq(files.taskId, id)).orderBy(asc(files.createdAt)),
+    ],
+  );
+  // Downloadable artifacts this task produced (charts, exports, saved pages).
+  const downloadableFiles = taskFiles.filter((f) =>
+    ['code/', 'browser/attachments/', 'documents/'].some((p) => f.workspacePath.startsWith(p)),
+  );
 
   const timeline: TimelineEntry[] = [
     ...taskToolCalls.map((tc): TimelineEntry => {
@@ -369,6 +380,30 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           </div>
         ) : null}
       </section>
+
+      {downloadableFiles.length > 0 ? (
+        <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+          <h2 className="text-sm font-semibold">Files produced</h2>
+          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-zinc-400">
+            Artifacts this task saved to the workspace — click to download.
+          </p>
+          <ul className="mt-4 divide-y divide-slate-100 dark:divide-zinc-800">
+            {downloadableFiles.map((file) => (
+              <li key={file.id} className="flex items-center justify-between gap-3 py-2">
+                <a
+                  href={`/api/files?path=${encodeURIComponent(file.workspacePath)}`}
+                  className="truncate text-sm font-medium text-indigo-700 hover:underline dark:text-indigo-300"
+                >
+                  {file.workspacePath.split('/').pop()}
+                </a>
+                <span className="shrink-0 text-xs text-slate-500 dark:text-zinc-400">
+                  {file.bytes > 0 ? `${Math.max(1, Math.round(file.bytes / 1024))} KB` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <details className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
         <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-zinc-300">

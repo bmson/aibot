@@ -166,6 +166,7 @@ export function buildDeps(): AgentDeps {
       client: googleClient,
       botEmail,
       botName: 'AI Bot',
+      workspace,
       prepareOutbound: async (text, register) => {
         const context = await loadVoiceContext(db, router, register, text);
         const result = await rewriteInVoice(router, { draft: text, register, context });

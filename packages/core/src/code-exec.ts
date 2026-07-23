@@ -23,11 +23,32 @@ export function codeOutputPrefix(taskId: string): string {
   return `${CODE_OUTPUT_PREFIX}${taskId}/`;
 }
 
+/** Workspace areas a code input may be staged from (never profile/secrets). */
+export const CODE_INPUT_PREFIXES = ['code/', 'browser/attachments/', 'documents/', 'imports/'];
+
 export const CodeSpecSchema = z.object({
   goal: z.string().min(3).max(500).describe('One line: what this script is for.'),
   language: z.enum(['javascript', 'python']).default('javascript'),
   /** The full script source — exactly what the owner approves when gated. */
   source: z.string().min(1).max(60_000),
+  /**
+   * Workspace files staged into ./input/<as> before the script runs — feed a
+   * CSV/doc from the Workspace (drive.download, an ingested document, a prior
+   * code output) into the script. Read them at ./input/<as>.
+   */
+  inputs: z
+    .array(
+      z.object({
+        workspacePath: z.string().min(1).max(300),
+        as: z
+          .string()
+          .min(1)
+          .max(100)
+          .regex(/^[\w.-]+$/, 'a bare filename (no path separators)'),
+      }),
+    )
+    .max(10)
+    .optional(),
   /**
    * Whether the script needs network access. Off by default: a pure computation
    * is autonomous, anything that reaches the network is owner-approved.

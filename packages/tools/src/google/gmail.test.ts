@@ -62,6 +62,46 @@ describe('Gmail outbound security', () => {
     expect(prepareOutbound).toHaveBeenCalledOnce();
   });
 
+  it('attaches an allowlisted workspace file and rejects a disallowed path', async () => {
+    const api = vi.fn().mockResolvedValue({ id: 'sent-1', threadId: 't-1' });
+    const readBytes = vi.fn(async () => Buffer.from('CSVDATA'));
+    const registry = registerGmailTools(new ToolRegistry(), {
+      client: { api } as unknown as never,
+      botEmail: 'bot@example.com',
+      workspace: { readBytes },
+    });
+    const send = registry.get('gmail.send')?.tool;
+
+    await send?.execute(
+      { ...outbound, attachments: [{ workspacePath: 'code/task-1/out.csv' }] },
+      context(false),
+    );
+    expect(readBytes).toHaveBeenCalledWith('code/task-1/out.csv');
+    const [, init] = api.mock.calls[0] as [string, RequestInit];
+    const raw = JSON.parse(String(init.body)).raw as string;
+    expect(Buffer.from(raw, 'base64url').toString('utf8')).toContain('filename="out.csv"');
+
+    await expect(
+      send?.execute(
+        { ...outbound, attachments: [{ workspacePath: 'b-bot/browser/profile.tar.enc' }] },
+        context(false),
+      ),
+    ).rejects.toThrow(/not allowed/);
+  });
+
+  it('names attachments on the send approval card', () => {
+    const summary = registerGmailTools(new ToolRegistry(), {
+      client: {} as never,
+      botEmail: 'bot@example.com',
+    })
+      .get('gmail.send')
+      ?.tool.approvalSummary?.({
+        ...outbound,
+        attachments: [{ workspacePath: 'code/t/chart.png' }],
+      });
+    expect(summary).toContain('chart.png');
+  });
+
   it('keys create_draft idempotently: stable for the same draft, distinct for a different body', () => {
     const key = registerGmailTools(new ToolRegistry(), {
       client: {} as never,

@@ -2,13 +2,16 @@ import { z } from 'zod';
 import { markdownToEmailHtml, markdownToPlainText } from '../markdown-email.js';
 import type { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolContext, ToolFlags } from '../types.js';
+import type { WorkspaceStore } from '../workspace-store.js';
 import {
   buildRawEmail,
   contentDigest,
+  type EmailAttachment,
   extractGmailText,
   type GmailPayload,
   type GoogleClient,
   gmailHeader,
+  mimeTypeForFilename,
 } from './client.js';
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -23,6 +26,15 @@ export interface GmailToolDeps {
     text: string,
     register: 'email_professional' | 'email_casual',
   ) => Promise<{ text: string; flagged?: string }>;
+  /** Workspace reader, required only to send attachments. */
+  workspace?: Pick<WorkspaceStore, 'readBytes'>;
+}
+
+/** Workspace areas an email attachment may be pulled from (never profile/secrets). */
+const ATTACHMENT_PREFIXES = ['code/', 'browser/attachments/', 'documents/', 'imports/', 'drive/'];
+
+function attachmentFilename(workspacePath: string): string {
+  return workspacePath.split('/').filter(Boolean).pop() ?? 'attachment';
 }
 
 interface GmailMessage {
@@ -127,10 +139,36 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
     register: z.enum(['email_professional', 'email_casual']).default('email_casual'),
     /** Set by the voice pipeline when the fact check failed — shown on the approval card. */
     voiceFlag: z.string().optional(),
+    /** Files from the Workspace to attach (e.g. a chart code.execute produced). */
+    attachments: z
+      .array(z.object({ workspacePath: z.string().min(1).max(300) }))
+      .max(5)
+      .optional(),
   });
 
   const threadingHeaders = (args: z.infer<typeof outboundSchema>) =>
     args.inReplyToRfcId ? { inReplyTo: args.inReplyToRfcId, references: args.inReplyToRfcId } : {};
+
+  const loadAttachments = async (
+    args: z.infer<typeof outboundSchema>,
+  ): Promise<EmailAttachment[]> => {
+    if (!args.attachments?.length) return [];
+    if (!deps.workspace) throw new Error('attachments are not available (no workspace configured)');
+    const out: EmailAttachment[] = [];
+    for (const { workspacePath } of args.attachments) {
+      const rel = workspacePath.replace(/^\/+/, '');
+      if (!ATTACHMENT_PREFIXES.some((p) => rel.startsWith(p))) {
+        throw new Error(`attachment path not allowed: ${workspacePath}`);
+      }
+      const data = await deps.workspace.readBytes(rel);
+      out.push({
+        filename: attachmentFilename(rel),
+        mimeType: mimeTypeForFilename(rel),
+        data,
+      });
+    }
+    return out;
+  };
 
   const prepareOutbound = async (
     args: z.infer<typeof outboundSchema>,
@@ -173,6 +211,7 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
           subject: args.subject,
           body: markdownToPlainText(args.body),
           html: markdownToEmailHtml(args.body),
+          attachments: await loadAttachments(args),
           ...threadingHeaders(args),
         });
         const draft = await deps.client.api<{ id: string; message?: { id: string } }>(
@@ -203,7 +242,10 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
       prepare: prepareOutbound,
       approvalSummary: (args) => {
         const a = args as z.infer<typeof outboundSchema>;
-        return `Send email to ${a.to.join(', ')} — "${a.subject}"`;
+        const files = a.attachments?.length
+          ? ` with ${a.attachments.map((x) => attachmentFilename(x.workspacePath)).join(', ')}`
+          : '';
+        return `Send email to ${a.to.join(', ')} — "${a.subject}"${files}`;
       },
       idempotencyKey: (args, ctx) => {
         const a = args as z.infer<typeof outboundSchema>;
@@ -216,6 +258,7 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
           subject: args.subject,
           body: markdownToPlainText(args.body),
           html: markdownToEmailHtml(args.body),
+          attachments: await loadAttachments(args),
           ...threadingHeaders(args),
         });
         const sent = await deps.client.api<{ id: string; threadId: string }>(

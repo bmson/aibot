@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { type JobInput, parseJobInput } from './input.js';
+import { CODE_INPUT_PREFIXES, type JobInput, parseJobInput } from './input.js';
 import { type BlobStore, buildWorkspace } from './storage.js';
 
 /**
@@ -49,7 +49,8 @@ function runProcess(
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
-      env: { PATH: process.env.PATH, HOME: opts.cwd, TMPDIR: opts.cwd },
+      // MPLCONFIGDIR keeps matplotlib's cache inside the writable temp dir.
+      env: { PATH: process.env.PATH, HOME: opts.cwd, TMPDIR: opts.cwd, MPLCONFIGDIR: opts.cwd },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -99,6 +100,25 @@ async function run(input: JobInput): Promise<JobResult> {
   const outputDir = path.join(work, 'output');
   try {
     await mkdir(outputDir, { recursive: true });
+
+    // Stage Workspace inputs into ./input/<as> before the script runs, so a
+    // script can read a CSV/doc the model already has (drive.download, an
+    // ingested document, a prior code output). Paths are prefix-allowlisted and
+    // `as` is a bare filename — neither can escape the input dir.
+    if (input.spec.inputs?.length) {
+      const inputDir = path.join(work, 'input');
+      await mkdir(inputDir, { recursive: true });
+      for (const { workspacePath, as } of input.spec.inputs) {
+        const rel = workspacePath.replace(/^\/+/, '');
+        if (!CODE_INPUT_PREFIXES.some((p) => rel.startsWith(p))) {
+          throw new Error(`input path not allowed: ${workspacePath}`);
+        }
+        if (!/^[\w.-]+$/.test(as)) throw new Error(`unsafe input filename: ${as}`);
+        const bytes = await workspace.get(rel);
+        await writeFile(path.join(inputDir, as), bytes);
+      }
+    }
+
     const isPython = input.spec.language === 'python';
     const scriptFile = path.join(work, isPython ? 'script.py' : 'script.mjs');
     await writeFile(scriptFile, input.spec.source, 'utf8');

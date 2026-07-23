@@ -1,4 +1,4 @@
-import { lstat, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { JobStorageConfig } from './input.js';
 
@@ -9,6 +9,7 @@ const STORAGE_TIMEOUT_MS = 60_000;
 /** Binary blob store: local FS in dev, GCS JSON API (metadata-server token) in prod. */
 export interface BlobStore {
   put(relPath: string, data: Buffer, contentType: string): Promise<void>;
+  get(relPath: string): Promise<Buffer>;
 }
 
 function safeRel(rel: string): string {
@@ -47,6 +48,13 @@ class LocalBlobStore implements BlobStore {
     if (info?.isSymbolicLink()) throw new Error('blob writes through symlinks are blocked');
     await writeFile(target, data);
   }
+
+  async get(rel: string): Promise<Buffer> {
+    const root = await this.canonicalRoot();
+    const target = path.join(root, safeRel(rel));
+    this.assertInside(root, await realpath(path.dirname(target)));
+    return readFile(target);
+  }
 }
 
 class GcsBlobStore implements BlobStore {
@@ -83,6 +91,18 @@ class GcsBlobStore implements BlobStore {
       },
     );
     if (!res.ok) throw new Error(`gcs put failed: ${res.status} ${await res.text()}`);
+  }
+
+  async get(rel: string): Promise<Buffer> {
+    const res = await fetch(
+      `https://storage.googleapis.com/storage/v1/b/${this.bucket}/o/${encodeURIComponent(this.object(rel))}?alt=media`,
+      {
+        headers: { authorization: `Bearer ${await this.token()}` },
+        signal: AbortSignal.timeout(STORAGE_TIMEOUT_MS),
+      },
+    );
+    if (!res.ok) throw new Error(`gcs get failed: ${res.status} ${await res.text()}`);
+    return Buffer.from(await res.arrayBuffer());
   }
 }
 

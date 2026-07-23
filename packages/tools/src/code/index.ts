@@ -35,7 +35,7 @@ export function registerCodeTools(registry: ToolRegistry, deps: CodeDeps): ToolR
     {
       name: 'code.execute',
       description:
-        'Run a short script you write (JavaScript or Python) in an isolated, credential-free sandbox to compute, transform, or parse data. The sandbox has no database access and no API keys; files the script writes to ./output are saved to the Workspace and listed in the result. A pure computation (no network) runs autonomously; set allowNetwork only if it truly needs the internet, which requires owner approval. Results arrive asynchronously in the next turn — call it ONCE and wait; only one job runs per task at a time. Never put secrets in the source.',
+        'Run a short script you write (JavaScript or Python) in an isolated, credential-free sandbox to compute, transform, analyze, or chart data. Python has pandas, numpy, matplotlib, and openpyxl preinstalled. Stage Workspace files into the run via `inputs` (read them at ./input/<as>); files the script writes to ./output are saved to the Workspace and listed in the result (a chart PNG, a CSV, an .xlsx). The sandbox has no database access and no API keys. A pure computation (no network) runs autonomously; set allowNetwork only if it truly needs the internet, which requires owner approval. Results arrive asynchronously in the next turn — call it ONCE and wait; only one job runs per task at a time. Never put secrets in the source.',
       inputSchema: z.object({ spec: CodeSpecSchema }),
       // Pure compute is autonomous; anything reaching the network needs the
       // owner. (The networkEgress flag additionally forces approval once any

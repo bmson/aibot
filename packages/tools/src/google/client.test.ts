@@ -200,6 +200,52 @@ describe('buildRawEmail', () => {
       }),
     ).toThrow('Subject contains a forbidden line break');
   });
+
+  it('wraps body + attachment in multipart/mixed with a base64 part', () => {
+    const raw = buildRawEmail({
+      from: 'assistant@example.com',
+      to: ['owner@example.com'],
+      subject: 'Chart',
+      body: 'see attached',
+      html: '<p>see attached</p>',
+      attachments: [{ filename: 'chart.png', mimeType: 'image/png', data: Buffer.from('PNGDATA') }],
+    });
+    const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+    expect(decoded).toContain('Content-Type: multipart/mixed;');
+    expect(decoded).toContain('Content-Type: multipart/alternative;'); // body kept inside
+    expect(decoded).toContain('Content-Disposition: attachment; filename="chart.png"');
+    expect(decoded).toContain(Buffer.from('PNGDATA').toString('base64'));
+  });
+
+  it('rejects attachments over the size limit', () => {
+    expect(() =>
+      buildRawEmail({
+        from: 'a@example.com',
+        to: ['b@example.com'],
+        subject: 'big',
+        body: 'x',
+        attachments: [
+          {
+            filename: 'big.bin',
+            mimeType: 'application/octet-stream',
+            data: Buffer.alloc(19 * 1024 * 1024),
+          },
+        ],
+      }),
+    ).toThrow(/over the .* email limit/);
+  });
+
+  it('has no attachment framing when none are supplied', () => {
+    const raw = buildRawEmail({
+      from: 'a@example.com',
+      to: ['b@example.com'],
+      subject: 's',
+      body: 'plain',
+    });
+    const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+    expect(decoded).not.toContain('multipart/mixed');
+    expect(decoded).toContain('Content-Type: text/plain');
+  });
 });
 
 describe('collectGmailAttachments', () => {
