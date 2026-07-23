@@ -19,7 +19,14 @@ export const btn = {
 
 /** Zinc count-pill as a raw class string, for spans that can't use <CountBadge>. */
 export const countBadgeClass =
-  'rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 whitespace-nowrap dark:bg-zinc-800 dark:text-zinc-400';
+  'rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 whitespace-nowrap dark:bg-zinc-800 dark:text-zinc-400';
+
+/** A loading placeholder block — used by route-level loading.tsx skeletons. */
+export function Skeleton({ className = '' }: { className?: string }) {
+  return (
+    <div className={`animate-pulse rounded-md bg-zinc-200/70 dark:bg-zinc-800/70 ${className}`} />
+  );
+}
 
 export const inputClass =
   'rounded-md border border-zinc-300 bg-white px-2 py-1 text-base sm:text-sm dark:border-zinc-700 dark:bg-zinc-900';

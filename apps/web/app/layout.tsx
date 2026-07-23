@@ -1,11 +1,19 @@
 import { approvals } from '@assistant/db';
 import { count, eq } from 'drizzle-orm';
 import type { Metadata, Viewport } from 'next';
+import { Inter, JetBrains_Mono } from 'next/font/google';
 import type { ReactNode } from 'react';
 import { auth, authMode } from '@/auth';
 import { getDb } from '@/lib/server';
 import { AppNav } from './app-nav';
 import './globals.css';
+
+const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
+const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });
+
+// Sets the .dark class from localStorage or OS preference BEFORE first paint, so
+// there is no light→dark flash and OS-dark users still default to dark.
+const THEME_SCRIPT = `(()=>{try{const t=localStorage.getItem('theme');const d=t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches);document.documentElement.classList.toggle('dark',d);}catch{}})()`;
 
 export const metadata: Metadata = {
   title: 'Assistant',
@@ -63,8 +71,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   ]);
 
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-[#f5f7fb] text-slate-950 antialiased dark:bg-zinc-950 dark:text-zinc-100">
+    <html lang="en" className={`${inter.variable} ${mono.variable}`} suppressHydrationWarning>
+      <head>
+        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: static no-flash theme script */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
+      <body className="min-h-screen bg-[#f5f7fb] font-sans text-zinc-950 antialiased dark:bg-zinc-950 dark:text-zinc-100">
         {authMode === 'dev-bypass' ? (
           <div className="bg-amber-100 px-4 py-1 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
             dev mode — auth disabled

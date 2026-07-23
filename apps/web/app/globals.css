@@ -1,5 +1,19 @@
 @import "tailwindcss";
 
+/* Class-strategy dark mode: the theme toggle stamps `.dark` on <html>; a no-flash
+   inline script in layout.tsx sets it from localStorage or the OS preference
+   before first paint, so OS-dark users still get dark by default. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* next/font wires these CSS vars; fall back to the system stack. */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  /* One step below text-xs (12px) — replaces the scattered text-[10px]/[11px]. */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+}
+
 /* Phone controls share one physical rhythm: large enough to tap without
    making the desktop UI unnecessarily loose. Sixteen-pixel form text also
    prevents Safari from zooming the viewport when a field receives focus. */

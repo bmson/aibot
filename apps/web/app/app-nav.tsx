@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { CountBadge } from '@/lib/ui';
 import { signOutAction } from './actions';
+import { ThemeToggle } from './theme-toggle';
 
 interface NavItem {
   href: string;
@@ -135,9 +136,10 @@ export function AppNav({
             <nav className="mt-2 flex flex-col gap-1">{renderLinks(utilityItems, 'rail')}</nav>
           </div>
         ) : null}
-        {signOut ? (
-          <div className="mt-auto border-t border-white/10 px-5 py-4">{signOut}</div>
-        ) : null}
+        <div className="mt-auto flex items-center justify-between border-t border-white/10 px-5 py-4">
+          {signOut ?? <span />}
+          <ThemeToggle />
+        </div>
       </aside>
 
       {/* Mobile top bar */}
@@ -149,31 +151,34 @@ export function AppNav({
         >
           Assistant
         </Link>
-        <button
-          ref={menuTriggerRef}
-          type="button"
-          onClick={() => setOpen(true)}
-          aria-label="Open navigation menu"
-          aria-expanded={open}
-          aria-controls="mobile-nav"
-          className="relative -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-slate-200 hover:bg-white/10"
-        >
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <title>Menu</title>
-            <path
-              d="M3 5h14M3 10h14M3 15h14"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-            />
-          </svg>
-          {pendingApprovals > 0 ? (
-            <span
-              className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-amber-500"
-              aria-hidden="true"
-            />
-          ) : null}
-        </button>
+        <div className="flex items-center gap-1">
+          <ThemeToggle />
+          <button
+            ref={menuTriggerRef}
+            type="button"
+            onClick={() => setOpen(true)}
+            aria-label="Open navigation menu"
+            aria-expanded={open}
+            aria-controls="mobile-nav"
+            className="relative -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-slate-200 hover:bg-white/10"
+          >
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <title>Menu</title>
+              <path
+                d="M3 5h14M3 10h14M3 15h14"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+            {pendingApprovals > 0 ? (
+              <span
+                className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-amber-500"
+                aria-hidden="true"
+              />
+            ) : null}
+          </button>
+        </div>
       </header>
 
       {/* Mobile drawer */}
