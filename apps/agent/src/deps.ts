@@ -30,6 +30,7 @@ import {
   registerDocsTools,
   registerDriveTools,
   registerGmailTools,
+  registerReminderTools,
   registerSearchTools,
   registerSheetsTools,
   registerSlidesTools,
@@ -146,6 +147,8 @@ export function buildDeps(): AgentDeps {
   // Inbox watchers take no outward action and need no provider client, so they
   // are available even when Google/Twilio are not configured.
   registerWatchTools(registry);
+  // Recurring reminders write a schedule row and need no provider either.
+  registerReminderTools(registry);
 
   // Web search: registered only when a provider + key are configured (like SMS).
   if (config.SEARCH_PROVIDER !== 'none' && config.SEARCH_API_KEY) {

@@ -13,6 +13,7 @@ export * from './google/slides.js';
 export * from './markdown-email.js';
 export * from './policies.js';
 export * from './registry.js';
+export * from './reminders.js';
 export * from './search.js';
 export * from './twilio/client.js';
 export * from './twilio/sms.js';
