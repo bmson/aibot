@@ -78,12 +78,15 @@ const ConfigSchema = z.object({
    * refresh token from double-triaging the live mailbox.
    */
   GMAIL_SYNC_ENABLED: z.enum(['true', 'false']).optional(),
-  /** Web search: which provider backs the web.search tool; 'none' disables it. */
-  SEARCH_PROVIDER: z.enum(['none', 'brave', 'tavily', 'serper', 'google']).default('none'),
+  /**
+   * Web search: which provider backs the web.search tool; 'none' disables it.
+   * No Google option on purpose — Google discontinued whole-web Custom Search
+   * (Mar 2026) and its replacements are grounding-shaped (answer+citations), not
+   * link-list APIs. brave/tavily/serper are the clean link-returning options.
+   */
+  SEARCH_PROVIDER: z.enum(['none', 'brave', 'tavily', 'serper']).default('none'),
   /** API key for SEARCH_PROVIDER; web.search is unregistered without it. */
   SEARCH_API_KEY: z.string().default(''),
-  /** Programmable Search Engine id (cx) — required only for SEARCH_PROVIDER=google. */
-  SEARCH_ENGINE_ID: z.string().default(''),
   /** Self-maintenance (Phase 21): a GitHub token the bot opens self-PRs with; empty disables PRs. */
   GITHUB_TOKEN: z.string().default(''),
   GITHUB_REPO: z.string().default('bmson/aibot'),

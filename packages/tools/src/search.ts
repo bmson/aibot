@@ -3,7 +3,9 @@ import { z } from 'zod';
 import type { ToolRegistry } from './registry.js';
 import type { AssistantTool, ToolFlags } from './types.js';
 
-export type SearchProvider = 'brave' | 'tavily' | 'serper' | 'google';
+// No 'google' provider on purpose — Google discontinued whole-web Custom Search
+// (Mar 2026) and its replacements return grounded answers, not link lists.
+export type SearchProvider = 'brave' | 'tavily' | 'serper';
 
 export interface SearchResult {
   url: string;
@@ -14,8 +16,6 @@ export interface SearchResult {
 export interface SearchToolDeps {
   provider: SearchProvider;
   apiKey: string;
-  /** Programmable Search Engine id (cx) — required only for the 'google' provider. */
-  engineId?: string;
   /** Injected in tests; defaults to global fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -25,8 +25,6 @@ const PROVIDER_COST_USD: Record<SearchProvider, number> = {
   brave: 0.005,
   tavily: 0.008,
   serper: 0.001,
-  // Google Custom Search: 100/day free, then $5 per 1,000 queries.
-  google: 0.005,
 };
 
 const MAX_SNIPPET = 400;
@@ -53,9 +51,6 @@ export function normalizeResults(
   } else if (provider === 'tavily') {
     const results = (body as { results?: unknown[] })?.results ?? [];
     for (const r of results as Array<Record<string, unknown>>) push(r.url, r.title, r.content);
-  } else if (provider === 'google') {
-    const results = (body as { items?: unknown[] })?.items ?? [];
-    for (const r of results as Array<Record<string, unknown>>) push(r.link, r.title, r.snippet);
   } else {
     const results = (body as { organic?: unknown[] })?.organic ?? [];
     for (const r of results as Array<Record<string, unknown>>) push(r.link, r.title, r.snippet);
@@ -82,17 +77,6 @@ async function runSearch(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ api_key: deps.apiKey, query, max_results: count }),
-      signal,
-    });
-  } else if (deps.provider === 'google') {
-    if (!deps.engineId) throw new Error('web.search google provider requires SEARCH_ENGINE_ID');
-    const params = new URLSearchParams({
-      key: deps.apiKey,
-      cx: deps.engineId,
-      q: query,
-      num: String(count),
-    });
-    response = await doFetch(`https://www.googleapis.com/customsearch/v1?${params.toString()}`, {
       signal,
     });
   } else {

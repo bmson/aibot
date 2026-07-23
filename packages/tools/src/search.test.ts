@@ -28,15 +28,6 @@ describe('normalizeResults', () => {
     expect(rows).toEqual([{ url: 'https://t.test', title: 'T', snippet: 'body' }]);
   });
 
-  it('maps Google Custom Search items (link → url, snippet)', () => {
-    const rows = normalizeResults(
-      'google',
-      { items: [{ link: 'https://g.test/page', title: 'G', snippet: 'from google' }] },
-      5,
-    );
-    expect(rows).toEqual([{ url: 'https://g.test/page', title: 'G', snippet: 'from google' }]);
-  });
-
   it('maps Serper organic (link → url, snippet)', () => {
     const rows = normalizeResults(
       'serper',
