@@ -1,8 +1,6 @@
 import { detectOccasionInText, listOccasionsForContact } from '@assistant/core';
 import { contacts, findDuplicateContactSuggestions, type MemoryRow, memories } from '@assistant/db';
 import { and, count, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
-import { ArrowLeft } from 'lucide-react';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { AddFact } from '@/app/profile/add-fact';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
@@ -16,7 +14,16 @@ import { DeletePerson, PersonControls } from '@/app/profile/person-controls';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { Badge, labelClass, PageHeader, PageShell, Panel, SectionHeading } from '@/lib/ui';
+import {
+  BackLink,
+  Badge,
+  EmptyState,
+  labelClass,
+  PageHeader,
+  PageShell,
+  Panel,
+  SectionHeading,
+} from '@/lib/ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -117,13 +124,7 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
 
   return (
     <PageShell size="reading">
-      <Link
-        href="/profile"
-        className="mb-5 inline-flex items-center gap-1.5 text-[13px] font-medium text-muted hover:text-strong"
-      >
-        <ArrowLeft className="size-3.5" aria-hidden="true" />
-        Memory overview
-      </Link>
+      <BackLink href="/profile">Memory overview</BackLink>
       <PageHeader
         title={contact.name}
         intro="Review the facts the assistant associates with this person. Update the identity or relationship when needed; changes take effect in future conversations."
@@ -185,9 +186,7 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
           </p>
         ) : null}
         {facts.length === 0 ? (
-          <p className="mt-3 text-[15px] leading-6 text-muted">
-            No active facts are saved for this person.
-          </p>
+          <EmptyState>No active facts are saved for this person.</EmptyState>
         ) : (
           <div className="mt-3 flex flex-col gap-2">
             {facts.map((fact) => (

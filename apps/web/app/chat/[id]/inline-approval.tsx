@@ -84,10 +84,10 @@ export function ApprovalRow({
       </div>
       {part.details && part.details.length > 0 ? (
         <details open={detailsOpenByDefault} className="mt-2 border-y border-edge py-2.5">
-          <summary className="cursor-pointer text-2xs font-semibold tracking-[0.1em] text-zinc-500 uppercase select-none dark:text-zinc-400">
+          <summary className="disclosure flex items-center gap-2 cursor-pointer text-2xs font-semibold tracking-[0.1em] text-zinc-500 uppercase select-none dark:text-zinc-400">
             Exact details
           </summary>
-          <dl className="mt-2 flex max-h-64 flex-col gap-2 overflow-y-auto">
+          <dl className="mt-2 flex max-h-64 flex-col gap-2 overscroll-contain overflow-y-auto">
             {part.details.map((detail, index) => (
               <div key={`${detail.label}-${index.toString()}`}>
                 <dt className="text-2xs font-medium text-zinc-500 dark:text-zinc-400">

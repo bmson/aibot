@@ -141,7 +141,7 @@ export function AppNav({
           aria-current={active ? 'page' : undefined}
           className={`mobile-touch-target relative flex items-center justify-between rounded-lg px-3 py-2 text-sm motion-safe:transition-colors ${focusRing} ${
             active
-              ? 'before:absolute before:top-1/2 before:-left-3 before:h-4 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent'
+              ? 'before:absolute before:top-1/2 before:-left-2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent'
               : ''
           } ${
             tone === 'rail'
@@ -185,7 +185,7 @@ export function AppNav({
     items.length > 0 ? (
       <details className="group mt-1">
         <summary
-          className={`mobile-touch-target flex cursor-pointer list-none items-center gap-2.5 rounded-lg px-3 py-2 text-sm select-none [&::-webkit-details-marker]:hidden ${focusRing} ${
+          className={`mobile-touch-target flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm select-none ${focusRing} ${
             tone === 'rail'
               ? 'text-zinc-400 hover:bg-white/7 hover:text-white'
               : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-950 dark:hover:bg-zinc-900 dark:hover:text-zinc-100'
@@ -223,29 +223,37 @@ export function AppNav({
           the sign-out/theme footer stay put, and only the link list scrolls if
           it ever outgrows the rail — so no control is stranded below the fold
           on a long page. */}
-      <aside className="hidden h-screen w-60 shrink-0 flex-col bg-[#0b0d12] text-white lg:sticky lg:top-0 lg:flex">
+      {/* bg-rail, not a literal near-black: in dark mode the canvas is itself
+          #0b0d12, so a rail painted that colour dissolved into the page and its
+          links appeared to float in the void. The token lifts the rail a step
+          above the dark canvas, and the hairline means the boundary never
+          depends on the fill alone. */}
+      <aside className="hidden h-[calc(100dvh-var(--app-chrome,0px))] w-60 shrink-0 flex-col border-r border-white/10 bg-rail text-white lg:sticky lg:top-0 lg:flex">
         <div className="shrink-0 px-5 pt-6 pb-7">
           <Link href="/chat" className={`inline-flex rounded-lg ${focusRing}`}>
             <BrandLockup
               name={agentName}
               presence={presence}
               subtitle={
+                // Sentence case, no letter-spacing: "NEEDS YOUR ATTENTION" as
+                // tracked-out caps wrapped onto a second line and pushed the
+                // lockup out of shape. This reads as a status line, not a label.
                 <span
-                  className={`text-2xs font-medium tracking-[0.14em] uppercase ${
+                  className={`truncate text-xs ${
                     presence === 'attention' ? 'text-amber-300' : 'text-indigo-300'
                   }`}
                 >
                   {presence === 'attention'
-                    ? 'Needs your attention'
+                    ? 'Needs you'
                     : presence === 'working'
-                      ? 'Working'
+                      ? 'Working…'
                       : 'Ready when you are'}
                 </span>
               }
             />
           </Link>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+        <div className="scroll-subtle min-h-0 flex-1 overflow-y-auto pb-4">
           <nav className="flex flex-col gap-1 px-3">{renderLinks(primaryItems, 'rail')}</nav>
           <div className="mt-6 px-3">
             <p className="px-3 text-2xs font-semibold tracking-[0.14em] text-zinc-500 uppercase">
@@ -264,7 +272,7 @@ export function AppNav({
       </aside>
 
       {/* Mobile top bar */}
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-zinc-800 bg-[#0b0d12]/95 px-4 text-white backdrop-blur lg:hidden">
+      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-white/10 bg-rail/95 px-4 text-white backdrop-blur lg:hidden">
         <Link
           href="/chat"
           data-mobile-touch-target="true"
@@ -331,7 +339,7 @@ export function AppNav({
                 <X className="size-5" aria-hidden="true" />
               </button>
             </div>
-            <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-3">
+            <nav className="scroll-subtle flex flex-1 flex-col gap-1 overflow-y-auto p-3">
               {renderLinks(primaryItems, 'drawer')}
               <p className="mt-5 px-3 text-2xs font-semibold tracking-[0.14em] text-zinc-400 uppercase">
                 Manage

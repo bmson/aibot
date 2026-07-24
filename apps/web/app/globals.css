@@ -18,6 +18,10 @@
   --content-muted: #667085;
   --accent: #5b5ce2; /* Iris */
   --accent-hover: #4b4cc9;
+  /* The nav rail is dark in both themes. In dark mode it has to sit a step
+     above the canvas, which is this same near-black — otherwise the rail has
+     no edge and its links look like they are floating on the page. */
+  --rail: #0b0d12;
 }
 .dark {
   --surface: #0b0d12; /* Night */
@@ -28,6 +32,7 @@
   --content-muted: #9ca3b2;
   --accent: #7375ee;
   --accent-hover: #8385f4;
+  --rail: #101319;
 }
 
 @theme {
@@ -52,6 +57,242 @@
   --color-muted: var(--content-muted);
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
+  --color-rail: var(--rail);
+}
+
+/* Lets the browser interpolate to and from intrinsic keywords, so `height: auto`
+   is animatable. The disclosure transition below depends on it. */
+:root {
+  interpolate-size: allow-keywords;
+}
+
+/* ── Native disclosures ───────────────────────────────────────────────────────
+   Every <details> in the app (nav's System group, card footers, "why am I
+   seeing this?", usage breakdowns) used to snap open. ::details-content is the
+   browser's own wrapper around the content, so animating it needs no markup
+   change anywhere — it reaches all of them at once.
+
+   `content-visibility` has to transition with allow-discrete, otherwise the
+   content is hidden instantly on close and the height animates against nothing. */
+@media (prefers-reduced-motion: no-preference) {
+  ::details-content {
+    block-size: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition:
+      block-size 280ms cubic-bezier(0.22, 1, 0.36, 1),
+      content-visibility 280ms allow-discrete,
+      opacity 200ms ease-out;
+  }
+  [open]::details-content {
+    block-size: auto;
+    opacity: 1;
+  }
+}
+
+/* The default ▶ marker is inconsistent with the icon set, and several summaries
+   were showing it raw. Hidden everywhere; `.disclosure` below supplies a proper
+   chevron for the summaries that have no icon of their own. */
+summary {
+  list-style: none;
+}
+summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Shared disclosure affordance: a chevron that swings from pointing right to
+   pointing down as the section opens. */
+.disclosure::before {
+  content: '';
+  flex: none;
+  inline-size: 0.45rem;
+  block-size: 0.45rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  rotate: -45deg;
+  opacity: 0.55;
+}
+details[open] > .disclosure::before {
+  rotate: 45deg;
+}
+.disclosure:hover::before {
+  opacity: 1;
+}
+/* The chevron swings only when motion is welcome; otherwise it just flips. */
+@media (prefers-reduced-motion: no-preference) {
+  .disclosure::before {
+    transition:
+      rotate 280ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 160ms ease-out;
+  }
+}
+
+/* ── Theme switch ─────────────────────────────────────────────────────────────
+   The only View Transition in the app, and the one place the API genuinely
+   fits: flipping `.dark` on <html> is a synchronous DOM change, so the browser
+   can snapshot before and after with nothing async in between. theme-toggle.tsx
+   animates a circle out from the button across ::view-transition-new(root).
+
+   The default cross-fade is switched off — the new theme has to sit as an
+   opaque layer for the circular wipe to read, and both snapshots blending would
+   just muddy it. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+/* The outgoing theme stays put underneath while the new one is clipped in. */
+::view-transition-old(root) {
+  z-index: 0;
+}
+::view-transition-new(root) {
+  z-index: 1;
+}
+
+/* ── Scroll-driven reveal ─────────────────────────────────────────────────────
+   Cards settle in as they scroll into view. `animation-timeline: view()` drives
+   this from the scroller itself — no IntersectionObserver, no client component,
+   and nothing to hydrate. Anything already on screen at load starts at the end
+   of its range, so the first paint is complete rather than animating in. */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    .reveal {
+      animation: reveal-in linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 32%;
+    }
+  }
+}
+
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ── Popovers ─────────────────────────────────────────────────────────────────
+   Native popovers (the card action menus) animate open *and* closed. Both
+   `overlay` and `display` need allow-discrete: without them the element leaves
+   the top layer on the first frame and the exit is never seen. */
+@media (prefers-reduced-motion: no-preference) {
+  [popover] {
+    opacity: 0;
+    translate: 0 -4px;
+    scale: 0.98;
+    transition:
+      opacity 160ms ease-out,
+      translate 180ms cubic-bezier(0.22, 1, 0.36, 1),
+      scale 180ms cubic-bezier(0.22, 1, 0.36, 1),
+      overlay 180ms allow-discrete,
+      display 180ms allow-discrete;
+  }
+  [popover]:popover-open {
+    opacity: 1;
+    translate: none;
+    scale: 1;
+  }
+  /* The pre-open state the transition starts from. */
+  @starting-style {
+    [popover]:popover-open {
+      opacity: 0;
+      translate: 0 -4px;
+      scale: 0.98;
+    }
+  }
+}
+
+/* ── Scrolling ────────────────────────────────────────────────────────────────
+   The document itself never rubber-bands or pulls to refresh: this is an app
+   surface, and a bounce under a fixed rail plus a floating composer reads as a
+   glitch rather than as feedback. Inner scrollers use `contain` instead of
+   `none` so they still bounce at their own ends, but never hand the leftover
+   scroll up to the page behind them (scroll chaining) — reaching the top of the
+   chat log should stop, not start scrolling the document. */
+html {
+  overscroll-behavior-y: none;
+}
+
+.scroll-subtle {
+  overscroll-behavior: contain;
+}
+
+/* ── Page gutters ─────────────────────────────────────────────────────────────
+   One horizontal rhythm for every page, widening with the viewport. `max()`
+   against the safe-area insets means a landscape notch pushes the content in
+   rather than clipping it; on any device without insets these resolve to the
+   plain values. */
+.page-gutter {
+  padding-inline:
+    max(1rem, env(safe-area-inset-left)) max(1rem, env(safe-area-inset-right));
+}
+@media (min-width: 640px) {
+  .page-gutter {
+    padding-inline:
+      max(1.5rem, env(safe-area-inset-left)) max(1.5rem, env(safe-area-inset-right));
+  }
+}
+@media (min-width: 1024px) {
+  .page-gutter {
+    padding-inline:
+      max(2.5rem, env(safe-area-inset-left)) max(2.5rem, env(safe-area-inset-right));
+  }
+}
+
+/* Underlines sit clear of descenders instead of striking through them, and stay
+   hairline-thin at every size rather than scaling into a heavy rule. */
+a {
+  text-underline-offset: 0.16em;
+  text-decoration-thickness: 1px;
+}
+
+/* Selected text carries the brand instead of the browser's default blue. */
+::selection {
+  background: color-mix(in oklab, var(--accent) 24%, transparent);
+  color: var(--content-strong);
+}
+
+/* Scrollbars in app-owned scrollers (the chat log, the nav rail) recede until
+   used — the default chrome bar is a heavy vertical line beside quiet content.
+   Firefox/modern engines take scrollbar-*; WebKit needs the pseudo-elements. */
+.scroll-subtle {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--content-muted) 30%, transparent) transparent;
+}
+
+/* Only where there's a mouse. Defining ::-webkit-scrollbar at all opts the
+   element out of overlay scrollbars, so on a phone these rules turned a
+   scrollbar that should float above the content into a permanent 10px gutter
+   carved out of an already narrow column. Touch devices keep the overlay bar. */
+@media (pointer: fine) {
+  .scroll-subtle::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scroll-subtle::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scroll-subtle::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background-clip: content-box;
+    background-color: color-mix(in oklab, var(--content-muted) 28%, transparent);
+  }
+  .scroll-subtle::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklab, var(--content-muted) 55%, transparent);
+  }
+}
+
+/* Per-message actions (copy, time) reveal on hover so a quiet log stays quiet.
+   Touch devices never hover, so there they are simply always present. */
+@media (hover: none) {
+  .msg-actions {
+    opacity: 1;
+  }
 }
 
 /* Phone controls share one physical rhythm: large enough to tap without
@@ -76,8 +317,11 @@
     min-height: 44px;
   }
 
+  /* Clears the home indicator on a notched phone (viewport-fit=cover makes the
+     inset real), and still leaves the composer a little air on a flat-bottomed
+     screen where the inset is 0. */
   .mobile-safe-bottom {
-    padding-bottom: max(0.25rem, env(safe-area-inset-bottom));
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
   }
 }
 
@@ -115,6 +359,34 @@
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+/* The busy indicator in chat: a small accent orb that draws breath, wrapped in
+   a halo that expands and fades. It replaces the avatar as the assistant's
+   "I'm here, working" signal. Reduced-motion readers get the still orb and the
+   plain label instead (both animations sit behind motion-safe:). */
+@keyframes orb-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(0.78);
+    opacity: 0.6;
+  }
+}
+
+@keyframes orb-halo {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.45;
+  }
+  70%,
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
   }
 }
 

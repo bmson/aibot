@@ -2,13 +2,12 @@ import { activeAutonomyGrant, getAgent } from '@assistant/core';
 import { approvals, files, messages, modelCalls, tasks, toolCalls } from '@assistant/db';
 import { and, asc, eq } from 'drizzle-orm';
 import { Brain, Hand, MessageSquare, Wrench } from 'lucide-react';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, prettyJson, relativeTime, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { cardShellClass, InfoGrid, InfoItem, PageShell } from '@/lib/ui';
+import { BackLink, cardShellClass, InfoGrid, InfoItem, PageShell } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { displayTaskStatus, StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 import {
@@ -45,10 +44,10 @@ interface TimelineEntry {
 function JsonDetails({ summary, value }: { summary: string; value: unknown }) {
   return (
     <details className="mt-1">
-      <summary className="cursor-pointer text-xs text-zinc-600 select-none dark:text-zinc-400">
+      <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs text-zinc-600 select-none dark:text-zinc-400">
         {summary}
       </summary>
-      <pre className="mt-1 overflow-x-auto rounded bg-zinc-100 p-2 font-mono text-xs dark:bg-zinc-900">
+      <pre className="mt-1 overscroll-x-contain overflow-x-auto rounded bg-zinc-100 p-2 font-mono text-xs dark:bg-zinc-900">
         {typeof value === 'string' ? value : prettyJson(value)}
       </pre>
     </details>
@@ -226,13 +225,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
   return (
     <PageShell size="reading">
-      <Link
-        href="/tasks"
-        className="text-xs font-medium text-indigo-700 hover:underline dark:text-indigo-300"
-      >
-        ← Activity
-      </Link>
-      <header className="mt-3 grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+      <BackLink href="/tasks">Activity</BackLink>
+      <header className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="font-display text-2xl font-semibold tracking-[-0.035em]">
@@ -414,7 +408,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       ) : null}
 
       <details className={`${cardShellClass} mt-5 p-5`}>
-        <summary className="cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">
+        <summary className="disclosure flex items-center gap-2 cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">
           Full technical record
         </summary>
         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">

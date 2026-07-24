@@ -279,17 +279,15 @@ export default async function GoalsPage({
 
   return (
     <PageShell size="reading">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <PageHeader
-          title={archived ? 'Archived goals' : 'Goals'}
-          intro={
-            archived
-              ? 'Archived goals keep their work chats, tasks, and evidence. Restore one whenever you want to continue.'
-              : 'Give the assistant an outcome to keep moving forward. Each goal has its own chat for updates and direction.'
-          }
-        />
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          {archived ? (
+      <PageHeader
+        title={archived ? 'Archived goals' : 'Goals'}
+        intro={
+          archived
+            ? 'Archived goals keep their work chats, tasks, and evidence. Restore one whenever you want to continue.'
+            : 'Give the assistant an outcome to keep moving forward. Each goal has its own chat for updates and direction.'
+        }
+        actions={
+          archived ? (
             <Link href="/goals" className={btn.outline}>
               Current goals
             </Link>
@@ -311,9 +309,9 @@ export default async function GoalsPage({
                 </p>
               </ActionMenu>
             </>
-          )}
-        </div>
-      </div>
+          )
+        }
+      />
 
       {activeCards.length > 0 ? (
         <p className="mt-3 text-[13px] leading-5 text-muted">

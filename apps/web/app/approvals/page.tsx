@@ -95,9 +95,9 @@ export default async function ApprovalsPage() {
       </section>
 
       <details className="group mt-6 rounded-2xl bg-sunken/55 p-5">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[15px] font-semibold [&::-webkit-details-marker]:hidden">
+        <summary className="disclosure flex cursor-pointer items-center gap-2 text-[15px] font-semibold">
           Recently resolved
-          <span className="text-xs font-normal text-muted group-open:hidden">
+          <span className="ml-auto text-xs font-normal text-muted group-open:hidden">
             {resolved.length} recent
           </span>
         </summary>

@@ -33,8 +33,10 @@ export function AvatarMark({
     >
       {initial}
       {state !== 'idle' ? (
+        // The mark only ever sits on the nav rail, so the dot's cut-out ring
+        // is rail-coloured. Against ring-surface it read as a pale halo.
         <span
-          className={`absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-surface ${
+          className={`absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-rail ${
             state === 'attention' ? 'bg-amber-400' : 'bg-emerald-400'
           }`}
         />

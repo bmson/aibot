@@ -5,7 +5,7 @@ import { SourceCard, type SourceView, StartImportButton } from '@/app/import/sou
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb, getWorkspace } from '@/lib/server';
-import { inputClass, PageHeader, PageShell, Panel } from '@/lib/ui';
+import { fileInputClass, inputClass, PageHeader, PageShell, Panel } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 
 export const metadata = { title: 'Import' };
@@ -68,18 +68,15 @@ export default async function ImportPage() {
           className="mt-3 flex flex-col items-start gap-3"
         >
           <div className="flex flex-wrap items-center gap-3">
-            <input
-              type="file"
-              name="file"
-              required
-              className="text-[13px] text-muted file:mr-3 file:h-9 file:rounded-lg file:border file:border-edge file:bg-raised file:px-3 file:text-[13px] file:font-medium file:text-strong hover:file:bg-sunken"
-            />
+            <input type="file" name="file" required className={fileInputClass} />
             <SubmitButton variant="primary" pendingLabel="Uploading…">
               Upload and import
             </SubmitButton>
           </div>
           <details className="text-xs text-zinc-500 dark:text-zinc-400">
-            <summary className="cursor-pointer">Choose a custom label</summary>
+            <summary className="disclosure flex items-center gap-2 cursor-pointer">
+              Choose a custom label
+            </summary>
             <label className="mt-2 flex flex-col gap-1">
               Label
               <input

@@ -127,16 +127,16 @@ export function ApprovalCard({
         ) : null}
         <div className="grid gap-2 sm:grid-cols-2">
           <details className="rounded-xl bg-sunken/45 px-3 py-2.5">
-            <summary className="cursor-pointer text-xs font-medium text-muted select-none">
+            <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs font-medium text-muted select-none">
               Why AI Bot paused
             </summary>
             <p className="mt-2 max-w-[72ch] text-xs leading-5 text-muted">{approval.reason}</p>
           </details>
           <details className="rounded-xl bg-sunken/45 px-3 py-2.5">
-            <summary className="cursor-pointer text-xs font-medium text-muted select-none">
+            <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs font-medium text-muted select-none">
               Technical details
             </summary>
-            <pre className="mt-2 overflow-x-auto rounded-lg bg-sunken p-3 font-mono text-xs">
+            <pre className="mt-2 overscroll-x-contain overflow-x-auto rounded-lg bg-sunken p-3 font-mono text-xs">
               {approval.payloadJson}
             </pre>
           </details>

@@ -144,7 +144,9 @@ export function ActionMenu({
             panelRef.current?.hidePopover();
           }
         }}
-        className={`fixed inset-auto z-50 m-0 max-h-[min(24rem,calc(100vh-1rem))] flex-col gap-2 overflow-y-auto rounded-xl border border-edge bg-raised p-3 shadow-lg motion-safe:animate-[pop-in_120ms_ease-out] [&:popover-open]:flex ${panelClassName}`}
+        // Open/close motion lives in globals.css on [popover] — a keyframe here
+        // would only play on enter and would fight the exit transition.
+        className={`scroll-subtle fixed inset-auto z-50 m-0 max-h-[min(24rem,calc(100vh-1rem))] flex-col gap-2 overflow-y-auto rounded-xl border border-edge bg-raised p-3 shadow-lg [&:popover-open]:flex ${panelClassName}`}
       >
         {children}
       </div>

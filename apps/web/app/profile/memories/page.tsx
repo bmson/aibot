@@ -1,13 +1,14 @@
 import { getAgent } from '@assistant/core';
 import { contacts, type MemoryRow, memories } from '@assistant/db';
 import { and, count, desc, eq, gt, ilike, isNull, or, type SQL, sql } from 'drizzle-orm';
-import { ArrowLeft, ChevronLeft, ChevronRight, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import Link from 'next/link';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import {
+  BackLink,
   btn,
   inputClass,
   PageHeader,
@@ -161,13 +162,7 @@ export default async function MemoryLibraryPage({
 
   return (
     <PageShell size="reading">
-      <Link
-        href="/profile"
-        className="mobile-touch-target mb-5 inline-flex items-center gap-1.5 text-[13px] font-medium text-muted hover:text-strong"
-      >
-        <ArrowLeft className="size-3.5" aria-hidden="true" />
-        Memory overview
-      </Link>
+      <BackLink href="/profile">Memory overview</BackLink>
       <PageHeader title={stateCopy[state].title} intro={intro} />
 
       <div className="mt-6 grid min-w-0 gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">

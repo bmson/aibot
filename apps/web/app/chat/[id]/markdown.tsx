@@ -70,11 +70,11 @@ const components: Components = {
   pre: ({ node: _node, ...props }) => (
     <pre
       {...props}
-      className="my-3 max-w-full overflow-x-auto rounded-xl bg-[#10131a] p-4 font-mono text-xs leading-5 text-zinc-100 shadow-inner first:mt-0 last:mb-0 dark:bg-black/40 [&_code]:break-normal [&_code]:rounded-none [&_code]:bg-transparent [&_code]:p-0 [&_code]:whitespace-pre [&_code]:[overflow-wrap:normal]"
+      className="my-3 max-w-full overscroll-x-contain overflow-x-auto rounded-xl bg-[#10131a] p-4 font-mono text-xs leading-5 text-zinc-100 shadow-inner first:mt-0 last:mb-0 dark:bg-black/40 [&_code]:break-normal [&_code]:rounded-none [&_code]:bg-transparent [&_code]:p-0 [&_code]:whitespace-pre [&_code]:[overflow-wrap:normal]"
     />
   ),
   table: ({ node: _node, children, ...props }) => (
-    <div className="my-3 max-w-full overflow-x-auto rounded-xl border border-edge first:mt-0 last:mb-0">
+    <div className="my-3 max-w-full overscroll-x-contain overflow-x-auto rounded-xl border border-edge first:mt-0 last:mb-0">
       <table {...props} className="w-full border-collapse text-[13px]">
         {children}
       </table>
@@ -97,7 +97,7 @@ const components: Components = {
 /** Assistant-message markdown (GFM: tables, strikethrough, task lists, autolinks). */
 export function MessageMarkdown({ text }: { text: string }) {
   return (
-    <div className="min-w-0 max-w-full break-words leading-6 [overflow-wrap:anywhere]">
+    <div className="min-w-0 max-w-full break-words leading-[1.7] [overflow-wrap:anywhere]">
       <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
         {text}
       </ReactMarkdown>

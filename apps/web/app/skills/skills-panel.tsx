@@ -1,5 +1,6 @@
 'use client';
 
+import { Lightbulb } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import {
   addSkillAction,
@@ -15,6 +16,7 @@ import {
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
+  EmptyState,
   InfoGrid,
   InfoItem,
   inputClass as sharedInputClass,
@@ -146,10 +148,10 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
       ) : null}
 
       {skills.length === 0 && !adding ? (
-        <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
+        <EmptyState icon={<Lightbulb className="size-5" aria-hidden="true" />}>
           No skills yet — the assistant drafts these from tasks it solves a non-obvious way, and you
           can add your own.
-        </p>
+        </EmptyState>
       ) : (
         <div className="mt-3 grid gap-3 lg:grid-cols-2">
           {skills.map((s) => (

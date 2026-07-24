@@ -3,7 +3,7 @@ import { approvals, tasks } from '@assistant/db';
 import { and, count, eq, gt, inArray, sql } from 'drizzle-orm';
 import type { Metadata, Viewport } from 'next';
 import { Bricolage_Grotesque, Inter, JetBrains_Mono } from 'next/font/google';
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { auth, authMode } from '@/auth';
 import { getAgentIdentity, getDb } from '@/lib/server';
 import { AppNav } from './app-nav';
@@ -34,6 +34,12 @@ export async function generateMetadata(): Promise<Metadata> {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
+  // Lets the layout reach the physical edges of a notched phone, which is what
+  // makes env(safe-area-inset-*) report real values. Without it those insets are
+  // always 0 and `.mobile-safe-bottom` — which exists precisely to keep the chat
+  // composer off the home indicator — silently does nothing. Every edge that can
+  // now reach hardware pads itself from the insets (see `.page-gutter`).
+  viewportFit: 'cover',
 };
 
 // The sidebar badge (DB) and session lookup are per-request — never prerender.
@@ -138,13 +144,23 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: static no-flash theme script */}
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
-      <body className="min-h-screen bg-surface font-sans text-strong antialiased">
+      {/* The page column is a flex stack: the dev banner is a fixed row and the
+          shell takes exactly what is left. It used to be `min-h-screen` sitting
+          *below* the banner, which made the document 24px taller than the
+          viewport on every single page — the whole app scrolled by the height
+          of the banner even when nothing overflowed. `--app-chrome` carries the
+          banner's height to the two places that size themselves against the
+          viewport directly (the rail, and the chat column). */}
+      <body
+        style={{ '--app-chrome': authMode === 'dev-bypass' ? '1.5rem' : '0px' } as CSSProperties}
+        className="flex min-h-dvh flex-col bg-surface font-sans text-strong antialiased"
+      >
         {authMode === 'dev-bypass' ? (
-          <div className="bg-amber-100 px-4 py-1 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          <div className="flex h-6 shrink-0 items-center justify-center bg-amber-100 px-4 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
             dev mode — auth disabled
           </div>
         ) : null}
-        <div className="flex min-h-screen flex-col lg:flex-row">
+        <div className="flex flex-1 flex-col lg:flex-row">
           <AppNav
             navItems={navItems}
             pendingApprovals={pendingApprovals}
@@ -153,7 +169,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             presence={presence}
             memoryReviewCount={memoryHealth.awaitingReview}
           />
-          <main className="min-w-0 flex-1 px-4 py-7 sm:px-6 lg:px-10 lg:py-10">{children}</main>
+          <main className="page-gutter min-w-0 flex-1 py-7 lg:py-10">{children}</main>
         </div>
       </body>
     </html>

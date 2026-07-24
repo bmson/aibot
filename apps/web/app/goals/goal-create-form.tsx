@@ -25,13 +25,16 @@ export function GoalCreateForm({ startOpen = false }: { startOpen?: boolean }) {
           // Focus after the form mounts, so typing can start immediately.
           requestAnimationFrame(() => titleRef.current?.focus());
         }}
-        className={`${cardShellClass} mt-6 flex w-full items-center justify-between gap-3 px-4 py-3 text-left motion-safe:transition-shadow hover:ring-accent/40 sm:px-5 ${focusRing}`}
+        // Stacks on a phone: side by side, the prompt wrapped onto two lines
+        // and squeezed the pill against it. Full width also gives the primary
+        // action a proper thumb target.
+        className={`${cardShellClass} mt-6 flex w-full flex-col items-stretch gap-3 px-4 py-3 text-left motion-safe:transition-shadow hover:ring-accent/40 sm:flex-row sm:items-center sm:justify-between sm:px-5 ${focusRing}`}
       >
         <span className="text-[14px] text-muted">
           Give the assistant a new outcome to work toward…
         </span>
         <span
-          className={`${btn.primary} pointer-events-none`}
+          className={`${btn.primary} pointer-events-none w-full justify-center sm:w-auto`}
           // Presentation only — the whole bar is the real button.
           aria-hidden="true"
         >
@@ -72,7 +75,7 @@ export function GoalCreateForm({ startOpen = false }: { startOpen?: boolean }) {
           />
         </label>
         <details className="rounded-xl bg-sunken/55 px-3 py-2">
-          <summary className="cursor-pointer text-xs font-medium text-zinc-600 dark:text-zinc-400">
+          <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs font-medium text-zinc-600 dark:text-zinc-400">
             Pace, target date, and updates
           </summary>
           <div className="mt-3 flex flex-col gap-3">

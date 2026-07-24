@@ -1,27 +1,85 @@
 'use client';
 
 import { Moon, Sun } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { focusRing } from '@/lib/ui';
 
 /** Light/dark toggle. The no-flash script in layout.tsx sets the initial class. */
 export function ThemeToggle() {
   const [dark, setDark] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
   useEffect(() => {
     setDark(document.documentElement.classList.contains('dark'));
   }, []);
 
   const toggle = () => {
     const next = !document.documentElement.classList.contains('dark');
-    document.documentElement.classList.toggle('dark', next);
-    try {
-      localStorage.setItem('theme', next ? 'dark' : 'light');
-    } catch {}
-    setDark(next);
+
+    const apply = () => {
+      document.documentElement.classList.toggle('dark', next);
+      setDark(next);
+    };
+
+    const persist = () => {
+      try {
+        localStorage.setItem('theme', next ? 'dark' : 'light');
+      } catch {
+        // Private mode or blocked storage — the theme still applies for this
+        // session, it just won't be remembered.
+      }
+    };
+
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // Flipping the class is synchronous, which is exactly what the View
+    // Transition API wants: the browser snapshots the old theme, we swap, it
+    // snapshots the new one, and we animate between the two. Anything that
+    // can't do that (no support, reduced motion) just swaps instantly.
+    if (reduceMotion || typeof document.startViewTransition !== 'function') {
+      apply();
+      persist();
+      return;
+    }
+
+    const transition = document.startViewTransition(apply);
+    persist();
+
+    transition.ready
+      .then(() => {
+        // Grow a circle from the toggle itself, sized to reach the furthest
+        // corner of the viewport so the new theme fully covers the old one.
+        const button = buttonRef.current;
+        if (!button) return;
+        const { top, left, width, height } = button.getBoundingClientRect();
+        const x = left + width / 2;
+        const y = top + height / 2;
+        const radius = Math.hypot(
+          Math.max(x, window.innerWidth - x),
+          Math.max(y, window.innerHeight - y),
+        );
+
+        document.documentElement.animate(
+          { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
+          {
+            duration: 520,
+            easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+            pseudoElement: '::view-transition-new(root)',
+          },
+        );
+      })
+      .catch(() => {
+        // `ready` rejects whenever the browser declines the transition — the
+        // document is hidden, or a second toggle aborted this one. The theme
+        // itself has already been applied by `apply()`, so there is nothing to
+        // recover: we just skip the flourish. Without this handler that
+        // rejection surfaces as an unhandled promise error.
+      });
   };
 
   return (
     <button
+      ref={buttonRef}
       type="button"
       onClick={toggle}
       aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}

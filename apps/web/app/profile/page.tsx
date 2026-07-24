@@ -361,7 +361,7 @@ export default async function ProfilePage() {
             </span>
           </summary>
           {card?.content ? (
-            <div className="mt-4 max-h-52 overflow-y-auto rounded-xl bg-sunken/60 p-4 text-[13px] leading-6 whitespace-pre-wrap text-strong">
+            <div className="mt-4 max-h-52 overscroll-contain overflow-y-auto rounded-xl bg-sunken/60 p-4 text-[13px] leading-6 whitespace-pre-wrap text-strong">
               {card.content}
             </div>
           ) : (

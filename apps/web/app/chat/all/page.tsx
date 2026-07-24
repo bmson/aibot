@@ -77,43 +77,47 @@ export default async function ChatListPage({
 
   return (
     <PageShell size="reading">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <PageHeader
-          title={archived ? 'Archived chats' : 'All chats'}
-          intro={
-            archived
-              ? 'Archived chats stay intact and can be restored at any time.'
-              : 'Your main thread brings older topics back when they become relevant.'
-          }
-        />
-        <div className="flex flex-wrap items-center gap-2">
-          <Link href="/chat" className={btn.outline}>
-            Main thread
-          </Link>
-          {archived ? (
-            <Link href="/chat/all" className={btn.outline}>
-              Current chats
-            </Link>
-          ) : (
-            <>
-              {archivedCount > 0 ? (
-                <Link href="/chat/all?view=archived" className={btn.outline}>
-                  Archived ({archivedCount})
-                </Link>
-              ) : null}
-              <form action={archiveInactiveConversations}>
-                <SubmitButton variant="outline" pendingLabel="Archiving…">
-                  Archive inactive chats (30+ days)
-                </SubmitButton>
-              </form>
-            </>
-          )}
+      {/* The primary action rides with the title; the housekeeping ones sit in
+          their own row beneath. All three in one wrapping row put "New chat"
+          wherever the long "Archive inactive chats" label happened to leave a
+          gap, which on a phone was its own ragged third line. */}
+      <PageHeader
+        title={archived ? 'Archived chats' : 'All chats'}
+        intro={
+          archived
+            ? 'Archived chats stay intact and can be restored at any time.'
+            : 'Your main thread brings older topics back when they become relevant.'
+        }
+        actions={
           <form action={newConversation}>
             <SubmitButton variant="primary" pendingLabel="Creating…">
               New chat
             </SubmitButton>
           </form>
-        </div>
+        }
+      />
+      <div className="mt-5 flex flex-wrap items-center gap-2">
+        <Link href="/chat" className={btn.outline}>
+          Main thread
+        </Link>
+        {archived ? (
+          <Link href="/chat/all" className={btn.outline}>
+            Current chats
+          </Link>
+        ) : (
+          <>
+            {archivedCount > 0 ? (
+              <Link href="/chat/all?view=archived" className={btn.outline}>
+                Archived ({archivedCount})
+              </Link>
+            ) : null}
+            <form action={archiveInactiveConversations}>
+              <SubmitButton variant="outline" pendingLabel="Archiving…">
+                Archive inactive chats (30+ days)
+              </SubmitButton>
+            </form>
+          </>
+        )}
       </div>
       {chatRows.length === 0 ? (
         <EmptyState>
@@ -127,11 +131,17 @@ export default async function ChatListPage({
               chats trims this list.
             </p>
           ) : null}
-          <ul className="mt-6 grid gap-3">
-            {chatRows.map((conversation) => (
+          {/* One card holding divided rows, the same shape the Activity list
+              uses — fifty separate slabs made a plain list of chats look far
+              heavier than it is, and gave the scroll-reveal fifty animations to
+              drive instead of one. */}
+          <ul className={`${cardShellClass} mt-6`}>
+            {chatRows.map((conversation, index) => (
               <li
                 key={conversation.id}
-                className={`${cardShellClass} grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2`}
+                className={`grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2 ${
+                  index > 0 ? 'border-t border-edge' : ''
+                }`}
               >
                 <Link
                   href={`/chat/${conversation.id}`}

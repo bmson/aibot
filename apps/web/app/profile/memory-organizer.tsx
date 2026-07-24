@@ -138,7 +138,7 @@ export function MemoryOrganizer({
           </form>
         </div>
         <details className="mt-4 border-t border-edge/70 pt-3">
-          <summary className="cursor-pointer text-xs font-medium text-muted select-none">
+          <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs font-medium text-muted select-none">
             What happens during a pass?
           </summary>
           <p className="mt-2 max-w-[72ch] text-xs leading-5 text-muted">

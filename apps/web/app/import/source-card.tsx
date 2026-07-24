@@ -142,7 +142,9 @@ export function SourceCard({ view }: { view: SourceView }) {
       </div>
 
       <details className={`${cardFooterChromeClass} text-xs`}>
-        <summary className="cursor-pointer font-medium text-muted">File and actions</summary>
+        <summary className="disclosure flex items-center gap-2 cursor-pointer font-medium text-muted">
+          File and actions
+        </summary>
         <p className="mt-2 break-words text-muted [overflow-wrap:anywhere]">
           {view.workspacePath} · {view.kind}
           {view.taskId ? (

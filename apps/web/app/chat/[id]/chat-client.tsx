@@ -6,8 +6,10 @@ import {
   ArrowDown,
   ArrowUp,
   CalendarDays,
+  Check,
   CircleCheck,
   CircleX,
+  Copy,
   Hand,
   History,
   Inbox,
@@ -21,7 +23,6 @@ import {
   Zap,
 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react';
-import { AvatarMark } from '@/app/brand-mark';
 import { hasContractNoticePart, isApprovalProseNotice, isContractNotice } from '@/lib/chat-notices';
 import { eventCardClass, focusRing } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
@@ -117,13 +118,86 @@ function timeLabel(date: Date): string {
 function DayDivider({ label }: { label: string }) {
   // Generous vertical air: dividers are chapter breaks, not rules on a form.
   // The hairlines fade toward the edges so the floating chip carries the date.
+  // The chip is tonal rather than raised — a date is a quiet waypoint, and an
+  // outlined, shadowed pill competed with the cards the assistant actually places.
   return (
     <div aria-hidden="true" className="flex items-center gap-4 pt-7 pb-3 [div:first-child>&]:pt-1">
       <span className="h-px flex-1 bg-gradient-to-r from-transparent to-edge" />
-      <span className="rounded-full bg-raised px-3 py-1 text-2xs font-semibold tracking-[0.08em] text-muted uppercase shadow-[0_1px_2px_rgb(23_25_35/0.05)] ring-1 ring-edge/70">
+      <span className="rounded-full bg-sunken/80 px-2.5 py-1 text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
         {label}
       </span>
       <span className="h-px flex-1 bg-gradient-to-l from-transparent to-edge" />
+    </div>
+  );
+}
+
+/**
+ * The assistant's "I'm here" signal, now that the message stream carries no
+ * avatar: a small accent orb drawing breath inside an expanding halo. Still for
+ * reduced motion — the label beside it already says what's happening.
+ */
+function PresenceOrb() {
+  return (
+    <span aria-hidden="true" className="relative mt-1.5 inline-flex size-2 shrink-0">
+      <span className="absolute inset-0 rounded-full bg-accent motion-safe:animate-[orb-halo_2s_ease-out_infinite]" />
+      <span className="relative inline-flex size-2 rounded-full bg-accent motion-safe:animate-[orb-breathe_2s_ease-in-out_infinite]" />
+    </span>
+  );
+}
+
+/**
+ * Copy a reply, and the time it landed — revealed on hover so a resting log
+ * stays free of chrome. Phones skip it entirely: a permanent row under every
+ * message is heavy on a small screen, and long-press selection already copies.
+ */
+function MessageActions({ text, date }: { text: string; date: Date | null }) {
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
+
+  useEffect(() => {
+    if (state === 'idle') return;
+    const timer = window.setTimeout(() => setState('idle'), 1800);
+    return () => window.clearTimeout(timer);
+  }, [state]);
+
+  if (text === '') return null;
+
+  const copy = async () => {
+    try {
+      // Undefined outside a secure context — say so rather than doing nothing.
+      if (!navigator.clipboard) throw new Error('clipboard unavailable');
+      await navigator.clipboard.writeText(text);
+      setState('copied');
+    } catch {
+      setState('failed');
+    }
+  };
+
+  return (
+    <div className="msg-actions mt-1.5 hidden items-center gap-2 opacity-0 motion-safe:transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100 sm:flex">
+      <button
+        type="button"
+        onClick={() => void copy()}
+        title={state === 'failed' ? 'Your browser blocked clipboard access' : 'Copy this reply'}
+        className={`inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-2xs font-medium motion-safe:transition-colors ${focusRing} ${
+          state === 'failed'
+            ? 'text-red-600 dark:text-red-400'
+            : state === 'copied'
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : 'text-muted hover:bg-sunken hover:text-strong'
+        }`}
+      >
+        {state === 'copied' ? (
+          <Check className="size-3" aria-hidden="true" />
+        ) : (
+          <Copy className="size-3" aria-hidden="true" />
+        )}
+        {state === 'copied' ? 'Copied' : state === 'failed' ? 'Could not copy' : 'Copy'}
+      </button>
+      {date ? (
+        <span title={date.toLocaleString()} className="text-2xs text-muted">
+          {timeLabel(date)}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -135,29 +209,27 @@ function DayDivider({ label }: { label: string }) {
  * reduced-motion readers get plain muted text.
  */
 function PresenceRow({
-  name,
   phase,
   activity,
 }: {
-  name: string;
   phase: 'thinking' | 'starting' | 'working';
   activity: Array<{ toolName: string; status: string; step: number }>;
 }) {
   const label =
     phase === 'thinking' ? 'Thinking…' : phase === 'starting' ? 'Starting the work…' : 'Working…';
   return (
-    <div className="flex w-full max-w-3xl items-start gap-3">
-      <AvatarMark name={name} size="sm" active />
-      <div className="min-w-0 flex-1 pt-1">
+    <div className="flex w-full min-w-0 items-start gap-2.5">
+      <PresenceOrb />
+      <div className="min-w-0 flex-1">
         <span className="sr-only">The assistant is working</span>
         <span
           aria-hidden="true"
-          className="text-[13px] text-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--content-muted),var(--content-strong),var(--content-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent"
+          className="block text-[13px] leading-5 text-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--content-muted),var(--content-strong),var(--content-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent"
         >
           {label}
         </span>
         {activity.length > 0 ? (
-          <div className="mt-2">
+          <div className="mt-2.5">
             <ActivityTrail activity={activity} />
           </div>
         ) : null}
@@ -172,10 +244,10 @@ function PresenceRow({
  * honesty enforcement stops reading like the assistant talking strangely.
  */
 function ContractNotice({ text }: { text: string }) {
-  // Narrower than a reply bubble: it's an aside about the conversation, so it
-  // should not span the full column like the assistant's own speech.
+  // Narrower than a reply: it's an aside about the conversation, so it should
+  // not span the full column like the assistant's own speech.
   return (
-    <div className={`${eventCardClass} max-w-xl sm:ml-9`}>
+    <div className={`${eventCardClass} max-w-xl`}>
       <div className="flex items-center gap-2.5 border-b border-edge/60 bg-sunken/40 px-4 py-2">
         <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-sunken text-muted">
           <ShieldCheck className="size-3.5" aria-hidden="true" />
@@ -189,7 +261,7 @@ function ContractNotice({ text }: { text: string }) {
           {text}
         </p>
         <details className="mt-2">
-          <summary className="cursor-pointer text-2xs text-muted select-none">
+          <summary className="disclosure flex items-center gap-2 cursor-pointer text-2xs text-muted select-none">
             Why am I seeing this?
           </summary>
           <p className="mt-1 max-w-prose text-2xs leading-4 text-muted">
@@ -232,7 +304,7 @@ function AssistantUpdate({ text, sources }: { text: string; sources: RecallSourc
         };
 
   return (
-    <section className={`${eventCardClass} max-w-3xl border-l-[3px] sm:ml-9 ${tone.edge}`}>
+    <section className={`${eventCardClass} border-l-[3px] ${tone.edge}`}>
       <div className="min-w-0 px-4 py-3">
         <div className="mb-2 flex items-center gap-2.5">
           <span
@@ -263,7 +335,7 @@ function ActivityTrail({
   return (
     <section
       className="min-w-0 max-w-full rounded-xl bg-sunken/50 px-4 py-3 ring-1 ring-edge/50"
-      aria-label="AI Bot activity"
+      aria-label="Work trail"
     >
       <p className="mb-2 text-2xs font-semibold tracking-[0.1em] text-muted uppercase">
         Work trail
@@ -628,6 +700,9 @@ export function ChatClient({
       ? SLASH_COMMANDS.filter((entry) => entry.command.slice(1).startsWith(slashToken))
       : [];
   const commandPaletteOpen = commandMatches.length > 0;
+  /** There is something to send, and nothing in the way of sending it. */
+  const canSend =
+    !busy && input.trim() !== '' && !modelCommandOpen && !commandPaletteOpen && !isSwitching;
   const [commandHighlight, setCommandHighlight] = useState(0);
   // Clamp instead of resetting via effect — the list is tiny and refilters
   // on every keystroke, so an out-of-range cursor just snaps to the end.
@@ -740,7 +815,11 @@ export function ChatClient({
     // text vanished mid-scroll with visible emptiness above it. Anything that
     // needs breathing room (the header, the log's own opening air) supplies it
     // from the inside, where it scrolls.
-    <div className="relative mx-auto -my-7 flex h-[calc(100dvh-3.5rem)] w-full min-w-0 max-w-5xl flex-col lg:-my-10 lg:h-[100dvh]">
+    //
+    // The column is capped at a reading measure rather than the page's full
+    // width: prose that runs to 1000px is tiring, and pinning the user's
+    // bubbles that far right made a two-way exchange read as two columns.
+    <div className="relative mx-auto -my-7 flex h-[calc(100dvh-3.5rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-10 lg:h-[calc(100dvh-var(--app-chrome,0px))]">
       {/* The primary thread is the whole surface — it needs no title. Side and
           goal chats keep a slim header so you know which one you're in. */}
       {!isPrimary ? (
@@ -799,162 +878,167 @@ export function ChatClient({
           if (bottom) setUnseenCount(0);
         }}
         style={{ paddingBottom: `calc(5rem + ${composerHeight}px)` }}
-        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto pt-20"
+        className="scroll-subtle min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto pt-20"
       >
-        {messages.length === 0 ? (
-          <div className="mx-auto flex max-w-xl flex-col items-center text-center sm:mt-6">
-            <span className="inline-flex size-12 items-center justify-center rounded-2xl bg-sunken text-accent">
-              <Sparkles className="size-5" aria-hidden="true" />
-            </span>
-            <p className="mt-4 font-display text-2xl font-semibold tracking-[-0.035em] text-strong">
-              What should we move forward?
-            </p>
-            {/* A small hand-drawn stroke that sketches itself in under the
+        {/* A short thread rests on the composer instead of hanging from the top
+            of the window with a void beneath it — `mt-auto` on the log (and
+            `my-auto` on the opening screen) does that, while a thread long
+            enough to overflow simply scrolls as before. */}
+        <div className="flex min-h-full min-w-0 flex-col">
+          {messages.length === 0 ? (
+            <div className="mx-auto flex max-w-xl flex-col items-center text-center my-auto">
+              <span className="inline-flex size-12 items-center justify-center rounded-2xl bg-sunken text-accent">
+                <Sparkles className="size-5" aria-hidden="true" />
+              </span>
+              <p className="mt-4 font-display text-2xl font-semibold tracking-[-0.035em] text-balance text-strong">
+                What should we move forward?
+              </p>
+              {/* A small hand-drawn stroke that sketches itself in under the
                 greeting — the page's one flourish. Static for reduced motion. */}
-            <svg aria-hidden="true" viewBox="0 0 140 10" fill="none" className="mt-2 h-2.5 w-36">
-              <path
-                d="M3 7 C 28 3, 55 8.5, 82 5 S 125 3.5, 137 5.5"
-                stroke="var(--accent)"
-                strokeOpacity="0.65"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                className="[stroke-dasharray:160] [stroke-dashoffset:160] motion-safe:animate-[draw-in_700ms_ease-out_250ms_forwards] motion-reduce:[stroke-dashoffset:0]"
-              />
-            </svg>
-            <p className="mt-2 max-w-md text-[15px] leading-6 text-muted">
-              Start with an outcome. AI Bot can research, plan, draft, schedule, and keep following
-              up when the work takes time.
-            </p>
-            <div className="mt-6 grid w-full gap-2 sm:grid-cols-3">
-              {[
-                {
-                  text: 'Summarize my unread email',
-                  label: 'Clear the inbox',
-                  icon: Inbox,
-                },
-                {
-                  text: 'What’s on my calendar this week?',
-                  label: 'Review the week',
-                  icon: CalendarDays,
-                },
-                {
-                  text: 'Draft a plan for my next trip',
-                  label: 'Plan a trip',
-                  icon: Route,
-                },
-              ].map((suggestion, index) => {
-                const SuggestionIcon = suggestion.icon;
-                return (
-                  <button
-                    key={suggestion.text}
-                    type="button"
-                    disabled={busy}
-                    onClick={() => {
-                      stickToBottomRef.current = true;
-                      setAtBottom(true);
-                      void sendMessage({ text: suggestion.text });
-                    }}
-                    style={{ animationDelay: `${index * 60}ms` }}
-                    className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.10)] active:translate-y-0 disabled:opacity-60 ${focusRing}`}
-                  >
-                    <SuggestionIcon className="size-4 text-accent" aria-hidden="true" />
-                    <span className="mt-3 text-[13px] font-medium text-strong">
-                      {suggestion.label}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : (
-          <div className="flex min-w-0 flex-col">
-            {messages.map((message, messageIndex) => {
-              const parts = message.parts as Array<
-                UIMessage['parts'][number] | InlineApprovalPart | InlineBudgetRequestPart
-              >;
-              const approvalParts = parts.filter(
-                (part): part is InlineApprovalPart => part.type === 'approval',
-              );
-              const budgetParts = parts.filter(
-                (part): part is InlineBudgetRequestPart => part.type === 'budget-request',
-              );
-              const textParts = parts.filter(
-                (part): part is Extract<UIMessage['parts'][number], { type: 'text' }> =>
-                  part.type === 'text',
-              );
-              // The grouped card repeats the executor's prose approval list —
-              // hide the duplicate text, never the persisted message itself.
-              const visibleTextParts =
-                approvalParts.length > 0
-                  ? textParts.filter((part) => !isApprovalProseNotice(part.text))
-                  : textParts;
-              const fullText = visibleTextParts
-                .map((part) => part.text)
-                .join('')
-                .trim();
-              const isNotice =
-                message.role === 'assistant' &&
-                approvalParts.length === 0 &&
-                budgetParts.length === 0 &&
-                fullText !== '' &&
-                (hasContractNoticePart(parts) || isContractNotice(fullText));
-              const date = messageDate(message);
-              const previousDate =
-                messageIndex > 0 ? messageDate(messages[messageIndex - 1] as UIMessage) : null;
-              const showDivider =
-                mounted && date !== null && (previousDate === null || !sameDay(previousDate, date));
-              // A chat is one continuous discussion — per-message clock times
-              // are noise there, and the day dividers already carry the "when".
-              // Proactive updates are the exception: those arrive at a time
-              // that is part of the message, so Notifications keeps them.
-              const showTime = mounted && date !== null && notificationMode;
-              const recallSources = recallSourcesOf(message);
-              const hasBubble = visibleTextParts.length > 0 && !isNotice;
-              const isNewMessage = !initialMessageIdsRef.current?.has(message.id);
-              const previousMessage = messageIndex > 0 ? messages[messageIndex - 1] : undefined;
-              // A "run" is a streak of turns from the same speaker — the avatar
-              // shows once at the top and the follow-ons tuck in under it.
-              const startsRun =
-                !previousMessage || previousMessage.role !== message.role || showDivider;
-              const streamingCaret =
-                status === 'streaming' &&
-                message.role === 'assistant' &&
-                messageIndex === messages.length - 1;
-              return (
-                <div
-                  key={message.id}
-                  className={`flex min-w-0 flex-col gap-2 first:mt-0 ${startsRun ? 'mt-7' : 'mt-2'} ${
-                    isNewMessage ? 'motion-safe:animate-[message-in_220ms_ease-out]' : ''
-                  }`}
-                >
-                  {showDivider && date ? <DayDivider label={dayLabel(date, new Date())} /> : null}
-                  {isNotice ? (
-                    <ContractNotice text={fullText} />
-                  ) : notificationMode && message.role === 'assistant' && hasBubble ? (
-                    <AssistantUpdate text={fullText} sources={recallSources} />
-                  ) : hasBubble ? (
-                    <div
-                      className={
-                        message.role === 'user' ? 'flex justify-end' : 'flex justify-start'
-                      }
+              <svg aria-hidden="true" viewBox="0 0 140 10" fill="none" className="mt-2 h-2.5 w-36">
+                <path
+                  d="M3 7 C 28 3, 55 8.5, 82 5 S 125 3.5, 137 5.5"
+                  stroke="var(--accent)"
+                  strokeOpacity="0.65"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  className="[stroke-dasharray:160] [stroke-dashoffset:160] motion-safe:animate-[draw-in_700ms_ease-out_250ms_forwards] motion-reduce:[stroke-dashoffset:0]"
+                />
+              </svg>
+              <p className="mt-2 max-w-md text-[15px] leading-6 text-pretty text-muted">
+                Start with an outcome. {agentName} can research, plan, draft, schedule, and keep
+                following up when the work takes time.
+              </p>
+              <div className="mt-6 grid w-full gap-2 sm:grid-cols-3">
+                {[
+                  {
+                    text: 'Summarize my unread email',
+                    label: 'Clear the inbox',
+                    icon: Inbox,
+                  },
+                  {
+                    text: 'What’s on my calendar this week?',
+                    label: 'Review the week',
+                    icon: CalendarDays,
+                  },
+                  {
+                    text: 'Draft a plan for my next trip',
+                    label: 'Plan a trip',
+                    icon: Route,
+                  },
+                ].map((suggestion, index) => {
+                  const SuggestionIcon = suggestion.icon;
+                  return (
+                    <button
+                      key={suggestion.text}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        stickToBottomRef.current = true;
+                        setAtBottom(true);
+                        void sendMessage({ text: suggestion.text });
+                      }}
+                      style={{ animationDelay: `${index * 60}ms` }}
+                      className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.10)] active:translate-y-0 disabled:opacity-60 ${focusRing}`}
                     >
-                      {message.role === 'assistant' ? (
-                        <div className="flex w-full max-w-3xl items-start gap-3">
-                          {startsRun ? (
-                            <AvatarMark name={agentName} size="sm" className="mt-1.5" />
-                          ) : (
-                            <span aria-hidden="true" className="w-6 shrink-0" />
-                          )}
-                          {/* The reply is speech, so it gets a bubble: raised
-                              and outlined against the canvas, sized to fit. */}
-                          <div className="min-w-0 flex-1">
+                      <SuggestionIcon className="size-4 text-accent" aria-hidden="true" />
+                      <span className="mt-3 text-[13px] font-medium text-strong">
+                        {suggestion.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-auto flex min-w-0 flex-col">
+              {messages.map((message, messageIndex) => {
+                const parts = message.parts as Array<
+                  UIMessage['parts'][number] | InlineApprovalPart | InlineBudgetRequestPart
+                >;
+                const approvalParts = parts.filter(
+                  (part): part is InlineApprovalPart => part.type === 'approval',
+                );
+                const budgetParts = parts.filter(
+                  (part): part is InlineBudgetRequestPart => part.type === 'budget-request',
+                );
+                const textParts = parts.filter(
+                  (part): part is Extract<UIMessage['parts'][number], { type: 'text' }> =>
+                    part.type === 'text',
+                );
+                // The grouped card repeats the executor's prose approval list —
+                // hide the duplicate text, never the persisted message itself.
+                const visibleTextParts =
+                  approvalParts.length > 0
+                    ? textParts.filter((part) => !isApprovalProseNotice(part.text))
+                    : textParts;
+                const fullText = visibleTextParts
+                  .map((part) => part.text)
+                  .join('')
+                  .trim();
+                const isNotice =
+                  message.role === 'assistant' &&
+                  approvalParts.length === 0 &&
+                  budgetParts.length === 0 &&
+                  fullText !== '' &&
+                  (hasContractNoticePart(parts) || isContractNotice(fullText));
+                const date = messageDate(message);
+                const previousDate =
+                  messageIndex > 0 ? messageDate(messages[messageIndex - 1] as UIMessage) : null;
+                const showDivider =
+                  mounted &&
+                  date !== null &&
+                  (previousDate === null || !sameDay(previousDate, date));
+                // A chat is one continuous discussion — per-message clock times
+                // are noise there, and the day dividers already carry the "when".
+                // Proactive updates are the exception: those arrive at a time
+                // that is part of the message, so Notifications keeps them.
+                const showTime = mounted && date !== null && notificationMode;
+                const recallSources = recallSourcesOf(message);
+                const hasText = visibleTextParts.length > 0 && !isNotice;
+                const isNewMessage = !initialMessageIdsRef.current?.has(message.id);
+                const previousMessage = messageIndex > 0 ? messages[messageIndex - 1] : undefined;
+                // A "run" is a streak of turns from the same speaker. Handing
+                // over gets a clear break; a follow-on from the same speaker
+                // tucks in close, so a run reads as one continuous thought.
+                const startsRun =
+                  !previousMessage || previousMessage.role !== message.role || showDivider;
+                const streamingCaret =
+                  status === 'streaming' &&
+                  message.role === 'assistant' &&
+                  messageIndex === messages.length - 1;
+                return (
+                  <div
+                    key={message.id}
+                    className={`flex min-w-0 flex-col gap-2 first:mt-0 ${startsRun ? 'mt-7' : 'mt-2'} ${
+                      isNewMessage ? 'motion-safe:animate-[message-in_220ms_ease-out]' : ''
+                    }`}
+                  >
+                    {showDivider && date ? <DayDivider label={dayLabel(date, new Date())} /> : null}
+                    {isNotice ? (
+                      <ContractNotice text={fullText} />
+                    ) : notificationMode && message.role === 'assistant' && hasText ? (
+                      <AssistantUpdate text={fullText} sources={recallSources} />
+                    ) : hasText ? (
+                      <div
+                        className={
+                          message.role === 'user' ? 'flex justify-end' : 'flex justify-start'
+                        }
+                      >
+                        {message.role === 'assistant' ? (
+                          // One human, one assistant — so a reply needs no avatar
+                          // and no bubble to say who is speaking. Set as plain
+                          // prose it reads like a letter rather than a card, and
+                          // it leaves the raised-card treatment to mean one thing
+                          // only: an object the assistant placed in the thread
+                          // (an approval, a budget ask, a work trail).
+                          <div className="group/msg min-w-0 max-w-full flex-1">
+                            <RecallNote sources={recallSources} />
                             <div
-                              title={date ? date.toLocaleString() : undefined}
-                              className={`w-fit min-w-0 max-w-full rounded-2xl bg-raised px-4 py-3 text-[15px] leading-6 shadow-[0_1px_2px_rgb(23_25_35/0.05)] ring-1 ring-edge/60 ${
-                                startsRun ? 'rounded-tl-md' : ''
-                              } ${streamingCaret ? 'chat-caret' : ''}`}
+                              className={`min-w-0 max-w-full text-[15px] text-strong ${
+                                streamingCaret ? 'chat-caret' : ''
+                              }`}
                             >
-                              <RecallNote sources={recallSources} />
                               {visibleTextParts.map((part, index) => (
                                 <MessageMarkdown
                                   key={`${message.id}-${index.toString()}`}
@@ -962,61 +1046,61 @@ export function ChatClient({
                                 />
                               ))}
                             </div>
+                            <MessageActions text={fullText} date={date} />
                           </div>
-                        </div>
-                      ) : (
-                        // Both speakers read at the same size — a smaller user
-                        // bubble made your own words look like a footnote.
-                        <div
-                          title={date ? date.toLocaleString() : undefined}
-                          className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-accent px-4 py-3 text-[15px] leading-6 text-white shadow-sm sm:max-w-[76%]"
-                        >
-                          {visibleTextParts.map((part, index) => (
-                            <p
-                              key={`${message.id}-${index.toString()}`}
-                              className="break-words whitespace-pre-wrap [overflow-wrap:anywhere]"
-                            >
-                              {part.text}
-                            </p>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ) : null}
-                  {approvalParts.length > 0 ? <ApprovalGroup parts={approvalParts} /> : null}
-                  {budgetParts.map((part) => (
-                    <InlineBudgetRequest key={part.taskId} part={part} />
-                  ))}
-                  {showTime && date ? (
-                    <p
-                      title={date.toLocaleString()}
-                      className={`text-2xs text-muted ${
-                        message.role === 'user' ? 'self-end' : 'ml-9 self-start'
-                      }`}
-                    >
-                      {timeLabel(date)}
-                    </p>
-                  ) : null}
+                        ) : (
+                          // Both speakers read at the same size — a smaller user
+                          // bubble made your own words look like a footnote.
+                          <div
+                            title={date ? date.toLocaleString() : undefined}
+                            className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover px-4 py-3 text-[15px] leading-6 text-white shadow-[0_2px_10px_rgb(91_92_226/0.22)] sm:max-w-[76%] dark:shadow-[0_1px_3px_rgb(0_0_0/0.45)]"
+                          >
+                            {visibleTextParts.map((part, index) => (
+                              <p
+                                key={`${message.id}-${index.toString()}`}
+                                className="break-words whitespace-pre-wrap [overflow-wrap:anywhere]"
+                              >
+                                {part.text}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                    {approvalParts.length > 0 ? <ApprovalGroup parts={approvalParts} /> : null}
+                    {budgetParts.map((part) => (
+                      <InlineBudgetRequest key={part.taskId} part={part} />
+                    ))}
+                    {showTime && date ? (
+                      <p
+                        title={date.toLocaleString()}
+                        className={`text-2xs text-muted ${
+                          message.role === 'user' ? 'self-end' : 'self-start'
+                        }`}
+                      >
+                        {timeLabel(date)}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {status === 'submitted' ? (
+                <div className="mt-6">
+                  <PresenceRow phase="thinking" activity={[]} />
                 </div>
-              );
-            })}
-            {status === 'submitted' ? (
-              <div className="mt-5">
-                <PresenceRow name={agentName} phase="thinking" activity={[]} />
-              </div>
-            ) : asyncTurn ? (
-              <div className="mt-5">
-                <PresenceRow
-                  name={agentName}
-                  phase={activity.length > 0 ? 'working' : 'starting'}
-                  activity={activity}
-                />
-              </div>
-            ) : null}
-            {asyncNote ? <p className="mt-3 text-xs text-muted">{asyncNote}</p> : null}
-            {liveRecall ? <RecallNote sources={liveRecall} /> : null}
-          </div>
-        )}
+              ) : asyncTurn ? (
+                <div className="mt-6">
+                  <PresenceRow
+                    phase={activity.length > 0 ? 'working' : 'starting'}
+                    activity={activity}
+                  />
+                </div>
+              ) : null}
+              {asyncNote ? <p className="mt-3 text-xs text-muted">{asyncNote}</p> : null}
+              {liveRecall ? <RecallNote sources={liveRecall} /> : null}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* The composer floats over the conversation rather than docking under
@@ -1141,7 +1225,7 @@ export function ChatClient({
                 id="model-listbox"
                 role="listbox"
                 aria-label="Response model"
-                className="max-h-56 overflow-y-auto p-1.5"
+                className="max-h-56 overscroll-contain overflow-y-auto p-1.5"
               >
                 {modelOptions.length > 0 ? (
                   modelOptions.map((model, index) => {
@@ -1332,11 +1416,18 @@ export function ChatClient({
                     Stop
                   </button>
                 ) : (
+                  // Readiness is a state change, not a dimmed copy of the live
+                  // button: with nothing to send it sits back as a quiet tonal
+                  // disc, then fills with accent and lifts once you have typed.
                   <button
                     type="submit"
-                    disabled={busy || input.trim() === '' || modelCommandOpen || commandPaletteOpen}
+                    disabled={!canSend}
                     aria-label={asyncTurn ? 'Working on your request' : 'Send'}
-                    className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-accent text-white shadow-sm motion-safe:transition-[transform,background-color,box-shadow] hover:bg-accent-hover hover:shadow-[0_5px_14px_rgb(91_92_226/0.35)] motion-safe:hover:scale-105 motion-safe:active:scale-95 disabled:opacity-50 disabled:shadow-sm motion-safe:disabled:hover:scale-100 ${focusRing}`}
+                    className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full motion-safe:transition-[transform,background-color,color,box-shadow] ${focusRing} ${
+                      canSend
+                        ? 'bg-accent text-white shadow-[0_2px_10px_rgb(91_92_226/0.35)] hover:bg-accent-hover hover:shadow-[0_5px_16px_rgb(91_92_226/0.45)] motion-safe:hover:scale-105 motion-safe:active:scale-95'
+                        : 'cursor-not-allowed bg-sunken text-muted'
+                    }`}
                   >
                     {asyncTurn ? (
                       <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />

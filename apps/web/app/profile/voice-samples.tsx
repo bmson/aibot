@@ -8,6 +8,7 @@ import {
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
+  fileInputClass,
   InfoGrid,
   InfoItem,
   inputClass,
@@ -96,7 +97,7 @@ export function VoiceSamplesPanel({
                 name="file"
                 required
                 accept=".mbox,.txt,.json,.md,text/plain,application/json"
-                className="min-w-0 text-[13px] text-muted file:mr-3 file:h-9 file:rounded-lg file:border file:border-edge file:bg-raised file:px-3 file:text-[13px] file:font-medium file:text-strong hover:file:bg-sunken"
+                className={fileInputClass}
               />
               <label className="flex items-center gap-1.5 text-xs text-muted">
                 Style

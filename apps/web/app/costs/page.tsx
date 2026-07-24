@@ -102,7 +102,7 @@ export default async function CostsPage() {
           <div key={p.label} className={`${cardShellClass} p-4`}>
             <div className="flex items-baseline justify-between gap-3">
               <p className="text-[13px] font-semibold text-strong">{p.label}</p>
-              <p className="font-display text-2xl font-semibold tracking-[-0.04em]">
+              <p className="font-display text-2xl font-semibold tracking-[-0.04em] tabular-nums">
                 {formatUsd(p.spent.toFixed(4))}
               </p>
             </div>
@@ -153,14 +153,18 @@ export default async function CostsPage() {
               className={`${inputClass} w-28`}
             />
           </label>
-          <SubmitButton variant="outline" pendingLabel="Updating…">
+          {/* Full width on a phone so it lands on its own row instead of
+              trailing whichever cap field happened to wrap last. */}
+          <SubmitButton variant="outline" pendingLabel="Updating…" className="w-full sm:w-auto">
             Update caps
           </SubmitButton>
         </form>
       </section>
 
       <details className="mt-8 rounded-2xl bg-sunken/55">
-        <summary className="cursor-pointer px-5 py-4 text-sm font-medium">Detailed usage</summary>
+        <summary className="disclosure flex items-center gap-2 cursor-pointer px-5 py-4 text-sm font-medium">
+          Detailed usage
+        </summary>
         <div className="border-t border-edge px-5 pb-5">
           {held.length > 0 ? (
             <section className="mt-5">
@@ -195,7 +199,9 @@ export default async function CostsPage() {
                     <tr key={row.source} className="border-t border-zinc-100 dark:border-zinc-900">
                       <td className="py-1.5">{row.source}</td>
                       <td className="py-1.5 text-right text-xs text-zinc-500">{row.n}×</td>
-                      <td className="py-1.5 text-right">{formatUsd(String(row.usd ?? '0'))}</td>
+                      <td className="py-1.5 text-right tabular-nums">
+                        {formatUsd(String(row.usd ?? '0'))}
+                      </td>
                     </tr>
                   ))}
                   {bySource.length === 0 ? (
@@ -214,7 +220,9 @@ export default async function CostsPage() {
                     <tr key={row.model} className="border-t border-zinc-100 dark:border-zinc-900">
                       <td className="max-w-0 truncate py-1.5">{row.model}</td>
                       <td className="py-1.5 text-right text-xs text-zinc-500">{row.n}×</td>
-                      <td className="py-1.5 text-right">{formatUsd(String(row.usd ?? '0'))}</td>
+                      <td className="py-1.5 text-right tabular-nums">
+                        {formatUsd(String(row.usd ?? '0'))}
+                      </td>
                     </tr>
                   ))}
                   {byModel.length === 0 ? (
@@ -251,7 +259,7 @@ export default async function CostsPage() {
             </div>
           </section>
 
-          <section className="mt-6 overflow-x-auto">
+          <section className="mt-6 overscroll-x-contain overflow-x-auto">
             <h2 className="text-sm font-medium">Recent charges</h2>
             <table className="mt-3 w-full text-sm">
               <tbody>
@@ -264,7 +272,7 @@ export default async function CostsPage() {
                     <td className="max-w-0 truncate px-2 py-1.5 text-xs text-zinc-500">
                       {e.description}
                     </td>
-                    <td className="py-1.5 text-right">{formatUsd(e.usd)}</td>
+                    <td className="py-1.5 text-right tabular-nums">{formatUsd(e.usd)}</td>
                   </tr>
                 ))}
                 {recent.length === 0 ? (

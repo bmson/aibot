@@ -1,12 +1,22 @@
+import { ArrowLeft } from 'lucide-react';
+import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 // Shared UI primitives: the one place button/badge/card/section styling
 // lives. Class-string constants (not components) where client components
 // need to compose them with their own handlers.
 
-/** Visible keyboard-focus ring shared by buttons, links, and menu items. */
+/**
+ * Visible keyboard-focus ring shared by buttons, links, and menu items.
+ *
+ * A real `outline` rather than ring + ring-offset: an offset ring has to paint
+ * its gap in a fixed colour, and `ring-offset-surface` drew a pale halo around
+ * every focused link on the dark nav rail. `outline-offset` leaves the gap
+ * transparent, so the same ring reads correctly on the rail, on cards, and on
+ * the canvas without any per-surface override.
+ */
 export const focusRing =
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-1 focus-visible:ring-offset-surface';
+  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
 
 const btnBase = `mobile-touch-target inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap font-medium motion-safe:transition-[transform,background-color,border-color,color,box-shadow] motion-safe:active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
 const btnMd = 'h-9 rounded-lg px-3.5 text-[13px]';
@@ -41,9 +51,18 @@ export const btnSm = {
   success: `${btnBase} ${btnXs} ${btnVariants.success}`,
 } as const;
 
-/** Zinc count-pill as a raw class string, for spans that can't use <CountBadge>. */
+/**
+ * Figures across the app are set in tabular (fixed-width) numerals. Inter's
+ * default proportional digits are right for prose but wrong for data: a `1` is
+ * narrower than a `7`, so a live count or a spend total visibly reflows every
+ * time it refreshes, and columns of numbers fail to line up. Only digits are
+ * affected, so this is safe on strings that mix numbers and words.
+ */
+export const tabularNums = 'tabular-nums';
+
+/** Neutral count-pill as a raw class string, for spans that can't use <CountBadge>. */
 export const countBadgeClass =
-  'rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 whitespace-nowrap dark:bg-zinc-800 dark:text-zinc-400';
+  'rounded-full bg-sunken px-1.5 py-0.5 text-2xs font-medium text-muted tabular-nums whitespace-nowrap';
 
 /** A loading placeholder block — used by route-level loading.tsx skeletons.
  *  A light sheen sweeps across it while motion is allowed; reduced-motion
@@ -59,10 +78,22 @@ export function Skeleton({ className = '' }: { className?: string }) {
 export const inputClass =
   'h-9 rounded-lg border border-edge bg-raised px-3 text-base text-strong outline-none placeholder:text-muted/70 motion-safe:transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/20 sm:text-sm';
 
+/** `field-sizing: content` grows the box with what's typed, so these need no
+ *  resize grabber and no JS measuring — the min/max keep it in a sane band. */
 export const textareaClass =
-  'rounded-xl border border-edge bg-raised px-3 py-2.5 text-base text-strong outline-none placeholder:text-muted/70 motion-safe:transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/20 sm:text-sm';
+  'rounded-xl border border-edge bg-raised px-3 py-2.5 text-base text-strong outline-none resize-none [field-sizing:content] min-h-20 max-h-80 placeholder:text-muted/70 motion-safe:transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/20 sm:text-sm';
 
 export const labelClass = 'text-[13px] font-medium text-muted';
+
+/**
+ * Native file input, with its ::file-selector-button dressed to match the
+ * outline button. The same class string was pasted into three upload forms and
+ * had already drifted; this is the one copy. The "no file chosen" text beside
+ * the button is browser chrome and cannot be restyled — it is left alone
+ * rather than replaced with a JS-driven imitation.
+ */
+export const fileInputClass =
+  'min-w-0 max-w-full text-[13px] text-muted file:mr-3 file:h-9 file:cursor-pointer file:rounded-lg file:border file:border-edge file:bg-raised file:px-3.5 file:text-[13px] file:font-medium file:text-strong motion-safe:file:transition-colors hover:file:bg-sunken active:file:bg-sunken/80';
 
 /**
  * Cards use one shared information architecture:
@@ -70,7 +101,7 @@ export const labelClass = 'text-[13px] font-medium text-muted';
  * compact grid, and actions in a quiet footer.
  */
 export const cardShellClass =
-  'min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60';
+  'reveal min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60';
 export const cardBodyClass = 'grid min-w-0 gap-4 p-4 sm:p-5';
 export const cardHeaderClass = 'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3';
 /** Footer chrome (divider + tonal well + padding), shared by the button-row
@@ -97,17 +128,67 @@ export const eventCardClass =
 export const cardGridClass = 'grid min-w-0 items-stretch gap-4 lg:grid-cols-2';
 export const tileGridClass = 'grid min-w-0 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3';
 
-/** Collapsible-section summary row (native <details>). */
+/** Collapsible-section summary row (native <details>). The `disclosure` class
+ *  draws the rotating chevron and globals.css animates the panel itself, so
+ *  every section built from this opens the same way. */
 export const summaryClass =
-  'flex cursor-pointer list-none items-baseline gap-2 text-sm font-medium [&::-webkit-details-marker]:hidden';
+  'disclosure flex cursor-pointer list-none items-center gap-2 text-sm font-medium';
 
-export function PageHeader({ title, intro }: { title: string; intro?: ReactNode }) {
+/**
+ * "Back to the parent surface" link above a detail page's title.
+ *
+ * There were three hand-rolled versions: two used the ArrowLeft icon and one a
+ * literal "←" glyph in indigo link styling, and only one of the three carried
+ * the mobile touch target. One component, so a detail page can't drift again.
+ */
+export function BackLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <Link
+      href={href}
+      className={`mobile-touch-target mb-5 inline-flex items-center gap-1.5 rounded-md text-[13px] font-medium text-muted motion-safe:transition-colors hover:text-strong ${focusRing}`}
+    >
+      <ArrowLeft className="size-3.5 shrink-0" aria-hidden="true" />
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * Page title, optional intro, and optional page-level actions.
+ *
+ * `actions` pairs with the *title*, not with the whole header. Pages used to
+ * wrap this in `flex flex-wrap justify-between` alongside their buttons, which
+ * meant the long intro forced a wrap on narrow screens and dumped the button on
+ * its own line under the paragraph, left-aligned and orphaned. Titles are short,
+ * so keeping the action beside the title fits at every width and lets the intro
+ * run the full measure beneath both.
+ */
+export function PageHeader({
+  title,
+  intro,
+  actions,
+}: {
+  title: string;
+  intro?: ReactNode;
+  actions?: ReactNode;
+}) {
+  // text-balance/text-pretty stop a wrapped title or intro from stranding a
+  // single word on its own last line.
   return (
     <header>
-      <h1 className="font-display text-[1.875rem] leading-9 font-semibold tracking-[-0.035em] text-strong sm:text-[2rem] sm:leading-10">
-        {title}
-      </h1>
-      {intro ? <p className="mt-2 max-w-[68ch] text-[15px] leading-6 text-muted">{intro}</p> : null}
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <h1 className="min-w-0 font-display text-[1.875rem] leading-9 font-semibold tracking-[-0.035em] text-balance text-strong sm:text-[2rem] sm:leading-10">
+          {title}
+        </h1>
+        {actions ? (
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 pt-1">
+            {actions}
+          </div>
+        ) : null}
+      </div>
+      {intro ? (
+        <p className="mt-2 max-w-[68ch] text-[15px] leading-6 text-pretty text-muted">{intro}</p>
+      ) : null}
     </header>
   );
 }
@@ -168,7 +249,7 @@ export function InfoItem({
   return (
     <div className={`min-w-0 bg-sunken/65 px-3 py-2.5 ${className}`}>
       <dt className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">{label}</dt>
-      <dd className="mt-0.5 min-w-0 break-words text-[13px] leading-5 font-medium text-strong [overflow-wrap:anywhere]">
+      <dd className="mt-0.5 min-w-0 break-words text-[13px] leading-5 font-medium text-strong tabular-nums [overflow-wrap:anywhere]">
         {children}
       </dd>
     </div>
@@ -256,7 +337,12 @@ export function Badge({
 }
 
 const badgeTones = {
-  zinc: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400',
+  // The neutral pill is `sunken`, not zinc-100: zinc-100 and the light canvas
+  // (#f4f4f5 vs #f4f6fa) are the same colour to the eye, so a count sitting
+  // directly on the page background simply vanished. `sunken` is defined as one
+  // step below the canvas, so it reads on the page and on a raised card alike,
+  // in both themes.
+  zinc: 'bg-sunken text-muted',
   amber: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
   blue: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
   green: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300',
@@ -271,7 +357,7 @@ export function CountBadge({
 }) {
   return (
     <span
-      className={`rounded-full px-1.5 py-0.5 text-2xs font-semibold whitespace-nowrap ${badgeTones[tone]}`}
+      className={`rounded-full px-1.5 py-0.5 text-2xs font-semibold tabular-nums whitespace-nowrap ${badgeTones[tone]}`}
     >
       {children}
     </span>
@@ -296,6 +382,13 @@ export function SectionHeading({
   );
 }
 
+/**
+ * "Nothing here yet" always reads as a deliberate tonal panel. It used to fall
+ * back to a bare paragraph whenever no icon or action was supplied, which is
+ * nine of the ten uses — on a page whose entire body is empty (Skills, Filed
+ * documents) that left a lone sentence floating in the void, looking more like
+ * a rendering failure than a state.
+ */
 export function EmptyState({
   children,
   icon,
@@ -305,15 +398,14 @@ export function EmptyState({
   icon?: ReactNode;
   action?: ReactNode;
 }) {
-  if (!icon && !action) return <p className="mt-3 text-[15px] leading-6 text-muted">{children}</p>;
   return (
-    <div className="mt-3 flex flex-col items-start gap-2 rounded-2xl bg-sunken/55 px-5 py-6">
+    <div className="mt-3 flex flex-col items-start gap-3 rounded-2xl bg-sunken/50 px-5 py-5 ring-1 ring-edge/40">
       {icon ? (
         <span aria-hidden="true" className="text-muted">
           {icon}
         </span>
       ) : null}
-      <p className="text-[15px] leading-6 text-muted">{children}</p>
+      <p className="max-w-[68ch] text-[15px] leading-6 text-pretty text-muted">{children}</p>
       {action}
     </div>
   );

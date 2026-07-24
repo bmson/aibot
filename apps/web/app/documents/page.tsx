@@ -8,7 +8,16 @@ import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { btn, cardGridClass, EmptyState, inputClass, PageHeader, PageShell, Panel } from '@/lib/ui';
+import {
+  btn,
+  cardGridClass,
+  EmptyState,
+  fileInputClass,
+  inputClass,
+  PageHeader,
+  PageShell,
+  Panel,
+} from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { DocumentCard, type DocumentCardView } from './document-card';
 
@@ -52,15 +61,15 @@ export default async function DocumentsPage() {
 
   return (
     <PageShell size="reading">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <PageHeader
-          title="Documents"
-          intro="Upload files — PDFs, notes, exports — and I'll read them so you can ask about their contents in chat. Attachments from people you know are filed here automatically. Text and PDFs are read right away; scans and office files wait for the document processor."
-        />
-        <Link href="/import" className={`${btn.outline} mt-1 shrink-0`}>
-          Import backstory
-        </Link>
-      </div>
+      <PageHeader
+        title="Documents"
+        intro="Upload files — PDFs, notes, exports — and I'll read them so you can ask about their contents in chat. Attachments from people you know are filed here automatically. Text and PDFs are read right away; scans and office files wait for the document processor."
+        actions={
+          <Link href="/import" className={btn.outline}>
+            Import backstory
+          </Link>
+        }
+      />
 
       <Panel tone="sunken" className="mt-8">
         <h2 className="text-[15px] font-semibold">Upload a document</h2>
@@ -71,18 +80,15 @@ export default async function DocumentsPage() {
           className="mt-3 flex flex-col items-start gap-3"
         >
           <div className="flex flex-wrap items-center gap-3">
-            <input
-              type="file"
-              name="file"
-              required
-              className="text-[13px] text-muted file:mr-3 file:h-9 file:rounded-lg file:border file:border-edge file:bg-raised file:px-3 file:text-[13px] file:font-medium file:text-strong hover:file:bg-sunken"
-            />
+            <input type="file" name="file" required className={fileInputClass} />
             <SubmitButton variant="primary" pendingLabel="Uploading…">
               Upload
             </SubmitButton>
           </div>
           <details className="text-xs text-zinc-500 dark:text-zinc-400">
-            <summary className="cursor-pointer">Give it a title</summary>
+            <summary className="disclosure flex items-center gap-2 cursor-pointer">
+              Give it a title
+            </summary>
             <label className="mt-2 flex flex-col gap-1">
               Title
               <input

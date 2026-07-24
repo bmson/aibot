@@ -145,17 +145,15 @@ export default async function TasksPage({
   return (
     <PageShell>
       {archived ? null : <AutoRefresh />}
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <PageHeader
-          title={archived ? 'Archived activity' : 'Activity'}
-          intro={
-            archived
-              ? 'Hidden work stays available with its decisions and evidence intact.'
-              : 'A chronological record of what AI Bot did, what it is doing, and where it needs you.'
-          }
-        />
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          {archived ? (
+      <PageHeader
+        title={archived ? 'Archived activity' : 'Activity'}
+        intro={
+          archived
+            ? 'Hidden work stays available with its decisions and evidence intact.'
+            : 'A chronological record of what AI Bot did, what it is doing, and where it needs you.'
+        }
+        actions={
+          archived ? (
             <Link href="/tasks" className={btn.outline}>
               Current activity
             </Link>
@@ -173,9 +171,9 @@ export default async function TasksPage({
                 </SubmitButton>
               </form>
             </>
-          )}
-        </div>
-      </div>
+          )
+        }
+      />
 
       {!archived ? (
         <nav aria-label="Filter activity" className={`${segmentedControlClass} mt-7`}>
@@ -236,9 +234,12 @@ export default async function TasksPage({
                     pendingApprovalTaskIds.has(task.id),
                   );
                   return (
+                    // Each row leads somewhere, so it lights up under the
+                    // pointer — scanning a long day of activity should feel
+                    // like a list you can move through, not a static table.
                     <article
                       key={task.id}
-                      className={`grid grid-cols-[2rem_minmax(0,1fr)] gap-3 px-4 py-4 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-center sm:px-5 ${
+                      className={`grid grid-cols-[2rem_minmax(0,1fr)] gap-3 px-4 py-4 motion-safe:transition-colors hover:bg-sunken/40 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-center sm:px-5 ${
                         index > 0 ? 'border-t border-edge' : ''
                       }`}
                     >
