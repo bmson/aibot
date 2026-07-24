@@ -733,11 +733,18 @@ export function ChatClient({
   };
 
   return (
-    <div className="relative mx-auto flex h-[calc(100dvh-6.5rem)] w-full min-w-0 max-w-5xl flex-col lg:h-[calc(100vh-5rem)]">
+    // The log is the full height of the screen, not a panel inset within it.
+    // The negative margins cancel the page shell's vertical padding, which was
+    // otherwise dead space the log could not use: messages clipped at a line
+    // ~4rem below the top of the window instead of at the window itself, so
+    // text vanished mid-scroll with visible emptiness above it. Anything that
+    // needs breathing room (the header, the log's own opening air) supplies it
+    // from the inside, where it scrolls.
+    <div className="relative mx-auto -my-7 flex h-[calc(100dvh-3.5rem)] w-full min-w-0 max-w-5xl flex-col lg:-my-10 lg:h-[100dvh]">
       {/* The primary thread is the whole surface — it needs no title. Side and
           goal chats keep a slim header so you know which one you're in. */}
       {!isPrimary ? (
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-edge pb-3">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-edge pt-7 pb-3 lg:pt-10">
           <div className="min-w-0">
             <h1
               className="truncate font-display text-lg font-semibold tracking-[-0.03em]"
@@ -1029,9 +1036,13 @@ export function ChatClient({
         style={{ marginTop: `-${composerHeight}px` }}
         className="mobile-safe-bottom pointer-events-none sticky bottom-0 z-20 min-w-0 sm:pb-3"
       >
+        {/* The scrim stops at the composer's own bottom edge. It used to hang
+            below it, which cost nothing when the column ended above the fold
+            but now adds its overhang to the document — the whole page would
+            scroll a little, sliding the "full height" log out of place. */}
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 -top-16 -bottom-8 bg-gradient-to-t from-surface from-35% via-surface/85 to-transparent"
+          className="pointer-events-none absolute inset-x-0 -top-16 bottom-0 bg-gradient-to-t from-surface from-35% via-surface/85 to-transparent"
         />
         {!atBottom && messages.length > 0 ? (
           <div className="pointer-events-none absolute inset-x-0 -top-14 z-10 flex justify-center">
