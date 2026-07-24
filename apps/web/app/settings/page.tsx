@@ -171,9 +171,16 @@ export default async function SettingsPage() {
                 detailTitle={`Schedule: ${s.cron}`}
                 detail={
                   <>
-                    {s.enabled && s.nextRunAt
-                      ? `Next ${relativeTime(s.nextRunAt, now)}, ${formatDateTime(s.nextRunAt, agent.timezone)}`
-                      : 'Not scheduled'}
+                    {!s.enabled
+                      ? 'Not scheduled'
+                      : !s.nextRunAt
+                        ? // Resuming clears next_run_at; the sweep recomputes it.
+                          'Recalculating on the next sweep'
+                        : s.nextRunAt <= now
+                          ? // A due time in the past means the sweep has not
+                            // reached it yet. "Next 5h ago" reads as a bug.
+                            `Overdue since ${formatDateTime(s.nextRunAt, agent.timezone)}`
+                          : `Next ${relativeTime(s.nextRunAt, now)}, ${formatDateTime(s.nextRunAt, agent.timezone)}`}
                     {' · '}
                     {s.lastRunAt ? `last ran ${relativeTime(s.lastRunAt, now)}` : 'has not run yet'}
                   </>
