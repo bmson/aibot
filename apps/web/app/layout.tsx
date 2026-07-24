@@ -151,7 +151,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             signedIn={!!session?.user}
             agentName={identity.name}
             presence={presence}
-            memoryBacklogCount={memoryHealth.notYetOrganized}
+            memoryReviewCount={memoryHealth.awaitingReview}
           />
           <main className="min-w-0 flex-1 px-4 py-7 sm:px-6 lg:px-10 lg:py-10">{children}</main>
         </div>

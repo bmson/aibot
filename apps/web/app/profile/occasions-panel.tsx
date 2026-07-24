@@ -20,7 +20,28 @@ export interface OccasionView {
   quarantined: boolean;
 }
 
+/** A date found in a saved fact that isn't yet an occasion (the chip source). */
+export interface OccasionSuggestion {
+  kind: 'birthday' | 'anniversary';
+  month: number;
+  day: number;
+}
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTHS_LONG = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
 
 function dateLabel(o: OccasionView): string {
   const md = `${MONTHS[o.month - 1] ?? o.month} ${o.day}`;
@@ -36,14 +57,37 @@ export function OccasionsPanel({
   contactId,
   personName,
   occasions,
+  suggestions = [],
 }: {
   contactId: string;
   personName: string;
   occasions: OccasionView[];
+  suggestions?: OccasionSuggestion[];
 }) {
   const [pending, startTransition] = useTransition();
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+
+  const saveSuggestion = (suggestion: OccasionSuggestion) => {
+    const key = `${suggestion.month}-${suggestion.day}`;
+    startTransition(async () => {
+      setError(null);
+      const result = await addOccasionAction(contactId, {
+        kind: suggestion.kind,
+        label: '',
+        month: String(suggestion.month),
+        day: String(suggestion.day),
+        year: '',
+        leadDays: '7',
+        notes: '',
+      });
+      if (result.error) setError(result.error);
+      else setDismissed((prev) => new Set(prev).add(key));
+    });
+  };
+
+  const visibleSuggestions = suggestions.filter((s) => !dismissed.has(`${s.month}-${s.day}`));
 
   return (
     <section className="mt-8">
@@ -118,6 +162,29 @@ export function OccasionsPanel({
           No occasions saved for {personName} yet.
         </p>
       )}
+
+      {visibleSuggestions.length > 0 ? (
+        <div className="mt-3 rounded-xl border border-dashed border-edge bg-sunken/40 p-3">
+          <p className="text-xs text-muted">
+            Found in saved facts — save any of these as a recurring reminder:
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {visibleSuggestions.map((s) => (
+              <button
+                key={`${s.month}-${s.day}-${s.kind}`}
+                type="button"
+                disabled={pending}
+                onClick={() => saveSuggestion(s)}
+                className={`${btn.outline} gap-1`}
+                title={`Save ${MONTHS_LONG[s.month - 1]} ${s.day} as ${s.kind === 'birthday' ? 'a birthday' : 'an anniversary'}`}
+              >
+                + {MONTHS_LONG[s.month - 1]} {s.day}
+                <span className="text-muted">· {s.kind}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {adding ? (
         <form

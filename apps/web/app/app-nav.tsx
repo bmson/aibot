@@ -58,14 +58,14 @@ export function AppNav({
   signedIn,
   agentName,
   presence,
-  memoryBacklogCount,
+  memoryReviewCount,
 }: {
   navItems: NavItem[];
   pendingApprovals: number;
   signedIn: boolean;
   agentName: string;
   presence: AssistantPresence;
-  memoryBacklogCount: number;
+  memoryReviewCount: number;
 }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -160,14 +160,16 @@ export function AppNav({
           </span>
           {item.href === '/approvals' && pendingApprovals > 0 ? (
             <CountBadge tone="amber">{pendingApprovals}</CountBadge>
-          ) : item.href === '/profile' && memoryBacklogCount > 0 ? (
+          ) : item.href === '/profile' && memoryReviewCount > 0 ? (
             <span
-              title={`${memoryBacklogCount.toLocaleString()} memories are waiting for a cleanup pass`}
+              title={`${memoryReviewCount.toLocaleString()} ${
+                memoryReviewCount === 1 ? 'memory needs' : 'memories need'
+              } your review`}
             >
-              <CountBadge>
-                {memoryBacklogCount >= 1_000
-                  ? `${(memoryBacklogCount / 1_000).toFixed(1)}k`
-                  : memoryBacklogCount}
+              <CountBadge tone="amber">
+                {memoryReviewCount >= 1_000
+                  ? `${(memoryReviewCount / 1_000).toFixed(1)}k`
+                  : memoryReviewCount}
               </CountBadge>
             </span>
           ) : null}

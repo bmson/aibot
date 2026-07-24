@@ -2,21 +2,22 @@
 
 import { LoaderCircle } from 'lucide-react';
 import Link from 'next/link';
-import { useState, useTransition } from 'react';
+import { type ReactNode, useState, useTransition } from 'react';
 import {
   approveQuarantined,
   confirmFact,
   correctFact,
-  demoteFact,
   forgetFact,
+  type ProminenceLevel,
   rejectQuarantined,
-  setFactPinned,
+  setFactProminence,
 } from '@/app/profile/actions';
 import {
   Badge,
   btnSm,
   cardFooterClass,
   cardShellClass,
+  focusRing,
   InfoGrid,
   InfoItem,
   textareaClass,
@@ -35,11 +36,37 @@ export interface FactView {
   organized: boolean;
   /** Whether the compile rules put this fact in the owner card right now. */
   inCard: boolean;
+  /** Owner facts can auto-surface by importance; person facts only via pin. */
+  aboutOwner: boolean;
   originTrust: string;
   sourceTaskId: string | null;
   subjectLabel?: string | null;
   createdLabel: string;
   validityLabel: string;
+}
+
+const PROMINENCE_OPTIONS: Array<{ level: ProminenceLevel; label: string; hint: string }> = [
+  {
+    level: 'always',
+    label: 'Always',
+    hint: 'Always kept in AI Bot’s profile summary, in every conversation.',
+  },
+  {
+    level: 'auto',
+    label: 'When relevant',
+    hint: 'AI Bot decides — important facts surface on their own; the rest are recalled when they matter.',
+  },
+  {
+    level: 'minor',
+    label: 'Minor',
+    hint: 'A small detail — kept for recall but never featured in the profile summary.',
+  },
+];
+
+function prominenceOf(fact: FactView): ProminenceLevel {
+  if (fact.pinned) return 'always';
+  if (fact.importance <= 1) return 'minor';
+  return 'auto';
 }
 
 const outlineButton = btnSm.outline;
@@ -165,38 +192,15 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
                 {pendingAction === 'confirm' ? 'Confirming…' : 'Confirm'}
               </button>
             ) : null}
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => runAction('pin', () => setFactPinned(fact.id, !fact.pinned))}
-              className={outlineButton}
-              title={
-                fact.pinned
-                  ? 'Remove from the compiled owner card'
-                  : 'Always include in the compiled owner card'
+            <ProminenceControl
+              fact={fact}
+              pending={pending}
+              pendingAction={pendingAction}
+              pendingIcon={pendingIcon}
+              onSelect={(level) =>
+                runAction(`prominence:${level}`, () => setFactProminence(fact.id, level))
               }
-            >
-              {pendingAction === 'pin' ? pendingIcon : null}
-              {pendingAction === 'pin'
-                ? fact.pinned
-                  ? 'Unpinning…'
-                  : 'Pinning…'
-                : fact.pinned
-                  ? 'Unpin'
-                  : 'Pin to card'}
-            </button>
-            {fact.importance > 1 ? (
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => runAction('demote', () => demoteFact(fact.id))}
-                className={outlineButton}
-                title="Minor detail: stays in memory for recall but never auto-appears in the card"
-              >
-                {pendingAction === 'demote' ? pendingIcon : null}
-                {pendingAction === 'demote' ? 'Demoting…' : 'Demote'}
-              </button>
-            ) : null}
+            />
             <button
               type="button"
               disabled={pending}
@@ -271,5 +275,66 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
         </div>
       ) : null}
     </article>
+  );
+}
+
+/**
+ * One control for how prominently AI Bot uses a fact, replacing the old
+ * pin/demote pair. Owner facts offer all three levels; a person's facts only
+ * ever reach the profile summary by pinning, so "Minor" (which only suppresses
+ * auto-surfacing) is hidden for them — it would change nothing.
+ */
+function ProminenceControl({
+  fact,
+  pending,
+  pendingAction,
+  pendingIcon,
+  onSelect,
+}: {
+  fact: FactView;
+  pending: boolean;
+  pendingAction: string | null;
+  pendingIcon: ReactNode;
+  onSelect: (level: ProminenceLevel) => void;
+}) {
+  const current = prominenceOf(fact);
+  const options = fact.aboutOwner
+    ? PROMINENCE_OPTIONS
+    : PROMINENCE_OPTIONS.filter((option) => option.level !== 'minor');
+
+  return (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <span className="text-2xs font-medium text-muted">In conversations</span>
+      {/* biome-ignore lint/a11y/useSemanticElements: a toolbar-style segmented
+          control, not a form fieldset; each option is an aria-pressed button. */}
+      <div
+        role="group"
+        aria-label="How prominently AI Bot uses this fact"
+        className="inline-flex rounded-lg bg-sunken/70 p-0.5"
+      >
+        {options.map((option) => {
+          const active = option.level === current;
+          const isPending = pendingAction === `prominence:${option.level}`;
+          return (
+            <button
+              key={option.level}
+              type="button"
+              disabled={pending}
+              aria-pressed={active}
+              title={option.hint}
+              onClick={() => onSelect(option.level)}
+              className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-2xs font-medium motion-safe:transition-colors ${focusRing} ${
+                active
+                  ? 'bg-raised text-strong shadow-sm'
+                  : 'text-muted hover:text-strong disabled:hover:text-muted'
+              }`}
+            >
+              {isPending ? pendingIcon : null}
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
