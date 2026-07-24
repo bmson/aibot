@@ -89,7 +89,7 @@ export async function runCodeJob(
       const r = await runMemoryConsolidation(deps, { taskId: task.id, agentId: task.agentId });
       return {
         done: true,
-        summary: `consolidation: ${r.memoriesReviewed + r.standaloneReviewed} memories reviewed in ${r.batches} batch(es) across ${r.entities} people, ${r.duplicatesExpired} duplicates expired, ${r.contradictionsResolved} contradictions resolved, ${r.factsUnified} facts unified, ${r.domainsAssigned} domains assigned, owner card recompiled`,
+        summary: `consolidation: ${r.memoriesReviewed + r.standaloneReviewed} memories reviewed in ${r.batches} batch(es) across ${r.entities} people, ${r.duplicatesExpired} duplicates expired, ${r.contradictionsResolved} contradictions resolved, ${r.factsUnified} facts unified, ${r.domainsAssigned} domains assigned, ${r.occasionsSaved} occasion(s) found, owner card recompiled`,
       };
     }
     case 'chat.segment': {

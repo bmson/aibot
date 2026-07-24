@@ -17,13 +17,14 @@ import { withSpan } from '../otel.js';
 import { getQueueNotifier } from '../queue.js';
 import { enqueueTask } from '../workflow/machine.js';
 import { compileOwnerCard } from './consolidation.js';
-import { ExtractedFactSchema, parseValidFrom } from './extraction.js';
+import { ExtractedFactSchema, ExtractedOccasionSchema, parseValidFrom } from './extraction.js';
 import {
   ageScaledConfidence,
   type ImportKind,
   parseArchive,
   windowUnits,
 } from './import-parsers.js';
+import { saveOccasion } from './occasions.js';
 
 /**
  * Backstory import (Phase 22): batch-distill an archive from the workspace
@@ -48,7 +49,10 @@ export interface WorkspaceReader {
   readBytes?(relPath: string): Promise<Buffer>;
 }
 
-const ImportFactsSchema = z.object({ facts: z.array(ExtractedFactSchema).max(20) });
+const ImportFactsSchema = z.object({
+  facts: z.array(ExtractedFactSchema).max(20),
+  occasions: z.array(ExtractedOccasionSchema).max(10).default([]),
+});
 
 const WINDOWS_PER_RUN = 6; // checkpoint granularity: one run ≈ one queue lease
 const RESUME_DELAY_MS = 5_000;
@@ -61,6 +65,7 @@ interface ImportCursor {
   duplicates: number;
   tombstoned: number;
   quarantined: number;
+  occasionsSaved: number;
   /** Durable parsed snapshot. Resumed leases never reopen the source archive. */
   manifestPath?: string;
   manifestHash?: string;
@@ -272,6 +277,9 @@ function importSystem(source: string, period: string): string {
     'and anything trivially dated. Each fact must stand alone, in third person, with names',
     'spelled out. Use subject "owner" for Baldvin himself. Include validFrom (ISO date)',
     'when the period implies it. If nothing is worth keeping, return an empty facts array.',
+    'Also capture OCCASIONS in the separate occasions array: recurring dates for named',
+    'people — birthdays, anniversaries, and other dated events — but only when a specific',
+    'month and day are stated. Include the year only if given, and any gift ideas as notes.',
   ].join('\n');
 }
 
@@ -314,6 +322,7 @@ export async function runImportJob(
       duplicates: 0,
       tombstoned: 0,
       quarantined: 0,
+      occasionsSaved: 0,
       ...((plannerState.import as Partial<ImportCursor>) ?? {}),
     };
 
@@ -557,6 +566,34 @@ export async function runImportJob(
         });
       }
 
+      // Occasions stated in this window (birthdays, anniversaries) — saved
+      // outside the fact transaction since saveOccasion is an idempotent upsert
+      // that a resumed lease can safely re-run. Third-party occasions from the
+      // owner's archive quarantine for review, mirroring third-party facts.
+      for (const occ of outcome.object.occasions ?? []) {
+        const resolvedContact = await resolveSubjectContact(db, { subject: occ.subject });
+        if (!resolvedContact) continue;
+        const occAboutOwner = occ.subject.trim().toLowerCase() === 'owner';
+        try {
+          const savedOccasion = await saveOccasion(db, {
+            agentId: task.agentId,
+            contactId: resolvedContact.contactId,
+            kind: occ.kind,
+            label: occ.label,
+            month: occ.month,
+            day: occ.day,
+            year: occ.year,
+            notes: occ.notes,
+            originTrust: 'owner',
+            quarantined: !occAboutOwner,
+            source: payload.source,
+          });
+          if (savedOccasion.saved) cursor.occasionsSaved += 1;
+        } catch (err) {
+          console.error(`import ${payload.source}: skipping unsavable occasion`, err);
+        }
+      }
+
       cursor.windowIndex += 1;
       await checkpoint();
     }
@@ -570,7 +607,7 @@ export async function runImportJob(
       await compileOwnerCard(db).catch((err) => console.error('card recompile failed', err));
       return {
         done: true,
-        summary: `import ${payload.source}: complete — ${cursor.saved} memories (${cursor.quarantined} quarantined for review), ${cursor.duplicates} duplicates, ${cursor.tombstoned} tombstoned, ${manifest.windowCount} windows`,
+        summary: `import ${payload.source}: complete — ${cursor.saved} memories (${cursor.quarantined} quarantined for review), ${cursor.occasionsSaved} occasion(s), ${cursor.duplicates} duplicates, ${cursor.tombstoned} tombstoned, ${manifest.windowCount} windows`,
       };
     }
     return {
