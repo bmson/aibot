@@ -3,6 +3,7 @@ import { modelMessageSchema } from 'ai';
 import { describe, expect, it } from 'vitest';
 import type { Plan } from '../events.js';
 import {
+  goalStopReason,
   replaceToolResultMessage,
   roleForTask,
   shouldTaintContext,
@@ -160,5 +161,27 @@ describe('roleForTask', () => {
     expect(roleForTask(t('chat_turn'), plan('reply'))).toBe('draft');
     expect(roleForTask(t('chat_turn'), null)).toBe('draft');
     expect(roleForTask(t('sms_turn'), null)).toBe('draft');
+  });
+});
+
+describe('goalStopReason', () => {
+  it('stops queued work for a goal the owner abandoned', () => {
+    expect(goalStopReason({ status: 'abandoned', archivedAt: null })).toBe('stopped');
+  });
+
+  it('stops queued work for an archived goal whatever its status', () => {
+    expect(goalStopReason({ status: 'active', archivedAt: new Date() })).toBe('archived');
+  });
+
+  it('lets a paused goal finish work that is already queued', () => {
+    // Pausing suppresses new automatic sessions. Cancelling in-flight work as
+    // well would silently discard a session the owner is waiting on.
+    expect(goalStopReason({ status: 'paused', archivedAt: null })).toBeNull();
+  });
+
+  it('does not block active or completed goals, or a goal that is gone', () => {
+    expect(goalStopReason({ status: 'active', archivedAt: null })).toBeNull();
+    expect(goalStopReason({ status: 'done', archivedAt: null })).toBeNull();
+    expect(goalStopReason(undefined)).toBeNull();
   });
 });

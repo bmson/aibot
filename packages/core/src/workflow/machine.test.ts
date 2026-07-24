@@ -43,6 +43,14 @@ let dbUp = false;
 let agentId: string;
 const createdTaskIds: string[] = [];
 
+/**
+ * These tests share a long-lived development database with whatever work is
+ * already queued there. Stamping a row with this makes it sort first in
+ * findDueTasks' `updatedAt` ordering, so assertions about the sweep are about
+ * the sweep and not about how much unrelated work happens to be pending.
+ */
+const OLDEST = new Date('2000-01-01T00:00:00Z');
+
 function event(overrides: Partial<InboundEvent> = {}): InboundEvent {
   return {
     source: 'internal',
@@ -195,7 +203,12 @@ describe('task state machine (integration)', () => {
     expect(dueNow.map((t) => t.id)).not.toContain(task.id);
 
     const past = new Date(Date.now() - 1000);
-    await db.update(tasks).set({ runAfter: past }).where(eq(tasks.id, task.id));
+    // findDueTasks orders by updatedAt ascending and takes `limit`. A row this
+    // test just wrote is the newest, so on a database with more due work than
+    // the limit it sorts off the end and the assertion fails for reasons that
+    // have nothing to do with the behaviour under test. Backdating makes this
+    // task sort first, so the sweep sees it no matter what else is queued.
+    await db.update(tasks).set({ runAfter: past, updatedAt: OLDEST }).where(eq(tasks.id, task.id));
     const dueLater = await findDueTasks(db, 100);
     expect(dueLater.map((t) => t.id)).toContain(task.id);
   });
@@ -267,7 +280,10 @@ describe('task state machine (integration)', () => {
 
     await db
       .update(tasks)
-      .set({ lockedUntil: new Date(Date.now() - 1000) })
+      // Backdated for the same reason as the sleeping-task sweep above: keep
+      // this row at the front of findDueTasks' updatedAt ordering so a busy
+      // database cannot push it past the limit.
+      .set({ lockedUntil: new Date(Date.now() - 1000), updatedAt: OLDEST })
       .where(eq(tasks.id, task.id));
     const firstSweep = await findDueTasks(db, 100);
     const first = firstSweep.find((candidate) => candidate.id === task.id);

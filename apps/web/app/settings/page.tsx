@@ -127,9 +127,17 @@ export default async function SettingsPage() {
                   </p>
                   <InfoGrid className="mt-3 sm:grid-cols-2">
                     <InfoItem label="Next run">
-                      {s.nextRunAt && s.enabled
-                        ? `${relativeTime(s.nextRunAt, now)} · ${formatDateTime(s.nextRunAt, agent.timezone)}`
-                        : 'Not scheduled'}
+                      {!s.enabled || !s.nextRunAt
+                        ? // Resuming clears next_run_at; the sweep recomputes it.
+                          s.enabled
+                          ? 'Recalculating on the next sweep'
+                          : 'Not scheduled'
+                        : // A due time in the past means the sweep has not reached
+                          // it yet. "5h ago" under a "Next run" label reads as a
+                          // bug; say what is actually true.
+                          s.nextRunAt <= now
+                          ? `Overdue since ${formatDateTime(s.nextRunAt, agent.timezone)}`
+                          : `${relativeTime(s.nextRunAt, now)} · ${formatDateTime(s.nextRunAt, agent.timezone)}`}
                     </InfoItem>
                     <InfoItem label="Last run">
                       {s.lastRunAt ? relativeTime(s.lastRunAt, now) : 'Not run yet'}

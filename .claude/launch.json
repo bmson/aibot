@@ -7,6 +7,20 @@
       "runtimeArgs": ["--filter", "@assistant/web", "dev"],
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "web-qa",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "AUTH_GOOGLE_ID=",
+        "AUTH_DEV_BYPASS=true",
+        "pnpm",
+        "--filter",
+        "@assistant/web",
+        "dev"
+      ],
+      "port": 3000,
+      "autoPort": true
     }
   ]
 }

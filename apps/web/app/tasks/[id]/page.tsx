@@ -10,7 +10,7 @@ import { formatDateTime, formatUsd, prettyJson, relativeTime, truncate } from '@
 import { getDb } from '@/lib/server';
 import { cardShellClass, InfoGrid, InfoItem, PageShell } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
-import { StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
+import { displayTaskStatus, StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 import {
   archiveTask,
   cancelTask,
@@ -217,6 +217,12 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   const stoppedForTaskBudget =
     task.status === 'needs_attention' && task.progress.startsWith('budget: task budget');
   const activeGrant = activeAutonomyGrant(task, Date.now());
+  const terminal = TERMINAL_TASK_STATUSES.has(task.status);
+  // Parked on an approval that was resolved, expired, or never written. Nothing
+  // will ever arrive to un-park it, so the owner needs the way out here.
+  const stuckWaiting =
+    task.status === 'waiting_approval' &&
+    !taskApprovals.some((approval) => approval.status === 'pending');
 
   return (
     <PageShell size="reading">
@@ -232,7 +238,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             <h1 className="font-display text-2xl font-semibold tracking-[-0.035em]">
               {task.title || taskTypeLabel(task.type)}
             </h1>
-            <StatusChip status={task.status} />
+            <StatusChip status={displayTaskStatus(task.status, !stuckWaiting)} />
           </div>
           {activeGrant ? (
             <span
@@ -244,19 +250,22 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-          {activeGrant && !TERMINAL_TASK_STATUSES.has(task.status) ? (
+          {activeGrant && !terminal ? (
             <form action={revokeAutonomyGrant.bind(null, task.id)}>
               <SubmitButton pendingLabel="Revoking…">Revoke free-range</SubmitButton>
             </form>
           ) : null}
-          {task.status === 'needs_attention' && !stoppedForTaskBudget ? (
+          {(task.status === 'needs_attention' && !stoppedForTaskBudget) || stuckWaiting ? (
             <form action={retryTask.bind(null, task.id)}>
               <SubmitButton variant="primary" pendingLabel="Retrying…">
                 Retry
               </SubmitButton>
             </form>
           ) : null}
-          {task.status === 'needs_attention' ? (
+          {/* Any unfinished task can be called off. Restricting this to
+              needs_attention left tasks parked on a vanished approval with no
+              reachable action at all. */}
+          {!terminal ? (
             <form action={cancelTask.bind(null, task.id)}>
               <SubmitButton pendingLabel="Cancelling…">Cancel</SubmitButton>
             </form>
@@ -265,13 +274,21 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             <form action={restoreTask.bind(null, task.id)}>
               <SubmitButton pendingLabel="Restoring…">Restore to Activity</SubmitButton>
             </form>
-          ) : TERMINAL_TASK_STATUSES.has(task.status) ? (
+          ) : terminal ? (
             <form action={archiveTask.bind(null, task.id)}>
               <SubmitButton pendingLabel="Archiving…">Archive</SubmitButton>
             </form>
           ) : null}
         </div>
       </header>
+
+      {stuckWaiting ? (
+        <p className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
+          This was parked for an approval that no longer exists — it was resolved, it expired, or it
+          was never recorded. Nothing will arrive to release it, so it does not appear on the
+          Approvals page. Retry to run it again, or cancel it.
+        </p>
+      ) : null}
 
       {stoppedForTaskBudget ? (
         <form

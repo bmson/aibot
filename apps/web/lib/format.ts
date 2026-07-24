@@ -75,11 +75,20 @@ export function formatFriendlyDateTime(
   return `${dayLabel} · ${time}`;
 }
 
-/** "$0.25" — numeric strings from drizzle, trailing zeros trimmed. */
+/**
+ * "$0.50" — numeric strings from drizzle rendered as money. Two decimals is the
+ * form people read prices in; trimming trailing zeros produced "$0.5" and
+ * "$0.982" side by side. Sub-cent amounts are the exception: a single model call
+ * costs less than a cent, and rounding those to "$0.00" would erase the number
+ * the costs page exists to show, so they keep up to 4 decimal places.
+ */
 export function formatUsd(value: string | null | undefined): string {
   const n = Number.parseFloat(value ?? '0');
-  if (Number.isNaN(n)) return '$0';
-  return `$${n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+  if (Number.isNaN(n)) return '$0.00';
+  if (n !== 0 && Math.abs(n) < 0.01) {
+    return `$${n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+  }
+  return `$${n.toFixed(2)}`;
 }
 
 export function truncate(text: string, max: number): string {

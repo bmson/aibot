@@ -1,5 +1,5 @@
-import type { TaskRow } from '@assistant/db';
-import { tasks } from '@assistant/db';
+import type { Db, TaskRow } from '@assistant/db';
+import { goals, tasks } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { eq } from 'drizzle-orm';
 import { getAgent } from '../chat.js';
@@ -36,6 +36,7 @@ import {
 import { compact, latestUserText } from './executor/util.js';
 import {
   claimTask,
+  completeTask,
   markTaskNeedsAttention,
   parkForBudget,
   recordFailedAttempt,
@@ -43,6 +44,32 @@ import {
   type TaskLease,
   taskState,
 } from './machine.js';
+
+/**
+ * Why a goal says its queued work should no longer run: the owner stopped it, or
+ * archived it out of the daily view. Null for every other case — including a
+ * *paused* goal, because pausing only stops new automatic sessions and work
+ * already in flight is still expected to finish. A goal that no longer exists
+ * does not block either; the task is judged on its own terms.
+ */
+export function goalStopReason(
+  goal: { status: string; archivedAt: Date | null } | undefined,
+): 'stopped' | 'archived' | null {
+  if (!goal) return null;
+  if (goal.status === 'abandoned') return 'stopped';
+  if (goal.archivedAt) return 'archived';
+  return null;
+}
+
+async function abandonedGoalFor(db: Db, task: TaskRow): Promise<'stopped' | 'archived' | null> {
+  if (!task.goalId) return null;
+  const [goal] = await db
+    .select({ status: goals.status, archivedAt: goals.archivedAt })
+    .from(goals)
+    .where(eq(goals.id, task.goalId))
+    .limit(1);
+  return goalStopReason(goal);
+}
 
 export { roleForTask } from './executor/role.js';
 // Public API preserved: these symbols now live in ./executor/* modules but stay
@@ -64,6 +91,20 @@ export async function executeTask(deps: ExecutorDeps, taskId: string): Promise<E
   const { db } = deps;
   const task = await claimTask(db, taskId);
   if (!task) return { outcome: 'not_claimable' };
+
+  // The owner stopping or archiving a goal must also stop work already sitting
+  // in the queue for it. Cancelling at the source is racy on its own — a task
+  // can be claimed between the owner's click and the cancelling write — so the
+  // executor refuses the run itself. Spending against an abandoned goal is the
+  // failure this closes.
+  const abandoned = await abandonedGoalFor(db, task);
+  if (abandoned) {
+    await completeTask(db, task, {
+      status: 'cancelled',
+      progress: `stopped because its goal was ${abandoned}`,
+    });
+    return { outcome: 'cancelled', detail: `goal ${abandoned}` };
+  }
 
   return withSpan('task.execute', { taskId, type: task.type, attempt: task.attempt }, async () => {
     try {

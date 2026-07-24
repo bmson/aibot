@@ -220,7 +220,11 @@ export function AppNav({
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden w-60 shrink-0 flex-col bg-[#0b0d12] text-white lg:flex">
+      {/* Pinned to the viewport: the rail used to stretch to document height, so
+          on a long Activity or Goals page it scrolled away and left a dead black
+          column. Its own overflow keeps the nav reachable when it outgrows the
+          screen. */}
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col overflow-y-auto bg-[#0b0d12] text-white lg:flex">
         <div className="px-5 pt-6 pb-7">
           <Link href="/chat" className={`inline-flex rounded-lg ${focusRing}`}>
             <BrandLockup

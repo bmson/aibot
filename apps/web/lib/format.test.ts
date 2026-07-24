@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatFriendlyDateTime, relativeTime, stripMarkdown, truncate } from './format';
+import { formatFriendlyDateTime, formatUsd, relativeTime, stripMarkdown, truncate } from './format';
 
 // A fixed "now": 2026-07-22 21:30 UTC = 2026-07-22 14:30 in Los Angeles.
 const NOW = new Date('2026-07-22T21:30:00Z');
@@ -80,5 +80,25 @@ describe('existing helpers stay stable', () => {
 
   it('truncate appends a single ellipsis character', () => {
     expect(truncate('abcdef', 4)).toBe('abc…');
+  });
+});
+
+describe('formatUsd', () => {
+  it('renders money with two decimals', () => {
+    expect(formatUsd('0.5')).toBe('$0.50');
+    expect(formatUsd('0.982')).toBe('$0.98');
+    expect(formatUsd('50')).toBe('$50.00');
+    expect(formatUsd('0')).toBe('$0.00');
+  });
+
+  it('keeps sub-cent precision so single model calls stay visible', () => {
+    expect(formatUsd('0.0055')).toBe('$0.0055');
+    expect(formatUsd('0.0001')).toBe('$0.0001');
+  });
+
+  it('falls back to zero for missing or unparseable values', () => {
+    expect(formatUsd(null)).toBe('$0.00');
+    expect(formatUsd(undefined)).toBe('$0.00');
+    expect(formatUsd('not-a-number')).toBe('$0.00');
   });
 });

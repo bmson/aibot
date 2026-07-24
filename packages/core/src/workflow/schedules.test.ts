@@ -3,6 +3,7 @@ import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import {
+  cancelQueuedGoalWork,
   GOAL_BLOCKED_PREFIX,
   GOAL_SESSION_SUPERSEDED,
   goalAutomationGate,
@@ -327,5 +328,72 @@ describe('runDueSchedules goal wiring (integration)', () => {
     } finally {
       await restore();
     }
+  });
+});
+
+describe('cancelQueuedGoalWork (integration)', () => {
+  it('calls off queued work but leaves a task a worker is holding', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const queued = await insertGoalTask({ status: 'pending' });
+    const parked = await insertGoalTask({ status: 'waiting_approval' });
+    const sleeping = await insertGoalTask({ status: 'sleeping' });
+    const running = await insertGoalTask({ status: 'running' });
+    const alreadyDone = await insertGoalTask({ status: 'done', progress: 'finished earlier' });
+
+    const cancelled = await cancelQueuedGoalWork(db, agentId, goalId);
+    expect(cancelled).toBe(3);
+
+    const rows = await db
+      .select({ id: tasks.id, status: tasks.status, progress: tasks.progress })
+      .from(tasks)
+      .where(inArray(tasks.id, [queued, parked, sleeping, running, alreadyDone]));
+    const statusOf = (id: string) => rows.find((row) => row.id === id)?.status;
+
+    expect(statusOf(queued)).toBe('cancelled');
+    expect(statusOf(parked)).toBe('cancelled');
+    expect(statusOf(sleeping)).toBe('cancelled');
+    // Held by a worker mid-step — the executor's own guard stops that one.
+    expect(statusOf(running)).toBe('running');
+    // Finished work keeps its outcome and its progress note.
+    expect(statusOf(alreadyDone)).toBe('done');
+    expect(rows.find((row) => row.id === alreadyDone)?.progress).toBe('finished earlier');
+    expect(rows.find((row) => row.id === queued)?.progress).toContain('goal was stopped');
+  });
+
+  it('does not touch another goal’s work', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const mine = await insertGoalTask({ status: 'pending' });
+    const [otherGoal] = await db
+      .insert(goals)
+      .values({ agentId, title: `other-goal-${Date.now()}`, status: 'active' })
+      .returning();
+    const otherGoalId = (otherGoal as NonNullable<typeof otherGoal>).id;
+    createdGoalIds.push(otherGoalId);
+    const [otherTask] = await db
+      .insert(tasks)
+      .values({
+        agentId,
+        goalId: otherGoalId,
+        type: 'scheduled',
+        status: 'pending',
+        trust: 'assistant',
+        trigger: { source: 'schedule', payload: {} },
+      })
+      .returning({ id: tasks.id });
+    const otherTaskId = (otherTask as NonNullable<typeof otherTask>).id;
+    createdTaskIds.push(otherTaskId);
+
+    expect(await cancelQueuedGoalWork(db, agentId, goalId)).toBe(1);
+
+    const [untouched] = await db
+      .select({ status: tasks.status })
+      .from(tasks)
+      .where(eq(tasks.id, otherTaskId));
+    expect(untouched?.status).toBe('pending');
+    const [cancelled] = await db
+      .select({ status: tasks.status })
+      .from(tasks)
+      .where(eq(tasks.id, mine));
+    expect(cancelled?.status).toBe('cancelled');
   });
 });
