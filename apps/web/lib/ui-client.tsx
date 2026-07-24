@@ -1,8 +1,8 @@
 'use client';
 
 import { LoaderCircle } from 'lucide-react';
-import type { ReactNode } from 'react';
-import { useState } from 'react';
+import type { ReactNode, ToggleEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFormStatus } from 'react-dom';
 import { btn, btnSm } from './ui';
 
@@ -52,6 +52,103 @@ export function SubmitButton({
         children
       )}
     </button>
+  );
+}
+
+/**
+ * A dropdown of secondary actions behind a trigger button. The panel is a
+ * native `popover`, so it renders in the top layer — it can never be clipped
+ * by an `overflow-hidden` card shell — and light-dismiss (outside click,
+ * Escape) comes from the platform. Placement is viewport-aware: the panel
+ * opens downward and flips above the trigger when the fold would cut it off.
+ *
+ * Clicking a link or an element marked `data-menu-close` closes the panel;
+ * everything else (submit buttons, two-step confirms) keeps it open so
+ * pending labels and arm states stay visible until the action lands.
+ */
+export function ActionMenu({
+  label = 'More',
+  variant = 'outline',
+  size = 'md',
+  panelClassName = 'w-56',
+  className = '',
+  children,
+}: {
+  label?: ReactNode;
+  variant?: BtnVariant;
+  size?: 'md' | 'sm';
+  /** Sizing/extra classes for the panel; keep a width here so placement can measure. */
+  panelClassName?: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+
+  const place = useCallback(() => {
+    const trigger = triggerRef.current;
+    const panel = panelRef.current;
+    if (!trigger || !panel?.matches(':popover-open')) return;
+    const edge = 8;
+    const rect = trigger.getBoundingClientRect();
+    const fitsBelow = window.innerHeight - rect.bottom >= panel.offsetHeight + edge * 2;
+    const flipUp = !fitsBelow && rect.top >= panel.offsetHeight + edge * 2;
+    panel.style.top = `${flipUp ? rect.top - panel.offsetHeight - edge : rect.bottom + edge}px`;
+    panel.style.left = `${Math.max(
+      edge,
+      Math.min(rect.right - panel.offsetWidth, window.innerWidth - panel.offsetWidth - edge),
+    )}px`;
+  }, []);
+
+  // The trigger can move under an open panel (window resize, any scroll).
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [open, place]);
+
+  return (
+    <>
+      <button
+        type="button"
+        ref={triggerRef}
+        aria-haspopup="true"
+        aria-expanded={open}
+        className={`${btnScale[size][variant]} ${className}`}
+        onClick={() => {
+          panelRef.current?.togglePopover();
+          place(); // togglePopover is synchronous; placing now avoids a first-frame jump
+        }}
+      >
+        {label}
+      </button>
+      {/* Click delegation, not an interactive element itself: menu items are real
+          buttons/links (keyboard-activatable), and Escape closes via the popover. */}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: see above */}
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: Enter on items fires click; Escape is native */}
+      <div
+        ref={panelRef}
+        popover="auto"
+        onToggle={(event: ToggleEvent<HTMLDivElement>) => {
+          const isOpen = event.newState === 'open';
+          setOpen(isOpen);
+          if (isOpen) place();
+        }}
+        onClick={(event) => {
+          if ((event.target as HTMLElement).closest('a, [data-menu-close]')) {
+            panelRef.current?.hidePopover();
+          }
+        }}
+        className={`fixed inset-auto z-50 m-0 max-h-[min(24rem,calc(100vh-1rem))] flex-col gap-2 overflow-y-auto rounded-xl border border-edge bg-raised p-3 shadow-lg motion-safe:animate-[pop-in_120ms_ease-out] [&:popover-open]:flex ${panelClassName}`}
+      >
+        {children}
+      </div>
+    </>
   );
 }
 

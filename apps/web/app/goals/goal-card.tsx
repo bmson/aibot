@@ -1,7 +1,8 @@
 'use client';
 
+import { CircleAlert, CornerDownRight } from 'lucide-react';
 import Link from 'next/link';
-import { useActionState, useState } from 'react';
+import { type ReactNode, useActionState, useEffect, useRef, useState } from 'react';
 import {
   archiveGoal,
   restoreGoal,
@@ -17,14 +18,11 @@ import {
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
-  cardTitleClass,
-  InfoGrid,
-  InfoItem,
   inputClass as sharedInputClass,
   labelClass as sharedLabelClass,
   textareaClass,
 } from '@/lib/ui';
-import { SubmitButton } from '@/lib/ui-client';
+import { ActionMenu, ConfirmButton, SubmitButton } from '@/lib/ui-client';
 import { PACE_OPTIONS } from './pace';
 
 /** Plain-serializable props built server-side in page.tsx (labels precomputed there). */
@@ -38,9 +36,7 @@ export interface GoalView {
   nextAction: string;
   /** 'YYYY-MM-DD' for the edit form's date input, '' when unset. */
   targetDateInput: string;
-  /** e.g. 'target in 30d (2026-08-14)', '' when unset. */
-  targetLabel: string;
-  /** e.g. 'updated 3m ago'. */
+  /** e.g. '2h ago' — freshness of the latest update. */
   updatedLabel: string;
   /** The chat created when this goal was started, if it has one. */
   conversationId?: string;
@@ -48,16 +44,20 @@ export interface GoalView {
   archived: boolean;
   /** Archive is unavailable while the linked goal still has unfinished work. */
   workActive: boolean;
-  /** How often the goal works on its own — a plain label, never cron. */
-  paceLabel: string;
-  /** e.g. 'next in 4h', empty if automation is not running. */
+  /** e.g. 'Checks in daily' / 'Automation paused', '' for closed goals. */
+  paceMeta: string;
+  /** e.g. 'next in 4h', empty if automation is not running (or the goal is blocked). */
   automationNextLabel: string;
+  /** Friendly deadline phrase, e.g. 'Due Oct 9 — 11w left'; null without a target. */
+  targetMeta: { label: string; overdue: boolean } | null;
+  /** Where now sits between goal start and target (0–100); null without a target. */
+  timelinePct: number | null;
   /** e.g. '2h ago — Completed', '' when no session has run yet. */
   lastSessionLabel: string;
   /** Link to the most recent session's task detail, if any. */
   lastSessionHref?: string;
   /**
-   * 'Blocked — needs you: …' when automatic work is stalled on the owner
+   * 'Waiting on you: …' when automatic work is stalled on the owner
    * (unanswered question or a needs_attention session); '' when healthy.
    * Without this the card shows only the next-run countdown, which looks
    * healthy while the automation is actually suspended.
@@ -72,15 +72,151 @@ export interface GoalView {
 }
 
 const outlineButton = btn.outline;
-const dangerOutlineButton = btn.dangerOutline;
 const inputClass = `${sharedInputClass} w-full`;
 const labelClass = `flex flex-col gap-1 ${sharedLabelClass}`;
 
+/**
+ * The latest update clamps to three lines so a wordy report cannot bury the
+ * cards below it; the toggle appears only when the clamp actually hides text.
+ */
+function LatestUpdate({ goal }: { goal: GoalView }) {
+  const textRef = useRef<HTMLParagraphElement | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+
+  useEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+    const check = () => setOverflowing(el.scrollHeight > el.clientHeight + 1);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <section className="min-w-0">
+      <p className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+        Latest update
+        <span className="ml-1.5 font-normal tracking-normal normal-case">
+          · {goal.updatedLabel}
+        </span>
+      </p>
+      {goal.progress ? (
+        <>
+          <p
+            ref={textRef}
+            className={`mt-1 text-[14px] leading-6 text-strong ${expanded ? '' : 'line-clamp-3'}`}
+          >
+            {goal.progress}
+          </p>
+          {overflowing || expanded ? (
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              className="mt-1 text-2xs font-medium text-muted underline decoration-edge underline-offset-2 hover:text-strong"
+            >
+              {expanded ? 'Show less' : 'Show more'}
+            </button>
+          ) : null}
+        </>
+      ) : (
+        <p className="mt-1 text-[14px] leading-6 text-muted">Nothing reported yet.</p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The runway: a hairline from the goal's start to its target date with a dot
+ * at today. Deliberately a position-in-time marker, not a fill bar — the app
+ * has no numeric completion, and a filled bar would read as one.
+ */
+function TargetRunway({ goal }: { goal: GoalView }) {
+  if (goal.timelinePct === null || !goal.targetMeta) return null;
+  const urgent = goal.targetMeta.overdue || goal.blockedLabel !== '';
+  const live = goal.automationNextLabel !== '' && !urgent;
+  return (
+    <div
+      role="img"
+      aria-label={`${goal.timelinePct}% of the time to the target date has passed`}
+      className="relative h-2"
+    >
+      <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 rounded-full bg-edge" />
+      <div
+        className={`absolute top-1/2 h-px -translate-y-1/2 rounded-full ${urgent ? 'bg-amber-500/50' : 'bg-accent/40'}`}
+        style={{ width: `${goal.timelinePct}%` }}
+      />
+      <div
+        className={`absolute top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full ${
+          urgent ? 'bg-amber-500' : 'bg-accent'
+        } ${live ? 'motion-safe:animate-[presence-breathe_2.4s_ease-in-out_3]' : ''}`}
+        style={{ left: `${goal.timelinePct}%` }}
+      />
+    </div>
+  );
+}
+
+/** 'Checks in daily · next in 4h  ·  Due Oct 9 — 11w left  ·  Last session …' */
+function MetaLine({ goal }: { goal: GoalView }) {
+  const segments: ReactNode[] = [];
+  if (goal.paceMeta) {
+    segments.push(
+      <span key="pace" className="whitespace-nowrap">
+        {goal.paceMeta}
+        {goal.automationNextLabel ? (
+          <span className="text-muted/80"> · {goal.automationNextLabel}</span>
+        ) : null}
+      </span>,
+    );
+  }
+  if (goal.targetMeta) {
+    segments.push(
+      <span
+        key="target"
+        className={`whitespace-nowrap ${
+          goal.targetMeta.overdue ? 'font-medium text-amber-700 dark:text-amber-400' : ''
+        }`}
+      >
+        {goal.targetMeta.label}
+      </span>,
+    );
+  }
+  if (goal.lastSessionLabel && goal.lastSessionHref) {
+    segments.push(
+      <span key="session" className="whitespace-nowrap">
+        Last session{' '}
+        <Link
+          href={goal.lastSessionHref}
+          className="underline decoration-edge underline-offset-2 hover:decoration-current"
+        >
+          {goal.lastSessionLabel}
+        </Link>
+      </span>,
+    );
+  }
+  if (segments.length === 0) return null;
+  return (
+    <p className="flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs leading-5 text-muted">
+      {segments.flatMap((segment, index) =>
+        index === 0
+          ? [segment]
+          : [
+              // biome-ignore lint/suspicious/noArrayIndexKey: separators are positional
+              <span key={`separator-${index}`} aria-hidden="true" className="text-muted/60">
+                ·
+              </span>,
+              segment,
+            ],
+      )}
+    </p>
+  );
+}
+
 export function GoalCard({ goal }: { goal: GoalView }) {
   // The parent keys this card by goal.updatedAt, so a successful save/status change
-  // remounts it with editing/confirming reset — no effects needed.
+  // remounts it with editing reset — no effects needed.
   const [editing, setEditing] = useState(false);
-  const [confirmingAbandon, setConfirmingAbandon] = useState(false);
   const [editState, editAction, editPending] = useActionState(updateGoal, { error: null });
 
   const open = goal.status === 'active' || goal.status === 'paused';
@@ -91,7 +227,9 @@ export function GoalCard({ goal }: { goal: GoalView }) {
       <div className={cardBodyClass}>
         <div className={cardHeaderClass}>
           <div className="min-w-0">
-            <h3 className={cardTitleClass}>{goal.title}</h3>
+            <h3 className="font-display text-[16px] leading-6 font-semibold tracking-[-0.02em] text-strong">
+              {goal.title}
+            </h3>
             {goal.description ? (
               <p className="mt-1 text-[13px] leading-5 text-muted">{goal.description}</p>
             ) : null}
@@ -103,47 +241,36 @@ export function GoalCard({ goal }: { goal: GoalView }) {
           ) : null}
         </div>
 
-        <section className="min-w-0">
-          <h4 className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
-            Current progress
-          </h4>
-          <p className="mt-1 text-[14px] leading-6 text-strong">
-            {goal.progress || 'No progress update yet.'}
-          </p>
-          {goal.blockedLabel ? (
-            <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2.5 text-xs leading-5 font-medium text-amber-800 dark:bg-amber-950/35 dark:text-amber-300">
+        <LatestUpdate goal={goal} />
+
+        {goal.blockedLabel ? (
+          <div className="flex gap-2.5 rounded-xl bg-amber-50 px-3 py-2.5 dark:bg-amber-950/35">
+            <CircleAlert
+              aria-hidden="true"
+              className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
+            />
+            <p className="min-w-0 text-[13px] leading-5 font-medium text-amber-800 dark:text-amber-300">
               {goal.blockedLabel}
             </p>
-          ) : goal.nextAction ? (
-            <div className="mt-3 border-l-2 border-accent/50 pl-3">
-              <p className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
-                Next action
+          </div>
+        ) : goal.nextAction ? (
+          <div className="flex gap-2.5 rounded-xl bg-accent/8 px-3 py-2.5 dark:bg-accent/15">
+            <CornerDownRight aria-hidden="true" className="mt-1 size-3.5 shrink-0 text-accent" />
+            <div className="min-w-0">
+              <p className="text-2xs font-semibold tracking-[0.08em] text-accent uppercase">
+                Up next
               </p>
               <p className="mt-0.5 text-[13px] leading-5 text-strong">{goal.nextAction}</p>
             </div>
-          ) : null}
-        </section>
+          </div>
+        ) : null}
 
-        <InfoGrid>
-          <InfoItem label="Pace">
-            {goal.paceLabel}
-            {goal.automationNextLabel ? ` · ${goal.automationNextLabel}` : ''}
-          </InfoItem>
-          <InfoItem label="Target">{goal.targetLabel || 'No target date'}</InfoItem>
-          <InfoItem label="Last session">
-            {goal.lastSessionHref ? (
-              <Link
-                href={goal.lastSessionHref}
-                className="underline decoration-edge underline-offset-2 hover:decoration-current"
-              >
-                {goal.lastSessionLabel}
-              </Link>
-            ) : (
-              'None yet'
-            )}
-          </InfoItem>
-          <InfoItem label="Updated">{goal.updatedLabel}</InfoItem>
-        </InfoGrid>
+        {goal.timelinePct !== null || goal.paceMeta || goal.targetMeta || goal.lastSessionLabel ? (
+          <div className="grid min-w-0 gap-2">
+            <TargetRunway goal={goal} />
+            <MetaLine goal={goal} />
+          </div>
+        ) : null}
 
         {goal.mirrorToPrimary || goal.autonomy ? (
           <div className="grid gap-2 sm:grid-cols-2">
@@ -175,7 +302,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
           </form>
         ) : (
           <>
-            {!goal.conversationId ? (
+            {!goal.conversationId && open ? (
               <form action={startGoalWork.bind(null, goal.id)}>
                 <SubmitButton variant="outline" pendingLabel="Starting…">
                   Start work now
@@ -196,79 +323,59 @@ export function GoalCard({ goal }: { goal: GoalView }) {
                 </SubmitButton>
               </form>
             ) : null}
-            <details className="relative">
-              <summary className={`${outlineButton} cursor-pointer list-none`}>More</summary>
-              <div className="absolute top-full right-0 z-10 mt-2 flex w-52 flex-col gap-2 rounded-xl border border-edge bg-raised p-3 shadow-lg">
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    setEditing((value) => !value);
-                    event.currentTarget.closest('details')?.removeAttribute('open');
-                  }}
-                  className={outlineButton}
-                >
-                  {editing ? 'Close editor' : 'Edit goal'}
-                </button>
-                {goal.taintedOrigin ? (
-                  <p className="px-1 text-2xs leading-4 text-muted">
-                    Autonomy is unavailable — this goal came from outside content, so every action
-                    asks you first.
-                  </p>
-                ) : (
-                  <form action={setGoalAutonomy.bind(null, goal.id, !goal.autonomy)}>
-                    <SubmitButton variant="outline" pendingLabel="Updating…" className="w-full">
-                      {goal.autonomy ? 'Require approvals' : 'Run autonomously'}
-                    </SubmitButton>
-                  </form>
-                )}
-                {open ? (
-                  <form action={setGoalStatus.bind(null, goal.id, 'done')}>
-                    <SubmitButton variant="outline" pendingLabel="Finishing…" className="w-full">
-                      Mark done
-                    </SubmitButton>
-                  </form>
-                ) : (
-                  <form action={setGoalStatus.bind(null, goal.id, 'active')}>
-                    <SubmitButton variant="outline" pendingLabel="Reactivating…" className="w-full">
-                      Reactivate
-                    </SubmitButton>
-                  </form>
-                )}
-                {!goal.workActive ? (
-                  <form action={archiveGoal.bind(null, goal.id)}>
-                    <SubmitButton variant="outline" pendingLabel="Archiving…" className="w-full">
-                      Archive
-                    </SubmitButton>
-                  </form>
-                ) : null}
-                {goal.status !== 'abandoned' ? (
-                  confirmingAbandon ? (
-                    <div className="flex flex-col gap-2">
-                      <form action={setGoalStatus.bind(null, goal.id, 'abandoned')}>
-                        <SubmitButton variant="danger" pendingLabel="Stopping…" className="w-full">
-                          Confirm stop
-                        </SubmitButton>
-                      </form>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmingAbandon(false)}
-                        className={outlineButton}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmingAbandon(true)}
-                      className={dangerOutlineButton}
-                    >
-                      Stop goal
-                    </button>
-                  )
-                ) : null}
-              </div>
-            </details>
+            <ActionMenu label="More" panelClassName="w-56">
+              <button
+                type="button"
+                data-menu-close
+                onClick={() => setEditing((value) => !value)}
+                className={outlineButton}
+              >
+                {editing ? 'Close editor' : 'Edit goal'}
+              </button>
+              {goal.taintedOrigin ? (
+                <p className="px-1 text-2xs leading-4 text-muted">
+                  Autonomy is unavailable — this goal came from outside content, so every action
+                  asks you first.
+                </p>
+              ) : (
+                <form action={setGoalAutonomy.bind(null, goal.id, !goal.autonomy)}>
+                  <SubmitButton variant="outline" pendingLabel="Updating…" className="w-full">
+                    {goal.autonomy ? 'Require approvals' : 'Run autonomously'}
+                  </SubmitButton>
+                </form>
+              )}
+              {open ? (
+                <form action={setGoalStatus.bind(null, goal.id, 'done')}>
+                  <SubmitButton variant="outline" pendingLabel="Finishing…" className="w-full">
+                    Mark done
+                  </SubmitButton>
+                </form>
+              ) : (
+                <form action={setGoalStatus.bind(null, goal.id, 'active')}>
+                  <SubmitButton variant="outline" pendingLabel="Reactivating…" className="w-full">
+                    Reactivate
+                  </SubmitButton>
+                </form>
+              )}
+              {!goal.workActive ? (
+                <form action={archiveGoal.bind(null, goal.id)}>
+                  <SubmitButton variant="outline" pendingLabel="Archiving…" className="w-full">
+                    Archive
+                  </SubmitButton>
+                </form>
+              ) : null}
+              {goal.status !== 'abandoned' ? (
+                <form action={setGoalStatus.bind(null, goal.id, 'abandoned')}>
+                  <ConfirmButton
+                    confirmLabel="Confirm — stop goal"
+                    pendingLabel="Stopping…"
+                    className="w-full"
+                  >
+                    Stop goal
+                  </ConfirmButton>
+                </form>
+              ) : null}
+            </ActionMenu>
           </>
         )}
       </div>

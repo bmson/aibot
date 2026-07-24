@@ -13,7 +13,7 @@ import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import { btn, EmptyState, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
-import { SubmitButton } from '@/lib/ui-client';
+import { ActionMenu, SubmitButton } from '@/lib/ui-client';
 import { statusLabel } from '@/lib/views';
 import { archiveInactiveGoals } from './actions';
 
@@ -37,6 +37,34 @@ function goalIdFromMetadata(metadata: unknown): string | undefined {
   return typeof goalId === 'string' ? goalId : undefined;
 }
 
+/** "Due Oct 9 — 11w left" / "Due tomorrow" / "Due Oct 9 — 5d overdue". */
+function targetMeta(target: Date | null, now: Date): GoalView['targetMeta'] {
+  if (!target) return null;
+  const days = Math.round((target.getTime() - now.getTime()) / 86_400_000);
+  // Targets are stored as UTC dates; format in UTC so "Sep 1" never renders
+  // as "Aug 31" in a western timezone.
+  const date = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC',
+    month: 'short',
+    day: 'numeric',
+    ...(target.getUTCFullYear() === now.getUTCFullYear() ? {} : { year: 'numeric' }),
+  }).format(target);
+  if (days < 0) return { label: `Due ${date} — ${-days}d overdue`, overdue: true };
+  if (days === 0) return { label: 'Due today', overdue: false };
+  if (days === 1) return { label: 'Due tomorrow', overdue: false };
+  if (days < 15) return { label: `Due ${date} — ${days}d left`, overdue: false };
+  return { label: `Due ${date} — ${Math.round(days / 7)}w left`, overdue: false };
+}
+
+/** Where "now" sits between the goal's start and its target, 0–100. */
+function timelinePct(goal: GoalRow, now: Date): number | null {
+  if (!goal.targetDate) return null;
+  const start = goal.createdAt.getTime();
+  const span = goal.targetDate.getTime() - start;
+  if (span <= 0) return null;
+  return Math.min(100, Math.max(0, Math.round(((now.getTime() - start) / span) * 100)));
+}
+
 function toGoalView(
   goal: GoalRow,
   now: Date,
@@ -53,7 +81,7 @@ function toGoalView(
   const blocked =
     goal.status === 'active' && !goal.archivedAt && (blockedQuestion !== '' || stalled);
   const isAutomating = goal.status === 'active' && !goal.archivedAt;
-  const cadence = goalAutomationCadence(goal, now).label;
+  const open = goal.status === 'active' || goal.status === 'paused';
   return {
     id: goal.id,
     title: goal.title,
@@ -63,18 +91,23 @@ function toGoalView(
     progress: goal.progress,
     nextAction: goal.nextAction,
     targetDateInput,
-    targetLabel: goal.targetDate
-      ? `${relativeTime(goal.targetDate, now)} (${targetDateInput})`
-      : '',
     updatedLabel: relativeTime(goal.updatedAt, now),
     conversationId,
     archived: goal.archivedAt !== null,
     workActive,
-    paceLabel: isAutomating ? cadence.charAt(0).toUpperCase() + cadence.slice(1) : 'Paused',
+    paceMeta: isAutomating
+      ? `Checks in ${goalAutomationCadence(goal, now).label}`
+      : goal.status === 'paused' && !goal.archivedAt
+        ? 'Automation paused'
+        : '',
+    // A healthy-looking countdown under a blocked goal reads as "all fine", so
+    // the next-run label stays off while the goal is waiting on the owner.
     automationNextLabel:
-      isAutomating && automation?.enabled && automation.nextRunAt
+      isAutomating && !blocked && automation?.enabled && automation.nextRunAt
         ? `next ${relativeTime(automation.nextRunAt, now)}`
         : '',
+    targetMeta: open && !goal.archivedAt ? targetMeta(goal.targetDate, now) : null,
+    timelinePct: open && !goal.archivedAt ? timelinePct(goal, now) : null,
     lastSessionLabel: lastSession
       ? `${relativeTime(lastSession.updatedAt, now)} — ${statusLabel(lastSession.status)}`
       : '',
@@ -201,10 +234,48 @@ export default async function GoalsPage({
     );
     if (automation) automationByGoalId.set(goal.id, automation);
   }
+  const cards = rows.map((goal) => ({
+    key: `${goal.id}:${goal.updatedAt.getTime()}`,
+    status: goal.status,
+    view: toGoalView(
+      goal,
+      now,
+      chatByGoalId.get(goal.id),
+      activeGoalIds.has(goal.id),
+      automationByGoalId.get(goal.id),
+      stalledGoalIds.has(goal.id),
+      lastSessionByGoalId.get(goal.id),
+    ),
+  }));
   const groups = STATUS_ORDER.map((status) => ({
     status,
-    items: rows.filter((goal) => goal.status === status),
+    items: cards.filter((card) => card.status === status),
   })).filter((group) => group.items.length > 0);
+  // Goals waiting on the owner lead the Active section — they are the ones a
+  // visit to this page can actually unblock.
+  for (const group of groups) {
+    if (group.status === 'active') {
+      group.items.sort(
+        (a, b) => Number(b.view.blockedLabel !== '') - Number(a.view.blockedLabel !== ''),
+      );
+    }
+  }
+
+  // One-line digest: what needs the owner, what runs on its own, when the
+  // assistant looks at any of it next.
+  const activeCards = archived ? [] : cards.filter((card) => card.status === 'active');
+  const blockedCount = activeCards.filter((card) => card.view.blockedLabel !== '').length;
+  const selfRunningCount = activeCards.length - blockedCount;
+  const nextCheckIns = activeCards
+    .filter((card) => card.view.blockedLabel === '')
+    .map((card) => automationByGoalId.get(card.view.id))
+    .filter(
+      (automation): automation is { enabled: boolean; nextRunAt: Date } =>
+        automation?.enabled === true && automation.nextRunAt !== null && automation.nextRunAt > now,
+    )
+    .map((automation) => automation.nextRunAt.getTime());
+  const nextCheckInLabel =
+    nextCheckIns.length > 0 ? relativeTime(new Date(Math.min(...nextCheckIns)), now) : '';
 
   return (
     <PageShell size="reading">
@@ -229,26 +300,40 @@ export default async function GoalsPage({
                   Archived ({archivedCount})
                 </Link>
               ) : null}
-              <details className="relative">
-                <summary className={`${btn.outline} cursor-pointer list-none`}>More</summary>
-                <form
-                  action={archiveInactiveGoals}
-                  className="absolute top-full right-0 z-10 mt-2 w-64 rounded-lg border border-edge bg-raised p-2 shadow-lg"
-                >
+              <ActionMenu label="More" panelClassName="w-64">
+                <form action={archiveInactiveGoals}>
                   <SubmitButton pendingLabel="Archiving…" className="w-full">
                     Archive old finished goals
                   </SubmitButton>
-                  <p className="mt-2 px-1 text-xs text-zinc-500">
-                    Hides goals finished more than 30 days ago. Their history is kept.
-                  </p>
                 </form>
-              </details>
+                <p className="px-1 text-xs text-zinc-500">
+                  Hides goals finished more than 30 days ago. Their history is kept.
+                </p>
+              </ActionMenu>
             </>
           )}
         </div>
       </div>
 
-      {!archived ? <GoalCreateForm /> : null}
+      {activeCards.length > 0 ? (
+        <p className="mt-3 text-[13px] leading-5 text-muted">
+          {blockedCount > 0 ? (
+            <>
+              <span className="font-medium text-amber-700 dark:text-amber-400">
+                {blockedCount} waiting on you
+              </span>
+              {' · '}
+            </>
+          ) : null}
+          {selfRunningCount > 0
+            ? `${selfRunningCount} moving on ${selfRunningCount === 1 ? 'its' : 'their'} own`
+            : null}
+          {selfRunningCount > 0 && nextCheckInLabel ? ' · ' : null}
+          {nextCheckInLabel ? `next check-in ${nextCheckInLabel}` : null}
+        </p>
+      ) : null}
+
+      {!archived ? <GoalCreateForm startOpen={rows.length === 0} /> : null}
 
       {rows.length === 0 ? (
         <EmptyState>
@@ -262,19 +347,8 @@ export default async function GoalsPage({
             <section key={group.status}>
               <SectionHeading title={statusHeadings[group.status]} count={group.items.length} />
               <div className="mt-3 flex flex-col gap-4">
-                {group.items.map((goal) => (
-                  <GoalCard
-                    key={`${goal.id}:${goal.updatedAt.getTime()}`}
-                    goal={toGoalView(
-                      goal,
-                      now,
-                      chatByGoalId.get(goal.id),
-                      activeGoalIds.has(goal.id),
-                      automationByGoalId.get(goal.id),
-                      stalledGoalIds.has(goal.id),
-                      lastSessionByGoalId.get(goal.id),
-                    )}
-                  />
+                {group.items.map((card) => (
+                  <GoalCard key={card.key} goal={card.view} />
                 ))}
               </div>
             </section>
