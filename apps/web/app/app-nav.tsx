@@ -219,13 +219,12 @@ export function AppNav({
 
   return (
     <>
-      {/* Desktop sidebar */}
-      {/* Pinned to the viewport: the rail used to stretch to document height, so
-          on a long Activity or Goals page it scrolled away and left a dead black
-          column. Its own overflow keeps the nav reachable when it outgrows the
-          screen. */}
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col overflow-y-auto bg-[#0b0d12] text-white lg:flex">
-        <div className="px-5 pt-6 pb-7">
+      {/* Desktop sidebar. Pinned to the viewport at full height: the brand and
+          the sign-out/theme footer stay put, and only the link list scrolls if
+          it ever outgrows the rail — so no control is stranded below the fold
+          on a long page. */}
+      <aside className="hidden h-screen w-60 shrink-0 flex-col bg-[#0b0d12] text-white lg:sticky lg:top-0 lg:flex">
+        <div className="shrink-0 px-5 pt-6 pb-7">
           <Link href="/chat" className={`inline-flex rounded-lg ${focusRing}`}>
             <BrandLockup
               name={agentName}
@@ -246,17 +245,19 @@ export function AppNav({
             />
           </Link>
         </div>
-        <nav className="flex flex-col gap-1 px-3">{renderLinks(primaryItems, 'rail')}</nav>
-        <div className="mt-6 px-3">
-          <p className="px-3 text-2xs font-semibold tracking-[0.14em] text-zinc-500 uppercase">
-            Manage
-          </p>
-          <nav className="mt-2 flex flex-col gap-1">
-            {renderLinks(utilityItems, 'rail')}
-            {renderSystemGroup(systemItems, 'rail')}
-          </nav>
+        <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+          <nav className="flex flex-col gap-1 px-3">{renderLinks(primaryItems, 'rail')}</nav>
+          <div className="mt-6 px-3">
+            <p className="px-3 text-2xs font-semibold tracking-[0.14em] text-zinc-500 uppercase">
+              Manage
+            </p>
+            <nav className="mt-2 flex flex-col gap-1">
+              {renderLinks(utilityItems, 'rail')}
+              {renderSystemGroup(systemItems, 'rail')}
+            </nav>
+          </div>
         </div>
-        <div className="mt-auto flex items-center justify-between border-t border-white/10 px-5 py-4">
+        <div className="flex shrink-0 items-center justify-between border-t border-white/10 px-5 py-4">
           {signOut ?? <span />}
           <ThemeToggle />
         </div>

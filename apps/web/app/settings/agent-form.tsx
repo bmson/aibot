@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { updateAgentSettings } from '@/app/settings/actions';
-import { btn, inputClass, labelClass } from '@/lib/ui';
+import { btn, inputClass, labelClass, textareaClass } from '@/lib/ui';
 
 /** Timezone/locale/signature editor with Saving…/Saved ✓/error feedback. */
 export function AgentForm({
@@ -23,9 +23,9 @@ export function AgentForm({
   };
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap gap-4">
-        <label className="flex flex-col gap-1">
+    <div className="flex min-w-0 flex-col gap-4">
+      <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <label className="flex min-w-0 flex-col gap-1.5">
           <span className={labelClass}>Timezone</span>
           <input
             type="text"
@@ -34,11 +34,11 @@ export function AgentForm({
               setTimezone(e.target.value);
               onChange();
             }}
-            className={`${inputClass} w-56`}
+            className={`${inputClass} w-full`}
             placeholder="Atlantic/Reykjavik"
           />
         </label>
-        <label className="flex flex-col gap-1">
+        <label className="flex min-w-0 flex-col gap-1.5">
           <span className={labelClass}>Locale</span>
           <input
             type="text"
@@ -47,13 +47,15 @@ export function AgentForm({
               setLocale(e.target.value);
               onChange();
             }}
-            className={`${inputClass} w-24`}
+            className={`${inputClass} w-full`}
             placeholder="en"
           />
         </label>
       </div>
-      <label className="flex flex-col gap-1">
-        <span className={labelClass}>Signature (appended to outbound email)</span>
+      <label className="flex min-w-0 flex-col gap-1.5">
+        <span className={labelClass}>Email signature</span>
+        {/* textareaClass, not inputClass — the latter pins h-9 and squashed
+            this to a single line regardless of rows. */}
         <textarea
           value={signature}
           onChange={(e) => {
@@ -61,7 +63,8 @@ export function AgentForm({
             onChange();
           }}
           rows={3}
-          className={`${inputClass} max-w-xl`}
+          placeholder="Appended to email the assistant sends on your behalf"
+          className={`${textareaClass} w-full`}
         />
       </label>
       <div className="flex items-center gap-2">
@@ -75,16 +78,18 @@ export function AgentForm({
               else setSaved(true);
             })
           }
-          className={btn.outline}
+          className={btn.primary}
         >
-          {pending ? 'Saving…' : 'Save'}
+          {pending ? 'Saving…' : 'Save changes'}
         </button>
         {saved && !pending ? (
-          <span className="text-2xs font-medium text-emerald-600 dark:text-emerald-400">
-            Saved ✓
+          <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">Saved</span>
+        ) : null}
+        {error ? (
+          <span role="alert" className="text-xs text-red-600 dark:text-red-400">
+            {error}
           </span>
         ) : null}
-        {error ? <span className="text-2xs text-red-600 dark:text-red-400">{error}</span> : null}
       </div>
     </div>
   );
