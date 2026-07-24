@@ -115,7 +115,8 @@ export type ExecuteResult = {
     | 'dead_letter'
     | 'not_claimable'
     | 'needs_attention'
-    | 'clarify';
+    | 'clarify'
+    | 'cancelled';
   detail?: string;
 };
 

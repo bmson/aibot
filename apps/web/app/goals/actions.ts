@@ -1,6 +1,7 @@
 'use server';
 
 import {
+  cancelQueuedGoalWork,
   encodeMessageCursor,
   enqueueTask,
   ensureGoalAutomation,
@@ -250,7 +251,12 @@ export async function setGoalStatus(goalId: string, status: GoalStatus): Promise
     .set({ status, updatedAt: new Date() })
     .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id)))
     .returning();
-  if (goal) await ensureGoalAutomation(db, agent, goal);
+  if (goal) {
+    await ensureGoalAutomation(db, agent, goal);
+    // Stopping a goal has to stop the work already queued for it, or the next
+    // sweep spends against a goal the owner just abandoned.
+    if (status === 'abandoned') await cancelQueuedGoalWork(db, agent.id, goal.id);
+  }
   revalidateGoalViews();
 }
 

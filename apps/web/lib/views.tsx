@@ -212,10 +212,23 @@ const statusLabels: Record<string, string> = {
   active: 'Active',
   paused: 'Paused',
   abandoned: 'Stopped',
+  // Display-only: a task parked on an approval that no longer exists. Claiming
+  // it is "waiting on you" is a lie — the Approvals page has nothing to show.
+  stuck: 'Stuck — nothing to approve',
 };
 
 export function statusLabel(status: string): string {
   return statusLabels[status] ?? status.replaceAll('_', ' ');
+}
+
+/**
+ * The status to *show* for a task. A task parked in `waiting_approval` whose
+ * approval was resolved, expired, or never written is not waiting on the owner:
+ * nothing about it appears on the Approvals page, so the honest label is stuck.
+ * Callers pass whether a pending approval actually exists for the row.
+ */
+export function displayTaskStatus(status: string, hasPendingApproval: boolean): string {
+  return status === 'waiting_approval' && !hasPendingApproval ? 'stuck' : status;
 }
 
 /** The voice-rewrite tool sets `voiceFlag` on its args when fact-preservation fails. */
@@ -268,6 +281,7 @@ const statusTone: Record<string, BadgeTone> = {
   active: 'blue',
   paused: 'amber',
   abandoned: 'muted',
+  stuck: 'orange',
 };
 
 export function StatusChip({ status }: { status: string }) {

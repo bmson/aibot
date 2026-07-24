@@ -1,6 +1,6 @@
 import type { ApprovalRow } from '@assistant/db';
 import { describe, expect, it } from 'vitest';
-import { toPendingApprovalView } from './views';
+import { displayTaskStatus, statusLabel, toPendingApprovalView } from './views';
 
 const now = new Date('2026-07-22T18:00:00.000Z');
 
@@ -48,5 +48,26 @@ describe('toPendingApprovalView', () => {
 
     expect(view.expired).toBe(false);
     expect(view.actionKind).toBe('calendar');
+  });
+});
+
+describe('displayTaskStatus', () => {
+  it('calls a task waiting on a live approval what it is', () => {
+    expect(displayTaskStatus('waiting_approval', true)).toBe('waiting_approval');
+    expect(statusLabel(displayTaskStatus('waiting_approval', true))).toBe('Needs your approval');
+  });
+
+  it('reports a task parked on a vanished approval as stuck, not waiting on you', () => {
+    // The Approvals page has nothing to show for these, so badging them
+    // "Needs your approval" sends the owner somewhere empty.
+    expect(displayTaskStatus('waiting_approval', false)).toBe('stuck');
+    expect(statusLabel('stuck')).toBe('Stuck — nothing to approve');
+  });
+
+  it('leaves every other status untouched', () => {
+    for (const status of ['pending', 'running', 'done', 'needs_attention', 'sleeping']) {
+      expect(displayTaskStatus(status, false)).toBe(status);
+      expect(displayTaskStatus(status, true)).toBe(status);
+    }
   });
 });

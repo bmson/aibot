@@ -244,6 +244,43 @@ async function goalConversationId(
 }
 
 /**
+ * Cancel the work already queued for a goal the owner stopped.
+ *
+ * `ensureGoalAutomation` only unschedules *future* sessions, so without this a
+ * stopped goal keeps whatever was already in the queue and the next sweep runs
+ * — and bills — against it. Tasks a worker currently holds are deliberately
+ * left alone: yanking a row out from under a running step is worse than
+ * letting it finish, and the executor refuses those itself on next claim.
+ *
+ * Returns the number of tasks called off, so callers can report it.
+ */
+export async function cancelQueuedGoalWork(
+  db: Db,
+  agentId: string,
+  goalId: string,
+  progress = 'stopped because its goal was stopped',
+): Promise<number> {
+  const cancelled = await db
+    .update(tasks)
+    .set({
+      status: 'cancelled',
+      progress,
+      runAfter: null,
+      lockedUntil: null,
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(tasks.agentId, agentId),
+        eq(tasks.goalId, goalId),
+        notInArray(tasks.status, [...TERMINAL_TASK_STATUSES, 'running']),
+      ),
+    )
+    .returning({ id: tasks.id });
+  return cancelled.length;
+}
+
+/**
  * Create or refresh the one recurring runner for a Goal. This is deliberately
  * idempotent: actions, sweeps, and deploy recovery can all call it safely.
  */
@@ -509,7 +546,18 @@ export async function runDueSchedules(
         .select({ autonomy: goals.autonomy, taintedOrigin: goals.taintedOrigin })
         .from(goals)
         .where(eq(goals.id, template.goalId));
-      if (goalRow?.autonomy && !goalRow.taintedOrigin) {
+      // A schedule that outlived its goal can never enqueue: tasks.goal_id is a
+      // foreign key, so the insert raises and takes down the rest of the sweep
+      // with it — every other schedule silently stops firing because of one
+      // orphan. Retire the orphan instead and keep going.
+      if (!goalRow) {
+        await db
+          .update(schedules)
+          .set({ enabled: false, nextRunAt: null, updatedAt: sql`now()` })
+          .where(eq(schedules.id, row.id));
+        continue;
+      }
+      if (goalRow.autonomy && !goalRow.taintedOrigin) {
         goalAutonomyGrant = buildAutonomyGrant({ grantedVia: 'goal', nowMs: Date.now() });
       }
     }

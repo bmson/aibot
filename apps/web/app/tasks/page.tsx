@@ -1,5 +1,5 @@
 import { getAgent } from '@assistant/core';
-import { tasks } from '@assistant/db';
+import { approvals, tasks } from '@assistant/db';
 import { and, count, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import {
   Archive,
@@ -27,7 +27,7 @@ import {
   segmentedItemClass,
 } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
-import { StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
+import { displayTaskStatus, StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 import { archiveOldTasks, archiveTask, restoreTask } from './actions';
 
 export const metadata = { title: 'Activity' };
@@ -117,6 +117,21 @@ export default async function TasksPage({
       .where(and(eq(tasks.agentId, agent.id), isNotNull(tasks.archivedAt))),
   ]);
   const archivedCount = archivedCountRows[0]?.value ?? 0;
+  // Which parked rows are genuinely waiting on the owner. Without this the list
+  // badges "Needs your approval" on tasks the Approvals page has nothing for.
+  const waitingIds = rows
+    .filter((task) => task.status === 'waiting_approval')
+    .map((task) => task.id);
+  const pendingApprovalTaskIds = new Set(
+    waitingIds.length === 0
+      ? []
+      : (
+          await db
+            .selectDistinct({ taskId: approvals.taskId })
+            .from(approvals)
+            .where(and(inArray(approvals.taskId, waitingIds), eq(approvals.status, 'pending')))
+        ).map((row) => row.taskId),
+  );
   const now = new Date();
   const groups = [...new Set(rows.map((task) => calendarDay(task.updatedAt)))].map((day) => ({
     day,
@@ -216,6 +231,10 @@ export default async function TasksPage({
                   const terminal = TERMINAL_TASK_STATUSES.includes(
                     task.status as (typeof TERMINAL_TASK_STATUSES)[number],
                   );
+                  const shownStatus = displayTaskStatus(
+                    task.status,
+                    pendingApprovalTaskIds.has(task.id),
+                  );
                   return (
                     <article
                       key={task.id}
@@ -241,7 +260,7 @@ export default async function TasksPage({
                           >
                             {task.title || taskTypeLabel(task.type)}
                           </Link>
-                          <StatusChip status={task.status} />
+                          <StatusChip status={shownStatus} />
                         </div>
                         <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-muted">
                           {truncate(stripMarkdown(task.progress), 180) || 'No update recorded yet.'}

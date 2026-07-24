@@ -148,7 +148,14 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
         </div>
         <InfoGrid className="sm:grid-cols-4">
           <InfoItem label={quarantine ? 'Source' : 'About'}>
-            {quarantine ? `${fact.originTrust} source` : fact.subjectLabel || 'You'}
+            {/* The owner reads as "You" whether or not the row carries their
+                contact name — the library was showing "You" and "Baldvin" for
+                the same person depending on which query loaded the fact. */}
+            {quarantine
+              ? `${fact.originTrust} source`
+              : fact.aboutOwner || !fact.subjectLabel
+                ? 'You'
+                : fact.subjectLabel}
           </InfoItem>
           <InfoItem label="Type">{fact.kind}</InfoItem>
           <InfoItem label="Topic">{fact.domain || 'General'}</InfoItem>

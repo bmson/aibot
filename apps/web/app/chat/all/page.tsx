@@ -1,6 +1,6 @@
 import { getAgent, listConversations } from '@assistant/core';
 import { conversations, tasks } from '@assistant/db';
-import { and, count, eq, isNotNull, notInArray } from 'drizzle-orm';
+import { and, count, eq, isNotNull, isNull, notInArray } from 'drizzle-orm';
 import { MessageSquareText } from 'lucide-react';
 import Link from 'next/link';
 import { requireOwner } from '@/auth';
@@ -31,7 +31,7 @@ export default async function ChatListPage({
   const archived = view === 'archived';
   const db = getDb();
   const agent = await getAgent(db);
-  const [chatRows, archivedCountRows, activeTaskRows] = await Promise.all([
+  const [chatRows, archivedCountRows, shownScopeCountRows, activeTaskRows] = await Promise.all([
     listConversations(db, agent.id, { archived }),
     db
       .select({ value: count() })
@@ -41,6 +41,18 @@ export default async function ChatListPage({
           eq(conversations.agentId, agent.id),
           eq(conversations.channel, 'chat'),
           isNotNull(conversations.archivedAt),
+        ),
+      ),
+    // listConversations caps at 50. Count the same scope so a truncated list
+    // says so instead of silently looking like the whole history.
+    db
+      .select({ value: count() })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.agentId, agent.id),
+          eq(conversations.channel, 'chat'),
+          archived ? isNotNull(conversations.archivedAt) : isNull(conversations.archivedAt),
         ),
       ),
     db
@@ -60,6 +72,7 @@ export default async function ChatListPage({
       .filter((conversationId): conversationId is string => conversationId !== null),
   );
   const archivedCount = archivedCountRows[0]?.value ?? 0;
+  const totalInScope = shownScopeCountRows[0]?.value ?? chatRows.length;
   const now = new Date();
 
   return (
@@ -107,68 +120,76 @@ export default async function ChatListPage({
           {archived ? 'No archived chats.' : 'No chats yet — start one with “New chat”.'}
         </EmptyState>
       ) : (
-        <ul className="mt-6 grid gap-3">
-          {chatRows.map((conversation) => (
-            <li
-              key={conversation.id}
-              className={`${cardShellClass} grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2`}
-            >
-              <Link
-                href={`/chat/${conversation.id}`}
-                data-mobile-touch-target="true"
-                className={`mobile-touch-target flex min-w-0 items-center gap-3 rounded-xl px-2 py-2 motion-safe:transition-colors hover:bg-sunken/65 ${
-                  conversation.isPrimary ? 'col-span-2' : ''
-                }`}
+        <>
+          {totalInScope > chatRows.length ? (
+            <p className="mt-6 text-xs text-muted">
+              Showing the {chatRows.length} most recent of {totalInScope} chats. Archiving inactive
+              chats trims this list.
+            </p>
+          ) : null}
+          <ul className="mt-6 grid gap-3">
+            {chatRows.map((conversation) => (
+              <li
+                key={conversation.id}
+                className={`${cardShellClass} grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2`}
               >
-                <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-sunken text-muted">
-                  <MessageSquareText className="size-4" aria-hidden="true" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span className="truncate text-[14px] font-semibold">
-                      {conversation.title && conversation.title !== 'Untitled'
-                        ? conversation.title
-                        : 'New conversation'}
+                <Link
+                  href={`/chat/${conversation.id}`}
+                  data-mobile-touch-target="true"
+                  className={`mobile-touch-target flex min-w-0 items-center gap-3 rounded-xl px-2 py-2 motion-safe:transition-colors hover:bg-sunken/65 ${
+                    conversation.isPrimary ? 'col-span-2' : ''
+                  }`}
+                >
+                  <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-sunken text-muted">
+                    <MessageSquareText className="size-4" aria-hidden="true" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-[14px] font-semibold">
+                        {conversation.title && conversation.title !== 'Untitled'
+                          ? conversation.title
+                          : 'New conversation'}
+                      </span>
+                      {conversation.isPrimary ? (
+                        <span className="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-2xs font-semibold tracking-wide text-indigo-700 uppercase dark:bg-indigo-950 dark:text-indigo-300">
+                          Main
+                        </span>
+                      ) : activeConversationIds.has(conversation.id) ? (
+                        <span className="shrink-0 rounded-full bg-blue-100 px-1.5 py-0.5 text-2xs font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+                          Work active
+                        </span>
+                      ) : null}
                     </span>
-                    {conversation.isPrimary ? (
-                      <span className="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-2xs font-semibold tracking-wide text-indigo-700 uppercase dark:bg-indigo-950 dark:text-indigo-300">
-                        Main
-                      </span>
-                    ) : activeConversationIds.has(conversation.id) ? (
-                      <span className="shrink-0 rounded-full bg-blue-100 px-1.5 py-0.5 text-2xs font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">
-                        Work active
-                      </span>
-                    ) : null}
+                    <span className="mt-0.5 block text-xs text-muted">
+                      Last active {relativeTime(conversation.updatedAt, now)}
+                    </span>
                   </span>
-                  <span className="mt-0.5 block text-xs text-muted">
-                    Last active {relativeTime(conversation.updatedAt, now)}
-                  </span>
-                </span>
-              </Link>
-              {conversation.isPrimary ? null : archived ? (
-                <form action={restoreConversation.bind(null, conversation.id)}>
-                  <SubmitButton
-                    variant="outline"
-                    pendingLabel="Restoring…"
-                    className="h-8 px-3 text-xs"
-                  >
-                    Restore
-                  </SubmitButton>
-                </form>
-              ) : activeConversationIds.has(conversation.id) ? null : (
-                <form action={archiveConversation.bind(null, conversation.id)}>
-                  <SubmitButton
-                    variant="outline"
-                    pendingLabel="Archiving…"
-                    className="h-8 px-3 text-xs"
-                  >
-                    Archive
-                  </SubmitButton>
-                </form>
-              )}
-            </li>
-          ))}
-        </ul>
+                </Link>
+                {conversation.isPrimary ? null : archived ? (
+                  <form action={restoreConversation.bind(null, conversation.id)}>
+                    <SubmitButton
+                      variant="outline"
+                      pendingLabel="Restoring…"
+                      className="h-8 px-3 text-xs"
+                    >
+                      Restore
+                    </SubmitButton>
+                  </form>
+                ) : activeConversationIds.has(conversation.id) ? null : (
+                  <form action={archiveConversation.bind(null, conversation.id)}>
+                    <SubmitButton
+                      variant="outline"
+                      pendingLabel="Archiving…"
+                      className="h-8 px-3 text-xs"
+                    >
+                      Archive
+                    </SubmitButton>
+                  </form>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </PageShell>
   );

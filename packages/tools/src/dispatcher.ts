@@ -144,8 +144,24 @@ export function approvalFallbackSummary(toolName: string, args: Record<string, u
     case 'applications.watch_confirmation':
       return 'Act on a job-application confirmation';
     default:
-      return `Allow the assistant to ${toolName.replaceAll('.', ' ').replaceAll('_', ' ')}`;
+      return unmappedToolSummary(toolName);
   }
+}
+
+/**
+ * Fallback wording for a tool with no hand-written summary. Splicing the raw
+ * name into "Allow the assistant to …" produced non-sentences ("Allow the
+ * assistant to calendar test create") because tool names are namespace-first,
+ * not verb-first. Naming the tool plainly is both grammatical and more honest
+ * about the fact that this action has no vetted description.
+ */
+function unmappedToolSummary(toolName: string): string {
+  const [namespace, ...rest] = toolName.split('.');
+  const action = rest.join(' ').replaceAll('_', ' ').trim();
+  if (!namespace) return 'Run an assistant action';
+  return action
+    ? `Use the ${namespace} tool (${action})`
+    : `Use the ${namespace.replaceAll('_', ' ')} tool`;
 }
 
 /** Tools whose recipient must be provenance-checked before an autonomous send. */
