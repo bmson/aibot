@@ -76,8 +76,10 @@ const inputClass = `${sharedInputClass} w-full`;
 const labelClass = `flex flex-col gap-1 ${sharedLabelClass}`;
 
 /**
- * The latest update clamps to three lines so a wordy report cannot bury the
- * cards below it; the toggle appears only when the clamp actually hides text.
+ * The latest report is the card's body text — no eyebrow label above it, since
+ * a card about a goal has only one thing to say. It clamps to three lines so a
+ * wordy report cannot bury the cards below it; the toggle appears only when the
+ * clamp actually hides text.
  */
 function LatestUpdate({ goal }: { goal: GoalView }) {
   const textRef = useRef<HTMLParagraphElement | null>(null);
@@ -94,36 +96,27 @@ function LatestUpdate({ goal }: { goal: GoalView }) {
     return () => observer.disconnect();
   }, []);
 
+  if (!goal.progress) {
+    return <p className="min-w-0 text-[14px] leading-6 text-muted">Nothing reported yet.</p>;
+  }
   return (
-    <section className="min-w-0">
-      <p className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
-        Latest update
-        <span className="ml-1.5 font-normal tracking-normal normal-case">
-          · {goal.updatedLabel}
-        </span>
+    <div className="min-w-0">
+      <p
+        ref={textRef}
+        className={`text-[14px] leading-6 text-strong ${expanded ? '' : 'line-clamp-3'}`}
+      >
+        {goal.progress}
       </p>
-      {goal.progress ? (
-        <>
-          <p
-            ref={textRef}
-            className={`mt-1 text-[14px] leading-6 text-strong ${expanded ? '' : 'line-clamp-3'}`}
-          >
-            {goal.progress}
-          </p>
-          {overflowing || expanded ? (
-            <button
-              type="button"
-              onClick={() => setExpanded((value) => !value)}
-              className="mt-1 text-2xs font-medium text-muted underline decoration-edge underline-offset-2 hover:text-strong"
-            >
-              {expanded ? 'Show less' : 'Show more'}
-            </button>
-          ) : null}
-        </>
-      ) : (
-        <p className="mt-1 text-[14px] leading-6 text-muted">Nothing reported yet.</p>
-      )}
-    </section>
+      {overflowing || expanded ? (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="mt-1 text-xs font-medium text-muted underline decoration-edge underline-offset-2 hover:text-strong"
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -157,9 +150,14 @@ function TargetRunway({ goal }: { goal: GoalView }) {
   );
 }
 
-/** 'Checks in daily · next in 4h  ·  Due Oct 9 — 11w left  ·  Last session …' */
+/** 'Updated 2h ago · Checks in daily · next in 4h · Due Oct 9 · Last session …' */
 function MetaLine({ goal }: { goal: GoalView }) {
   const segments: ReactNode[] = [];
+  segments.push(
+    <span key="updated" className="whitespace-nowrap">
+      Updated {goal.updatedLabel}
+    </span>,
+  );
   if (goal.paceMeta) {
     segments.push(
       <span key="pace" className="whitespace-nowrap">
@@ -195,7 +193,6 @@ function MetaLine({ goal }: { goal: GoalView }) {
       </span>,
     );
   }
-  if (segments.length === 0) return null;
   return (
     <p className="flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs leading-5 text-muted">
       {segments.flatMap((segment, index) =>
@@ -225,6 +222,10 @@ export function GoalCard({ goal }: { goal: GoalView }) {
   return (
     <div id={`goal-${goal.id}`} className={`${cardShellClass} scroll-mt-20`}>
       <div className={cardBodyClass}>
+        {/* Everything that used to be its own tinted panel — autonomy, chat
+            mirroring, live work — is a pill up here instead, so the card has
+            one column of text to read rather than a stack of boxes. Only the
+            blocked state keeps a panel: it's an alert, not a property. */}
         <div className={cardHeaderClass}>
           <div className="min-w-0">
             <h3 className="font-display text-[16px] leading-6 font-semibold tracking-[-0.02em] text-strong">
@@ -234,11 +235,31 @@ export function GoalCard({ goal }: { goal: GoalView }) {
               <p className="mt-1 text-[13px] leading-5 text-muted">{goal.description}</p>
             ) : null}
           </div>
-          {goal.blockedLabel ? (
-            <Badge tone="amber">Needs you</Badge>
-          ) : goal.workActive ? (
-            <Badge tone="blue">Working</Badge>
-          ) : null}
+          <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+            {goal.blockedLabel ? (
+              <Badge tone="amber">Needs you</Badge>
+            ) : goal.workActive ? (
+              <Badge tone="blue">Working</Badge>
+            ) : null}
+            {goal.autonomy ? (
+              <Badge
+                tone="amber"
+                size="xs"
+                title="Runs autonomously — routine approvals are handled for this goal. Sensitive actions still ask."
+              >
+                Autonomous
+              </Badge>
+            ) : null}
+            {goal.mirrorToPrimary ? (
+              <Badge
+                tone="indigo"
+                size="xs"
+                title="Background updates from this goal also appear in your main chat."
+              >
+                In main chat
+              </Badge>
+            ) : null}
+          </div>
         </div>
 
         <LatestUpdate goal={goal} />
@@ -254,38 +275,18 @@ export function GoalCard({ goal }: { goal: GoalView }) {
             </p>
           </div>
         ) : goal.nextAction ? (
-          <div className="flex gap-2.5 rounded-xl bg-accent/8 px-3 py-2.5 dark:bg-accent/15">
+          <p className="flex min-w-0 gap-2 text-[14px] leading-6">
             <CornerDownRight aria-hidden="true" className="mt-1 size-3.5 shrink-0 text-accent" />
-            <div className="min-w-0">
-              <p className="text-2xs font-semibold tracking-[0.08em] text-accent uppercase">
-                Up next
-              </p>
-              <p className="mt-0.5 text-[13px] leading-5 text-strong">{goal.nextAction}</p>
-            </div>
-          </div>
+            <span className="min-w-0 text-strong">
+              <span className="font-medium text-accent">Up next</span> — {goal.nextAction}
+            </span>
+          </p>
         ) : null}
 
-        {goal.timelinePct !== null || goal.paceMeta || goal.targetMeta || goal.lastSessionLabel ? (
-          <div className="grid min-w-0 gap-2">
-            <TargetRunway goal={goal} />
-            <MetaLine goal={goal} />
-          </div>
-        ) : null}
-
-        {goal.mirrorToPrimary || goal.autonomy ? (
-          <div className="grid gap-2 sm:grid-cols-2">
-            {goal.mirrorToPrimary ? (
-              <p className="rounded-xl bg-indigo-50 px-3 py-2.5 text-xs leading-5 text-indigo-800 dark:bg-indigo-950/30 dark:text-indigo-300">
-                ↩ Updates also appear in your main chat.
-              </p>
-            ) : null}
-            {goal.autonomy ? (
-              <p className="rounded-xl bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-                ⚡ Runs autonomously — routine approvals are handled. Sensitive actions still ask.
-              </p>
-            ) : null}
-          </div>
-        ) : null}
+        <div className="grid min-w-0 gap-2">
+          <TargetRunway goal={goal} />
+          <MetaLine goal={goal} />
+        </div>
       </div>
 
       <div className={cardFooterClass}>

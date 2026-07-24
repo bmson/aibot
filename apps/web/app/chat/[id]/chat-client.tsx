@@ -172,8 +172,10 @@ function PresenceRow({
  * honesty enforcement stops reading like the assistant talking strangely.
  */
 function ContractNotice({ text }: { text: string }) {
+  // Narrower than a reply bubble: it's an aside about the conversation, so it
+  // should not span the full column like the assistant's own speech.
   return (
-    <div className={`${eventCardClass} max-w-3xl sm:ml-9`}>
+    <div className={`${eventCardClass} max-w-xl sm:ml-9`}>
       <div className="flex items-center gap-2.5 border-b border-edge/60 bg-sunken/40 px-4 py-2">
         <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-sunken text-muted">
           <ShieldCheck className="size-3.5" aria-hidden="true" />
@@ -426,6 +428,8 @@ export function ChatClient({
   const formRef = useRef<HTMLFormElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messageScrollerRef = useRef<HTMLDivElement>(null);
+  /** The floating composer overlays the log — see the layout note on the form. */
+  const [composerHeight, setComposerHeight] = useState(112);
   const stickToBottomRef = useRef(true);
   const previousMessageCountRef = useRef(initialMessages.length);
   /** Messages present at mount render static; only genuinely new ones animate in. */
@@ -666,6 +670,22 @@ export function ChatClient({
     previousMessageCountRef.current = messages.length;
   }, [messages.length]);
 
+  // The composer floats over the conversation, so nothing in the log can rely
+  // on it taking layout space. Measure the form and feed that height back two
+  // ways: a negative top margin cancels the space it would occupy in the
+  // column, and the scroller reserves it as bottom padding so the newest
+  // message still clears the composer by the same 5rem the log keeps on top.
+  useLayoutEffect(() => {
+    const element = formRef.current;
+    if (!element) return;
+    setComposerHeight(element.offsetHeight);
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setComposerHeight(entry.borderBoxSize?.[0]?.blockSize ?? element.offsetHeight);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
   // Grow the composer with its content, up to the CSS max-height cap. `input`
   // is the trigger; the new height is read from the DOM, not from `input`.
   // biome-ignore lint/correctness/useExhaustiveDependencies: input drives the re-measure
@@ -713,7 +733,7 @@ export function ChatClient({
   };
 
   return (
-    <div className="mx-auto flex h-[calc(100dvh-6.5rem)] w-full min-w-0 max-w-5xl flex-col lg:h-[calc(100vh-5rem)]">
+    <div className="relative mx-auto flex h-[calc(100dvh-6.5rem)] w-full min-w-0 max-w-5xl flex-col lg:h-[calc(100vh-5rem)]">
       {/* The primary thread is the whole surface — it needs no title. Side and
           goal chats keep a slim header so you know which one you're in. */}
       {!isPrimary ? (
@@ -771,10 +791,11 @@ export function ChatClient({
           setAtBottom(bottom);
           if (bottom) setUnseenCount(0);
         }}
-        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto py-6 sm:py-8"
+        style={{ paddingBottom: `calc(5rem + ${composerHeight}px)` }}
+        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto pt-20"
       >
         {messages.length === 0 ? (
-          <div className="mx-auto mt-8 flex max-w-xl flex-col items-center text-center sm:mt-14">
+          <div className="mx-auto flex max-w-xl flex-col items-center text-center sm:mt-6">
             <span className="inline-flex size-12 items-center justify-center rounded-2xl bg-sunken text-accent">
               <Sparkles className="size-5" aria-hidden="true" />
             </span>
@@ -875,11 +896,11 @@ export function ChatClient({
                 messageIndex > 0 ? messageDate(messages[messageIndex - 1] as UIMessage) : null;
               const showDivider =
                 mounted && date !== null && (previousDate === null || !sameDay(previousDate, date));
-              const nextMessage = messages[messageIndex + 1];
-              const showTime =
-                mounted &&
-                date !== null &&
-                (notificationMode || !nextMessage || nextMessage.role !== message.role);
+              // A chat is one continuous discussion — per-message clock times
+              // are noise there, and the day dividers already carry the "when".
+              // Proactive updates are the exception: those arrive at a time
+              // that is part of the message, so Notifications keeps them.
+              const showTime = mounted && date !== null && notificationMode;
               const recallSources = recallSourcesOf(message);
               const hasBubble = visibleTextParts.length > 0 && !isNotice;
               const isNewMessage = !initialMessageIdsRef.current?.has(message.id);
@@ -921,6 +942,7 @@ export function ChatClient({
                               and outlined against the canvas, sized to fit. */}
                           <div className="min-w-0 flex-1">
                             <div
+                              title={date ? date.toLocaleString() : undefined}
                               className={`w-fit min-w-0 max-w-full rounded-2xl bg-raised px-4 py-3 text-[15px] leading-6 shadow-[0_1px_2px_rgb(23_25_35/0.05)] ring-1 ring-edge/60 ${
                                 startsRun ? 'rounded-tl-md' : ''
                               } ${streamingCaret ? 'chat-caret' : ''}`}
@@ -936,7 +958,12 @@ export function ChatClient({
                           </div>
                         </div>
                       ) : (
-                        <div className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-accent px-4 py-2.5 text-[14px] leading-5 text-white shadow-sm sm:max-w-[76%]">
+                        // Both speakers read at the same size — a smaller user
+                        // bubble made your own words look like a footnote.
+                        <div
+                          title={date ? date.toLocaleString() : undefined}
+                          className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-accent px-4 py-3 text-[15px] leading-6 text-white shadow-sm sm:max-w-[76%]"
+                        >
                           {visibleTextParts.map((part, index) => (
                             <p
                               key={`${message.id}-${index.toString()}`}
@@ -985,29 +1012,29 @@ export function ChatClient({
         )}
       </div>
 
-      {error ? (
-        <div className="mb-3 flex items-start justify-between gap-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
-          <span>{errorText(error)}</span>
-          <button
-            type="button"
-            onClick={clearError}
-            className="shrink-0 text-xs underline hover:no-underline"
-          >
-            dismiss
-          </button>
-        </div>
-      ) : null}
-
+      {/* The composer floats over the conversation rather than docking under
+          it: no bar, no border — just the raised card lifted off the log, with
+          a scrim so the text scrolling beneath it fades out instead of
+          colliding with it. It stays `sticky` so it tracks the viewport bottom
+          even when the column overflows, and the negative margin gives back
+          the space it would otherwise take from the log. Everything transient
+          (errors, palettes) sits in an out-of-flow stack above it, so opening
+          the "/" palette never resizes the conversation. */}
       <form
         ref={formRef}
         onSubmit={(event) => {
           event.preventDefault();
           submitCurrentMessage();
         }}
-        className="mobile-safe-bottom sticky bottom-0 min-w-0 border-t border-edge bg-surface/95 pt-3 backdrop-blur sm:pb-3 relative"
+        style={{ marginTop: `-${composerHeight}px` }}
+        className="mobile-safe-bottom pointer-events-none sticky bottom-0 z-20 min-w-0 sm:pb-3"
       >
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 -top-16 -bottom-8 bg-gradient-to-t from-surface from-35% via-surface/85 to-transparent"
+        />
         {!atBottom && messages.length > 0 ? (
-          <div className="pointer-events-none absolute inset-x-0 -top-14 flex justify-center">
+          <div className="pointer-events-none absolute inset-x-0 -top-14 z-10 flex justify-center">
             <button
               type="button"
               onClick={jumpToLatest}
@@ -1022,287 +1049,305 @@ export function ChatClient({
             </button>
           </div>
         ) : null}
-        {commandPaletteOpen ? (
-          <section
-            aria-label="Commands"
-            className="mb-2 min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_6px_24px_rgb(23_25_35/0.08)] ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
-          >
-            <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-2.5">
-              <p className="text-[13px] font-semibold text-strong">Commands</p>
-              <span className="hidden shrink-0 text-2xs text-muted sm:block">
-                ↑↓ choose · Enter complete · Esc dismiss
-              </span>
+        <div className="pointer-events-none absolute inset-x-0 bottom-full z-20 min-w-0">
+          {error ? (
+            <div className="pointer-events-auto mb-2 flex items-start justify-between gap-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 shadow-[0_6px_24px_rgb(23_25_35/0.08)] dark:border-red-800 dark:bg-red-950 dark:text-red-200">
+              <span>{errorText(error)}</span>
+              <button
+                type="button"
+                onClick={clearError}
+                className="shrink-0 text-xs underline hover:no-underline"
+              >
+                dismiss
+              </button>
             </div>
-            <div id="command-listbox" role="listbox" aria-label="Commands" className="p-1.5">
-              {commandMatches.map((entry, index) => {
-                const highlighted = index === safeCommandHighlight;
-                const EntryIcon = entry.icon;
-                return (
-                  <button
-                    key={entry.command}
-                    id={`command-option-${index}`}
-                    type="button"
-                    role="option"
-                    aria-selected={highlighted}
-                    onMouseMove={() => setCommandHighlight(index)}
-                    onClick={() => completeCommand(entry.command)}
-                    className={`mobile-touch-target flex min-h-11 w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2 text-left motion-safe:transition-colors ${focusRing} ${
-                      highlighted ? 'bg-sunken text-strong' : 'text-strong hover:bg-sunken'
-                    }`}
-                  >
-                    <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
-                      <EntryIcon className="size-3.5" aria-hidden="true" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-mono text-[13px] font-medium">
-                        {entry.command}
-                      </span>
-                      <span className="block truncate text-2xs text-muted">{entry.hint}</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        ) : null}
-        {modelCommandOpen ? (
-          <section
-            aria-label="Choose response model"
-            className="mb-2 min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_6px_24px_rgb(23_25_35/0.08)] ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
-          >
-            <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-3">
-              <div className="min-w-0">
-                <p className="text-[13px] font-semibold text-strong">Response model</p>
-                <p className="truncate text-2xs text-muted">Currently {selectedModelLabel}</p>
-              </div>
-              {isSwitching ? (
-                <span className="inline-flex shrink-0 items-center gap-1.5 text-2xs text-muted">
-                  <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-                  Switching…
-                </span>
-              ) : (
-                <span className="hidden shrink-0 text-2xs text-muted sm:block">
-                  ↑↓ choose · Enter select · Esc close
-                </span>
-              )}
-            </div>
-            <div
-              id="model-listbox"
-              role="listbox"
-              aria-label="Response model"
-              className="max-h-56 overflow-y-auto p-1.5"
+          ) : null}
+          {commandPaletteOpen ? (
+            <section
+              aria-label="Commands"
+              className="pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_6px_24px_rgb(23_25_35/0.08)] ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
             >
-              {modelOptions.length > 0 ? (
-                modelOptions.map((model, index) => {
-                  const active = selectedModel === model.id;
-                  const highlighted = index === modelHighlight;
+              <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-2.5">
+                <p className="text-[13px] font-semibold text-strong">Commands</p>
+                <span className="hidden shrink-0 text-2xs text-muted sm:block">
+                  ↑↓ choose · Enter complete · Esc dismiss
+                </span>
+              </div>
+              <div id="command-listbox" role="listbox" aria-label="Commands" className="p-1.5">
+                {commandMatches.map((entry, index) => {
+                  const highlighted = index === safeCommandHighlight;
+                  const EntryIcon = entry.icon;
                   return (
                     <button
-                      key={model.id ?? 'auto'}
-                      id={`model-option-${index}`}
+                      key={entry.command}
+                      id={`command-option-${index}`}
                       type="button"
                       role="option"
-                      aria-selected={active}
-                      disabled={isSwitching}
-                      onMouseMove={() => setModelHighlight(index)}
-                      onClick={() => chooseModel(model.id)}
+                      aria-selected={highlighted}
+                      onMouseMove={() => setCommandHighlight(index)}
+                      onClick={() => completeCommand(entry.command)}
                       className={`mobile-touch-target flex min-h-11 w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2 text-left motion-safe:transition-colors ${focusRing} ${
-                        active
-                          ? 'bg-accent/10 text-accent'
-                          : highlighted
-                            ? 'bg-sunken text-strong'
-                            : 'text-strong hover:bg-sunken'
-                      } ${active && highlighted ? 'ring-1 ring-accent/40' : ''}`}
+                        highlighted ? 'bg-sunken text-strong' : 'text-strong hover:bg-sunken'
+                      }`}
                     >
-                      <span
-                        aria-hidden="true"
-                        className={`size-2 shrink-0 rounded-full ${
-                          active ? 'bg-accent' : 'bg-edge'
-                        }`}
-                      />
+                      <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+                        <EntryIcon className="size-3.5" aria-hidden="true" />
+                      </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] font-medium">
-                          {model.label}
+                        <span className="block truncate font-mono text-[13px] font-medium">
+                          {entry.command}
                         </span>
-                        <span className="block truncate text-2xs text-muted">{model.detail}</span>
+                        <span className="block truncate text-2xs text-muted">{entry.hint}</span>
                       </span>
                     </button>
                   );
-                })
-              ) : (
-                <p className="px-3 py-4 text-center text-[13px] text-muted">
-                  No models match “{modelQuery}”
-                </p>
-              )}
-            </div>
-            {modelError ? (
-              <p role="alert" className="border-t border-edge px-4 py-2 text-xs text-red-700">
-                {modelError}
-              </p>
-            ) : null}
-          </section>
-        ) : null}
-        <div
-          data-testid="chat-composer-surface"
-          className="min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_6px_24px_rgb(23_25_35/0.08)] ring-1 ring-edge motion-safe:transition-shadow focus-within:shadow-[0_10px_32px_rgb(91_92_226/0.12)] focus-within:ring-accent/40"
-        >
-          <textarea
-            ref={textareaRef}
-            aria-label="Message"
-            aria-controls={
-              modelCommandOpen
-                ? 'model-listbox'
-                : commandPaletteOpen
-                  ? 'command-listbox'
-                  : undefined
-            }
-            aria-activedescendant={
-              modelCommandOpen
-                ? `model-option-${modelHighlight}`
-                : commandPaletteOpen
-                  ? `command-option-${safeCommandHighlight}`
-                  : undefined
-            }
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              // While the /model palette is open the arrows drive it, Enter picks
-              // the highlighted model, and Escape closes it — so none of those
-              // reach the send handler.
-              if (modelCommandOpen) {
-                if (event.key === 'ArrowDown') {
-                  event.preventDefault();
-                  setModelHighlight((h) =>
-                    modelOptions.length ? (h + 1) % modelOptions.length : 0,
-                  );
-                } else if (event.key === 'ArrowUp') {
-                  event.preventDefault();
-                  setModelHighlight((h) =>
-                    modelOptions.length ? (h - 1 + modelOptions.length) % modelOptions.length : 0,
-                  );
-                } else if (
-                  event.key === 'Enter' &&
-                  !event.shiftKey &&
-                  !event.nativeEvent.isComposing
-                ) {
-                  event.preventDefault();
-                  const choice = modelOptions[modelHighlight];
-                  if (choice && !isSwitching) chooseModel(choice.id);
-                } else if (event.key === 'Escape') {
-                  event.preventDefault();
-                  setInput('');
-                }
-                return;
-              }
-              // The "/" palette: arrows move the cursor, Enter or Tab complete
-              // the highlighted command, Escape dismisses.
-              if (commandPaletteOpen) {
-                if (event.key === 'ArrowDown') {
-                  event.preventDefault();
-                  setCommandHighlight((h) => (h + 1) % commandMatches.length);
-                } else if (event.key === 'ArrowUp') {
-                  event.preventDefault();
-                  setCommandHighlight(
-                    (h) => (h - 1 + commandMatches.length) % commandMatches.length,
-                  );
-                } else if (
-                  event.key === 'Tab' ||
-                  (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing)
-                ) {
-                  event.preventDefault();
-                  const choice = commandMatches[safeCommandHighlight];
-                  if (choice) completeCommand(choice.command);
-                } else if (event.key === 'Escape') {
-                  event.preventDefault();
-                  setInput('');
-                }
-                return;
-              }
-              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                formRef.current?.requestSubmit();
-              }
-            }}
-            placeholder="Ask anything… type / for commands"
-            rows={1}
-            className="block max-h-40 min-h-12 w-full min-w-0 resize-none border-0 bg-transparent px-4 pt-3 pb-2 text-base outline-none placeholder:text-muted/70 sm:text-sm"
-          />
-          <div className="flex min-w-0 items-center justify-between gap-2 border-t border-edge/70 px-2 py-2">
-            <button
-              data-testid="chat-autonomy-mode"
-              type="button"
-              aria-pressed={autonomous}
-              aria-label={
-                autonomous
-                  ? 'Autonomous mode on. Tap to ask before acting.'
-                  : 'Ask before acting. Tap to turn on autonomous mode.'
-              }
-              onClick={() => setAutonomous((value) => !value)}
-              title="Autonomous mode acts without asking for each routine approval. Sensitive steps and budget caps still require permission."
-              className={`inline-flex h-10 min-w-0 items-center gap-1.5 rounded-xl px-3 text-xs font-medium motion-safe:transition-[background-color,color,transform] motion-safe:active:translate-y-px ${focusRing} ${
-                autonomous
-                  ? 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300'
-                  : 'bg-sunken text-muted hover:text-strong'
-              }`}
+                })}
+              </div>
+            </section>
+          ) : null}
+          {modelCommandOpen ? (
+            <section
+              aria-label="Choose response model"
+              className="pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_6px_24px_rgb(23_25_35/0.08)] ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
             >
-              <Zap className="size-3.5 shrink-0" aria-hidden="true" />
-              <span className="truncate">{autonomous ? 'Autonomous on' : 'Ask first'}</span>
-              <span className="sr-only">
-                . Sensitive steps including unknown recipients and logged-in browsing still ask, and
-                budget caps still apply.
-              </span>
-            </button>
-            <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setInput('/model');
-                  textareaRef.current?.focus();
-                }}
-                aria-label={`Response model: ${selectedModelLabel}. Tap to change.`}
-                title="Switch response model"
-                className={`hidden h-10 items-center gap-1.5 rounded-xl px-3 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong sm:inline-flex ${focusRing}`}
+              <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-3">
+                <div className="min-w-0">
+                  <p className="text-[13px] font-semibold text-strong">Response model</p>
+                  <p className="truncate text-2xs text-muted">Currently {selectedModelLabel}</p>
+                </div>
+                {isSwitching ? (
+                  <span className="inline-flex shrink-0 items-center gap-1.5 text-2xs text-muted">
+                    <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                    Switching…
+                  </span>
+                ) : (
+                  <span className="hidden shrink-0 text-2xs text-muted sm:block">
+                    ↑↓ choose · Enter select · Esc close
+                  </span>
+                )}
+              </div>
+              <div
+                id="model-listbox"
+                role="listbox"
+                aria-label="Response model"
+                className="max-h-56 overflow-y-auto p-1.5"
               >
-                <Sparkles className="size-3.5 shrink-0" aria-hidden="true" />
-                <span className="max-w-[14ch] truncate">{selectedModelLabel}</span>
+                {modelOptions.length > 0 ? (
+                  modelOptions.map((model, index) => {
+                    const active = selectedModel === model.id;
+                    const highlighted = index === modelHighlight;
+                    return (
+                      <button
+                        key={model.id ?? 'auto'}
+                        id={`model-option-${index}`}
+                        type="button"
+                        role="option"
+                        aria-selected={active}
+                        disabled={isSwitching}
+                        onMouseMove={() => setModelHighlight(index)}
+                        onClick={() => chooseModel(model.id)}
+                        className={`mobile-touch-target flex min-h-11 w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2 text-left motion-safe:transition-colors ${focusRing} ${
+                          active
+                            ? 'bg-accent/10 text-accent'
+                            : highlighted
+                              ? 'bg-sunken text-strong'
+                              : 'text-strong hover:bg-sunken'
+                        } ${active && highlighted ? 'ring-1 ring-accent/40' : ''}`}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`size-2 shrink-0 rounded-full ${
+                            active ? 'bg-accent' : 'bg-edge'
+                          }`}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-medium">
+                            {model.label}
+                          </span>
+                          <span className="block truncate text-2xs text-muted">{model.detail}</span>
+                        </span>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <p className="px-3 py-4 text-center text-[13px] text-muted">
+                    No models match “{modelQuery}”
+                  </p>
+                )}
+              </div>
+              {modelError ? (
+                <p role="alert" className="border-t border-edge px-4 py-2 text-xs text-red-700">
+                  {modelError}
+                </p>
+              ) : null}
+            </section>
+          ) : null}
+        </div>
+        <div className="pointer-events-auto relative min-w-0">
+          <div
+            data-testid="chat-composer-surface"
+            className="min-w-0 overflow-hidden rounded-2xl bg-raised/90 shadow-[0_10px_36px_rgb(23_25_35/0.14)] ring-1 ring-edge backdrop-blur-xl motion-safe:transition-shadow focus-within:shadow-[0_14px_44px_rgb(91_92_226/0.18)] focus-within:ring-accent/40"
+          >
+            <textarea
+              ref={textareaRef}
+              aria-label="Message"
+              aria-controls={
+                modelCommandOpen
+                  ? 'model-listbox'
+                  : commandPaletteOpen
+                    ? 'command-listbox'
+                    : undefined
+              }
+              aria-activedescendant={
+                modelCommandOpen
+                  ? `model-option-${modelHighlight}`
+                  : commandPaletteOpen
+                    ? `command-option-${safeCommandHighlight}`
+                    : undefined
+              }
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                // While the /model palette is open the arrows drive it, Enter picks
+                // the highlighted model, and Escape closes it — so none of those
+                // reach the send handler.
+                if (modelCommandOpen) {
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setModelHighlight((h) =>
+                      modelOptions.length ? (h + 1) % modelOptions.length : 0,
+                    );
+                  } else if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setModelHighlight((h) =>
+                      modelOptions.length ? (h - 1 + modelOptions.length) % modelOptions.length : 0,
+                    );
+                  } else if (
+                    event.key === 'Enter' &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
+                    const choice = modelOptions[modelHighlight];
+                    if (choice && !isSwitching) chooseModel(choice.id);
+                  } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    setInput('');
+                  }
+                  return;
+                }
+                // The "/" palette: arrows move the cursor, Enter or Tab complete
+                // the highlighted command, Escape dismisses.
+                if (commandPaletteOpen) {
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setCommandHighlight((h) => (h + 1) % commandMatches.length);
+                  } else if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setCommandHighlight(
+                      (h) => (h - 1 + commandMatches.length) % commandMatches.length,
+                    );
+                  } else if (
+                    event.key === 'Tab' ||
+                    (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing)
+                  ) {
+                    event.preventDefault();
+                    const choice = commandMatches[safeCommandHighlight];
+                    if (choice) completeCommand(choice.command);
+                  } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    setInput('');
+                  }
+                  return;
+                }
+                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  formRef.current?.requestSubmit();
+                }
+              }}
+              placeholder="Ask anything… type / for commands"
+              rows={1}
+              className="block max-h-40 min-h-12 w-full min-w-0 resize-none border-0 bg-transparent px-4 pt-3 pb-2 text-base outline-none placeholder:text-muted/70 sm:text-sm"
+            />
+            <div className="flex min-w-0 items-center justify-between gap-2 border-t border-edge/70 px-2 py-2">
+              <button
+                data-testid="chat-autonomy-mode"
+                type="button"
+                aria-pressed={autonomous}
+                aria-label={
+                  autonomous
+                    ? 'Autonomous mode on. Tap to ask before acting.'
+                    : 'Ask before acting. Tap to turn on autonomous mode.'
+                }
+                onClick={() => setAutonomous((value) => !value)}
+                title="Autonomous mode acts without asking for each routine approval. Sensitive steps and budget caps still require permission."
+                // Pressing deepens the fill and draws a ring in place. Nudging
+                // the button down a pixel read as the control slipping.
+                className={`inline-flex h-10 min-w-0 items-center gap-1.5 rounded-xl px-3 text-xs font-medium ring-1 ring-transparent motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
+                  autonomous
+                    ? 'bg-amber-100 text-amber-900 active:bg-amber-200 active:ring-amber-500/50 dark:bg-amber-950 dark:text-amber-300 dark:active:bg-amber-900 dark:active:ring-amber-400/40'
+                    : 'bg-sunken text-muted hover:text-strong active:bg-edge active:text-strong active:ring-edge'
+                }`}
+              >
+                <Zap className="size-3.5 shrink-0" aria-hidden="true" />
+                <span className="truncate">{autonomous ? 'Autonomous on' : 'Ask first'}</span>
+                <span className="sr-only">
+                  . Sensitive steps including unknown recipients and logged-in browsing still ask,
+                  and budget caps still apply.
+                </span>
               </button>
-              {status === 'submitted' || status === 'streaming' ? (
+              <div className="flex shrink-0 items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => stop()}
-                  title="Stop generating"
-                  className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-edge bg-raised px-4 text-sm font-medium text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
+                  onClick={() => {
+                    setInput('/model');
+                    textareaRef.current?.focus();
+                  }}
+                  aria-label={`Response model: ${selectedModelLabel}. Tap to change.`}
+                  title="Switch response model"
+                  className={`hidden h-10 items-center gap-1.5 rounded-xl px-3 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong sm:inline-flex ${focusRing}`}
                 >
-                  <Square className="size-3 fill-current" aria-hidden="true" />
-                  Stop
+                  <Sparkles className="size-3.5 shrink-0" aria-hidden="true" />
+                  <span className="max-w-[14ch] truncate">{selectedModelLabel}</span>
                 </button>
-              ) : (
-                <button
-                  type="submit"
-                  disabled={busy || input.trim() === '' || modelCommandOpen || commandPaletteOpen}
-                  aria-label={asyncTurn ? 'Working on your request' : 'Send'}
-                  className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-accent text-white shadow-sm motion-safe:transition-[transform,background-color,box-shadow] hover:bg-accent-hover hover:shadow-[0_5px_14px_rgb(91_92_226/0.35)] motion-safe:hover:scale-105 motion-safe:active:scale-95 disabled:opacity-50 disabled:shadow-sm motion-safe:disabled:hover:scale-100 ${focusRing}`}
-                >
-                  {asyncTurn ? (
-                    <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-                  ) : (
-                    <ArrowUp className="size-4" aria-hidden="true" />
-                  )}
-                </button>
-              )}
+                {status === 'submitted' || status === 'streaming' ? (
+                  <button
+                    type="button"
+                    onClick={() => stop()}
+                    title="Stop generating"
+                    className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-edge bg-raised px-4 text-sm font-medium text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
+                  >
+                    <Square className="size-3 fill-current" aria-hidden="true" />
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={busy || input.trim() === '' || modelCommandOpen || commandPaletteOpen}
+                    aria-label={asyncTurn ? 'Working on your request' : 'Send'}
+                    className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-accent text-white shadow-sm motion-safe:transition-[transform,background-color,box-shadow] hover:bg-accent-hover hover:shadow-[0_5px_14px_rgb(91_92_226/0.35)] motion-safe:hover:scale-105 motion-safe:active:scale-95 disabled:opacity-50 disabled:shadow-sm motion-safe:disabled:hover:scale-100 ${focusRing}`}
+                  >
+                    {asyncTurn ? (
+                      <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+                    ) : (
+                      <ArrowUp className="size-4" aria-hidden="true" />
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
+          <span aria-live="polite" className="sr-only">
+            {modelCommandOpen && modelOptions[modelHighlight]
+              ? `${modelOptions[modelHighlight].label}, ${modelOptions[modelHighlight].detail}`
+              : commandPaletteOpen && commandMatches[safeCommandHighlight]
+                ? `${commandMatches[safeCommandHighlight].command}, ${commandMatches[safeCommandHighlight].hint}`
+                : ''}
+          </span>
+          {fallbackNote ? (
+            <p className="px-1 pt-1.5 text-right text-2xs text-muted">{fallbackNote}</p>
+          ) : null}
         </div>
-        <span aria-live="polite" className="sr-only">
-          {modelCommandOpen && modelOptions[modelHighlight]
-            ? `${modelOptions[modelHighlight].label}, ${modelOptions[modelHighlight].detail}`
-            : commandPaletteOpen && commandMatches[safeCommandHighlight]
-              ? `${commandMatches[safeCommandHighlight].command}, ${commandMatches[safeCommandHighlight].hint}`
-              : ''}
-        </span>
-        {fallbackNote ? (
-          <p className="px-1 pt-2 pb-1 text-right text-2xs text-muted">{fallbackNote}</p>
-        ) : null}
       </form>
     </div>
   );

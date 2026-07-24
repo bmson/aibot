@@ -38,7 +38,7 @@ export function MergeControl({
           setTargetId(e.target.value);
           setConfirming(false);
         }}
-        className={`${inputClass} min-w-36 text-xs`}
+        className={`${inputClass} min-w-44`}
       >
         <option value="">merge into…</option>
         {options.map((o) => (

@@ -1,19 +1,21 @@
 import { getAgent } from '@assistant/core';
 import { approvalPolicies, schedules } from '@assistant/db';
 import { asc } from 'drizzle-orm';
+import { ArrowRight } from 'lucide-react';
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 import { deletePolicy, setPolicyEnabled, setScheduleEnabled } from '@/app/settings/actions';
 import { AgentForm } from '@/app/settings/agent-form';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import {
-  btn,
+  Badge,
   Card,
-  CountBadge,
+  cardInteractiveClass,
+  cardShellClass,
   EmptyState,
-  InfoGrid,
-  InfoItem,
+  focusRing,
   PageHeader,
   PageShell,
   SectionHeading,
@@ -59,6 +61,44 @@ function policyScope(templateKey: string, match: unknown): string | null {
   return null;
 }
 
+/**
+ * Every list entry on this page is the same shape: what it is, one line of
+ * plain-language detail, and its controls on the right. Nested fact grids used
+ * to wrap two values in their own boxes, which made a simple "runs daily, ran
+ * two hours ago" read like a data table.
+ */
+function SettingRow({
+  title,
+  badges,
+  detail,
+  detailTitle,
+  actions,
+}: {
+  title: string;
+  badges?: ReactNode;
+  detail: ReactNode;
+  /** Tooltip for the machine-readable form (cron expression, tool name). */
+  detailTitle?: string;
+  actions: ReactNode;
+}) {
+  return (
+    <div
+      className={`${cardShellClass} flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-3 px-4 py-4 sm:px-5`}
+    >
+      <div className="min-w-0 flex-1 basis-64">
+        <p className="flex min-w-0 flex-wrap items-center gap-2 text-[15px] leading-6 font-semibold tracking-[-0.01em] text-strong">
+          {title}
+          {badges}
+        </p>
+        <p className="mt-1 min-w-0 text-[13px] leading-5 text-muted" title={detailTitle}>
+          {detail}
+        </p>
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>
+    </div>
+  );
+}
+
 export default async function SettingsPage() {
   await requireOwner();
   const db = getDb();
@@ -75,138 +115,146 @@ export default async function SettingsPage() {
   const goalAutomationCount = scheduleRows.length - directScheduleRows.length;
 
   return (
-    <PageShell size="reading" className="flex flex-col gap-8">
+    <PageShell size="reading" className="flex flex-col gap-10">
       <PageHeader
         title="Settings"
-        intro="Configure the assistant — identity, proactive schedules, spend caps, and standing approval rules."
+        intro="Identity, the jobs the assistant runs on its own, spending, and the approvals it can handle without asking."
       />
 
       {/* Identity */}
       <section>
-        <SectionHeading title="Assistant" hint={`${agent.name} <${agent.email}>`} />
+        <SectionHeading title="Assistant" hint={`${agent.name} · ${agent.email}`} />
         <Card className="mt-3">
-          <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-500">
-            {agent.phoneE164 ? `Phone ${agent.phoneE164} · ` : ''}
-            Name, email, and phone are provisioned at deploy time — the name matches the assistant’s
-            email account so messages it sends agree with what you see here.
-          </p>
           <AgentForm
             initial={{ timezone: agent.timezone, locale: agent.locale, signature: agent.signature }}
           />
+          <p className="mt-5 border-t border-edge pt-3 text-xs leading-5 text-muted">
+            {agent.phoneE164
+              ? `Name, email, and phone (${agent.phoneE164}) are`
+              : 'Name and email are'}{' '}
+            provisioned at deploy time — the name matches the assistant’s email account, so messages
+            it sends agree with what you see here.
+          </p>
         </Card>
       </section>
 
       {/* Schedules */}
       <section>
         <SectionHeading
-          title="Other schedules"
+          title="Recurring jobs"
           count={directScheduleRows.length}
           hint={
             goalAutomationCount
-              ? `${goalAutomationCount} goal automations are managed from Goals.`
-              : 'proactive jobs the assistant runs on its own'
+              ? `${goalAutomationCount} goal automations are managed from Goals`
+              : 'work the assistant starts on its own'
           }
         />
         {directScheduleRows.length === 0 ? (
           <EmptyState>
             {goalAutomationCount
-              ? 'No other schedules. Manage your automatic goal work from Goals.'
-              : 'No other schedules yet.'}
+              ? 'No other recurring jobs. Your automatic goal work is managed from Goals.'
+              : 'No recurring jobs yet.'}
           </EmptyState>
         ) : (
           <div className="mt-3 flex flex-col gap-2">
             {directScheduleRows.map((s) => (
-              <Card
+              <SettingRow
                 key={s.id}
-                className="grid min-w-0 gap-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-              >
-                <div className="min-w-0">
-                  <p className="flex flex-wrap items-center gap-2 text-[15px] font-semibold">
-                    {scheduleLabels[s.name] ?? s.name.replaceAll('-', ' ')}
-                    {s.enabled ? null : <CountBadge tone="amber">paused</CountBadge>}
-                  </p>
-                  <InfoGrid className="mt-3 sm:grid-cols-2">
-                    <InfoItem label="Next run">
-                      {s.nextRunAt && s.enabled
-                        ? `${relativeTime(s.nextRunAt, now)} · ${formatDateTime(s.nextRunAt, agent.timezone)}`
-                        : 'Not scheduled'}
-                    </InfoItem>
-                    <InfoItem label="Last run">
-                      {s.lastRunAt ? relativeTime(s.lastRunAt, now) : 'Not run yet'}
-                    </InfoItem>
-                  </InfoGrid>
-                  <details className="mt-1 text-2xs text-zinc-500">
-                    <summary className="cursor-pointer py-1">Technical schedule</summary>
-                    <code>{s.cron}</code>
-                  </details>
-                </div>
-                <form action={setScheduleEnabled.bind(null, s.id, !s.enabled)}>
-                  <SubmitButton pendingLabel={s.enabled ? 'Pausing…' : 'Resuming…'}>
-                    {s.enabled ? 'Pause' : 'Resume'}
-                  </SubmitButton>
-                </form>
-              </Card>
+                title={scheduleLabels[s.name] ?? s.name.replaceAll('-', ' ')}
+                badges={
+                  s.enabled ? null : (
+                    <Badge tone="amber" size="xs">
+                      Paused
+                    </Badge>
+                  )
+                }
+                detailTitle={`Schedule: ${s.cron}`}
+                detail={
+                  <>
+                    {s.enabled && s.nextRunAt
+                      ? `Next ${relativeTime(s.nextRunAt, now)}, ${formatDateTime(s.nextRunAt, agent.timezone)}`
+                      : 'Not scheduled'}
+                    {' · '}
+                    {s.lastRunAt ? `last ran ${relativeTime(s.lastRunAt, now)}` : 'has not run yet'}
+                  </>
+                }
+                actions={
+                  <form action={setScheduleEnabled.bind(null, s.id, !s.enabled)}>
+                    <SubmitButton
+                      variant="outline"
+                      pendingLabel={s.enabled ? 'Pausing…' : 'Resuming…'}
+                    >
+                      {s.enabled ? 'Pause' : 'Resume'}
+                    </SubmitButton>
+                  </form>
+                }
+              />
             ))}
           </div>
         )}
       </section>
 
-      {/* Costs */}
+      {/* Costs — one destination, so the whole row is the link. */}
       <section>
-        <SectionHeading title="Spending" hint="usage and limits live in one place" />
-        <Card className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-zinc-700 dark:text-zinc-300">
-            Review today’s usage, the monthly total, and adjust spending limits.
-          </p>
-          <Link href="/costs" className={btn.outline}>
+        <SectionHeading title="Spending" />
+        <Link
+          href="/costs"
+          className={`${cardShellClass} ${cardInteractiveClass} ${focusRing} mt-3 flex min-w-0 items-center justify-between gap-4 px-4 py-4 sm:px-5`}
+        >
+          <span className="min-w-0">
+            <span className="block text-[15px] leading-6 font-semibold tracking-[-0.01em] text-strong">
+              Usage and limits
+            </span>
+            <span className="mt-1 block text-[13px] leading-5 text-muted">
+              Today’s spend, the monthly total, and the caps that pause work.
+            </span>
+          </span>
+          <span className="inline-flex shrink-0 items-center gap-1 text-[13px] font-medium text-accent">
             Open costs
-          </Link>
-        </Card>
+            <ArrowRight className="size-3.5" aria-hidden="true" />
+          </span>
+        </Link>
       </section>
 
       {/* Approval rules */}
       <section>
         <SectionHeading
-          title="Standing approval choices"
+          title="Standing approvals"
           count={policyRows.length}
-          hint="actions the assistant can remember how to handle"
+          hint="decisions the assistant reuses instead of asking again"
         />
         {policyRows.length === 0 ? (
           <EmptyState>
-            No standing rules. Recipient-specific choices you save from an approval will appear
-            here.
+            No standing rules yet. When you save a choice from an approval, it appears here.
           </EmptyState>
         ) : (
           <div className="mt-3 flex flex-col gap-2">
-            {policyRows.map((p) => {
-              const scope = policyScope(p.templateKey, p.match);
-              return (
-                <Card
-                  key={p.id}
-                  className="grid min-w-0 gap-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-                >
-                  <div className="min-w-0">
-                    <p className="text-[15px] font-semibold">
-                      {policyLabels[p.templateKey] ?? 'Custom approval rule'}
-                    </p>
-                    <InfoGrid className="mt-3 sm:grid-cols-3">
-                      <InfoItem label="Decision">
-                        {p.effect === 'allow' ? 'Allowed' : 'Blocked'}
-                      </InfoItem>
-                      <InfoItem label="Status">{p.enabled ? 'In use' : 'Paused'}</InfoItem>
-                      <InfoItem label="Applies to" className="col-span-2 sm:col-span-1">
-                        {scope ?? 'Custom scope'}
-                      </InfoItem>
-                    </InfoGrid>
-                    <details className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-                      <summary className="cursor-pointer py-1">Technical details</summary>
-                      <code>{p.toolName}</code> · {p.templateKey}
-                    </details>
-                  </div>
-                  <div className="flex shrink-0 gap-1.5">
+            {policyRows.map((p) => (
+              <SettingRow
+                key={p.id}
+                title={policyLabels[p.templateKey] ?? 'Custom approval rule'}
+                badges={
+                  <>
+                    <Badge tone={p.effect === 'allow' ? 'green' : 'red'} size="xs">
+                      {p.effect === 'allow' ? 'Allowed' : 'Blocked'}
+                    </Badge>
+                    {p.enabled ? null : (
+                      <Badge tone="amber" size="xs">
+                        Paused
+                      </Badge>
+                    )}
+                  </>
+                }
+                detailTitle={`${p.toolName} · ${p.templateKey}`}
+                detail={policyScope(p.templateKey, p.match) ?? 'Custom scope'}
+                actions={
+                  <>
                     <form action={setPolicyEnabled.bind(null, p.id, !p.enabled)}>
-                      <SubmitButton pendingLabel={p.enabled ? 'Pausing…' : 'Enabling…'}>
-                        {p.enabled ? 'Pause rule' : 'Use rule'}
+                      <SubmitButton
+                        variant="outline"
+                        pendingLabel={p.enabled ? 'Pausing…' : 'Enabling…'}
+                      >
+                        {p.enabled ? 'Pause' : 'Use'}
                       </SubmitButton>
                     </form>
                     {p.createdVia !== 'seed' ? (
@@ -220,10 +268,10 @@ export default async function SettingsPage() {
                         </ConfirmButton>
                       </form>
                     ) : null}
-                  </div>
-                </Card>
-              );
-            })}
+                  </>
+                }
+              />
+            ))}
           </div>
         )}
       </section>

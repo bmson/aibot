@@ -12,12 +12,11 @@ import {
   OccasionsPanel,
   type OccasionView,
 } from '@/app/profile/occasions-panel';
-import { PersonControls } from '@/app/profile/person-controls';
-import { RelationshipForm } from '@/app/profile/relationship-form';
+import { DeletePerson, PersonControls } from '@/app/profile/person-controls';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { countBadgeClass, PageHeader, PageShell, Panel } from '@/lib/ui';
+import { Badge, labelClass, PageHeader, PageShell, Panel, SectionHeading } from '@/lib/ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -131,28 +130,40 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
       />
 
       <Panel className="mt-6">
-        <h2 className="text-sm font-medium">Person details</h2>
-        <div className="mt-3 grid gap-4 lg:grid-cols-2">
-          <div>
-            <p className="mb-1 text-xs text-zinc-500 dark:text-zinc-400">Name and aliases</p>
-            <PersonControls
-              contactId={contact.id}
-              initialName={contact.name}
-              initialAliases={contact.aliases}
-            />
-          </div>
-          <div>
-            <p className="mb-1 text-xs text-zinc-500 dark:text-zinc-400">Relationship</p>
-            <RelationshipForm contactId={contact.id} initial={contact.relationship} />
-            <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-              Adding a relationship marks this person as known, so their content is no longer
-              treated as unverified.
-            </p>
-          </div>
+        <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-3">
+          <SectionHeading title="Person details" />
+          {contact.trust === 'unknown' ? (
+            <Badge
+              tone="amber"
+              size="xs"
+              title="The assistant doesn't know who this is yet, so content from them is treated as untrusted."
+            >
+              Unverified
+            </Badge>
+          ) : (
+            <span className="text-2xs font-medium text-muted">Known contact</span>
+          )}
         </div>
-        <div className="mt-4 border-t border-edge pt-4">
-          <p className="mb-1 text-xs text-zinc-500 dark:text-zinc-400">Possible duplicate</p>
-          <MergeControl contactId={contact.id} options={mergeOptions} suggested={duplicate} />
+        <p className="mt-1 max-w-[62ch] text-[13px] leading-5 text-muted">
+          How the assistant recognises this person. Adding a relationship marks them as known, so
+          their content is no longer treated as unverified.
+        </p>
+        <PersonControls
+          contactId={contact.id}
+          initialName={contact.name}
+          initialAliases={contact.aliases}
+          initialRelationship={contact.relationship}
+        />
+        <div className="mt-6 border-t border-edge pt-4">
+          <p className={labelClass}>Merge or remove</p>
+          <p className="mt-1 max-w-[62ch] text-xs text-muted">
+            Merging moves every fact onto the person you pick and retires this entry. Deleting
+            removes {contact.name} and their facts for good.
+          </p>
+          <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+            <MergeControl contactId={contact.id} options={mergeOptions} suggested={duplicate} />
+            <DeletePerson contactId={contact.id} name={contact.name} />
+          </div>
         </div>
       </Panel>
 
@@ -165,19 +176,16 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
 
       <section className="mt-8">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="flex items-baseline gap-2 text-sm font-medium">
-            Saved facts
-            <span className={countBadgeClass}>{totalFacts}</span>
-          </h2>
+          <SectionHeading title="Saved facts" count={totalFacts} />
           <AddFact subjectContactId={contact.id} subjectLabel={contact.name} />
         </div>
         {totalFacts > FACT_LIMIT ? (
-          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          <p className="mt-1 text-xs text-muted">
             Showing the {FACT_LIMIT} most relevant facts to keep this page quick to open.
           </p>
         ) : null}
         {facts.length === 0 ? (
-          <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="mt-3 text-[15px] leading-6 text-muted">
             No active facts are saved for this person.
           </p>
         ) : (
