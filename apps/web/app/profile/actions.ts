@@ -7,6 +7,7 @@ import {
   getAgent,
   InboundEventSchema,
   isOccasionKind,
+  MEMORY_DOMAINS,
   purgeVoiceSamples,
   saveOccasion,
 } from '@assistant/core';
@@ -14,8 +15,10 @@ import {
   addTombstone,
   contacts,
   deleteContact,
+  isTombstoned,
   memories,
   mergeContacts,
+  normalizeContactAliases,
   occasions,
   tasks,
   updateContactIdentity,
@@ -88,23 +91,38 @@ export async function forgetFact(memoryId: string): Promise<void> {
   revalidateProfile();
 }
 
-/** Pin/unpin: pinned facts are always part of the compiled owner card. */
-export async function setFactPinned(memoryId: string, pinned: boolean): Promise<void> {
-  await requireOwner();
-  const db = getDb();
-  await db.update(memories).set({ pinned }).where(eq(memories.id, memoryId));
-  await compileOwnerCard(db);
-  revalidateProfile();
-}
+export type ProminenceLevel = 'always' | 'auto' | 'minor';
 
 /**
- * Demote to minor detail: importance 1 (and unpinned), so the fact never
- * auto-appears in the compiled card but stays in memory for semantic recall.
+ * Set how prominently a fact figures in conversations — one owner-facing control
+ * replacing the old pin/demote pair:
+ *   always → pinned into the compiled card, guaranteed in every prompt.
+ *   auto   → AI Bot decides (important owner facts auto-surface; the rest are
+ *            recalled when relevant). Lifts a previously-minor fact back to the
+ *            default importance so it can surface again; leaves a normal/high
+ *            importance untouched.
+ *   minor  → a small detail: importance 1 and unpinned, so it never auto-appears
+ *            in the card but stays available for recall.
  */
-export async function demoteFact(memoryId: string): Promise<void> {
+export async function setFactProminence(memoryId: string, level: ProminenceLevel): Promise<void> {
   await requireOwner();
   const db = getDb();
-  await db.update(memories).set({ importance: 1, pinned: false }).where(eq(memories.id, memoryId));
+  if (level === 'always') {
+    await db.update(memories).set({ pinned: true }).where(eq(memories.id, memoryId));
+  } else if (level === 'minor') {
+    await db
+      .update(memories)
+      .set({ pinned: false, importance: 1 })
+      .where(eq(memories.id, memoryId));
+  } else {
+    await db
+      .update(memories)
+      .set({
+        pinned: false,
+        importance: sql`CASE WHEN ${memories.importance} <= 1 THEN 3 ELSE ${memories.importance} END`,
+      })
+      .where(eq(memories.id, memoryId));
+  }
   await compileOwnerCard(db);
   revalidateProfile();
 }
@@ -288,6 +306,100 @@ export async function purgeVoiceSamplesAction(): Promise<void> {
   await requireOwner();
   await purgeVoiceSamples(getDb(), getWorkspace());
   revalidateProfile();
+}
+
+// ── Manual creation ──────────────────────────────────────────────────────────
+
+/**
+ * Owner adds a person by hand. A manually-named person is vouched-for, so they
+ * are created 'known' (their content is not treated as unverified). Refuses an
+ * exact-name duplicate so the owner merges rather than forking a contact.
+ */
+export async function createPersonAction(input: {
+  name: string;
+  relationship: string;
+  aliases: string;
+}): Promise<{ error?: string; contactId?: string }> {
+  await requireOwner();
+  const name = input.name.trim().slice(0, 120);
+  if (name.length < 1) return { error: 'Enter a name.' };
+  const db = getDb();
+  const [existing] = await db
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(sql`lower(${contacts.name}) = ${name.toLowerCase()}`)
+    .limit(1);
+  if (existing) return { error: 'A person with that name already exists.' };
+  const aliases = normalizeContactAliases(
+    input.aliases
+      .slice(0, 4_000)
+      .split(/[,\n]/)
+      .map((alias) => alias.trim())
+      .filter(Boolean),
+    name,
+  );
+  const [row] = await db
+    .insert(contacts)
+    .values({ name, relationship: input.relationship.trim().slice(0, 80), trust: 'known', aliases })
+    .returning({ id: contacts.id });
+  await compileOwnerCard(db);
+  revalidateProfile();
+  return { contactId: row?.id };
+}
+
+/**
+ * Owner adds a fact by hand. Owner-authored → full confidence, owner-confirmed
+ * (so consolidation protects the wording), origin 'owner'. `subjectContactId`
+ * says who it is about — the owner's own id, or a person's. A previously
+ * forgotten fact stays forgotten (tombstone wins).
+ */
+export async function createMemoryAction(input: {
+  content: string;
+  domain: string;
+  importance: string;
+  pinned: boolean;
+  subjectContactId: string;
+}): Promise<{ error?: string }> {
+  await requireOwner();
+  const content = input.content.trim();
+  if (content.length < 3) return { error: 'Write a little more.' };
+  if (!UUID_RE.test(input.subjectContactId)) return { error: 'Invalid subject.' };
+  const db = getDb();
+
+  const contentHash = createHash('sha256').update(content).digest('hex');
+  if (await isTombstoned(db, contentHash)) {
+    return { error: 'You previously forgot this fact, so it is not saved again.' };
+  }
+  const importance = Math.min(Math.max(Math.trunc(Number(input.importance)) || 3, 1), 5);
+  const domain = (MEMORY_DOMAINS as readonly string[]).includes(input.domain)
+    ? input.domain
+    : undefined;
+  const [embedding] = await getRouter().embed([content]);
+  const agent = await getAgent(db);
+  const [row] = await db
+    .insert(memories)
+    .values({
+      agentId: agent.id,
+      category: 'knowledge',
+      kind: 'fact',
+      content,
+      contentHash,
+      embedding,
+      importance,
+      confidence: '1.00',
+      originTrust: 'owner',
+      ownerConfirmed: true,
+      pinned: input.pinned,
+      subjectContactId: input.subjectContactId,
+      domain,
+      source: 'manual',
+    })
+    .onConflictDoNothing({ target: memories.contentHash })
+    .returning({ id: memories.id });
+  if (!row) return { error: 'That fact is already saved.' };
+  await compileOwnerCard(db);
+  revalidateProfile();
+  return {};
 }
 
 // ── Occasions (Phase 17) ─────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { contacts, createDb, type Db, memories, ownerCard } from '@assistant/db';
-import { eq, sql } from 'drizzle-orm';
+import { contacts, createDb, type Db, memories, occasions, ownerCard } from '@assistant/db';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import type { ModelRouter } from '../model-router/router.js';
@@ -15,6 +15,7 @@ let db: Db;
 let dbUp = false;
 let agentId: string;
 let ownerId: string;
+let personId: string | undefined;
 const factIds: Record<string, string> = {};
 
 async function insertFact(
@@ -76,6 +77,7 @@ const fakeRouter = {
         ],
         domainFixes: [{ id: factIds.noDomain, domain: 'home' }],
         timeline: [{ id: factIds.newJob, validFrom: '2024-03-01', validUntil: '' }],
+        occasions: [{ kind: 'birthday', label: '', month: 5, day: 20, year: null, notes: '' }],
       },
     };
   },
@@ -160,6 +162,8 @@ beforeAll(async () => {
 afterAll(async () => {
   if (dbUp) {
     await db.delete(memories).where(sql`${memories.content} LIKE ${`${MARKER}%`}`);
+    await db.delete(occasions).where(eq(occasions.source, 'consolidation'));
+    if (personId) await db.delete(contacts).where(eq(contacts.id, personId));
     await compileOwnerCard(db); // leave the card clean of test facts
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
@@ -242,6 +246,14 @@ describe('memory consolidation (integration)', () => {
     expect(result.duplicatesExpired).toBeGreaterThanOrEqual(1);
     expect(result.contradictionsResolved).toBeGreaterThanOrEqual(1);
     expect(result.cardCompiled).toBe(true);
+
+    // occasions mined from facts are upserted for the processed entity
+    expect(result.occasionsSaved).toBeGreaterThanOrEqual(1);
+    const ownerOccasions = await db
+      .select()
+      .from(occasions)
+      .where(and(eq(occasions.contactId, ownerId), eq(occasions.source, 'consolidation')));
+    expect(ownerOccasions.some((o) => o.month === 5 && o.day === 20)).toBe(true);
 
     // duplicate: higher-confidence newer dupB survives; dupA expired, superseded by dupB
     const [dupA] = await db
@@ -370,5 +382,36 @@ describe('compileOwnerCard pinning (integration)', () => {
     expect(content).not.toContain('cardMid sleeps with the window open');
     // overflow is surfaced to the model so it knows recall has more
     expect(content).toContain('memory.recall');
+  });
+
+  it('a pinned fact about a person is carried into the card under People', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+
+    const [person] = await db
+      .insert(contacts)
+      .values({ name: `${MARKER} Person`, relationship: 'sister', trust: 'known' })
+      .returning({ id: contacts.id });
+    personId = (person as NonNullable<typeof person>).id;
+
+    // A pinned person fact must reach the card even though it is low importance
+    // and person facts never auto-surface; an ordinary one must not.
+    await insertFact('personPinned', {
+      content: `${MARKER}: personPinned plays the cello`,
+      confidence: '0.20',
+      importance: 1,
+      pinned: true,
+      subjectContactId: personId,
+    });
+    await insertFact('personPlain', {
+      content: `${MARKER}: personPlain once visited Japan`,
+      confidence: '0.90',
+      importance: 3,
+      subjectContactId: personId,
+    });
+
+    const content = await compileOwnerCard(db);
+    expect(content).toContain(`${MARKER} Person`);
+    expect(content).toContain('personPinned plays the cello');
+    expect(content).not.toContain('personPlain once visited Japan');
   });
 });

@@ -27,6 +27,78 @@ function validMonthDay(month: number, day: number): boolean {
   );
 }
 
+const MONTH_NAMES: Record<string, number> = {
+  january: 1,
+  february: 2,
+  march: 3,
+  april: 4,
+  may: 5,
+  june: 6,
+  july: 7,
+  august: 8,
+  september: 9,
+  october: 10,
+  november: 11,
+  december: 12,
+  jan: 1,
+  feb: 2,
+  mar: 3,
+  apr: 4,
+  jun: 6,
+  jul: 7,
+  aug: 8,
+  sep: 9,
+  sept: 9,
+  oct: 10,
+  nov: 11,
+  dec: 12,
+};
+const MONTH_ALT = Object.keys(MONTH_NAMES).join('|');
+// "14 March" / "14th of March"
+const DAY_MONTH_RE = new RegExp(
+  `\\b(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\s+(?:of\\s+)?(${MONTH_ALT})\\b`,
+);
+// "March 14" / "March 14th" — the (?!\d) day guard rejects a bare year ("May 1990").
+const MONTH_DAY_RE = new RegExp(`\\b(${MONTH_ALT})\\s+(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\b`);
+
+export interface DetectedOccasion {
+  kind: 'birthday' | 'anniversary';
+  month: number;
+  day: number;
+}
+
+/**
+ * Best-effort detection of a birthday/anniversary date stated in a fact's text,
+ * powering the Profile "Save as occasion" chip. Deliberately conservative: it
+ * only fires when the sentence also names the *kind* (born/birthday, or
+ * anniversary) so it never guesses a bare date, and it never infers the year —
+ * "turned 70 on 9 January 2026" would misread 2026 as a birth year, so the owner
+ * fills the year in themselves. Returns null when nothing confident is found.
+ */
+export function detectOccasionInText(text: string): DetectedOccasion | null {
+  const lower = text.toLowerCase();
+  const kind: DetectedOccasion['kind'] | null = /anniversar/.test(lower)
+    ? 'anniversary'
+    : /\b(born|birthday|birth\s?day|turns?|turned)\b/.test(lower)
+      ? 'birthday'
+      : null;
+  if (!kind) return null;
+
+  const dayMonth = lower.match(DAY_MONTH_RE);
+  if (dayMonth) {
+    const day = Number(dayMonth[1]);
+    const month = MONTH_NAMES[dayMonth[2] as string];
+    if (month && validMonthDay(month, day)) return { kind, month, day };
+  }
+  const monthDay = lower.match(MONTH_DAY_RE);
+  if (monthDay) {
+    const month = MONTH_NAMES[monthDay[1] as string];
+    const day = Number(monthDay[2]);
+    if (month && validMonthDay(month, day)) return { kind, month, day };
+  }
+  return null;
+}
+
 /** Date-only "today" in UTC — occasions are day-granular, so time-of-day is irrelevant. */
 function utcToday(now: Date): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));

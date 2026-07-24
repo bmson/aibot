@@ -15,17 +15,12 @@ import {
   tasks,
 } from '@assistant/db';
 import { and, count, desc, eq, gt, inArray, isNull, like, or, sql } from 'drizzle-orm';
-import {
-  ArrowRight,
-  CheckCircle2,
-  CircleCheck,
-  Clock3,
-  Library,
-  ShieldQuestion,
-} from 'lucide-react';
+import { ArrowRight, CheckCircle2, Library, ShieldQuestion } from 'lucide-react';
 import Link from 'next/link';
 import { AutoRefresh } from '@/app/auto-refresh';
 import { recompileCard } from '@/app/profile/actions';
+import { AddFact } from '@/app/profile/add-fact';
+import { AddPerson } from '@/app/profile/add-person';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { MemoryOrganizer } from '@/app/profile/memory-organizer';
 import { type VoiceImportView, VoiceSamplesPanel } from '@/app/profile/voice-samples';
@@ -66,7 +61,7 @@ const PROFILE_FACT_LIMIT = 250;
 const QUARANTINE_LIMIT = 100;
 const VOICE_IMPORT_LIMIT = 5;
 
-function toFactView(m: MemoryRow, now: Date, inCard = false): FactView {
+function toFactView(m: MemoryRow, now: Date, inCard = false, aboutOwner = false): FactView {
   const from = m.validFrom?.toISOString().slice(0, 10);
   const until = m.validUntil?.toISOString().slice(0, 10);
   return {
@@ -80,6 +75,7 @@ function toFactView(m: MemoryRow, now: Date, inCard = false): FactView {
     pinned: m.pinned,
     organized: m.lastConsolidatedAt !== null,
     inCard,
+    aboutOwner,
     originTrust: m.originTrust,
     sourceTaskId: m.sourceTaskId,
     createdLabel: relativeTime(m.createdAt, now),
@@ -209,9 +205,16 @@ export default async function ProfilePage() {
 
   const pinnedCount = ownerFacts.filter((m) => m.pinned).length;
 
+  // Memory state only changes nightly or from an action on this page (which
+  // revalidates on its own). The one thing that updates in the background is a
+  // running consolidation pass — so poll only while one is active, instead of
+  // re-running every query on this page every 8 seconds.
+  const organizerActive =
+    latestOrganizer?.status === 'pending' || latestOrganizer?.status === 'running';
+
   return (
     <PageShell size="reading">
-      <AutoRefresh intervalMs={8_000} />
+      {organizerActive ? <AutoRefresh intervalMs={5_000} /> : null}
       <PageHeader
         title="What I remember"
         intro={`See what shapes AI Bot’s understanding of ${owner?.name ?? 'you'}, what still needs care, and what stays available for recall.`}
@@ -222,8 +225,8 @@ export default async function ProfilePage() {
           <div>
             <h2 className="text-lg font-semibold tracking-[-0.025em]">Your memory library</h2>
             <p className="mt-1 text-[13px] leading-5 text-muted">
-              Each number opens the exact memories behind it, with controls to verify, correct, pin,
-              or forget them.
+              Everything AI Bot has learned, with controls to verify, correct, feature, or forget
+              each fact.
             </p>
           </div>
           <Link href="/profile/memories" className={`${btn.outline} group`}>
@@ -234,70 +237,78 @@ export default async function ProfilePage() {
             />
           </Link>
         </div>
-        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {[
-            {
-              value: memoryHealth.totalUsable,
-              label: 'Available to AI Bot',
-              description: 'Active facts that can be recalled in conversations.',
-              href: '/profile/memories?view=available',
-              icon: Library,
-              tone: 'bg-accent/10 text-accent',
-            },
-            {
-              value: memoryHealth.notYetOrganized,
-              label: 'Waiting for a pass',
-              description: 'Saved facts not yet checked for repetition or conflicts.',
-              href: '/profile/memories?view=waiting',
-              icon: Clock3,
-              tone: 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300',
-            },
-            {
-              value: memoryHealth.awaitingReview,
-              label: 'Needs your review',
-              description: 'Held back because the source was not verified.',
-              href: '/profile/memories?view=review',
-              icon: ShieldQuestion,
-              tone: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
-            },
-            {
-              value: memoryHealth.ownerConfirmed,
-              label: 'Verified by you',
-              description: 'Facts protected by your confirmation or correction.',
-              href: '/profile/memories?view=verified',
-              icon: CircleCheck,
-              tone: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300',
-            },
-          ].map((item) => {
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.label}
-                href={item.href}
-                className="group rounded-2xl bg-raised p-3 shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.08)] sm:p-4"
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <Link
+            href="/profile/memories"
+            className="group rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.08)] sm:p-5"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <span className="inline-flex size-9 items-center justify-center rounded-xl bg-accent/10 text-accent">
+                <Library className="size-4" aria-hidden="true" />
+              </span>
+              <span className="font-display text-3xl font-semibold tracking-[-0.04em]">
+                {memoryHealth.totalUsable.toLocaleString()}
+              </span>
+            </div>
+            <p className="mt-4 text-[13px] font-semibold">In use by AI Bot</p>
+            <p className="mt-1 text-xs leading-5 text-muted">
+              Active facts that can be recalled in conversations
+              {memoryHealth.ownerConfirmed > 0
+                ? ` — ${memoryHealth.ownerConfirmed.toLocaleString()} verified by you`
+                : ''}
+              .
+            </p>
+            <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-accent">
+              Browse and manage
+              <ArrowRight
+                className="size-3 motion-safe:transition-transform group-hover:translate-x-0.5"
+                aria-hidden="true"
+              />
+            </span>
+          </Link>
+
+          <Link
+            href="/profile/memories?state=review"
+            className={`group rounded-2xl p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.08)] sm:p-5 ${
+              memoryHealth.awaitingReview > 0
+                ? 'bg-amber-50/70 ring-amber-200 dark:bg-amber-950/20 dark:ring-amber-900'
+                : 'bg-raised ring-edge/60'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <span
+                className={`inline-flex size-9 items-center justify-center rounded-xl ${
+                  memoryHealth.awaitingReview > 0
+                    ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                    : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                }`}
               >
-                <div className="flex items-start justify-between gap-4">
-                  <span
-                    className={`inline-flex size-9 items-center justify-center rounded-xl ${item.tone}`}
-                  >
-                    <Icon className="size-4" aria-hidden="true" />
-                  </span>
-                  <span className="font-display text-2xl font-semibold tracking-[-0.04em]">
-                    {item.value}
-                  </span>
-                </div>
-                <p className="mt-3 text-[13px] font-semibold sm:mt-4">{item.label}</p>
-                <p className="mt-1 text-xs leading-5 text-muted">{item.description}</p>
-                <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-accent">
-                  View <span className="hidden sm:inline">and manage</span>
-                  <ArrowRight
-                    className="size-3 motion-safe:transition-transform group-hover:translate-x-0.5"
-                    aria-hidden="true"
-                  />
-                </span>
-              </Link>
-            );
-          })}
+                {memoryHealth.awaitingReview > 0 ? (
+                  <ShieldQuestion className="size-4" aria-hidden="true" />
+                ) : (
+                  <CheckCircle2 className="size-4" aria-hidden="true" />
+                )}
+              </span>
+              <span className="font-display text-3xl font-semibold tracking-[-0.04em]">
+                {memoryHealth.awaitingReview.toLocaleString()}
+              </span>
+            </div>
+            <p className="mt-4 text-[13px] font-semibold">
+              {memoryHealth.awaitingReview > 0 ? 'Waiting on you' : 'Nothing to review'}
+            </p>
+            <p className="mt-1 text-xs leading-5 text-muted">
+              {memoryHealth.awaitingReview > 0
+                ? 'Held back until you approve the source. Not used in conversations yet.'
+                : 'Everything from unverified sources has been reviewed.'}
+            </p>
+            <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-accent">
+              {memoryHealth.awaitingReview > 0 ? 'Review now' : 'View'}
+              <ArrowRight
+                className="size-3 motion-safe:transition-transform group-hover:translate-x-0.5"
+                aria-hidden="true"
+              />
+            </span>
+          </Link>
         </div>
         <div className="mt-4">
           <MemoryOrganizer
@@ -378,9 +389,14 @@ export default async function ProfilePage() {
             About {owner?.name ?? 'you'}
             <span className={countBadge}>{ownerFacts.length} facts</span>
             <span className="text-xs font-normal text-zinc-500 dark:text-zinc-500">
-              Open when you need to edit or verify something.
+              Open when you need to edit, add, or verify something.
             </span>
           </summary>
+          {owner ? (
+            <div className="mt-3">
+              <AddFact subjectContactId={owner.id} subjectLabel="you" />
+            </div>
+          ) : null}
           {ownerByDomain.length === 0 ? (
             <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
               No details yet — they are added from conversations only after review.
@@ -404,7 +420,10 @@ export default async function ProfilePage() {
                     </summary>
                     <div className="mt-3 flex flex-col gap-2">
                       {group.facts.map((m) => (
-                        <FactRow key={m.id} fact={toFactView(m, now, cardFactIds.has(m.id))} />
+                        <FactRow
+                          key={m.id}
+                          fact={toFactView(m, now, cardFactIds.has(m.id), true)}
+                        />
                       ))}
                     </div>
                   </details>
@@ -433,6 +452,9 @@ export default async function ProfilePage() {
         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
           Open a person to review what the assistant knows about them.
         </p>
+        <div className="mt-3">
+          <AddPerson />
+        </div>
         {people.length === 0 ? (
           <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
             No people yet — new names in conversations become contacts automatically.

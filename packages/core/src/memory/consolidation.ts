@@ -6,6 +6,7 @@ import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cos
 import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import { MEMORY_DOMAINS } from './extraction.js';
+import { saveOccasion } from './occasions.js';
 
 /**
  * Nightly consolidation (Phase 8): per entity, the model DETECTS duplicate
@@ -52,6 +53,22 @@ const ConsolidationFindingsSchema = z.object({
     .max(40)
     .describe(
       'Temporal validity explicitly stated in a fact ("2019–2023", "since March"). ISO dates; empty string = unknown/open.',
+    ),
+  occasions: z
+    .array(
+      z.object({
+        kind: z.enum(['birthday', 'anniversary', 'custom']),
+        label: z.string().max(120).default('').describe('For a custom occasion, what it is.'),
+        month: z.number().int().min(1).max(12),
+        day: z.number().int().min(1).max(31),
+        year: z.number().int().min(1900).max(2200).nullable().default(null),
+        notes: z.string().max(500).default('').describe('Gift ideas or context, if mentioned.'),
+      }),
+    )
+    .max(10)
+    .default([])
+    .describe(
+      'Recurring dates for THIS person stated in the facts — birthdays, anniversaries, and other dated events. Only when a specific month and day are given; include the year only if stated.',
     ),
 });
 type ConsolidationFindings = z.infer<typeof ConsolidationFindingsSchema>;
@@ -104,6 +121,7 @@ export interface ConsolidationResult {
   contradictionsResolved: number;
   factsUnified: number;
   domainsAssigned: number;
+  occasionsSaved: number;
   cardCompiled: boolean;
 }
 
@@ -122,6 +140,7 @@ export async function runMemoryConsolidation(
       contradictionsResolved: 0,
       factsUnified: 0,
       domainsAssigned: 0,
+      occasionsSaved: 0,
       cardCompiled: false,
     };
 
@@ -244,6 +263,10 @@ export async function runMemoryConsolidation(
             'sentence loses nothing ("drinks coffee black" + "prefers espresso after lunch" →',
             '"Drinks coffee black; espresso after lunch"). Keep every specific, invent nothing,',
             'and leave facts marked [curated] alone.',
+            'Occasions: if a fact states a recurring date for THIS person (a birthday,',
+            'anniversary, or other dated event with a specific month and day), surface it in',
+            'the occasions array so it can be reminded at lead time. Include the year only if',
+            'stated. Do not guess a date that is not written in a fact.',
           ].join('\n'),
           prompt: listing,
         })
@@ -360,6 +383,33 @@ export async function runMemoryConsolidation(
           .where(eq(memories.id, t.id));
       }
 
+      // Backfill occasions from dates already stated in this person's facts, so
+      // a birthday captured before occasion-mining existed (or imported as plain
+      // text) still populates the Occasions panel and morning brief. Derived
+      // from already-vetted active facts → not quarantined; saveOccasion is an
+      // idempotent upsert, so re-running never duplicates. A bad date is skipped
+      // rather than failing the whole pass.
+      for (const occ of outcome.object.occasions ?? []) {
+        try {
+          const saved = await saveOccasion(db, {
+            agentId: (facts[0] as FactLite).agentId,
+            contactId: entity.subjectContactId,
+            kind: occ.kind,
+            label: occ.label,
+            month: occ.month,
+            day: occ.day,
+            year: occ.year,
+            notes: occ.notes,
+            originTrust: 'assistant',
+            quarantined: false,
+            source: 'consolidation',
+          });
+          if (saved.saved) result.occasionsSaved += 1;
+        } catch (err) {
+          console.error('memory consolidation: skipping unsavable occasion', err);
+        }
+      }
+
       // everything reviewed this round goes to the back of the rotation queue
       await db
         .update(memories)
@@ -455,6 +505,7 @@ export async function compileOwnerCard(db: Db): Promise<string> {
 
   const peopleRows = await db
     .select({
+      id: contacts.id,
       name: contacts.name,
       relationship: contacts.relationship,
       n: sql<number>`count(${memories.id})`,
@@ -473,9 +524,44 @@ export async function compileOwnerCard(db: Db): Promise<string> {
     .having(sql`count(${memories.id}) > 0`)
     .orderBy(sql`count(${memories.id}) desc`);
 
-  // only people who clearly matter: a named relationship or a real body of facts
+  // Facts the owner pinned about a specific person belong in the always-on card
+  // just like pinned owner facts do — otherwise "Always in profile" is a silent
+  // no-op on person pages. Collect them so each person can carry their pins as
+  // sub-bullets, and so a pinned-about person is never omitted from the list.
+  const pinnedPersonFacts = await db
+    .select({ contactId: memories.subjectContactId, content: memories.content })
+    .from(memories)
+    .innerJoin(contacts, eq(memories.subjectContactId, contacts.id))
+    .where(
+      and(
+        ne(contacts.trust, 'owner'),
+        eq(memories.pinned, true),
+        eq(memories.category, 'knowledge'),
+        eq(memories.quarantined, false),
+        or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
+      ),
+    )
+    .orderBy(sql`${memories.importance} desc`, sql`${memories.confidence} desc`);
+  const pinnedByContact = new Map<string, string[]>();
+  for (const f of pinnedPersonFacts) {
+    if (!f.contactId) continue;
+    const list = pinnedByContact.get(f.contactId) ?? [];
+    list.push(f.content);
+    pinnedByContact.set(f.contactId, list);
+  }
+
+  // Include a person when they clearly matter (a named relationship or a real
+  // body of facts) OR when the owner pinned a fact about them. Pinned-about
+  // people sort first so the limit never drops an explicit owner choice.
   const people = peopleRows
-    .filter((p) => p.relationship || Number(p.n) >= CARD_PEOPLE_MIN_FACTS)
+    .filter(
+      (p) => p.relationship || Number(p.n) >= CARD_PEOPLE_MIN_FACTS || pinnedByContact.has(p.id),
+    )
+    .sort(
+      (a, b) =>
+        (pinnedByContact.has(b.id) ? 1 : 0) - (pinnedByContact.has(a.id) ? 1 : 0) ||
+        Number(b.n) - Number(a.n),
+    )
     .slice(0, CARD_PEOPLE_LIMIT);
   const peopleOmitted = peopleRows.length - people.length;
 
@@ -483,6 +569,9 @@ export async function compileOwnerCard(db: Db): Promise<string> {
     lines.push('People:');
     for (const p of people) {
       lines.push(`- ${p.name}${p.relationship ? ` (${p.relationship})` : ''}`);
+      for (const fact of pinnedByContact.get(p.id) ?? []) {
+        lines.push(`  - ${fact}`);
+      }
     }
   }
 

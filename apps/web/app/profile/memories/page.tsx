@@ -20,33 +20,46 @@ export const metadata = { title: 'Memory library' };
 export const dynamic = 'force-dynamic';
 
 const PAGE_SIZE = 60;
-const VIEWS = ['available', 'waiting', 'review', 'verified'] as const;
-type MemoryView = (typeof VIEWS)[number];
 
-const viewCopy: Record<MemoryView, { label: string; title: string; intro: string }> = {
-  available: {
-    label: 'Available',
-    title: 'Available to AI Bot',
-    intro: 'Active saved facts that AI Bot can recall when they are relevant.',
-  },
-  waiting: {
-    label: 'Waiting for a pass',
-    title: 'Waiting for a cleanup pass',
-    intro: 'These have not yet been checked for repetition, direct conflicts, or topic cleanup.',
+// Two axes the owner actually cares about, instead of four overlapping buckets:
+// the top-level STATE (is a fact in use, or held back for review?) and, within
+// the in-use set, an optional FILTER (verified wording, or not yet tidied).
+const STATES = ['in-use', 'review'] as const;
+type MemoryState = (typeof STATES)[number];
+const FILTERS = ['all', 'verified', 'untidied'] as const;
+type MemoryFilter = (typeof FILTERS)[number];
+
+const stateCopy: Record<MemoryState, { label: string; title: string; intro: string }> = {
+  'in-use': {
+    label: 'In use',
+    title: 'In use by AI Bot',
+    intro: 'Active saved facts AI Bot can recall when they are relevant.',
   },
   review: {
-    label: 'Needs review',
-    title: 'Needs your review',
+    label: 'Held for review',
+    title: 'Held for your review',
     intro: 'These came from an unverified source and stay unavailable until you approve them.',
-  },
-  verified: {
-    label: 'Verified by you',
-    title: 'Verified by you',
-    intro: 'You confirmed or corrected these facts, so organization protects their wording.',
   },
 };
 
-function toFactView(memory: MemoryRow, now: Date, subjectLabel: string | null): FactView {
+const filterCopy: Record<MemoryFilter, { label: string; intro: string }> = {
+  all: { label: 'All', intro: '' },
+  verified: {
+    label: 'Verified',
+    intro: 'You confirmed or corrected these, so organization protects their wording.',
+  },
+  untidied: {
+    label: 'Not yet tidied',
+    intro: 'Not yet checked for repetition, direct conflicts, or topic cleanup.',
+  },
+};
+
+function toFactView(
+  memory: MemoryRow,
+  now: Date,
+  subjectLabel: string | null,
+  aboutOwner: boolean,
+): FactView {
   const from = memory.validFrom?.toISOString().slice(0, 10);
   const until = memory.validUntil?.toISOString().slice(0, 10);
   return {
@@ -60,6 +73,7 @@ function toFactView(memory: MemoryRow, now: Date, subjectLabel: string | null): 
     pinned: memory.pinned,
     organized: memory.lastConsolidatedAt !== null,
     inCard: false,
+    aboutOwner,
     originTrust: memory.originTrust,
     sourceTaskId: memory.sourceTaskId,
     subjectLabel,
@@ -68,23 +82,36 @@ function toFactView(memory: MemoryRow, now: Date, subjectLabel: string | null): 
   };
 }
 
-function hrefFor(view: MemoryView, query: string, page = 1): string {
-  const params = new URLSearchParams({ view });
-  if (query) params.set('q', query);
-  if (page > 1) params.set('page', String(page));
-  return `/profile/memories?${params.toString()}`;
+function hrefFor(opts: {
+  state?: MemoryState;
+  filter?: MemoryFilter;
+  q?: string;
+  page?: number;
+}): string {
+  const params = new URLSearchParams();
+  const state = opts.state ?? 'in-use';
+  if (state !== 'in-use') params.set('state', state);
+  if (state === 'in-use' && opts.filter && opts.filter !== 'all') params.set('filter', opts.filter);
+  if (opts.q) params.set('q', opts.q);
+  if (opts.page && opts.page > 1) params.set('page', String(opts.page));
+  const qs = params.toString();
+  return qs ? `/profile/memories?${qs}` : '/profile/memories';
 }
 
 export default async function MemoryLibraryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string; q?: string; page?: string }>;
+  searchParams: Promise<{ state?: string; filter?: string; q?: string; page?: string }>;
 }) {
   await requireOwner();
   const params = await searchParams;
-  const view = VIEWS.includes(params.view as MemoryView)
-    ? (params.view as MemoryView)
-    : 'available';
+  const state: MemoryState = STATES.includes(params.state as MemoryState)
+    ? (params.state as MemoryState)
+    : 'in-use';
+  const filter: MemoryFilter =
+    state === 'in-use' && FILTERS.includes(params.filter as MemoryFilter)
+      ? (params.filter as MemoryFilter)
+      : 'all';
   const query = (params.q ?? '').trim().slice(0, 120);
   const requestedPage = Number.parseInt(params.page ?? '1', 10);
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
@@ -94,12 +121,12 @@ export default async function MemoryLibraryPage({
 
   const unexpired = or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`));
   const stateCondition: SQL | undefined =
-    view === 'review'
+    state === 'review'
       ? eq(memories.quarantined, true)
-      : view === 'waiting'
-        ? and(eq(memories.quarantined, false), isNull(memories.lastConsolidatedAt))
-        : view === 'verified'
-          ? and(eq(memories.quarantined, false), eq(memories.ownerConfirmed, true))
+      : filter === 'verified'
+        ? and(eq(memories.quarantined, false), eq(memories.ownerConfirmed, true))
+        : filter === 'untidied'
+          ? and(eq(memories.quarantined, false), isNull(memories.lastConsolidatedAt))
           : eq(memories.quarantined, false);
   const filters = and(
     eq(memories.agentId, agent.id),
@@ -116,7 +143,7 @@ export default async function MemoryLibraryPage({
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const rows = await db
-    .select({ memory: memories, subjectLabel: contacts.name })
+    .select({ memory: memories, subjectLabel: contacts.name, subjectTrust: contacts.trust })
     .from(memories)
     .leftJoin(contacts, eq(memories.subjectContactId, contacts.id))
     .where(filters)
@@ -129,6 +156,9 @@ export default async function MemoryLibraryPage({
     .limit(PAGE_SIZE)
     .offset((safePage - 1) * PAGE_SIZE);
 
+  const intro =
+    state === 'in-use' && filter !== 'all' ? filterCopy[filter].intro : stateCopy[state].intro;
+
   return (
     <PageShell size="reading">
       <Link
@@ -138,25 +168,28 @@ export default async function MemoryLibraryPage({
         <ArrowLeft className="size-3.5" aria-hidden="true" />
         Memory overview
       </Link>
-      <PageHeader title={viewCopy[view].title} intro={viewCopy[view].intro} />
+      <PageHeader title={stateCopy[state].title} intro={intro} />
 
       <div className="mt-6 grid min-w-0 gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
-        <nav className={segmentedControlClass} aria-label="Memory views">
-          {VIEWS.map((item) => (
+        <nav className={segmentedControlClass} aria-label="Memory state">
+          {STATES.map((item) => (
             <Link
               key={item}
-              href={hrefFor(item, query)}
-              aria-current={item === view ? 'page' : undefined}
+              href={hrefFor({ state: item, q: query })}
+              aria-current={item === state ? 'page' : undefined}
               className={`${segmentedItemClass} ${
-                item === view ? 'bg-raised text-strong shadow-sm' : ''
+                item === state ? 'bg-raised text-strong shadow-sm' : ''
               }`}
             >
-              {viewCopy[item].label}
+              {stateCopy[item].label}
             </Link>
           ))}
         </nav>
         <form action="/profile/memories" method="get" className="flex min-w-0 gap-2">
-          <input type="hidden" name="view" value={view} />
+          <input type="hidden" name="state" value={state} />
+          {state === 'in-use' && filter !== 'all' ? (
+            <input type="hidden" name="filter" value={filter} />
+          ) : null}
           <label className="relative min-w-0 flex-1">
             <span className="sr-only">Search memories</span>
             <Search
@@ -176,6 +209,26 @@ export default async function MemoryLibraryPage({
           </button>
         </form>
       </div>
+
+      {state === 'in-use' ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-2xs font-medium text-muted">Show</span>
+          {FILTERS.map((item) => (
+            <Link
+              key={item}
+              href={hrefFor({ state: 'in-use', filter: item, q: query })}
+              aria-current={item === filter ? 'true' : undefined}
+              className={`rounded-full px-2.5 py-1 text-xs font-medium motion-safe:transition-colors ${
+                item === filter
+                  ? 'bg-accent/10 text-accent ring-1 ring-accent/30'
+                  : 'bg-sunken/60 text-muted hover:text-strong'
+              }`}
+            >
+              {filterCopy[item].label}
+            </Link>
+          ))}
+        </div>
+      ) : null}
 
       <div className="mt-6 flex items-baseline justify-between gap-3 border-b border-edge pb-3">
         <p className="text-[13px] font-medium">
@@ -198,11 +251,11 @@ export default async function MemoryLibraryPage({
         </div>
       ) : (
         <div className="mt-3 flex flex-col gap-3">
-          {rows.map(({ memory, subjectLabel }) => (
+          {rows.map(({ memory, subjectLabel, subjectTrust }) => (
             <FactRow
               key={memory.id}
-              fact={toFactView(memory, now, subjectLabel)}
-              quarantine={view === 'review'}
+              fact={toFactView(memory, now, subjectLabel, subjectTrust === 'owner')}
+              quarantine={state === 'review'}
             />
           ))}
         </div>
@@ -211,7 +264,10 @@ export default async function MemoryLibraryPage({
       {totalPages > 1 ? (
         <nav className="mt-6 flex items-center justify-between gap-3" aria-label="Memory pages">
           {safePage > 1 ? (
-            <Link href={hrefFor(view, query, safePage - 1)} className={btn.outline}>
+            <Link
+              href={hrefFor({ state, filter, q: query, page: safePage - 1 })}
+              className={btn.outline}
+            >
               <ChevronLeft className="size-4" aria-hidden="true" />
               Previous
             </Link>
@@ -219,7 +275,10 @@ export default async function MemoryLibraryPage({
             <span />
           )}
           {safePage < totalPages ? (
-            <Link href={hrefFor(view, query, safePage + 1)} className={btn.outline}>
+            <Link
+              href={hrefFor({ state, filter, q: query, page: safePage + 1 })}
+              className={btn.outline}
+            >
               Next
               <ChevronRight className="size-4" aria-hidden="true" />
             </Link>

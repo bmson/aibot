@@ -4,11 +4,54 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import {
   daysUntilOccurrence,
+  detectOccasionInText,
   listOccasionsForContact,
   nextAnnualOccurrence,
   saveOccasion,
   upcomingOccasions,
 } from './occasions.js';
+
+// ── Date detection (Save-as-occasion chip) ───────────────────────────────────
+
+describe('detectOccasionInText', () => {
+  it('reads day-month and month-day birthdays without inventing a year', () => {
+    expect(detectOccasionInText('Sigríður was born on 14 March 1948 in Akureyri.')).toEqual({
+      kind: 'birthday',
+      month: 3,
+      day: 14,
+    });
+    expect(detectOccasionInText("Anna's birthday is 2 June; she was born in 1992.")).toEqual({
+      kind: 'birthday',
+      month: 6,
+      day: 2,
+    });
+    expect(detectOccasionInText('His birthday is March 3rd.')).toEqual({
+      kind: 'birthday',
+      month: 3,
+      day: 3,
+    });
+  });
+
+  it('classifies anniversaries', () => {
+    expect(
+      detectOccasionInText('Kristján and Helga celebrate their anniversary on 21 August.'),
+    ).toEqual({ kind: 'anniversary', month: 8, day: 21 });
+  });
+
+  it('does not treat a year as a day, and needs an explicit kind', () => {
+    // "turned 70 on 9 January 2026" → the day is 9, and 2026 is never a birth year.
+    expect(detectOccasionInText('Kristján turned 70 on 9 January 2026 and retired.')).toEqual({
+      kind: 'birthday',
+      month: 1,
+      day: 9,
+    });
+    // A bare date with no birthday/anniversary cue is not a suggestion.
+    expect(detectOccasionInText('The project shipped on 4 July.')).toBeNull();
+    // "May 1990" must not read 19 as a day.
+    expect(detectOccasionInText('He was born in May 1990.')).toBeNull();
+    expect(detectOccasionInText('No dates here at all.')).toBeNull();
+  });
+});
 
 // ── Pure date math ───────────────────────────────────────────────────────────
 

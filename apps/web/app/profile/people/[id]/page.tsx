@@ -1,12 +1,17 @@
-import { listOccasionsForContact } from '@assistant/core';
+import { detectOccasionInText, listOccasionsForContact } from '@assistant/core';
 import { contacts, findDuplicateContactSuggestions, type MemoryRow, memories } from '@assistant/db';
 import { and, count, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { AddFact } from '@/app/profile/add-fact';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { MergeControl } from '@/app/profile/merge-control';
-import { OccasionsPanel, type OccasionView } from '@/app/profile/occasions-panel';
+import {
+  type OccasionSuggestion,
+  OccasionsPanel,
+  type OccasionView,
+} from '@/app/profile/occasions-panel';
 import { PersonControls } from '@/app/profile/person-controls';
 import { RelationshipForm } from '@/app/profile/relationship-form';
 import { requireOwner } from '@/auth';
@@ -19,7 +24,7 @@ export const dynamic = 'force-dynamic';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FACT_LIMIT = 250;
 
-function toFactView(memory: MemoryRow, now: Date): FactView {
+function toFactView(memory: MemoryRow, now: Date, subjectLabel: string): FactView {
   const from = memory.validFrom?.toISOString().slice(0, 10);
   const until = memory.validUntil?.toISOString().slice(0, 10);
   return {
@@ -33,8 +38,14 @@ function toFactView(memory: MemoryRow, now: Date): FactView {
     pinned: memory.pinned,
     organized: memory.lastConsolidatedAt !== null,
     inCard: false,
+    // This page never shows the owner (guarded above), so facts here reach the
+    // profile summary only by pinning.
+    aboutOwner: false,
     originTrust: memory.originTrust,
     sourceTaskId: memory.sourceTaskId,
+    // Every fact on this page is about this person — the row must not fall back
+    // to the owner's "You" label.
+    subjectLabel,
     createdLabel: relativeTime(memory.createdAt, now),
     validityLabel: from ? `${from}–${until ?? 'now'}` : '',
   };
@@ -79,6 +90,21 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
     notes: o.notes,
     quarantined: o.quarantined,
   }));
+
+  // Offer to lift a birthday/anniversary stated in a fact into an Occasion when
+  // the person has no occasion on that date yet. Consolidation backfills these
+  // nightly too; the chip just makes it immediate and owner-controlled.
+  const existingDates = new Set(occasionRows.map((o) => `${o.month}-${o.day}`));
+  const suggestionSeen = new Set<string>();
+  const occasionSuggestions: OccasionSuggestion[] = [];
+  for (const fact of facts) {
+    const detected = detectOccasionInText(fact.content);
+    if (!detected) continue;
+    const key = `${detected.month}-${detected.day}`;
+    if (existingDates.has(key) || suggestionSeen.has(key)) continue;
+    suggestionSeen.add(key);
+    occasionSuggestions.push(detected);
+  }
   const totalFacts = Number(factCount?.n ?? 0);
   const mergeOptions = allContacts
     .filter((person) => person.id !== contact.id)
@@ -130,13 +156,21 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
         </div>
       </Panel>
 
-      <OccasionsPanel contactId={contact.id} personName={contact.name} occasions={occasionViews} />
+      <OccasionsPanel
+        contactId={contact.id}
+        personName={contact.name}
+        occasions={occasionViews}
+        suggestions={occasionSuggestions}
+      />
 
       <section className="mt-8">
-        <h2 className="flex items-baseline gap-2 text-sm font-medium">
-          Saved facts
-          <span className={countBadgeClass}>{totalFacts}</span>
-        </h2>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="flex items-baseline gap-2 text-sm font-medium">
+            Saved facts
+            <span className={countBadgeClass}>{totalFacts}</span>
+          </h2>
+          <AddFact subjectContactId={contact.id} subjectLabel={contact.name} />
+        </div>
         {totalFacts > FACT_LIMIT ? (
           <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
             Showing the {FACT_LIMIT} most relevant facts to keep this page quick to open.
@@ -149,7 +183,7 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
         ) : (
           <div className="mt-3 flex flex-col gap-2">
             {facts.map((fact) => (
-              <FactRow key={fact.id} fact={toFactView(fact, now)} />
+              <FactRow key={fact.id} fact={toFactView(fact, now, contact.name)} />
             ))}
           </div>
         )}

@@ -24,6 +24,7 @@ function friendlyResult(progress: string): string {
   const duplicates = progress.match(/(\d+) duplicates expired/);
   const contradictions = progress.match(/(\d+) contradictions resolved/);
   const domains = progress.match(/(\d+) domains assigned/);
+  const occasions = progress.match(/(\d+) occasion\(s\) found/);
   if (!reviewed) return progress || 'The latest organization pass finished.';
   const details = [
     duplicates && Number(duplicates[1]) > 0 ? `${duplicates[1]} duplicate(s) cleared` : null,
@@ -31,6 +32,7 @@ function friendlyResult(progress: string): string {
       ? `${contradictions[1]} contradiction(s) resolved`
       : null,
     domains && Number(domains[1]) > 0 ? `${domains[1]} topic label(s) improved` : null,
+    occasions && Number(occasions[1]) > 0 ? `${occasions[1]} date(s) found` : null,
   ].filter(Boolean);
   return `${reviewed[1]} memories reviewed${details.length > 0 ? ` · ${details.join(' · ')}` : ''}.`;
 }
@@ -141,9 +143,10 @@ export function MemoryOrganizer({
           </summary>
           <p className="mt-2 max-w-[72ch] text-xs leading-5 text-muted">
             AI Bot reviews up to 720 saved memories, grouped by person. It can clear duplicates,
-            resolve direct contradictions, improve topic labels, and combine fragments. A single
-            standalone fact is marked as checked without rewriting it. Your confirmed or pinned
-            wording remains protected.
+            resolve direct contradictions, improve topic labels, combine fragments, and turn
+            birthdays or anniversaries mentioned in facts into Occasions. A single standalone fact
+            is marked as checked without rewriting it. Your confirmed or pinned wording remains
+            protected.
           </p>
         </details>
       </div>
