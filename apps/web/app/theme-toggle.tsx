@@ -45,6 +45,15 @@ export function ThemeToggle() {
     const transition = document.startViewTransition(apply);
     persist();
 
+    // If the tab loses focus or visibility mid-wipe, its rAF-driven animation
+    // can stall without ever reaching `finished` — the old/new snapshot pair
+    // is left composited on top of the (already-correct) real page, frozen
+    // wherever the circle stopped growing. Force the transition to finish
+    // once comfortably past its own 520ms so it can never hang there; this
+    // never fires on the normal path, since `finished` resolves first.
+    const unstick = window.setTimeout(() => transition.skipTransition(), 1000);
+    transition.finished.finally(() => window.clearTimeout(unstick));
+
     transition.ready
       .then(() => {
         // Grow a circle from the toggle itself, sized to reach the furthest

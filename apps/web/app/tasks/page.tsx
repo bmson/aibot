@@ -143,7 +143,7 @@ export default async function TasksPage({
   }));
 
   return (
-    <PageShell>
+    <PageShell size="reading">
       {archived ? null : <AutoRefresh />}
       <PageHeader
         title={archived ? 'Archived activity' : 'Activity'}

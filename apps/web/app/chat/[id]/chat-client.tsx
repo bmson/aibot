@@ -1026,16 +1026,15 @@ export function ChatClient({
                         }
                       >
                         {message.role === 'assistant' ? (
-                          // One human, one assistant — so a reply needs no avatar
-                          // and no bubble to say who is speaking. Set as plain
-                          // prose it reads like a letter rather than a card, and
-                          // it leaves the raised-card treatment to mean one thing
-                          // only: an object the assistant placed in the thread
-                          // (an approval, a budget ask, a work trail).
-                          <div className="group/msg min-w-0 max-w-full flex-1">
+                          // A neutral bubble distinct from the user's accent
+                          // gradient — it reads as the bot's voice while
+                          // keeping the raised-card treatment meaning one
+                          // thing only: an object the assistant placed in the
+                          // thread (an approval, a budget ask, a work trail).
+                          <div className="group/msg min-w-0 max-w-[88%] sm:max-w-[76%]">
                             <RecallNote sources={recallSources} />
                             <div
-                              className={`min-w-0 max-w-full text-[15px] text-strong ${
+                              className={`min-w-0 max-w-full rounded-2xl rounded-bl-md bg-raised px-4 py-3 text-[15px] text-strong shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 ${
                                 streamingCaret ? 'chat-caret' : ''
                               }`}
                             >
