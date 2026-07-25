@@ -5,10 +5,36 @@ import type { GoogleClient } from './client.js';
 
 const CAL = 'https://www.googleapis.com/calendar/v3';
 
+/**
+ * How many calendars a single read will fan out across. A Google account
+ * typically carries a handful, but subscribed holiday/birthday calendars can
+ * push the list up, and every extra calendar is another HTTP round trip.
+ */
+const MAX_CALENDAR_FANOUT = 25;
+
+/** freeBusy accepts at most 50 items per request. */
+const MAX_FREEBUSY_ITEMS = 50;
+
 export interface CalendarToolDeps {
   client: GoogleClient;
   botEmail: string;
   ownerEmail: string;
+}
+
+interface CalendarEntry {
+  id: string;
+  name: string;
+  primary: boolean;
+  accessRole: string;
+}
+
+interface RawEvent {
+  id: string;
+  summary?: string;
+  location?: string;
+  start?: { dateTime?: string; date?: string };
+  end?: { dateTime?: string; date?: string };
+  attendees?: Array<{ email: string; responseStatus?: string }>;
 }
 
 function register<S extends z.ZodType, Out>(
@@ -17,6 +43,108 @@ function register<S extends z.ZodType, Out>(
   flags: ToolFlags = {},
 ) {
   registry.register(tool as unknown as AssistantTool, flags);
+}
+
+/**
+ * Every calendar this account can read — its own plus any the owner (or anyone
+ * else) has shared with it. `calendar.readonly` already covers shared
+ * calendars; before this the tools only ever addressed `calendars/primary`, so
+ * a calendar shared with the bot was invisible no matter how it was shared.
+ */
+async function fetchCalendars(client: GoogleClient): Promise<CalendarEntry[]> {
+  const res = await client.api<{
+    items?: Array<{
+      id?: string;
+      summary?: string;
+      summaryOverride?: string;
+      primary?: boolean;
+      accessRole?: string;
+      deleted?: boolean;
+    }>;
+  }>(`${CAL}/users/me/calendarList?minAccessRole=reader&maxResults=250&showDeleted=false`);
+  return (res.items ?? [])
+    .filter((c): c is typeof c & { id: string } => Boolean(c.id) && c.deleted !== true)
+    .map((c) => ({
+      id: c.id,
+      // summaryOverride is the name the owner gave it locally; prefer it.
+      name: c.summaryOverride || c.summary || c.id,
+      primary: c.primary === true,
+      accessRole: c.accessRole ?? 'reader',
+    }));
+}
+
+function startedAt(event: { start: string }): number {
+  const ms = Date.parse(event.start);
+  return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
+}
+
+function normalizeEvent(raw: RawEvent, calendar: CalendarEntry) {
+  return {
+    eventId: raw.id,
+    // Which calendar this came from — without it a merged list can't say
+    // whether something is on the work calendar or the family one.
+    calendar: calendar.name,
+    calendarId: calendar.id,
+    summary: raw.summary ?? '',
+    location: raw.location ?? '',
+    start: raw.start?.dateTime ?? raw.start?.date ?? '',
+    end: raw.end?.dateTime ?? raw.end?.date ?? '',
+    attendees: (raw.attendees ?? []).map((a) => `${a.email} (${a.responseStatus ?? '?'})`),
+  };
+}
+
+/**
+ * Read across several calendars at once and merge the results into one
+ * chronological list.
+ *
+ * A single calendar failing (revoked share, transient 5xx) must not blank the
+ * whole answer, so failures are collected per calendar and returned alongside
+ * the events rather than thrown — the caller can then say what it did and
+ * didn't see instead of silently under-reporting.
+ */
+async function collectEvents(
+  deps: CalendarToolDeps,
+  opts: { calendarIds?: string[]; maxResults: number; query: (calendarId: string) => string },
+) {
+  const available = await fetchCalendars(deps.client);
+  const requested = opts.calendarIds?.length
+    ? available.filter(
+        (c) => opts.calendarIds?.includes(c.id) || opts.calendarIds?.includes(c.name),
+      )
+    : available;
+  const targets = requested.slice(0, MAX_CALENDAR_FANOUT);
+
+  const settled = await Promise.allSettled(
+    targets.map(async (calendar) => {
+      const res = await deps.client.api<{ items?: RawEvent[] }>(opts.query(calendar.id));
+      return (res.items ?? []).map((raw) => normalizeEvent(raw, calendar));
+    }),
+  );
+
+  const events: ReturnType<typeof normalizeEvent>[] = [];
+  const unavailable: Array<{ calendar: string; reason: string }> = [];
+  settled.forEach((result, index) => {
+    const calendar = targets[index];
+    if (!calendar) return;
+    if (result.status === 'fulfilled') events.push(...result.value);
+    else
+      unavailable.push({
+        calendar: calendar.name,
+        reason: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+  });
+  events.sort((a, b) => startedAt(a) - startedAt(b));
+
+  return {
+    events: events.slice(0, opts.maxResults),
+    calendarsSearched: targets.map((c) => c.name),
+    ...(unavailable.length > 0 ? { unavailable } : {}),
+    ...(requested.length > targets.length
+      ? {
+          note: `Searched the first ${targets.length} of ${requested.length} calendars; name specific calendars to reach the rest.`,
+        }
+      : {}),
+  };
 }
 
 export function registerCalendarTools(
@@ -28,7 +156,7 @@ export function registerCalendarTools(
     {
       name: 'calendar.availability',
       description:
-        "Check free/busy for the assistant's calendar and the owner's (if shared). Times are ISO 8601 with offset.",
+        'Check when the owner is free or busy. Covers every calendar shared with the assistant, plus its own. Times are ISO 8601 with offset.',
       inputSchema: z.object({
         timeMin: z.string().datetime({ offset: true }),
         timeMax: z.string().datetime({ offset: true }),
@@ -37,6 +165,15 @@ export function registerCalendarTools(
       acceptsUntrustedInput: true,
       cacheTtlSeconds: 300,
       execute: async (args) => {
+        // Ask about every calendar this account can see, not just the bot's own
+        // and the owner's address: a busy block on a shared "Work" calendar is
+        // exactly as blocking as one on the owner's primary.
+        const available = await fetchCalendars(deps.client).catch(() => [] as CalendarEntry[]);
+        const ids = new Set<string>([deps.botEmail, deps.ownerEmail]);
+        for (const calendar of available) ids.add(calendar.id);
+        const items = [...ids].slice(0, MAX_FREEBUSY_ITEMS).map((id) => ({ id }));
+        const nameFor = new Map(available.map((c) => [c.id, c.name]));
+
         const res = await deps.client.api<{
           calendars?: Record<
             string,
@@ -44,19 +181,55 @@ export function registerCalendarTools(
           >;
         }>(`${CAL}/freeBusy`, {
           method: 'POST',
-          body: JSON.stringify({
-            timeMin: args.timeMin,
-            timeMax: args.timeMax,
-            items: [{ id: deps.botEmail }, { id: deps.ownerEmail }],
-          }),
+          body: JSON.stringify({ timeMin: args.timeMin, timeMax: args.timeMax, items }),
         });
+
         const calendars = res.calendars ?? {};
+        const busy: Array<{ start: string; end: string; calendar: string }> = [];
+        const unavailable: string[] = [];
+        for (const { id } of items) {
+          const entry = calendars[id];
+          const label = nameFor.get(id) ?? id;
+          if (entry?.errors !== undefined) {
+            unavailable.push(label);
+            continue;
+          }
+          for (const slot of entry?.busy ?? []) busy.push({ ...slot, calendar: label });
+        }
+        busy.sort((a, b) => startedAt(a) - startedAt(b));
+
         return {
-          bot: calendars[deps.botEmail]?.busy ?? [],
-          owner:
-            calendars[deps.ownerEmail]?.errors !== undefined
-              ? 'unavailable — owner has not shared free/busy with the assistant'
-              : (calendars[deps.ownerEmail]?.busy ?? []),
+          busy,
+          calendarsChecked: items.map(({ id }) => nameFor.get(id) ?? id),
+          ...(unavailable.length > 0
+            ? { unavailable, note: 'These calendars have not shared free/busy with the assistant.' }
+            : {}),
+        };
+      },
+    },
+    { confidentialRead: true, returnsUntrustedContent: true },
+  );
+
+  register(
+    registry,
+    {
+      name: 'calendar.list_calendars',
+      description:
+        'List every calendar the assistant can read — its own and any shared with it. Use this to find out which calendars exist before reading a specific one.',
+      inputSchema: z.object({}),
+      risk: 'autonomous',
+      acceptsUntrustedInput: true,
+      cacheTtlSeconds: 300,
+      execute: async () => {
+        const calendars = await fetchCalendars(deps.client);
+        return {
+          calendars: calendars.map((c) => ({
+            id: c.id,
+            name: c.name,
+            primary: c.primary,
+            // reader = shared read-only; owner/writer = the bot can edit it.
+            access: c.accessRole,
+          })),
         };
       },
     },
@@ -67,35 +240,35 @@ export function registerCalendarTools(
     registry,
     {
       name: 'calendar.list_events',
-      description: "List upcoming events on the assistant's own calendar.",
+      description:
+        'List events in a time range. Reads the owner\'s calendars and every other calendar shared with the assistant, plus its own, and says which calendar each event is on. This is the tool for "what\'s on my calendar". Omit calendarIds to read them all.',
       inputSchema: z.object({
         timeMin: z.string().datetime({ offset: true }),
         timeMax: z.string().datetime({ offset: true }),
         maxResults: z.number().int().min(1).max(50).default(20),
+        /** Names or ids from calendar.list_calendars. Omit to read every one. */
+        calendarIds: z.array(z.string().min(1).max(200)).max(25).optional(),
       }),
       risk: 'autonomous',
       acceptsUntrustedInput: true,
-      execute: async (args) => {
-        const url = `${CAL}/calendars/primary/events?timeMin=${encodeURIComponent(args.timeMin)}&timeMax=${encodeURIComponent(args.timeMax)}&maxResults=${args.maxResults}&singleEvents=true&orderBy=startTime`;
-        const res = await deps.client.api<{
-          items?: Array<{
-            id: string;
-            summary?: string;
-            start?: { dateTime?: string; date?: string };
-            end?: { dateTime?: string; date?: string };
-            attendees?: Array<{ email: string; responseStatus?: string }>;
-          }>;
-        }>(url);
-        return {
-          events: (res.items ?? []).map((e) => ({
-            eventId: e.id,
-            summary: e.summary ?? '',
-            start: e.start?.dateTime ?? e.start?.date ?? '',
-            end: e.end?.dateTime ?? e.end?.date ?? '',
-            attendees: (e.attendees ?? []).map((a) => `${a.email} (${a.responseStatus ?? '?'})`),
-          })),
-        };
-      },
+      execute: async (args) =>
+        collectEvents(deps, {
+          calendarIds: args.calendarIds,
+          maxResults: args.maxResults,
+          query: (calendarId) => {
+            const params = new URLSearchParams({
+              timeMin: args.timeMin,
+              timeMax: args.timeMax,
+              // Fetch a full page per calendar; the merged list is trimmed to
+              // maxResults after sorting, so a busy calendar can't crowd out an
+              // earlier event on a quieter one.
+              maxResults: String(args.maxResults),
+              singleEvents: 'true',
+              orderBy: 'startTime',
+            });
+            return `${CAL}/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`;
+          },
+        }),
     },
     { confidentialRead: true, returnsUntrustedContent: true },
   );
@@ -156,45 +329,33 @@ export function registerCalendarTools(
     {
       name: 'calendar.search_events',
       description:
-        "Search the assistant's own calendar by keyword (attendee, title, or location). Times are ISO 8601 with offset.",
+        "Search by keyword (attendee, title, or location) across the owner's calendars, every calendar shared with the assistant, and its own. Says which calendar each hit is on. Times are ISO 8601 with offset.",
       inputSchema: z.object({
         query: z.string().min(1).max(200),
         timeMin: z.string().datetime({ offset: true }).optional(),
         timeMax: z.string().datetime({ offset: true }).optional(),
         maxResults: z.number().int().min(1).max(50).default(20),
+        /** Names or ids from calendar.list_calendars. Omit to search every one. */
+        calendarIds: z.array(z.string().min(1).max(200)).max(25).optional(),
       }),
       risk: 'autonomous',
       acceptsUntrustedInput: true,
-      execute: async (args) => {
-        const params = new URLSearchParams({
-          q: args.query,
-          maxResults: String(args.maxResults),
-          singleEvents: 'true',
-          orderBy: 'startTime',
-        });
-        if (args.timeMin) params.set('timeMin', args.timeMin);
-        if (args.timeMax) params.set('timeMax', args.timeMax);
-        const res = await deps.client.api<{
-          items?: Array<{
-            id: string;
-            summary?: string;
-            location?: string;
-            start?: { dateTime?: string; date?: string };
-            end?: { dateTime?: string; date?: string };
-            attendees?: Array<{ email: string; responseStatus?: string }>;
-          }>;
-        }>(`${CAL}/calendars/primary/events?${params.toString()}`);
-        return {
-          events: (res.items ?? []).map((e) => ({
-            eventId: e.id,
-            summary: e.summary ?? '',
-            location: e.location ?? '',
-            start: e.start?.dateTime ?? e.start?.date ?? '',
-            end: e.end?.dateTime ?? e.end?.date ?? '',
-            attendees: (e.attendees ?? []).map((a) => `${a.email} (${a.responseStatus ?? '?'})`),
-          })),
-        };
-      },
+      execute: async (args) =>
+        collectEvents(deps, {
+          calendarIds: args.calendarIds,
+          maxResults: args.maxResults,
+          query: (calendarId) => {
+            const params = new URLSearchParams({
+              q: args.query,
+              maxResults: String(args.maxResults),
+              singleEvents: 'true',
+              orderBy: 'startTime',
+            });
+            if (args.timeMin) params.set('timeMin', args.timeMin);
+            if (args.timeMax) params.set('timeMax', args.timeMax);
+            return `${CAL}/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`;
+          },
+        }),
     },
     { confidentialRead: true, returnsUntrustedContent: true },
   );
