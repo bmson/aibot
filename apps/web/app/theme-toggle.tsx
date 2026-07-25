@@ -8,12 +8,21 @@ import { focusRing } from '@/lib/ui';
 export function ThemeToggle() {
   const [dark, setDark] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  // Guards against a second tap landing mid-wipe. Touchscreens have no hover
+  // state to signal "this already registered", so a second tap before the
+  // first ripple finishes is common — and a second startViewTransition() call
+  // races the first for the DOM snapshot, which Chrome resolves by aborting it
+  // (`ready` rejects with InvalidStateError), freezing the ripple wherever it
+  // had grown to and snapping straight to the second click's result. Ignoring
+  // repeat taps until the current wipe settles keeps every wipe uninterrupted.
+  const wiping = useRef(false);
 
   useEffect(() => {
     setDark(document.documentElement.classList.contains('dark'));
   }, []);
 
   const toggle = () => {
+    if (wiping.current) return;
     const next = !document.documentElement.classList.contains('dark');
 
     const apply = () => {
@@ -42,6 +51,7 @@ export function ThemeToggle() {
       return;
     }
 
+    wiping.current = true;
     const transition = document.startViewTransition(apply);
     persist();
 
@@ -52,7 +62,10 @@ export function ThemeToggle() {
     // once comfortably past its own 520ms so it can never hang there; this
     // never fires on the normal path, since `finished` resolves first.
     const unstick = window.setTimeout(() => transition.skipTransition(), 1000);
-    transition.finished.finally(() => window.clearTimeout(unstick));
+    transition.finished.finally(() => {
+      window.clearTimeout(unstick);
+      wiping.current = false;
+    });
 
     transition.ready
       .then(() => {
@@ -72,7 +85,16 @@ export function ThemeToggle() {
           { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
           {
             duration: 520,
-            easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+            // A steep ease-out (the previous 0.22,1,0.36,1) front-loads nearly
+            // all the growth: by the temporal midpoint the circle is already
+            // ~96% of its final radius, so the back half of the animation is
+            // visually static — it reads as "stops halfway", and the eventual
+            // pseudo-element teardown then looks like a snap. This symmetric
+            // ease-in-out keeps the radius visibly growing for the full 520ms
+            // (half the growth at the temporal half), which also spreads the
+            // per-frame repaint cost evenly instead of bursting it into the
+            // first ~250ms — the part a weaker mobile GPU tends to drop.
+            easing: 'cubic-bezier(0.65, 0, 0.35, 1)',
             pseudoElement: '::view-transition-new(root)',
           },
         );
