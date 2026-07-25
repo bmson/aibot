@@ -23,7 +23,8 @@ import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CountBadge, focusRing } from '@/lib/ui';
 import { signOutAction } from './actions';
-import { type AssistantPresence, AvatarMark, BrandLockup } from './brand-mark';
+import { type AssistantPresence, BrandLockup } from './brand-mark';
+import { SettingsPopoverTile } from './settings/settings-popover';
 import { ThemeToggle } from './theme-toggle';
 
 interface NavItem {
@@ -48,9 +49,15 @@ const navIcons: Record<string, typeof MessageCircle> = {
   '/improvements': TrendingUp,
 };
 
-function badgeCountFor(href: string, pendingApprovals: number, memoryReviewCount: number): number {
+function badgeCountFor(
+  href: string,
+  pendingApprovals: number,
+  memoryReviewCount: number,
+  needsAttentionCount: number,
+): number {
   if (href === '/approvals') return pendingApprovals;
   if (href === '/profile') return memoryReviewCount;
+  if (href === '/tasks') return needsAttentionCount;
   return 0;
 }
 
@@ -73,6 +80,7 @@ export function AppNav({
   agentName,
   presence,
   memoryReviewCount,
+  needsAttentionCount,
 }: {
   navItems: NavItem[];
   pendingApprovals: number;
@@ -80,6 +88,7 @@ export function AppNav({
   agentName: string;
   presence: AssistantPresence;
   memoryReviewCount: number;
+  needsAttentionCount: number;
 }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -215,17 +224,25 @@ export function AppNav({
       const active = item.href === activeHref;
       const Icon = navIcons[item.href];
       const collapseAware = tone === 'rail';
-      const count = badgeCountFor(item.href, pendingApprovals, memoryReviewCount);
+      const count = badgeCountFor(
+        item.href,
+        pendingApprovals,
+        memoryReviewCount,
+        needsAttentionCount,
+      );
       const badgeTitle =
         item.href === '/profile' && count > 0
           ? `${count.toLocaleString()} ${count === 1 ? 'memory needs' : 'memories need'} your review`
-          : undefined;
+          : item.href === '/tasks' && count > 0
+            ? `${count.toLocaleString()} ${count === 1 ? 'task needs' : 'tasks need'} your attention`
+            : undefined;
       return (
         <Link
           key={item.href}
           href={item.href}
           data-mobile-touch-target="true"
           aria-current={active ? 'page' : undefined}
+          title={collapseAware && collapsed ? item.label : undefined}
           className={`nav-tile mobile-touch-target relative grid h-10 grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-lg pr-3 text-sm motion-safe:transition-colors ${focusRing} ${
             active
               ? 'bg-accent font-semibold text-white'
@@ -273,7 +290,12 @@ export function AppNav({
     items.map((item, index) => {
       const active = item.href === activeHref;
       const Icon = navIcons[item.href];
-      const count = badgeCountFor(item.href, pendingApprovals, memoryReviewCount);
+      const count = badgeCountFor(
+        item.href,
+        pendingApprovals,
+        memoryReviewCount,
+        needsAttentionCount,
+      );
       const spanFull = items.length % 2 === 1 && index === items.length - 1;
       return (
         <Link
@@ -312,6 +334,7 @@ export function AppNav({
     items.length > 0 ? (
       <details className="group mt-1">
         <summary
+          title={tone === 'rail' && collapsed ? 'System' : undefined}
           className={`nav-tile mobile-touch-target grid h-10 cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-lg pr-3 text-sm text-zinc-500 select-none hover:bg-sunken hover:text-strong dark:text-zinc-400 dark:hover:text-zinc-100 ${focusRing}`}
         >
           <span className="flex size-10 shrink-0 items-center justify-center">
@@ -323,7 +346,12 @@ export function AppNav({
             aria-hidden="true"
           />
         </summary>
-        <div className="mt-1 flex flex-col gap-1 pl-3">{renderLinks(items, tone)}</div>
+        {/* The left indent nests these under "System" once there's a label to
+            nest them from — in the collapsed rail it would just knock their
+            icons 12px out of the shared column every other icon lines up in. */}
+        <div className={`mt-1 flex flex-col gap-1 ${tone === 'rail' && collapsed ? '' : 'pl-3'}`}>
+          {renderLinks(items, tone)}
+        </div>
       </details>
     ) : null;
 
@@ -355,64 +383,59 @@ export function AppNav({
       <aside
         className={`nav-rail hidden shrink-0 flex-col rounded-2xl border border-edge bg-raised text-strong shadow-[0_12px_28px_-8px_rgb(0_0_0/0.18)] dark:shadow-[0_12px_28px_-8px_rgb(0_0_0/0.4)] lg:m-4 lg:flex lg:sticky lg:top-4 lg:h-[calc(100dvh-var(--app-chrome,0px)-2rem)] xl:m-5 xl:top-5 xl:h-[calc(100dvh-var(--app-chrome,0px)-2.5rem)]`}
       >
-        <div className="nav-header flex shrink-0 items-center gap-2 pt-6 pb-7">
-          {/* Inlined rather than <BrandLockup>: the name/subtitle column needs
-              to fade with the rest of the rail's labels while the avatar mark
-              — the icon for this row — stays put, same rule as every tile.
-              `w-full` + grid (not inline-flex) so the text column shrinks in
-              lockstep with the rail's own width, the same way a tile's `1fr`
-              label column does — otherwise the opacity-faded-but-still-laid-out
-              text would keep the link at its full expanded width and overflow
-              the 4.5rem collapsed rail. */}
-          <Link
-            href="/chat"
-            className={`grid w-full min-w-0 grid-cols-[2rem_1fr] items-center gap-2.5 rounded-lg ${focusRing}`}
-          >
-            <AvatarMark name={agentName} presence={presence} />
-            <span className="nav-label flex min-w-0 flex-col">
-              <span className="truncate font-display text-lg font-semibold tracking-[-0.02em]">
-                {agentName}
-              </span>
-              {/* Sentence case, no letter-spacing: "NEEDS YOUR ATTENTION" as
-                  tracked-out caps wrapped onto a second line and pushed the
-                  lockup out of shape. This reads as a status line, not a label. */}
-              <span
-                className={`truncate text-xs ${
-                  presence === 'attention' ? 'text-amber-300' : 'text-indigo-300'
-                }`}
-              >
-                {presence === 'attention'
-                  ? 'Needs you'
-                  : presence === 'working'
-                    ? 'Working…'
-                    : 'Ready when you are'}
-              </span>
-            </span>
-          </Link>
+        {/* No brand mark here — the rail has a single owner, so a name/logo
+            row is pure overhead. The toggle sits in the same fixed-width
+            gutter as every tile icon below it (`nav-header`'s padding matches
+            the tile nav's `px-3`, and the button is `size-10`), so the whole
+            column — toggle, tiles, footer icon — shares one left edge and one
+            visual center in both rail states instead of each row inventing
+            its own inset. */}
+        <div className="nav-header flex shrink-0 items-center pt-6 pb-7">
           <button
             type="button"
             onClick={toggleCollapsed}
             aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-            className={`inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 hover:bg-sunken hover:text-strong dark:text-zinc-400 dark:hover:text-zinc-100 ${focusRing}`}
+            title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+            className={`inline-flex size-10 shrink-0 items-center justify-center rounded-lg text-zinc-500 hover:bg-sunken hover:text-strong dark:text-zinc-400 dark:hover:text-zinc-100 ${focusRing}`}
           >
             <PanelLeftClose className="nav-toggle-icon size-4" aria-hidden="true" />
           </button>
         </div>
         <div className="scroll-subtle min-h-0 flex-1 overflow-y-auto pb-4">
           <nav className="flex flex-col gap-1 px-3">{renderLinks(primaryItems, 'rail')}</nav>
-          <div className="mt-6 px-3">
+          <div className="nav-manage-group mt-6 px-3">
             <p className="nav-label px-3 font-display text-2xs font-semibold tracking-[0.14em] text-zinc-500 uppercase">
               Manage
             </p>
             <nav className="mt-2 flex flex-col gap-1">
-              {renderLinks(utilityItems, 'rail')}
+              {renderLinks(
+                utilityItems.filter((item) => item.href !== '/settings'),
+                'rail',
+              )}
+              {/* Collapsed: a popover with the real settings content beats
+                  navigating blind into an icon-only rail. Expanded, the label
+                  already gives that context back, so it's a plain link like
+                  every other tile. */}
+              {collapsed ? (
+                <SettingsPopoverTile active={activeHref === '/settings'} />
+              ) : (
+                renderLinks(
+                  utilityItems.filter((item) => item.href === '/settings'),
+                  'rail',
+                )
+              )}
               {renderSystemGroup(systemItems, 'rail')}
             </nav>
           </div>
         </div>
-        <div className="flex shrink-0 items-center justify-between border-t border-edge px-5 py-4">
+        <div className="nav-footer flex shrink-0 items-center justify-between border-t border-edge px-5 py-4">
           <span className="nav-label">{signOut ?? <span />}</span>
-          <ThemeToggle />
+          {/* Same size-10 gutter as the header toggle and every tile icon, so
+              the theme toggle lands in the same column once collapsed instead
+              of hugging the footer's own (wider) right padding. */}
+          <span className="nav-footer-icon flex size-10 shrink-0 items-center justify-center">
+            <ThemeToggle />
+          </span>
         </div>
       </aside>
 

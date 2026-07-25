@@ -68,18 +68,35 @@ export function SubmitButton({
  */
 export function ActionMenu({
   label = 'More',
+  trigger,
+  triggerClassName,
+  triggerTitle,
+  triggerAriaCurrent,
   variant = 'outline',
   size = 'md',
   panelClassName = 'w-56',
   className = '',
+  onOpenChange,
   children,
 }: {
   label?: ReactNode;
+  /** Replaces `label` inside the trigger button — for callers that need the
+      trigger to look like something other than a standard button (e.g. a nav
+      tile). Pairs with `triggerClassName`. */
+  trigger?: ReactNode;
+  /** Full className override for the trigger button; `label`/btnScale styling
+      applies only when this is omitted. */
+  triggerClassName?: string;
+  triggerTitle?: string;
+  /** For a trigger standing in for a nav link to the page you're already on. */
+  triggerAriaCurrent?: 'page';
   variant?: BtnVariant;
   size?: 'md' | 'sm';
   /** Sizing/extra classes for the panel; keep a width here so placement can measure. */
   panelClassName?: string;
   className?: string;
+  /** Fires on every open/close, e.g. to lazy-load panel content on first open. */
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -119,13 +136,15 @@ export function ActionMenu({
         ref={triggerRef}
         aria-haspopup="true"
         aria-expanded={open}
-        className={`${btnScale[size][variant]} ${className}`}
+        aria-current={triggerAriaCurrent}
+        title={triggerTitle}
+        className={triggerClassName ?? `${btnScale[size][variant]} ${className}`}
         onClick={() => {
           panelRef.current?.togglePopover();
           place(); // togglePopover is synchronous; placing now avoids a first-frame jump
         }}
       >
-        {label}
+        {trigger ?? label}
       </button>
       {/* Click delegation, not an interactive element itself: menu items are real
           buttons/links (keyboard-activatable), and Escape closes via the popover. */}
@@ -137,6 +156,7 @@ export function ActionMenu({
         onToggle={(event: ToggleEvent<HTMLDivElement>) => {
           const isOpen = event.newState === 'open';
           setOpen(isOpen);
+          onOpenChange?.(isOpen);
           if (isOpen) place();
         }}
         onClick={(event) => {

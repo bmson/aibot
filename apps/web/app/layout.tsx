@@ -130,9 +130,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           lastOrganizedAt: null,
         }),
   ]);
+  const needsAttentionCount =
+    presenceRows.find((row) => row.status === 'needs_attention')?.value ?? 0;
   const presence =
-    pendingApprovals > 0 ||
-    presenceRows.some((row) => row.status === 'needs_attention' && row.value > 0)
+    pendingApprovals > 0 || needsAttentionCount > 0
       ? 'attention'
       : presenceRows.some((row) => row.status === 'running' && row.value > 0)
         ? 'working'
@@ -174,6 +175,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             agentName={identity.name}
             presence={presence}
             memoryReviewCount={memoryHealth.awaitingReview}
+            needsAttentionCount={needsAttentionCount}
           />
           <main className="page-gutter min-w-0 flex-1 py-7 lg:py-10">{children}</main>
         </div>
