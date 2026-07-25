@@ -24,6 +24,27 @@ const LEADING_ACTION =
 const ACTION_PHRASE =
   /(remind me\b|(?:on|to) (?:my|the) calendar|to (?:my|the) (?:to-?do|todo|task|shopping|grocery) list|set (?:a|an|up) (?:reminder|meeting|event|alarm|timer|call|appointment)|(?:book|schedule|set up) (?:a|an|me|us|my)\b|send (?:a|an|the|him|her|them)\b|look up\b|search for\b|check (?:my|the) (?:calendar|inbox|e-?mail|mail|schedule|messages|texts|dms)\b|move (?:my|the) [\w\s]*?(?:meeting|call|appointment|event)|find (?:me |us )?(?:a|an|the)\b)/;
 
+// Surfaces the assistant can actually open with tools.
+const READ_TARGET =
+  '(?:calendars?|schedule|agenda|inbox|e-?mails?|mail|messages|texts|dms|appointments|events|meetings|reminders|to-?dos?|tasks?)';
+
+// Read phrasings: "look at my calendar", "show me my inbox", "what's on my
+// calendar", "go through my email", "tell me my schedule". Verbs are anchored
+// to a possessive + target so "check this out" / "look, ..." stay untouched.
+// Present-tense only on purpose: "looked at" (a recap) does not match.
+const READ_PHRASE = new RegExp(
+  [
+    String.raw`\b(?:check|look (?:at|in|into|through|over)|go (?:through|over)|review|scan|open|search|pull up|bring up|show(?: me| us)?|see)\s+(?:my|the|our)\s+${READ_TARGET}\b`,
+    // "read" is spelled the same in past tense, so "I read the email you
+    // drafted" (a recap) must not trip; require a possessive object.
+    String.raw`\bread\s+(?:my|our)\s+${READ_TARGET}\b`,
+    String.raw`\bwhat(?:'|’)?s (?:on|in) (?:my|the|our) ${READ_TARGET}\b`,
+    String.raw`\bwhat (?:do|does) (?:i|we) have (?:on|in|scheduled|coming up|planned)\b`,
+    String.raw`\btell me (?:what(?:'|’)?s on |about )?(?:my|the|our) (?:[\w-]+ )?(?:schedule|calendar|agenda|appointments|flights|day|week)\b`,
+    String.raw`\b(?:anything|what(?:'|’)?s) (?:new|urgent|important)? ?in (?:my|the) (?:inbox|e-?mail|mail)\b`,
+  ].join('|'),
+);
+
 // Leading politeness/filler to peel off before looking for an imperative verb.
 const LEADING_FILLER =
   /^(hey|hi|hello|yo|ok|okay|so|also|and|then|now|please|pls|kindly|just|quick|quickly|could you|can you|would you|will you|can u|would u|i need (?:you )?to|i'?d like (?:you )?to|i want (?:you )?to|i'?d like|let'?s|lets|go ahead and)\b[\s,:-]*/;
@@ -48,6 +69,7 @@ export function looksLikeActionRequest(text: string, priorAssistantText = ''): b
   return (
     LEADING_ACTION.test(t) ||
     ACTION_PHRASE.test(t) ||
+    READ_PHRASE.test(t) ||
     (FAILED_ACTION_FOLLOW_UP.test(t) &&
       PRIOR_ACTION_COMMITMENT.test(priorAssistantText.toLowerCase()))
   );

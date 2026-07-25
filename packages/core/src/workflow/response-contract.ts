@@ -24,6 +24,8 @@ type ActionKind =
   | 'outbound'
   | 'application'
   | 'calendar'
+  | 'calendar_read'
+  | 'inbox_read'
   | 'research'
   | 'background'
   | 'memory'
@@ -39,6 +41,12 @@ const OUTBOUND_OBJECTS = 'email|message|sms|text|call|outreach|reply|follow-?up'
 const APPLICATION_OBJECTS =
   'application|applications|job application|application form|career portal|form submission|jobs?|roles?|positions?';
 const CALENDAR_OBJECTS = 'calendar|calendar event|event|appointment|meeting|interview';
+const CALENDAR_READ_OBJECTS = 'calendars?|schedule|agenda|upcoming events|appointments';
+const INBOX_READ_OBJECTS = 'inbox|e-?mails?|mail|messages|threads|texts';
+// Read claims are past-tense only, so "check your calendar" (advice) and
+// "I'll check" (a promise) don't trip them.
+const READ_ACTIONS =
+  'checked|reviewed|looked (?:at|through|over|in|into)|went (?:through|over)|searched|scanned|read through|pulled up|examined|inspected';
 const RESEARCH_OBJECTS =
   'research|companies|company list|target companies|job boards?|sources?|search results?';
 const BACKGROUND_OBJECTS = 'mission|task|watcher|monitoring|tracker';
@@ -118,6 +126,13 @@ const passiveOutbound =
 // future-tense "I'll keep that in mind" does not trip it.
 const memoryClaim =
   /\b(?:saved|stored|recorded|noted|logged|updated|corrected|remembered|memoriz(?:e|ed)|committed|kept|added|confirmed)\b[^.\n]{0,40}\b(?:in|to|into)?\s*(?:your\s+)?(?:memory|profile|the\s+record)\b/i;
+// Negative-result narration of a read: "found no flights on your calendar",
+// "nothing in your inbox", "your calendar is clear". A model that never ran a
+// read tool asserting emptiness is the same fabrication as a fake "I checked".
+const emptyCalendarClaim =
+  /\b(?:no|none|nothing|zero)\b[^.\n]{0,40}\b(?:on|in)\s+(?:your|the|my|either|any)\b[^.\n]{0,30}\b(?:calendar|schedule|agenda)\b|\byour (?:calendar|schedule) (?:is|looks|appears) (?:clear|empty|free|wide open)\b/i;
+const emptyInboxClaim =
+  /\b(?:no|none|nothing|zero)\b[^.\n]{0,40}\bin\s+(?:your|the|my)\b[^.\n]{0,30}\b(?:inbox|mailbox|e-?mail)\b|\byour inbox (?:is|looks|appears) (?:clear|empty)\b/i;
 
 /**
  * Approval rows and short codes are created only by the dispatcher. A model
@@ -200,6 +215,10 @@ const CURRENT_TASK_ONLY: ReadonlySet<ActionKind> = new Set([
   // "I saved that to memory" is a claim about THIS turn — an earlier save
   // doesn't authorise narrating a fresh one.
   'memory',
+  // "I checked your calendar/inbox" narrates a fresh read; last turn's read
+  // says nothing about what's there now.
+  'calendar_read',
+  'inbox_read',
 ]);
 
 function inScope(kind: ActionKind, item: ActionEvidence): boolean {
@@ -237,6 +256,13 @@ function supports(kind: ActionKind, evidence: ActionEvidence[], currentTaskOnly 
       );
     case 'calendar':
       return names.some((name) => /^calendar\.(create|update|cancel|delete)/.test(name));
+    // Any tool in the family proves the surface was opened — "I checked your
+    // calendar for conflicts and booked it" backed by calendar.create_event
+    // must not read as a fabricated check.
+    case 'calendar_read':
+      return names.some((name) => /^calendar\./.test(name));
+    case 'inbox_read':
+      return names.some((name) => /^gmail\./.test(name));
     case 'research':
       return names.some((name) => name === 'web.fetch' || name === 'browser.execute');
     case 'background':
@@ -395,6 +421,15 @@ function claimedKinds(text: string): ActionKind[] {
     kinds.add('calendar');
   }
   if (
+    completedActionClaim(text, CALENDAR_READ_OBJECTS, READ_ACTIONS) ||
+    emptyCalendarClaim.test(text)
+  ) {
+    kinds.add('calendar_read');
+  }
+  if (completedActionClaim(text, INBOX_READ_OBJECTS, READ_ACTIONS) || emptyInboxClaim.test(text)) {
+    kinds.add('inbox_read');
+  }
+  if (
     completedActionClaim(
       text,
       RESEARCH_OBJECTS,
@@ -453,6 +488,8 @@ const UNSUPPORTED_LABEL: Record<ActionKind, string> = {
   outbound: 'the requested outbound message',
   application: 'the application submission',
   calendar: 'the requested calendar action',
+  calendar_read: 'the claimed calendar check',
+  inbox_read: 'the claimed inbox check',
   research: 'the requested research',
   background: 'the promised background work',
   memory: 'the requested memory update',
@@ -473,6 +510,10 @@ function toolKind(name: string): ActionKind | undefined {
   if (/^(gmail\.send|sms\.send|email\.send)$/.test(name)) return 'outbound';
   if (name === 'application.submit') return 'application';
   if (/^calendar\.(create|update|cancel|delete)/.test(name)) return 'calendar';
+  if (/^calendar\.(?:list_calendars|list_events|search_events|availability)$/.test(name)) {
+    return 'calendar_read';
+  }
+  if (/^gmail\.(?:search|read_thread)$/.test(name)) return 'inbox_read';
   if (name === 'web.fetch' || name === 'browser.execute') return 'research';
   if (name === 'memory.save') return 'memory';
   if (
@@ -498,6 +539,10 @@ function describeTool(name: string): string | undefined {
   if (name === 'gmail.send') return 'the email was sent';
   if (name === 'sms.send' || name === 'email.send') return 'the message was sent';
   if (/^calendar\.(create|update|cancel|delete)/.test(name)) return 'the calendar action completed';
+  if (/^calendar\.(?:list_calendars|list_events|search_events|availability)$/.test(name)) {
+    return 'the calendar was actually read';
+  }
+  if (/^gmail\.(?:search|read_thread)$/.test(name)) return 'the mailbox was actually read';
   if (name === 'web.fetch') return 'the web request completed';
   if (name === 'memory.save') return 'the fact was saved to memory';
   if (name === 'application.submit') return 'the application was submitted';

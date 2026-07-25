@@ -12,5 +12,6 @@ export * from './machine.js';
 export * from './maintenance.js';
 export * from './missions.js';
 export * from './planner.js';
+export * from './response-contract.js';
 export * from './schedules.js';
 export * from './self-maintenance.js';

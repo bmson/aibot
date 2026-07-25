@@ -411,6 +411,69 @@ describe('response execution contract', () => {
     expect(result.blocked).toBe(true);
     expect(result.text).toContain('gmail.send');
   });
+
+  describe('read claims', () => {
+    // The prod incident: a tool-less draft narrated a calendar check that
+    // never ran and reported the calendar empty of flights.
+    const calendarCheck =
+      'I checked your primary calendar and the shared "Family" calendar — no flights in the next 3 weeks.';
+
+    it('blocks a calendar-check claim with no calendar tool behind it', () => {
+      const result = enforceResponseContract(calendarCheck, []);
+      expect(result.blocked).toBe(true);
+      expect(result.unsupported).toContain('calendar_read');
+      expect(result.text).toContain("I couldn't verify this completed");
+    });
+
+    it('blocks an inbox-check claim with no gmail tool behind it', () => {
+      const result = enforceResponseContract(
+        'I went through your inbox and found nothing urgent.',
+        [],
+      );
+      expect(result.blocked).toBe(true);
+      expect(result.unsupported).toContain('inbox_read');
+    });
+
+    it('blocks a bare emptiness assertion about the calendar', () => {
+      const result = enforceResponseContract(
+        'There are no flight events on your calendar for the next three weeks.',
+        [],
+      );
+      expect(result.blocked).toBe(true);
+      expect(result.unsupported).toContain('calendar_read');
+    });
+
+    it('allows a calendar-check claim backed by a calendar read this task', () => {
+      expect(
+        enforceResponseContract(calendarCheck, [
+          { toolName: 'calendar.list_events', status: 'succeeded', result: { events: [] } },
+        ]),
+      ).toMatchObject({ blocked: false, text: calendarCheck });
+    });
+
+    it('does not let a prior-turn read authorise a fresh check claim', () => {
+      const result = enforceResponseContract(calendarCheck, [
+        {
+          toolName: 'calendar.list_events',
+          status: 'succeeded',
+          result: { events: [] },
+          fromCurrentTask: false,
+        },
+      ]);
+      expect(result.blocked).toBe(true);
+      expect(result.unsupported).toContain('calendar_read');
+    });
+
+    it('leaves advice, questions, and promises about checking untouched', () => {
+      for (const text of [
+        'You should check your calendar before booking.',
+        'Want me to check your calendar?',
+        "I'll check your calendar now.",
+      ]) {
+        expect(enforceResponseContract(text, []), text).toMatchObject({ blocked: false, text });
+      }
+    });
+  });
 });
 
 describe('enforceUrlProvenance', () => {

@@ -27,6 +27,23 @@ describe('looksLikeActionRequest', () => {
     }
   });
 
+  it('catches calendar/inbox read requests', () => {
+    for (const t of [
+      'look at my calendar and tell me the flight schedule for the next 3 weeks', // the reported prod miss
+      "what's on my calendar this week",
+      'show me my inbox',
+      'go through my email and flag anything urgent',
+      'tell me my schedule for tomorrow',
+      'review my calendar for conflicts next month',
+      'pull up my appointments for Friday',
+      'can you look at my calendar and tell me when I fly',
+      'anything urgent in my inbox?',
+      'what do I have planned this weekend',
+    ]) {
+      expect(looksLikeActionRequest(t), `should be an action: ${t}`).toBe(true);
+    }
+  });
+
   it('leaves plain conversation for the model to classify', () => {
     for (const t of [
       'what do you think about the plan?',
@@ -39,6 +56,11 @@ describe('looksLikeActionRequest', () => {
       'explain how embeddings work',
       'why did that happen?',
       'nice work on the summary',
+      'I looked at my calendar yesterday and it was busy', // past-tense recap — classifier still sees it
+      "let's look at the numbers",
+      'show me how embeddings work',
+      "what's on your mind?",
+      'I read the email you drafted, looks good',
       '',
       '   ',
     ]) {

@@ -160,6 +160,12 @@ export type StreamOutcome =
       degraded: boolean;
       text: PromiseLike<string>;
       toUIMessageStreamResponse: (options?: Record<string, unknown>) => Response;
+      // Raw part stream for callers that compose their own UI message stream
+      // (e.g. to append a post-draft part) instead of taking a Response. The
+      // SDK's AsyncIterableStream surfaces as both shapes.
+      toUIMessageStream: (
+        options?: Record<string, unknown>,
+      ) => ReadableStream<unknown> & AsyncIterable<unknown>;
     };
 
 /** Loose supertype of the AI SDK finish events — only what metering reads. */
@@ -684,6 +690,9 @@ export class ModelRouter {
     const narrowed = result as unknown as {
       text: PromiseLike<string>;
       toUIMessageStreamResponse: (options?: Record<string, unknown>) => Response;
+      toUIMessageStream: (
+        options?: Record<string, unknown>,
+      ) => ReadableStream<unknown> & AsyncIterable<unknown>;
     };
     return {
       ok: true,
@@ -691,6 +700,7 @@ export class ModelRouter {
       degraded: route.degraded,
       text: narrowed.text,
       toUIMessageStreamResponse: (options) => narrowed.toUIMessageStreamResponse(options),
+      toUIMessageStream: (options) => narrowed.toUIMessageStream(options),
     };
   }
 

@@ -10,6 +10,7 @@ import {
   getAmbientBlock,
   getOwnerCard,
   goalIdForConversation,
+  listConversationToolEvidence,
   listMessages,
   loadConfig,
   persistMessage,
@@ -27,6 +28,7 @@ import {
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { isAuthed } from '@/auth';
+import { CORRECTION, guardDraft } from '@/lib/chat-draft-guard';
 import { looksLikeActionRequest } from '@/lib/chat-triage';
 import { getDb, getRouter } from '@/lib/server';
 
@@ -93,7 +95,7 @@ const NeedsActionSchema = z.object({
   needsAction: z
     .boolean()
     .describe(
-      'true if the user asks the assistant to DO or CHECK something (send email/SMS, schedule, book, buy, browse the web, look at inbox/calendar, remember something, set a reminder, run a task) — false for plain conversation, questions answerable from general knowledge, or feedback.',
+      'true if the user asks the assistant to DO or CHECK something (send email/SMS, schedule, book, buy, browse the web, look at inbox/calendar — e.g. "look at my calendar", "what\'s on my schedule", "tell me my flights" — remember something, set a reminder, run a task) — false for plain conversation, questions answerable from general knowledge, or feedback.',
     ),
 });
 
@@ -267,7 +269,7 @@ export async function POST(req: Request) {
       const triage = await getRouter().object<z.infer<typeof NeedsActionSchema>>('classify', {
         schema: NeedsActionSchema,
         system:
-          'Route one chat turn. Decide whether the LATEST user message asks the assistant to DO or CHECK something (send/schedule/book/buy/browse, read the inbox or calendar, remember something, set a reminder, run a task) versus plain conversation. Judge ONLY the latest message; earlier turns are context. When uncertain, choose action — this streaming path has no tools and cannot act on the message.',
+          'Route one chat turn. Decide whether the LATEST user message asks the assistant to DO or CHECK something (send/schedule/book/buy/browse, read, summarize, or report on the inbox or calendar — "look at my calendar and tell me…", "what do I have this week" — remember something, set a reminder, run a task) versus plain conversation. Judge ONLY the latest message; earlier turns are context. When uncertain, choose action — this streaming path has no tools and cannot act on the message.',
         prompt: context
           ? `Prior turns (context only):\n${context}\n\nLATEST USER MESSAGE (classify this):\n${userText}`
           : `LATEST USER MESSAGE (classify this):\n${userText}`,
@@ -360,6 +362,10 @@ export async function POST(req: Request) {
     goalId: await goalIdForConversation(db, conversation.id),
   });
 
+  // Honesty-check scope for guardDraft: everything earlier turns actually did,
+  // all marked prior-turn. This turn itself runs no tools.
+  const toolEvidence = await listConversationToolEvidence(db, conversation.id);
+
   let outcome: StreamOutcome;
   try {
     outcome = await getRouter().stream('draft', {
@@ -381,9 +387,13 @@ export async function POST(req: Request) {
       ].join('\n'),
       messages: await convertToModelMessages(modelHistory),
       onComplete: async (text) => {
+        const guarded = guardDraft(text, toolEvidence);
+        if (guarded.corrected) {
+          console.warn('tool-less chat draft claimed unperformed work', { taskId: task.id });
+        }
         await finishTask(db, task, {
           status: 'done',
-          responseText: text,
+          responseText: guarded.text,
           recall: recallSources,
         });
       },
@@ -410,7 +420,32 @@ export async function POST(req: Request) {
     );
   }
 
-  return outcome.toUIMessageStreamResponse({
+  // Stream the draft as-is, then run the honesty check on the finished text and
+  // append the correction part when it claimed tool-backed work — the deltas
+  // have already reached the client, so appending is the only honest option
+  // that keeps the live view and the persisted message (onComplete) identical.
+  const okOutcome = outcome;
+  const stream = createUIMessageStream({
+    execute: async ({ writer }) => {
+      // Pump the model stream by hand (not writer.merge, whose pump can race a
+      // direct write) and hold the finish part back, so the correction — when
+      // needed — still lands inside the message, not after the client saw it end.
+      const parts = okOutcome.toUIMessageStream({ sendFinish: false });
+      for await (const part of parts) {
+        writer.write(part as Parameters<typeof writer.write>[0]);
+      }
+      const draft = await okOutcome.text;
+      if (guardDraft(draft, toolEvidence).corrected) {
+        const partId = `contract-${task.id}`;
+        writer.write({ type: 'text-start', id: partId });
+        writer.write({ type: 'text-delta', id: partId, delta: CORRECTION });
+        writer.write({ type: 'text-end', id: partId });
+      }
+      writer.write({ type: 'finish', finishReason: 'stop' });
+    },
+  });
+  return createUIMessageStreamResponse({
+    stream,
     headers: {
       'x-model-id': outcome.modelId,
       'x-model-degraded': String(outcome.degraded),

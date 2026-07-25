@@ -8,10 +8,12 @@ import {
   goals,
   messages,
   tasks,
+  toolCalls,
 } from '@assistant/db';
 import { and, asc, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import type { RecallSource } from './memory/recall.js';
 import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
+import type { ActionEvidence } from './workflow/response-contract.js';
 
 /**
  * Parts for a persisted assistant message. Beyond the text, an optional
@@ -470,6 +472,29 @@ export async function finishTask(
     }
     return true;
   });
+}
+
+/**
+ * Every tool row this conversation has ever produced, marked as prior-turn
+ * evidence. The tool-less streaming chat path runs no tools by construction,
+ * so its honesty check needs exactly this scope: artifacts from earlier turns
+ * stay citable, while a fresh "I checked/sent/saved" claim finds no support.
+ */
+export async function listConversationToolEvidence(
+  db: Db,
+  conversationId: string,
+): Promise<ActionEvidence[]> {
+  const rows = await db
+    .select({
+      toolName: toolCalls.toolName,
+      status: toolCalls.status,
+      result: toolCalls.result,
+      error: toolCalls.error,
+    })
+    .from(toolCalls)
+    .innerJoin(tasks, eq(toolCalls.taskId, tasks.id))
+    .where(eq(tasks.conversationId, conversationId));
+  return rows.map((row) => ({ ...row, fromCurrentTask: false }));
 }
 
 /** Set (or clear) the per-conversation model override used by the chat switcher. */
