@@ -18,21 +18,18 @@
   --content-muted: #667085;
   --accent: #5b5ce2; /* Iris */
   --accent-hover: #4b4cc9;
-  /* The nav rail is dark in both themes. In dark mode it has to sit a step
-     above the canvas, which is this same near-black — otherwise the rail has
-     no edge and its links look like they are floating on the page. */
-  --rail: #0b0d12;
 }
 .dark {
-  --surface: #0b0d12; /* Night */
-  --surface-raised: #12151c;
-  --surface-sunken: #1a1e27;
-  --edge: #292e39;
+  /* A soft charcoal, not OLED-black: the conversation is the point, and a
+     true near-black canvas competes with it rather than receding behind it. */
+  --surface: #15171f; /* Night, softened */
+  --surface-raised: #1c1f29;
+  --surface-sunken: #262a36;
+  --edge: #333947;
   --content-strong: #f4f5f7;
   --content-muted: #9ca3b2;
   --accent: #7375ee;
   --accent-hover: #8385f4;
-  --rail: #101319;
 }
 
 @theme {
@@ -57,7 +54,6 @@
   --color-muted: var(--content-muted);
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
-  --color-rail: var(--rail);
 }
 
 /* Lets the browser interpolate to and from intrinsic keywords, so `height: auto`
@@ -147,6 +143,127 @@ details[open] > .disclosure::before {
 }
 ::view-transition-new(root) {
   z-index: 1;
+}
+
+/* ── Nav rail ─────────────────────────────────────────────────────────────────
+   The rail floats instead of sitting flush against the viewport edge, and can
+   collapse to an icon-only strip. One custom property drives the width so the
+   rail is the only thing that has to know both numbers — mirrors exactly how
+   `.dark` above overrides tokens on <html>, stamped pre-paint by the same kind
+   of inline script as the theme's no-flash one. Every tile keeps a fixed-width
+   icon gutter that never moves between states: collapsing reads as the label
+   receding from a stationary icon, never the row itself scaling. */
+:root {
+  --rail-w: 15rem;
+}
+html.nav-collapsed {
+  --rail-w: 4.5rem;
+}
+
+.nav-rail {
+  width: var(--rail-w);
+}
+
+/* At the collapsed 4.5rem width there isn't room for the avatar mark and the
+   toggle button side by side (both are already 2rem alone) — stack them
+   instead of letting the row squeeze the brand link to zero width. */
+.nav-header {
+  flex-direction: row;
+  justify-content: space-between;
+  padding-inline: 1.25rem;
+}
+html.nav-collapsed .nav-header {
+  flex-direction: column;
+  justify-content: center;
+  padding-inline: 0.75rem;
+  gap: 0.75rem;
+}
+
+/* Base/collapsed states apply unconditionally so a reduced-motion user still
+   gets the collapsed layout — just as an instant swap instead of a wipe. */
+.nav-label {
+  opacity: 1;
+  translate: none;
+}
+html.nav-collapsed .nav-label {
+  opacity: 0;
+  translate: -6px 0;
+}
+.nav-toggle-icon {
+  rotate: 0deg;
+}
+html.nav-collapsed .nav-toggle-icon {
+  rotate: 180deg;
+}
+
+/* The compact corner-dot badge only makes sense once the count itself is
+   hidden with the rest of the label — shown only in the collapsed state. */
+.nav-badge-dot {
+  display: none;
+}
+html.nav-collapsed .nav-badge-dot {
+  display: block;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .nav-rail {
+    transition: width 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .nav-label {
+    transition:
+      opacity 160ms ease-out,
+      translate 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  /* Expand: labels wait for the rail to have room before fading/sliding in,
+     so text never materializes cramped against a still-widening tile. */
+  html:not(.nav-collapsed) .nav-label {
+    transition-delay: 90ms;
+  }
+  .nav-toggle-icon {
+    transition: rotate 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  /* A one-shot echo of the avatar mark's own arrival vocabulary — settles
+     once on activation, never loops, so it doesn't compete with the mark. */
+  .nav-tile[aria-current='page'] {
+    animation: nav-tile-settle 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+}
+@keyframes nav-tile-settle {
+  from {
+    scale: 0.97;
+  }
+  to {
+    scale: 1;
+  }
+}
+
+/* Mobile drawer + scrim, given a real exit animation instead of vanishing on
+   the first frame: the panel stays mounted through the closing transition
+   (app-nav.tsx lags `rendered` one tick behind `open`), and these two states
+   are what it transitions between. */
+.nav-scrim {
+  opacity: 0;
+}
+.nav-scrim[data-open='true'] {
+  opacity: 1;
+}
+.nav-drawer {
+  opacity: 0;
+  translate: 100% 0;
+}
+.nav-drawer[data-open='true'] {
+  opacity: 1;
+  translate: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .nav-scrim {
+    transition: opacity 180ms ease-out;
+  }
+  .nav-drawer {
+    transition:
+      opacity 180ms ease-out,
+      translate 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
 }
 
 /* ── Scroll-driven reveal ─────────────────────────────────────────────────────

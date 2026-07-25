@@ -23,6 +23,10 @@ const display = Bricolage_Grotesque({
 // there is no light→dark flash and OS-dark users still default to dark.
 const THEME_SCRIPT = `(()=>{try{const t=localStorage.getItem('theme');const d=t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches);document.documentElement.classList.toggle('dark',d);}catch{}})()`;
 
+// Same shape as THEME_SCRIPT: stamps the rail's collapsed state pre-paint so
+// there's no flash of the wrong width on load.
+const NAV_SCRIPT = `(()=>{try{document.documentElement.classList.toggle('nav-collapsed',localStorage.getItem('nav-collapsed')==='1');}catch{}})()`;
+
 export async function generateMetadata(): Promise<Metadata> {
   const { name } = await getAgentIdentity();
   return {
@@ -143,6 +147,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       <head>
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: static no-flash theme script */}
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: static no-flash nav-collapse script */}
+        <script dangerouslySetInnerHTML={{ __html: NAV_SCRIPT }} />
       </head>
       {/* The page column is a flex stack: the dev banner is a fixed row and the
           shell takes exactly what is left. It used to be `min-h-screen` sitting

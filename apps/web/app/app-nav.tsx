@@ -10,6 +10,7 @@ import {
   ListChecks,
   Menu,
   MessageCircle,
+  PanelLeftClose,
   Settings,
   ShieldCheck,
   Target,
@@ -19,10 +20,10 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CountBadge, focusRing } from '@/lib/ui';
 import { signOutAction } from './actions';
-import { type AssistantPresence, BrandLockup } from './brand-mark';
+import { type AssistantPresence, AvatarMark, BrandLockup } from './brand-mark';
 import { ThemeToggle } from './theme-toggle';
 
 interface NavItem {
@@ -47,10 +48,23 @@ const navIcons: Record<string, typeof MessageCircle> = {
   '/improvements': TrendingUp,
 };
 
+function badgeCountFor(href: string, pendingApprovals: number, memoryReviewCount: number): number {
+  if (href === '/approvals') return pendingApprovals;
+  if (href === '/profile') return memoryReviewCount;
+  return 0;
+}
+
+function formatBadgeCount(count: number): string {
+  return count >= 1_000 ? `${(count / 1_000).toFixed(1)}k` : String(count);
+}
+
 /**
- * App navigation. On large screens it's the persistent left sidebar; on small
- * screens it collapses to a sticky top bar with a slide-in drawer so the nav
- * doesn't eat half the viewport on a phone.
+ * App navigation. On large screens it's a floating rail — inset from the
+ * viewport, collapsible to icon-only — and on small screens a floating top
+ * bar with a slide-in drawer, so the nav doesn't eat half the viewport on a
+ * phone. Every tile keeps a fixed-width icon gutter that never moves between
+ * rail states: collapsing reads as the label receding from a stationary icon,
+ * not the row itself scaling.
  */
 export function AppNav({
   navItems,
@@ -69,23 +83,78 @@ export function AppNav({
 }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  // The drawer stays mounted through its own closing transition (`open` flips
+  // false immediately, `rendered` lags behind until the CSS transition ends),
+  // so closing plays the same slide/fade the opening does instead of the
+  // panel vanishing on the first frame.
+  const [rendered, setRendered] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  // Read inside the close-fallback timeout, not captured by its closure — a
+  // rapid re-open within the fallback's window must not have the stale timer
+  // unmount the drawer out from under it.
+  const openRef = useRef(open);
+
+  useEffect(() => {
+    openRef.current = open;
+    if (open) setRendered(true);
+  }, [open]);
+
+  // Hydrate from the class the no-flash inline script (layout.tsx) already
+  // stamped on <html> pre-paint — same pattern as ThemeToggle's `dark` state.
+  useEffect(() => {
+    setCollapsed(document.documentElement.classList.contains('nav-collapsed'));
+  }, []);
+
+  const toggleCollapsed = () => {
+    const next = !collapsed;
+    document.documentElement.classList.toggle('nav-collapsed', next);
+    setCollapsed(next);
+    try {
+      localStorage.setItem('nav-collapsed', next ? '1' : '0');
+    } catch {
+      // Private mode or blocked storage — still applies for this session.
+    }
+  };
+
+  const closeDrawer = useCallback(() => {
+    setOpen(false);
+    // Reduced-motion users get no CSS transition, so there is no
+    // transitionend to unmount on — close the DOM immediately instead.
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setRendered(false);
+      return;
+    }
+    // `inert` (set on the panel the instant it starts closing, so it can't be
+    // tabbed into or clicked mid-exit) appears to suppress `transitionend`
+    // from reaching the handler on the panel in at least some engines, which
+    // would otherwise leave the drawer mounted — invisible but still in the
+    // DOM — forever. A timeout just past the longer of the two closing
+    // transitions (220ms) is the guaranteed fallback, same belt-and-suspenders
+    // pattern as the theme wipe's own unstick timer. The ref guard means a
+    // rapid re-open inside that window is not unmounted by the stale timer.
+    window.setTimeout(() => {
+      if (!openRef.current) setRendered(false);
+    }, 260);
+  }, []);
 
   // Close the drawer whenever the route changes (a link was tapped).
   // biome-ignore lint/correctness/useExhaustiveDependencies: close on navigation
   useEffect(() => {
-    setOpen(false);
+    closeDrawer();
   }, [pathname]);
 
   // While the drawer is open, contain keyboard focus, lock body scroll, and
-  // return focus to the trigger when it closes.
+  // return focus to the trigger when it closes. Keyed on `open`, not
+  // `rendered`: focus and scroll restore the instant the owner asks to close,
+  // not after the panel finishes animating away.
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setOpen(false);
+        closeDrawer();
         return;
       }
       if (event.key !== 'Tab') return;
@@ -122,7 +191,7 @@ export function AppNav({
       document.body.style.overflow = previousOverflow;
       menuTriggerRef.current?.focus();
     };
-  }, [open]);
+  }, [open, closeDrawer]);
 
   // Longest matching nav href wins, so /chat/all doesn't also light up /chat.
   const activeHref = navItems
@@ -133,50 +202,96 @@ export function AppNav({
     items.map((item) => {
       const active = item.href === activeHref;
       const Icon = navIcons[item.href];
+      const collapseAware = tone === 'rail';
+      const count = badgeCountFor(item.href, pendingApprovals, memoryReviewCount);
+      const badgeTitle =
+        item.href === '/profile' && count > 0
+          ? `${count.toLocaleString()} ${count === 1 ? 'memory needs' : 'memories need'} your review`
+          : undefined;
       return (
         <Link
           key={item.href}
           href={item.href}
           data-mobile-touch-target="true"
           aria-current={active ? 'page' : undefined}
-          className={`mobile-touch-target relative flex items-center justify-between rounded-lg px-3 py-2 text-sm motion-safe:transition-colors ${focusRing} ${
+          className={`nav-tile mobile-touch-target relative grid h-10 grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-lg pr-3 text-sm motion-safe:transition-colors ${focusRing} ${
             active
-              ? 'before:absolute before:top-1/2 before:-left-2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent'
-              : ''
-          } ${
-            tone === 'rail'
-              ? active
-                ? 'bg-white/12 font-medium text-white shadow-sm'
-                : 'text-zinc-300 hover:bg-white/7 hover:text-white active:bg-white/10'
-              : active
-                ? 'bg-zinc-900 font-medium text-white'
-                : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 active:bg-zinc-200/70 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100 dark:active:bg-zinc-800'
+              ? 'bg-accent font-semibold text-white'
+              : 'font-medium text-zinc-600 hover:bg-sunken hover:text-strong active:bg-sunken dark:text-zinc-400 dark:hover:text-zinc-100'
           }`}
         >
-          <span className="flex min-w-0 items-center gap-2.5">
+          <span className="flex size-10 shrink-0 items-center justify-center">
             {Icon ? (
-              <Icon
-                className={`size-4 shrink-0 ${active ? '' : 'opacity-70'}`}
+              <span
+                className={`flex size-6 items-center justify-center rounded-md ${active ? 'bg-white/15' : ''}`}
+              >
+                <Icon
+                  className={`size-4 shrink-0 ${active ? '' : 'opacity-70'}`}
+                  aria-hidden="true"
+                />
+              </span>
+            ) : null}
+            {collapseAware && count > 0 ? (
+              <span
                 aria-hidden="true"
+                className="nav-badge-dot absolute top-1 right-1 size-3 rounded-full bg-amber-500 ring-2 ring-raised"
               />
             ) : null}
+          </span>
+          <span
+            className={`min-w-0 truncate tracking-[-0.01em] ${collapseAware ? 'nav-label' : ''}`}
+          >
             {item.label}
           </span>
-          {item.href === '/approvals' && pendingApprovals > 0 ? (
-            <CountBadge tone="amber">{pendingApprovals}</CountBadge>
-          ) : item.href === '/profile' && memoryReviewCount > 0 ? (
+          {count > 0 ? (
             <span
-              title={`${memoryReviewCount.toLocaleString()} ${
-                memoryReviewCount === 1 ? 'memory needs' : 'memories need'
-              } your review`}
+              className={`flex items-center ${collapseAware ? 'nav-label' : ''}`}
+              title={badgeTitle}
             >
-              <CountBadge tone="amber">
-                {memoryReviewCount >= 1_000
-                  ? `${(memoryReviewCount / 1_000).toFixed(1)}k`
-                  : memoryReviewCount}
-              </CountBadge>
+              <CountBadge tone="amber">{formatBadgeCount(count)}</CountBadge>
+            </span>
+          ) : (
+            <span />
+          )}
+        </Link>
+      );
+    });
+
+  const renderMobileGrid = (items: NavItem[]) =>
+    items.map((item, index) => {
+      const active = item.href === activeHref;
+      const Icon = navIcons[item.href];
+      const count = badgeCountFor(item.href, pendingApprovals, memoryReviewCount);
+      const spanFull = items.length % 2 === 1 && index === items.length - 1;
+      return (
+        <Link
+          key={item.href}
+          href={item.href}
+          data-mobile-touch-target="true"
+          aria-current={active ? 'page' : undefined}
+          className={`nav-tile relative mobile-touch-target flex min-h-[76px] flex-col items-center justify-center gap-1.5 rounded-lg border ${
+            spanFull ? 'col-span-2' : ''
+          } ${
+            active
+              ? 'border-transparent bg-accent text-white'
+              : 'border-edge bg-sunken/60 text-zinc-600 hover:bg-sunken active:bg-sunken dark:text-zinc-400'
+          } ${focusRing}`}
+        >
+          {count > 0 ? (
+            <span className="absolute top-2 right-2">
+              <CountBadge tone="amber">{formatBadgeCount(count)}</CountBadge>
             </span>
           ) : null}
+          {Icon ? (
+            <span
+              className={`flex size-9 items-center justify-center rounded-lg ${
+                active ? 'bg-white/15' : 'bg-sunken'
+              }`}
+            >
+              <Icon className={`size-5 ${active ? '' : 'opacity-70'}`} aria-hidden="true" />
+            </span>
+          ) : null}
+          <span className="text-xs font-semibold tracking-[-0.01em]">{item.label}</span>
         </Link>
       );
     });
@@ -185,16 +300,14 @@ export function AppNav({
     items.length > 0 ? (
       <details className="group mt-1">
         <summary
-          className={`mobile-touch-target flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm select-none ${focusRing} ${
-            tone === 'rail'
-              ? 'text-zinc-400 hover:bg-white/7 hover:text-white'
-              : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-950 dark:hover:bg-zinc-900 dark:hover:text-zinc-100'
-          }`}
+          className={`nav-tile mobile-touch-target grid h-10 cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-lg pr-3 text-sm text-zinc-500 select-none hover:bg-sunken hover:text-strong dark:text-zinc-400 dark:hover:text-zinc-100 ${focusRing}`}
         >
-          <Gauge className="size-4 shrink-0 opacity-70" aria-hidden="true" />
-          System
+          <span className="flex size-10 shrink-0 items-center justify-center">
+            <Gauge className="size-4 shrink-0 opacity-70" aria-hidden="true" />
+          </span>
+          <span className={`min-w-0 truncate ${tone === 'rail' ? 'nav-label' : ''}`}>System</span>
           <ChevronRight
-            className="ml-auto size-3.5 opacity-60 motion-safe:transition-transform group-open:rotate-90"
+            className={`size-3.5 opacity-60 motion-safe:transition-transform group-open:rotate-90 ${tone === 'rail' ? 'nav-label' : ''}`}
             aria-hidden="true"
           />
         </summary>
@@ -206,7 +319,7 @@ export function AppNav({
     <form action={signOutAction}>
       <button
         type="submit"
-        className={`rounded text-xs text-zinc-400 hover:text-white hover:underline ${focusRing}`}
+        className={`rounded text-xs text-zinc-500 hover:text-strong hover:underline dark:text-zinc-400 dark:hover:text-zinc-100 ${focusRing}`}
       >
         Sign out
       </button>
@@ -219,44 +332,64 @@ export function AppNav({
 
   return (
     <>
-      {/* Desktop sidebar. Pinned to the viewport at full height: the brand and
-          the sign-out/theme footer stay put, and only the link list scrolls if
-          it ever outgrows the rail — so no control is stranded below the fold
-          on a long page. */}
-      {/* bg-rail, not a literal near-black: in dark mode the canvas is itself
-          #0b0d12, so a rail painted that colour dissolved into the page and its
-          links appeared to float in the void. The token lifts the rail a step
-          above the dark canvas, and the hairline means the boundary never
-          depends on the fill alone. */}
-      <aside className="hidden h-[calc(100dvh-var(--app-chrome,0px))] w-60 shrink-0 flex-col border-r border-white/10 bg-rail text-white lg:sticky lg:top-0 lg:flex">
-        <div className="shrink-0 px-5 pt-6 pb-7">
-          <Link href="/chat" className={`inline-flex rounded-lg ${focusRing}`}>
-            <BrandLockup
-              name={agentName}
-              presence={presence}
-              subtitle={
-                // Sentence case, no letter-spacing: "NEEDS YOUR ATTENTION" as
-                // tracked-out caps wrapped onto a second line and pushed the
-                // lockup out of shape. This reads as a status line, not a label.
-                <span
-                  className={`truncate text-xs ${
-                    presence === 'attention' ? 'text-amber-300' : 'text-indigo-300'
-                  }`}
-                >
-                  {presence === 'attention'
-                    ? 'Needs you'
-                    : presence === 'working'
-                      ? 'Working…'
-                      : 'Ready when you are'}
-                </span>
-              }
-            />
+      {/* Desktop rail. Floats inset from the viewport rather than sitting flush
+          against it, and collapses to icon-only via the `nav-rail`/`nav-label`
+          CSS classes (globals.css), which read the `--rail-w` custom property
+          that the `nav-collapsed` class on <html> overrides — same mechanism
+          as `.dark` overriding color tokens above it in globals.css.
+          bg-raised/border-edge, the same tokens every other panel in the app
+          uses (message bubbles, form cards) — a permanently-dark rail read as
+          heavier than the rest of the UI rather than as a floating peer of it. */}
+      <aside
+        className={`nav-rail hidden shrink-0 flex-col rounded-2xl border border-edge bg-raised text-strong shadow-[0_12px_28px_-8px_rgb(0_0_0/0.18)] dark:shadow-[0_12px_28px_-8px_rgb(0_0_0/0.4)] lg:m-4 lg:flex lg:sticky lg:top-4 lg:h-[calc(100dvh-var(--app-chrome,0px)-2rem)] xl:m-5 xl:top-5 xl:h-[calc(100dvh-var(--app-chrome,0px)-2.5rem)]`}
+      >
+        <div className="nav-header flex shrink-0 items-center gap-2 pt-6 pb-7">
+          {/* Inlined rather than <BrandLockup>: the name/subtitle column needs
+              to fade with the rest of the rail's labels while the avatar mark
+              — the icon for this row — stays put, same rule as every tile.
+              `w-full` + grid (not inline-flex) so the text column shrinks in
+              lockstep with the rail's own width, the same way a tile's `1fr`
+              label column does — otherwise the opacity-faded-but-still-laid-out
+              text would keep the link at its full expanded width and overflow
+              the 4.5rem collapsed rail. */}
+          <Link
+            href="/chat"
+            className={`grid w-full min-w-0 grid-cols-[2rem_1fr] items-center gap-2.5 rounded-lg ${focusRing}`}
+          >
+            <AvatarMark name={agentName} presence={presence} />
+            <span className="nav-label flex min-w-0 flex-col">
+              <span className="truncate font-display text-lg font-semibold tracking-[-0.02em]">
+                {agentName}
+              </span>
+              {/* Sentence case, no letter-spacing: "NEEDS YOUR ATTENTION" as
+                  tracked-out caps wrapped onto a second line and pushed the
+                  lockup out of shape. This reads as a status line, not a label. */}
+              <span
+                className={`truncate text-xs ${
+                  presence === 'attention' ? 'text-amber-300' : 'text-indigo-300'
+                }`}
+              >
+                {presence === 'attention'
+                  ? 'Needs you'
+                  : presence === 'working'
+                    ? 'Working…'
+                    : 'Ready when you are'}
+              </span>
+            </span>
           </Link>
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+            className={`inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 hover:bg-sunken hover:text-strong dark:text-zinc-400 dark:hover:text-zinc-100 ${focusRing}`}
+          >
+            <PanelLeftClose className="nav-toggle-icon size-4" aria-hidden="true" />
+          </button>
         </div>
         <div className="scroll-subtle min-h-0 flex-1 overflow-y-auto pb-4">
           <nav className="flex flex-col gap-1 px-3">{renderLinks(primaryItems, 'rail')}</nav>
           <div className="mt-6 px-3">
-            <p className="px-3 text-2xs font-semibold tracking-[0.14em] text-zinc-500 uppercase">
+            <p className="nav-label px-3 font-display text-2xs font-semibold tracking-[0.14em] text-zinc-500 uppercase">
               Manage
             </p>
             <nav className="mt-2 flex flex-col gap-1">
@@ -265,14 +398,14 @@ export function AppNav({
             </nav>
           </div>
         </div>
-        <div className="flex shrink-0 items-center justify-between border-t border-white/10 px-5 py-4">
-          {signOut ?? <span />}
+        <div className="flex shrink-0 items-center justify-between border-t border-edge px-5 py-4">
+          <span className="nav-label">{signOut ?? <span />}</span>
           <ThemeToggle />
         </div>
       </aside>
 
       {/* Mobile top bar */}
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-white/10 bg-rail/95 px-4 text-white backdrop-blur lg:hidden">
+      <header className="sticky top-3 z-30 m-3 flex h-14 items-center justify-between rounded-2xl border border-edge bg-raised/95 px-4 text-strong shadow-[0_8px_20px_-6px_rgb(0_0_0/0.14)] backdrop-blur dark:shadow-[0_8px_20px_-6px_rgb(0_0_0/0.35)] lg:hidden">
         <Link
           href="/chat"
           data-mobile-touch-target="true"
@@ -293,7 +426,7 @@ export function AppNav({
             aria-label="Open navigation menu"
             aria-expanded={open}
             aria-controls="mobile-nav"
-            className={`relative -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-zinc-200 hover:bg-white/10 ${focusRing}`}
+            className={`relative -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-zinc-600 hover:bg-sunken dark:text-zinc-300 ${focusRing}`}
           >
             <Menu className="size-5" aria-hidden="true" />
             {pendingApprovals > 0 ? (
@@ -306,16 +439,20 @@ export function AppNav({
         </div>
       </header>
 
-      {/* Mobile drawer */}
-      {open ? (
+      {/* Mobile drawer. Stays mounted (via `rendered`) through its own close
+          transition — data-open drives .nav-scrim/.nav-drawer in globals.css,
+          and `inert` while closing keeps it out of tab order and unclickable
+          without waiting for the animation to finish. */}
+      {rendered ? (
         <div className="fixed inset-0 z-40 lg:hidden">
           <button
             type="button"
             aria-label="Close navigation menu"
             aria-hidden="true"
             tabIndex={-1}
-            onClick={() => setOpen(false)}
-            className="absolute inset-0 bg-zinc-950/50 backdrop-blur-sm motion-safe:animate-[fade-in_150ms_ease-out]"
+            onClick={closeDrawer}
+            data-open={open}
+            className={`nav-scrim absolute inset-0 bg-zinc-950/50 backdrop-blur-sm ${open ? '' : 'pointer-events-none'}`}
           />
           <div
             ref={drawerRef}
@@ -323,7 +460,12 @@ export function AppNav({
             role="dialog"
             aria-modal="true"
             aria-labelledby="mobile-nav-title"
-            className="absolute inset-y-0 right-0 flex w-72 max-w-[84%] flex-col border-l border-edge bg-raised shadow-2xl motion-safe:animate-[slide-in-right_200ms_ease-out]"
+            data-open={open}
+            inert={!open}
+            onTransitionEnd={(event) => {
+              if (event.target === event.currentTarget && !open) setRendered(false);
+            }}
+            className="nav-drawer absolute inset-y-3 right-3 flex w-72 max-w-[calc(84%-0.75rem)] flex-col rounded-2xl border border-edge bg-raised shadow-2xl"
           >
             <div className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
               <span id="mobile-nav-title" className="text-sm font-semibold tracking-[-0.02em]">
@@ -332,7 +474,7 @@ export function AppNav({
               <button
                 ref={closeButtonRef}
                 type="button"
-                onClick={() => setOpen(false)}
+                onClick={closeDrawer}
                 aria-label="Close navigation menu"
                 className={`-mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900 ${focusRing}`}
               >
@@ -340,8 +482,8 @@ export function AppNav({
               </button>
             </div>
             <nav className="scroll-subtle flex flex-1 flex-col gap-1 overflow-y-auto p-3">
-              {renderLinks(primaryItems, 'drawer')}
-              <p className="mt-5 px-3 text-2xs font-semibold tracking-[0.14em] text-zinc-400 uppercase">
+              <div className="grid grid-cols-2 gap-2">{renderMobileGrid(primaryItems)}</div>
+              <p className="mt-5 px-3 font-display text-2xs font-semibold tracking-[0.14em] text-zinc-400 uppercase">
                 Manage
               </p>
               {renderLinks(utilityItems, 'drawer')}

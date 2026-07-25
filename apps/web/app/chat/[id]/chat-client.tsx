@@ -816,10 +816,13 @@ export function ChatClient({
     // needs breathing room (the header, the log's own opening air) supplies it
     // from the inside, where it scrolls.
     //
-    // The column is capped at a reading measure rather than the page's full
-    // width: prose that runs to 1000px is tiring, and pinning the user's
-    // bubbles that far right made a two-way exchange read as two columns.
-    <div className="relative mx-auto -my-7 flex h-[calc(100dvh-3.5rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-10 lg:h-[calc(100dvh-var(--app-chrome,0px))]">
+    // The column widens on larger screens so the header/composer use the
+    // space a floating rail plus a wide canvas otherwise leaves empty — but
+    // each bubble caps its own width separately (max-w-[min(76%,42rem)]
+    // above), not this container: prose that runs to 1000px is tiring, and
+    // pinning the user's bubbles that far right would make a two-way
+    // exchange read as two columns regardless of how wide the column is.
+    <div className="relative mx-auto -my-7 flex h-[calc(100dvh-3.5rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-10 lg:h-[calc(100dvh-var(--app-chrome,0px))] lg:max-w-4xl 2xl:max-w-[56rem]">
       {/* The primary thread is the whole surface — it needs no title. Side and
           goal chats keep a slim header so you know which one you're in. */}
       {!isPrimary ? (
@@ -1031,7 +1034,7 @@ export function ChatClient({
                           // keeping the raised-card treatment meaning one
                           // thing only: an object the assistant placed in the
                           // thread (an approval, a budget ask, a work trail).
-                          <div className="group/msg min-w-0 max-w-[88%] sm:max-w-[76%]">
+                          <div className="group/msg min-w-0 max-w-[88%] sm:max-w-[min(76%,42rem)]">
                             <RecallNote sources={recallSources} />
                             <div
                               className={`min-w-0 max-w-full rounded-2xl rounded-bl-md bg-raised px-4 py-3 text-[15px] text-strong shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 ${
@@ -1052,7 +1055,7 @@ export function ChatClient({
                           // bubble made your own words look like a footnote.
                           <div
                             title={date ? date.toLocaleString() : undefined}
-                            className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover px-4 py-3 text-[15px] leading-6 text-white shadow-[0_2px_10px_rgb(91_92_226/0.22)] sm:max-w-[76%] dark:shadow-[0_1px_3px_rgb(0_0_0/0.45)]"
+                            className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover px-4 py-3 text-[15px] leading-6 text-white shadow-[0_2px_10px_rgb(91_92_226/0.22)] sm:max-w-[min(76%,42rem)] dark:shadow-[0_1px_3px_rgb(0_0_0/0.45)]"
                           >
                             {visibleTextParts.map((part, index) => (
                               <p

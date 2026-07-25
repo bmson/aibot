@@ -19,6 +19,13 @@ export function ThemeToggle() {
 
   useEffect(() => {
     setDark(document.documentElement.classList.contains('dark'));
+    // The desktop rail and mobile header each mount their own <ThemeToggle>
+    // (one hidden via CSS, not unmounted, depending on breakpoint) — without
+    // this, toggling on one leaves the other's icon/label stale until it
+    // happens to remount, e.g. resizing across the lg breakpoint mid-session.
+    const onExternalChange = () => setDark(document.documentElement.classList.contains('dark'));
+    window.addEventListener('app:theme-change', onExternalChange);
+    return () => window.removeEventListener('app:theme-change', onExternalChange);
   }, []);
 
   const toggle = () => {
@@ -28,6 +35,7 @@ export function ThemeToggle() {
     const apply = () => {
       document.documentElement.classList.toggle('dark', next);
       setDark(next);
+      window.dispatchEvent(new Event('app:theme-change'));
     };
 
     const persist = () => {
