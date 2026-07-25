@@ -99,8 +99,20 @@ export function AppNav({
 
   useEffect(() => {
     openRef.current = open;
-    if (open) setRendered(true);
   }, [open]);
+
+  // Sets `rendered` synchronously alongside `open` (React batches both into
+  // one render) rather than deriving it in a follow-up effect. Opening had a
+  // real, CI-caught race: the focus-trap effect's rAF(() =>
+  // closeButtonRef.current?.focus()) also fires off `open` changing, and if
+  // `rendered` only flips true a render later, that rAF can land before the
+  // drawer (and its close button) has actually mounted — focus silently goes
+  // nowhere. Setting both here guarantees the drawer is already in the DOM by
+  // the render the focus-trap effect runs against.
+  const openDrawer = () => {
+    setRendered(true);
+    setOpen(true);
+  };
 
   // Hydrate from the class the no-flash inline script (layout.tsx) already
   // stamped on <html> pre-paint — same pattern as ThemeToggle's `dark` state.
@@ -422,7 +434,7 @@ export function AppNav({
           <button
             ref={menuTriggerRef}
             type="button"
-            onClick={() => setOpen(true)}
+            onClick={openDrawer}
             aria-label="Open navigation menu"
             aria-expanded={open}
             aria-controls="mobile-nav"
