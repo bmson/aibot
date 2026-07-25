@@ -17,8 +17,7 @@ const nextConfig: NextConfig = {
   // in Next's experimental app-page runtime, which requires React's experimental
   // channel. On React 19.2 stable the flag is accepted but the router never
   // calls document.startViewTransition, so it buys nothing. Route entry stays
-  // with the CSS animation in template.tsx; the theme switch drives the View
-  // Transition API directly, where the DOM change is synchronous and it works.
+  // with the CSS animation in template.tsx.
   experimental: { authInterrupts: true },
   async redirects() {
     return [{ source: '/', destination: '/chat', permanent: false }];
