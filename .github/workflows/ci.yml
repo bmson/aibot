@@ -35,6 +35,24 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # pnpm.auditConfig.ignoreGhsas in package.json suppresses exactly one
+      # advisory: GHSA-mh99-v99m-4gvg (brace-expansion DoS). It reaches us only
+      # as workers/document-processor > exceljs > archiver > glob > minimatch,
+      # and there is no upstream fix to take — exceljs 4.4.0 is the latest
+      # release and pins archiver ^5, which is what holds the old glob chain.
+      #
+      # Forcing brace-expansion >=5.0.8 is NOT a workaround: minimatch 3 expects
+      # its CommonJS function export and throws "expand is not a function" at
+      # runtime. That break is invisible to `pnpm test` and `pnpm build`, so the
+      # override looks green and ships a broken document-processor.
+      #
+      # The residual risk is a denial of service through a hostile glob pattern,
+      # and nothing routes user input into archiver's glob — it only ever globs
+      # paths the worker itself chose. Revisit if exceljs ships a release that
+      # moves off archiver 5.
+      #
+      # The ignore is per-advisory and `pnpm audit` still prints the finding and
+      # an ignored count, so a NEW brace-expansion advisory would still fail CI.
       - run: pnpm audit --audit-level moderate
       - name: Scan repository for secrets and insecure configuration
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
