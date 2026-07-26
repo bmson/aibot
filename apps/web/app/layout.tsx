@@ -151,6 +151,14 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: static no-flash nav-collapse script */}
         <script dangerouslySetInnerHTML={{ __html: NAV_SCRIPT }} />
+        {/* Fetch Jelly early without blocking hydration. The after-interactive
+            module below can then upgrade an already usable native fallback
+            without waiting on a fresh responsive context's network turn. */}
+        <link
+          rel="modulepreload"
+          href="/vendor/jelly-ui/d898ec9/jelly.js"
+          crossOrigin="anonymous"
+        />
       </head>
       {/* The page column is a flex stack: the dev banner is a fixed row and the
           shell takes exactly what is left. It used to be `min-h-screen` sitting

@@ -100,4 +100,7 @@ jobs:
             cat "$RUNNER_TEMP/assistant-web.log"
             exit 1
           fi
-          pnpm smoke:mobile
+          if ! pnpm smoke:mobile; then
+            tail -n 300 "$RUNNER_TEMP/assistant-web.log"
+            exit 1
+          fi

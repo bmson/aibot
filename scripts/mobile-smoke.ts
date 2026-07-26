@@ -218,11 +218,31 @@ async function assertResponsiveContract(page: Page, label: string, mobile: boole
 }
 
 async function assertPinnedJelly(page: Page, label: string) {
-  await page.waitForFunction(() =>
-    ['jelly-button', 'jelly-input', 'jelly-textarea', 'jelly-segmented'].every((tag) =>
-      Boolean(customElements.get(tag)),
-    ),
-  );
+  const tags = ['jelly-button', 'jelly-input', 'jelly-textarea', 'jelly-segmented'] as const;
+  try {
+    await page.waitForFunction(
+      (expectedTags) => expectedTags.every((tag) => Boolean(customElements.get(tag))),
+      tags,
+    );
+  } catch (cause) {
+    const diagnostics = await page.evaluate(
+      (expectedTags) => ({
+        readyState: document.readyState,
+        registered: Object.fromEntries(
+          expectedTags.map((tag) => [tag, Boolean(customElements.get(tag))]),
+        ),
+        scripts: [...document.querySelectorAll<HTMLScriptElement>('script[src]')].map((script) => ({
+          src: script.src,
+          type: script.type,
+        })),
+      }),
+      tags,
+    );
+    throw new Error(
+      `${label} did not register the pinned Jelly runtime: ${JSON.stringify(diagnostics)}`,
+      { cause },
+    );
+  }
   const scripts = await page
     .locator('script[src]')
     .evaluateAll((elements) => elements.map((element) => (element as HTMLScriptElement).src));

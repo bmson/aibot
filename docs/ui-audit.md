@@ -83,6 +83,9 @@ rendering path was reviewed in code.
 - Jelly registration no longer replaces a focused native fallback during
   mobile-drawer opening. A value and focus typed before delayed registration
   are handed to the upgraded control.
+- The local Jelly module is preloaded without blocking hydration, then executed
+  after the native adapters are interactive. Fresh documents register
+  reliably while blocked or delayed runtime requests retain usable fallbacks.
 - Jelly controls remain form-associated without hidden duplicate values and
   follow native `form.reset()` behavior after upgrade.
 - Conditional Send/Stop controls have stable React identities, preventing a
