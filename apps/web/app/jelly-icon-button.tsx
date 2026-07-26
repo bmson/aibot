@@ -65,6 +65,10 @@ export function JellyIconButton({
     {
       'aria-controls': controls,
       'aria-expanded': expanded === undefined ? undefined : String(expanded),
+      // Keep the light-DOM host labelled as well as Jelly's shadow button.
+      // Focus management and accessibility checks see the custom-element host
+      // as document.activeElement when its internal control owns focus.
+      'aria-label': label,
       className: `nav-jelly-button ${className}`.trim(),
       label,
       onClick,
