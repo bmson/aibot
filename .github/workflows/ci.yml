@@ -85,7 +85,9 @@ jobs:
           SMOKE_BROWSER_CHANNEL: chrome
           SMOKE_CREATE_FIXTURE: 'true'
         run: |
-          pnpm --filter @assistant/web exec next dev --webpack --hostname 127.0.0.1 --port 3000 > "$RUNNER_TEMP/assistant-web.log" 2>&1 &
+          # The route matrix intentionally warms every page. Give Next's dev
+          # server enough headroom to avoid its automatic 80%-heap restart.
+          NODE_OPTIONS=--max-old-space-size=6144 pnpm --filter @assistant/web exec next dev --webpack --hostname 127.0.0.1 --port 3000 > "$RUNNER_TEMP/assistant-web.log" 2>&1 &
           assistant_web_pid=$!
           trap 'kill "$assistant_web_pid" 2>/dev/null || true' EXIT
           assistant_web_ready=false
