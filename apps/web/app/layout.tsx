@@ -3,6 +3,7 @@ import { approvals, tasks } from '@assistant/db';
 import { and, count, eq, gt, inArray, sql } from 'drizzle-orm';
 import type { Metadata, Viewport } from 'next';
 import { Bricolage_Grotesque, Inter, JetBrains_Mono } from 'next/font/google';
+import Script from 'next/script';
 import type { CSSProperties, ReactNode } from 'react';
 import { auth, authMode } from '@/auth';
 import { getAgentIdentity, getDb } from '@/lib/server';
@@ -21,7 +22,7 @@ const display = Bricolage_Grotesque({
 
 // Sets the .dark class from localStorage or OS preference BEFORE first paint, so
 // there is no light→dark flash and OS-dark users still default to dark.
-const THEME_SCRIPT = `(()=>{try{const t=localStorage.getItem('theme');const d=t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches);document.documentElement.classList.toggle('dark',d);}catch{}})()`;
+const THEME_SCRIPT = `(()=>{try{const t=localStorage.getItem('theme');const d=t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches);document.documentElement.classList.toggle('dark',d);document.documentElement.dataset.jellyMode=d?'dark':'light';}catch{}})()`;
 
 // Same shape as THEME_SCRIPT: stamps the rail's collapsed state pre-paint so
 // there's no flash of the wrong width on load.
@@ -162,6 +163,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         style={{ '--app-chrome': authMode === 'dev-bypass' ? '1.5rem' : '0px' } as CSSProperties}
         className="flex min-h-dvh flex-col bg-surface font-sans text-strong antialiased"
       >
+        {/* Jelly UI is intentionally limited to nav controls, badges, and
+            collapsed-rail tooltips; primary destinations remain native links. */}
+        <Script src="https://jelly-ui.com/package.js" type="module" strategy="afterInteractive" />
         {authMode === 'dev-bypass' ? (
           <div className="flex h-6 shrink-0 items-center justify-center bg-amber-100 px-4 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
             dev mode — auth disabled

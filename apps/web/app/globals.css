@@ -232,6 +232,54 @@ html.nav-collapsed .nav-badge-dot {
   display: block;
 }
 
+/* Keep the current location present but quiet: a tint and slim marker orient
+   the user without making the navigation the loudest surface in the app. */
+.nav-tile-active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-raised));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 13%, transparent),
+    0 1px 2px rgb(15 23 42 / 0.04);
+}
+.nav-tile-active::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0.2rem;
+  top: 50%;
+  width: 3px;
+  height: 1.25rem;
+  border-radius: 999px;
+  background: currentColor;
+  translate: 0 -50%;
+}
+
+/* Jelly is limited to compact navigation controls, live counts, and the
+   labels restored by tooltips when the rail collapses. */
+.nav-jelly-badge {
+  display: inline-flex;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  color: #78350f;
+  font: 650 0.6875rem/1 var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+.nav-jelly-button {
+  position: relative;
+  display: inline-flex;
+  width: var(--nav-jelly-button-size);
+  height: var(--nav-jelly-button-size);
+  flex: none;
+  --nav-jelly-button-size: 36px;
+  --nav-jelly-button-radius: 12px;
+}
+.nav-tooltip {
+  display: block;
+  width: 100%;
+  --jelly-font-display: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --jelly-tooltip-background: var(--content-strong);
+  --jelly-tooltip-color: var(--surface-raised);
+}
 /* A tile's row (Link/summary/ActionMenu trigger) otherwise stretches to the
    nav's full width regardless of collapse state — fine expanded, but
    collapsed it left 5-10px of hoverable/active background to the right of
@@ -243,11 +291,24 @@ html.nav-collapsed .nav-badge-dot {
    the rail — `[popover]` renders in the top layer for paint only, not for
    selector matching — so they need to opt back out of the cap; their rows
    always show full labels regardless of the rail's own collapse state. */
-html.nav-collapsed .nav-tile {
-  width: 2.5rem;
+@media (min-width: 1024px) {
+  html.nav-collapsed .nav-tooltip {
+    display: flex;
+    justify-content: center;
+  }
+  html.nav-collapsed .nav-tile {
+    width: 2.5rem;
+  }
+  html.nav-collapsed [popover] .nav-tile {
+    width: auto;
+  }
 }
-html.nav-collapsed [popover] .nav-tile {
-  width: auto;
+
+@media (max-width: 639px) {
+  .nav-jelly-button {
+    --nav-jelly-button-size: 44px;
+    --nav-jelly-button-radius: 14px;
+  }
 }
 
 @media (prefers-reduced-motion: no-preference) {
