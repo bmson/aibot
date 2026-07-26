@@ -13,6 +13,7 @@ import {
 const baseUrl = (process.env.SMOKE_BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 const browserPath = process.env.SMOKE_BROWSER_PATH;
 const browserChannel = process.env.SMOKE_BROWSER_CHANNEL ?? 'chrome';
+const navigationTimeoutMs = Number(process.env.SMOKE_NAVIGATION_TIMEOUT_MS ?? 30_000);
 const requestedBrowsers = (process.env.SMOKE_BROWSERS ?? 'chromium')
   .split(',')
   .map((name) => name.trim())
@@ -307,7 +308,10 @@ async function openRoute(
   if (page.url() !== 'about:blank') {
     await page.goto('about:blank', { waitUntil: 'commit' });
   }
-  const response = await page.goto(`${baseUrl}${path}`, { waitUntil: 'domcontentloaded' });
+  const response = await page.goto(`${baseUrl}${path}`, {
+    timeout: navigationTimeoutMs,
+    waitUntil: 'domcontentloaded',
+  });
   assert(response?.ok(), `${label} ${path} returned HTTP ${response?.status() ?? 'unknown'}`);
   assert(
     new URL(page.url()).origin === new URL(baseUrl).origin,

@@ -84,6 +84,9 @@ jobs:
           SMOKE_BROWSERS: chromium,webkit
           SMOKE_BROWSER_CHANNEL: chrome
           SMOKE_CREATE_FIXTURE: 'true'
+          # A cold Webpack route compile can exceed Playwright's 30s default on
+          # shared runners. This suite audits behavior, not cold-build latency.
+          SMOKE_NAVIGATION_TIMEOUT_MS: '90000'
         run: |
           # The route matrix intentionally warms every page. Give Next's dev
           # server enough headroom to avoid its automatic 80%-heap restart.
