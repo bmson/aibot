@@ -144,37 +144,66 @@ html.nav-collapsed {
 
 /* Same 0.75rem inset as the tile nav's `px-3` in both rail states, so the
    collapse toggle sits in the exact column the tile icons do instead of
-   drifting to whatever center a wider header padding would put it at. */
+   drifting to whatever center a wider header padding would put it at.
+   Collapsed, it's the row's only child — centering it keeps equal space on
+   both sides instead of hugging the left edge with a lopsided gap on the
+   right (the tile-gutter inset was never meant to double as "how far this
+   button sits from the rail's own edge", just as "where the icon column
+   starts"). */
 .nav-header {
   padding-inline: 0.75rem;
+}
+html.nav-collapsed .nav-header {
+  justify-content: center;
 }
 
 /* The "Manage" label fades out with every other label once collapsed, which
    left the primary/utility boundary marked by nothing but blank space — a
-   plain rule takes over as the visible divider once the label can't. */
+   plain rule takes over as the visible divider once the label can't. Margin
+   moves in here (was Tailwind's mt-6 in the JSX) so the collapsed variant can
+   trade some of it for the divider's own border+padding instead of adding to
+   it — adding a border+padding on top of the full expanded-state gap visibly
+   pushed the first utility icon down and read as too much space. */
+.nav-manage-group {
+  margin-top: 1.5rem;
+}
 html.nav-collapsed .nav-manage-group {
+  margin-top: 0.75rem;
   border-top: 1px solid var(--edge);
   padding-top: 0.75rem;
+}
+
+/* Collapsed, every tile is capped to the icon gutter's own 2.5rem width (see
+   `.nav-tile` below) rather than stretching across the row like it does
+   expanded — center that narrower box in the row instead of leaving it
+   flush left with the leftover space stranded on the right. Per-child
+   centering (not a fixed inset) so it's correct regardless of the rail's
+   exact collapsed width or border. Expanded, tiles still need the default
+   stretch (the active/hover background has to span the full row), so this
+   only applies collapsed. */
+html.nav-collapsed .nav-tile-list {
+  align-items: center;
 }
 
 /* The footer's own padding (px-5, wider than the tile nav's px-3) and its
    space-between layout are right for the expanded "Sign out ⋯ theme toggle"
    row, but in the collapsed rail they'd leave the theme icon hugging the
-   footer's right edge instead of sharing the tile column's left-aligned
-   center. Switching to a grid with the same 2.5rem first column as a tile's
-   icon gutter — explicitly reordered, since the icon is second in the DOM —
-   pins it to that column regardless of the (invisible but still laid-out)
-   sign-out link's width. */
+   footer's right edge instead of centered like every other icon. A grid with
+   the icon in a fixed middle column flanked by two equal (and
+   zero-minimum, so the sign-out link's own width can't lopside them) flexible
+   columns centers it regardless of the (invisible but still laid-out)
+   sign-out link's width — which column that link sits in doesn't matter
+   since it's invisible either way. */
 html.nav-collapsed .nav-footer {
   display: grid;
-  grid-template-columns: 2.5rem 1fr;
+  grid-template-columns: minmax(0, 1fr) 2.5rem minmax(0, 1fr);
   padding-inline: 0.75rem;
 }
 html.nav-collapsed .nav-footer-icon {
-  grid-column: 1;
+  grid-column: 2;
 }
 html.nav-collapsed .nav-footer > .nav-label {
-  grid-column: 2;
+  grid-column: 1;
 }
 
 /* Base/collapsed states apply unconditionally so a reduced-motion user still
@@ -203,8 +232,29 @@ html.nav-collapsed .nav-badge-dot {
   display: block;
 }
 
+/* A tile's row (Link/summary/ActionMenu trigger) otherwise stretches to the
+   nav's full width regardless of collapse state — fine expanded, but
+   collapsed it left 5-10px of hoverable/active background to the right of
+   the icon (the label/badge columns shrink to 0 width, the row itself
+   didn't). Capping it to the icon gutter's own width makes the hover/active
+   background a clean square instead of a wide box with the icon pinned to
+   its left edge. Popover panels (the System dropdown) reuse the same
+   `.nav-tile` styling for their own links but are still DOM descendants of
+   the rail — `[popover]` renders in the top layer for paint only, not for
+   selector matching — so they need to opt back out of the cap; their rows
+   always show full labels regardless of the rail's own collapse state. */
+html.nav-collapsed .nav-tile {
+  width: 2.5rem;
+}
+html.nav-collapsed [popover] .nav-tile {
+  width: auto;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .nav-rail {
+    transition: width 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .nav-tile {
     transition: width 280ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .nav-label {
