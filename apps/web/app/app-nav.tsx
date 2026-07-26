@@ -20,11 +20,12 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { CountBadge, focusRing } from '@/lib/ui';
+import { createElement, type ReactElement, useCallback, useEffect, useRef, useState } from 'react';
+import { focusRing } from '@/lib/ui';
 import { ActionMenu } from '@/lib/ui-client';
 import { signOutAction } from './actions';
 import { type AssistantPresence, BrandLockup } from './brand-mark';
+import { type JellyButtonElement, JellyIconButton } from './jelly-icon-button';
 import { ThemeToggle } from './theme-toggle';
 
 interface NavItem {
@@ -65,6 +66,41 @@ function formatBadgeCount(count: number): string {
   return count >= 1_000 ? `${(count / 1_000).toFixed(1)}k` : String(count);
 }
 
+function JellyCountBadge({ count, title }: { count: number; title?: string }) {
+  return createElement(
+    'jelly-badge',
+    {
+      className: 'nav-jelly-badge',
+      size: 'small',
+      title,
+      variant: 'amber',
+    },
+    formatBadgeCount(count),
+  );
+}
+
+function JellyNavTooltip({
+  children,
+  enabled,
+  text,
+}: {
+  children: ReactElement;
+  enabled: boolean;
+  text: string;
+}) {
+  if (!enabled) return children;
+  return createElement(
+    'jelly-tooltip',
+    {
+      className: 'nav-tooltip',
+      placement: 'right',
+      size: 'small',
+      text,
+    },
+    children,
+  );
+}
+
 /**
  * App navigation. On large screens it's a floating rail — inset from the
  * viewport, collapsible to icon-only — and on small screens a floating top
@@ -98,9 +134,9 @@ export function AppNav({
   // panel vanishing on the first frame.
   const [rendered, setRendered] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const menuTriggerRef = useRef<JellyButtonElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const closeButtonRef = useRef<JellyButtonElement>(null);
   // Read inside the close-fallback timeout, not captured by its closure — a
   // rapid re-open within the fallback's window must not have the stale timer
   // unmount the drawer out from under it.
@@ -181,7 +217,7 @@ export function AppNav({
       if (event.key !== 'Tab') return;
       const focusable = Array.from(
         drawerRef.current?.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+          'jelly-button:not([disabled]), a[href], button:not([disabled]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
         ) ?? [],
         // Links inside a closed <details> (the System group) are in the DOM but
         // not tabbable — counting them as first/last breaks the wrap. Chrome
@@ -235,24 +271,26 @@ export function AppNav({
           ? `${count.toLocaleString()} ${count === 1 ? 'memory needs' : 'memories need'} your review`
           : item.href === '/tasks' && count > 0
             ? `${count.toLocaleString()} ${count === 1 ? 'task needs' : 'tasks need'} your attention`
-            : undefined;
-      return (
+            : item.href === '/approvals' && count > 0
+              ? `${count.toLocaleString()} pending ${count === 1 ? 'approval' : 'approvals'}`
+              : undefined;
+      const link = (
         <Link
-          key={item.href}
           href={item.href}
           data-mobile-touch-target="true"
           aria-current={active ? 'page' : undefined}
-          title={collapseAware && collapsed ? item.label : undefined}
-          className={`nav-tile mobile-touch-target relative grid h-10 grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-lg text-sm motion-safe:transition-colors ${collapseAware && collapsed ? '' : 'pr-3'} ${focusRing} ${
+          className={`nav-tile mobile-touch-target relative grid h-10 w-full grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-xl text-sm motion-safe:transition-[background-color,color,box-shadow] ${collapseAware && collapsed ? '' : 'pr-3'} ${focusRing} ${
             active
-              ? 'bg-accent font-semibold text-white'
+              ? 'nav-tile-active font-semibold'
               : 'font-medium text-zinc-600 hover:bg-sunken hover:text-strong active:bg-sunken dark:text-zinc-400 dark:hover:text-zinc-100'
           }`}
         >
           <span className="flex size-10 shrink-0 items-center justify-center">
             {Icon ? (
               <span
-                className={`flex size-6 items-center justify-center rounded-md ${active ? 'bg-white/15' : ''}`}
+                className={`flex size-6 items-center justify-center rounded-lg ${
+                  active ? 'bg-accent/10' : ''
+                }`}
               >
                 <Icon
                   className={`size-4 shrink-0 ${active ? '' : 'opacity-70'}`}
@@ -273,105 +311,75 @@ export function AppNav({
             {item.label}
           </span>
           {count > 0 ? (
-            <span
-              className={`flex items-center ${collapseAware ? 'nav-label' : ''}`}
-              title={badgeTitle}
-            >
-              <CountBadge tone="amber">{formatBadgeCount(count)}</CountBadge>
+            <span className={`flex items-center ${collapseAware ? 'nav-label' : ''}`}>
+              <JellyCountBadge count={count} title={badgeTitle} />
             </span>
           ) : (
             <span />
           )}
         </Link>
       );
-    });
-
-  const renderMobileGrid = (items: NavItem[]) =>
-    items.map((item, index) => {
-      const active = item.href === activeHref;
-      const Icon = navIcons[item.href];
-      const count = badgeCountFor(
-        item.href,
-        pendingApprovals,
-        memoryReviewCount,
-        needsAttentionCount,
-      );
-      const spanFull = items.length % 2 === 1 && index === items.length - 1;
       return (
-        <Link
+        <JellyNavTooltip
           key={item.href}
-          href={item.href}
-          data-mobile-touch-target="true"
-          aria-current={active ? 'page' : undefined}
-          className={`nav-tile relative mobile-touch-target flex min-h-[76px] flex-col items-center justify-center gap-1.5 rounded-lg border ${
-            spanFull ? 'col-span-2' : ''
-          } ${
-            active
-              ? 'border-transparent bg-accent text-white'
-              : 'border-edge bg-sunken/60 text-zinc-600 hover:bg-sunken active:bg-sunken dark:text-zinc-400'
-          } ${focusRing}`}
+          enabled={collapseAware && collapsed}
+          text={`${item.label}${count > 0 ? ` · ${count}` : ''}`}
         >
-          {count > 0 ? (
-            <span className="absolute top-2 right-2">
-              <CountBadge tone="amber">{formatBadgeCount(count)}</CountBadge>
-            </span>
-          ) : null}
-          {Icon ? (
-            <span
-              className={`flex size-9 items-center justify-center rounded-lg ${
-                active ? 'bg-white/15' : 'bg-sunken'
-              }`}
-            >
-              <Icon className={`size-5 ${active ? '' : 'opacity-70'}`} aria-hidden="true" />
-            </span>
-          ) : null}
-          <span className="text-xs font-semibold tracking-[-0.01em]">{item.label}</span>
-        </Link>
+          {link}
+        </JellyNavTooltip>
       );
     });
 
   // Mobile drawer: an inline disclosure, indented under its own label — there's
   // no floating-panel real estate to spare in a 288px-wide slide-in panel, and
   // the whole drawer is already an overlay.
-  const renderSystemDisclosure = (items: NavItem[]) => (
-    <details className="group mt-1">
-      <summary
-        className={`nav-tile mobile-touch-target grid h-10 cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-lg pr-3 text-sm text-zinc-500 select-none hover:bg-sunken hover:text-strong dark:text-zinc-400 dark:hover:text-zinc-100 ${focusRing}`}
-      >
-        <span className="flex size-10 shrink-0 items-center justify-center">
-          <Gauge className="size-4 shrink-0 opacity-70" aria-hidden="true" />
-        </span>
-        <span className="min-w-0 truncate">System</span>
-        <ChevronRight
-          className="size-3.5 opacity-60 motion-safe:transition-transform group-open:rotate-90"
-          aria-hidden="true"
-        />
-      </summary>
-      <div className="mt-1 flex flex-col gap-1 pl-3">{renderLinks(items, 'drawer')}</div>
-    </details>
-  );
+  const renderSystemDisclosure = (items: NavItem[]) => {
+    const containsCurrent = items.some((item) => item.href === activeHref);
+    return (
+      <details className="group mt-1" open={containsCurrent || undefined}>
+        <summary
+          className={`nav-tile mobile-touch-target grid h-10 cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-xl pr-3 text-sm select-none hover:bg-sunken hover:text-strong dark:hover:text-zinc-100 ${focusRing} ${
+            containsCurrent ? 'text-accent' : 'text-zinc-500 dark:text-zinc-400'
+          }`}
+        >
+          <span className="flex size-10 shrink-0 items-center justify-center">
+            <Gauge className="size-4 shrink-0 opacity-70" aria-hidden="true" />
+          </span>
+          <span className="min-w-0 truncate">System</span>
+          <ChevronRight
+            className="size-3.5 opacity-60 motion-safe:transition-transform group-open:rotate-90"
+            aria-hidden="true"
+          />
+        </summary>
+        <div className="mt-1 flex flex-col gap-1 pl-3">{renderLinks(items, 'drawer')}</div>
+      </details>
+    );
+  };
 
   // Desktop rail: a floating dropdown instead of an inline accordion — expanding
   // in place pushed everything below it down every time it opened, and in the
   // collapsed rail there was no room for an indented sub-list at all.
-  const renderSystemDropdown = (items: NavItem[]) => (
-    <ActionMenu
-      trigger={
-        <>
-          <span className="flex size-10 shrink-0 items-center justify-center">
-            <Gauge className="size-4 shrink-0 opacity-70" aria-hidden="true" />
-          </span>
-          <span className="nav-label min-w-0 truncate">System</span>
-          <ChevronRight className="nav-label size-3.5 opacity-60" aria-hidden="true" />
-        </>
-      }
-      triggerTitle={collapsed ? 'System' : undefined}
-      triggerClassName={`nav-tile mobile-touch-target grid h-10 w-full cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-lg text-sm text-zinc-500 motion-safe:transition-colors hover:bg-sunken hover:text-strong dark:text-zinc-400 dark:hover:text-zinc-100 ${collapsed ? '' : 'pr-3'} ${focusRing}`}
-      panelClassName="w-48"
-    >
-      {renderLinks(items, 'drawer')}
-    </ActionMenu>
-  );
+  const renderSystemDropdown = (items: NavItem[]) => {
+    const containsCurrent = items.some((item) => item.href === activeHref);
+    return (
+      <ActionMenu
+        trigger={
+          <>
+            <span className="flex size-10 shrink-0 items-center justify-center">
+              <Gauge className="size-4 shrink-0 opacity-70" aria-hidden="true" />
+            </span>
+            <span className="nav-label min-w-0 truncate">System</span>
+            <ChevronRight className="nav-label size-3.5 opacity-60" aria-hidden="true" />
+          </>
+        }
+        triggerTitle={collapsed ? 'System' : undefined}
+        triggerClassName={`nav-tile mobile-touch-target grid h-10 w-full cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-xl text-sm motion-safe:transition-colors hover:bg-sunken hover:text-strong dark:hover:text-zinc-100 ${containsCurrent ? 'text-accent' : 'text-zinc-500 dark:text-zinc-400'} ${collapsed ? '' : 'pr-3'} ${focusRing}`}
+        panelClassName="w-48"
+      >
+        {renderLinks(items, 'drawer')}
+      </ActionMenu>
+    );
+  };
 
   const renderSystemGroup = (items: NavItem[], tone: 'rail' | 'drawer') =>
     items.length > 0
@@ -406,25 +414,25 @@ export function AppNav({
           uses (message bubbles, form cards) — a permanently-dark rail read as
           heavier than the rest of the UI rather than as a floating peer of it. */}
       <aside
-        className={`nav-rail hidden shrink-0 flex-col rounded-2xl border border-edge bg-raised text-strong shadow-[0_12px_28px_-8px_rgb(0_0_0/0.18)] dark:shadow-[0_12px_28px_-8px_rgb(0_0_0/0.4)] lg:m-4 lg:flex lg:sticky lg:top-4 lg:h-[calc(100dvh-var(--app-chrome,0px)-2rem)] xl:m-5 xl:top-5 xl:h-[calc(100dvh-var(--app-chrome,0px)-2.5rem)]`}
+        className={`nav-rail hidden shrink-0 flex-col rounded-[1.4rem] border border-edge bg-raised text-strong shadow-[0_20px_50px_-24px_rgb(15_23_42/0.32)] dark:shadow-[0_20px_50px_-24px_rgb(0_0_0/0.7)] lg:m-4 lg:flex lg:sticky lg:top-4 lg:h-[calc(100dvh-var(--app-chrome,0px)-2rem)] xl:m-5 xl:top-5 xl:h-[calc(100dvh-var(--app-chrome,0px)-2.5rem)]`}
       >
         {/* No brand mark here — the rail has a single owner, so a name/logo
             row is pure overhead. The toggle sits in the same fixed-width
             gutter as every tile icon below it (`nav-header`'s padding matches
-            the tile nav's `px-3`, and the button is `size-10`), so the whole
+            the tile nav's `px-3`), so the whole
             column — toggle, tiles, footer icon — shares one left edge and one
             visual center in both rail states instead of each row inventing
             its own inset. */}
         <div className="nav-header flex shrink-0 items-center pt-6 pb-7">
-          <button
-            type="button"
-            onClick={toggleCollapsed}
-            aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-            title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-            className={`inline-flex size-10 shrink-0 items-center justify-center rounded-lg text-zinc-500 hover:bg-sunken hover:text-strong dark:text-zinc-400 dark:hover:text-zinc-100 ${focusRing}`}
-          >
-            <PanelLeftClose className="nav-toggle-icon size-4" aria-hidden="true" />
-          </button>
+          <span className="flex size-10 shrink-0 items-center justify-center">
+            <JellyIconButton
+              onClick={toggleCollapsed}
+              label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+              title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+            >
+              <PanelLeftClose className="nav-toggle-icon size-4" aria-hidden="true" />
+            </JellyIconButton>
+          </span>
         </div>
         <div className="scroll-subtle min-h-0 flex-1 overflow-y-auto pb-4">
           <nav className="nav-tile-list flex flex-col gap-1 px-3">
@@ -466,14 +474,13 @@ export function AppNav({
         </Link>
         <div className="flex items-center gap-1">
           <ThemeToggle />
-          <button
-            ref={menuTriggerRef}
-            type="button"
+          <JellyIconButton
+            buttonRef={menuTriggerRef}
             onClick={openDrawer}
-            aria-label="Open navigation menu"
-            aria-expanded={open}
-            aria-controls="mobile-nav"
-            className={`relative -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-zinc-600 hover:bg-sunken dark:text-zinc-300 ${focusRing}`}
+            label="Open navigation menu"
+            expanded={open}
+            controls="mobile-nav"
+            className="-mr-1"
           >
             <Menu className="size-5" aria-hidden="true" />
             {pendingApprovals > 0 ? (
@@ -482,7 +489,7 @@ export function AppNav({
                 aria-hidden="true"
               />
             ) : null}
-          </button>
+          </JellyIconButton>
         </div>
       </header>
 
@@ -518,19 +525,18 @@ export function AppNav({
               <span id="mobile-nav-title" className="text-sm font-semibold tracking-[-0.02em]">
                 Menu
               </span>
-              <button
-                ref={closeButtonRef}
-                type="button"
+              <JellyIconButton
+                buttonRef={closeButtonRef}
                 onClick={closeDrawer}
-                aria-label="Close navigation menu"
-                className={`-mr-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900 ${focusRing}`}
+                label="Close navigation menu"
+                className="-mr-1"
               >
                 <X className="size-5" aria-hidden="true" />
-              </button>
+              </JellyIconButton>
             </div>
             <nav className="scroll-subtle flex flex-1 flex-col gap-1 overflow-y-auto p-3">
-              <div className="grid grid-cols-2 gap-2">{renderMobileGrid(primaryItems)}</div>
-              <p className="mt-5 px-3 font-display text-2xs font-semibold tracking-[0.14em] text-zinc-400 uppercase">
+              {renderLinks(primaryItems, 'drawer')}
+              <p className="mt-5 px-3 font-display text-2xs font-semibold tracking-[0.12em] text-zinc-400 uppercase">
                 Manage
               </p>
               {renderLinks(utilityItems, 'drawer')}
