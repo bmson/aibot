@@ -51,9 +51,15 @@ jobs:
       # paths the worker itself chose. Revisit if exceljs ships a release that
       # moves off archiver 5.
       #
-      # The ignore is per-advisory and `pnpm audit` still prints the finding and
-      # an ignored count, so a NEW brace-expansion advisory would still fail CI.
-      - run: pnpm audit --audit-level moderate
+      # pnpm 10 still calls npm's retired legacy audit endpoint, which now
+      # returns an undecoded gzip body. Use a pinned current audit client while
+      # keeping installs on the repository's package-manager version. The
+      # ignore remains per-advisory, so every new moderate advisory still fails.
+      - name: Audit dependencies
+        run: >-
+          corepack pnpm@11.17.0 --pm-on-fail=ignore audit
+          --audit-level moderate
+          --ignore GHSA-mh99-v99m-4gvg
       - run: pnpm vendor:jelly:check
       - name: Scan repository for secrets and insecure configuration
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
