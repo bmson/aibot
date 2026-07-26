@@ -70,15 +70,38 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 async function targetSize(locator: Locator, label: string) {
-  // Registration and shadow-DOM layout complete on separate turns. A fast CI
-  // navigation can resolve the accessible inner control while its host still
-  // has no rendered box, so wait for the actual target before measuring it.
-  await locator.waitFor({ state: 'visible' });
-  const box = await locator.boundingBox();
-  assert(box, `${label} is not visible`);
+  // Registration, the native-to-Jelly React swap, and shadow-DOM layout
+  // complete on separate turns. Re-resolve the role locator until the current
+  // control has its final target box; otherwise CI can measure the fallback,
+  // watch it detach, and then read the not-yet-laid-out custom element.
+  await locator.waitFor({ state: 'attached' });
+  const deadline = Date.now() + 10_000;
+  let snapshot: { fallback: boolean; height: number; width: number } | null = null;
+  while (Date.now() < deadline) {
+    try {
+      // Read identity and geometry in one browser turn so the fallback cannot
+      // detach between two Playwright calls.
+      snapshot = await locator.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          fallback: element.classList.contains('app-jelly-fallback'),
+          height: rect.height,
+          width: rect.width,
+        };
+      });
+    } catch {
+      snapshot = null;
+    }
+    if (snapshot && !snapshot.fallback && snapshot.width >= 43.5 && snapshot.height >= 43.5) {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  }
+  assert(snapshot, `${label} is not visible`);
+  assert(!snapshot.fallback, `${label} did not upgrade from its native fallback`);
   assert(
-    box.width >= 43.5 && box.height >= 43.5,
-    `${label} is ${Math.round(box.width)}×${Math.round(box.height)}; expected at least 44×44`,
+    snapshot.width >= 43.5 && snapshot.height >= 43.5,
+    `${label} is ${Math.round(snapshot.width)}×${Math.round(snapshot.height)}; expected at least 44×44`,
   );
 }
 
