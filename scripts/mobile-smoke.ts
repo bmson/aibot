@@ -70,6 +70,10 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 async function targetSize(locator: Locator, label: string) {
+  // Registration and shadow-DOM layout complete on separate turns. A fast CI
+  // navigation can resolve the accessible inner control while its host still
+  // has no rendered box, so wait for the actual target before measuring it.
+  await locator.waitFor({ state: 'visible' });
   const box = await locator.boundingBox();
   assert(box, `${label} is not visible`);
   assert(
