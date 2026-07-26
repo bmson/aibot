@@ -72,20 +72,28 @@ export default async function DocumentsPage() {
       />
 
       <Panel tone="sunken" className="mt-8">
-        <h2 className="text-[15px] font-semibold">Upload a document</h2>
+        <h2 id="document-upload-title" className="text-[15px] font-semibold">
+          Upload a document
+        </h2>
         <form
           action="/api/documents/upload"
           method="post"
           encType="multipart/form-data"
           className="mt-3 flex flex-col items-start gap-3"
         >
-          <div className="flex flex-wrap items-center gap-3">
-            <input type="file" name="file" required className={fileInputClass} />
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-3">
+            <input
+              type="file"
+              name="file"
+              required
+              aria-labelledby="document-upload-title"
+              className={fileInputClass}
+            />
             <SubmitButton variant="primary" pendingLabel="Uploading…">
               Upload
             </SubmitButton>
           </div>
-          <details className="text-xs text-zinc-500 dark:text-zinc-400">
+          <details className="text-xs text-muted">
             <summary className="disclosure flex items-center gap-2 cursor-pointer">
               Give it a title
             </summary>
@@ -100,7 +108,7 @@ export default async function DocumentsPage() {
             </label>
           </details>
         </form>
-        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">Files can be up to 25MB.</p>
+        <p className="mt-2 text-xs text-muted">Files can be up to 25MB.</p>
       </Panel>
 
       <section className="mt-8">

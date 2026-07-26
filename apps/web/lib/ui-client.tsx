@@ -4,6 +4,7 @@ import { LoaderCircle } from 'lucide-react';
 import type { ReactNode, ToggleEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFormStatus } from 'react-dom';
+import { JellyButton } from '@/app/jelly-icon-button';
 import { btn, btnSm } from './ui';
 
 type BtnVariant = keyof typeof btn;
@@ -35,23 +36,43 @@ export function SubmitButton({
   title?: string;
 }) {
   const { pending } = useFormStatus();
+  const content = pending ? (
+    <>
+      <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+      {pendingLabel}
+    </>
+  ) : (
+    children
+  );
+
+  // Dense list-row actions stay native: Jelly's animation canvas and generous
+  // interaction surface are intentionally reserved for prominent actions.
+  if (size === 'sm') {
+    return (
+      <button
+        type="submit"
+        disabled={pending}
+        aria-busy={pending}
+        title={title}
+        className={`${btnScale.sm[variant]} ${className}`}
+      >
+        {content}
+      </button>
+    );
+  }
+
   return (
-    <button
+    <JellyButton
       type="submit"
       disabled={pending}
-      aria-busy={pending}
+      busy={pending}
       title={title}
-      className={`${btnScale[size][variant]} ${className}`}
+      size={size}
+      tone={variant}
+      className={className}
     >
-      {pending ? (
-        <>
-          <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-          {pendingLabel}
-        </>
-      ) : (
-        children
-      )}
-    </button>
+      {content}
+    </JellyButton>
   );
 }
 

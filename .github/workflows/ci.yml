@@ -54,6 +54,7 @@ jobs:
       # The ignore is per-advisory and `pnpm audit` still prints the finding and
       # an ignored count, so a NEW brace-expansion advisory would still fail CI.
       - run: pnpm audit --audit-level moderate
+      - run: pnpm vendor:jelly:check
       - name: Scan repository for secrets and insecure configuration
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -68,10 +69,13 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-      - name: Exercise the mobile UI in a real browser
+      - name: Install the WebKit audit browser
+        run: pnpm exec playwright install --with-deps webkit
+      - name: Exercise the UI in Chromium and WebKit
         env:
           AUTH_DEV_BYPASS: 'true'
           SMOKE_BASE_URL: http://localhost:3000
+          SMOKE_BROWSERS: chromium,webkit
           SMOKE_BROWSER_CHANNEL: chrome
           SMOKE_CREATE_FIXTURE: 'true'
         run: |

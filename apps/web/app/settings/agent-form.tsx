@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useTransition } from 'react';
+import { JellyInput, JellyTextarea } from '@/app/jelly-form-controls';
+import { JellyButton } from '@/app/jelly-icon-button';
 import { updateAgentSettings } from '@/app/settings/actions';
-import { btn, inputClass, labelClass, textareaClass } from '@/lib/ui';
+import { labelClass } from '@/lib/ui';
 
 /** Timezone/locale/signature editor with Saving…/Saved ✓/error feedback. */
 export function AgentForm({
@@ -25,50 +27,58 @@ export function AgentForm({
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <label className="flex min-w-0 flex-col gap-1.5">
+        <label htmlFor="agent-timezone" className="flex min-w-0 flex-col gap-1.5">
           <span className={labelClass}>Timezone</span>
-          <input
-            type="text"
+          <JellyInput
+            id="agent-timezone"
+            ariaLabel="Timezone"
+            label="Timezone"
             value={timezone}
-            onChange={(e) => {
-              setTimezone(e.target.value);
+            onValueChange={(next) => {
+              setTimezone(next);
               onChange();
             }}
-            className={`${inputClass} w-full`}
+            className="w-full"
             placeholder="Atlantic/Reykjavik"
+            size="md"
           />
         </label>
-        <label className="flex min-w-0 flex-col gap-1.5">
+        <label htmlFor="agent-locale" className="flex min-w-0 flex-col gap-1.5">
           <span className={labelClass}>Locale</span>
-          <input
-            type="text"
+          <JellyInput
+            id="agent-locale"
+            ariaLabel="Locale"
+            label="Locale"
             value={locale}
-            onChange={(e) => {
-              setLocale(e.target.value);
+            onValueChange={(next) => {
+              setLocale(next);
               onChange();
             }}
-            className={`${inputClass} w-full`}
+            className="w-full"
             placeholder="en"
+            size="md"
           />
         </label>
       </div>
-      <label className="flex min-w-0 flex-col gap-1.5">
+      <label htmlFor="agent-signature" className="flex min-w-0 flex-col gap-1.5">
         <span className={labelClass}>Email signature</span>
-        {/* textareaClass, not inputClass — the latter pins h-9 and squashed
-            this to a single line regardless of rows. */}
-        <textarea
+        <JellyTextarea
+          id="agent-signature"
+          ariaLabel="Email signature"
+          label="Email signature"
           value={signature}
-          onChange={(e) => {
-            setSignature(e.target.value);
+          onValueChange={(next) => {
+            setSignature(next);
             onChange();
           }}
           rows={3}
           placeholder="Appended to email the assistant sends on your behalf"
-          className={`${textareaClass} w-full`}
+          className="w-full"
+          size="md"
         />
       </label>
       <div className="flex items-center gap-2">
-        <button
+        <JellyButton
           type="button"
           disabled={pending}
           onClick={() =>
@@ -78,10 +88,11 @@ export function AgentForm({
               else setSaved(true);
             })
           }
-          className={btn.primary}
+          tone="primary"
+          busy={pending}
         >
           {pending ? 'Saving…' : 'Save changes'}
-        </button>
+        </JellyButton>
         {saved && !pending ? (
           <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">Saved</span>
         ) : null}

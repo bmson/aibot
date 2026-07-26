@@ -10,12 +10,12 @@
    text-strong, bg-accent) instead of raw palette classes, so light and dark stay
    in sync from this one block. */
 :root {
-  --surface: #f4f6fa; /* Canvas — cool, quiet, never beige */
-  --surface-raised: #ffffff; /* Panel */
-  --surface-sunken: #e9edf5; /* Tonal wells and receipts */
-  --edge: #dce1ea;
+  --surface: #eef1f6; /* Canvas — cool porcelain */
+  --surface-raised: #fcfdff; /* Panel */
+  --surface-sunken: #e7ebf2; /* Tonal wells and receipts */
+  --edge: #d8dee8;
   --content-strong: #171923; /* Ink */
-  --content-muted: #667085;
+  --content-muted: #606a79;
   --accent: #5b5ce2; /* Iris */
   --accent-hover: #4b4cc9;
 }
@@ -32,14 +32,91 @@
   --accent-hover: #8385f4;
 }
 
+/* The app reads as one softly framed workspace on desktop, borrowing the
+   references' "instrument inside a shell" feeling without turning every
+   surface into another card. Mobile keeps the edge-to-edge layout. */
+.app-workspace {
+  isolation: isolate;
+}
+
+/* Activity is the assistant's operational memory, so its entries connect as
+   one continuous pulse rather than a stack of unrelated dashboard cards. */
+.activity-timeline {
+  position: relative;
+  padding-inline-start: 1.35rem;
+}
+.activity-timeline::before {
+  content: '';
+  position: absolute;
+  inset-block: 1.1rem;
+  inset-inline-start: 0.28rem;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--accent) 30%, var(--edge)) 8%,
+    var(--edge) 88%,
+    transparent
+  );
+}
+.activity-event::before {
+  content: '';
+  position: absolute;
+  top: 1.8rem;
+  left: -1.36rem;
+  width: 0.58rem;
+  height: 0.58rem;
+  border: 2px solid var(--surface-raised);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--content-muted) 48%, var(--surface-raised));
+  box-shadow: 0 0 0 1px var(--edge);
+}
+.activity-event:has(.activity-node-running)::before {
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .activity-event {
+    transition:
+      transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 220ms ease-out;
+  }
+  .activity-event:hover {
+    transform: translateX(3px);
+    box-shadow: 0 14px 38px -28px rgb(23 25 35 / 0.32);
+  }
+  .activity-node-running::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    border-radius: inherit;
+    animation: activity-breathe 2.4s ease-out infinite;
+  }
+}
+
+@keyframes activity-breathe {
+  from {
+    opacity: 0.65;
+    transform: scale(0.88);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.38);
+  }
+}
+
 @theme {
   /* next/font wires these CSS vars; fall back to the system stack. */
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
   /* Display face (titles/brand/greeting only). Revert = point at --font-inter. */
   --font-display: var(--font-bricolage), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  /* One step below text-xs (12px) — replaces the scattered text-[10px]/[11px]. */
-  --text-2xs: 0.6875rem;
+  /* Metadata floor: no production copy drops below 12px. */
+  --text-2xs: 0.75rem;
   --text-2xs--line-height: 1rem;
 }
 
@@ -235,7 +312,7 @@ html.nav-collapsed .nav-badge-dot {
 /* Keep the current location present but quiet: a tint and slim marker orient
    the user without making the navigation the loudest surface in the app. */
 .nav-tile-active {
-  color: var(--accent);
+  color: var(--accent-hover);
   background: color-mix(in srgb, var(--accent) 10%, var(--surface-raised));
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--accent) 13%, transparent),
@@ -253,8 +330,8 @@ html.nav-collapsed .nav-badge-dot {
   translate: 0 -50%;
 }
 
-/* Jelly is limited to compact navigation controls, live counts, and the
-   labels restored by tooltips when the rail collapses. */
+/* Jelly is the tactile feedback layer for high-value actions and compact
+   controls. Dense, destructive, and validation-heavy controls stay native. */
 .nav-jelly-badge {
   display: inline-flex;
   min-width: 1.25rem;
@@ -269,6 +346,10 @@ html.nav-collapsed .nav-badge-dot {
   display: inline-flex;
   width: var(--nav-jelly-button-size);
   height: var(--nav-jelly-button-size);
+  /* Jelly's shadow button keeps a generous internal interaction canvas. Clip
+     that canvas to the declared host size so two controls cannot widen the
+     mobile top bar (the ripple itself remains contained by Jelly). */
+  overflow: clip;
   flex: none;
   --nav-jelly-button-size: 36px;
   --nav-jelly-button-radius: 12px;
@@ -279,6 +360,237 @@ html.nav-collapsed .nav-badge-dot {
   --jelly-font-display: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --jelly-tooltip-background: var(--content-strong);
   --jelly-tooltip-color: var(--surface-raised);
+}
+
+/* Tactile actions beyond the rail: server submits and composer controls use
+   the same Jelly physics while retaining native form behavior. Links, dense
+   filters, and destructive confirmation steps remain native and predictable. */
+.app-jelly-button {
+  display: inline-flex;
+  height: var(--app-jelly-height, 36px);
+  /* Jelly renders into a deliberately oversized shadow canvas. Keep that
+     paint local to the adapter so edge-aligned actions cannot widen the page. */
+  overflow: clip;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  color: var(--content-strong);
+  font: 550 0.8125rem/1 var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --jelly-button-height: var(--app-jelly-height, 36px);
+  --jelly-button-min-width: var(--app-jelly-min-width, 36px);
+  --jelly-button-padding-inline: 14px;
+  --jelly-button-radius: 12px;
+  --jelly-ring: var(--accent);
+}
+.app-jelly-button[data-size='sm'] {
+  --app-jelly-height: 32px;
+  --app-jelly-min-width: 32px;
+  --jelly-button-padding-inline: 12px;
+  font-size: 0.75rem;
+}
+.app-jelly-button[data-tone='outline'] {
+  --jelly-fill: var(--surface-sunken);
+  --jelly-label: var(--content-strong);
+}
+.app-jelly-button[data-tone='primary'] {
+  --jelly-fill: var(--accent);
+  --jelly-label: #ffffff;
+}
+.app-jelly-button[data-tone='dangerOutline'] {
+  --jelly-fill: var(--surface-raised);
+  --jelly-label: #b42318;
+}
+.app-jelly-button[data-tone='danger'] {
+  --jelly-fill: #dc2626;
+  --jelly-label: #ffffff;
+}
+.app-jelly-button[data-tone='success'] {
+  --jelly-fill: #059669;
+  --jelly-label: #ffffff;
+}
+.app-jelly-button-icon {
+  width: var(--app-jelly-height, 36px);
+  overflow: clip;
+  --jelly-button-padding-inline: 0px;
+  --jelly-button-radius: 999px;
+}
+.app-jelly-button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+.app-jelly-button.app-jelly-fallback {
+  box-sizing: border-box;
+  cursor: pointer;
+  border: 1px solid color-mix(in oklab, var(--edge) 82%, transparent);
+  border-radius: var(--jelly-button-radius);
+  background: var(--surface-sunken);
+  padding-inline: var(--jelly-button-padding-inline);
+  color: var(--content-strong);
+  box-shadow: 0 1px 2px rgb(23 25 35 / 0.05);
+}
+.app-jelly-button.app-jelly-fallback[data-tone='primary'] {
+  border-color: transparent;
+  background: var(--accent);
+  color: #ffffff;
+}
+.app-jelly-button.app-jelly-fallback[data-tone='danger'] {
+  border-color: transparent;
+  background: #dc2626;
+  color: #ffffff;
+}
+.app-jelly-button.app-jelly-fallback[data-tone='dangerOutline'] {
+  background: var(--surface-raised);
+  color: #b42318;
+}
+.app-jelly-button.app-jelly-fallback[data-tone='success'] {
+  border-color: transparent;
+  background: #059669;
+  color: #ffffff;
+}
+.app-jelly-button.app-jelly-fallback:focus-visible,
+.app-jelly-input.app-jelly-fallback:focus-visible,
+.app-jelly-textarea.app-jelly-fallback:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.app-jelly-button.app-jelly-fallback:disabled {
+  cursor: not-allowed;
+}
+
+/* Form fields use Jelly's canvas surface and native form association, with
+   app tokens keeping the effect quiet enough for dense work. The soft inset
+   differentiates editable space without adding another hard border. */
+.app-jelly-input,
+.app-jelly-textarea {
+  display: block;
+  max-width: 100%;
+  /* Jelly paints its soft body on an oversized shadow canvas. WebKit counts
+     that canvas toward document width unless the adapter clips it locally. */
+  overflow: clip;
+  color: var(--content-strong);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --jelly-fill: color-mix(in oklab, var(--surface-sunken) 76%, var(--surface-raised));
+  --jelly-label: var(--content-strong);
+  --jelly-accent: var(--accent);
+  --jelly-ring: var(--accent);
+}
+.app-jelly-input {
+  width: 100%;
+  height: 44px;
+  min-width: 0;
+  --jelly-input-radius: 13px;
+  --jelly-input-font-size: 0.875rem;
+}
+.app-jelly-input-search {
+  --jelly-input-padding-inline: 38px 16px;
+}
+.app-jelly-textarea {
+  width: 100%;
+  min-width: 0;
+  --jelly-textarea-radius: 15px;
+  --jelly-textarea-min-height: 88px;
+  --jelly-textarea-max-height: 240px;
+}
+.app-jelly-input.app-jelly-fallback,
+.app-jelly-textarea.app-jelly-fallback {
+  box-sizing: border-box;
+  border: 1px solid color-mix(in oklab, var(--edge) 88%, transparent);
+  background: color-mix(in oklab, var(--surface-sunken) 58%, var(--surface-raised));
+  color: var(--content-strong);
+  outline: none;
+  box-shadow: inset 0 1px 1px rgb(23 25 35 / 0.03);
+}
+.app-jelly-input.app-jelly-fallback {
+  border-radius: var(--jelly-input-radius);
+  padding-inline: 16px;
+  font-size: var(--jelly-input-font-size);
+}
+.app-jelly-input-search.app-jelly-fallback {
+  padding-inline: 38px 16px;
+}
+.app-jelly-textarea.app-jelly-fallback {
+  min-height: var(--jelly-textarea-min-height);
+  max-height: var(--jelly-textarea-max-height);
+  resize: vertical;
+  border-radius: var(--jelly-textarea-radius);
+  padding: 13px 16px;
+  font-size: var(--jelly-textarea-font-size, 0.875rem);
+  line-height: 1.5;
+}
+
+/* The composer is already a floating surface, so its Jelly field is a very
+   light inner well rather than a second card. It grows itself as text arrives. */
+.chat-jelly-textarea {
+  --jelly-fill: color-mix(in oklab, var(--surface-sunken) 40%, var(--surface-raised));
+  --jelly-textarea-font-size: 0.875rem;
+  --jelly-textarea-padding-block: 12px;
+  --jelly-textarea-padding-inline: 16px;
+  --jelly-textarea-radius: 18px;
+  --jelly-textarea-min-height: 50px;
+  --jelly-textarea-max-height: 160px;
+}
+
+/* URL-backed views are real tabs. The scroll viewport preserves full labels at
+   320px instead of compressing five states into an unreadable string. */
+.jelly-tabs-viewport {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+  scroll-padding-inline: 0.5rem;
+}
+.jelly-tabs-viewport::-webkit-scrollbar {
+  display: none;
+}
+.jelly-tabs-track {
+  display: inline-flex;
+  min-width: max-content;
+}
+.jelly-tabs-viewport:not([data-ready]) .jelly-tabs-track {
+  min-height: 36px;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 0.875rem;
+  background: var(--surface-sunken);
+  padding: 0.25rem;
+}
+.jelly-tabs-viewport[data-overflow]:not([data-at-end]) {
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 1.75rem), transparent 100%);
+}
+.jelly-tabs-viewport[data-overflow]:not([data-at-start]):not([data-at-end]) {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 1.25rem,
+    #000 calc(100% - 1.75rem),
+    transparent 100%
+  );
+}
+.jelly-tabs-viewport[data-overflow][data-at-end]:not([data-at-start]) {
+  mask-image: linear-gradient(to right, transparent 0, #000 1.25rem, #000 100%);
+}
+.app-jelly-tabs {
+  display: inline-flex;
+  max-width: none;
+  overflow: clip;
+  --jelly-font-display: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --jelly-track: var(--surface-sunken);
+  --jelly-pill: var(--surface-raised);
+  --jelly-label: var(--content-muted);
+  --jelly-label-on: var(--content-strong);
+  --jelly-ring: var(--accent);
+  --jelly-segmented-min-width: 48px;
+  --jelly-segmented-padding-inline: 13px;
+}
+.chat-jelly-model {
+  display: none;
+}
+@media (min-width: 640px) {
+  .chat-jelly-model {
+    display: inline-flex;
+  }
 }
 /* A tile's row (Link/summary/ActionMenu trigger) otherwise stretches to the
    nav's full width regardless of collapse state — fine expanded, but
@@ -308,6 +620,38 @@ html.nav-collapsed .nav-badge-dot {
   .nav-jelly-button {
     --nav-jelly-button-size: 44px;
     --nav-jelly-button-radius: 14px;
+  }
+  .app-jelly-button,
+  .app-jelly-button[data-size='sm'] {
+    --app-jelly-height: 44px;
+    --app-jelly-min-width: 44px;
+  }
+  .app-jelly-input {
+    --jelly-input-font-size: 16px;
+  }
+  .app-jelly-textarea {
+    --jelly-textarea-font-size: 16px;
+  }
+  .app-jelly-tabs {
+    height: 44px;
+    --jelly-segmented-min-width: 52px;
+    --jelly-segmented-padding-inline: 13px;
+    --jelly-segmented-font-size: 13px;
+  }
+}
+
+@media (max-width: 359px) {
+  .page-header-actions {
+    width: 100%;
+    justify-content: flex-start;
+    padding-top: 0;
+  }
+  .memory-search-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .memory-search-submit {
+    width: 100%;
   }
 }
 
@@ -378,8 +722,8 @@ html.nav-collapsed .nav-badge-dot {
 /* ── Scroll-driven reveal ─────────────────────────────────────────────────────
    Cards settle in as they scroll into view. `animation-timeline: view()` drives
    this from the scroller itself — no IntersectionObserver, no client component,
-   and nothing to hydrate. Anything already on screen at load starts at the end
-   of its range, so the first paint is complete rather than animating in. */
+   and nothing to hydrate. Text stays fully opaque throughout so off-screen
+   content never enters the accessibility tree at artificially low contrast. */
 @media (prefers-reduced-motion: no-preference) {
   @supports (animation-timeline: view()) {
     .reveal {
@@ -392,11 +736,9 @@ html.nav-collapsed .nav-badge-dot {
 
 @keyframes reveal-in {
   from {
-    opacity: 0;
     transform: translateY(12px) scale(0.995);
   }
   to {
-    opacity: 1;
     transform: none;
   }
 }
@@ -557,7 +899,8 @@ a {
 @keyframes pop-in {
   from {
     opacity: 0;
-    transform: translateY(-2px) scale(0.98);
+    /* Keep interactive hit areas at their full size for the entire entrance. */
+    transform: translateY(-2px);
   }
   to {
     opacity: 1;
@@ -651,11 +994,9 @@ a {
    get an instant swap. */
 @keyframes page-in {
   from {
-    opacity: 0;
     transform: translateY(6px);
   }
   to {
-    opacity: 1;
     transform: none;
   }
 }

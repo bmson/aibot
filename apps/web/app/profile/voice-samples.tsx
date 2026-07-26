@@ -90,13 +90,16 @@ export function VoiceSamplesPanel({
         >
           <input type="hidden" name="voice" value="1" />
           <div className="min-w-0">
-            <p className="text-[13px] font-semibold text-strong">Add sent messages</p>
-            <div className="mt-2 flex min-w-0 flex-wrap items-center gap-3">
+            <p id="voice-upload-title" className="text-[13px] font-semibold text-strong">
+              Add sent messages
+            </p>
+            <div className="mt-2 flex w-full min-w-0 flex-wrap items-center gap-3">
               <input
                 type="file"
                 name="file"
                 required
                 accept=".mbox,.txt,.json,.md,text/plain,application/json"
+                aria-labelledby="voice-upload-title"
                 className={fileInputClass}
               />
               <label className="flex items-center gap-1.5 text-xs text-muted">

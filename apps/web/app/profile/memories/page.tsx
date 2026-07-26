@@ -3,19 +3,14 @@ import { contacts, type MemoryRow, memories } from '@assistant/db';
 import { and, count, desc, eq, gt, ilike, isNull, or, type SQL, sql } from 'drizzle-orm';
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import Link from 'next/link';
+import { JellyInput } from '@/app/jelly-form-controls';
+import { JellyButton } from '@/app/jelly-icon-button';
+import { JellyNavTabs } from '@/app/jelly-nav-tabs';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import {
-  BackLink,
-  btn,
-  inputClass,
-  PageHeader,
-  PageShell,
-  segmentedControlClass,
-  segmentedItemClass,
-} from '@/lib/ui';
+import { BackLink, btn, PageHeader, PageShell } from '@/lib/ui';
 
 export const metadata = { title: 'Memory library' };
 export const dynamic = 'force-dynamic';
@@ -166,42 +161,43 @@ export default async function MemoryLibraryPage({
       <PageHeader title={stateCopy[state].title} intro={intro} />
 
       <div className="mt-6 grid min-w-0 gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
-        <nav className={segmentedControlClass} aria-label="Memory state">
-          {STATES.map((item) => (
-            <Link
-              key={item}
-              href={hrefFor({ state: item, q: query })}
-              aria-current={item === state ? 'page' : undefined}
-              className={`${segmentedItemClass} ${
-                item === state ? 'bg-raised text-strong shadow-sm' : ''
-              }`}
-            >
-              {stateCopy[item].label}
-            </Link>
-          ))}
-        </nav>
-        <form action="/profile/memories" method="get" className="flex min-w-0 gap-2">
+        <JellyNavTabs
+          label="Memory state"
+          value={state}
+          items={STATES.map((item) => ({
+            value: item,
+            label: stateCopy[item].label,
+            href: hrefFor({ state: item, q: query }),
+          }))}
+        />
+        <form
+          action="/profile/memories"
+          method="get"
+          className="memory-search-form flex min-w-0 gap-2"
+        >
           <input type="hidden" name="state" value={state} />
           {state === 'in-use' && filter !== 'all' ? (
             <input type="hidden" name="filter" value={filter} />
           ) : null}
-          <label className="relative min-w-0 flex-1">
+          <label htmlFor="memory-search" className="relative min-w-0 flex-1">
             <span className="sr-only">Search memories</span>
             <Search
               className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted"
               aria-hidden="true"
             />
-            <input
+            <JellyInput
+              id="memory-search"
               type="search"
               name="q"
               defaultValue={query}
+              ariaLabel="Search memories"
               placeholder="Search what AI Bot remembers"
-              className={`${inputClass} w-full pl-9`}
+              className="app-jelly-input-search w-full"
             />
           </label>
-          <button type="submit" className={btn.outline}>
+          <JellyButton type="submit" className="memory-search-submit">
             Search
-          </button>
+          </JellyButton>
         </form>
       </div>
 

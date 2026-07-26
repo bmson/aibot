@@ -373,7 +373,7 @@ export function AppNav({
           </>
         }
         triggerTitle={collapsed ? 'System' : undefined}
-        triggerClassName={`nav-tile mobile-touch-target grid h-10 w-full cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-xl text-sm motion-safe:transition-colors hover:bg-sunken hover:text-strong dark:hover:text-zinc-100 ${containsCurrent ? 'text-accent' : 'text-zinc-500 dark:text-zinc-400'} ${collapsed ? '' : 'pr-3'} ${focusRing}`}
+        triggerClassName={`nav-tile mobile-touch-target grid h-10 w-full cursor-pointer appearance-none grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-xl border-0 bg-transparent p-0 text-left font-sans text-sm motion-safe:transition-colors hover:bg-sunken hover:text-strong dark:hover:text-zinc-100 ${containsCurrent ? 'text-accent' : 'text-zinc-500 dark:text-zinc-400'} ${collapsed ? '' : 'pr-3'} ${focusRing}`}
         panelClassName="w-48"
       >
         {renderLinks(items, 'drawer')}
@@ -414,7 +414,7 @@ export function AppNav({
           uses (message bubbles, form cards) — a permanently-dark rail read as
           heavier than the rest of the UI rather than as a floating peer of it. */}
       <aside
-        className={`nav-rail hidden shrink-0 flex-col rounded-[1.4rem] border border-edge bg-raised text-strong shadow-[0_20px_50px_-24px_rgb(15_23_42/0.32)] dark:shadow-[0_20px_50px_-24px_rgb(0_0_0/0.7)] lg:m-4 lg:flex lg:sticky lg:top-4 lg:h-[calc(100dvh-var(--app-chrome,0px)-2rem)] xl:m-5 xl:top-5 xl:h-[calc(100dvh-var(--app-chrome,0px)-2.5rem)]`}
+        className={`nav-rail hidden shrink-0 flex-col rounded-[1.75rem] border border-edge/80 bg-raised/92 text-strong shadow-[0_24px_64px_-38px_rgb(15_23_42/0.38)] backdrop-blur-xl dark:shadow-[0_24px_64px_-38px_rgb(0_0_0/0.8)] lg:m-4 lg:flex lg:sticky lg:top-4 lg:h-[calc(100dvh-var(--app-chrome,0px)-2rem)] xl:m-5 xl:top-5 xl:h-[calc(100dvh-var(--app-chrome,0px)-2.5rem)]`}
       >
         {/* No brand mark here — the rail has a single owner, so a name/logo
             row is pure overhead. The toggle sits in the same fixed-width

@@ -10,6 +10,7 @@ import {
 import {
   approvalPolicies,
   approvals,
+  conversationSegments,
   conversations,
   createDb,
   type Db,
@@ -168,6 +169,12 @@ afterAll(async () => {
       .delete(approvalPolicies)
       .where(eq(approvalPolicies.templateKey, 'test.exec.outbound.recipient'));
     if (createdConversationIds.length) {
+      // The segmentation integration suite may process these conversations
+      // while Vitest runs database suites concurrently. Remove those derived
+      // rows before their message anchors.
+      await db
+        .delete(conversationSegments)
+        .where(inArray(conversationSegments.conversationId, createdConversationIds));
       await db.delete(messages).where(inArray(messages.conversationId, createdConversationIds));
     }
     if (createdTaskIds.length) {

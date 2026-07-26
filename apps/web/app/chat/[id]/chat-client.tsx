@@ -1,3 +1,5 @@
+// biome-ignore-all lint/a11y/noNoninteractiveTabindex: the conversation scroll region must accept keyboard focus for scrolling without moving the composer
+
 'use client';
 
 import { useChat } from '@ai-sdk/react';
@@ -27,6 +29,8 @@ import { hasContractNoticePart, isApprovalProseNotice, isContractNotice } from '
 import { eventCardClass, focusRing } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { toolLabel } from '@/lib/views';
+import { JellyTextarea, type JellyTextareaElement } from '../../jelly-form-controls';
+import { JellyButton } from '../../jelly-icon-button';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
 import { ApprovalGroup } from './approval-group';
 import type { InlineApprovalPart } from './inline-approval';
@@ -498,8 +502,8 @@ export function ChatClient({
   const autonomousRef = useRef(false);
   autonomousRef.current = autonomous;
   const formRef = useRef<HTMLFormElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const messageScrollerRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<JellyTextareaElement>(null);
+  const messageScrollerRef = useRef<HTMLElement>(null);
   /** The floating composer overlays the log — see the layout note on the form. */
   const [composerHeight, setComposerHeight] = useState(112);
   const stickToBottomRef = useRef(true);
@@ -761,16 +765,6 @@ export function ChatClient({
     return () => observer.disconnect();
   }, []);
 
-  // Grow the composer with its content, up to the CSS max-height cap. `input`
-  // is the trigger; the new height is read from the DOM, not from `input`.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: input drives the re-measure
-  useLayoutEffect(() => {
-    const element = textareaRef.current;
-    if (!element) return;
-    element.style.height = '0px';
-    element.style.height = `${Math.min(element.scrollHeight, 160)}px`;
-  }, [input]);
-
   const jumpToLatest = () => {
     stickToBottomRef.current = true;
     setAtBottom(true);
@@ -822,7 +816,7 @@ export function ChatClient({
     // above), not this container: prose that runs to 1000px is tiring, and
     // pinning the user's bubbles that far right would make a two-way
     // exchange read as two columns regardless of how wide the column is.
-    <div className="relative mx-auto -my-7 flex h-[calc(100dvh-3.5rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-10 lg:h-[calc(100dvh-var(--app-chrome,0px))] lg:max-w-4xl 2xl:max-w-[56rem]">
+    <div className="relative mx-auto -my-7 flex h-[calc(100dvh-3.5rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-10 lg:h-[calc(100dvh-var(--app-chrome,0px)-2rem)] lg:max-w-4xl 2xl:max-w-[56rem]">
       {/* The primary thread is the whole surface — it needs no title. Side and
           goal chats keep a slim header so you know which one you're in. */}
       {!isPrimary ? (
@@ -871,8 +865,10 @@ export function ChatClient({
         </div>
       ) : null}
 
-      <div
+      <section
         ref={messageScrollerRef}
+        aria-label="Conversation history"
+        tabIndex={0}
         onScroll={(event) => {
           const element = event.currentTarget;
           const bottom = element.scrollHeight - element.scrollTop - element.clientHeight < 120;
@@ -942,7 +938,7 @@ export function ChatClient({
                         void sendMessage({ text: suggestion.text });
                       }}
                       style={{ animationDelay: `${index * 60}ms` }}
-                      className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.10)] active:translate-y-0 disabled:opacity-60 ${focusRing}`}
+                      className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-sunken/45 p-3 text-left ring-1 ring-edge/45 motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-[transform,background-color,box-shadow] hover:-translate-y-0.5 hover:bg-raised hover:shadow-[0_10px_30px_rgb(23_25_35/0.08)] active:translate-y-0 disabled:opacity-60 ${focusRing}`}
                     >
                       <SuggestionIcon className="size-4 text-accent" aria-hidden="true" />
                       <span className="mt-3 text-[13px] font-medium text-strong">
@@ -1034,10 +1030,14 @@ export function ChatClient({
                           // keeping the raised-card treatment meaning one
                           // thing only: an object the assistant placed in the
                           // thread (an approval, a budget ask, a work trail).
-                          <div className="group/msg min-w-0 max-w-[88%] sm:max-w-[min(76%,42rem)]">
+                          <div className="group/msg relative min-w-0 max-w-[92%] pl-5 sm:max-w-[min(80%,44rem)]">
+                            <span
+                              aria-hidden="true"
+                              className="absolute top-2 left-0 inline-flex size-2 rounded-full bg-accent/75 shadow-[0_0_0_4px_color-mix(in_srgb,var(--accent)_10%,transparent)]"
+                            />
                             <RecallNote sources={recallSources} />
                             <div
-                              className={`min-w-0 max-w-full rounded-2xl rounded-bl-md bg-raised px-4 py-3 text-[15px] text-strong shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 ${
+                              className={`min-w-0 max-w-full py-1 text-[15px] leading-6 text-strong ${
                                 streamingCaret ? 'chat-caret' : ''
                               }`}
                             >
@@ -1055,7 +1055,7 @@ export function ChatClient({
                           // bubble made your own words look like a footnote.
                           <div
                             title={date ? date.toLocaleString() : undefined}
-                            className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover px-4 py-3 text-[15px] leading-6 text-white shadow-[0_2px_10px_rgb(91_92_226/0.22)] sm:max-w-[min(76%,42rem)] dark:shadow-[0_1px_3px_rgb(0_0_0/0.45)]"
+                            className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md border border-accent/15 bg-accent/10 px-4 py-3 text-[15px] leading-6 text-strong shadow-[0_1px_2px_rgb(23_25_35/0.04)] sm:max-w-[min(76%,42rem)]"
                           >
                             {visibleTextParts.map((part, index) => (
                               <p
@@ -1103,7 +1103,7 @@ export function ChatClient({
             </div>
           )}
         </div>
-      </div>
+      </section>
 
       {/* The composer floats over the conversation rather than docking under
           it: no bar, no border — just the raised card lifted off the log, with
@@ -1283,19 +1283,19 @@ export function ChatClient({
         <div className="pointer-events-auto relative min-w-0">
           <div
             data-testid="chat-composer-surface"
-            className="min-w-0 overflow-hidden rounded-2xl bg-raised/90 shadow-[0_10px_36px_rgb(23_25_35/0.14)] ring-1 ring-edge backdrop-blur-xl motion-safe:transition-shadow focus-within:shadow-[0_14px_44px_rgb(91_92_226/0.18)] focus-within:ring-accent/40"
+            className="min-w-0 overflow-hidden rounded-[1.35rem] bg-raised/92 shadow-[0_16px_50px_-20px_rgb(23_25_35/0.28)] ring-1 ring-edge/90 backdrop-blur-xl motion-safe:transition-[box-shadow,transform] focus-within:-translate-y-0.5 focus-within:shadow-[0_20px_58px_-22px_rgb(91_92_226/0.32)] focus-within:ring-accent/35"
           >
-            <textarea
-              ref={textareaRef}
-              aria-label="Message"
-              aria-controls={
+            <JellyTextarea
+              inputRef={textareaRef}
+              ariaLabel="Message"
+              controls={
                 modelCommandOpen
                   ? 'model-listbox'
                   : commandPaletteOpen
                     ? 'command-listbox'
                     : undefined
               }
-              aria-activedescendant={
+              activeDescendant={
                 modelCommandOpen
                   ? `model-option-${modelHighlight}`
                   : commandPaletteOpen
@@ -1303,7 +1303,7 @@ export function ChatClient({
                     : undefined
               }
               value={input}
-              onChange={(event) => setInput(event.target.value)}
+              onValueChange={setInput}
               onKeyDown={(event) => {
                 // While the /model palette is open the arrows drive it, Enter picks
                 // the highlighted model, and Escape closes it — so none of those
@@ -1364,27 +1364,22 @@ export function ChatClient({
               }}
               placeholder="Ask anything… type / for commands"
               rows={1}
-              className="block max-h-40 min-h-12 w-full min-w-0 resize-none border-0 bg-transparent px-4 pt-3 pb-2 text-base outline-none placeholder:text-muted/70 sm:text-sm"
+              className="chat-jelly-textarea w-full min-w-0"
             />
             <div className="flex min-w-0 items-center justify-between gap-2 border-t border-edge/70 px-2 py-2">
-              <button
-                data-testid="chat-autonomy-mode"
+              <JellyButton
+                testId="chat-autonomy-mode"
                 type="button"
-                aria-pressed={autonomous}
-                aria-label={
+                pressed={autonomous}
+                label={
                   autonomous
                     ? 'Autonomous mode on. Tap to ask before acting.'
                     : 'Ask before acting. Tap to turn on autonomous mode.'
                 }
                 onClick={() => setAutonomous((value) => !value)}
                 title="Autonomous mode acts without asking for each routine approval. Sensitive steps and budget caps still require permission."
-                // Pressing deepens the fill and draws a ring in place. Nudging
-                // the button down a pixel read as the control slipping.
-                className={`inline-flex h-10 min-w-0 items-center gap-1.5 rounded-xl px-3 text-xs font-medium ring-1 ring-transparent motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
-                  autonomous
-                    ? 'bg-amber-100 text-amber-900 active:bg-amber-200 active:ring-amber-500/50 dark:bg-amber-950 dark:text-amber-300 dark:active:bg-amber-900 dark:active:ring-amber-400/40'
-                    : 'bg-sunken text-muted hover:text-strong active:bg-edge active:text-strong active:ring-edge'
-                }`}
+                tone={autonomous ? 'primary' : 'outline'}
+                className="min-w-0"
               >
                 <Zap className="size-3.5 shrink-0" aria-hidden="true" />
                 <span className="truncate">{autonomous ? 'Autonomous on' : 'Ask first'}</span>
@@ -1392,51 +1387,50 @@ export function ChatClient({
                   . Sensitive steps including unknown recipients and logged-in browsing still ask,
                   and budget caps still apply.
                 </span>
-              </button>
+              </JellyButton>
               <div className="flex shrink-0 items-center gap-2">
-                <button
+                <JellyButton
                   type="button"
                   onClick={() => {
                     setInput('/model');
                     textareaRef.current?.focus();
                   }}
-                  aria-label={`Response model: ${selectedModelLabel}. Tap to change.`}
+                  label={`Response model: ${selectedModelLabel}. Tap to change.`}
                   title="Switch response model"
-                  className={`hidden h-10 items-center gap-1.5 rounded-xl px-3 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong sm:inline-flex ${focusRing}`}
+                  className="chat-jelly-model"
                 >
                   <Sparkles className="size-3.5 shrink-0" aria-hidden="true" />
                   <span className="max-w-[14ch] truncate">{selectedModelLabel}</span>
-                </button>
+                </JellyButton>
                 {status === 'submitted' || status === 'streaming' ? (
-                  <button
+                  <JellyButton
+                    key="stop"
                     type="button"
                     onClick={() => stop()}
                     title="Stop generating"
-                    className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-edge bg-raised px-4 text-sm font-medium text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
+                    className="motion-safe:animate-[pop-in_120ms_ease-out]"
                   >
                     <Square className="size-3 fill-current" aria-hidden="true" />
                     Stop
-                  </button>
+                  </JellyButton>
                 ) : (
                   // Readiness is a state change, not a dimmed copy of the live
                   // button: with nothing to send it sits back as a quiet tonal
                   // disc, then fills with accent and lifts once you have typed.
-                  <button
+                  <JellyButton
+                    key="send"
                     type="submit"
                     disabled={!canSend}
-                    aria-label={asyncTurn ? 'Working on your request' : 'Send'}
-                    className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full motion-safe:transition-[transform,background-color,color,box-shadow] ${focusRing} ${
-                      canSend
-                        ? 'bg-accent text-white shadow-[0_2px_10px_rgb(91_92_226/0.35)] hover:bg-accent-hover hover:shadow-[0_5px_16px_rgb(91_92_226/0.45)] motion-safe:hover:scale-105 motion-safe:active:scale-95'
-                        : 'cursor-not-allowed bg-sunken text-muted'
-                    }`}
+                    label={asyncTurn ? 'Working on your request' : 'Send'}
+                    iconOnly
+                    tone={canSend ? 'primary' : 'outline'}
                   >
                     {asyncTurn ? (
                       <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />
                     ) : (
                       <ArrowUp className="size-4" aria-hidden="true" />
                     )}
-                  </button>
+                  </JellyButton>
                 )}
               </div>
             </div>

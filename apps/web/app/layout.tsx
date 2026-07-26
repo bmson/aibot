@@ -163,9 +163,15 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         style={{ '--app-chrome': authMode === 'dev-bypass' ? '1.5rem' : '0px' } as CSSProperties}
         className="flex min-h-dvh flex-col bg-surface font-sans text-strong antialiased"
       >
-        {/* Jelly UI is intentionally limited to nav controls, badges, and
-            collapsed-rail tooltips; primary destinations remain native links. */}
-        <Script src="https://jelly-ui.com/package.js" type="module" strategy="afterInteractive" />
+        {/* The pinned Jelly runtime powers tactile primary actions, optional
+            free-text fields, tabs, and compact icon controls. Navigation links,
+            native-validation fields, and destructive confirmations stay native. */}
+        <Script
+          src="/vendor/jelly-ui/d898ec9/jelly.js"
+          type="module"
+          strategy="afterInteractive"
+          crossOrigin="anonymous"
+        />
         {authMode === 'dev-bypass' ? (
           <div className="flex h-6 shrink-0 items-center justify-center bg-amber-100 px-4 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
             dev mode — auth disabled
@@ -181,7 +187,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             memoryReviewCount={memoryHealth.awaitingReview}
             needsAttentionCount={needsAttentionCount}
           />
-          <main className="page-gutter min-w-0 flex-1 py-7 lg:py-10">{children}</main>
+          <main className="app-workspace page-gutter min-w-0 flex-1 py-7 lg:my-4 lg:mr-4 lg:rounded-[1.75rem] lg:border lg:border-edge/80 lg:bg-raised/55 lg:py-10 lg:shadow-[0_24px_70px_-42px_rgb(23_25_35/0.34)] xl:my-5 xl:mr-5">
+            {children}
+          </main>
         </div>
       </body>
     </html>

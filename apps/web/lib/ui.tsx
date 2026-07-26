@@ -76,7 +76,7 @@ export function Skeleton({ className = '' }: { className?: string }) {
 }
 
 export const inputClass =
-  'h-9 rounded-lg border border-edge bg-raised px-3 text-base text-strong outline-none placeholder:text-muted/70 motion-safe:transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/20 sm:text-sm';
+  'h-11 rounded-lg border border-edge bg-raised px-3 text-base text-strong outline-none placeholder:text-muted/70 motion-safe:transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/20 sm:h-9 sm:text-sm';
 
 /** `field-sizing: content` grows the box with what's typed, so these need no
  *  resize grabber and no JS measuring — the min/max keep it in a sane band. */
@@ -93,7 +93,7 @@ export const labelClass = 'text-[13px] font-medium text-muted';
  * rather than replaced with a JS-driven imitation.
  */
 export const fileInputClass =
-  'min-w-0 max-w-full text-[13px] text-muted file:mr-3 file:h-9 file:cursor-pointer file:rounded-lg file:border file:border-edge file:bg-raised file:px-3.5 file:text-[13px] file:font-medium file:text-strong motion-safe:file:transition-colors hover:file:bg-sunken active:file:bg-sunken/80';
+  'w-full min-w-0 max-w-full text-[13px] text-muted file:mr-3 file:h-9 file:cursor-pointer file:rounded-lg file:border file:border-edge file:bg-raised file:px-3.5 file:text-[13px] file:font-medium file:text-strong motion-safe:file:transition-colors hover:file:bg-sunken active:file:bg-sunken/80 sm:w-auto';
 
 /**
  * Cards use one shared information architecture:
@@ -159,9 +159,9 @@ export function BackLink({ href, children }: { href: string; children: ReactNode
  * `actions` pairs with the *title*, not with the whole header. Pages used to
  * wrap this in `flex flex-wrap justify-between` alongside their buttons, which
  * meant the long intro forced a wrap on narrow screens and dumped the button on
- * its own line under the paragraph, left-aligned and orphaned. Titles are short,
- * so keeping the action beside the title fits at every width and lets the intro
- * run the full measure beneath both.
+ * its own line under the paragraph, left-aligned and orphaned. The action now
+ * pairs with the title while there is room, then wraps beneath it before the
+ * intro at compact widths.
  */
 export function PageHeader({
   title,
@@ -176,12 +176,12 @@ export function PageHeader({
   // single word on its own last line.
   return (
     <header>
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <h1 className="min-w-0 font-display text-[1.875rem] leading-9 font-semibold tracking-[-0.035em] text-balance text-strong sm:text-[2rem] sm:leading-10">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-3 gap-y-3">
+        <h1 className="min-w-0 flex-1 basis-64 font-display text-[1.875rem] leading-9 font-semibold tracking-[-0.035em] text-balance text-strong [overflow-wrap:anywhere] sm:text-[2rem] sm:leading-10">
           {title}
         </h1>
         {actions ? (
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 pt-1">
+          <div className="page-header-actions flex shrink-0 flex-wrap items-center justify-end gap-2 pt-1">
             {actions}
           </div>
         ) : null}
@@ -374,7 +374,7 @@ export function SectionHeading({
   hint?: string;
 }) {
   return (
-    <h2 className="flex min-w-0 flex-wrap items-baseline gap-2 text-[15px] font-semibold tracking-[-0.01em]">
+    <h2 className="flex min-w-0 flex-wrap items-baseline gap-2 text-base font-semibold tracking-[-0.01em]">
       {title}
       {count !== undefined ? <CountBadge>{count}</CountBadge> : null}
       {hint ? <span className="text-xs font-normal text-muted">{hint}</span> : null}

@@ -60,20 +60,28 @@ export default async function ImportPage() {
 
       {/* Upload */}
       <Panel tone="sunken" className="mt-8">
-        <h2 className="text-[15px] font-semibold">Upload an archive</h2>
+        <h2 id="archive-upload-title" className="text-[15px] font-semibold">
+          Upload an archive
+        </h2>
         <form
           action="/api/import/upload"
           method="post"
           encType="multipart/form-data"
           className="mt-3 flex flex-col items-start gap-3"
         >
-          <div className="flex flex-wrap items-center gap-3">
-            <input type="file" name="file" required className={fileInputClass} />
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-3">
+            <input
+              type="file"
+              name="file"
+              required
+              aria-labelledby="archive-upload-title"
+              className={fileInputClass}
+            />
             <SubmitButton variant="primary" pendingLabel="Uploading…">
               Upload and import
             </SubmitButton>
           </div>
-          <details className="text-xs text-zinc-500 dark:text-zinc-400">
+          <details className="text-xs text-muted">
             <summary className="disclosure flex items-center gap-2 cursor-pointer">
               Choose a custom label
             </summary>
@@ -88,7 +96,7 @@ export default async function ImportPage() {
             </label>
           </details>
         </form>
-        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">
+        <p className="mt-2 text-xs text-muted">
           Files can be up to 25MB. For larger archives, add the file to{' '}
           <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">import/</code> and start them
           from the list below.

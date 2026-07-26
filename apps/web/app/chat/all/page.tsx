@@ -177,21 +177,13 @@ export default async function ChatListPage({
                 </Link>
                 {conversation.isPrimary ? null : archived ? (
                   <form action={restoreConversation.bind(null, conversation.id)}>
-                    <SubmitButton
-                      variant="outline"
-                      pendingLabel="Restoring…"
-                      className="h-8 px-3 text-xs"
-                    >
+                    <SubmitButton size="sm" variant="outline" pendingLabel="Restoring…">
                       Restore
                     </SubmitButton>
                   </form>
                 ) : activeConversationIds.has(conversation.id) ? null : (
                   <form action={archiveConversation.bind(null, conversation.id)}>
-                    <SubmitButton
-                      variant="outline"
-                      pendingLabel="Archiving…"
-                      className="h-8 px-3 text-xs"
-                    >
+                    <SubmitButton size="sm" variant="outline" pendingLabel="Archiving…">
                       Archive
                     </SubmitButton>
                   </form>

@@ -3,6 +3,7 @@ import { approvals, tasks } from '@assistant/db';
 import { and, count, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import {
   Archive,
+  ArrowUpRight,
   CalendarClock,
   CircleCheck,
   CircleX,
@@ -13,19 +14,11 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { AutoRefresh } from '@/app/auto-refresh';
+import { JellyNavTabs } from '@/app/jelly-nav-tabs';
 import { requireOwner } from '@/auth';
 import { formatUsd, relativeTime, stripMarkdown, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import {
-  btn,
-  btnSm,
-  cardShellClass,
-  EmptyState,
-  PageHeader,
-  PageShell,
-  segmentedControlClass,
-  segmentedItemClass,
-} from '@/lib/ui';
+import { btn, btnSm, cardShellClass, EmptyState, PageHeader, PageShell } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { displayTaskStatus, StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 import { archiveOldTasks, archiveTask, restoreTask } from './actions';
@@ -176,23 +169,15 @@ export default async function TasksPage({
       />
 
       {!archived ? (
-        <nav aria-label="Filter activity" className={`${segmentedControlClass} mt-7`}>
-          {FILTERS.map((item) => {
-            const active = filter === item.value;
-            return (
-              <Link
-                key={item.value}
-                href={item.value === 'all' ? '/tasks' : `/tasks?filter=${item.value}`}
-                aria-current={active ? 'page' : undefined}
-                className={`${segmentedItemClass} ${
-                  active ? 'bg-raised text-strong shadow-sm' : ''
-                }`}
-              >
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
+        <JellyNavTabs
+          className="mt-7"
+          label="Filter activity"
+          value={filter}
+          items={FILTERS.map((item) => ({
+            ...item,
+            href: item.value === 'all' ? '/tasks' : `/tasks?filter=${item.value}`,
+          }))}
+        />
       ) : null}
 
       {rows.length === 0 ? (
@@ -217,13 +202,19 @@ export default async function TasksPage({
               : `No ${FILTERS.find((item) => item.value === filter)?.label.toLowerCase()} activity.`}
         </EmptyState>
       ) : (
-        <div className="mt-8 flex flex-col gap-8">
+        <div className="mt-10 flex flex-col gap-10">
           {groups.map((group) => (
             <section key={group.day}>
-              <h2 className="mb-3 text-xs font-semibold tracking-[0.1em] text-muted uppercase">
-                {group.label}
-              </h2>
-              <div className={cardShellClass}>
+              <div className="mb-4 flex items-center gap-3">
+                <h2 className="font-display text-sm font-semibold tracking-[-0.01em] text-strong">
+                  {group.label}
+                </h2>
+                <span className="text-2xs text-muted tabular-nums">
+                  {group.items.length} {group.items.length === 1 ? 'event' : 'events'}
+                </span>
+                <span className="h-px flex-1 bg-gradient-to-r from-edge/80 to-transparent" />
+              </div>
+              <div className="activity-timeline">
                 {group.items.map((task, index) => {
                   const Icon = taskIcon[task.status as keyof typeof taskIcon] ?? Clock3;
                   const terminal = TERMINAL_TASK_STATUSES.includes(
@@ -239,13 +230,15 @@ export default async function TasksPage({
                     // like a list you can move through, not a static table.
                     <article
                       key={task.id}
-                      className={`grid grid-cols-[2rem_minmax(0,1fr)] gap-3 px-4 py-4 motion-safe:transition-colors hover:bg-sunken/40 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-center sm:px-5 ${
-                        index > 0 ? 'border-t border-edge' : ''
+                      className={`${cardShellClass} activity-event group/activity relative grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 px-4 py-4 sm:grid-cols-[2.25rem_minmax(0,1fr)_auto] sm:items-center sm:px-5 ${
+                        index > 0 ? 'mt-3' : ''
                       }`}
                     >
                       <span
-                        className={`inline-flex size-8 items-center justify-center rounded-xl bg-sunken text-muted ${
-                          task.status === 'running' ? 'text-accent' : ''
+                        className={`activity-node relative z-10 inline-flex size-9 items-center justify-center rounded-xl border border-edge/70 bg-surface text-muted shadow-[0_1px_2px_rgb(23_25_35/0.05)] ${
+                          task.status === 'running'
+                            ? 'activity-node-running border-accent/25 bg-accent/10 text-accent'
+                            : ''
                         }`}
                       >
                         <Icon
@@ -263,24 +256,26 @@ export default async function TasksPage({
                           </Link>
                           <StatusChip status={shownStatus} />
                         </div>
-                        <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-muted">
+                        <p className="mt-1.5 line-clamp-2 max-w-2xl text-[13px] leading-5 text-muted">
                           {truncate(stripMarkdown(task.progress), 180) || 'No update recorded yet.'}
                         </p>
-                        <div className="mt-2 flex flex-wrap gap-1.5 text-2xs text-muted">
-                          <span className="rounded-md bg-sunken/65 px-2 py-1">
-                            Started by {trustLabel(task.trust)}
+                        <div className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-muted">
+                          <span>Started by {trustLabel(task.trust)}</span>
+                          <span aria-hidden="true" className="size-0.5 rounded-full bg-muted/50" />
+                          <span className="tabular-nums">
+                            {formatUsd(task.spentUsd)} of {formatUsd(task.budgetUsdLimit)}
                           </span>
-                          <span className="rounded-md bg-sunken/65 px-2 py-1">
-                            Spent {formatUsd(task.spentUsd)} / {formatUsd(task.budgetUsdLimit)}
-                          </span>
-                          <span className="rounded-md bg-sunken/65 px-2 py-1">
-                            Updated {relativeTime(task.updatedAt, now)}
-                          </span>
+                          <span aria-hidden="true" className="size-0.5 rounded-full bg-muted/50" />
+                          <span>Updated {relativeTime(task.updatedAt, now)}</span>
                         </div>
                       </div>
                       <div className="col-start-2 flex items-center gap-2 sm:col-start-auto sm:justify-end">
-                        <Link href={`/tasks/${task.id}`} className={btnSm.outline}>
-                          Open
+                        <Link
+                          href={`/tasks/${task.id}`}
+                          className={`${btnSm.outline} group-hover/activity:border-accent/25 group-hover/activity:text-accent`}
+                        >
+                          View
+                          <ArrowUpRight className="size-3.5" aria-hidden="true" />
                         </Link>
                         {archived ? (
                           <form action={restoreTask.bind(null, task.id)}>

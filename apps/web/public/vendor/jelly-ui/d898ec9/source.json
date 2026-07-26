@@ -1,0 +1,7 @@
+{
+  "name": "jelly-ui",
+  "version": "1.0.0",
+  "sourceRepository": "https://github.com/jelly-org/ui.git",
+  "sourceCommit": "d898ec995f3cbe16e720c4857c13c0dceb489585",
+  "bundleSha256": "c38e4e2222fcb9ecb820d5f31fd452774d07f599104c9db7ef71edcd1d38cdf9"
+}

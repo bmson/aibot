@@ -10,7 +10,7 @@ import Link from 'next/link';
 import { GoalCard, type GoalView } from '@/app/goals/goal-card';
 import { GoalCreateForm } from '@/app/goals/goal-create-form';
 import { requireOwner } from '@/auth';
-import { relativeTime } from '@/lib/format';
+import { relativeTime, stripMarkdown } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import { btn, EmptyState, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
 import { ActionMenu, SubmitButton } from '@/lib/ui-client';
@@ -75,9 +75,11 @@ function toGoalView(
   lastSession: { id: string; status: string; updatedAt: Date } | undefined,
 ): GoalView {
   const targetDateInput = goal.targetDate ? goal.targetDate.toISOString().slice(0, 10) : '';
-  const blockedQuestion = goal.nextAction.startsWith(GOAL_BLOCKED_PREFIX)
-    ? goal.nextAction.slice(GOAL_BLOCKED_PREFIX.length).trim()
-    : '';
+  const blockedQuestion = stripMarkdown(
+    goal.nextAction.startsWith(GOAL_BLOCKED_PREFIX)
+      ? goal.nextAction.slice(GOAL_BLOCKED_PREFIX.length).trim()
+      : '',
+  );
   const blocked =
     goal.status === 'active' && !goal.archivedAt && (blockedQuestion !== '' || stalled);
   const isAutomating = goal.status === 'active' && !goal.archivedAt;
@@ -85,11 +87,11 @@ function toGoalView(
   return {
     id: goal.id,
     title: goal.title,
-    description: goal.description,
+    description: stripMarkdown(goal.description),
     status: goal.status,
     priority: goal.priority,
-    progress: goal.progress,
-    nextAction: goal.nextAction,
+    progress: stripMarkdown(goal.progress),
+    nextAction: stripMarkdown(goal.nextAction),
     targetDateInput,
     updatedLabel: relativeTime(goal.updatedAt, now),
     conversationId,

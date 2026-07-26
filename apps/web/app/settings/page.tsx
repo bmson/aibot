@@ -182,7 +182,7 @@ export default async function SettingsPage() {
               Today’s spend, the monthly total, and the caps that pause work.
             </span>
           </span>
-          <span className="inline-flex shrink-0 items-center gap-1 text-[13px] font-medium text-accent">
+          <span className="inline-flex shrink-0 items-center gap-1 text-[13px] font-medium text-accent-hover">
             Open costs
             <ArrowRight className="size-3.5" aria-hidden="true" />
           </span>

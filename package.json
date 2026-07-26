@@ -31,13 +31,16 @@
     "seed": "pnpm --filter @assistant/db seed",
     "auth:bot": "tsx scripts/auth-bot.ts",
     "voice:ingest": "tsx scripts/ingest-voice.ts",
-    "smoke:mobile": "tsx scripts/mobile-smoke.ts"
+    "smoke:mobile": "tsx scripts/mobile-smoke.ts",
+    "vendor:jelly": "node scripts/vendor-jelly-ui.mjs",
+    "vendor:jelly:check": "node scripts/vendor-jelly-ui.mjs --check"
   },
   "devDependencies": {
     "@assistant/core": "workspace:^",
     "@assistant/db": "workspace:^",
     "@biomejs/biome": "^2.5.4",
     "@types/node": "^26.1.1",
+    "axe-core": "^4.12.1",
     "dotenv": "^16.6.1",
     "drizzle-orm": "^0.45.2",
     "playwright": "^1.61.1",
