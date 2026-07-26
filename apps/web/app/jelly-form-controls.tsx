@@ -150,9 +150,19 @@ export function JellyInput({
       localRef.current = element;
       if (label) element?.setAttribute('label', label);
       if (name) element?.setAttribute('name', name);
-      const handoffValue = handoffValueRef.current ?? resolvedValueRef.current;
+      const pendingHandoff = handoffValueRef.current;
+      const handoffValue = pendingHandoff ?? resolvedValueRef.current;
       if (element && element.value !== handoffValue) {
         element.value = handoffValue;
+      }
+      // A user can type between `whenDefined()` resolving and React replacing
+      // the native fallback. The DOM value survives that swap, but the native
+      // input event may lose its React target as the node detaches. Reconcile
+      // the captured value with both adapter and parent state before the
+      // upgraded control can render dependent UI (for example, Send enabled).
+      if (element && pendingHandoff !== null && pendingHandoff !== resolvedValueRef.current) {
+        resolvedValueRef.current = pendingHandoff;
+        updateValue(pendingHandoff);
       }
       if (element) handoffValueRef.current = null;
       if (element && restoreFocusRef.current) {
@@ -161,7 +171,7 @@ export function JellyInput({
       }
       assignRef(inputRef, element);
     },
-    [inputRef, label, name],
+    [inputRef, label, name, updateValue],
   );
   useUncontrolledFormReset({
     defaultValue,
@@ -289,9 +299,14 @@ export function JellyTextarea({
       localRef.current = element;
       if (label) element?.setAttribute('label', label);
       if (name) element?.setAttribute('name', name);
-      const handoffValue = handoffValueRef.current ?? resolvedValueRef.current;
+      const pendingHandoff = handoffValueRef.current;
+      const handoffValue = pendingHandoff ?? resolvedValueRef.current;
       if (element && element.value !== handoffValue) {
         element.value = handoffValue;
+      }
+      if (element && pendingHandoff !== null && pendingHandoff !== resolvedValueRef.current) {
+        resolvedValueRef.current = pendingHandoff;
+        updateValue(pendingHandoff);
       }
       if (element) handoffValueRef.current = null;
       if (element && restoreFocusRef.current) {
@@ -300,7 +315,7 @@ export function JellyTextarea({
       }
       assignRef(inputRef, element);
     },
-    [inputRef, label, name],
+    [inputRef, label, name, updateValue],
   );
   useUncontrolledFormReset({
     defaultValue,

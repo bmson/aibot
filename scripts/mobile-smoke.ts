@@ -643,6 +643,46 @@ async function assertDelayedJellyUpgrade(engineName: string, browser: Browser) {
   await context.close();
 }
 
+async function assertDelayedChatHandoff(engineName: string, browser: Browser) {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  let releaseJelly = () => {};
+  const jellyGate = new Promise<void>((resolve) => {
+    releaseJelly = resolve;
+  });
+  await context.route('**/vendor/jelly-ui/**', async (route) => {
+    await jellyGate;
+    await route.continue();
+  });
+  const page = await context.newPage();
+  await page.goto(`${baseUrl}/chat`, { waitUntil: 'domcontentloaded' });
+  const fallback = page.locator('textarea.app-jelly-fallback[aria-label="Message"]');
+  await fallback.waitFor();
+  await page.waitForFunction(() =>
+    Object.keys(document.querySelector('textarea[aria-label="Message"]') ?? {}).some((key) =>
+      key.startsWith('__reactProps$'),
+    ),
+  );
+  await fallback.fill('Typed while Jelly upgrades');
+  releaseJelly();
+  await page.waitForFunction(() => Boolean(customElements.get('jelly-textarea')));
+  const upgraded = page.getByRole('textbox', { name: 'Message' });
+  const send = page.getByRole('button', { name: 'Send' });
+  await upgraded.waitFor();
+  assert(
+    (await upgraded.inputValue()) === 'Typed while Jelly upgrades',
+    `${engineName} lost chat text during Jelly registration`,
+  );
+  // Trial mode waits for the upgraded button to become enabled without
+  // submitting a real message. This proves the parent-controlled chat state
+  // received the fallback value, not merely the custom element's DOM.
+  await send.click({ trial: true });
+  await context.close();
+}
+
 async function assertChatStreamingStates(engineName: string, browser: Browser) {
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
@@ -899,6 +939,7 @@ try {
     try {
       await assertNativeFallback(engineName, browser);
       await assertDelayedJellyUpgrade(engineName, browser);
+      await assertDelayedChatHandoff(engineName, browser);
       // Streaming interceptors deserve a clean browser phase: they exercise
       // request cancellation, not accumulated navigation/cache state from the
       // route sweep that follows.

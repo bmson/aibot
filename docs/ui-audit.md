@@ -82,7 +82,8 @@ rendering path was reviewed in code.
   sizes.
 - Jelly registration no longer replaces a focused native fallback during
   mobile-drawer opening. A value and focus typed before delayed registration
-  are handed to the upgraded control.
+  are handed to the upgraded control, and textarea handoff also reconciles the
+  controlled parent state so dependent actions such as Send become enabled.
 - The local Jelly module is preloaded without blocking hydration, then executed
   after the native adapters are interactive. Fresh documents register
   reliably while blocked or delayed runtime requests retain usable fallbacks.
