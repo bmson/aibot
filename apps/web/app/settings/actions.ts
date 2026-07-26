@@ -1,13 +1,10 @@
 'use server';
 
-import { getAgent } from '@assistant/core';
 import { agents, approvalPolicies, budgets, schedules } from '@assistant/db';
-import { asc, eq, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { formatDateTime, relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { policyLabels, policyScope, scheduleLabels } from './labels';
 
 function revalidateSettings(): void {
   revalidatePath('/settings');
@@ -88,59 +85,4 @@ export async function deletePolicy(policyId: string): Promise<void> {
   await requireOwner();
   await getDb().delete(approvalPolicies).where(eq(approvalPolicies.id, policyId));
   revalidateSettings();
-}
-
-export interface SettingsSummary {
-  agent: { name: string; email: string; timezone: string };
-  schedules: Array<{ id: string; title: string; enabled: boolean; detail: string }>;
-  goalAutomationCount: number;
-  policies: Array<{
-    id: string;
-    title: string;
-    allowed: boolean;
-    enabled: boolean;
-    scope: string | null;
-  }>;
-}
-
-/**
- * Read-only settings digest for the collapsed-rail popover. Fetched on demand
- * (only when that popover opens) rather than joined into every page's data —
- * the full settings page already pays for these queries when it's the one
- * being viewed; nothing else needs to.
- */
-export async function getSettingsSummary(): Promise<SettingsSummary> {
-  await requireOwner();
-  const db = getDb();
-  const now = new Date();
-  const [agent, scheduleRows, policyRows] = await Promise.all([
-    getAgent(db),
-    db.select().from(schedules).orderBy(asc(schedules.name)),
-    db.select().from(approvalPolicies).orderBy(asc(approvalPolicies.toolName)),
-  ]);
-  const directScheduleRows = scheduleRows.filter((s) => !s.name.startsWith('goal:'));
-
-  return {
-    agent: { name: agent.name, email: agent.email, timezone: agent.timezone },
-    schedules: directScheduleRows.map((s) => ({
-      id: s.id,
-      title: scheduleLabels[s.name] ?? s.name.replaceAll('-', ' '),
-      enabled: s.enabled,
-      detail: !s.enabled
-        ? 'Not scheduled'
-        : !s.nextRunAt
-          ? 'Recalculating on the next sweep'
-          : s.nextRunAt <= now
-            ? `Overdue since ${formatDateTime(s.nextRunAt, agent.timezone)}`
-            : `Next ${relativeTime(s.nextRunAt, now)}`,
-    })),
-    goalAutomationCount: scheduleRows.length - directScheduleRows.length,
-    policies: policyRows.map((p) => ({
-      id: p.id,
-      title: policyLabels[p.templateKey] ?? 'Custom approval rule',
-      allowed: p.effect === 'allow',
-      enabled: p.enabled,
-      scope: policyScope(p.templateKey, p.match),
-    })),
-  };
 }

@@ -71,12 +71,10 @@ export function ActionMenu({
   trigger,
   triggerClassName,
   triggerTitle,
-  triggerAriaCurrent,
   variant = 'outline',
   size = 'md',
   panelClassName = 'w-56',
   className = '',
-  onOpenChange,
   children,
 }: {
   label?: ReactNode;
@@ -88,15 +86,11 @@ export function ActionMenu({
       applies only when this is omitted. */
   triggerClassName?: string;
   triggerTitle?: string;
-  /** For a trigger standing in for a nav link to the page you're already on. */
-  triggerAriaCurrent?: 'page';
   variant?: BtnVariant;
   size?: 'md' | 'sm';
   /** Sizing/extra classes for the panel; keep a width here so placement can measure. */
   panelClassName?: string;
   className?: string;
-  /** Fires on every open/close, e.g. to lazy-load panel content on first open. */
-  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -136,7 +130,6 @@ export function ActionMenu({
         ref={triggerRef}
         aria-haspopup="true"
         aria-expanded={open}
-        aria-current={triggerAriaCurrent}
         title={triggerTitle}
         className={triggerClassName ?? `${btnScale[size][variant]} ${className}`}
         onClick={() => {
@@ -156,7 +149,6 @@ export function ActionMenu({
         onToggle={(event: ToggleEvent<HTMLDivElement>) => {
           const isOpen = event.newState === 'open';
           setOpen(isOpen);
-          onOpenChange?.(isOpen);
           if (isOpen) place();
         }}
         onClick={(event) => {

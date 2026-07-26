@@ -22,9 +22,9 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CountBadge, focusRing } from '@/lib/ui';
+import { ActionMenu } from '@/lib/ui-client';
 import { signOutAction } from './actions';
 import { type AssistantPresence, BrandLockup } from './brand-mark';
-import { SettingsPopoverTile } from './settings/settings-popover';
 import { ThemeToggle } from './theme-toggle';
 
 interface NavItem {
@@ -243,7 +243,7 @@ export function AppNav({
           data-mobile-touch-target="true"
           aria-current={active ? 'page' : undefined}
           title={collapseAware && collapsed ? item.label : undefined}
-          className={`nav-tile mobile-touch-target relative grid h-10 grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-lg pr-3 text-sm motion-safe:transition-colors ${focusRing} ${
+          className={`nav-tile mobile-touch-target relative grid h-10 grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-lg text-sm motion-safe:transition-colors ${collapseAware && collapsed ? '' : 'pr-3'} ${focusRing} ${
             active
               ? 'bg-accent font-semibold text-white'
               : 'font-medium text-zinc-600 hover:bg-sunken hover:text-strong active:bg-sunken dark:text-zinc-400 dark:hover:text-zinc-100'
@@ -330,30 +330,55 @@ export function AppNav({
       );
     });
 
-  const renderSystemGroup = (items: NavItem[], tone: 'rail' | 'drawer') =>
-    items.length > 0 ? (
-      <details className="group mt-1">
-        <summary
-          title={tone === 'rail' && collapsed ? 'System' : undefined}
-          className={`nav-tile mobile-touch-target grid h-10 cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-lg pr-3 text-sm text-zinc-500 select-none hover:bg-sunken hover:text-strong dark:text-zinc-400 dark:hover:text-zinc-100 ${focusRing}`}
-        >
+  // Mobile drawer: an inline disclosure, indented under its own label — there's
+  // no floating-panel real estate to spare in a 288px-wide slide-in panel, and
+  // the whole drawer is already an overlay.
+  const renderSystemDisclosure = (items: NavItem[]) => (
+    <details className="group mt-1">
+      <summary
+        className={`nav-tile mobile-touch-target grid h-10 cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-lg pr-3 text-sm text-zinc-500 select-none hover:bg-sunken hover:text-strong dark:text-zinc-400 dark:hover:text-zinc-100 ${focusRing}`}
+      >
+        <span className="flex size-10 shrink-0 items-center justify-center">
+          <Gauge className="size-4 shrink-0 opacity-70" aria-hidden="true" />
+        </span>
+        <span className="min-w-0 truncate">System</span>
+        <ChevronRight
+          className="size-3.5 opacity-60 motion-safe:transition-transform group-open:rotate-90"
+          aria-hidden="true"
+        />
+      </summary>
+      <div className="mt-1 flex flex-col gap-1 pl-3">{renderLinks(items, 'drawer')}</div>
+    </details>
+  );
+
+  // Desktop rail: a floating dropdown instead of an inline accordion — expanding
+  // in place pushed everything below it down every time it opened, and in the
+  // collapsed rail there was no room for an indented sub-list at all.
+  const renderSystemDropdown = (items: NavItem[]) => (
+    <ActionMenu
+      trigger={
+        <>
           <span className="flex size-10 shrink-0 items-center justify-center">
             <Gauge className="size-4 shrink-0 opacity-70" aria-hidden="true" />
           </span>
-          <span className={`min-w-0 truncate ${tone === 'rail' ? 'nav-label' : ''}`}>System</span>
-          <ChevronRight
-            className={`size-3.5 opacity-60 motion-safe:transition-transform group-open:rotate-90 ${tone === 'rail' ? 'nav-label' : ''}`}
-            aria-hidden="true"
-          />
-        </summary>
-        {/* The left indent nests these under "System" once there's a label to
-            nest them from — in the collapsed rail it would just knock their
-            icons 12px out of the shared column every other icon lines up in. */}
-        <div className={`mt-1 flex flex-col gap-1 ${tone === 'rail' && collapsed ? '' : 'pl-3'}`}>
-          {renderLinks(items, tone)}
-        </div>
-      </details>
-    ) : null;
+          <span className="nav-label min-w-0 truncate">System</span>
+          <ChevronRight className="nav-label size-3.5 opacity-60" aria-hidden="true" />
+        </>
+      }
+      triggerTitle={collapsed ? 'System' : undefined}
+      triggerClassName={`nav-tile mobile-touch-target grid h-10 w-full cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-lg text-sm text-zinc-500 motion-safe:transition-colors hover:bg-sunken hover:text-strong dark:text-zinc-400 dark:hover:text-zinc-100 ${collapsed ? '' : 'pr-3'} ${focusRing}`}
+      panelClassName="w-48"
+    >
+      {renderLinks(items, 'drawer')}
+    </ActionMenu>
+  );
+
+  const renderSystemGroup = (items: NavItem[], tone: 'rail' | 'drawer') =>
+    items.length > 0
+      ? tone === 'rail'
+        ? renderSystemDropdown(items)
+        : renderSystemDisclosure(items)
+      : null;
 
   const signOut = signedIn ? (
     <form action={signOutAction}>
@@ -402,28 +427,15 @@ export function AppNav({
           </button>
         </div>
         <div className="scroll-subtle min-h-0 flex-1 overflow-y-auto pb-4">
-          <nav className="flex flex-col gap-1 px-3">{renderLinks(primaryItems, 'rail')}</nav>
-          <div className="nav-manage-group mt-6 px-3">
+          <nav className="nav-tile-list flex flex-col gap-1 px-3">
+            {renderLinks(primaryItems, 'rail')}
+          </nav>
+          <div className="nav-manage-group px-3">
             <p className="nav-label px-3 font-display text-2xs font-semibold tracking-[0.14em] text-zinc-500 uppercase">
               Manage
             </p>
-            <nav className="mt-2 flex flex-col gap-1">
-              {renderLinks(
-                utilityItems.filter((item) => item.href !== '/settings'),
-                'rail',
-              )}
-              {/* Collapsed: a popover with the real settings content beats
-                  navigating blind into an icon-only rail. Expanded, the label
-                  already gives that context back, so it's a plain link like
-                  every other tile. */}
-              {collapsed ? (
-                <SettingsPopoverTile active={activeHref === '/settings'} />
-              ) : (
-                renderLinks(
-                  utilityItems.filter((item) => item.href === '/settings'),
-                  'rail',
-                )
-              )}
+            <nav className="nav-tile-list mt-2 flex flex-col gap-1">
+              {renderLinks(utilityItems, 'rail')}
               {renderSystemGroup(systemItems, 'rail')}
             </nav>
           </div>
