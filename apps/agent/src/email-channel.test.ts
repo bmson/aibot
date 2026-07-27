@@ -18,6 +18,8 @@ const DATABASE_URL =
 let db: Db;
 let dbUp = false;
 let agentId: string;
+let agentName: string;
+let agentEmail: string;
 let emailConvId: string;
 let chatConvId: string;
 const createdConversationIds: string[] = [];
@@ -64,7 +66,10 @@ function emailTask(overrides: Partial<TaskRow> = {}): TaskRow {
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
   try {
-    agentId = (await getAgent(db)).id;
+    const agent = await getAgent(db);
+    agentId = agent.id;
+    agentName = agent.name;
+    agentEmail = agent.email;
     dbUp = true;
   } catch {
     console.warn('email-channel.test: database unreachable — skipping');
@@ -109,7 +114,7 @@ describe('deliverEmailFinal', () => {
     const body = JSON.parse(sent[0]?.body ?? '{}') as { raw: string; threadId: string };
     expect(body.threadId).toBe('thread-1');
     const decoded = Buffer.from(body.raw, 'base64url').toString('utf8');
-    expect(decoded).toMatch(/From: "[^"]+" <bot@bmson\.com>/); // explicit display name, not the account profile name
+    expect(decoded).toContain(`From: "${agentName}" <${agentEmail}>`);
     expect(decoded).toContain('To: bmson@bmson.com');
     expect(decoded).toContain('Subject: Re: Camp performance');
     expect(decoded).toContain('In-Reply-To: <orig-123@mail>');
