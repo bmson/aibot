@@ -101,8 +101,8 @@ function extractionSystem(knownNames: string[]): string {
     'Extract ONLY genuinely useful, lasting information: facts about the owner or named people,',
     'stable preferences, projects, relationships, and notable episodes. Skip pleasantries,',
     'one-off logistics, anything already implied by another fact, and anything about the assistant itself.',
-    'Each fact must stand alone without the conversation ("Baldvin\'s sister Anna lives in Oslo" — not "his sister lives there").',
-    'Attribute each fact to its subject. Use subject "owner" for the owner (Baldvin).',
+    'Each fact must stand alone without the conversation ("The owner\'s sister Anna lives in Oslo" — not "his sister lives there").',
+    'Attribute each fact to its subject. Use subject "owner" for the owner.',
     knownNames.length
       ? `Known people (use these exact names when the fact is about one of them): ${knownNames.join(', ')}.`
       : '',

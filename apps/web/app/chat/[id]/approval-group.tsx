@@ -100,7 +100,7 @@ export function ApprovalGroup({ parts }: { parts: InlineApprovalPart[] }) {
         </span>
       </div>
       <div className="px-4 pt-2 pb-3">
-        <p className="text-xs text-muted">AI Bot paused here before taking action.</p>
+        <p className="text-xs text-muted">The assistant paused here before taking action.</p>
         <div className="mt-1 divide-y divide-edge/70">
           {parts.map((part) => (
             <ApprovalRow

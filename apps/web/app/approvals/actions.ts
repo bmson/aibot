@@ -1,8 +1,10 @@
 'use server';
 
-import { getAgent, resolveApproval } from '@assistant/core';
-import { approvals, toolCalls } from '@assistant/db';
-import { eq } from 'drizzle-orm';
+import {
+  approveAndRememberApproval,
+  decideApproval,
+  decideApprovals,
+} from '@assistant/application/approvals';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
 import { getDb } from '@/lib/server';
@@ -16,13 +18,13 @@ function revalidateApprovalViews(): void {
 
 export async function approveApproval(approvalId: string): Promise<void> {
   await requireOwner();
-  await resolveApproval(getDb(), { approvalId, decision: 'approved', via: 'web' });
+  await decideApproval(getDb(), approvalId, 'approved');
   revalidateApprovalViews();
 }
 
 export async function denyApproval(approvalId: string): Promise<void> {
   await requireOwner();
-  await resolveApproval(getDb(), { approvalId, decision: 'denied', via: 'web' });
+  await decideApproval(getDb(), approvalId, 'denied');
   revalidateApprovalViews();
 }
 
@@ -31,7 +33,7 @@ export async function resolveApprovalInline(
   decision: 'approved' | 'denied',
 ): Promise<{ ok: boolean; error?: string }> {
   await requireOwner();
-  const result = await resolveApproval(getDb(), { approvalId, decision, via: 'web' });
+  const result = await decideApproval(getDb(), approvalId, decision);
   revalidateApprovalViews();
   return result.ok ? { ok: true } : { ok: false, error: result.reason };
 }
@@ -47,12 +49,7 @@ export async function resolveApprovalsInline(
   decision: 'approved' | 'denied',
 ): Promise<{ failures: Array<{ approvalId: string; error: string }> }> {
   await requireOwner();
-  const db = getDb();
-  const failures: Array<{ approvalId: string; error: string }> = [];
-  for (const approvalId of approvalIds.slice(0, 20)) {
-    const result = await resolveApproval(db, { approvalId, decision, via: 'web' });
-    if (!result.ok) failures.push({ approvalId, error: result.reason });
-  }
+  const failures = await decideApprovals(getDb(), approvalIds, decision);
   revalidateApprovalViews();
   return { failures };
 }
@@ -60,37 +57,7 @@ export async function resolveApprovalsInline(
 /** Approve and create the one currently supported recipient-scoped standing rule. */
 export async function approveAndRemember(approvalId: string): Promise<void> {
   await requireOwner();
-  const db = getDb();
-  const [row] = await db
-    .select({ approval: approvals, toolName: toolCalls.toolName })
-    .from(approvals)
-    .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
-    .where(eq(approvals.id, approvalId))
-    .limit(1);
-  if (row?.approval.status !== 'pending') return;
-
-  const payload = row.approval.payload as { to?: unknown } | null;
-  const recipients = Array.isArray(payload?.to)
-    ? payload.to.filter((item): item is string => typeof item === 'string')
-    : [];
-  const recipient = recipients.length === 1 ? recipients[0] : undefined;
-  if (row.toolName !== 'gmail.send' || !recipient) {
-    await resolveApproval(db, { approvalId, decision: 'approved', via: 'web' });
-  } else {
-    const agent = await getAgent(db);
-    await resolveApproval(db, {
-      approvalId,
-      decision: 'approved',
-      via: 'web',
-      policy: {
-        agentId: agent.id,
-        toolName: 'gmail.send',
-        templateKey: 'gmail.send.to_recipient',
-        match: { recipient: recipient.toLowerCase() },
-        effect: 'allow',
-      },
-    });
-  }
+  await approveAndRememberApproval(getDb(), approvalId);
   revalidateApprovalViews();
 }
 
@@ -120,12 +87,7 @@ export async function editAndApprove(
     return { error: 'Invalid JSON — fix the payload and submit again.', raw };
   }
 
-  const result = await resolveApproval(getDb(), {
-    approvalId,
-    decision: 'approved',
-    via: 'web',
-    editedPayload,
-  });
+  const result = await decideApproval(getDb(), approvalId, 'approved', editedPayload);
   if (!result.ok) return { error: `Could not approve: ${result.reason}`, raw };
 
   revalidateApprovalViews();

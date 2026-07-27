@@ -1,11 +1,8 @@
-import { getAgent, listConversations } from '@assistant/core';
-import { conversations, tasks } from '@assistant/db';
-import { and, count, eq, isNotNull, isNull, notInArray } from 'drizzle-orm';
 import { MessageSquareText } from 'lucide-react';
 import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
-import { getDb } from '@/lib/server';
+import { getApplication } from '@/lib/server';
 import { btn, cardShellClass, EmptyState, PageHeader, PageShell } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import {
@@ -19,8 +16,6 @@ export const metadata = { title: 'All chats' };
 
 export const dynamic = 'force-dynamic';
 
-const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'];
-
 export default async function ChatListPage({
   searchParams,
 }: {
@@ -29,50 +24,13 @@ export default async function ChatListPage({
   await requireOwner();
   const { view } = await searchParams;
   const archived = view === 'archived';
-  const db = getDb();
-  const agent = await getAgent(db);
-  const [chatRows, archivedCountRows, shownScopeCountRows, activeTaskRows] = await Promise.all([
-    listConversations(db, agent.id, { archived }),
-    db
-      .select({ value: count() })
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.agentId, agent.id),
-          eq(conversations.channel, 'chat'),
-          isNotNull(conversations.archivedAt),
-        ),
-      ),
-    // listConversations caps at 50. Count the same scope so a truncated list
-    // says so instead of silently looking like the whole history.
-    db
-      .select({ value: count() })
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.agentId, agent.id),
-          eq(conversations.channel, 'chat'),
-          archived ? isNotNull(conversations.archivedAt) : isNull(conversations.archivedAt),
-        ),
-      ),
-    db
-      .selectDistinct({ conversationId: tasks.conversationId })
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.agentId, agent.id),
-          isNotNull(tasks.conversationId),
-          notInArray(tasks.status, TERMINAL_TASK_STATUSES),
-        ),
-      ),
-  ]);
-  const activeConversationIds = new Set(
-    activeTaskRows
-      .map((task) => task.conversationId)
-      .filter((conversationId): conversationId is string => conversationId !== null),
-  );
-  const archivedCount = archivedCountRows[0]?.value ?? 0;
-  const totalInScope = shownScopeCountRows[0]?.value ?? chatRows.length;
+  const {
+    conversations: chatRows,
+    archivedCount,
+    totalInScope,
+    activeConversationIds: activeIds,
+  } = await getApplication().listChatHistory(archived);
+  const activeConversationIds = new Set(activeIds);
   const now = new Date();
 
   return (

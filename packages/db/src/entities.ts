@@ -5,7 +5,7 @@ import { type ContactRow, contacts, memories, memoryTombstones } from './schema.
 /** Subjects that are the assistant itself — facts about it never become contacts. */
 const ASSISTANT_ALIASES = new Set(['assistant', 'ai bot', 'b bot', 'the assistant', 'bot']);
 
-/** "Baldvin" name-prefixes "Baldvin Kristjánsson" (word boundary, either direction). */
+/** A short name may prefix a longer full name at a word boundary. */
 function namePrefixMatch(a: string, b: string): boolean {
   const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
   return shorter.length >= 3 && (longer === shorter || longer.startsWith(`${shorter} `));
@@ -201,7 +201,7 @@ export async function resolveSubjectContact(
     : undefined;
   if (lower === 'owner' || ownerMatch) {
     if (!owner) return null;
-    // adopt the fuller name ("Baldvin" → "Baldvin Kristjánsson")
+    // Adopt the fuller name when an existing short name gains a surname.
     if (name.length > owner.name.length && ownerMatch === owner.name && lower !== 'owner') {
       await db
         .update(contacts)

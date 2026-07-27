@@ -1,16 +1,10 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { getAgent, startDocumentIngest } from '@assistant/core';
-import { safeRelPath } from '@assistant/tools';
+import { isModuleEnabled, loadConfig } from '@assistant/config';
 import { redirect } from 'next/navigation';
 import { isAuthed } from '@/auth';
-import { getDb, getWorkspace } from '@/lib/server';
+import { getApplication } from '@/lib/server';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // Cloud Run request cap is 32MB — stay under it
 const MAX_MULTIPART_BYTES = MAX_UPLOAD_BYTES + 1024 * 1024;
-
-function cleanName(name: string): string {
-  return name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120) || 'document';
-}
 
 /**
  * Document upload (Phase 11): multipart form → binary workspace write → a
@@ -18,6 +12,9 @@ function cleanName(name: string): string {
  * route this reads the raw bytes (PDFs, not just UTF-8 archives).
  */
 export async function POST(req: Request) {
+  if (!isModuleEnabled(loadConfig(), 'documents')) {
+    return Response.json({ error: 'documents module disabled' }, { status: 404 });
+  }
   if (!(await isAuthed())) {
     return Response.json({ error: 'unauthorized' }, { status: 401 });
   }
@@ -36,37 +33,13 @@ export async function POST(req: Request) {
     return Response.json({ error: 'file too large for upload' }, { status: 413 });
   }
 
-  const name = cleanName(file.name);
   const bytes = Buffer.from(await file.arrayBuffer());
-  const sha256 = createHash('sha256').update(bytes).digest('hex');
-  const mime = file.type || 'application/octet-stream';
-  const workspacePath = safeRelPath(`documents/uploads/${randomUUID()}-${name}`);
-  const title = String(form.get('title') ?? '').trim() || name;
-
-  const workspace = getWorkspace();
-  const db = getDb();
-  const agent = await getAgent(db);
-
-  await workspace.writeBytes(workspacePath, bytes, mime);
-  let duplicate = false;
-  try {
-    const result = await startDocumentIngest(db, {
-      agentId: agent.id,
-      title,
-      workspacePath,
-      mime,
-      bytes: bytes.length,
-      sha256,
-      source: 'upload',
-      trust: 'owner',
-    });
-    duplicate = result.duplicate;
-  } catch (err) {
-    await workspace.delete(workspacePath).catch(() => {});
-    throw err;
-  }
-  // A duplicate upload points at an existing document — drop the redundant blob.
-  if (duplicate) await workspace.delete(workspacePath).catch(() => {});
+  await getApplication().uploadDocument({
+    name: file.name,
+    title: String(form.get('title') ?? ''),
+    mime: file.type,
+    bytes,
+  });
 
   redirect('/documents');
 }

@@ -1,4 +1,4 @@
-import { loadConfig } from '@assistant/core';
+import { loadConfig } from '@assistant/config';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { NodeSDK, tracing } from '@opentelemetry/sdk-node';
 

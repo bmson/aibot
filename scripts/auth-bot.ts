@@ -1,5 +1,5 @@
 /**
- * One-time OAuth flow for the bot's Google account (bot@bmson.com).
+ * One-time OAuth flow for the configured assistant Google account.
  *
  * Prereqs (see infra/gcp/oauth-setup.md):
  *   - GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET in .env
@@ -11,17 +11,12 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import dotenv from 'dotenv';
+import { envFile as envPath, loadConfig } from '@assistant/config';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const envPath = path.join(repoRoot, '.env');
-dotenv.config({ path: envPath });
-
-const CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID ?? '';
-const CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? '';
-const BOT_EMAIL = 'bot@bmson.com';
+const config = loadConfig();
+const CLIENT_ID = config.GOOGLE_OAUTH_CLIENT_ID;
+const CLIENT_SECRET = config.GOOGLE_OAUTH_CLIENT_SECRET;
+const BOT_EMAIL = config.ASSISTANT_EMAIL;
 const REDIRECT_URI = 'http://localhost:8123/callback';
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',

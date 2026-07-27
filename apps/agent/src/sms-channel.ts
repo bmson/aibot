@@ -87,7 +87,7 @@ export async function sendCanarySms(
   if (!deps.twilio.configured() || !deps.config.OWNER_PHONE) {
     throw new Error('Twilio or OWNER_PHONE is not configured');
   }
-  const text = `[aibot canary ${marker.slice(0, 8)}] SMS delivery check. No reply needed.`;
+  const text = `[assistant canary ${marker.slice(0, 8)}] SMS delivery check. No reply needed.`;
   if (text.length > 160 || /[^\x20-\x7E]/.test(text)) {
     throw new Error('canary SMS must remain one GSM-compatible segment');
   }

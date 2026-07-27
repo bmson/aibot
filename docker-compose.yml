@@ -1,3 +1,26 @@
+name: assistant
+
+x-runtime-environment: &runtime-environment
+  DATABASE_URL: postgres://assistant:assistant@db:5432/assistant
+  ASSISTANT_NAME: ${ASSISTANT_NAME:-Assistant}
+  ASSISTANT_EMAIL: ${ASSISTANT_EMAIL:-assistant@example.com}
+  ASSISTANT_WORKSPACE_ID: ${ASSISTANT_WORKSPACE_ID:-assistant}
+  ASSISTANT_TIMEZONE: ${ASSISTANT_TIMEZONE:-UTC}
+  ASSISTANT_LOCALE: ${ASSISTANT_LOCALE:-en}
+  ASSISTANT_SIGNATURE: ${ASSISTANT_SIGNATURE:--- Assistant}
+  ASSISTANT_MODULES: ${ASSISTANT_MODULES:-minimal}
+  OWNER_NAME: ${OWNER_NAME:-Owner}
+  OWNER_EMAIL: ${OWNER_EMAIL:-owner@example.com}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  QUEUE_DRIVER: local
+  FILES_DRIVER: local
+  INTERNAL_AUTH_MODE: shared-secret
+  INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-local-compose-only}
+  AUTH_SECRET: ${AUTH_SECRET:-local-compose-auth-secret-change-before-sharing}
+  AUTH_DEV_BYPASS: "false"
+  AUTH_LOCALHOST_BYPASS: "true"
+  OTEL_EXPORTER: none
+
 services:
   db:
     image: pgvector/pgvector:pg17
@@ -13,16 +36,84 @@ services:
       test: ["CMD-SHELL", "pg_isready -U assistant"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
+    restart: unless-stopped
 
-  gcs:
-    image: fsouza/fake-gcs-server:latest
-    command: ["-scheme", "http", "-port", "4443", "-public-host", "localhost:4443"]
+  migrate:
+    build:
+      context: .
+      dockerfile: infra/docker/migrate.Dockerfile
+    environment:
+      <<: *runtime-environment
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  agent:
+    build:
+      context: .
+      dockerfile: infra/docker/agent.Dockerfile
+    environment:
+      <<: *runtime-environment
+      NODE_ENV: production
+      PORT: "8787"
+      AGENT_PORT: "8787"
+      AGENT_URL: http://agent:8787
+      PUBLIC_URL: http://agent:8787
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     ports:
-      - "127.0.0.1:4443:4443"
+      - "127.0.0.1:8787:8787"
     volumes:
-      - gcs-data:/data
+      - workspace-data:/app/.workspace
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8787/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+      args:
+        GIT_SHA: local
+    environment:
+      <<: *runtime-environment
+      NODE_ENV: production
+      PORT: "3000"
+      AUTH_URL: http://localhost:3000
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      agent:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - workspace-data:/app/.workspace
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
 
 volumes:
   db-data:
-  gcs-data:
+  workspace-data:

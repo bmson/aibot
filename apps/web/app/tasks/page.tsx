@@ -1,6 +1,8 @@
-import { getAgent } from '@assistant/core';
-import { approvals, tasks } from '@assistant/db';
-import { and, count, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import {
+  type ActivityFilter,
+  listActivity,
+  terminalTaskStatuses,
+} from '@assistant/application/tasks';
 import {
   Archive,
   CalendarClock,
@@ -34,7 +36,6 @@ export const metadata = { title: 'Activity' };
 
 export const dynamic = 'force-dynamic';
 
-const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'] as const;
 const FILTERS = [
   { value: 'all', label: 'All' },
   { value: 'needs-you', label: 'Needs you' },
@@ -42,15 +43,6 @@ const FILTERS = [
   { value: 'scheduled', label: 'Scheduled' },
   { value: 'completed', label: 'Completed' },
 ] as const;
-type ActivityFilter = (typeof FILTERS)[number]['value'];
-
-function filterStatuses(filter: ActivityFilter): string[] | undefined {
-  if (filter === 'needs-you') return ['waiting_approval', 'waiting_budget', 'needs_attention'];
-  if (filter === 'working') return ['pending', 'running'];
-  if (filter === 'scheduled') return ['sleeping', 'waiting_event'];
-  if (filter === 'completed') return [...TERMINAL_TASK_STATUSES];
-  return undefined;
-}
 
 function calendarDay(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
@@ -94,44 +86,8 @@ export default async function TasksPage({
   const filter = FILTERS.some((item) => item.value === rawFilter)
     ? (rawFilter as ActivityFilter)
     : 'all';
-  const statuses = filterStatuses(filter);
   const db = getDb();
-  const agent = await getAgent(db);
-  const [rows, archivedCountRows] = await Promise.all([
-    db
-      .select()
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.agentId, agent.id),
-          sql`${tasks.trigger}->'payload'->>'canary' IS DISTINCT FROM 'true'`,
-          archived ? isNotNull(tasks.archivedAt) : isNull(tasks.archivedAt),
-          statuses ? inArray(tasks.status, statuses) : undefined,
-        ),
-      )
-      .orderBy(desc(tasks.updatedAt))
-      .limit(50),
-    db
-      .select({ value: count() })
-      .from(tasks)
-      .where(and(eq(tasks.agentId, agent.id), isNotNull(tasks.archivedAt))),
-  ]);
-  const archivedCount = archivedCountRows[0]?.value ?? 0;
-  // Which parked rows are genuinely waiting on the owner. Without this the list
-  // badges "Needs your approval" on tasks the Approvals page has nothing for.
-  const waitingIds = rows
-    .filter((task) => task.status === 'waiting_approval')
-    .map((task) => task.id);
-  const pendingApprovalTaskIds = new Set(
-    waitingIds.length === 0
-      ? []
-      : (
-          await db
-            .selectDistinct({ taskId: approvals.taskId })
-            .from(approvals)
-            .where(and(inArray(approvals.taskId, waitingIds), eq(approvals.status, 'pending')))
-        ).map((row) => row.taskId),
-  );
+  const { items: rows, archivedCount } = await listActivity(db, { archived, filter });
   const now = new Date();
   const groups = [...new Set(rows.map((task) => calendarDay(task.updatedAt)))].map((day) => ({
     day,
@@ -150,7 +106,7 @@ export default async function TasksPage({
         intro={
           archived
             ? 'Hidden work stays available with its decisions and evidence intact.'
-            : 'A chronological record of what AI Bot did, what it is doing, and where it needs you.'
+            : 'A chronological record of what the assistant did, what it is doing, and where it needs you.'
         }
         actions={
           archived ? (
@@ -213,7 +169,7 @@ export default async function TasksPage({
           {archived
             ? 'No archived activity.'
             : filter === 'all'
-              ? 'Nothing yet. Give AI Bot something in chat and its work will appear here.'
+              ? 'Nothing yet. Give the assistant something in chat and its work will appear here.'
               : `No ${FILTERS.find((item) => item.value === filter)?.label.toLowerCase()} activity.`}
         </EmptyState>
       ) : (
@@ -226,13 +182,10 @@ export default async function TasksPage({
               <div className={cardShellClass}>
                 {group.items.map((task, index) => {
                   const Icon = taskIcon[task.status as keyof typeof taskIcon] ?? Clock3;
-                  const terminal = TERMINAL_TASK_STATUSES.includes(
-                    task.status as (typeof TERMINAL_TASK_STATUSES)[number],
+                  const terminal = terminalTaskStatuses.includes(
+                    task.status as (typeof terminalTaskStatuses)[number],
                   );
-                  const shownStatus = displayTaskStatus(
-                    task.status,
-                    pendingApprovalTaskIds.has(task.id),
-                  );
+                  const shownStatus = displayTaskStatus(task.status, task.hasPendingApproval);
                   return (
                     // Each row leads somewhere, so it lights up under the
                     // pointer — scanning a long day of activity should feel

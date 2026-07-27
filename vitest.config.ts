@@ -6,6 +6,8 @@ export default defineConfig({
     // parallel lets count-based assertions observe another suite's fixture.
     fileParallelism: false,
     projects: [
+      'packages/application',
+      'packages/config',
       'packages/core',
       'packages/db',
       'packages/tools',

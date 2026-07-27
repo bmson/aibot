@@ -1,8 +1,8 @@
+import { gmailSyncEnabled, isModuleEnabled, loadConfig } from '@assistant/config';
 import {
   evaluateCanaryHealth,
   expireStaleApprovals,
   findDueTasks,
-  loadConfig,
   resumeResolvedApprovalTasks,
 } from '@assistant/core';
 import { Hono } from 'hono';
@@ -156,6 +156,9 @@ internal.post('/sweep', async (c) => {
 
 internal.post('/gmail/watch', async (c) => {
   const config = loadConfig();
+  if (!isModuleEnabled(config, 'google')) {
+    return c.json({ error: 'google module disabled' }, 404);
+  }
   if (!config.GMAIL_PUBSUB_TOPIC) {
     return c.json(
       { error: 'GMAIL_PUBSUB_TOPIC not set — local dev uses polling; push arrives with deploy' },
@@ -169,9 +172,8 @@ internal.post('/gmail/watch', async (c) => {
 });
 
 internal.post('/gmail/sync', async (c) => {
-  const { gmailSyncEnabled } = await import('@assistant/core');
   if (!gmailSyncEnabled()) {
-    return c.json({ skipped: true, reason: 'gmail sync disabled (GMAIL_SYNC_ENABLED)' });
+    return c.json({ skipped: true, reason: 'gmail sync disabled by module or setting' });
   }
   const deps = buildDeps();
   const { syncMailbox } = await import('../email-sync.js');

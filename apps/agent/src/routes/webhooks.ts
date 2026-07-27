@@ -1,7 +1,7 @@
+import { isModuleEnabled, loadConfig } from '@assistant/config';
 import {
   getAgent,
   LocationPingSchema,
-  loadConfig,
   recordBrowserJobResult,
   recordCodeJobResult,
   recordDocumentProcessorResult,
@@ -35,6 +35,7 @@ webhooks.use(
 
 webhooks.post('/gmail/pubsub', async (c) => {
   const config = loadConfig();
+  if (!isModuleEnabled(config, 'google')) return c.json({ error: 'google module disabled' }, 404);
   const authorization = c.req.header('authorization');
   if (!authorization) return c.json({ error: 'missing token' }, 401);
   if (
@@ -65,6 +66,9 @@ webhooks.post('/gmail/pubsub', async (c) => {
  * shared secrets, so a leaked job env can wake exactly one task, once.
  */
 webhooks.post('/browser/callback', async (c) => {
+  if (!isModuleEnabled(loadConfig(), 'browser')) {
+    return c.json({ error: 'browser module disabled' }, 404);
+  }
   const body = await c.req
     .json<{ taskId?: string; token?: string; result?: Record<string, unknown> }>()
     .catch(() => null);
@@ -86,6 +90,9 @@ webhooks.post('/browser/callback', async (c) => {
  * task state is the only credential the credential-free job carries.
  */
 webhooks.post('/code/callback', async (c) => {
+  if (!isModuleEnabled(loadConfig(), 'code')) {
+    return c.json({ error: 'code module disabled' }, 404);
+  }
   const body = await c.req
     .json<{ taskId?: string; token?: string; result?: Record<string, unknown> }>()
     .catch(() => null);
@@ -108,6 +115,9 @@ webhooks.post('/code/callback', async (c) => {
  * `documents` row is the only credential the credential-free worker carries.
  */
 webhooks.post('/document/callback', async (c) => {
+  if (!isModuleEnabled(loadConfig(), 'documents')) {
+    return c.json({ error: 'documents module disabled' }, 404);
+  }
   const body = await c.req
     .json<{
       documentId?: string;
@@ -160,6 +170,9 @@ webhooks.post('/location', async (c) => {
 
 /** Dedicated one-shot callback for browser canaries; no task/workflow state is exposed. */
 webhooks.post('/canaries/browser', async (c) => {
+  if (!isModuleEnabled(loadConfig(), 'browser')) {
+    return c.json({ error: 'browser module disabled' }, 404);
+  }
   const body = await c.req
     .json<{ taskId?: string; token?: string; result?: unknown }>()
     .catch(() => null);
@@ -183,6 +196,7 @@ webhooks.post('/canaries/browser', async (c) => {
 
 webhooks.post('/twilio/sms', async (c) => {
   const config = loadConfig();
+  if (!isModuleEnabled(config, 'sms')) return c.text('SMS module disabled', 404);
   if (!config.TWILIO_AUTH_TOKEN) return c.text('Twilio not configured', 501);
 
   const form = await c.req.parseBody();

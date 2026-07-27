@@ -128,7 +128,7 @@ export function ApprovalCard({
         <div className="grid gap-2 sm:grid-cols-2">
           <details className="rounded-xl bg-sunken/45 px-3 py-2.5">
             <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs font-medium text-muted select-none">
-              Why AI Bot paused
+              Why the assistant paused
             </summary>
             <p className="mt-2 max-w-[72ch] text-xs leading-5 text-muted">{approval.reason}</p>
           </details>
@@ -154,7 +154,7 @@ export function ApprovalCard({
             Edit the exact request
           </label>
           <p className="mt-1 text-xs text-muted">
-            This is the technical payload AI Bot will use after approval.
+            This is the technical payload the assistant will use after approval.
           </p>
           <textarea
             id={`approval-payload-${approval.id}`}

@@ -1,16 +1,8 @@
 'use server';
 
-import {
-  deleteImportSource,
-  detectKind,
-  getAgent,
-  purgeImportSource,
-  reviewImportSource,
-  startImport,
-} from '@assistant/core';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getDb, getWorkspace } from '@/lib/server';
+import { getApplication } from '@/lib/server';
 
 function revalidateImport(): void {
   revalidatePath('/import');
@@ -23,15 +15,8 @@ export async function startImportAction(
   sourceTag: string,
 ): Promise<{ error?: string }> {
   await requireOwner();
-  const db = getDb();
-  const agent = await getAgent(db);
-  try {
-    const content = await getWorkspace().read(workspacePath);
-    const kind = detectKind(workspacePath, content.slice(0, 4000));
-    await startImport(db, { agentId: agent.id, source: sourceTag, workspacePath, kind });
-  } catch (err) {
-    return { error: String(err instanceof Error ? err.message : err) };
-  }
+  const result = await getApplication().startImport(workspacePath, sourceTag);
+  if (result.error) return result;
   revalidateImport();
   return {};
 }
@@ -39,14 +24,14 @@ export async function startImportAction(
 /** Bound form action: purge every memory this source produced. */
 export async function purgeSourceAction(source: string): Promise<void> {
   await requireOwner();
-  await purgeImportSource(getDb(), source);
+  await getApplication().purgeImport(source);
   revalidateImport();
 }
 
 /** Remove the source entirely: memories, uploaded file, and the row itself. */
 export async function deleteSourceAction(source: string): Promise<void> {
   await requireOwner();
-  await deleteImportSource(getDb(), source, getWorkspace());
+  await getApplication().deleteImport(source);
   revalidateImport();
 }
 
@@ -55,6 +40,6 @@ export async function reviewSourceAction(
   verdict: 'approve' | 'reject',
 ): Promise<void> {
   await requireOwner();
-  await reviewImportSource(getDb(), source, verdict);
+  await getApplication().reviewImport(source, verdict);
   revalidateImport();
 }

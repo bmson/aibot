@@ -9,8 +9,15 @@ import type { NextConfig } from 'next';
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 const nextConfig: NextConfig = {
+  output: 'standalone',
   outputFileTracingRoot: workspaceRoot,
-  transpilePackages: ['@assistant/db', '@assistant/core', '@assistant/tools'],
+  transpilePackages: [
+    '@assistant/application',
+    '@assistant/config',
+    '@assistant/db',
+    '@assistant/core',
+    '@assistant/tools',
+  ],
   // unauthorized() in auth.ts renders app/unauthorized.tsx with a real 401 status.
   //
   // Deliberately NOT setting experimental.viewTransition: it only takes effect

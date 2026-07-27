@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import type { Config } from '@assistant/core';
+import type { Config } from '@assistant/config';
 import { createRemoteJWKSet, type JWTVerifyGetKey, type JWTVerifyOptions, jwtVerify } from 'jose';
 
 const googleJwks = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));

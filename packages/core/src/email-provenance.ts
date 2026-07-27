@@ -28,7 +28,7 @@ const QUOTE_MARKERS: RegExp[] = [
   // A quoted block: any line beginning with the ">" citation marker.
   /^\s*>/m,
   // Attribution lines that introduce a quote, e.g.
-  // "On Sun, Jul 19, 2026 at 21:52 Baldvin <b@x.com> wrote:". The date and name
+  // "On Sun, Jul 19, 2026 at 21:52 Owner <owner@example.com> wrote:". The date and name
   // may wrap across lines, so match the bracketing tokens rather than a shape.
   /^\s*on\b[\s\S]{0,300}?\bwrote\s*:/im,
   // Outlook's header block reproduced inline.

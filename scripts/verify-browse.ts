@@ -6,13 +6,13 @@
  *   pnpm tsx scripts/verify-browse.ts --prod            # enqueue in prod
  *   pnpm tsx scripts/verify-browse.ts --prod --watch <taskId>
  */
-import { loadConfig } from '@assistant/core';
+import { loadConfig } from '@assistant/config';
 import { agents, conversations, createDb, messages, tasks, toolCalls } from '@assistant/db';
 import { desc, eq } from 'drizzle-orm';
 
 const prod = process.argv.includes('--prod');
 const config = loadConfig();
-const dbUrl = prod ? process.env.PROD_DATABASE_URL : config.DATABASE_URL;
+const dbUrl = prod ? config.PROD_DATABASE_URL : config.DATABASE_URL;
 if (!dbUrl) {
   console.error(prod ? 'PROD_DATABASE_URL missing from .env' : 'DATABASE_URL missing');
   process.exit(1);

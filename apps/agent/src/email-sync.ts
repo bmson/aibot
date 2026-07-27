@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isModuleEnabled } from '@assistant/config';
 import type { Trust } from '@assistant/core';
 import {
   captureOwnerWritingSample,
@@ -328,6 +329,7 @@ async function fileMessageAttachments(
   deps: AgentDeps,
   input: { agentId: string; message: GmailMessage; trust: Trust },
 ): Promise<void> {
+  if (!isModuleEnabled(deps.config, 'documents')) return;
   const attachments = collectGmailAttachments(input.message.payload).slice(
     0,
     MAX_ATTACHMENTS_PER_MESSAGE,

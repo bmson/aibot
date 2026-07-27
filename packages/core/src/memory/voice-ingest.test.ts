@@ -2,6 +2,7 @@ import { createDb, type Db, importSources, tasks, writingSamples } from '@assist
 import { and, eq, inArray, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
+import { loadConfig } from '../config.js';
 import type { ModelRouter } from '../model-router/router.js';
 import type { DispatcherPort } from '../workflow/executor.js';
 import { executeTask } from '../workflow/executor.js';
@@ -175,7 +176,9 @@ describe('voice ingest job (integration)', () => {
 
   const fakeWorkspace: WorkspaceReader = {
     async read(relPath: string) {
-      if (relPath === 'import/uploads/voice.mbox') return MBOX;
+      if (relPath === 'import/uploads/voice.mbox') {
+        return MBOX.replaceAll('bmson@bmson.com', loadConfig().OWNER_EMAIL);
+      }
       throw new Error(`no such file: ${relPath}`);
     },
     async write() {

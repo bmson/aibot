@@ -1,6 +1,4 @@
-import { getAgent } from '@assistant/core';
-import { approvals, tasks, toolCalls } from '@assistant/db';
-import { and, asc, desc, eq, gt, inArray, lte, or, sql } from 'drizzle-orm';
+import { listApprovalInbox } from '@assistant/application/approvals';
 import { ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { AutoRefresh } from '@/app/auto-refresh';
@@ -19,43 +17,9 @@ export default async function ApprovalsPage() {
   await requireOwner();
   const db = getDb();
   const now = new Date();
-  const [tz, agent] = await Promise.all([getAgentTimezone(), getAgent(db)]);
-
-  const [pending, resolved] = await Promise.all([
-    db
-      .select({
-        approval: approvals,
-        taskType: tasks.type,
-        taskTrust: tasks.trust,
-        toolName: toolCalls.toolName,
-        decision: toolCalls.decision,
-      })
-      .from(approvals)
-      .innerJoin(tasks, eq(approvals.taskId, tasks.id))
-      .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
-      .where(
-        and(
-          eq(tasks.agentId, agent.id),
-          eq(approvals.status, 'pending'),
-          gt(approvals.expiresAt, sql`now()`),
-        ),
-      )
-      .orderBy(asc(approvals.requestedAt)),
-    db
-      .select({ approval: approvals, taskType: tasks.type })
-      .from(approvals)
-      .innerJoin(tasks, eq(approvals.taskId, tasks.id))
-      .where(
-        and(
-          eq(tasks.agentId, agent.id),
-          or(
-            inArray(approvals.status, ['approved', 'denied', 'expired']),
-            and(eq(approvals.status, 'pending'), lte(approvals.expiresAt, sql`now()`)),
-          ),
-        ),
-      )
-      .orderBy(desc(approvals.resolvedAt))
-      .limit(20),
+  const [tz, { pending, resolved }] = await Promise.all([
+    getAgentTimezone(),
+    listApprovalInbox(db),
   ]);
 
   return (
@@ -74,7 +38,7 @@ export default async function ApprovalsPage() {
         </p>
         {pending.length === 0 ? (
           <EmptyState icon={<ShieldCheck className="size-5" />}>
-            Nothing is waiting on you. AI Bot asks here before anything leaves its workspace.
+            Nothing is waiting on you. The assistant asks here before anything leaves its workspace.
           </EmptyState>
         ) : (
           <div className="mt-5 flex flex-col gap-4">

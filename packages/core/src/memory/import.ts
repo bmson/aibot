@@ -270,12 +270,12 @@ function importPayload(task: TaskRow): ImportPayload {
 
 function importSystem(source: string, period: string): string {
   return [
-    "You distill an ARCHIVE from the owner's (Baldvin's) digital past into lasting memories.",
+    "You distill an ARCHIVE from the owner's digital past into lasting memories.",
     `Source: ${source}. Period: ${period}. The content may be years old — extract only`,
     'durable, biography-level information: who people are, where he lived/worked, lasting',
     'preferences, significant events. Skip logistics, newsletters, receipts, marketing,',
     'and anything trivially dated. Each fact must stand alone, in third person, with names',
-    'spelled out. Use subject "owner" for Baldvin himself. Include validFrom (ISO date)',
+    'spelled out. Use subject "owner" for the owner. Include validFrom (ISO date)',
     'when the period implies it. If nothing is worth keeping, return an empty facts array.',
     'Also capture OCCASIONS in the separate occasions array: recurring dates for named',
     'people — birthdays, anniversaries, and other dated events — but only when a specific',

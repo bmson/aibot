@@ -1,6 +1,4 @@
-import { activeAutonomyGrant, getAgent } from '@assistant/core';
-import { approvals, files, messages, modelCalls, tasks, toolCalls } from '@assistant/db';
-import { and, asc, eq } from 'drizzle-orm';
+import { getTaskDetail } from '@assistant/application/tasks';
 import { Brain, Hand, MessageSquare, Wrench } from 'lucide-react';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
@@ -91,32 +89,20 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   if (!UUID_RE.test(id)) notFound();
 
   const db = getDb();
-  const agent = await getAgent(db);
   const now = new Date();
-
-  const [task] = await db
-    .select()
-    .from(tasks)
-    .where(and(eq(tasks.id, id), eq(tasks.agentId, agent.id)));
-  if (!task) notFound();
-
-  const [taskToolCalls, taskModelCalls, taskApprovals, taskMessages, taskFiles] = await Promise.all(
-    [
-      db.select().from(toolCalls).where(eq(toolCalls.taskId, id)).orderBy(asc(toolCalls.createdAt)),
-      db
-        .select()
-        .from(modelCalls)
-        .where(eq(modelCalls.taskId, id))
-        .orderBy(asc(modelCalls.createdAt)),
-      db
-        .select()
-        .from(approvals)
-        .where(eq(approvals.taskId, id))
-        .orderBy(asc(approvals.requestedAt)),
-      db.select().from(messages).where(eq(messages.taskId, id)).orderBy(asc(messages.createdAt)),
-      db.select().from(files).where(eq(files.taskId, id)).orderBy(asc(files.createdAt)),
-    ],
-  );
+  const detail = await getTaskDetail(db, id);
+  if (!detail) notFound();
+  const {
+    timezone,
+    task,
+    toolCalls: taskToolCalls,
+    modelCalls: taskModelCalls,
+    approvals: taskApprovals,
+    messages: taskMessages,
+    files: taskFiles,
+    activeGrant,
+    stuckWaiting,
+  } = detail;
   // Downloadable artifacts this task produced (charts, exports, saved pages).
   const downloadableFiles = taskFiles.filter((f) =>
     ['code/', 'browser/attachments/', 'documents/'].some((p) => f.workspacePath.startsWith(p)),
@@ -186,9 +172,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
               {approval.shortCode}
               {approval.resolvedVia ? ` · resolved via ${approval.resolvedVia}` : ''}
-              {approval.resolvedAt
-                ? ` at ${formatDateTime(approval.resolvedAt, agent.timezone)}`
-                : ''}
+              {approval.resolvedAt ? ` at ${formatDateTime(approval.resolvedAt, timezone)}` : ''}
             </p>
           </div>
         ),
@@ -215,13 +199,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   const suggestedBudget = Math.ceil(Math.max(taskBudget * 2, Number(task.spentUsd) + 0.25) * 4) / 4;
   const stoppedForTaskBudget =
     task.status === 'needs_attention' && task.progress.startsWith('budget: task budget');
-  const activeGrant = activeAutonomyGrant(task, Date.now());
   const terminal = TERMINAL_TASK_STATUSES.has(task.status);
-  // Parked on an approval that was resolved, expired, or never written. Nothing
-  // will ever arrive to un-park it, so the owner needs the way out here.
-  const stuckWaiting =
-    task.status === 'waiting_approval' &&
-    !taskApprovals.some((approval) => approval.status === 'pending');
 
   return (
     <PageShell size="reading">
@@ -317,11 +295,11 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           {formatUsd(task.spentUsd)} of {formatUsd(task.budgetUsdLimit)}
         </InfoItem>
         <InfoItem label="Updated">
-          {relativeTime(task.updatedAt, now)} · {formatDateTime(task.updatedAt, agent.timezone)}
+          {relativeTime(task.updatedAt, now)} · {formatDateTime(task.updatedAt, timezone)}
         </InfoItem>
         {task.deadline ? (
           <InfoItem label="Target date">
-            {relativeTime(task.deadline, now)} · {formatDateTime(task.deadline, agent.timezone)}
+            {relativeTime(task.deadline, now)} · {formatDateTime(task.deadline, timezone)}
           </InfoItem>
         ) : null}
         {task.nextAction ? (
@@ -435,7 +413,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                         {entry.label}
                       </span>
                       <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
-                        {formatDateTime(entry.at, agent.timezone)}
+                        {formatDateTime(entry.at, timezone)}
                       </span>
                     </div>
                     <div className="mt-1">{entry.content}</div>

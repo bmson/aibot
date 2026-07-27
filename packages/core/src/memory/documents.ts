@@ -1,20 +1,14 @@
 import { createHash } from 'node:crypto';
-import {
-  type Db,
-  type DocumentRow,
-  documentChunks,
-  documents,
-  files,
-  type TaskRow,
-  tasks,
-} from '@assistant/db';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { type Db, documentChunks, documents, files, type TaskRow, tasks } from '@assistant/db';
+import { and, eq, sql } from 'drizzle-orm';
 import { BudgetReservationError } from '../cost.js';
 import type { ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
-import { getQueueNotifier } from '../queue.js';
-import { enqueueTask } from '../workflow/machine.js';
+import { baseMime, type DocumentExtractor, extractorFor } from './document-types.js';
 import type { WorkspaceReader } from './import.js';
+
+export * from './document-catalog.js';
+export * from './document-types.js';
 
 /**
  * Document intelligence (Phase 11). An uploaded file or an attachment the
@@ -30,10 +24,6 @@ import type { WorkspaceReader } from './import.js';
  * container never loads heavyweight parsers for those.
  */
 
-export type DocumentExtractor = 'text' | 'pdf' | 'pending_processor' | 'unsupported';
-export type DocumentTrust = 'owner' | 'known' | 'unknown' | 'assistant';
-export type DocumentSource = 'upload' | 'email' | 'drive';
-
 const CHUNK_CHARS = 1200;
 const CHUNK_OVERLAP = 150;
 const MAX_CHUNKS = 4000; // bounds cost/runtime for a very large document
@@ -41,57 +31,6 @@ const CHUNKS_PER_RUN = 60; // one lease's worth, under the router's 100/embed-ba
 const MAX_EXTRACT_BYTES = 40 * 1024 * 1024;
 const MIN_PDF_TEXT_CHARS = 16; // below this a PDF is treated as a scan → needs OCR (Phase 14)
 const RESUME_DELAY_MS = 3_000;
-const DEFAULT_DOCUMENT_BUDGET_USD = '0.50';
-
-const TEXT_LIKE_MIMES: ReadonlySet<string> = new Set([
-  'application/json',
-  'application/xml',
-  'application/xhtml+xml',
-  'application/csv',
-  'application/x-ndjson',
-  'application/x-yaml',
-  'application/yaml',
-  'application/markdown',
-]);
-const TEXT_LIKE_EXT =
-  /\.(txt|md|markdown|csv|tsv|json|jsonl|ndjson|ya?ml|xml|html?|log|rst|org|tex|vtt|srt)$/i;
-const CODE_EXT =
-  /\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|kt|c|h|cpp|cc|cs|php|sh|sql|css|scss|toml|ini|cfg|conf)$/i;
-const PDF_MIME = 'application/pdf';
-const PENDING_MIME_RE = /^(image|audio|video)\//;
-const PENDING_MIMES: ReadonlySet<string> = new Set([
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-excel',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-powerpoint',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/vnd.oasis.opendocument.text',
-  'application/vnd.oasis.opendocument.spreadsheet',
-  'application/rtf',
-]);
-
-function baseMime(mime: string): string {
-  return (mime || '').toLowerCase().split(';')[0]?.trim() ?? '';
-}
-
-/** Pick the extraction strategy from the mime type, falling back to the filename. */
-export function extractorFor(mime: string, filename: string): DocumentExtractor {
-  const m = baseMime(mime);
-  const name = filename.toLowerCase();
-  if (m === PDF_MIME || name.endsWith('.pdf')) return 'pdf';
-  if (
-    m.startsWith('text/') ||
-    TEXT_LIKE_MIMES.has(m) ||
-    TEXT_LIKE_EXT.test(name) ||
-    CODE_EXT.test(name)
-  ) {
-    return 'text';
-  }
-  if (PENDING_MIME_RE.test(m) || PENDING_MIMES.has(m)) return 'pending_processor';
-  return 'unsupported';
-}
-
 function stripHtml(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -428,232 +367,4 @@ export async function searchDocumentChunks(
     .where(and(...filters))
     .orderBy(sql`${documentChunks.embedding} <=> ${vec}::vector`)
     .limit(input.limit);
-}
-
-// ── Lifecycle (dashboard + triage entry points) ──────────────────────────────
-
-export interface StartDocumentInput {
-  agentId: string;
-  title: string;
-  workspacePath: string;
-  mime: string;
-  bytes: number;
-  sha256: string;
-  source?: DocumentSource;
-  sourceRef?: string;
-  trust?: DocumentTrust;
-  budgetUsdLimit?: string;
-}
-
-export interface StartDocumentResult {
-  document: DocumentRow;
-  taskId: string | null;
-  duplicate: boolean;
-}
-
-/**
- * File a document: create its files-inventory row and documents row, and — for
- * in-process formats — enqueue the resumable extraction job. Deduplicates on
- * (agentId, sha256): re-filing identical bytes returns the existing document
- * without re-extracting. Heavy formats are recorded `pending`/`pending_processor`
- * (awaiting Phase 14) or `unsupported`, with no job enqueued.
- */
-export async function startDocumentIngest(
-  db: Db,
-  input: StartDocumentInput,
-): Promise<StartDocumentResult> {
-  const extractor = extractorFor(input.mime, input.title);
-  const status = extractor === 'unsupported' ? 'unsupported' : 'pending';
-
-  type EnqueuedTask = { id: string; queueGeneration: number };
-  const result = await db.transaction(async (tx) => {
-    const txDb = tx as unknown as Db;
-    const [existing] = await tx
-      .select()
-      .from(documents)
-      .where(and(eq(documents.agentId, input.agentId), eq(documents.sha256, input.sha256)))
-      .limit(1);
-    if (existing) {
-      return { document: existing, task: null as EnqueuedTask | null, duplicate: true };
-    }
-
-    const [file] = await tx
-      .insert(files)
-      .values({
-        agentId: input.agentId,
-        workspacePath: input.workspacePath,
-        mime: input.mime,
-        bytes: input.bytes,
-        sha256: input.sha256,
-      })
-      .returning();
-    if (!file) throw new Error('failed to create file row for document');
-
-    const [doc] = await tx
-      .insert(documents)
-      .values({
-        agentId: input.agentId,
-        fileId: file.id,
-        title: input.title.slice(0, 300),
-        mime: input.mime,
-        source: input.source ?? 'upload',
-        sourceRef: input.sourceRef ?? '',
-        trust: input.trust ?? 'owner',
-        sha256: input.sha256,
-        status,
-        extractor,
-      })
-      .returning();
-    if (!doc) throw new Error('failed to create document row');
-
-    // text/pdf are extracted in-process; heavy formats are handed to the
-    // out-of-process document-processor worker (Phase 14). Unsupported enqueues
-    // nothing.
-    const job =
-      extractor === 'text' || extractor === 'pdf'
-        ? 'documents.extract'
-        : extractor === 'pending_processor'
-          ? 'documents.process'
-          : null;
-    if (!job) return { document: doc, task: null as EnqueuedTask | null, duplicate: false };
-
-    const { task } = await enqueueTask(txDb, {
-      event: {
-        source: 'internal',
-        agentId: input.agentId,
-        trust: 'assistant',
-        payload: { job, documentId: doc.id },
-      },
-      type: 'adhoc',
-      budgetUsdLimit:
-        job === 'documents.process'
-          ? '0.05'
-          : (input.budgetUsdLimit ?? DEFAULT_DOCUMENT_BUDGET_USD),
-      deferNotification: true,
-    });
-    return {
-      document: doc,
-      task: { id: task.id, queueGeneration: task.queueGeneration },
-      duplicate: false,
-    };
-  });
-
-  if (result.task) getQueueNotifier().notify(result.task.id, result.task.queueGeneration);
-  return {
-    document: result.document,
-    taskId: result.task?.id ?? null,
-    duplicate: result.duplicate,
-  };
-}
-
-export interface DocumentView {
-  id: string;
-  title: string;
-  mime: string;
-  source: string;
-  trust: string;
-  status: string;
-  extractor: string;
-  chunkCount: number;
-  charCount: number;
-  bytes: number;
-  error: string | null;
-  createdAt: Date;
-}
-
-export async function listDocuments(db: Db, agentId: string): Promise<DocumentView[]> {
-  const rows = await db
-    .select({
-      id: documents.id,
-      title: documents.title,
-      mime: documents.mime,
-      source: documents.source,
-      trust: documents.trust,
-      status: documents.status,
-      extractor: documents.extractor,
-      chunkCount: documents.chunkCount,
-      charCount: documents.charCount,
-      bytes: files.bytes,
-      error: documents.error,
-      createdAt: documents.createdAt,
-    })
-    .from(documents)
-    .innerJoin(files, eq(files.id, documents.fileId))
-    .where(eq(documents.agentId, agentId))
-    .orderBy(desc(documents.createdAt))
-    .limit(200);
-  return rows.map((r) => ({ ...r, bytes: r.bytes ?? 0 }));
-}
-
-export interface DocumentStats {
-  total: number;
-  ready: number;
-  pending: number;
-  chunks: number;
-}
-
-export async function documentStats(db: Db, agentId: string): Promise<DocumentStats> {
-  const [row] = await db
-    .select({
-      total: sql<number>`count(*)`,
-      ready: sql<number>`count(*) filter (where ${documents.status} = 'ready')`,
-      pending: sql<number>`count(*) filter (where ${documents.status} in ('pending','extracting'))`,
-      chunks: sql<number>`coalesce(sum(${documents.chunkCount}), 0)`,
-    })
-    .from(documents)
-    .where(eq(documents.agentId, agentId));
-  return {
-    total: Number(row?.total ?? 0),
-    ready: Number(row?.ready ?? 0),
-    pending: Number(row?.pending ?? 0),
-    chunks: Number(row?.chunks ?? 0),
-  };
-}
-
-/**
- * Delete a document: cancel any in-flight extraction, remove its chunks, the
- * document row, its file-inventory row, and the workspace bytes.
- */
-export async function purgeDocument(
-  db: Db,
-  agentId: string,
-  documentId: string,
-  workspace?: { delete(relPath: string): Promise<void> },
-): Promise<{ deleted: boolean }> {
-  const [doc] = await db
-    .select()
-    .from(documents)
-    .where(and(eq(documents.id, documentId), eq(documents.agentId, agentId)));
-  if (!doc) return { deleted: false };
-  const [file] = await db.select().from(files).where(eq(files.id, doc.fileId));
-
-  await db.transaction(async (tx) => {
-    await tx
-      .update(tasks)
-      .set({ status: 'cancelled', lockedUntil: null, runAfter: null, updatedAt: sql`now()` })
-      .where(
-        and(
-          sql`${tasks.trigger}->'payload'->>'job' IN ('documents.extract','documents.process')`,
-          sql`${tasks.trigger}->'payload'->>'documentId' = ${documentId}`,
-          inArray(tasks.status, ['pending', 'sleeping', 'running', 'needs_attention']),
-        ),
-      );
-    await tx.delete(documentChunks).where(eq(documentChunks.documentId, documentId));
-    await tx.delete(documents).where(eq(documents.id, documentId));
-    await tx.delete(files).where(eq(files.id, doc.fileId));
-  });
-
-  if (workspace && file) {
-    await workspace.delete(file.workspacePath).catch((err) => {
-      console.error(`document purge: workspace delete failed for ${file.workspacePath}`, err);
-    });
-  }
-  // The document-processor worker's extracted-text blob (Phase 14) lives outside
-  // the files inventory, so purge it explicitly.
-  if (workspace && doc.processedTextPath) {
-    await workspace.delete(doc.processedTextPath).catch((err) => {
-      console.error(`document purge: text-blob delete failed for ${doc.processedTextPath}`, err);
-    });
-  }
-  return { deleted: true };
 }

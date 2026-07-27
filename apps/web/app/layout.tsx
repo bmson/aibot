@@ -1,12 +1,10 @@
-import { getMemoryHealth } from '@assistant/core';
-import { approvals, tasks } from '@assistant/db';
-import { and, count, eq, gt, inArray, sql } from 'drizzle-orm';
+import { isModuleEnabled, loadConfig } from '@assistant/config';
 import type { Metadata, Viewport } from 'next';
 import { Bricolage_Grotesque, Inter, JetBrains_Mono } from 'next/font/google';
 import Script from 'next/script';
 import type { CSSProperties, ReactNode } from 'react';
 import { auth, authMode } from '@/auth';
-import { getAgentIdentity, getDb } from '@/lib/server';
+import { getAgentIdentity, getApplication } from '@/lib/server';
 import { AppNav } from './app-nav';
 import './globals.css';
 
@@ -69,27 +67,38 @@ const navItems = [
 ];
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
+  const config = loadConfig();
+  const visibleNavItems = navItems.filter(
+    (item) => item.href !== '/documents' || isModuleEnabled(config, 'documents'),
+  );
   const identity = await getAgentIdentity();
-  const [pendingApprovals, session, presenceRows, memoryHealth] = await Promise.all([
-    (async () => {
-      try {
-        const [pendingRow] = await getDb()
-          .select({ value: count() })
-          .from(approvals)
-          .innerJoin(tasks, eq(approvals.taskId, tasks.id))
-          .where(
-            and(
-              eq(tasks.agentId, identity.id),
-              eq(approvals.status, 'pending'),
-              gt(approvals.expiresAt, sql`now()`),
-            ),
-          );
-        return pendingRow?.value ?? 0;
-      } catch (error) {
-        console.error('[layout] failed to load pending approval count', error);
-        return 0;
-      }
-    })(),
+  const [shell, session] = await Promise.all([
+    identity.id
+      ? getApplication()
+          .getShellStatus(identity.id)
+          .catch((error) => {
+            console.error('[layout] failed to load shell status', error);
+            return {
+              dashboard: { pendingApprovals: 0, needsAttention: 0, presence: 'idle' as const },
+              memoryHealth: {
+                totalUsable: 0,
+                notYetOrganized: 0,
+                awaitingReview: 0,
+                ownerConfirmed: 0,
+                lastOrganizedAt: null,
+              },
+            };
+          })
+      : Promise.resolve({
+          dashboard: { pendingApprovals: 0, needsAttention: 0, presence: 'idle' as const },
+          memoryHealth: {
+            totalUsable: 0,
+            notYetOrganized: 0,
+            awaitingReview: 0,
+            ownerConfirmed: 0,
+            lastOrganizedAt: null,
+          },
+        }),
     (async () => {
       if (authMode !== 'google') return null;
       try {
@@ -99,46 +108,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         return null;
       }
     })(),
-    (async () => {
-      try {
-        return await getDb()
-          .select({ status: tasks.status, value: count() })
-          .from(tasks)
-          .where(
-            and(
-              eq(tasks.agentId, identity.id),
-              inArray(tasks.status, ['running', 'needs_attention']),
-            ),
-          )
-          .groupBy(tasks.status);
-      } catch {
-        return [];
-      }
-    })(),
-    identity.id
-      ? getMemoryHealth(getDb(), identity.id).catch(() => ({
-          totalUsable: 0,
-          notYetOrganized: 0,
-          awaitingReview: 0,
-          ownerConfirmed: 0,
-          lastOrganizedAt: null,
-        }))
-      : Promise.resolve({
-          totalUsable: 0,
-          notYetOrganized: 0,
-          awaitingReview: 0,
-          ownerConfirmed: 0,
-          lastOrganizedAt: null,
-        }),
   ]);
-  const needsAttentionCount =
-    presenceRows.find((row) => row.status === 'needs_attention')?.value ?? 0;
-  const presence =
-    pendingApprovals > 0 || needsAttentionCount > 0
-      ? 'attention'
-      : presenceRows.some((row) => row.status === 'running' && row.value > 0)
-        ? 'working'
-        : 'idle';
+  const { dashboard, memoryHealth } = shell;
+  const { pendingApprovals, needsAttention: needsAttentionCount, presence } = dashboard;
 
   return (
     <html
@@ -173,7 +145,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         ) : null}
         <div className="flex flex-1 flex-col lg:flex-row">
           <AppNav
-            navItems={navItems}
+            navItems={visibleNavItems}
             pendingApprovals={pendingApprovals}
             signedIn={!!session?.user}
             agentName={identity.name}

@@ -1,15 +1,6 @@
-import {
-  detectKind,
-  getAgent,
-  isVoiceRegister,
-  registerForFilename,
-  startImport,
-  startVoiceIngest,
-} from '@assistant/core';
 import { redirect } from 'next/navigation';
 import { isAuthed } from '@/auth';
-import { cleanImportFileName, registerStagedImport, stagedImportPath } from '@/lib/import-upload';
-import { getDb, getWorkspace } from '@/lib/server';
+import { getApplication } from '@/lib/server';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // Cloud Run request cap is 32MB — stay under it
 const MAX_MULTIPART_BYTES = MAX_UPLOAD_BYTES + 1024 * 1024; // form fields + MIME boundary overhead
@@ -45,36 +36,19 @@ export async function POST(req: Request) {
     );
   }
 
-  const cleanName = cleanImportFileName(file.name);
-  const workspacePath = stagedImportPath(cleanName);
   const labelField = String(form.get('source') ?? '').trim();
-  const sourceTag = labelField || cleanName.replace(/\.[a-z0-9]+$/i, '').toLowerCase();
   // Voice uploads seed the writing-sample corpus instead of memory; the Profile
   // page posts here with voice=1 and a register.
   const isVoice = String(form.get('voice') ?? '') === '1';
 
   const content = await file.text();
-  const workspace = getWorkspace();
-  const db = getDb();
-  const agent = await getAgent(db);
-  const kind = detectKind(cleanName, content.slice(0, 4000));
-
-  await registerStagedImport(workspace, workspacePath, content, () => {
-    if (isVoice) {
-      const registerField = String(form.get('register') ?? '');
-      const register = isVoiceRegister(registerField)
-        ? registerField
-        : registerForFilename(file.name);
-      return startVoiceIngest(db, {
-        agentId: agent.id,
-        source: labelField || cleanName,
-        workspacePath,
-        kind,
-        register,
-      });
-    }
-    return startImport(db, { agentId: agent.id, source: sourceTag, workspacePath, kind });
+  const result = await getApplication().uploadImport({
+    fileName: file.name,
+    content,
+    source: labelField,
+    voice: isVoice,
+    register: String(form.get('register') ?? ''),
   });
 
-  redirect(isVoice ? '/profile' : '/import');
+  redirect(result.destination);
 }

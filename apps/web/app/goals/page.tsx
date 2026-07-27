@@ -1,11 +1,8 @@
 import {
-  GOAL_BLOCKED_PREFIX,
-  getAgent,
-  goalAutomationCadence,
-  goalScheduleName,
-} from '@assistant/core';
-import { conversations, type GoalRow, goals, schedules, tasks } from '@assistant/db';
-import { and, asc, count, desc, eq, isNotNull, isNull, notInArray } from 'drizzle-orm';
+  type GoalDashboardItem,
+  type GoalSnapshot,
+  listGoalsDashboard,
+} from '@assistant/application/goals';
 import Link from 'next/link';
 import { GoalCard, type GoalView } from '@/app/goals/goal-card';
 import { GoalCreateForm } from '@/app/goals/goal-create-form';
@@ -31,12 +28,6 @@ const statusHeadings: Record<(typeof STATUS_ORDER)[number], string> = {
   abandoned: 'Stopped',
 };
 
-function goalIdFromMetadata(metadata: unknown): string | undefined {
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
-  const goalId = (metadata as Record<string, unknown>).goalId;
-  return typeof goalId === 'string' ? goalId : undefined;
-}
-
 /** "Due Oct 9 — 11w left" / "Due tomorrow" / "Due Oct 9 — 5d overdue". */
 function targetMeta(target: Date | null, now: Date): GoalView['targetMeta'] {
   if (!target) return null;
@@ -57,7 +48,7 @@ function targetMeta(target: Date | null, now: Date): GoalView['targetMeta'] {
 }
 
 /** Where "now" sits between the goal's start and its target, 0–100. */
-function timelinePct(goal: GoalRow, now: Date): number | null {
+function timelinePct(goal: GoalSnapshot, now: Date): number | null {
   if (!goal.targetDate) return null;
   const start = goal.createdAt.getTime();
   const span = goal.targetDate.getTime() - start;
@@ -66,18 +57,17 @@ function timelinePct(goal: GoalRow, now: Date): number | null {
 }
 
 function toGoalView(
-  goal: GoalRow,
+  goal: GoalSnapshot,
   now: Date,
   conversationId: string | undefined,
   workActive: boolean,
   automation: { enabled: boolean; nextRunAt: Date | null } | undefined,
+  cadenceLabel: string,
+  blockedQuestion: string,
   stalled: boolean,
   lastSession: { id: string; status: string; updatedAt: Date } | undefined,
 ): GoalView {
   const targetDateInput = goal.targetDate ? goal.targetDate.toISOString().slice(0, 10) : '';
-  const blockedQuestion = goal.nextAction.startsWith(GOAL_BLOCKED_PREFIX)
-    ? goal.nextAction.slice(GOAL_BLOCKED_PREFIX.length).trim()
-    : '';
   const blocked =
     goal.status === 'active' && !goal.archivedAt && (blockedQuestion !== '' || stalled);
   const isAutomating = goal.status === 'active' && !goal.archivedAt;
@@ -96,7 +86,7 @@ function toGoalView(
     archived: goal.archivedAt !== null,
     workActive,
     paceMeta: isAutomating
-      ? `Checks in ${goalAutomationCadence(goal, now).label}`
+      ? `Checks in ${cadenceLabel}`
       : goal.status === 'paused' && !goal.archivedAt
         ? 'Automation paused'
         : '',
@@ -134,117 +124,25 @@ export default async function GoalsPage({
   const db = getDb();
   const now = new Date();
 
-  const agent = await getAgent(db);
-  const [
-    rows,
-    chatRows,
-    archivedCountRows,
-    activeTaskRows,
-    automationRows,
-    stalledTaskRows,
-    sessionRows,
-  ] = await Promise.all([
-    db
-      .select()
-      .from(goals)
-      .where(
-        and(
-          eq(goals.agentId, agent.id),
-          archived ? isNotNull(goals.archivedAt) : isNull(goals.archivedAt),
-        ),
-      )
-      .orderBy(asc(goals.priority), desc(goals.updatedAt)),
-    db
-      .select({ id: conversations.id, metadata: conversations.metadata })
-      .from(conversations)
-      .where(and(eq(conversations.agentId, agent.id), eq(conversations.channel, 'chat')))
-      .orderBy(desc(conversations.updatedAt)),
-    db
-      .select({ value: count() })
-      .from(goals)
-      .where(and(eq(goals.agentId, agent.id), isNotNull(goals.archivedAt))),
-    db
-      .selectDistinct({ goalId: tasks.goalId })
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.agentId, agent.id),
-          isNotNull(tasks.goalId),
-          notInArray(tasks.status, ['done', 'failed', 'cancelled']),
-        ),
-      ),
-    db
-      .select({
-        name: schedules.name,
-        enabled: schedules.enabled,
-        nextRunAt: schedules.nextRunAt,
-      })
-      .from(schedules)
-      .where(eq(schedules.agentId, agent.id)),
-    db
-      .selectDistinct({ goalId: tasks.goalId })
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.agentId, agent.id),
-          isNotNull(tasks.goalId),
-          eq(tasks.status, 'needs_attention'),
-        ),
-      ),
-    // Most-recent-first; reduced to the latest session per goal below.
-    db
-      .select({
-        goalId: tasks.goalId,
-        id: tasks.id,
-        status: tasks.status,
-        updatedAt: tasks.updatedAt,
-      })
-      .from(tasks)
-      .where(and(eq(tasks.agentId, agent.id), isNotNull(tasks.goalId)))
-      .orderBy(desc(tasks.updatedAt)),
-  ]);
-  const chatByGoalId = new Map<string, string>();
-  for (const chat of chatRows) {
-    const goalId = goalIdFromMetadata(chat.metadata);
-    if (goalId && !chatByGoalId.has(goalId)) chatByGoalId.set(goalId, chat.id);
-  }
-  const activeGoalIds = new Set(
-    activeTaskRows.map((task) => task.goalId).filter((goalId): goalId is string => goalId !== null),
-  );
-  const stalledGoalIds = new Set(
-    stalledTaskRows
-      .map((task) => task.goalId)
-      .filter((goalId): goalId is string => goalId !== null),
-  );
-  const lastSessionByGoalId = new Map<string, { id: string; status: string; updatedAt: Date }>();
-  for (const session of sessionRows) {
-    if (session.goalId && !lastSessionByGoalId.has(session.goalId)) {
-      lastSessionByGoalId.set(session.goalId, {
-        id: session.id,
-        status: session.status,
-        updatedAt: session.updatedAt,
-      });
-    }
-  }
-  const archivedCount = archivedCountRows[0]?.value ?? 0;
+  const { items, archivedCount } = await listGoalsDashboard(db, archived, now);
+  const rows = items.map((item) => item.goal);
   const automationByGoalId = new Map<string, { enabled: boolean; nextRunAt: Date | null }>();
-  for (const goal of rows) {
-    const automation = automationRows.find(
-      (schedule) => schedule.name === goalScheduleName(goal.id),
-    );
-    if (automation) automationByGoalId.set(goal.id, automation);
+  for (const item of items) {
+    if (item.automation) automationByGoalId.set(item.goal.id, item.automation);
   }
-  const cards = rows.map((goal) => ({
-    key: `${goal.id}:${goal.updatedAt.getTime()}`,
-    status: goal.status,
+  const cards = items.map((item: GoalDashboardItem) => ({
+    key: `${item.goal.id}:${item.goal.updatedAt.getTime()}`,
+    status: item.goal.status,
     view: toGoalView(
-      goal,
+      item.goal,
       now,
-      chatByGoalId.get(goal.id),
-      activeGoalIds.has(goal.id),
-      automationByGoalId.get(goal.id),
-      stalledGoalIds.has(goal.id),
-      lastSessionByGoalId.get(goal.id),
+      item.conversationId,
+      item.workActive,
+      item.automation,
+      item.cadenceLabel,
+      item.blockedQuestion,
+      item.stalled,
+      item.lastSession,
     ),
   }));
   const groups = STATUS_ORDER.map((status) => ({

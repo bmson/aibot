@@ -1,3 +1,4 @@
+import { loadConfig, resetConfigForTest } from '@assistant/config';
 import { describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 
@@ -13,6 +14,25 @@ describe('agent app', () => {
     const app = createApp();
     const twilio = await app.request('/webhooks/twilio/sms', { method: 'POST' });
     expect(twilio.status).toBe(501);
+  });
+
+  it('keeps disabled module entry points inactive', async () => {
+    resetConfigForTest();
+    loadConfig({ ASSISTANT_MODULES: 'minimal' });
+    try {
+      const app = createApp();
+      const [gmail, sms, browser] = await Promise.all([
+        app.request('/webhooks/gmail/pubsub', { method: 'POST' }),
+        app.request('/webhooks/twilio/sms', { method: 'POST' }),
+        app.request('/webhooks/browser/callback', { method: 'POST' }),
+      ]);
+      expect(gmail.status).toBe(404);
+      expect(sms.status).toBe(404);
+      expect(browser.status).toBe(404);
+    } finally {
+      resetConfigForTest();
+      loadConfig(process.env);
+    }
   });
 
   it('rejects Pub/Sub pushes without a valid Google OIDC token', async () => {

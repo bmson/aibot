@@ -49,12 +49,12 @@ const PROMINENCE_OPTIONS: Array<{ level: ProminenceLevel; label: string; hint: s
   {
     level: 'always',
     label: 'Always',
-    hint: 'Always kept in AI Bot’s profile summary, in every conversation.',
+    hint: 'Always kept in the assistant’s profile summary, in every conversation.',
   },
   {
     level: 'auto',
     label: 'When relevant',
-    hint: 'AI Bot decides — important facts surface on their own; the rest are recalled when they matter.',
+    hint: 'The assistant decides — important facts surface on their own; the rest are recalled when they matter.',
   },
   {
     level: 'minor',
@@ -149,7 +149,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
         <InfoGrid className="sm:grid-cols-4">
           <InfoItem label={quarantine ? 'Source' : 'About'}>
             {/* The owner reads as "You" whether or not the row carries their
-                contact name — the library was showing "You" and "Baldvin" for
+                contact name — the library was showing "You" and the owner's name for
                 the same person depending on which query loaded the fact. */}
             {quarantine
               ? `${fact.originTrust} source`
@@ -286,7 +286,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
 }
 
 /**
- * One control for how prominently AI Bot uses a fact, replacing the old
+ * One control for how prominently the assistant uses a fact, replacing the old
  * pin/demote pair. Owner facts offer all three levels; a person's facts only
  * ever reach the profile summary by pinning, so "Minor" (which only suppresses
  * auto-surfacing) is hidden for them — it would change nothing.
@@ -316,7 +316,7 @@ function ProminenceControl({
           control, not a form fieldset; each option is an aria-pressed button. */}
       <div
         role="group"
-        aria-label="How prominently AI Bot uses this fact"
+        aria-label="How prominently the assistant uses this fact"
         className="inline-flex rounded-lg bg-sunken/70 p-0.5"
       >
         {options.map((option) => {

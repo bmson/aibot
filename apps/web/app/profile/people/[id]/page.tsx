@@ -1,15 +1,9 @@
-import { detectOccasionInText, listOccasionsForContact } from '@assistant/core';
-import { contacts, findDuplicateContactSuggestions, type MemoryRow, memories } from '@assistant/db';
-import { and, count, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import { getPersonProfile, type MemorySnapshot } from '@assistant/application/profile';
 import { notFound } from 'next/navigation';
 import { AddFact } from '@/app/profile/add-fact';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { MergeControl } from '@/app/profile/merge-control';
-import {
-  type OccasionSuggestion,
-  OccasionsPanel,
-  type OccasionView,
-} from '@/app/profile/occasions-panel';
+import { OccasionsPanel } from '@/app/profile/occasions-panel';
 import { DeletePerson, PersonControls } from '@/app/profile/person-controls';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
@@ -30,7 +24,7 @@ export const dynamic = 'force-dynamic';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FACT_LIMIT = 250;
 
-function toFactView(memory: MemoryRow, now: Date, subjectLabel: string): FactView {
+function toFactView(memory: MemorySnapshot, now: Date, subjectLabel: string): FactView {
   const from = memory.validFrom?.toISOString().slice(0, 10);
   const until = memory.validUntil?.toISOString().slice(0, 10);
   return {
@@ -64,63 +58,17 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
 
   const db = getDb();
   const now = new Date();
-  const [contact] = await db.select().from(contacts).where(eq(contacts.id, id)).limit(1);
-  if (!contact || contact.trust === 'owner') notFound();
-
-  const active = and(
-    eq(memories.category, 'knowledge'),
-    eq(memories.quarantined, false),
-    or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-  );
-  const [facts, [factCount], allContacts, occasionRows] = await Promise.all([
-    db
-      .select()
-      .from(memories)
-      .where(and(active, eq(memories.subjectContactId, contact.id)))
-      .orderBy(desc(memories.pinned), desc(memories.importance), desc(memories.confidence))
-      .limit(FACT_LIMIT),
-    db
-      .select({ n: count() })
-      .from(memories)
-      .where(and(active, eq(memories.subjectContactId, contact.id))),
-    db.select().from(contacts).orderBy(contacts.name).limit(500),
-    listOccasionsForContact(db, contact.id),
-  ]);
-  const occasionViews: OccasionView[] = occasionRows.map((o) => ({
-    id: o.id,
-    kind: o.kind,
-    label: o.label,
-    month: o.month,
-    day: o.day,
-    year: o.year,
-    notes: o.notes,
-    quarantined: o.quarantined,
-  }));
-
-  // Offer to lift a birthday/anniversary stated in a fact into an Occasion when
-  // the person has no occasion on that date yet. Consolidation backfills these
-  // nightly too; the chip just makes it immediate and owner-controlled.
-  const existingDates = new Set(occasionRows.map((o) => `${o.month}-${o.day}`));
-  const suggestionSeen = new Set<string>();
-  const occasionSuggestions: OccasionSuggestion[] = [];
-  for (const fact of facts) {
-    const detected = detectOccasionInText(fact.content);
-    if (!detected) continue;
-    const key = `${detected.month}-${detected.day}`;
-    if (existingDates.has(key) || suggestionSeen.has(key)) continue;
-    suggestionSeen.add(key);
-    occasionSuggestions.push(detected);
-  }
-  const totalFacts = Number(factCount?.n ?? 0);
-  const mergeOptions = allContacts
-    .filter((person) => person.id !== contact.id)
-    .map((person) => ({
-      id: person.id,
-      label: person.relationship ? `${person.name} (${person.relationship})` : person.name,
-    }));
-  const duplicate = findDuplicateContactSuggestions(allContacts).find(
-    (suggestion) => suggestion.contactId === contact.id,
-  );
+  const profile = await getPersonProfile(db, id, FACT_LIMIT);
+  if (!profile) notFound();
+  const {
+    contact,
+    facts,
+    totalFacts,
+    occasions: occasionViews,
+    occasionSuggestions,
+    mergeOptions,
+    duplicate,
+  } = profile;
 
   return (
     <PageShell size="reading">

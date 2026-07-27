@@ -1,6 +1,9 @@
-import { getAgent } from '@assistant/core';
-import { contacts, type MemoryRow, memories } from '@assistant/db';
-import { and, count, desc, eq, gt, ilike, isNull, or, type SQL, sql } from 'drizzle-orm';
+import {
+  listMemoryLibrary,
+  type MemoryFilter,
+  type MemorySnapshot,
+  type MemoryState,
+} from '@assistant/application/profile';
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import Link from 'next/link';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
@@ -20,21 +23,17 @@ import {
 export const metadata = { title: 'Memory library' };
 export const dynamic = 'force-dynamic';
 
-const PAGE_SIZE = 60;
-
 // Two axes the owner actually cares about, instead of four overlapping buckets:
 // the top-level STATE (is a fact in use, or held back for review?) and, within
 // the in-use set, an optional FILTER (verified wording, or not yet tidied).
 const STATES = ['in-use', 'review'] as const;
-type MemoryState = (typeof STATES)[number];
 const FILTERS = ['all', 'verified', 'untidied'] as const;
-type MemoryFilter = (typeof FILTERS)[number];
 
 const stateCopy: Record<MemoryState, { label: string; title: string; intro: string }> = {
   'in-use': {
     label: 'In use',
-    title: 'In use by AI Bot',
-    intro: 'Active saved facts AI Bot can recall when they are relevant.',
+    title: 'In use by the assistant',
+    intro: 'Active saved facts the assistant can recall when they are relevant.',
   },
   review: {
     label: 'Held for review',
@@ -56,7 +55,7 @@ const filterCopy: Record<MemoryFilter, { label: string; intro: string }> = {
 };
 
 function toFactView(
-  memory: MemoryRow,
+  memory: MemorySnapshot,
   now: Date,
   subjectLabel: string | null,
   aboutOwner: boolean,
@@ -117,45 +116,18 @@ export default async function MemoryLibraryPage({
   const requestedPage = Number.parseInt(params.page ?? '1', 10);
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
   const db = getDb();
-  const agent = await getAgent(db);
   const now = new Date();
-
-  const unexpired = or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`));
-  const stateCondition: SQL | undefined =
-    state === 'review'
-      ? eq(memories.quarantined, true)
-      : filter === 'verified'
-        ? and(eq(memories.quarantined, false), eq(memories.ownerConfirmed, true))
-        : filter === 'untidied'
-          ? and(eq(memories.quarantined, false), isNull(memories.lastConsolidatedAt))
-          : eq(memories.quarantined, false);
-  const filters = and(
-    eq(memories.agentId, agent.id),
-    eq(memories.category, 'knowledge'),
-    unexpired,
-    stateCondition,
-    query
-      ? ilike(memories.content, `%${query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`)
-      : undefined,
-  );
-
-  const [totalRow] = await db.select({ value: count() }).from(memories).where(filters);
-  const total = Number(totalRow?.value ?? 0);
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages);
-  const rows = await db
-    .select({ memory: memories, subjectLabel: contacts.name, subjectTrust: contacts.trust })
-    .from(memories)
-    .leftJoin(contacts, eq(memories.subjectContactId, contacts.id))
-    .where(filters)
-    .orderBy(
-      desc(memories.pinned),
-      desc(memories.ownerConfirmed),
-      desc(memories.importance),
-      desc(memories.createdAt),
-    )
-    .limit(PAGE_SIZE)
-    .offset((safePage - 1) * PAGE_SIZE);
+  const {
+    rows,
+    total,
+    page: safePage,
+    totalPages,
+  } = await listMemoryLibrary(db, {
+    state,
+    filter,
+    query,
+    page,
+  });
 
   const intro =
     state === 'in-use' && filter !== 'all' ? filterCopy[filter].intro : stateCopy[state].intro;
@@ -195,7 +167,7 @@ export default async function MemoryLibraryPage({
               type="search"
               name="q"
               defaultValue={query}
-              placeholder="Search what AI Bot remembers"
+              placeholder="Search what the assistant remembers"
               className={`${inputClass} w-full pl-9`}
             />
           </label>
