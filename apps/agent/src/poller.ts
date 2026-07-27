@@ -1,10 +1,10 @@
+import { gmailSyncEnabled } from '@assistant/config';
 import {
   backfillMessageEmbeddings,
   emitBudgetNotices,
   expireStaleApprovals,
   findDueTasks,
   getAgent,
-  gmailSyncEnabled,
   purgeExpired,
   renotifyStalledApprovals,
   renotifyStalledAttention,

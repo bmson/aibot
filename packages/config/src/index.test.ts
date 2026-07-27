@@ -1,37 +1,73 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { gmailSyncEnabled, loadConfig, resetConfigForTest, validateProdConfig } from './config.js';
+import {
+  gmailSyncEnabled,
+  isModuleEnabled,
+  loadConfig,
+  moduleDiagnostics,
+  parseAssistantModules,
+  resetConfigForTest,
+  validateProdConfig,
+} from './index.js';
 
 describe('config', () => {
   afterEach(() => resetConfigForTest());
 
   it('applies defaults', () => {
-    resetConfigForTest();
     const config = loadConfig({});
     expect(config.QUEUE_DRIVER).toBe('local');
     expect(config.AGENT_PORT).toBe(8787);
     expect(config.DATABASE_URL).toContain('postgres://');
     expect(config.INTERNAL_AUTH_MODE).toBe('oidc');
     expect(config.AUTH_DEV_BYPASS).toBe(false);
+    expect(config.AUTH_LOCALHOST_BYPASS).toBe(false);
     expect(config.CANARY_ENABLED).toBe(false);
     expect(config.CANARY_MAX_COST_USD).toBe(0.03);
+    expect(isModuleEnabled(config, 'google')).toBe(true);
   });
 
   it('parses overrides and coerces numbers', () => {
-    resetConfigForTest();
     const config = loadConfig({ QUEUE_DRIVER: 'cloudtasks', AGENT_PORT: '9000' });
     expect(config.QUEUE_DRIVER).toBe('cloudtasks');
     expect(config.AGENT_PORT).toBe(9000);
   });
 
-  it('rejects invalid driver values', () => {
-    resetConfigForTest();
-    expect(() => loadConfig({ QUEUE_DRIVER: 'rabbitmq' })).toThrow();
+  it('supports minimal and explicit module installations', () => {
+    expect(parseAssistantModules('minimal')).toEqual([]);
+    expect(parseAssistantModules('sms, reminders, sms')).toEqual(['sms', 'reminders']);
+    expect(() => parseAssistantModules('google,unknown')).toThrow();
+
+    const config = loadConfig({ ASSISTANT_MODULES: 'google,search' });
+    expect(isModuleEnabled(config, 'google')).toBe(true);
+    expect(isModuleEnabled(config, 'sms')).toBe(false);
   });
 
-  it('requires an exact opt-in for the development auth bypass', () => {
-    expect(loadConfig({ AUTH_DEV_BYPASS: 'true' }).AUTH_DEV_BYPASS).toBe(true);
+  it('reports module readiness without exposing secrets', () => {
+    const config = loadConfig({
+      ASSISTANT_MODULES: 'google,search',
+      GOOGLE_OAUTH_CLIENT_ID: 'client',
+      GOOGLE_OAUTH_CLIENT_SECRET: 'secret',
+      BOT_GOOGLE_REFRESH_TOKEN: 'refresh',
+    });
+    expect(moduleDiagnostics(config)).toEqual(
+      expect.arrayContaining([
+        { module: 'google', enabled: true, ready: true, detail: 'ready' },
+        {
+          module: 'search',
+          enabled: true,
+          ready: false,
+          detail: 'missing search provider or key',
+        },
+        { module: 'sms', enabled: false, ready: false, detail: 'disabled' },
+      ]),
+    );
+  });
+
+  it('rejects invalid driver and boolean values', () => {
+    expect(() => loadConfig({ QUEUE_DRIVER: 'rabbitmq' })).toThrow();
     resetConfigForTest();
     expect(() => loadConfig({ AUTH_DEV_BYPASS: 'yes' })).toThrow();
+    resetConfigForTest();
+    expect(() => loadConfig({ AUTH_LOCALHOST_BYPASS: 'yes' })).toThrow();
   });
 
   it('bounds and explicitly opts into real canary side effects', () => {
@@ -42,19 +78,14 @@ describe('config', () => {
     expect(() => loadConfig({ CANARY_MAX_COST_USD: '1' })).toThrow();
   });
 
-  it('passes prod validation for a local (default) config', () => {
-    resetConfigForTest();
+  it('passes prod validation for a local config', () => {
     expect(validateProdConfig(loadConfig({}))).toEqual([]);
   });
 
-  it('flags a cloudtasks/oidc config missing its required keys', () => {
-    resetConfigForTest();
-    const config = loadConfig({
-      QUEUE_DRIVER: 'cloudtasks',
-      INTERNAL_AUTH_MODE: 'oidc',
-      // AGENT_URL, GCP_PROJECT, INTERNAL_OIDC_* deliberately empty
-    });
-    const problems = validateProdConfig(config);
+  it('flags a cloud config missing required infrastructure', () => {
+    const problems = validateProdConfig(
+      loadConfig({ QUEUE_DRIVER: 'cloudtasks', INTERNAL_AUTH_MODE: 'oidc' }),
+    );
     expect(problems).toEqual(
       expect.arrayContaining([
         expect.stringContaining('AGENT_URL'),
@@ -65,8 +96,7 @@ describe('config', () => {
     );
   });
 
-  it('is satisfied once the required cloudtasks/oidc keys are present', () => {
-    resetConfigForTest();
+  it('accepts a complete cloud config', () => {
     const config = loadConfig({
       QUEUE_DRIVER: 'cloudtasks',
       INTERNAL_AUTH_MODE: 'oidc',
@@ -75,51 +105,33 @@ describe('config', () => {
       CLOUD_TASKS_QUEUE: 'agent-steps',
       INTERNAL_OIDC_AUDIENCE: 'https://agent.example',
       INTERNAL_OIDC_SERVICE_ACCOUNT: 'invoker@proj.iam.gserviceaccount.com',
-      OPENROUTER_API_KEY: 'sk-or-x',
+      OPENROUTER_API_KEY: 'key',
       PUBLIC_URL: 'https://agent.example',
     });
     expect(validateProdConfig(config)).toEqual([]);
   });
 
-  it('flags an empty OpenRouter key and a still-localhost PUBLIC_URL in prod', () => {
-    resetConfigForTest();
+  it('validates enabled modules against production integrations', () => {
     const problems = validateProdConfig(
       loadConfig({
+        ASSISTANT_MODULES: 'minimal',
         QUEUE_DRIVER: 'cloudtasks',
-        INTERNAL_AUTH_MODE: 'oidc',
+        INTERNAL_AUTH_MODE: 'shared-secret',
+        INTERNAL_API_SECRET: 'secret',
         AGENT_URL: 'https://agent.example',
         GCP_PROJECT: 'proj',
-        INTERNAL_OIDC_AUDIENCE: 'https://agent.example',
-        INTERNAL_OIDC_SERVICE_ACCOUNT: 'invoker@proj.iam.gserviceaccount.com',
-        // OPENROUTER_API_KEY empty; PUBLIC_URL left at the localhost default.
+        OPENROUTER_API_KEY: 'key',
+        PUBLIC_URL: 'https://agent.example',
+        GMAIL_PUBSUB_TOPIC: 'projects/proj/topics/gmail',
+        GMAIL_PUSH_SERVICE_ACCOUNT: 'push@proj.iam.gserviceaccount.com',
+        CANARY_ENABLED: 'true',
       }),
     );
     expect(problems).toEqual(
       expect.arrayContaining([
-        expect.stringContaining('OPENROUTER_API_KEY'),
-        expect.stringContaining('PUBLIC_URL'),
+        expect.stringContaining('google module'),
+        expect.stringContaining('browser module'),
       ]),
-    );
-  });
-
-  it('requires the Gmail push SA when a push topic is set', () => {
-    resetConfigForTest();
-    const problems = validateProdConfig(
-      loadConfig({
-        QUEUE_DRIVER: 'cloudtasks',
-        INTERNAL_AUTH_MODE: 'oidc',
-        AGENT_URL: 'https://agent.example',
-        GCP_PROJECT: 'proj',
-        INTERNAL_OIDC_AUDIENCE: 'https://agent.example',
-        INTERNAL_OIDC_SERVICE_ACCOUNT: 'invoker@proj.iam.gserviceaccount.com',
-        OPENROUTER_API_KEY: 'sk-or-x',
-        PUBLIC_URL: 'https://agent.example',
-        GMAIL_PUBSUB_TOPIC: 'projects/proj/topics/gmail',
-        // GMAIL_PUSH_SERVICE_ACCOUNT deliberately empty → the 403 outage.
-      }),
-    );
-    expect(problems).toEqual(
-      expect.arrayContaining([expect.stringContaining('GMAIL_PUSH_SERVICE_ACCOUNT')]),
     );
   });
 });
@@ -127,21 +139,28 @@ describe('config', () => {
 describe('gmailSyncEnabled', () => {
   afterEach(() => resetConfigForTest());
 
-  it('honors an explicit true/false regardless of environment', () => {
+  it('requires the google module', () => {
+    expect(
+      gmailSyncEnabled(loadConfig({ ASSISTANT_MODULES: 'minimal', GMAIL_SYNC_ENABLED: 'true' })),
+    ).toBe(false);
+  });
+
+  it('honors explicit true and false values', () => {
     expect(gmailSyncEnabled(loadConfig({ GMAIL_SYNC_ENABLED: 'true' }))).toBe(true);
     resetConfigForTest();
     expect(gmailSyncEnabled(loadConfig({ GMAIL_SYNC_ENABLED: 'false' }))).toBe(false);
   });
 
-  it('defaults on only in production when unset', () => {
-    const prev = process.env.NODE_ENV;
+  it('defaults on only in production', () => {
+    const previous = process.env.NODE_ENV;
     try {
       process.env.NODE_ENV = 'production';
       expect(gmailSyncEnabled(loadConfig({}))).toBe(true);
+      resetConfigForTest();
       process.env.NODE_ENV = 'development';
       expect(gmailSyncEnabled(loadConfig({}))).toBe(false);
     } finally {
-      process.env.NODE_ENV = prev;
+      process.env.NODE_ENV = previous;
     }
   });
 });

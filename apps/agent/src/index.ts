@@ -1,4 +1,4 @@
-import { loadConfig, validateProdConfig } from '@assistant/core';
+import { loadConfig, validateProdConfig } from '@assistant/config';
 import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
 import { buildDeps } from './deps.js';

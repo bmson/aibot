@@ -93,7 +93,7 @@ export function activeAutonomyGrant(
 
 /**
  * The hard floor: true means "this call must stay owner-approved even under an
- * active grant". Baldvin's three floor items plus the always-on floor (policy
+ * active grant". The owner's floor items plus the always-on floor (policy
  * denies and budget) which are enforced elsewhere in the dispatcher:
  *   1. a memory write while the session carries untrusted content,
  *   2. a send to an unverified recipient,

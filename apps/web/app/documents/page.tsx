@@ -1,13 +1,9 @@
-import {
-  documentStats,
-  getAgent,
-  getOrCreatePrimaryConversation,
-  listDocuments,
-} from '@assistant/core';
+import { isModuleEnabled, loadConfig } from '@assistant/config';
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
-import { getDb } from '@/lib/server';
+import { getApplication } from '@/lib/server';
 import {
   btn,
   cardGridClass,
@@ -33,14 +29,9 @@ function formatBytes(n: number): string {
 
 export default async function DocumentsPage() {
   await requireOwner();
-  const db = getDb();
+  if (!isModuleEnabled(loadConfig(), 'documents')) notFound();
   const now = new Date();
-  const agent = await getAgent(db);
-  const [docs, stats, primary] = await Promise.all([
-    listDocuments(db, agent.id),
-    documentStats(db, agent.id),
-    getOrCreatePrimaryConversation(db, agent.id),
-  ]);
+  const { documents: docs, stats, primaryConversationId } = await getApplication().getDocuments();
 
   const views: DocumentCardView[] = docs.map((d) => ({
     id: d.id,
@@ -54,7 +45,7 @@ export default async function DocumentsPage() {
     bytesLabel: formatBytes(d.bytes),
     error: d.error,
     createdLabel: relativeTime(d.createdAt, now),
-    askHref: `/chat/${primary.id}?ask=${encodeURIComponent(
+    askHref: `/chat/${primaryConversationId}?ask=${encodeURIComponent(
       `From my documents, tell me about "${d.title}".`,
     )}`,
   }));

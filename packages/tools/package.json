@@ -4,7 +4,18 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./browser": "./src/browser/index.ts",
+    "./builtin": "./src/builtin/index.ts",
+    "./code": "./src/code/index.ts",
+    "./dispatcher": "./src/dispatcher.ts",
+    "./modules/google": "./src/modules/google.ts",
+    "./modules/sms": "./src/modules/sms.ts",
+    "./registry": "./src/registry.ts",
+    "./reminders": "./src/reminders.ts",
+    "./search": "./src/search.ts",
+    "./watches": "./src/watches.ts",
+    "./workspace": "./src/workspace-store.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

@@ -168,6 +168,7 @@ async function assertRunCostCeiling(deps: AgentDeps): Promise<void> {
 function assertCanaryConfiguration(deps: AgentDeps): void {
   const missing: string[] = [];
   if (!deps.googleClient.configured()) missing.push('Google OAuth');
+  if (!deps.browserLauncher) missing.push('browser module');
   if (!deps.config.OPENROUTER_API_KEY) missing.push('OPENROUTER_API_KEY');
   if (deps.config.BROWSER_DRIVER === 'cloudrun') {
     if (!deps.config.GCP_PROJECT) missing.push('GCP_PROJECT');
@@ -217,7 +218,7 @@ async function gmailCanary(deps: AgentDeps, runId: string, signal: AbortSignal):
     throw new Error('Google OAuth account does not match the configured agent mailbox');
   }
 
-  const marker = `[aibot-canary:${runId}]`;
+  const marker = `[assistant-canary:${runId}]`;
   const knownIds: string[] = [];
   try {
     try {
@@ -512,6 +513,8 @@ async function chatCanary(deps: AgentDeps, runId: string, signal: AbortSignal): 
 }
 
 async function browserCanary(deps: AgentDeps, runId: string, signal: AbortSignal): Promise<string> {
+  const launcher = deps.browserLauncher;
+  if (!launcher) throw new Error('browser module is disabled');
   if (
     deps.config.BROWSER_DRIVER === 'cloudrun' &&
     (!deps.config.GCP_PROJECT || !deps.config.PUBLIC_URL)
@@ -552,7 +555,7 @@ async function browserCanary(deps: AgentDeps, runId: string, signal: AbortSignal
   try {
     launchAttempted = true;
     try {
-      await deps.browserLauncher.launch({
+      await launcher.launch({
         taskId: runId,
         plan,
         callbackUrl: `${deps.config.PUBLIC_URL}/webhooks/canaries/browser`,

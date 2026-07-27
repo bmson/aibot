@@ -1,10 +1,8 @@
-import { isVoiceImportSource } from '@assistant/core';
-import { type ImportSourceRow, importSources, memories } from '@assistant/db';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import type { ImportSourceSnapshot } from '@assistant/application/imports';
 import { SourceCard, type SourceView, StartImportButton } from '@/app/import/source-card';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
-import { getDb, getWorkspace } from '@/lib/server';
+import { getApplication } from '@/lib/server';
 import { fileInputClass, inputClass, PageHeader, PageShell, Panel } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 
@@ -12,7 +10,7 @@ export const metadata = { title: 'Import' };
 
 export const dynamic = 'force-dynamic';
 
-function toView(row: ImportSourceRow, quarantinedNow: number, now: Date): SourceView {
+function toView(row: ImportSourceSnapshot, quarantinedNow: number, now: Date): SourceView {
   return {
     source: row.source,
     workspacePath: row.workspacePath,
@@ -30,26 +28,8 @@ function toView(row: ImportSourceRow, quarantinedNow: number, now: Date): Source
 
 export default async function ImportPage() {
   await requireOwner();
-  const db = getDb();
   const now = new Date();
-
-  const [allSources, quarantineCounts, importFiles] = await Promise.all([
-    db.select().from(importSources).orderBy(desc(importSources.updatedAt)),
-    db
-      .select({ source: memories.source, n: sql<number>`count(*)` })
-      .from(memories)
-      .where(and(eq(memories.quarantined, true), sql`${memories.source} IS NOT NULL`))
-      .groupBy(memories.source),
-    getWorkspace()
-      .list('import')
-      .catch(() => [] as Array<{ name: string; dir: boolean }>),
-  ]);
-  // Voice-sample imports seed the writing corpus, not memory — they're managed
-  // on the Profile page, so they never appear in the backstory list.
-  const sources = allSources.filter((s) => !isVoiceImportSource(s.source));
-  const quarantinedBySource = new Map(quarantineCounts.map((r) => [r.source ?? '', Number(r.n)]));
-  const knownPaths = new Set(allSources.map((s) => s.workspacePath));
-  const unstartedFiles = importFiles.filter((f) => !f.dir && !knownPaths.has(`import/${f.name}`));
+  const { sources, quarantineBySource, unstartedFiles } = await getApplication().getImports();
 
   return (
     <PageShell size="reading">
@@ -126,7 +106,7 @@ export default async function ImportPage() {
             {sources.map((row) => (
               <SourceCard
                 key={`${row.id}:${row.updatedAt.getTime()}`}
-                view={toView(row, quarantinedBySource.get(row.source) ?? 0, now)}
+                view={toView(row, quarantineBySource[row.source] ?? 0, now)}
               />
             ))}
           </div>

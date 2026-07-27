@@ -208,7 +208,7 @@ export async function getAmbientBlock(
     .from(ambientSnapshots)
     .where(eq(ambientSnapshots.agentId, agentId))
     .limit(1);
-  if (snap && snap.block && now.getTime() - snap.computedAt.getTime() <= ttl) {
+  if (snap?.block && now.getTime() - snap.computedAt.getTime() <= ttl) {
     return snap.block;
   }
   // Stale/absent snapshot: fall back to the freshest location on its own.

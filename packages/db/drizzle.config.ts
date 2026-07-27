@@ -1,10 +1,13 @@
+import { loadConfig } from '@assistant/config';
 import { defineConfig } from 'drizzle-kit';
+
+const config = loadConfig();
 
 export default defineConfig({
   schema: './src/schema.ts',
   out: './drizzle',
   dialect: 'postgresql',
   dbCredentials: {
-    url: process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant',
+    url: config.DATABASE_URL,
   },
 });

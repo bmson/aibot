@@ -1,20 +1,4 @@
-import {
-  CARD_AUTO_FACTS_PER_DOMAIN,
-  CARD_AUTO_MIN_IMPORTANCE,
-  getAgent,
-  getMemoryHealth,
-  voiceSampleStats,
-} from '@assistant/core';
-import {
-  type ContactRow,
-  contacts,
-  importSources,
-  type MemoryRow,
-  memories,
-  ownerCard,
-  tasks,
-} from '@assistant/db';
-import { and, count, desc, eq, gt, inArray, isNull, like, or, sql } from 'drizzle-orm';
+import { getProfileOverview, type MemorySnapshot } from '@assistant/application/profile';
 import { ArrowRight, CheckCircle2, Library, ShieldQuestion } from 'lucide-react';
 import Link from 'next/link';
 import { AutoRefresh } from '@/app/auto-refresh';
@@ -56,12 +40,7 @@ const DOMAIN_ORDER = [
 ] as const;
 
 const countBadge = countBadgeClass;
-const PROFILE_CONTACT_LIMIT = 500;
-const PROFILE_FACT_LIMIT = 250;
-const QUARANTINE_LIMIT = 100;
-const VOICE_IMPORT_LIMIT = 5;
-
-function toFactView(m: MemoryRow, now: Date, inCard = false, aboutOwner = false): FactView {
+function toFactView(m: MemorySnapshot, now: Date, inCard = false, aboutOwner = false): FactView {
   const from = m.validFrom?.toISOString().slice(0, 10);
   const until = m.validUntil?.toISOString().slice(0, 10);
   return {
@@ -87,65 +66,18 @@ export default async function ProfilePage() {
   await requireOwner();
   const db = getDb();
   const now = new Date();
-  const agent = await getAgent(db);
-
-  const active = and(
-    eq(memories.agentId, agent.id),
-    eq(memories.category, 'knowledge'),
-    eq(memories.quarantined, false),
-    or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-  );
-
-  const [
-    allContacts,
+  const {
+    owner,
+    people,
+    ownerFacts,
     quarantined,
-    [card],
     voiceStats,
     voiceImports,
     memoryHealth,
-    latestOrganizerRows,
-  ] = await Promise.all([
-    db.select().from(contacts).orderBy(contacts.name).limit(PROFILE_CONTACT_LIMIT),
-    db
-      .select()
-      .from(memories)
-      .where(
-        and(
-          eq(memories.agentId, agent.id),
-          eq(memories.category, 'knowledge'),
-          eq(memories.quarantined, true),
-          or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-        ),
-      )
-      .orderBy(desc(memories.createdAt))
-      .limit(QUARANTINE_LIMIT),
-    db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
-    voiceSampleStats(db),
-    db
-      .select()
-      .from(importSources)
-      .where(like(importSources.source, 'voice-samples%'))
-      .orderBy(desc(importSources.updatedAt))
-      .limit(VOICE_IMPORT_LIMIT),
-    getMemoryHealth(db, agent.id),
-    db
-      .select({
-        id: tasks.id,
-        status: tasks.status,
-        progress: tasks.progress,
-        updatedAt: tasks.updatedAt,
-      })
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.agentId, agent.id),
-          sql`${tasks.trigger} #>> '{payload,job}' = 'memory.consolidate'`,
-        ),
-      )
-      .orderBy(desc(tasks.createdAt))
-      .limit(1),
-  ]);
-  const latestOrganizer = latestOrganizerRows[0] ?? null;
+    latestOrganizer,
+    card,
+    cardFactIds: selectedCardFactIds,
+  } = await getProfileOverview(db);
   const voiceImportViews: VoiceImportView[] = voiceImports.map((row) => ({
     source: row.source,
     status: row.status,
@@ -156,52 +88,12 @@ export default async function ProfilePage() {
     error: row.error,
   }));
 
-  const owner = allContacts.find((c) => c.trust === 'owner');
-  const contactIds = allContacts.map((contact) => contact.id);
-  // The old page loaded and rendered every fact for every person (up to 1,000
-  // records) before the owner could see anything. Keep this overview to the
-  // owner's facts plus inexpensive counts; each person's facts load only when
-  // their detail page is opened.
-  const [ownerFacts, factCountRows] = await Promise.all([
-    owner
-      ? db
-          .select()
-          .from(memories)
-          .where(and(active, eq(memories.subjectContactId, owner.id)))
-          .orderBy(desc(memories.pinned), desc(memories.importance), desc(memories.confidence))
-          .limit(PROFILE_FACT_LIMIT)
-      : Promise.resolve([] as MemoryRow[]),
-    contactIds.length > 0
-      ? db
-          .select({ contactId: memories.subjectContactId, n: count() })
-          .from(memories)
-          .where(and(active, inArray(memories.subjectContactId, contactIds)))
-          .groupBy(memories.subjectContactId)
-      : Promise.resolve([]),
-  ]);
-  const factCounts = new Map(factCountRows.map((row) => [row.contactId ?? '', Number(row.n)]));
-  const people: Array<{ contact: ContactRow; factCount: number }> = allContacts
-    .filter((c) => c.trust !== 'owner')
-    .map((contact) => ({
-      contact,
-      factCount: factCounts.get(contact.id) ?? 0,
-    }));
-
   const ownerByDomain = DOMAIN_ORDER.map((domain) => ({
     domain,
     facts: ownerFacts.filter((m) => (m.domain ?? 'other') === domain),
   })).filter((g) => g.facts.length > 0);
 
-  // mirror compileOwnerCard's selection so rows can show an "in card" badge
-  const cardFactIds = new Set<string>();
-  for (const group of ownerByDomain) {
-    for (const m of group.facts.filter((f) => f.pinned)) cardFactIds.add(m.id);
-    for (const m of group.facts
-      .filter((f) => !f.pinned && f.importance >= CARD_AUTO_MIN_IMPORTANCE)
-      .slice(0, CARD_AUTO_FACTS_PER_DOMAIN)) {
-      cardFactIds.add(m.id);
-    }
-  }
+  const cardFactIds = new Set(selectedCardFactIds);
 
   const pinnedCount = ownerFacts.filter((m) => m.pinned).length;
 
@@ -217,7 +109,7 @@ export default async function ProfilePage() {
       {organizerActive ? <AutoRefresh intervalMs={5_000} /> : null}
       <PageHeader
         title="What I remember"
-        intro={`See what shapes AI Bot’s understanding of ${owner?.name ?? 'you'}, what still needs care, and what stays available for recall.`}
+        intro={`See what shapes the assistant’s understanding of ${owner?.name ?? 'you'}, what still needs care, and what stays available for recall.`}
       />
 
       <section className="mt-8">
@@ -225,8 +117,8 @@ export default async function ProfilePage() {
           <div>
             <h2 className="text-lg font-semibold tracking-[-0.025em]">Your memory library</h2>
             <p className="mt-1 text-[13px] leading-5 text-muted">
-              Everything AI Bot has learned, with controls to verify, correct, feature, or forget
-              each fact.
+              Everything the assistant has learned, with controls to verify, correct, feature, or
+              forget each fact.
             </p>
           </div>
           <Link href="/profile/memories" className={`${btn.outline} group`}>
@@ -250,7 +142,7 @@ export default async function ProfilePage() {
                 {memoryHealth.totalUsable.toLocaleString()}
               </span>
             </div>
-            <p className="mt-4 text-[13px] font-semibold">In use by AI Bot</p>
+            <p className="mt-4 text-[13px] font-semibold">In use by the assistant</p>
             <p className="mt-1 text-xs leading-5 text-muted">
               Active facts that can be recalled in conversations
               {memoryHealth.ownerConfirmed > 0
@@ -376,7 +268,7 @@ export default async function ProfilePage() {
               </SubmitButton>
             </form>
             <span className="text-xs text-muted">
-              This compact context is what AI Bot sees before it searches deeper memory.
+              This compact context is what the assistant sees before it searches deeper memory.
             </span>
           </div>
         </details>

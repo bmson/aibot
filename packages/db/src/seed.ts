@@ -1,7 +1,4 @@
-import { existsSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import dotenv from 'dotenv';
+import { loadConfig } from '@assistant/config';
 import { and, eq, sql } from 'drizzle-orm';
 import { createDb } from './client.js';
 import {
@@ -18,14 +15,8 @@ import {
 } from './schema.js';
 import { resolveOwnerPolicyValues } from './seed-values.js';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const envFile = path.join(repoRoot, '.env');
-if (existsSync(envFile)) dotenv.config({ path: envFile });
-
-const DATABASE_URL =
-  process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
-const OWNER_EMAIL = process.env.OWNER_EMAIL ?? 'bmson@bmson.com';
-const OWNER_PHONE = process.env.OWNER_PHONE ?? '';
+const config = loadConfig();
+const { DATABASE_URL, OWNER_EMAIL, OWNER_NAME, OWNER_PHONE } = config;
 
 const db = createDb(DATABASE_URL);
 
@@ -34,17 +25,17 @@ const db = createDb(DATABASE_URL);
 // The display name is seed-owned, while timezone, locale, and signature are
 // owner-editable settings and must survive the reconciliation run on deploy.
 // The workspace prefix is storage identity — never renamed.
-const AGENT_NAME = 'AI Bot';
-const AGENT_SIGNATURE = "— AI Bot (Baldvin's assistant)";
+const AGENT_NAME = config.ASSISTANT_NAME;
+const AGENT_SIGNATURE = config.ASSISTANT_SIGNATURE;
 
 const [agent] = await db
   .insert(agents)
   .values({
     name: AGENT_NAME,
-    email: 'bot@bmson.com',
-    workspacePrefix: 'workspace/b-bot',
-    timezone: 'America/Los_Angeles',
-    locale: 'en',
+    email: config.ASSISTANT_EMAIL,
+    workspacePrefix: `workspace/${config.ASSISTANT_WORKSPACE_ID}`,
+    timezone: config.ASSISTANT_TIMEZONE,
+    locale: config.ASSISTANT_LOCALE,
     signature: AGENT_SIGNATURE,
   })
   .onConflictDoUpdate({
@@ -211,7 +202,7 @@ if (!ownerContact) {
   [ownerContact] = await db
     .insert(contacts)
     .values({
-      name: 'Baldvin',
+      name: OWNER_NAME,
       emails: [OWNER_EMAIL],
       phones: OWNER_PHONE ? [OWNER_PHONE] : [],
       relationship: 'owner',

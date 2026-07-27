@@ -1,46 +1,77 @@
-# Google OAuth setup for the bot account (one-time, ~10 minutes)
+# Google OAuth setup for the assistant account
 
-Goal: an OAuth client the assistant uses to act as `bot@bmson.com` (its own Gmail + Calendar). No domain-wide delegation — the bot authorizes itself once via `pnpm auth:bot`.
+This creates a refresh token that lets the assistant act through its own Gmail, Calendar, and Drive
+identity. The flow does not use domain-wide delegation: the configured `ASSISTANT_EMAIL` authorizes
+itself once through `pnpm auth:bot`.
 
-## 1. GCP project
+## 1. Project and APIs
 
-1. Go to https://console.cloud.google.com → create project **`bmson-assistant`**.
-   **Important:** create it under the **bmson.com organization** (not "No organization") — that's what makes the Internal consent screen possible, which exempts the app from Google's restricted-scope verification.
-2. Enable APIs (APIs & Services → Library): **Gmail API**, **Google Calendar API**, **Google Docs API**, **Google Sheets API**, **Google Slides API**, and **Google Drive API**. (Pub/Sub comes later, with push notifications.)
+In the Google Cloud project configured by `GCP_PROJECT`, enable:
+
+- Gmail API
+- Google Calendar API
+- Google Docs API
+- Google Sheets API
+- Google Slides API
+- Google Drive API
+
+Workspace organizations can use an internal consent screen. Personal Google accounts or assistants
+outside the organization require an external consent screen and its corresponding Google testing or
+verification configuration.
 
 ## 2. OAuth consent screen
 
-APIs & Services → OAuth consent screen:
-- User type: **Internal** ← the whole trick; only bmson.com users can authorize, and no Google review is needed for Gmail's restricted scopes.
-- App name: `Assistant`, support email: you.
-- Scopes: you can leave this empty — scopes are requested at authorization time.
+In **APIs & Services → OAuth consent screen**:
+
+- choose the audience appropriate to the account;
+- name the application;
+- add a support email;
+- add `ASSISTANT_EMAIL` as a test user when the app is external and remains in testing.
 
 ## 3. OAuth client
 
-APIs & Services → Credentials → Create credentials → **OAuth client ID**:
-- Application type: **Web application**
-- Name: `assistant-bot`
-- Authorized redirect URIs: `http://localhost:8123/callback`
-- Copy the **Client ID** and **Client secret** into `.env`:
-  ```
-  GOOGLE_OAUTH_CLIENT_ID=...
-  GOOGLE_OAUTH_CLIENT_SECRET=...
-  ```
+In **APIs & Services → Credentials**, create a Web application OAuth client with this authorized
+redirect URI:
 
-## 4. Trust the app (Workspace admin)
+```text
+http://localhost:8123/callback
+```
 
-Gmail is a "restricted service" inside Workspace, so the client must be trusted:
-admin.google.com → Security → Access and data control → **API controls** → App access control → Manage third-party app access → add your app by its Client ID → **Trusted**.
+Put the credentials in `.env`:
 
-## 5. Authorize the bot
+```dotenv
+GOOGLE_OAUTH_CLIENT_ID=...
+GOOGLE_OAUTH_CLIENT_SECRET=...
+```
+
+The web dashboard may use the same client or a separate client through `AUTH_GOOGLE_ID` and
+`AUTH_GOOGLE_SECRET`.
+
+## 4. Workspace trust
+
+If Google Workspace blocks the requested services, an administrator must allow the OAuth client in
+**Admin Console → Security → Access and data control → API controls**. Grant only the client used by
+this installation.
+
+## 5. Authorize the assistant
+
+Confirm that `.env` contains the account that should own the assistant's workspace:
+
+```dotenv
+ASSISTANT_EMAIL=assistant@example.com
+```
+
+Then run:
 
 ```sh
 pnpm auth:bot
 ```
-Open the printed URL **signed in as `bot@bmson.com`** (use a private window if needed), approve, done — the refresh token lands in `.env` as `BOT_GOOGLE_REFRESH_TOKEN`.
 
-## Notes
+Open the printed URL while signed in as `ASSISTANT_EMAIL`. On success, the script writes
+`BOT_GOOGLE_REFRESH_TOKEN` to `.env`. Run `pnpm config:check` to confirm the Google module is ready.
 
-- The refresh token survives indefinitely (Internal apps have no 7-day expiry) but **dies if the bot account's password changes** — rerun step 5 if that happens.
-- Adding scopes (e.g. Docs, Sheets, Slides, or Drive) means the existing refresh token lacks them — **rerun step 5** after enabling the new APIs so the bot re-consents to the fuller scope set. Until then the respective workspace tools return a Google "insufficient scope" error.
-- Later (web auth, Phase 7): the same client can carry the production redirect URI for Auth.js sign-in, or use a separate client — either is fine.
+## Token maintenance
+
+Changing scopes, revoking app access, or some account security changes can invalidate the token.
+Rerun `pnpm auth:bot` whenever the Google module reports an authorization or insufficient-scope
+error after one of those changes.

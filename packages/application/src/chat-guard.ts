@@ -1,4 +1,7 @@
-import { type ActionEvidence, enforceResponseContract } from '@assistant/core';
+import {
+  type ActionEvidence,
+  enforceResponseContract,
+} from '@assistant/core/workflow/response-contract';
 
 /**
  * Honesty check for the tool-less streaming chat path. The executor runs

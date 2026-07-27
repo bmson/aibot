@@ -55,16 +55,60 @@ step() {
   return 1
 }
 
+agent_env_value() {
+  local name="$1"
+  gcloud run services describe assistant-agent \
+    --project "$PROJECT" --region "$REGION" --format=json |
+    node -e '
+      const fs = require("node:fs");
+      const name = process.argv[1];
+      const service = JSON.parse(fs.readFileSync(0, "utf8"));
+      const env = service.spec?.template?.spec?.containers?.[0]?.env ?? [];
+      process.stdout.write(String(env.find((entry) => entry.name === name)?.value ?? ""));
+    ' "$name"
+}
+
 if [[ "${SKIP_IMAGE_BUILD:-false}" != "true" ]]; then
   echo "Building release ${TAG} with Cloud Build"
+  RELEASE_MODULES="${ASSISTANT_MODULES:-$(agent_env_value ASSISTANT_MODULES)}"
+  RELEASE_MODULES="${RELEASE_MODULES:-all}"
   gcloud builds submit . \
     --project "$PROJECT" \
     --config infra/gcp/cloudbuild.yaml \
-    --substitutions "_REGION=${REGION},_REPO=${REPO},_TAG=${TAG}" \
+    --substitutions "_REGION=${REGION},_REPO=${REPO},_TAG=${TAG},_MODULES=${RELEASE_MODULES}" \
     --quiet
 else
   echo "Using pre-built release images ${TAG}"
 fi
+
+# A release-tagged, consistent dump is a hard gate before schema changes. The
+# backup job has the same database/storage access as the agent but no app code.
+BACKUP_BUCKET="$(agent_env_value WORKSPACE_BUCKET)"
+BACKUP_WORKSPACE_ID="$(agent_env_value ASSISTANT_WORKSPACE_ID)"
+[ -n "$BACKUP_BUCKET" ] || { echo "WORKSPACE_BUCKET is missing on assistant-agent" >&2; exit 1; }
+[ -n "$BACKUP_WORKSPACE_ID" ] || {
+  echo "ASSISTANT_WORKSPACE_ID is missing on assistant-agent" >&2
+  exit 1
+}
+echo "Backing up the database before migration"
+if gcloud run jobs describe assistant-backup --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
+  gcloud run jobs update assistant-backup \
+    --project "$PROJECT" --region "$REGION" \
+    --image "${IMAGE_ROOT}/backup:${TAG}" \
+    --service-account "$AGENT_SERVICE_ACCOUNT" \
+    --set-env-vars "^|^BACKUP_BUCKET=${BACKUP_BUCKET}|BACKUP_WORKSPACE_ID=${BACKUP_WORKSPACE_ID}|BACKUP_RELEASE=${TAG}" \
+    --set-secrets "DATABASE_URL=database-url:latest" \
+    --memory 512Mi --cpu 1 --task-timeout 1200 --max-retries 0 --quiet
+else
+  gcloud run jobs create assistant-backup \
+    --project "$PROJECT" --region "$REGION" \
+    --image "${IMAGE_ROOT}/backup:${TAG}" \
+    --service-account "$AGENT_SERVICE_ACCOUNT" \
+    --set-env-vars "^|^BACKUP_BUCKET=${BACKUP_BUCKET}|BACKUP_WORKSPACE_ID=${BACKUP_WORKSPACE_ID}|BACKUP_RELEASE=${TAG}" \
+    --set-secrets "DATABASE_URL=database-url:latest" \
+    --memory 512Mi --cpu 1 --task-timeout 1200 --max-retries 0 --quiet
+fi
+gcloud run jobs execute assistant-backup --project "$PROJECT" --region "$REGION" --wait --quiet
 
 # Migrations run in a short-lived Cloud Run Job with the agent's existing
 # database-secret access. The GitHub deployer never receives the database URL,
@@ -72,20 +116,28 @@ fi
 # made live. This one stays a hard gate on purpose: every rollout below assumes
 # the schema is current, so there is nothing safe to continue to.
 echo "Migrating and reconciling database defaults"
+MIGRATION_ASSISTANT_NAME="$(agent_env_value ASSISTANT_NAME)"
+MIGRATION_ASSISTANT_EMAIL="$(agent_env_value ASSISTANT_EMAIL)"
+MIGRATION_WORKSPACE_ID="$(agent_env_value ASSISTANT_WORKSPACE_ID)"
+MIGRATION_TIMEZONE="$(agent_env_value ASSISTANT_TIMEZONE)"
+MIGRATION_LOCALE="$(agent_env_value ASSISTANT_LOCALE)"
+MIGRATION_OWNER_NAME="$(agent_env_value OWNER_NAME)"
+MIGRATION_OWNER_EMAIL="$(agent_env_value OWNER_EMAIL)"
+MIGRATION_IDENTITY_ENV="^|^ASSISTANT_NAME=${MIGRATION_ASSISTANT_NAME:-Assistant}|ASSISTANT_EMAIL=${MIGRATION_ASSISTANT_EMAIL:-assistant@example.com}|ASSISTANT_WORKSPACE_ID=${MIGRATION_WORKSPACE_ID:-assistant}|ASSISTANT_TIMEZONE=${MIGRATION_TIMEZONE:-UTC}|ASSISTANT_LOCALE=${MIGRATION_LOCALE:-en}|OWNER_NAME=${MIGRATION_OWNER_NAME:-Owner}|OWNER_EMAIL=${MIGRATION_OWNER_EMAIL:-owner@example.com}"
 if gcloud run jobs describe assistant-migrate --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
   gcloud run jobs update assistant-migrate \
     --project "$PROJECT" --region "$REGION" \
-    --image "${IMAGE_ROOT}/agent:${TAG}" \
+    --image "${IMAGE_ROOT}/migrate:${TAG}" \
     --service-account "$AGENT_SERVICE_ACCOUNT" \
-    --command pnpm --args=--filter,@assistant/db,reconcile \
+    --set-env-vars "$MIGRATION_IDENTITY_ENV" \
     --set-secrets "DATABASE_URL=database-url:latest" \
     --memory 512Mi --cpu 1 --task-timeout 600 --max-retries 0 --quiet
 else
   gcloud run jobs create assistant-migrate \
     --project "$PROJECT" --region "$REGION" \
-    --image "${IMAGE_ROOT}/agent:${TAG}" \
+    --image "${IMAGE_ROOT}/migrate:${TAG}" \
     --service-account "$AGENT_SERVICE_ACCOUNT" \
-    --command pnpm --args=--filter,@assistant/db,reconcile \
+    --set-env-vars "$MIGRATION_IDENTITY_ENV" \
     --set-secrets "DATABASE_URL=database-url:latest" \
     --memory 512Mi --cpu 1 --task-timeout 600 --max-retries 0 --quiet
 fi
@@ -143,6 +195,18 @@ verify_agent_configuration() {
   return 0
 }
 
+configured_module_enabled() {
+  local modules="$1" module="$2"
+  [ "$modules" = "all" ] && return 0
+  case ",${modules}," in
+    *",${module},"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+RELEASE_MODULES="${ASSISTANT_MODULES:-$(agent_env_value ASSISTANT_MODULES)}"
+RELEASE_MODULES="${RELEASE_MODULES:-all}"
+
 # A pinned traffic split is the quiet way a Cloud Run service stops tracking its
 # own releases: once traffic points at a named revision (a manual rollback is
 # the usual cause), every later `services update --image` creates a revision
@@ -162,14 +226,26 @@ roll_out_service() {
 # strand retries or silently weaken the boundary after an infrastructure change.
 refresh_scheduler_oidc() {
   local agent_url="$1"
-  local job_spec job_name job_path describe_output missing_jobs
+  local job_spec job_name job_path describe_output missing_jobs modules canaries
+  modules="$(agent_env_value ASSISTANT_MODULES)" || return 1
+  modules="${modules:-all}"
+  canaries="$(agent_env_value CANARY_ENABLED)" || return 1
   missing_jobs=""
-  for job_spec in \
-    'assistant-sweep:/internal/sweep' \
-    'assistant-gmail-sync:/internal/gmail/sync' \
-    'assistant-gmail-watch:/internal/gmail/watch' \
-    'assistant-canaries:/internal/canaries/run' \
-    'assistant-canary-health:/internal/canaries/health'; do
+  local -a EXPECTED_JOBS
+  EXPECTED_JOBS=('assistant-sweep:/internal/sweep')
+  if configured_module_enabled "$modules" google; then
+    EXPECTED_JOBS+=(
+      'assistant-gmail-sync:/internal/gmail/sync'
+      'assistant-gmail-watch:/internal/gmail/watch'
+    )
+  fi
+  if [ "$canaries" = "true" ]; then
+    EXPECTED_JOBS+=(
+      'assistant-canaries:/internal/canaries/run'
+      'assistant-canary-health:/internal/canaries/health'
+    )
+  fi
+  for job_spec in "${EXPECTED_JOBS[@]}"; do
     job_name="${job_spec%%:*}"
     job_path="${job_spec#*:}"
     # A job that does not exist is drift, not a no-op to skip past: these carry the
@@ -266,12 +342,18 @@ else
   record_failure "Refreshing internal scheduler OIDC (could not resolve the agent URL)"
 fi
 
-step "Rolling out browser job" \
-  roll_out_job assistant-browser "${IMAGE_ROOT}/browser:${TAG}" "$BROWSER_SERVICE_ACCOUNT" required || true
-step "Rolling out code job" \
-  roll_out_job assistant-code "${IMAGE_ROOT}/code:${TAG}" "$CODE_SERVICE_ACCOUNT" optional || true
-step "Rolling out document processor job" \
-  roll_out_job assistant-processor "${IMAGE_ROOT}/processor:${TAG}" "$PROCESSOR_SERVICE_ACCOUNT" optional || true
+if configured_module_enabled "$RELEASE_MODULES" browser; then
+  step "Rolling out browser job" \
+    roll_out_job assistant-browser "${IMAGE_ROOT}/browser:${TAG}" "$BROWSER_SERVICE_ACCOUNT" optional || true
+fi
+if configured_module_enabled "$RELEASE_MODULES" code; then
+  step "Rolling out code job" \
+    roll_out_job assistant-code "${IMAGE_ROOT}/code:${TAG}" "$CODE_SERVICE_ACCOUNT" optional || true
+fi
+if configured_module_enabled "$RELEASE_MODULES" documents; then
+  step "Rolling out document processor job" \
+    roll_out_job assistant-processor "${IMAGE_ROOT}/processor:${TAG}" "$PROCESSOR_SERVICE_ACCOUNT" optional || true
+fi
 
 step "Verifying assistant-web serves ${TAG}" verify_web_serving_release || true
 

@@ -1,4 +1,4 @@
-import { loadConfig } from '@assistant/core/config';
+import { loadConfig } from '@assistant/config';
 import { redirect, unauthorized } from 'next/navigation';
 import NextAuth from 'next-auth';
 import Google from 'next-auth/providers/google';
@@ -10,17 +10,20 @@ const config = loadConfig();
 
 /**
  * google     — AUTH_GOOGLE_ID is set; real Google sign-in, allowlisted to the owner.
- * dev-bypass — explicitly enabled outside production; auth is skipped entirely.
+ * dev-bypass — explicitly enabled for development or loopback-only Docker; auth is skipped.
  * disabled   — auth is not configured; every request is rejected (401).
  */
 export const authMode = resolveAuthMode({
-  googleClientId: process.env.AUTH_GOOGLE_ID ?? '',
+  googleClientId: config.AUTH_GOOGLE_ID,
   devBypass: config.AUTH_DEV_BYPASS,
+  localhostBypass: config.AUTH_LOCALHOST_BYPASS,
+  authUrl: config.AUTH_URL,
+  queueDriver: config.QUEUE_DRIVER,
   nodeEnv: process.env.NODE_ENV,
 });
 
 if (authMode === 'dev-bypass') {
-  console.warn('[auth] explicit development bypass enabled — owner authentication is disabled');
+  console.warn('[auth] explicit local bypass enabled — owner authentication is disabled');
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({

@@ -324,7 +324,7 @@ describe('runDueSchedules goal wiring (integration)', () => {
 
       // next_run_at still advanced — the schedule stays healthy, just quiet.
       const [row] = await db.select().from(schedules).where(eq(schedules.name, name));
-      expect(row?.nextRunAt && row.nextRunAt.getTime()).toBeGreaterThan(Date.now());
+      expect(row?.nextRunAt?.getTime()).toBeGreaterThan(Date.now());
     } finally {
       await restore();
     }

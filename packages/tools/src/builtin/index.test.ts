@@ -223,6 +223,16 @@ describe('web.fetch network boundary', () => {
 });
 
 describe('builtin trust capabilities', () => {
+  it('omits document search when the documents module is disabled', () => {
+    const registry = registerBuiltinTools(new ToolRegistry(), {
+      embed: async () => [],
+      workspace: {} as Parameters<typeof registerBuiltinTools>[1]['workspace'],
+      documentsEnabled: false,
+    });
+
+    expect(registry.get('documents.search')).toBeUndefined();
+  });
+
   it('does not expose owner-private reads or workspace writes to unknown tasks', () => {
     const registry = registerBuiltinTools(new ToolRegistry(), {
       embed: async () => [],

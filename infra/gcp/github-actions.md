@@ -14,15 +14,14 @@ service-account key.
 
 ## One-time Google Cloud setup
 
-This production project is configured for `bmson/aibot`. The provider condition
-is intentionally bound to that repository and the `main` ref; do not loosen it
-to all repositories or refs. For another repository or project, replace the
-values below before running the setup as a project administrator.
+Set the project and `owner/repository` below before running the setup as a
+project administrator. The provider condition is intentionally bound to that
+repository and the `main` ref; do not loosen it to all repositories or refs.
 
 ```sh
-PROJECT_ID="bmson-assistant"
+PROJECT_ID="your-project-id"
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
-REPOSITORY="bmson/aibot"
+REPOSITORY="owner/assistant"
 POOL="github"
 PROVIDER="github-actions"
 DEPLOY_SA="assistant-github-deploy@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -98,10 +97,16 @@ checks.
 
 ## GitHub configuration
 
-No GitHub secret or repository variable is needed. The workflow names the
-non-secret project, region, deployment service account, and restricted workload
-identity provider directly, so it is ready as soon as it reaches `main`. GitHub
-will create the `production` environment on first use if it does not already
-exist. Do not add required reviewers to that environment if deployments should
-remain automatic. The workflow concurrency setting queues releases rather than
-cancelling an in-progress deployment.
+Add these non-secret repository variables:
+
+- `GCP_PROJECT`
+- `GCP_REGION`
+- `ARTIFACT_REPOSITORY`
+- `GCP_WORKLOAD_IDENTITY_PROVIDER` — the full provider resource name
+- `GCP_DEPLOY_SERVICE_ACCOUNT` — `assistant-github-deploy@PROJECT.iam.gserviceaccount.com`
+
+The workflow intentionally has no project or identity fallbacks: all five
+variables must be set before its first run. GitHub creates the `production`
+environment on first use if it does not exist. Add required reviewers only when
+production releases should wait for a human gate. Workflow concurrency queues
+releases instead of cancelling one already in progress.

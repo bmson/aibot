@@ -1,6 +1,6 @@
 // Server-side mappers turning DB rows into plain serializable view props for
 // client components (approval cards) and shared status-chip styling.
-import type { ApprovalRow, TaskRow } from '@assistant/db';
+import type { ApprovalSnapshot } from '@assistant/application/approvals';
 import { formatFriendlyDateTime, prettyJson, relativeTime } from './format';
 import { Badge, type BadgeTone } from './ui';
 
@@ -239,8 +239,8 @@ function extractVoiceFlag(payload: unknown): string | null {
 }
 
 export function toPendingApprovalView(
-  approval: ApprovalRow,
-  task: Pick<TaskRow, 'type' | 'trust'>,
+  approval: ApprovalSnapshot,
+  task: { type: string; trust: string },
   toolCall: { toolName: string; decision: unknown },
   now: Date = new Date(),
   timeZone?: string,

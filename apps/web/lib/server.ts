@@ -1,16 +1,66 @@
 // Server-only singletons. Cached on globalThis so Next dev hot-reload doesn't
 // leak postgres connection pools on every recompile.
 import path from 'node:path';
-import { getAgent, loadConfig, ModelRouter, repoRoot } from '@assistant/core';
-import { contacts, createDb, type Db } from '@assistant/db';
-import { GcsWorkspaceStore, LocalWorkspaceStore, type WorkspaceStore } from '@assistant/tools';
-import { eq } from 'drizzle-orm';
+import {
+  addAssistantSkill,
+  applyImprovementProposal,
+  archiveChatConversation,
+  archiveInactiveChats,
+  changeChatModel,
+  checkReadiness,
+  createChatConversation,
+  deleteApprovalPolicy,
+  deleteAssistantSkill,
+  deleteDocument,
+  deleteImportedSource,
+  dismissAnomalyRecord,
+  dismissImprovementProposal,
+  downloadArtifact,
+  editAssistantSkill,
+  getAssistantIdentity,
+  getAssistantTimezone,
+  getChatConversationView,
+  getChatTaskStatus,
+  getDocumentsOverview,
+  getImportOverview,
+  getOwnerGivenName,
+  getPrimaryConversationId,
+  getSettingsOverview,
+  getShellStatus,
+  handleChatTurn,
+  isValidChatCursor,
+  listAnomalies,
+  listAssistantSkills,
+  listChatHistory,
+  listImprovementProposals,
+  purgeImportedSource,
+  restoreChatConversation,
+  reviewImportedSource,
+  setApprovalPolicyEnabled,
+  setAssistantSkillDeprecated,
+  setRecurringJobEnabled,
+  startWorkspaceImport,
+  suspendAnomalyRecord,
+  updateAssistantSettings,
+  updateSpendingBudgets,
+  uploadDocument,
+  uploadImport,
+} from '@assistant/application';
+import { loadConfig, repoRoot } from '@assistant/config';
+import { ModelRouter } from '@assistant/core/model-router';
+import { createDb, type Db } from '@assistant/db';
+import {
+  GcsWorkspaceStore,
+  LocalWorkspaceStore,
+  type WorkspaceStore,
+} from '@assistant/tools/workspace';
 import { cache } from 'react';
 
 const globalCache = globalThis as unknown as {
   __assistantDb?: Db;
   __assistantRouter?: ModelRouter;
   __assistantWorkspace?: WorkspaceStore;
+  __assistantApplication?: ReturnType<typeof createApplication>;
 };
 
 export function getDb(): Db {
@@ -29,11 +79,7 @@ export function getRouter(): ModelRouter {
  * Falls back to UTC if the agent can't be read.
  */
 export const getAgentTimezone = cache(async (): Promise<string> => {
-  try {
-    return (await getAgent(getDb())).timezone || 'UTC';
-  } catch {
-    return 'UTC';
-  }
+  return getAssistantTimezone(getDb());
 });
 
 /**
@@ -42,14 +88,8 @@ export const getAgentTimezone = cache(async (): Promise<string> => {
  * the dashboard displays it wherever the assistant "speaks".
  */
 export const getAgentIdentity = cache(
-  async (): Promise<{ id: string; name: string; avatarUrl: string | null }> => {
-    try {
-      const agent = await getAgent(getDb());
-      return { id: agent.id, name: agent.name || 'Assistant', avatarUrl: agent.avatarUrl ?? null };
-    } catch {
-      return { id: '', name: 'Assistant', avatarUrl: null };
-    }
-  },
+  async (): Promise<{ id: string; name: string; avatarUrl: string | null }> =>
+    getAssistantIdentity(getDb()),
 );
 
 /**
@@ -57,26 +97,101 @@ export const getAgentIdentity = cache(
  * Null (never a placeholder) when unset so callers can fall back gracefully.
  */
 export const getOwnerFirstName = cache(async (): Promise<string | null> => {
-  try {
-    const [owner] = await getDb()
-      .select({ name: contacts.name })
-      .from(contacts)
-      .where(eq(contacts.trust, 'owner'))
-      .limit(1);
-    return owner?.name.trim().split(/\s+/)[0] || null;
-  } catch {
-    return null;
-  }
+  return getOwnerGivenName(getDb());
 });
 
-/** Same workspace the agent uses (prefix must match apps/agent/src/deps.ts). */
+/** Same workspace identity the agent composition root uses. */
 export function getWorkspace(): WorkspaceStore {
   if (!globalCache.__assistantWorkspace) {
     const config = loadConfig();
     globalCache.__assistantWorkspace =
       config.FILES_DRIVER === 'gcs'
-        ? new GcsWorkspaceStore(config.WORKSPACE_BUCKET, 'workspace/b-bot')
+        ? new GcsWorkspaceStore(
+            config.WORKSPACE_BUCKET,
+            `workspace/${config.ASSISTANT_WORKSPACE_ID}`,
+          )
         : new LocalWorkspaceStore(path.join(repoRoot, '.workspace'));
   }
   return globalCache.__assistantWorkspace;
+}
+
+/**
+ * Bound application use-cases for the Next.js transport layer. Pages, route
+ * handlers, and server actions call this facade instead of reaching into
+ * persistence, model routing, or workspace adapters themselves.
+ */
+function createApplication() {
+  const db = getDb();
+  const workspace = getWorkspace();
+  return {
+    listAnomalies: () => listAnomalies(db),
+    dismissAnomaly: (id: string) => dismissAnomalyRecord(db, id),
+    suspendAnomaly: (id: string) => suspendAnomalyRecord(db, id),
+    listImprovementProposals: () => listImprovementProposals(db),
+    applyImprovementProposal: (id: string) => applyImprovementProposal(db, id),
+    dismissImprovementProposal: (id: string) => dismissImprovementProposal(db, id),
+    listSkills: () => listAssistantSkills(db),
+    addSkill: (input: { name: string; preconditions: string; steps: string; gotchas: string }) =>
+      addAssistantSkill(db, getRouter(), input),
+    editSkill: (
+      id: string,
+      patch: { name: string; preconditions: string; steps: string; gotchas: string },
+    ) => editAssistantSkill(db, getRouter(), id, patch),
+    deleteSkill: (id: string) => deleteAssistantSkill(db, id),
+    setSkillDeprecated: (id: string, deprecated: boolean) =>
+      setAssistantSkillDeprecated(db, id, deprecated),
+    getSettings: () => getSettingsOverview(db),
+    updateSettings: (input: { timezone: string; locale: string; signature: string }) =>
+      updateAssistantSettings(db, input),
+    setScheduleEnabled: (id: string, enabled: boolean) => setRecurringJobEnabled(db, id, enabled),
+    updateBudgets: (values: Partial<Record<'task_default' | 'daily' | 'monthly', number>>) =>
+      updateSpendingBudgets(db, values),
+    setPolicyEnabled: (id: string, enabled: boolean) => setApprovalPolicyEnabled(db, id, enabled),
+    deletePolicy: (id: string) => deleteApprovalPolicy(db, id),
+    getDocuments: () => getDocumentsOverview(db),
+    deleteDocument: (id: string) => deleteDocument(db, workspace, id),
+    uploadDocument: (input: { name: string; title?: string; mime?: string; bytes: Buffer }) =>
+      uploadDocument(db, workspace, input),
+    downloadArtifact: (path: string) => downloadArtifact(db, workspace, path),
+    getImports: () => getImportOverview(db, workspace),
+    startImport: (path: string, source: string) =>
+      startWorkspaceImport(db, workspace, path, source),
+    purgeImport: (source: string) => purgeImportedSource(db, source),
+    deleteImport: (source: string) => deleteImportedSource(db, workspace, source),
+    reviewImport: (source: string, verdict: 'approve' | 'reject') =>
+      reviewImportedSource(db, source, verdict),
+    uploadImport: (input: {
+      fileName: string;
+      content: string;
+      source?: string;
+      voice?: boolean;
+      register?: string;
+    }) => uploadImport(db, workspace, input),
+    getPrimaryConversationId: () => getPrimaryConversationId(db),
+    getShellStatus: (agentId: string) => getShellStatus(db, agentId),
+    createChat: () => createChatConversation(db),
+    changeChatModel: (conversationId: string, modelId: string | null) =>
+      changeChatModel(db, conversationId, modelId),
+    archiveChat: (conversationId: string) => archiveChatConversation(db, conversationId),
+    restoreChat: (conversationId: string) => restoreChatConversation(db, conversationId),
+    archiveInactiveChats: () => archiveInactiveChats(db),
+    listChatHistory: (archived: boolean) => listChatHistory(db, archived),
+    getChatConversation: (conversationId: string, input: { taskId?: string; cursor?: string }) =>
+      getChatConversationView(db, conversationId, input),
+    getChatTaskStatus: (input: {
+      conversationId: string;
+      taskId: string;
+      cursor?: string;
+      pageSize?: number;
+    }) => getChatTaskStatus(db, input),
+    isValidChatCursor,
+    handleChatTurn: (request: Request) =>
+      handleChatTurn(request, { config: loadConfig(), db, router: getRouter() }),
+    checkReadiness: () => checkReadiness(db),
+  };
+}
+
+export function getApplication(): ReturnType<typeof createApplication> {
+  globalCache.__assistantApplication ??= createApplication();
+  return globalCache.__assistantApplication;
 }

@@ -1,7 +1,7 @@
 'use client';
 
+import type { InlineApprovalDetail, InlineApprovalStatus } from '@assistant/application/chat';
 import { Check, CircleCheck, CircleHelp, CircleX, Clock, LoaderCircle, X } from 'lucide-react';
-import type { InlineApprovalDetail, InlineApprovalStatus } from '@/lib/chat-approval-parts';
 import { btnSm } from '@/lib/ui';
 
 export interface InlineApprovalPart {

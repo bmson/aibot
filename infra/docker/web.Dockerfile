@@ -1,6 +1,5 @@
 FROM node:22-slim AS build
-WORKDIR /app
-
+WORKDIR /src
 RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
@@ -8,19 +7,22 @@ COPY packages ./packages
 COPY apps/web ./apps/web
 
 RUN pnpm install --frozen-lockfile --filter @assistant/web...
-# force-dynamic pages don't touch the DB at build time
-RUN pnpm --filter @assistant/web build
-
-ENV NODE_ENV=production
-
-# The released commit, surfaced by /api/health so release.sh can prove the live
-# revision is the one it just pushed. Declared after the build on purpose: it
-# changes every commit, and /api/health reads it at request time (force-dynamic,
-# not NEXT_PUBLIC_), so keeping it below the build leaves the layer cache intact.
 ARG GIT_SHA=unknown
 ENV BUILD_SHA=${GIT_SHA}
+RUN pnpm --filter @assistant/web build
 
-RUN chown -R node:node /app
+FROM node:22-slim AS runtime
+ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
+ENV PORT=8080
+ENV ASSISTANT_REPO_ROOT=/app
+WORKDIR /app
+
+COPY --from=build --chown=node:node /src/apps/web/.next/standalone ./
+COPY --from=build --chown=node:node /src/apps/web/.next/static ./apps/web/.next/static
+
+ARG GIT_SHA=unknown
+ENV BUILD_SHA=${GIT_SHA}
 USER node
 EXPOSE 8080
-CMD ["pnpm", "--filter", "@assistant/web", "start"]
+CMD ["node", "/app/apps/web/server.js"]

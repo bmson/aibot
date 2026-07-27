@@ -1,5 +1,5 @@
 /**
- * Ingest Baldvin's writing samples into the voice pipeline.
+ * Ingest the owner's writing samples into the voice pipeline.
  *
  * Usage:
  *   1. Drop text files into seed-data/voice/ — one or many samples per file.
@@ -15,7 +15,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, ModelRouter, registerForFilename } from '@assistant/core';
+import { loadConfig } from '@assistant/config';
+import { ModelRouter, registerForFilename } from '@assistant/core';
 import { createDb, voiceProfile, writingSamples } from '@assistant/db';
 import { count, eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -25,7 +26,7 @@ const voiceDir = path.join(repoRoot, 'seed-data', 'voice');
 const config = loadConfig();
 
 const prod = process.argv.includes('--prod');
-const dbUrl = prod ? process.env.PROD_DATABASE_URL : config.DATABASE_URL;
+const dbUrl = prod ? config.PROD_DATABASE_URL : config.DATABASE_URL;
 if (!dbUrl) {
   console.error(prod ? 'PROD_DATABASE_URL missing from .env' : 'DATABASE_URL missing');
   process.exit(1);

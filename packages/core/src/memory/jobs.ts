@@ -1,3 +1,4 @@
+import { isModuleEnabled, loadConfig } from '@assistant/config';
 import type { Db, TaskRow } from '@assistant/db';
 import type { ModelRouter } from '../model-router/router.js';
 import { runAnomalyScan } from '../workflow/anomaly.js';
@@ -75,6 +76,9 @@ export async function runCodeJob(
   job: CodeJobName,
   task: TaskRow,
 ): Promise<CodeJobOutcome> {
+  if (job.startsWith('documents.') && !isModuleEnabled(loadConfig(), 'documents')) {
+    return { done: true, summary: 'document job skipped because the documents module is disabled' };
+  }
   switch (job) {
     case 'memory.extract': {
       await deps.heartbeat?.();

@@ -1,0 +1,33 @@
+{
+  "name": "@assistant/application",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./approvals": "./src/approvals.ts",
+    "./chat": "./src/chat.ts",
+    "./costs": "./src/costs.ts",
+    "./dashboard": "./src/dashboard.ts",
+    "./documents": "./src/documents.ts",
+    "./goals": "./src/goals.ts",
+    "./health": "./src/health.ts",
+    "./imports": "./src/imports.ts",
+    "./operations": "./src/operations.ts",
+    "./profile": "./src/profile.ts",
+    "./settings": "./src/settings.ts",
+    "./shell": "./src/shell.ts",
+    "./tasks": "./src/tasks.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@assistant/core": "workspace:*",
+    "@assistant/config": "workspace:*",
+    "@assistant/db": "workspace:*",
+    "ai": "^7.0.29",
+    "drizzle-orm": "^0.45.2",
+    "zod": "^4.4.3"
+  }
+}

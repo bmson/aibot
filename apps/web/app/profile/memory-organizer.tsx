@@ -142,10 +142,10 @@ export function MemoryOrganizer({
             What happens during a pass?
           </summary>
           <p className="mt-2 max-w-[72ch] text-xs leading-5 text-muted">
-            AI Bot reviews up to 720 saved memories, grouped by person. It can clear duplicates,
-            resolve direct contradictions, improve topic labels, combine fragments, and turn
-            birthdays or anniversaries mentioned in facts into Occasions. A single standalone fact
-            is marked as checked without rewriting it. Your confirmed or pinned wording remains
+            The assistant reviews up to 720 saved memories, grouped by person. It can clear
+            duplicates, resolve direct contradictions, improve topic labels, combine fragments, and
+            turn birthdays or anniversaries mentioned in facts into Occasions. A single standalone
+            fact is marked as checked without rewriting it. Your confirmed or pinned wording remains
             protected.
           </p>
         </details>

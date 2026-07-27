@@ -1,6 +1,3 @@
-import { getAgent } from '@assistant/core';
-import { approvalPolicies, schedules } from '@assistant/db';
-import { asc } from 'drizzle-orm';
 import { ArrowRight } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
@@ -9,7 +6,7 @@ import { AgentForm } from '@/app/settings/agent-form';
 import { policyLabels, policyScope, scheduleLabels } from '@/app/settings/labels';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
-import { getDb } from '@/lib/server';
+import { getApplication } from '@/lib/server';
 import {
   Badge,
   Card,
@@ -67,18 +64,13 @@ function SettingRow({
 
 export default async function SettingsPage() {
   await requireOwner();
-  const db = getDb();
   const now = new Date();
-
-  const [agent, scheduleRows, policyRows] = await Promise.all([
-    getAgent(db),
-    db.select().from(schedules).orderBy(asc(schedules.name)),
-    db.select().from(approvalPolicies).orderBy(asc(approvalPolicies.toolName)),
-  ]);
-  // Goal-owned schedules are explained and controlled on Goals, where their
-  // title, urgency, deadline, and work chat are visible together.
-  const directScheduleRows = scheduleRows.filter((schedule) => !schedule.name.startsWith('goal:'));
-  const goalAutomationCount = scheduleRows.length - directScheduleRows.length;
+  const {
+    agent,
+    schedules: directScheduleRows,
+    policies: policyRows,
+    goalAutomationCount,
+  } = await getApplication().getSettings();
 
   return (
     <PageShell size="reading" className="flex flex-col gap-10">

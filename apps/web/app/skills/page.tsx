@@ -1,8 +1,7 @@
-import { getAgent, listSkills } from '@assistant/core';
 import { SkillsPanel, type SkillView } from '@/app/skills/skills-panel';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
-import { getDb } from '@/lib/server';
+import { getApplication } from '@/lib/server';
 import { PageHeader, PageShell } from '@/lib/ui';
 
 export const metadata = { title: 'Skills' };
@@ -11,10 +10,8 @@ export const dynamic = 'force-dynamic';
 
 export default async function SkillsPage() {
   await requireOwner();
-  const db = getDb();
   const now = new Date();
-  const agent = await getAgent(db);
-  const rows = await listSkills(db, agent.id);
+  const rows = await getApplication().listSkills();
 
   const skills: SkillView[] = rows.map((s) => ({
     id: s.id,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CORRECTION, guardDraft } from './chat-draft-guard.js';
+import { CORRECTION, guardDraft } from './chat-guard.js';
 
 describe('guardDraft', () => {
   it('appends the correction when a tool-less draft narrates a calendar check', () => {

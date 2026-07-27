@@ -1,6 +1,5 @@
-import { getAgent, getOrCreatePrimaryConversation } from '@assistant/core';
 import { requireOwner } from '@/auth';
-import { getDb } from '@/lib/server';
+import { getApplication } from '@/lib/server';
 import { type ChatPageQuery, renderChatConversation } from './conversation-page';
 
 export const dynamic = 'force-dynamic';
@@ -16,8 +15,8 @@ export default async function ChatIndexPage({
   searchParams: Promise<ChatPageQuery>;
 }) {
   await requireOwner();
-  const db = getDb();
-  const agent = await getAgent(db);
-  const primary = await getOrCreatePrimaryConversation(db, agent.id);
-  return renderChatConversation(primary.id, await searchParams);
+  return renderChatConversation(
+    await getApplication().getPrimaryConversationId(),
+    await searchParams,
+  );
 }
