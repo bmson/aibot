@@ -129,6 +129,33 @@ const ConfigSchema = z.object({
   LOCATION_PING_SECRET: z.string().default(''),
   LOCATION_RETENTION_DAYS: z.coerce.number().min(1).max(90).default(3),
   /**
+   * Age-based pruning of conversation/tool/model history. 0 (the default)
+   * keeps everything forever — deleting history is an owner policy decision,
+   * so the platform ships the machinery and leaves the knob off. A positive
+   * value makes the sweep prune rows older than that many days.
+   */
+  HISTORY_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .max(3650)
+    .default(0)
+    .refine((days) => days === 0 || days >= 30, {
+      message: 'HISTORY_RETENTION_DAYS must be 0 (keep forever) or at least 30',
+    }),
+  /**
+   * Same for the cost ledger. The floor is higher because budget hard caps
+   * count a rolling month of cost_events — pruning inside that window would
+   * quietly raise the spending limit.
+   */
+  COST_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .max(3650)
+    .default(0)
+    .refine((days) => days === 0 || days >= 60, {
+      message: 'COST_RETENTION_DAYS must be 0 (keep forever) or at least 60',
+    }),
+  /**
    * Explicit true/false wins; otherwise Gmail sync runs only in production.
    * The google module is an additional hard gate.
    */

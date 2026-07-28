@@ -11,6 +11,29 @@ Container and Cloud Run probes should use readiness endpoints. Alert on sustaine
 queue age, tasks in `needs_attention`, expired approvals, webhook rejection rates, and budget
 exhaustion. OpenTelemetry can be enabled centrally with `OTEL_EXPORTER=otlp`.
 
+## Monitoring and alerting
+
+`infra/gcp/deploy.sh` provisions a baseline automatically: a log-based metric
+(`assistant-error-logs`) counting error-severity entries from every `assistant-*` service and job,
+an email notification channel to `OWNER_EMAIL`, and an "Assistant error burst" alert policy
+(more than 5 error logs in 5 minutes). The policy is created once and then left alone, so
+threshold tuning in the console survives redeploys.
+
+Traces cover model calls (`model.generate`/`model.step`/`model.object`), task execution
+(`task.execute`), individual tool executions (`tool.execute`, with tool name, task, and step
+attributes), and the nightly self-maintenance jobs. Locally, `OTEL_EXPORTER=console` prints spans
+to stdout; `OTEL_EXPORTER=otlp` exports over OTLP/HTTP to whatever `OTEL_EXPORTER_OTLP_ENDPOINT`
+points at.
+
+## History retention
+
+Messages, tool calls, model calls, and cost events are kept forever by default. To bound them, set
+`HISTORY_RETENTION_DAYS` (minimum 30) and `COST_RETENTION_DAYS` (minimum 60 — budget caps count a
+rolling month of spend, so pruning inside that window would quietly raise the limit). The sweep
+prunes in batches of 1000 per run, so a large backlog drains gradually. Two kinds of rows outlive
+their cutoff by design: messages anchoring a conversation-segment summary (the recall unit
+references them), and tool calls still referenced by an approval or a retained cost event.
+
 ## Release artifacts
 
 CI scans every selected container for HIGH/CRITICAL vulnerabilities, generates an SPDX JSON SBOM,

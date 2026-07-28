@@ -196,16 +196,31 @@ Fixed in this commit:
 
 ---
 
+## Picked up after the initial pass (Phase 5)
+
+Two of the deferred items were pure engineering and landed in a follow-up
+commit:
+
+- **Retention sweeps**: `purgeAgedHistory` prunes `messages`, `tool_calls`,
+  `model_calls`, and `cost_events` past config-driven cutoffs
+  (`HISTORY_RETENTION_DAYS`, `COST_RETENTION_DAYS`). Both default to 0 —
+  keep forever — because deleting the owner's history is their policy call;
+  the machinery ships, the knob stays off. Segment-anchoring messages and
+  approval/cost-referenced tool calls survive their cutoff by design. See
+  `docs/operations.md`.
+- **Observability baseline**: `tool.execute` spans on both dispatch paths
+  (autonomous and approved), and `deploy.sh` now provisions the
+  `assistant-error-logs` log metric, an owner email notification channel,
+  and an error-burst alert policy — created once, then left alone so console
+  tuning survives redeploys.
+
 ## Deliberately deferred
 
 Larger projects, recorded here so they stay visible:
 
-- **Retention sweeps** for `messages`, `tool_calls`, `model_calls`, and
-  `cost_events` — these tables grow without bound today. Needs a policy
-  decision (what the owner wants to keep) more than engineering.
-- **Observability platform**: flip `OTEL_EXPORTER=otlp` in production, add
-  dispatcher spans, and provision log-based metrics and alert policies. The
-  tracer rewrite in Phase 2 made this cheap to pick up.
+- **Full trace export in production**: spans exist, but production still sets
+  `OTEL_EXPORTER=none`. Flipping to `otlp` needs an OTLP ingest to point at
+  (a collector sidecar or a managed vendor) — a cost/vendor decision.
 - **Turbopack migration** for the web build (currently webpack via
   `extensionAlias`).
 - **Recall quality tuning** (recency weighting, similarity-threshold

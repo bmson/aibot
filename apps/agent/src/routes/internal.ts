@@ -61,6 +61,7 @@ internal.post('/sweep', async (c) => {
     emitBudgetNotices,
     getAgent,
     getQueueNotifier,
+    purgeAgedHistory,
     purgeExpired,
     renotifyStalledApprovals,
     renotifyStalledAttention,
@@ -129,6 +130,11 @@ internal.post('/sweep', async (c) => {
     () => purgeExpired(deps.db),
     null as Awaited<ReturnType<typeof purgeExpired>> | null,
   );
+  const aged = await step(
+    'purgeAgedHistory',
+    () => purgeAgedHistory(deps.db),
+    null as Awaited<ReturnType<typeof purgeAgedHistory>> | null,
+  );
   const expiredWatches = await step(
     'reapExpiredApplicationWatches',
     async () =>
@@ -152,6 +158,7 @@ internal.post('/sweep', async (c) => {
     expiredWatches,
     expiredInboxWatches,
     purged,
+    aged,
   });
 });
 
