@@ -1,4 +1,5 @@
-import { isModuleEnabled, loadConfig } from '@assistant/config';
+import { loadConfig } from '@assistant/config';
+import { hiddenModuleNavHrefs } from '@assistant/modules/meta';
 import type { Metadata, Viewport } from 'next';
 import { Bricolage_Grotesque, Inter, JetBrains_Mono } from 'next/font/google';
 import Script from 'next/script';
@@ -68,9 +69,8 @@ const navItems = [
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const config = loadConfig();
-  const visibleNavItems = navItems.filter(
-    (item) => item.href !== '/documents' || isModuleEnabled(config, 'documents'),
-  );
+  const hiddenNav = hiddenModuleNavHrefs(config);
+  const visibleNavItems = navItems.filter((item) => !hiddenNav.has(item.href));
   const identity = await getAgentIdentity();
   const [shell, session] = await Promise.all([
     identity.id

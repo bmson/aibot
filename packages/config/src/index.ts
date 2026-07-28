@@ -151,6 +151,13 @@ const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
+/**
+ * Every setting name in the schema, including optional ones absent from a
+ * parsed configuration. Modules declare the keys they own against this list and
+ * deployment tooling uses it to map settings onto Secret Manager entries.
+ */
+export const configKeyNames = Object.keys(ConfigSchema.shape) as readonly (keyof Config)[];
+
 let cached: Config | undefined;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -161,6 +168,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 /**
  * Fail loudly when a cloud-shaped installation would otherwise boot broken.
  * Local and intentionally minimal installations may run in a degraded state.
+ *
+ * This covers the platform's own settings only. Module-specific problems are
+ * declared by each module and collected by `validateAssistantConfig` in
+ * `@assistant/modules`, which is what apps and setup tooling should call.
  */
 export function validateProdConfig(config: Config = loadConfig()): string[] {
   if (config.QUEUE_DRIVER !== 'cloudtasks') return [];
@@ -185,76 +196,7 @@ export function validateProdConfig(config: Config = loadConfig()): string[] {
   if (config.FILES_DRIVER === 'gcs' && !config.WORKSPACE_BUCKET) {
     problems.push('WORKSPACE_BUCKET is required when FILES_DRIVER=gcs');
   }
-  if (config.GMAIL_PUBSUB_TOPIC && !isModuleEnabled(config, 'google')) {
-    problems.push('the google module is required when GMAIL_PUBSUB_TOPIC is set');
-  }
-  if (config.GMAIL_PUBSUB_TOPIC && !config.GMAIL_PUSH_SERVICE_ACCOUNT) {
-    problems.push('GMAIL_PUSH_SERVICE_ACCOUNT is required when GMAIL_PUBSUB_TOPIC is set');
-  }
-  if (config.CANARY_ENABLED) {
-    if (!isModuleEnabled(config, 'google')) {
-      problems.push('the google module is required when CANARY_ENABLED=true');
-    }
-    if (!isModuleEnabled(config, 'browser')) {
-      problems.push('the browser module is required when CANARY_ENABLED=true');
-    }
-  }
   return problems;
-}
-
-export interface ModuleDiagnostic {
-  module: AssistantModule;
-  enabled: boolean;
-  ready: boolean;
-  detail: string;
-}
-
-/**
- * Secret-safe diagnostics for setup scripts and health tooling. This reports
- * only presence/absence and never includes a configured value.
- */
-export function moduleDiagnostics(config: Config = loadConfig()): ModuleDiagnostic[] {
-  const enabled = (module: AssistantModule) => isModuleEnabled(config, module);
-  return assistantModuleNames.map((module) => {
-    if (!enabled(module)) return { module, enabled: false, ready: false, detail: 'disabled' };
-    switch (module) {
-      case 'google': {
-        const ready = Boolean(
-          config.GOOGLE_OAUTH_CLIENT_ID &&
-            config.GOOGLE_OAUTH_CLIENT_SECRET &&
-            config.BOT_GOOGLE_REFRESH_TOKEN,
-        );
-        return {
-          module,
-          enabled: true,
-          ready,
-          detail: ready ? 'ready' : 'missing Google OAuth credentials',
-        };
-      }
-      case 'sms': {
-        const ready = Boolean(
-          config.TWILIO_ACCOUNT_SID && config.TWILIO_AUTH_TOKEN && config.TWILIO_FROM_NUMBER,
-        );
-        return {
-          module,
-          enabled: true,
-          ready,
-          detail: ready ? 'ready' : 'missing Twilio settings',
-        };
-      }
-      case 'search': {
-        const ready = config.SEARCH_PROVIDER !== 'none' && Boolean(config.SEARCH_API_KEY);
-        return {
-          module,
-          enabled: true,
-          ready,
-          detail: ready ? `ready (${config.SEARCH_PROVIDER})` : 'missing search provider or key',
-        };
-      }
-      default:
-        return { module, enabled: true, ready: true, detail: 'ready' };
-    }
-  });
 }
 
 export function gmailSyncEnabled(config: Config = loadConfig()): boolean {

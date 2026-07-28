@@ -15,6 +15,7 @@
     "@assistant/config": "workspace:*",
     "@assistant/core": "workspace:*",
     "@assistant/db": "workspace:*",
+    "@assistant/modules": "workspace:*",
     "@assistant/tools": "workspace:*",
     "ai": "^7.0.29",
     "lucide-react": "^0.469.0",

@@ -1,4 +1,5 @@
-import { loadConfig, moduleDiagnostics, validateProdConfig } from '@assistant/config';
+import { loadConfig } from '@assistant/config';
+import { moduleDiagnostics, validateAssistantConfig } from '@assistant/modules/meta';
 
 let config: ReturnType<typeof loadConfig>;
 try {
@@ -18,7 +19,7 @@ for (const diagnostic of moduleDiagnostics(config)) {
   console.log(`  ${marker} ${diagnostic.module}: ${diagnostic.detail}`);
 }
 
-const problems = validateProdConfig(config);
+const problems = validateAssistantConfig(config);
 if (problems.length > 0) {
   console.error('Production configuration problems:');
   for (const problem of problems) console.error(`  - ${problem}`);
