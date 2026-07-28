@@ -37,11 +37,18 @@ ASSISTANT_LOCALE="$(envval ASSISTANT_LOCALE)"
 ASSISTANT_LOCALE="${ASSISTANT_LOCALE:-en}"
 ASSISTANT_MODULES="$(envval ASSISTANT_MODULES)"
 ASSISTANT_MODULES="${ASSISTANT_MODULES:-all}"
+# The module plan is the single source of truth for what this installation
+# contains. It validates names against the configuration schema and expands
+# "all"/"minimal" exactly as the running services do, so provisioning cannot
+# drift from the app. Nothing here parses ASSISTANT_MODULES itself.
+PLAN_ENV="$(ASSISTANT_MODULES="$ASSISTANT_MODULES" pnpm -s modules:plan --format=env)" || {
+  echo "Could not read the module plan; check ASSISTANT_MODULES in ${ENV_FILE}"
+  exit 1
+}
+eval "$PLAN_ENV"
 module_enabled() {
-  local module="$1"
-  [ "$ASSISTANT_MODULES" = "all" ] && return 0
-  case ",${ASSISTANT_MODULES}," in
-    *",${module},"*) return 0 ;;
+  case ",${PLAN_MODULES}," in
+    *",$1,"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -92,6 +99,14 @@ echo "── enabling APIs"
 gcloud services enable run.googleapis.com cloudtasks.googleapis.com \
   cloudscheduler.googleapis.com pubsub.googleapis.com secretmanager.googleapis.com \
   artifactregistry.googleapis.com cloudbuild.googleapis.com --quiet
+
+# APIs the enabled modules declare (for example Workspace APIs for google).
+# Enabling is idempotent and additive, so this is safe to re-run.
+if [ -n "${PLAN_GCP_APIS:-}" ]; then
+  echo "── enabling module APIs: ${PLAN_GCP_APIS}"
+  # shellcheck disable=SC2086 # deliberate word splitting: a space-separated API list
+  gcloud services enable $PLAN_GCP_APIS --quiet
+fi
 
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
 LEGACY_RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"

@@ -17,6 +17,7 @@ import { smsMeta } from './sms/meta.js';
 import { watchesMeta } from './watches/meta.js';
 
 export * from './kit.js';
+export * from './plan.js';
 
 /**
  * Every module's metadata, ordered like `assistantModuleNames` so diagnostics
