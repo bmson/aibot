@@ -70,7 +70,12 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  // Workspace packages are NodeNext TS sources with `.js` specifiers — map them back to .ts.
+  // Workspace packages are NodeNext TS sources with `.js` specifiers — map them
+  // back to .ts. This is also why the build stays on webpack (`next build
+  // --webpack`): verified 2026-07 that Turbopack fails on every workspace
+  // import ("Can't resolve '../chat.js'") because it has no extensionAlias
+  // equivalent — turbopack.resolveAlias maps names, not extensions. Re-try
+  // when Turbopack learns extension aliasing or the packages ship built JS.
   webpack: (config) => {
     config.resolve.extensionAlias = { '.js': ['.ts', '.tsx', '.js'] };
     return config;
