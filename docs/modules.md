@@ -28,7 +28,16 @@ Run `pnpm config:check` after any change.
 
 A selected module can be either ready or unavailable. For example, selecting `google` without a
 refresh token keeps the tools unregistered and prints one startup warning. This makes initial setup
-recoverable while keeping an unavailable provider out of model tool selection.
+recoverable while keeping an unavailable provider out of model tool selection. An unavailable
+module's routes, sweep steps, and channels still mount — each self-guards on its own
+configuration — so credentials can arrive later without a redeploy changing which URLs exist.
+
+A module's behavior lives with the module, not the agent: mail sync, the email channel, and
+application confirmations in `google/`; the SMS channel (inbound webhook, owner notifier,
+delivery) in `sms/`; inbox-watch matching in `watches/`. The agent mounts what modules declare —
+webhooks (with platform-applied auth), internal routes, sweep steps, poller ticks, and
+deterministic task handlers — and composes their channels into the executor. Two webhooks remain
+agent-owned: `/webhooks/location` (platform) and `/webhooks/canaries/browser` (canaries).
 
 A disabled module is a hard gate:
 

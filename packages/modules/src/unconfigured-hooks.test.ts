@@ -2,9 +2,9 @@ import { loadConfig, resetConfigForTest } from '@assistant/config';
 import type { Db } from '@assistant/db';
 import { ToolRegistry } from '@assistant/tools/registry';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ModulePlatformContext } from '../platform.js';
-import { smsModule } from '../sms/module.js';
-import { googleModule } from './module.js';
+import { googleModule } from './google/module.js';
+import type { ModulePlatformContext } from './platform.js';
+import { smsModule } from './sms/module.js';
 
 function contextFor(): ModulePlatformContext {
   return {

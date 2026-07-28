@@ -65,12 +65,24 @@ only register a capability when called by the agent composition root.
 ### `@assistant/modules`
 
 Owns the module contract and every module. `src/contract.ts` defines the plain-data half — name,
-owned settings, readiness, production rules, infrastructure, billing, navigation, and code jobs —
-and `src/platform.ts` the runtime half, the context a module receives and the definition it
-returns. `src/registry.ts` lists the metadata, `src/diagnostics.ts` derives readiness and
-validation from it, `src/plan.ts` derives the deployment plan, `src/install.ts` installs, and
-`src/compose.ts` declares a composition. Each `src/<name>/` directory holds one module's `meta.ts`
-and `module.ts`.
+owned settings, readiness, production rules, infrastructure, billing, navigation, code jobs, and
+route declarations (webhooks with a closed auth union, internal routes) — and `src/platform.ts`
+the runtime half: the context a module receives, the definition it returns, and the hook surface
+(`ModuleHooks`) it can plug into the running agent — webhook and internal-route handlers, sweep
+steps, poller ticks, deterministic task handlers, a delivery channel, an owner-notifier port, and
+inbound-email observers. `src/registry.ts` lists the metadata, `src/diagnostics.ts` derives
+readiness and validation from it, `src/plan.ts` derives the deployment plan, `src/install.ts`
+installs and aggregates hooks (validating at boot that meta-declared routes and runtime handlers
+agree), and `src/compose.ts` declares a composition. Each `src/<name>/` directory holds one
+module's `meta.ts`, `module.ts`, and any behavior it owns (the google module's mail sync and email
+channel, the sms module's channel, the watches module's matching).
+
+Hooks receive invocation-time `ModuleServices` rather than richer `create()` context because the
+tool dispatcher can only exist after every module has registered its tools. Modules never import
+each other: cross-module needs flow through platform ports — the sms module *provides* the
+`OwnerNotifier`, google and watches consume it; watches observes google's inbound mail through the
+email-observer port. The mounters in the agent apply route auth (Google OIDC, Twilio signature,
+one-shot token) from the closed union in the meta before any module handler runs.
 
 Two entry points: `@assistant/modules/meta` reaches only plain data, so the web app, scripts, and
 diagnostics import it without pulling provider code into their bundles; `@assistant/modules` adds
@@ -108,6 +120,7 @@ input and never import the agent, web app, database package, or provider clients
 - application depends on tools/apps or leaks persistence into migrated UI features;
 - tools acquires an unsupported workspace dependency;
 - modules acquires a workspace dependency outside config, core, db, and tools;
+- one module imports a sibling module instead of a platform port;
 - the composition file moves out from under one of its importers, or the agent image stops
   copying it.
 
@@ -139,16 +152,21 @@ install, and naming it in the environment logs a warning rather than silently do
 2. Create `packages/modules/src/<name>/meta.ts` declaring the settings it owns, its readiness
    check, any production rules, its infrastructure, its billing, and any code jobs it owns.
 3. Create `packages/modules/src/<name>/module.ts` with `defineModule`, registering its tools on
-   the registry it is handed and returning whatever the composition root must hold onto.
+   the registry it is handed and returning whatever the composition root must hold onto — plus
+   `hooks` for any webhooks, internal routes, sweep steps, poller ticks, task handlers, channels,
+   or observers it owns (declare routes in the meta too; boot validation keeps the two in step).
 4. Add its metadata to `assistantModuleMetas` in `packages/modules/src/registry.ts`, export the
    definition from `packages/modules/src/index.ts`, and add it to `assistant.config.ts`.
 5. Document its credentials, infrastructure, side effects, and removal behavior.
 
 Nothing else changes: readiness diagnostics, production validation, navigation, worker image
-selection, and the deployment plan are all derived from metadata. No module should require a
-conditional inside the planner or business workflow — a module that owns code jobs declares them
-in metadata so a job queued before the module was removed completes benignly. Absence from the
-tool registry is the capability boundary.
+selection, the deployment plan, route mounting, sweep scheduling, task routing, and channel
+delivery are all derived from metadata and hooks. No module requires a conditional inside the
+planner, business workflow, or agent app — a module that owns code jobs declares them in metadata
+so a job queued before the module was removed completes benignly, and a module's routes answer 404
+the moment the configuration disables it. Absence from the tool registry is the capability
+boundary. The two remaining agent-owned webhooks are `/webhooks/location` (platform HMAC ingest)
+and `/webhooks/canaries/browser` (canaries are still agent-owned).
 
 ## Configuration lifecycle
 
