@@ -1218,6 +1218,13 @@ export const documents = pgTable(
      */
     processorTokenHash: text('processor_token_hash'),
     processorStartedAt: timestamp('processor_started_at', { withTimezone: true }),
+    /**
+     * Launches consumed by this document. A worker that dies without calling
+     * back (decompression bomb, OCR hang) would otherwise be relaunched every
+     * staleness window forever; after PROCESSOR_MAX_ATTEMPTS the document is
+     * marked failed instead.
+     */
+    processorAttempts: integer('processor_attempts').notNull().default(0),
     processedTextPath: text('processed_text_path'),
     ...timestamps,
   },

@@ -1,0 +1,1 @@
+ALTER TABLE "documents" ADD COLUMN "processor_attempts" integer DEFAULT 0 NOT NULL;

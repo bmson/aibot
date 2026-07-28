@@ -1,8 +1,9 @@
 import { loadConfig } from '@assistant/config';
+import { headers } from 'next/headers';
 import { redirect, unauthorized } from 'next/navigation';
 import NextAuth from 'next-auth';
 import Google from 'next-auth/providers/google';
-import { resolveAuthMode } from './auth-mode';
+import { requestLooksLoopback, resolveAuthMode } from './auth-mode';
 
 // loadConfig() side-loads the repo-root .env, so AUTH_* vars defined there are
 // visible even though Next only reads apps/web/.env* files.
@@ -50,6 +51,24 @@ export interface OwnerSession {
  */
 export async function isAuthed(): Promise<OwnerSession | null> {
   if (authMode === 'dev-bypass') {
+    // The production-built localhost bypass (Compose quickstart) additionally
+    // requires the request itself to look loopback-direct. Config alone cannot
+    // tell a 127.0.0.1-published container from one re-published on 0.0.0.0 or
+    // behind a reverse proxy — the request headers can. AUTH_DEV_BYPASS cannot
+    // reach here in production builds (resolveAuthMode throws), so this branch
+    // is exactly the Compose case.
+    if (process.env.NODE_ENV === 'production') {
+      const h = await headers();
+      const loopback = requestLooksLoopback({
+        host: h.get('host'),
+        forwardedFor: h.get('x-forwarded-for'),
+        forwardedHost: h.get('x-forwarded-host'),
+      });
+      if (!loopback) {
+        console.warn('[auth] localhost bypass refused for a non-loopback request');
+        return null;
+      }
+    }
     return { user: { email: config.OWNER_EMAIL, name: 'Owner (dev)' } };
   }
   if (authMode === 'disabled') return null;

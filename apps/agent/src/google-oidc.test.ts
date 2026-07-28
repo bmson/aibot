@@ -80,6 +80,7 @@ describe('Google OIDC authorization', () => {
       INTERNAL_API_SECRET: 'local-test-secret',
       INTERNAL_OIDC_AUDIENCE: '',
       INTERNAL_OIDC_SERVICE_ACCOUNT: '',
+      QUEUE_DRIVER: 'local',
     } as const;
 
     expect(
@@ -101,6 +102,15 @@ describe('Google OIDC authorization', () => {
         undefined,
         'production',
       ),
+    ).toBe(false);
+    // A cloudtasks-shaped installation is internet-facing: refuse the shared
+    // secret even when NODE_ENV never got set.
+    expect(
+      await verifyInternalAuthorization(`Bearer ${base.INTERNAL_API_SECRET}`, {
+        ...base,
+        INTERNAL_AUTH_MODE: 'shared-secret',
+        QUEUE_DRIVER: 'cloudtasks',
+      }),
     ).toBe(false);
   });
 });

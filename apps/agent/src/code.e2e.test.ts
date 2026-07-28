@@ -92,6 +92,7 @@ function makeFakeRouter(spec: CodeSpec) {
 
 function makeDispatcher(launches: CodeJobLaunchInput[]) {
   const registry = registerCodeTools(new ToolRegistry(), {
+    isolated: true,
     launcher: {
       launch: async (input) => {
         launches.push(input);

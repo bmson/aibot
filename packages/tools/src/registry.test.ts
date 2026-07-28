@@ -30,13 +30,46 @@ describe('ToolRegistry', () => {
       .register(fakeTool('memory.save'), { writesMemory: true })
       .register(fakeTool('workspace.write'), { writesWorkspace: true })
       .register(fakeTool('workspace.read'), { confidentialRead: true })
-      .register(fakeTool('web.fetch'));
+      .register(fakeTool('reminder.create'));
 
     const untrusted = registry.toolsForTask('unknown').map((t) => t.name);
-    expect(untrusted).toEqual(['web.fetch']);
+    expect(untrusted).toEqual(['reminder.create']);
 
     const owner = registry.toolsForTask('owner').map((t) => t.name);
     expect(owner).toHaveLength(6);
+  });
+
+  it('denies network egress to unknown senders but keeps it for known contacts', () => {
+    // A stranger's email must not be able to drive HTTP requests or paid
+    // searches from the owner's IP; a saved contact's task may still research.
+    const registry = new ToolRegistry()
+      .register(fakeTool('web.fetch'), { networkEgress: true, returnsUntrustedContent: true })
+      .register(fakeTool('web.search'), { networkEgress: true, returnsUntrustedContent: true })
+      .register(fakeTool('reminder.create'));
+
+    expect(registry.toolsForTask('unknown').map((t) => t.name)).toEqual(['reminder.create']);
+    expect(registry.toolsForTask('known').map((t) => t.name)).toContain('web.fetch');
+    expect(registry.toolsForTask('owner')).toHaveLength(3);
+  });
+
+  it('strips workspace-writing job launchers from every external tier', () => {
+    // code.execute / browser.execute persist artifacts into the Workspace, so
+    // known and unknown tasks both lose them along with the other writers.
+    const jobFlags = {
+      outwardFacing: true,
+      blanketAllowIneligible: true,
+      autonomyFloor: true,
+      returnsUntrustedContent: true,
+      networkEgress: true,
+      writesWorkspace: true,
+    };
+    const registry = new ToolRegistry()
+      .register(fakeTool('code.execute'), jobFlags)
+      .register(fakeTool('browser.execute'), jobFlags);
+
+    expect(registry.toolsForTask('known')).toHaveLength(0);
+    expect(registry.toolsForTask('unknown')).toHaveLength(0);
+    expect(registry.toolsForTask('owner')).toHaveLength(2);
   });
 
   it('assistant-trust tasks keep the full registry (internal provenance, same outbound gates)', () => {
@@ -62,18 +95,18 @@ describe('ToolRegistry', () => {
     // whether the model can see them. Hiding one from an owner who is asking for
     // it produced an invented refusal rather than an approval card.
     const sensitive = { ...fakeTool('sensitive.action'), acceptsUntrustedInput: false };
-    const registry = new ToolRegistry().register(sensitive).register(fakeTool('web.fetch'));
+    const registry = new ToolRegistry().register(sensitive).register(fakeTool('notes.list'));
     expect(registry.toolsForTask('owner').map((tool) => tool.name)).toEqual([
       'sensitive.action',
-      'web.fetch',
+      'notes.list',
     ]);
   });
 
   it('still strips them for external senders, who have no owner in the loop', () => {
     const sensitive = { ...fakeTool('sensitive.action'), acceptsUntrustedInput: false };
-    const registry = new ToolRegistry().register(sensitive).register(fakeTool('web.fetch'));
-    expect(registry.toolsForTask('known').map((tool) => tool.name)).toEqual(['web.fetch']);
-    expect(registry.toolsForTask('unknown').map((tool) => tool.name)).toEqual(['web.fetch']);
+    const registry = new ToolRegistry().register(sensitive).register(fakeTool('notes.list'));
+    expect(registry.toolsForTask('known').map((tool) => tool.name)).toEqual(['notes.list']);
+    expect(registry.toolsForTask('unknown').map((tool) => tool.name)).toEqual(['notes.list']);
   });
 
   it('marks Gmail and calendar reads as confidential capabilities', () => {
