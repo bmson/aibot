@@ -42,7 +42,6 @@
     "@assistant/config": "workspace:^",
     "@assistant/core": "workspace:^",
     "@assistant/db": "workspace:^",
-    "@assistant/modules": "workspace:*",
     "@biomejs/biome": "^2.5.5",
     "@types/node": "^26.1.1",
     "drizzle-orm": "^0.45.2",
@@ -52,5 +51,8 @@
     "typescript": "^7.0.2",
     "vitest": "^4.1.10",
     "zod": "^4.4.3"
+  },
+  "dependencies": {
+    "@assistant/modules": "workspace:*"
   }
 }

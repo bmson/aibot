@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -90,6 +90,24 @@ for (const directory of readdirSync(path.join(repoRoot, 'packages'), { withFileT
     if (!allowed.includes(dependency)) {
       failures.push(`${manifest.name} must not depend on ${dependency}`);
     }
+  }
+}
+
+/**
+ * The composition file is agent source even though it sits at the repository
+ * root. If the image build stops copying it the bundle fails to resolve it, so
+ * this is checked rather than remembered.
+ */
+const compositionFile = path.join(repoRoot, 'assistant.config.ts');
+if (!existsSync(compositionFile)) {
+  failures.push('assistant.config.ts is missing; the agent composes its modules from it');
+} else {
+  const agentDockerfile = readFileSync(
+    path.join(repoRoot, 'infra/docker/agent.Dockerfile'),
+    'utf8',
+  );
+  if (!/^COPY\s+assistant\.config\.ts\b/m.test(agentDockerfile)) {
+    failures.push('infra/docker/agent.Dockerfile must COPY assistant.config.ts into the build');
   }
 }
 

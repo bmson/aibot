@@ -69,3 +69,28 @@ describe('installModules', () => {
     expect(installed.jobUnavailable('documents.extract')).toBeNull();
   });
 });
+
+describe('composition as a restrictor', () => {
+  afterEach(() => resetConfigForTest());
+
+  it('warns when configuration names a module this build does not contain', () => {
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (message: string) => warnings.push(message);
+    try {
+      const context = contextFor(loadConfig({ ASSISTANT_MODULES: 'reminders,watches' }));
+      installModules([remindersModule], context);
+    } finally {
+      console.warn = warn;
+    }
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('watches');
+    expect(warnings[0]).toContain('assistant.config.ts');
+  });
+
+  it('installs the intersection of the composition and the configuration', () => {
+    const context = contextFor(loadConfig({ ASSISTANT_MODULES: 'reminders' }));
+    const installed = installModules([remindersModule, watchesModule], context);
+    expect(installed.enabled).toEqual(['reminders']);
+  });
+});

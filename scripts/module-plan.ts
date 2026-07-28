@@ -1,15 +1,22 @@
 import { appendFileSync } from 'node:fs';
 import { loadConfig } from '@assistant/config';
 import { billingSummary, deploymentPlan } from '@assistant/modules/meta';
+import composition from '../assistant.config.js';
 
 /**
  * The one place deployment learns what an installation contains. CI selects
  * worker images from it, the provisioner sources it instead of re-parsing
  * ASSISTANT_MODULES in bash, and `--billing` explains what enabling these
  * modules costs.
+ *
+ * The plan describes the composition file narrowed by ASSISTANT_MODULES, which
+ * is exactly what the built image will run.
  */
 const config = loadConfig();
-const plan = deploymentPlan(config);
+const plan = deploymentPlan(
+  config,
+  composition.modules.map((definition) => definition.meta),
+);
 const workerKeys = Object.keys(plan.workers).sort();
 
 function shellQuote(value: string): string {

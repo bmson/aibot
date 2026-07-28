@@ -3,7 +3,6 @@ import { type Config, isModuleEnabled, loadConfig, repoRoot } from '@assistant/c
 import { type DocumentProcessorConfig, ModelRouter } from '@assistant/core';
 import { createDb, type Db } from '@assistant/db';
 import {
-  assistantModules,
   browserModule,
   documentsModule,
   googleModule,
@@ -24,6 +23,9 @@ import {
   LocalWorkspaceStore,
   type WorkspaceStore,
 } from '@assistant/tools/workspace';
+// The installation's composition file, at the repository root. Importing it
+// here is what bakes the chosen modules into the built image.
+import composition from '../../../assistant.config.js';
 
 /**
  * Process-level dependency graph. Apps compose concrete adapters here while
@@ -66,7 +68,7 @@ export function buildDeps(): AgentDeps {
     workspace,
     documentsEnabled: isModuleEnabled(config, 'documents'),
   });
-  const modules = installModules(assistantModules, {
+  const modules = installModules(composition.modules, {
     config,
     db,
     registry,
