@@ -13,7 +13,7 @@ import {
 } from '@assistant/core';
 import { gmailSyncEnabled } from '@assistant/modules/meta';
 import { reapExpiredApplicationWatches } from './application-confirmations.js';
-import type { AgentDeps } from './deps.js';
+import { type AgentDeps, agentServices } from './deps.js';
 import { syncMailbox } from './email-sync.js';
 import { executorDeps } from './executor-deps.js';
 import { executeAgentTask } from './task-runner.js';
@@ -82,8 +82,21 @@ export function startPoller(deps: AgentDeps): () => void {
           backfillMessageEmbeddings(deps.db, deps.router),
         );
         await runStep('emitBudgetNotices', () => emitBudgetNotices(deps.db, agent.id));
+        // Module-declared sweep steps, with the same per-step failure isolation.
+        for (const sweepStep of deps.modules.sweepSteps) {
+          await runStep(sweepStep.name, () => sweepStep.run(agentServices(deps)));
+        }
         await runStep('reapExpiredApplicationWatches', () => reapExpiredApplicationWatches(deps));
         await runStep('reapExpiredWatches', () => reapExpiredWatches(deps));
+      }
+      // Module-declared recurring work (mail sync once relocated). Cadence is
+      // the module's everyTicks against the shared 2s tick.
+      for (const moduleTick of deps.modules.ticks) {
+        if (tick % moduleTick.everyTicks === 0) {
+          await moduleTick
+            .run(agentServices(deps))
+            .catch((err) => console.error(`${moduleTick.name} error`, err));
+        }
       }
       if (
         tick % EMAIL_SYNC_EVERY_TICKS === 0 &&

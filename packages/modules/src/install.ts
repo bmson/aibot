@@ -1,5 +1,17 @@
 import { type AssistantModule, isModuleEnabled } from '@assistant/config';
-import type { ModuleDefinition, ModulePlatformContext } from './platform.js';
+import {
+  type InboundEmailObserver,
+  type ModuleChannel,
+  type ModuleDefinition,
+  type ModuleInternalHandler,
+  type ModulePlatformContext,
+  type ModuleSweepStep,
+  type ModuleTaskHandler,
+  type ModuleTick,
+  type ModuleWebhookHandler,
+  noopOwnerNotifier,
+  type OwnerNotifier,
+} from './platform.js';
 
 export interface InstalledModuleSet {
   /** Modules that were installed, in composition order. */
@@ -22,6 +34,22 @@ export interface InstalledModuleSet {
    * complete benignly instead of dead-lettering.
    */
   jobUnavailable(job: string): string | null;
+  /** Runtime handler for an installed module's webhook path, if any. */
+  webhookHandler(path: string): ModuleWebhookHandler | undefined;
+  /** Runtime handler for an installed module's internal route, if any. */
+  internalHandler(path: string): ModuleInternalHandler | undefined;
+  /** Sweep steps of installed modules, in composition order. */
+  readonly sweepSteps: readonly ModuleSweepStep[];
+  /** Poller ticks of installed modules, in composition order. */
+  readonly ticks: readonly ModuleTick[];
+  /** Deterministic task handler for a trigger payload kind, if any. */
+  taskHandlerFor(kind: string): ModuleTaskHandler | undefined;
+  /** Delivery channels of installed modules, in composition order. */
+  readonly channels: readonly ModuleChannel[];
+  /** Fans out to every installed notifier; a no-op when none is installed. */
+  readonly ownerNotifier: OwnerNotifier;
+  /** Inbound-email observers of installed modules, in composition order. */
+  readonly emailObservers: readonly InboundEmailObserver[];
 }
 
 /**
@@ -38,6 +66,21 @@ export function installModules(
   const installed: AssistantModule[] = [];
   const exports = new Map<ModuleDefinition<unknown>, unknown>();
   const jobOwners = new Map<string, AssistantModule>();
+  const webhookHandlers = new Map<string, ModuleWebhookHandler>();
+  const internalHandlers = new Map<string, ModuleInternalHandler>();
+  const taskHandlers = new Map<string, ModuleTaskHandler>();
+  const sweepSteps: ModuleSweepStep[] = [];
+  const ticks: ModuleTick[] = [];
+  const channels: ModuleChannel[] = [];
+  const notifiers: OwnerNotifier[] = [];
+  const emailObservers: InboundEmailObserver[] = [];
+
+  // Composition mistakes must fail at boot, not surface later as a silent 404
+  // on a production webhook or a task kind nobody claims.
+  const claim = <Value>(map: Map<string, Value>, key: string, value: Value, what: string) => {
+    if (map.has(key)) throw new Error(`two installed modules both declare ${what} ${key}`);
+    map.set(key, value);
+  };
 
   for (const definition of definitions) {
     // Job ownership is recorded for every composed module, installed or not, so
@@ -47,6 +90,53 @@ export function installModules(
     installed.push(definition.meta.name);
     const runtime = definition.create(context);
     if (runtime.exports !== undefined) exports.set(definition, runtime.exports);
+
+    const hooks = runtime.hooks ?? {};
+    for (const route of hooks.webhooks ?? []) {
+      claim(webhookHandlers, route.path, route.handler, 'webhook');
+    }
+    for (const route of hooks.internalRoutes ?? []) {
+      claim(internalHandlers, route.path, route.handler, 'internal route');
+    }
+    for (const handler of hooks.taskHandlers ?? []) {
+      claim(taskHandlers, handler.kind, handler, 'task kind');
+    }
+    sweepSteps.push(...(hooks.sweepSteps ?? []));
+    ticks.push(...(hooks.ticks ?? []));
+    if (hooks.channel) channels.push(hooks.channel);
+    if (hooks.ownerNotifier) notifiers.push(hooks.ownerNotifier);
+    emailObservers.push(...(hooks.emailObservers ?? []));
+
+    // The meta declares routes as plain data for deployment and docs; the
+    // runtime provides the handlers. They must agree exactly — a declared
+    // route with no handler would 404 in production while auth tests pass.
+    const meta = definition.meta;
+    const declaredWebhooks = new Set((meta.webhooks ?? []).map((route) => route.path));
+    const runtimeWebhooks = new Set((hooks.webhooks ?? []).map((route) => route.path));
+    const declaredInternal = new Set((meta.internalRoutes ?? []).map((route) => route.path));
+    const runtimeInternal = new Set((hooks.internalRoutes ?? []).map((route) => route.path));
+    for (const path of declaredWebhooks) {
+      if (!runtimeWebhooks.has(path))
+        throw new Error(`the ${meta.name} module declares webhook ${path} but returns no handler`);
+    }
+    for (const path of runtimeWebhooks) {
+      if (!declaredWebhooks.has(path))
+        throw new Error(
+          `the ${meta.name} module handles webhook ${path} without declaring it in meta.webhooks`,
+        );
+    }
+    for (const path of declaredInternal) {
+      if (!runtimeInternal.has(path))
+        throw new Error(
+          `the ${meta.name} module declares internal route ${path} but returns no handler`,
+        );
+    }
+    for (const path of runtimeInternal) {
+      if (!declaredInternal.has(path))
+        throw new Error(
+          `the ${meta.name} module handles internal route ${path} without declaring it in meta.internalRoutes`,
+        );
+    }
   }
 
   // Configuration selects among what the build composes; it cannot add to it.
@@ -79,5 +169,23 @@ export function installModules(
       if (!owner || installed.includes(owner)) return null;
       return `${job} skipped because the ${owner} module is disabled`;
     },
+    webhookHandler: (path) => webhookHandlers.get(path),
+    internalHandler: (path) => internalHandlers.get(path),
+    sweepSteps,
+    ticks,
+    taskHandlerFor: (kind) => taskHandlers.get(kind),
+    channels,
+    ownerNotifier:
+      notifiers.length === 0
+        ? noopOwnerNotifier
+        : {
+            notifyOwner: async (input) => {
+              for (const notifier of notifiers) await notifier.notifyOwner(input);
+            },
+            notifyApprovals: async (approvals) => {
+              for (const notifier of notifiers) await notifier.notifyApprovals(approvals);
+            },
+          },
+    emailObservers,
   };
 }

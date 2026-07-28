@@ -34,6 +34,40 @@ export interface ModuleSchedulerJob {
   path: string;
 }
 
+/**
+ * How the platform authenticates a module webhook before its handler runs.
+ * A closed union: every route names one of these, and the mounter in the agent
+ * applies it — a module cannot opt out of authentication by omission.
+ */
+export type ModuleWebhookAuth =
+  | {
+      kind: 'googleOidc';
+      /** Config key naming the service account expected in the token's email claim. */
+      serviceAccountKey: ConfigKey;
+    }
+  | { kind: 'twilioSignature' }
+  /** The handler validates its own one-shot per-launch token from the body. */
+  | { kind: 'oneShotToken' };
+
+/** A public webhook a module serves, mounted under /webhooks by the platform. */
+export interface ModuleWebhookMeta {
+  /** POST path under /webhooks, e.g. '/gmail/pubsub'. */
+  path: string;
+  auth: ModuleWebhookAuth;
+}
+
+/** An internal route a module serves, mounted under /internal behind invoker auth. */
+export interface ModuleInternalRouteMeta {
+  /** POST path under /internal; platform invoker auth applies before it. */
+  path: string;
+  /**
+   * Response when the module is composed but disabled. Defaults to
+   * 404 {error: '<name> module disabled'}. Gmail sync overrides this with a
+   * 200 skip so its every-minute scheduler job stays green when sync is off.
+   */
+  whenDisabled?: { status: number; body: Record<string, unknown> };
+}
+
 /** Infrastructure a module needs, which deployment provisions when it is enabled. */
 export interface ModuleInfra {
   /**
@@ -101,6 +135,18 @@ export interface ModuleMeta {
   billing: ModuleBilling;
   /** Routes the web shell hides while this module is not installed. */
   ui?: { navHrefs?: readonly string[] };
+  /**
+   * Public webhooks this module serves. Declared here (plain data) so the
+   * deployment plan and docs can see them; the matching handlers come from the
+   * module's runtime hooks, and `installModules` verifies the two agree.
+   */
+  webhooks?: readonly ModuleWebhookMeta[];
+  /**
+   * Internal routes this module serves — usually the targets of its own
+   * `infra.schedulerJobs`, declared alongside so the schedule and the handler
+   * cannot drift apart.
+   */
+  internalRoutes?: readonly ModuleInternalRouteMeta[];
   /**
    * Code-job names this module owns, so a job queued before the module was
    * removed completes benignly instead of dead-lettering. Keep in step with
