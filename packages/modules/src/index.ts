@@ -27,4 +27,11 @@ export {
   sendCanarySms,
 } from './sms/channel.js';
 export { smsModule } from './sms/module.js';
+export {
+  type EmailWatchInput,
+  type EmailWatchResult,
+  matchEmailWatches,
+  reapExpiredWatches,
+  type WatchesDeps,
+} from './watches/email-watches.js';
 export { watchesModule } from './watches/module.js';
