@@ -30,10 +30,34 @@ const nextConfig: NextConfig = {
     return [{ source: '/', destination: '/chat', permanent: false }];
   },
   async headers() {
+    // The one non-self origin is jelly-ui.com, the nav-widget script loaded in
+    // app/layout.tsx. Everything else the page executes or fetches is served
+    // from this deployment, and this policy is what enforces that: a script
+    // tag injected from anywhere else simply will not run.
+    //
+    // 'unsafe-inline' for scripts is required by Next's app-router bootstrap
+    // (inline flight-data pushes) plus the two no-flash <script> blocks in the
+    // layout; for styles it covers Tailwind's style attributes. Tightening to
+    // nonces needs per-request middleware — revisit if the threat model grows.
+    const contentSecurityPolicy = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' https://jelly-ui.com",
+      "style-src 'self' 'unsafe-inline' https://jelly-ui.com",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      // script-src covers jelly-ui's module imports; connect-src covers any
+      // fetch() the widget makes back to its own origin for assets.
+      "connect-src 'self' https://jelly-ui.com",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+    ].join('; ');
     return [
       {
         source: '/:path*',
         headers: [
+          { key: 'Content-Security-Policy', value: contentSecurityPolicy },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },

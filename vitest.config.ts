@@ -1,22 +1,33 @@
 import { defineConfig } from 'vitest/config';
 
+/**
+ * Projects that never touch PostgreSQL run their files in parallel; the
+ * integration projects inherit the root's serial setting because they share
+ * one database, where parallel files let count-based assertions observe
+ * another suite's fixture.
+ */
+const parallel = (root: string) => ({
+  extends: true as const,
+  test: { root, fileParallelism: true },
+});
+
 export default defineConfig({
   test: {
-    // Integration suites share one PostgreSQL database. Running files in
-    // parallel lets count-based assertions observe another suite's fixture.
+    // Inherited default for the DB-touching projects listed as plain strings.
     fileParallelism: false,
     projects: [
       'packages/application',
-      'packages/config',
       'packages/core',
       'packages/db',
-      'packages/modules',
-      'packages/setup',
       'packages/tools',
       'apps/agent',
-      'apps/web',
-      'workers/browser-job',
-      'workers/document-processor',
+      parallel('packages/config'),
+      parallel('packages/modules'),
+      parallel('packages/setup'),
+      parallel('apps/web'),
+      parallel('workers/browser-job'),
+      parallel('workers/code-runner'),
+      parallel('workers/document-processor'),
     ],
   },
 });

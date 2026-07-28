@@ -136,7 +136,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         className="flex min-h-dvh flex-col bg-surface font-sans text-strong antialiased"
       >
         {/* Jelly UI is intentionally limited to nav controls, badges, and
-            collapsed-rail tooltips; primary destinations remain native links. */}
+            collapsed-rail tooltips; primary destinations remain native links.
+            The CSP in next.config.ts pins script execution to this origin plus
+            'self', so no other remote script can run even if injected. To pin
+            the content itself, vendor the file into public/ and point src at
+            /package.js — the bundle is unversioned upstream, so snapshot it
+            deliberately rather than tracking whatever is live. */}
         <Script src="https://jelly-ui.com/package.js" type="module" strategy="afterInteractive" />
         {authMode === 'dev-bypass' ? (
           <div className="flex h-6 shrink-0 items-center justify-center bg-amber-100 px-4 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
