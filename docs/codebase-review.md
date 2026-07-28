@@ -221,8 +221,13 @@ Larger projects, recorded here so they stay visible:
 - **Full trace export in production**: spans exist, but production still sets
   `OTEL_EXPORTER=none`. Flipping to `otlp` needs an OTLP ingest to point at
   (a collector sidecar or a managed vendor) — a cost/vendor decision.
-- **Turbopack migration** for the web build (currently webpack via
-  `extensionAlias`).
+- **Turbopack migration** for the web build. Attempted 2026-07:
+  `next build --turbopack` fails with `Module not found: Can't resolve
+  '../chat.js'` across every transpiled workspace package — the monorepo's
+  NodeNext-style `.js` specifiers need webpack's `extensionAlias`
+  (`.js → .ts`) and Turbopack has no equivalent (`turbopack.resolveAlias`
+  maps module names, not extensions). Blocked until Turbopack supports
+  extension aliasing or the packages ship built JS.
 - **Recall quality tuning** (recency weighting, similarity-threshold
   measurement) — intentionally sequenced after the golden-task harness so
   changes can be measured instead of vibed.
