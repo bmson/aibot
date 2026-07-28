@@ -8,8 +8,9 @@ import {
 import { gmailSyncEnabled } from '@assistant/modules/meta';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { latestCanaryRun, runCanaries } from '../canaries.js';
-import { buildDeps } from '../deps.js';
+import { agentServices, buildDeps, composedModuleMetas } from '../deps.js';
 import { oidcAudienceForPath, verifyInternalAuthorization } from '../google-oidc.js';
 
 /**
@@ -135,6 +136,16 @@ internal.post('/sweep', async (c) => {
     () => purgeAgedHistory(deps.db),
     null as Awaited<ReturnType<typeof purgeAgedHistory>> | null,
   );
+  // Module-declared sweep steps, in composition order, with the same per-step
+  // failure isolation as the platform's own.
+  const moduleSteps: Record<string, number> = {};
+  for (const sweepStep of deps.modules.sweepSteps) {
+    moduleSteps[sweepStep.reportKey ?? sweepStep.name] = await step(
+      sweepStep.name,
+      () => sweepStep.run(agentServices(deps)),
+      0,
+    );
+  }
   const expiredWatches = await step(
     'reapExpiredApplicationWatches',
     async () =>
@@ -155,6 +166,7 @@ internal.post('/sweep', async (c) => {
     dueTasksNotified: due.length,
     messagesEmbedded: embedded,
     budgetNotices: budgetNotices.length,
+    ...moduleSteps,
     expiredWatches,
     expiredInboxWatches,
     purged,
@@ -188,6 +200,33 @@ internal.post('/gmail/sync', async (c) => {
   const result = await syncMailbox(deps);
   return c.json(result);
 });
+
+/**
+ * Module-declared internal routes — usually the targets of the modules' own
+ * scheduler jobs, so the schedule and the handler live in one declaration.
+ * The blanket invoker-auth middleware above applies before any of these run.
+ */
+for (const meta of composedModuleMetas) {
+  for (const route of meta.internalRoutes ?? []) {
+    internal.post(route.path, async (c) => {
+      if (!isModuleEnabled(loadConfig(), meta.name)) {
+        const off = route.whenDisabled ?? {
+          status: 404,
+          body: { error: `${meta.name} module disabled` },
+        };
+        return c.json(off.body, off.status as ContentfulStatusCode);
+      }
+      const deps = buildDeps();
+      const handler = deps.modules.internalHandler(route.path);
+      if (!handler) return c.json({ error: `${meta.name} module disabled` }, 404);
+      const response = await handler(agentServices(deps));
+      if ('json' in response) {
+        return c.json(response.json as object, response.status as ContentfulStatusCode);
+      }
+      return c.text(response.text, response.status as ContentfulStatusCode);
+    });
+  }
+}
 
 internal.post('/canaries/run', async (c) => {
   const config = loadConfig();

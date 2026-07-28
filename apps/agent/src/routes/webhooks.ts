@@ -9,11 +9,13 @@ import {
   recordLocationPing,
   verifyLocationSignature,
 } from '@assistant/core';
+import type { ModuleWebhookRequest } from '@assistant/modules';
 import { validateTwilioSignature } from '@assistant/tools';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { recordCanaryBrowserResult } from '../canaries.js';
-import { buildDeps } from '../deps.js';
+import { agentServices, buildDeps, composedModuleMetas } from '../deps.js';
 import { syncMailbox } from '../email-sync.js';
 import { verifyGoogleServiceAccountToken } from '../google-oidc.js';
 import { handleInboundSms } from '../sms-channel.js';
@@ -230,3 +232,67 @@ webhooks.post('/twilio/sms', async (c) => {
     'content-type': 'text/xml',
   });
 });
+
+/**
+ * Module-declared webhooks. Mounting is static (Hono routes register at import
+ * time), so declarations come from the composed metas; the enabled-guard and
+ * auth run per request, and the handler is looked up from the installed set —
+ * a module the configuration disables answers 404 without its code running.
+ * Auth precedes the handler always: the closed union in the meta is what a
+ * module CAN declare, and the mounter is the only place that applies it.
+ */
+for (const meta of composedModuleMetas) {
+  for (const route of meta.webhooks ?? []) {
+    webhooks.post(route.path, async (c) => {
+      const config = loadConfig();
+      if (!isModuleEnabled(config, meta.name)) {
+        return c.json({ error: `${meta.name} module disabled` }, 404);
+      }
+
+      let form: Record<string, string> | undefined;
+      if (route.auth.kind === 'googleOidc') {
+        const authorization = c.req.header('authorization');
+        if (!authorization) return c.json({ error: 'missing token' }, 401);
+        const verified = await verifyGoogleServiceAccountToken(authorization, {
+          audience: `${config.PUBLIC_URL}/webhooks${route.path}`,
+          serviceAccount: String(config[route.auth.serviceAccountKey] ?? ''),
+        });
+        if (!verified) return c.json({ error: 'invalid token' }, 403);
+      } else if (route.auth.kind === 'twilioSignature') {
+        if (!config.TWILIO_AUTH_TOKEN) return c.text('Twilio not configured', 501);
+        const parsed = await c.req.parseBody();
+        form = {};
+        for (const [key, value] of Object.entries(parsed)) {
+          if (typeof value === 'string') form[key] = value;
+        }
+        const valid = validateTwilioSignature({
+          authToken: config.TWILIO_AUTH_TOKEN,
+          url: `${config.PUBLIC_URL}/webhooks${route.path}`,
+          params: form,
+          signature: c.req.header('x-twilio-signature') ?? '',
+        });
+        if (!valid) return c.text('invalid signature', 403);
+      }
+      // 'oneShotToken' routes authenticate inside the handler: the per-launch
+      // token in the body is the credential, exactly as the hardcoded routes did.
+
+      const deps = buildDeps();
+      const handler = deps.modules.webhookHandler(route.path);
+      if (!handler) return c.json({ error: `${meta.name} module disabled` }, 404);
+      const request: ModuleWebhookRequest = {
+        json: async <T>() => (await c.req.json().catch(() => null)) as T | null,
+        form: async () => form ?? {},
+        header: (name) => c.req.header(name),
+      };
+      const response = await handler(agentServices(deps), request);
+      if ('json' in response) {
+        return c.json(response.json as object, response.status as ContentfulStatusCode);
+      }
+      return c.text(
+        response.text,
+        response.status as ContentfulStatusCode,
+        response.contentType ? { 'content-type': response.contentType } : undefined,
+      );
+    });
+  }
+}

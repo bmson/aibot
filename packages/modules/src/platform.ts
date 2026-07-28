@@ -1,6 +1,7 @@
 import type { Config } from '@assistant/config';
 import type { ModelRouter } from '@assistant/core';
-import type { Db } from '@assistant/db';
+import type { Db, TaskRow } from '@assistant/db';
+import type { ToolDispatcher } from '@assistant/tools/dispatcher';
 import type { ToolRegistry } from '@assistant/tools/registry';
 import type { WorkspaceStore } from '@assistant/tools/workspace';
 import type { ModuleMeta } from './contract.js';
@@ -28,12 +29,143 @@ export interface ModulePlatformContext {
 }
 
 /**
+ * Cross-module port: reach the owner out-of-band (SMS today). Modules never
+ * import each other — a channel module *provides* this and everyone else
+ * consumes it through `ModuleServices`. Best-effort: when no installed module
+ * provides one, the platform substitutes a no-op.
+ */
+export interface OwnerNotifier {
+  notifyOwner(input: { text: string; taskId?: string }): Promise<void>;
+  notifyApprovals(
+    approvals: ReadonlyArray<{
+      taskId: string;
+      shortCode: string;
+      summary: string;
+      toolName?: string;
+    }>,
+  ): Promise<void>;
+}
+
+export const noopOwnerNotifier: OwnerNotifier = {
+  notifyOwner: async () => {},
+  notifyApprovals: async () => {},
+};
+
+/** An authenticated inbound email another module may observe (side effects only). */
+export interface InboundEmailEvent {
+  agentId: string;
+  messageId: string;
+  from: string;
+  subject: string;
+  body: string;
+  /** Receiver-authenticated (SPF/DKIM/DMARC at the receiving provider). */
+  authenticated: boolean;
+  now?: Date;
+}
+
+export type InboundEmailObserver = (
+  services: ModuleServices,
+  event: InboundEmailEvent,
+) => Promise<void>;
+
+/**
+ * Invocation-time services for module hooks. Built by the composition root
+ * AFTER `installModules` — that ordering is why hooks receive these as an
+ * argument instead of `create(ctx)` carrying them: the dispatcher can only
+ * exist once every module has registered its tools.
+ */
+export interface ModuleServices {
+  config: Config;
+  db: Db;
+  router: ModelRouter;
+  registry: ToolRegistry;
+  dispatcher: ToolDispatcher;
+  workspace: WorkspaceStore;
+  ownerNotifier: OwnerNotifier;
+  emailObservers: readonly InboundEmailObserver[];
+}
+
+/** The narrow, framework-free request a webhook handler receives. */
+export interface ModuleWebhookRequest {
+  /** Parsed JSON body, or null when absent or invalid. */
+  json<T = unknown>(): Promise<T | null>;
+  /** URL-encoded form fields; pre-parsed by twilioSignature auth. */
+  form(): Promise<Record<string, string>>;
+  header(name: string): string | undefined;
+}
+
+export type ModuleHttpResponse =
+  | { status: number; json: unknown }
+  | { status: number; text: string; contentType?: string };
+
+export type ModuleWebhookHandler = (
+  services: ModuleServices,
+  request: ModuleWebhookRequest,
+) => Promise<ModuleHttpResponse>;
+
+export type ModuleInternalHandler = (services: ModuleServices) => Promise<ModuleHttpResponse>;
+
+/** A maintenance step run from both sweep drivers (poller and /internal/sweep). */
+export interface ModuleSweepStep {
+  name: string;
+  /** Key under which /internal/sweep reports this step's count; defaults to name. */
+  reportKey?: string;
+  run(services: ModuleServices): Promise<number>;
+}
+
+/** Recurring local-poller work (one tick ≈ 2s). Errors are caught and logged. */
+export interface ModuleTick {
+  name: string;
+  everyTicks: number;
+  run(services: ModuleServices): Promise<void>;
+}
+
+export type ModuleTaskResult = { outcome: 'done' | 'needs_attention' | 'not_claimable' } & Record<
+  string,
+  unknown
+>;
+
+/** A deterministic executor for internal tasks matched on trigger.payload.kind. */
+export interface ModuleTaskHandler {
+  kind: string;
+  run(services: ModuleServices, taskId: string): Promise<ModuleTaskResult>;
+}
+
+/** An owner-facing delivery channel (email, SMS) composed into the executor. */
+export interface ModuleChannel {
+  /** Deliver a finished task's final text; must self-guard by conversation channel. */
+  deliverFinal(services: ModuleServices, task: TaskRow, text: string): Promise<void>;
+  /** Throw when a task of this shape requires this channel but it is unconfigured. */
+  assertDeliverable?(task: Pick<TaskRow, 'type' | 'trust'>): void;
+  /** In-thread notice when approvals park a task (email today). */
+  deliverApprovalNotice?(services: ModuleServices, task: TaskRow, text: string): Promise<void>;
+}
+
+/**
+ * Everything a module can plug into the running agent beyond tools. The
+ * matching plain-data declarations (`meta.webhooks`, `meta.internalRoutes`)
+ * stay in the contract so deployment and docs can see them; `installModules`
+ * verifies the two sides agree at boot.
+ */
+export interface ModuleHooks {
+  webhooks?: ReadonlyArray<{ path: string; handler: ModuleWebhookHandler }>;
+  internalRoutes?: ReadonlyArray<{ path: string; handler: ModuleInternalHandler }>;
+  sweepSteps?: readonly ModuleSweepStep[];
+  ticks?: readonly ModuleTick[];
+  taskHandlers?: readonly ModuleTaskHandler[];
+  channel?: ModuleChannel;
+  ownerNotifier?: OwnerNotifier;
+  emailObservers?: readonly InboundEmailObserver[];
+}
+
+/**
  * What installing a module produced. Tools are registered as a side effect on
  * `context.registry` — the only path into the risk-gated dispatcher — so they
  * do not appear here.
  */
 export interface ModuleRuntime<Exports = void> {
   exports?: Exports;
+  hooks?: ModuleHooks;
 }
 
 export interface ModuleDefinition<Exports = void> {

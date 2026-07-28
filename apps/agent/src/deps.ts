@@ -4,10 +4,13 @@ import { type DocumentProcessorConfig, ModelRouter } from '@assistant/core';
 import { createDb, type Db } from '@assistant/db';
 import {
   browserModule,
+  composedModuleMetas as collectModuleMetas,
   documentsModule,
   googleModule,
   type InstalledModuleSet,
   installModules,
+  type ModuleMeta,
+  type ModuleServices,
   smsModule,
 } from '@assistant/modules';
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
@@ -42,6 +45,27 @@ export interface AgentDeps {
   twilio: TwilioClient;
   browserLauncher?: BrowserJobLauncher;
   documentProcessor?: DocumentProcessorConfig;
+}
+
+/**
+ * The composed modules' plain metadata. Route mounters read this at import
+ * time — before any deps exist — because Hono routes register statically while
+ * enabled-guards evaluate per request.
+ */
+export const composedModuleMetas: readonly ModuleMeta[] = collectModuleMetas(composition);
+
+/** The invocation-time services module hooks receive. */
+export function agentServices(deps: AgentDeps): ModuleServices {
+  return {
+    config: deps.config,
+    db: deps.db,
+    router: deps.router,
+    registry: deps.registry,
+    dispatcher: deps.dispatcher,
+    workspace: deps.workspace,
+    ownerNotifier: deps.modules.ownerNotifier,
+    emailObservers: deps.modules.emailObservers,
+  };
 }
 
 let cached: AgentDeps | undefined;

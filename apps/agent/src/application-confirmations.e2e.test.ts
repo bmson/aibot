@@ -26,6 +26,7 @@ import {
   executeApplicationConfirmationTask,
   processApplicationConfirmation,
 } from './application-confirmations.js';
+import { type InstalledModuleSet, noopOwnerNotifier } from '@assistant/modules';
 import type { AgentDeps } from './deps.js';
 import { processMessage } from './email-sync.js';
 import { executeAgentTask } from './task-runner.js';
@@ -55,7 +56,18 @@ function harness(
   const client = { api, configured: () => true } as unknown as GoogleClient;
   const registry = registerApplicationTools(new ToolRegistry(), { client });
   const dispatcher = new ToolDispatcher(db, registry);
-  const deps = { db, dispatcher, registry, googleClient: client } as unknown as AgentDeps;
+  // The stub covers what executeAgentTask consults on this path: no module
+  // claims the task kinds, no notifier is installed, no observers exist.
+  const modules = {
+    taskHandlerFor: () => undefined,
+    ownerNotifier: noopOwnerNotifier,
+    emailObservers: [],
+    sweepSteps: [],
+    ticks: [],
+    channels: [],
+    jobUnavailable: () => null,
+  } as unknown as InstalledModuleSet;
+  const deps = { db, dispatcher, registry, googleClient: client, modules } as unknown as AgentDeps;
   return { api, client, dispatcher, registry, deps };
 }
 
