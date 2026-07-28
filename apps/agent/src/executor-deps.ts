@@ -32,6 +32,7 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
     dispatcher: deps.dispatcher,
     workspace: deps.workspace,
     documentProcessor: deps.documentProcessor,
+    jobUnavailable: (job) => deps.modules.jobUnavailable(job),
     deliverFinal: async (task, text) => {
       // Let provider failures escape: the workflow has already checkpointed
       // the exact final text and will retry delivery without rerunning the model.

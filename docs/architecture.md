@@ -15,9 +15,9 @@ The dependency direction is inward:
 presentation / HTTP
         │
         ▼
-application composition
-        │
-        ├──────────────► provider tools
+application composition        modules ──► provider tools
+        │                         │
+        ├─────────────────────────┘
         ▼
 business core ◄──────── ports
         │
@@ -31,9 +31,10 @@ configuration is read at composition boundaries and by infrastructure adapters
 
 ### `@assistant/config`
 
-Owns the environment schema, defaults, module parser, production validation, and secret-safe
-diagnostics. It has no workspace dependencies. New settings must be added here and to `.env.example`;
-apps should not invent their own service variables.
+Owns the environment schema, defaults, module parser, and platform production validation. It has no
+workspace dependencies and knows no individual module: readiness and module-specific production
+rules live with each module. New settings must be added here and to `.env.example`; apps should not
+invent their own service variables.
 
 ### `@assistant/db`
 
@@ -61,11 +62,21 @@ Owns the tool registry, risk dispatcher, storage adapters, and provider capabili
 on core contracts and the database. Provider-specific installation does not happen here; functions
 only register a capability when called by the agent composition root.
 
+### `@assistant/modules`
+
+Owns the module contract and every module. `src/kit.ts` and `src/runtime-kit.ts` define what a
+module is; each `src/<name>/` directory holds that module's metadata and its factory. Metadata is
+plain data — name, owned settings, readiness, production rules, infrastructure, billing,
+navigation, and code jobs — so the web app, deployment scripts, and diagnostics import
+`@assistant/modules/meta` without pulling provider code into their bundles. It may depend on
+config, core, db, and tools, and nothing may depend on it except the agent composition root and
+metadata consumers.
+
 ### `@assistant/agent`
 
-This is the composition root. `src/deps.ts` creates shared infrastructure, while `src/modules.ts`
-installs only the capabilities named by `ASSISTANT_MODULES`. HTTP routes authenticate and translate
-requests; they should not contain business policy.
+This is the composition root. `src/deps.ts` creates shared infrastructure and calls
+`installModules`, which installs only the capabilities named by `ASSISTANT_MODULES`. HTTP routes
+authenticate and translate requests; they should not contain business policy.
 
 ### `@assistant/web`
 
@@ -83,26 +94,33 @@ input and never import the agent, web app, database package, or provider clients
 `pnpm check:boundaries` fails when:
 
 - a client UI component imports server/business infrastructure;
+- a web file imports module runtime code instead of `@assistant/modules/meta`;
 - any web file outside the server composition root bypasses `@assistant/application`;
 - config depends on another workspace package;
 - db depends on core/tools/apps;
 - core depends on tools/apps;
 - application depends on tools/apps or leaks persistence into migrated UI features;
-- tools acquires an unsupported workspace dependency.
+- tools acquires an unsupported workspace dependency;
+- modules acquires a workspace dependency outside config, core, db, and tools.
 
 The check runs as part of `pnpm lint` and CI.
 
 ## Adding a module
 
-1. Put provider/worker behavior behind a registration function and narrow dependency interface.
-2. Add the module name to `packages/config/src/modules.ts`.
-3. Add its settings to the central schema and `.env.example`.
-4. Install it from `apps/agent/src/modules.ts` only when selected.
-5. Gate its webhook and background entry points with the same module flag.
-6. Add a diagnostic that reports readiness without printing secrets.
-7. Document its credentials, infrastructure, side effects, and removal behavior.
+1. Add the module name to `packages/config/src/modules.ts` and any new settings to the central
+   schema and `.env.example`.
+2. Create `packages/modules/src/<name>/meta.ts` declaring the settings it owns, its readiness
+   check, any production rules, its infrastructure, its billing, and any code jobs it owns.
+3. Create `packages/modules/src/<name>/module.ts` with `defineModule`, registering its tools on
+   the registry it is handed and returning whatever the composition root must hold onto.
+4. Add the definition to `assistantModules` in `packages/modules/src/runtime.ts` and its metadata
+   to `assistantModuleMetas` in `packages/modules/src/meta.ts`.
+5. Document its credentials, infrastructure, side effects, and removal behavior.
 
-No module should require a conditional inside the planner or business workflow. Absence from the
+Nothing else changes: readiness diagnostics, production validation, navigation, worker image
+selection, and the deployment plan are all derived from metadata. No module should require a
+conditional inside the planner or business workflow — a module that owns code jobs declares them
+in metadata so a job queued before the module was removed completes benignly. Absence from the
 tool registry is the capability boundary.
 
 ## Configuration lifecycle
