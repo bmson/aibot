@@ -105,6 +105,25 @@ input and never import the agent, web app, database package, or provider clients
 
 The check runs as part of `pnpm lint` and CI.
 
+## Composition
+
+`assistant.config.ts` at the repository root declares what an installation is made of:
+
+```ts
+export default defineAssistant({
+  modules: [googleModule, searchModule, remindersModule],
+});
+```
+
+The agent imports it, so it is the one file to edit when adding or removing a capability, and
+`pnpm modules:plan` derives the worker images, infrastructure, and billing from it. It is agent
+source despite living at the root: `infra/docker/agent.Dockerfile` copies it into the build, and
+`pnpm check:boundaries` fails if that COPY is ever dropped.
+
+`ASSISTANT_MODULES` narrows the composition at runtime for a container that should start with less
+than it was built with. It cannot widen it — a module absent from the file has no definition to
+install, and naming it in the environment logs a warning rather than silently doing nothing.
+
 ## Adding a module
 
 1. Add the module name to `packages/config/src/modules.ts` and any new settings to the central
@@ -113,8 +132,8 @@ The check runs as part of `pnpm lint` and CI.
    check, any production rules, its infrastructure, its billing, and any code jobs it owns.
 3. Create `packages/modules/src/<name>/module.ts` with `defineModule`, registering its tools on
    the registry it is handed and returning whatever the composition root must hold onto.
-4. Add the definition to `assistantModules` in `packages/modules/src/runtime.ts` and its metadata
-   to `assistantModuleMetas` in `packages/modules/src/meta.ts`.
+4. Add its metadata to `assistantModuleMetas` in `packages/modules/src/meta.ts`, export the
+   definition from `packages/modules/src/runtime.ts`, and add it to `assistant.config.ts`.
 5. Document its credentials, infrastructure, side effects, and removal behavior.
 
 Nothing else changes: readiness diagnostics, production validation, navigation, worker image

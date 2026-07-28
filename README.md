@@ -39,7 +39,19 @@ For source development rather than containers, run `docker compose up db`, then 
 ## Choose capabilities
 
 The base platform always includes chat, memory, goals, missions, approvals, schedules, and the local
-workspace. Optional modules are selected in one setting:
+workspace. Optional modules are composed in `assistant.config.ts`:
+
+```ts
+export default defineAssistant({
+  modules: [googleModule, remindersModule, searchModule],
+});
+```
+
+That one file decides what is installed, which worker images are built, and what is provisioned.
+`pnpm modules:plan --billing` prints what a given selection costs, separating services that bill
+directly from the Google Cloud resources each module adds.
+
+For a container that should start with less than it was built with, narrow it at runtime:
 
 ```dotenv
 ASSISTANT_MODULES=google,reminders,search

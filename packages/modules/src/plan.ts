@@ -1,5 +1,11 @@
 import { type AssistantModule, type Config, isModuleEnabled, loadConfig } from '@assistant/config';
-import type { ConfigKey, ModuleExternalCost, ModuleSchedulerJob, ModuleWorker } from './kit.js';
+import type {
+  ConfigKey,
+  ModuleExternalCost,
+  ModuleMeta,
+  ModuleSchedulerJob,
+  ModuleWorker,
+} from './kit.js';
 import { assistantModuleMetas } from './meta.js';
 
 export interface DeploymentPlanBillingLine {
@@ -36,7 +42,15 @@ export interface DeploymentPlan {
   };
 }
 
-export function deploymentPlan(config: Config = loadConfig()): DeploymentPlan {
+/**
+ * @param metas the modules this build contains; defaults to every module in the
+ * repository. Deployment passes the composition file's modules so CI builds
+ * images for what is actually compiled in.
+ */
+export function deploymentPlan(
+  config: Config = loadConfig(),
+  metas: readonly ModuleMeta[] = assistantModuleMetas,
+): DeploymentPlan {
   const modules: AssistantModule[] = [];
   const workers: Record<string, boolean> = {};
   const workerDetails: (ModuleWorker & { module: AssistantModule })[] = [];
@@ -48,7 +62,7 @@ export function deploymentPlan(config: Config = loadConfig()): DeploymentPlan {
   const gcp: DeploymentPlanBillingLine[] = [];
   const external: DeploymentPlanExternalCost[] = [];
 
-  for (const meta of assistantModuleMetas) {
+  for (const meta of metas) {
     // Every worker key is present regardless, so a disabled module produces an
     // explicit false rather than a missing key the deploy workflow must guess.
     if (meta.infra?.worker) workers[meta.infra.worker.planKey] = false;
