@@ -16,28 +16,45 @@ type BrowserStageSnapshots = Map<
 
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const PHONE_RE = /\+\d[\d\s().-]{6,}\d/g;
+// E.164 numbers carry 8-15 digits; anything outside that matched the regex by
+// accident (an order id, a tracking code) and must not become send-approved.
+const isPlausiblePhone = (normalized: string) => {
+  const digits = normalized.replace(/\D/g, '').length;
+  return digits >= 8 && digits <= 15;
+};
 
 /**
- * Harvest the recipient addresses the owner/thread actually provided — the seed
- * conversation window (the owner's message and any original email thread) plus
- * the trigger payload's from/to/cc. This is the provenance whitelist the
- * dispatcher checks a send against; deliberately scoped to the SEED context, not
- * addresses that later arrive inside a fetched page or tool result (those are
- * untrusted and a send to them should be owner-confirmed).
+ * Harvest the recipient addresses the owner actually provided. Two sources:
+ * the trigger payload's address headers (from/to/cc — routing metadata the
+ * provider authenticated), and, for owner-trust tasks only, the text of the
+ * owner's own messages. This is the provenance whitelist the dispatcher checks
+ * a send against.
+ *
+ * Deliberately NOT scanned: tool results (a fetched page or resumed window
+ * carries third-party text), assistant messages, and — for external-trust
+ * tasks — the inbound message body. A stranger mentioning victim@example.com
+ * in their email must not make sending to that address card-free.
  */
 export function harvestKnownAddresses(
   state: TaskState,
   trigger: TaskLease['trigger'],
+  trust: Trust,
 ): { emails: string[]; phones: string[] } {
   const emails = new Set<string>();
   const phones = new Set<string>();
   const scan = (text: string) => {
     for (const m of text.match(EMAIL_RE) ?? []) emails.add(m.toLowerCase());
-    for (const m of text.match(PHONE_RE) ?? []) phones.add(m.replace(/[^\d+]/g, ''));
+    for (const m of text.match(PHONE_RE) ?? []) {
+      const normalized = m.replace(/[^\d+]/g, '');
+      if (isPlausiblePhone(normalized)) phones.add(normalized);
+    }
   };
-  for (const message of state.contextWindow ?? []) {
-    const content = (message as { content?: unknown }).content;
-    scan(typeof content === 'string' ? content : JSON.stringify(content ?? ''));
+  if (trust === 'owner' || trust === 'assistant') {
+    for (const message of state.contextWindow ?? []) {
+      if ((message as { role?: unknown }).role !== 'user') continue;
+      const content = (message as { content?: unknown }).content;
+      if (typeof content === 'string') scan(content);
+    }
   }
   const payload = (trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
   for (const key of ['from', 'to', 'cc', 'replyTo', 'sender']) {
@@ -70,7 +87,7 @@ export function createToolContext(args: {
     conversationId: task.conversationId ?? undefined,
     trust: task.trust as Trust,
     tainted: state.untrustedContext,
-    knownAddresses: harvestKnownAddresses(state, task.trigger),
+    knownAddresses: harvestKnownAddresses(state, task.trigger, task.trust as Trust),
     db,
     now: () => new Date(),
     signal: args.signal,

@@ -138,7 +138,7 @@ export async function runDream(
       .slice(0, 6000);
 
     const outcome = await router
-      .object<z.infer<typeof DreamOutputSchema>>('reason', {
+      .object<z.infer<typeof DreamOutputSchema>>('batch', {
         taskId: opts.taskId,
         schema: DreamOutputSchema,
         system: DREAM_SYSTEM,

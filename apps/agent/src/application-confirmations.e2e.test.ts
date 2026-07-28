@@ -819,10 +819,12 @@ describe('cross-event application confirmations', () => {
       authenticated: true,
       now: NOW,
     });
-    expect(result).toEqual({
-      kind: 'ambiguous',
-      applicationIds: [first.applicationId, second.applicationId],
-    });
+    // Two watches created in the same millisecond come back in either order;
+    // the set is what the behavior guarantees.
+    expect(result.kind).toBe('ambiguous');
+    expect(result.kind === 'ambiguous' ? [...result.applicationIds].sort() : []).toEqual(
+      [first.applicationId, second.applicationId].sort(),
+    );
     expect(testHarness.api).not.toHaveBeenCalled();
     const records = await db
       .select({ id: applicationConfirmations.id, status: applicationConfirmations.status })

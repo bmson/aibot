@@ -12,6 +12,14 @@ export interface BudgetSnapshot {
   dailySpentUsd: number;
   monthlyLimitUsd: number;
   monthlySpentUsd: number;
+  /**
+   * Estimated USD held by unreconciled reservations. Holds are worst-case
+   * (often several times the eventual actual), so they count against the hard
+   * caps — a launched job must not be double-spendable — but not against the
+   * soft threshold, where paper spend was degrading the model for concurrent
+   * tasks that never actually approached the cap.
+   */
+  heldUsd: number;
   /** Percentage (0-100) at which degradation kicks in. */
   softPct: number;
 }
@@ -51,16 +59,16 @@ export function evaluateBudget(s: BudgetSnapshot, opts: BudgetEvalOptions = {}):
       reason: `task budget exhausted ($${(s.taskSpentUsd ?? 0).toFixed(4)} of $${s.taskLimitUsd.toFixed(4)})`,
     };
   }
-  if (hard(s.monthlySpentUsd, s.monthlyLimitUsd)) {
+  if (hard(s.monthlySpentUsd + s.heldUsd, s.monthlyLimitUsd)) {
     return {
       mode: 'block',
-      reason: `monthly budget exhausted ($${s.monthlySpentUsd.toFixed(2)} of $${s.monthlyLimitUsd.toFixed(2)})`,
+      reason: `monthly budget exhausted ($${(s.monthlySpentUsd + s.heldUsd).toFixed(2)} of $${s.monthlyLimitUsd.toFixed(2)})`,
     };
   }
-  if (hard(s.dailySpentUsd, s.dailyLimitUsd)) {
+  if (hard(s.dailySpentUsd + s.heldUsd, s.dailyLimitUsd)) {
     return {
       mode: 'block',
-      reason: `daily budget exhausted ($${s.dailySpentUsd.toFixed(2)} of $${s.dailyLimitUsd.toFixed(2)})`,
+      reason: `daily budget exhausted ($${(s.dailySpentUsd + s.heldUsd).toFixed(2)} of $${s.dailyLimitUsd.toFixed(2)})`,
     };
   }
 

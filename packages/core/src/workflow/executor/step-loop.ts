@@ -61,9 +61,28 @@ import { compact, toolResultMessage } from './util.js';
  * park / sleep / complete. Runs after planning; the pre-loop resume and
  * direct-intent phases have already settled in phases.ts.
  */
+/**
+ * The plan as prose. Raw JSON in a system prompt reads as noise, repeats empty
+ * fields every step, and never marks progress; short numbered lines do better.
+ */
+function renderPlan(plan: Plan): string {
+  const lines = [
+    `Current plan (follow it; deviate only with good reason):${plan.reasoning ? ` ${plan.reasoning}` : ''}`,
+  ];
+  lines.push(...plan.steps.map((step, index) => `  ${index + 1}. ${step}`));
+  if (plan.missingInfo.length > 0) {
+    lines.push(`Missing info to resolve first: ${plan.missingInfo.join('; ')}`);
+  }
+  if (plan.deadline) lines.push(`Deadline: ${plan.deadline}`);
+  return lines.join('\n');
+}
+
 export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<ExecuteResult> {
   const { deps, db, router, dispatcher, task, agent, state, ctx, artifactIntent } = rc;
   const lease = task;
+  // One clock for the whole run: the system prompt embeds it, and a per-step
+  // timestamp would break the cacheable prompt prefix on every minute boundary.
+  const runStartedAt = new Date();
   // Route action requests to the reasoning model (see roleForTask): a goal
   // session, a mission, an email to triage, or a chat/SMS turn the planner
   // routed to real work all drive tools on the strong model. The draft model
@@ -161,10 +180,8 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         const found = await recallSkills(db, router, agent.id, skillQuery, { taskId: task.id });
         if (found.length > 0) {
           skillsBlock = renderSkillsBlock(found);
-          await bumpSkillUse(
-            db,
-            found.map((s) => s.id),
-          );
+          state.usedSkillIds = found.map((skill) => skill.id);
+          await bumpSkillUse(db, state.usedSkillIds);
         }
       } catch (err) {
         console.error('skill recall failed — continuing without it', err);
@@ -213,14 +230,13 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         skills: !state.untrustedContext ? skillsBlock : undefined,
         ambient: !state.untrustedContext ? ambientBlock : undefined,
         tainted: state.untrustedContext,
+        now: runStartedAt,
       }),
       channelContext(task),
       isUnattendedGoalSession(task)
         ? `\nThis automatic session is bound to Goal ID ${task.goalId}. Every goals.update_progress call must use exactly this Goal ID.`
         : '',
-      plan
-        ? `\nCurrent plan (follow it; deviate only with good reason):\n${JSON.stringify(plan)}`
-        : '',
+      plan ? `\n${renderPlan(plan)}` : '',
       plan?.action === 'schedule' ? SCHEDULE_DIRECTIVE : '',
       mustRecordGoalProgress
         ? '\nYou completed a verified goal step. Call goals.update_progress now with only what the tool evidence proves and the best concrete next action. Do not finish in prose first.'
@@ -371,6 +387,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       isSimulatedApprovalNotice(stepResult.text)
     ) {
       console.warn('retrying simulated approval notice without a tool call', { taskId: task.id });
+      state.mustActRetries += 1;
       stepResult = await router.step(role, {
         taskId: task.id,
         system: `${system}\n\nYou claimed an approval exists, but no tool call created it. Emit the actual gated tool call now. Never write an approval code or approval-page notice yourself; the runtime creates those after the tool call.`,
@@ -397,6 +414,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       !isSimulatedApprovalNotice(stepResult.text)
     ) {
       console.warn('retrying forced action step with no tool call', { taskId: task.id });
+      state.mustActRetries += 1;
       stepResult = await router.step(role, {
         taskId: task.id,
         system: `${system}\n\nThis request needs an action, not a summary. Emit the appropriate tool call now; do not answer in prose until you have.`,
@@ -407,6 +425,16 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         critical,
       });
       if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+    }
+
+    if (stepResult.ok && stepResult.degraded) {
+      if (state.degradedSteps === 0) {
+        console.warn('step served by the fallback model', {
+          taskId: task.id,
+          modelId: stepResult.modelId,
+        });
+      }
+      state.degradedSteps += 1;
     }
 
     if (!stepResult.ok) {
@@ -574,7 +602,11 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
               requiredGoalProgressFailure = 'the progress write returned an unfinished job';
             }
           } else {
-            rc.window.push(toolResultMessage(tc.toolCallId, tc.toolName, outcome.result));
+            rc.window.push(
+              toolResultMessage(tc.toolCallId, tc.toolName, outcome.result, {
+                dbToolCallId: outcome.toolCallId,
+              }),
+            );
             state.completedToolCallIds.push(outcome.toolCallId);
             if (tc.toolName === 'goals.update_progress') requiredGoalProgressSaved = true;
             if (dispatcher.resultIsUntrusted(tc.toolName)) {
@@ -739,7 +771,18 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
 
   // max steps exhausted
   const stuck = `stopped after ${task.maxSteps} steps without finishing`;
-  const stuckMessage = `I ${stuck}. Here's where I got: ${state.scratchpad || 'see task log.'}`;
+  // The scratchpad is only written by mission.update, so for every other task
+  // type the best available summary is the model's own last words. "See task
+  // log" is the worst possible message at the moment the owner most needs one.
+  const lastAssistantText = [...rc.window]
+    .reverse()
+    .find((m) => m.role === 'assistant' && typeof m.content === 'string' && m.content.trim());
+  const lastProgress =
+    state.scratchpad ||
+    (typeof lastAssistantText?.content === 'string'
+      ? lastAssistantText.content.slice(0, 400)
+      : 'no summary was recorded — the step-by-step record is on the task page.');
+  const stuckMessage = `I ${stuck}. Here's where I got: ${lastProgress}`;
   if (isUnattendedGoalSession(task)) {
     const goalToolEvidence = await db
       .select({

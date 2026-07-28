@@ -22,7 +22,15 @@ import {
 import { withSpan } from '../otel.js';
 import { type BudgetDecision, evaluateBudget } from './budget.js';
 
-export type ModelRole = 'plan' | 'classify' | 'extract' | 'draft' | 'reason' | 'rewrite' | 'embed';
+export type ModelRole =
+  | 'plan'
+  | 'classify'
+  | 'extract'
+  | 'draft'
+  | 'reason'
+  | 'rewrite'
+  | 'embed'
+  | 'batch';
 
 export interface RouteOptions {
   taskId?: string;
@@ -194,6 +202,7 @@ const DEFAULT_MAX_OUTPUT_TOKENS: Record<Exclude<ModelRole, 'embed'>, number> = {
   draft: 2_048,
   reason: 4_096,
   rewrite: 2_048,
+  batch: 4_096,
 };
 const HARD_MAX_OUTPUT_TOKENS = 4_096;
 const ESTIMATE_SAFETY_FACTOR = 1.25;
@@ -238,9 +247,10 @@ function promptArgs(opts: CallOptions): { messages: ModelMessage[] } | { prompt:
 
 function estimatedInputTokens(opts: CallOptions): number {
   const content = opts.messages ? JSON.stringify(opts.messages) : (opts.prompt ?? '');
-  // UTF-8/token ratios vary substantially across languages and structured tool
-  // payloads. Two characters per token is deliberately conservative.
-  return Math.max(1, Math.ceil(((opts.system?.length ?? 0) + content.length) / 2));
+  // ~3.5 chars/token holds for English prose and JSON tool payloads. The old
+  // /2 estimate was ~2x pessimistic, which inflated every reservation and
+  // tripped the soft budget threshold on spend that never materialized.
+  return Math.max(1, Math.ceil(((opts.system?.length ?? 0) + content.length) / 3.5));
 }
 
 function reservationDecision(reason: string): Extract<BudgetDecision, { mode: 'park' | 'block' }> {
@@ -323,9 +333,10 @@ export class ModelRouter {
       taskLimitUsd,
       taskSpentUsd,
       dailyLimitUsd: totals.dailyLimitUsd,
-      dailySpentUsd: totals.dailySpentUsd + totals.heldUsd,
+      dailySpentUsd: totals.dailySpentUsd,
       monthlyLimitUsd: totals.monthlyLimitUsd,
-      monthlySpentUsd: totals.monthlySpentUsd + totals.heldUsd,
+      monthlySpentUsd: totals.monthlySpentUsd,
+      heldUsd: totals.heldUsd,
       softPct: totals.softPct,
     };
   }
@@ -723,6 +734,30 @@ export class ModelRouter {
     return this.withTimeoutRetry(opts, () => this.stepOnce(role, opts));
   }
 
+  /**
+   * Prompt-caching hints for the step loop. The system prompt is stable within
+   * a task run and the transcript grows append-only, so two cache_control
+   * breakpoints — after the system prompt and on the newest message — let each
+   * step read the previous step's entire prefix from provider cache instead of
+   * re-billing it. Anthropic models need the explicit breakpoints (via
+   * OpenRouter); OpenAI-family models cache prefixes automatically and ignore
+   * the hint.
+   */
+  private static cacheHinted(system: string | undefined, messages: ModelMessage[]): ModelMessage[] {
+    const hint = { openrouter: { cacheControl: { type: 'ephemeral' } } };
+    const hinted = [...messages];
+    const last = hinted[hinted.length - 1];
+    if (last) {
+      hinted[hinted.length - 1] = {
+        ...last,
+        providerOptions: { ...last.providerOptions, ...hint },
+      } as ModelMessage;
+    }
+    return system
+      ? [{ role: 'system', content: system, providerOptions: hint } as ModelMessage, ...hinted]
+      : hinted;
+  }
+
   private async stepOnce(
     role: Exclude<ModelRole, 'embed'>,
     opts: CallOptions & { tools: ToolSet; toolChoice?: StepToolChoice },
@@ -742,11 +777,14 @@ export class ModelRouter {
       return await withSpan('model.step', { role, model: route.modelId }, async () => {
         const result = await generateText({
           model: route.model,
-          system: opts.system,
-          ...promptArgs({
-            ...opts,
-            messages: opts.messages ? encodeMessageToolNames(opts.messages) : undefined,
-          }),
+          ...(opts.messages
+            ? {
+                messages: ModelRouter.cacheHinted(
+                  opts.system,
+                  encodeMessageToolNames(opts.messages),
+                ),
+              }
+            : { system: opts.system, ...promptArgs(opts) }),
           tools: encoded,
           toolChoice: toolChoice as never,
           temperature: opts.temperature ?? (route.params.temperature as number | undefined),

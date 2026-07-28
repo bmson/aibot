@@ -115,8 +115,12 @@ const roleSeed = [
     params: DETERMINISTIC,
   },
   {
+    // Same upgrade extract got in migration 0019: qwen3-30b intermittently
+    // fails structured output, and a classify miss routes a real action
+    // request into a tool-less conversational path. Migration 0041 applies
+    // this to existing rows.
     role: 'classify',
-    primaryModel: 'qwen/qwen3-30b-a3b-instruct-2507',
+    primaryModel: 'deepseek/deepseek-chat',
     fallbackModel: 'openai/gpt-oss-120b',
     params: DETERMINISTIC,
   },
@@ -132,8 +136,20 @@ const roleSeed = [
   },
   { role: 'draft', primaryModel: 'deepseek/deepseek-chat', fallbackModel: 'openai/gpt-oss-120b' },
   {
+    // The fallback must still drive the tool-calling loop: deepseek-chat is
+    // documented (role.ts) as answering with prose instead of tool calls,
+    // which made the budget soft-threshold a silent capability cliff.
+    // gpt-oss-120b has thinking and tools. Migration 0041 updates existing rows.
     role: 'reason',
     primaryModel: 'anthropic/claude-sonnet-4.5',
+    fallbackModel: 'openai/gpt-oss-120b',
+  },
+  {
+    // Nightly synthesis (skill reflection, dreams, self-improvement) needs a
+    // capable model but not the most expensive one; these jobs run daily
+    // regardless of owner activity.
+    role: 'batch',
+    primaryModel: 'openai/gpt-oss-120b',
     fallbackModel: 'deepseek/deepseek-chat',
   },
   {

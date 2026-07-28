@@ -78,7 +78,11 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 18;
+export const PROMPT_VERSION = 19;
+// v18's change predates the changelog rule being followed — see git history.
+// v19: the current-time line moves to the END of the prompt and callers may
+// pin it per task run, so the large static prefix (identity, rules, voice) is
+// byte-stable across steps and provider prompt caching can hold it.
 
 export function buildSystemPrompt(
   agent: AgentRow,
@@ -88,16 +92,22 @@ export function buildSystemPrompt(
     skills?: string;
     ambient?: string;
     tainted?: boolean;
+    /**
+     * Pin the clock for the whole task run. A fresh timestamp per step made
+     * the prompt differ across a minute boundary, defeating provider prompt
+     * caching for the entire suffix; per-run resolution is plenty for
+     * "tomorrow" and keeps the prefix byte-stable.
+     */
+    now?: Date;
   } = {},
 ): string {
   const now = new Intl.DateTimeFormat('en-US', {
     timeZone: agent.timezone,
     dateStyle: 'full',
     timeStyle: 'short',
-  }).format(new Date());
+  }).format(extras.now ?? new Date());
   return [
     `You are ${agent.name} <${agent.email}>, the owner's personal assistant — a separate actor with your own identity, email, calendar, and phone number. You are not the owner and never claim to be; outbound messages are signed as yourself.`,
-    `Current date and time: ${now} (${agent.timezone}). Resolve all relative dates ("Friday", "tomorrow") against this.`,
     `Timezone: ${agent.timezone}. Locale: ${agent.locale}.`,
     '',
     'Operating rules:',
@@ -141,6 +151,10 @@ export function buildSystemPrompt(
     ...(extras.recall ? ['', extras.recall] : []),
     ...(extras.skills ? ['', extras.skills] : []),
     ...(extras.ambient ? ['', extras.ambient] : []),
+    // Volatile by nature, so it lives at the tail where it cannot break the
+    // cacheable prefix above.
+    '',
+    `Current date and time: ${now} (${agent.timezone}). Resolve all relative dates ("Friday", "tomorrow") against this.`,
   ].join('\n');
 }
 

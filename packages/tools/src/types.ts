@@ -95,7 +95,14 @@ export interface ToolFlags {
   writesWorkspace?: boolean;
   /** Writes private assistant state outside the workspace (for example Gmail drafts). */
   privateWrite?: boolean;
-  /** The result may contain attacker-controlled instructions/content. */
+  /**
+   * The result may contain attacker-controlled instructions/content — text a
+   * third party authored (a web page, a mail thread, a filed attachment, an
+   * event body from an external invite). Owner-vetted own state (quarantine-
+   * filtered memory, free/busy times, the calendar roster) deliberately does
+   * NOT set this: tainting a task for grounding in its own state strips the
+   * owner card and recall from every later step for no security gain.
+   */
   returnsUntrustedContent?: boolean;
   /** Sends an attacker-observable network request even though it is nominally a read. */
   networkEgress?: boolean;

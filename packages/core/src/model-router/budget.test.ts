@@ -8,6 +8,7 @@ const base: BudgetSnapshot = {
   dailySpentUsd: 0,
   monthlyLimitUsd: 20,
   monthlySpentUsd: 0,
+  heldUsd: 0,
   softPct: 80,
 };
 
@@ -72,5 +73,18 @@ describe('evaluateBudget', () => {
   it('parks a critical reply once it passes the task-cap carve-out margin', () => {
     // 0.3 > 0.275 (1.1x of 0.25): even critical work must stop.
     expect(evaluateBudget({ ...base, taskSpentUsd: 0.3 }, { critical: true }).mode).toBe('park');
+  });
+});
+
+describe('held reservations', () => {
+  it('count against the hard caps — a launched job cannot be double-spent', () => {
+    const d = evaluateBudget({ ...base, dailySpentUsd: 1.5, heldUsd: 0.6 });
+    expect(d.mode).toBe('block');
+  });
+
+  it('do not trip the soft threshold — paper spend must not degrade the model', () => {
+    // 1.0 spent + 0.7 held = 85% with holds, but real spend is only 50%.
+    const d = evaluateBudget({ ...base, dailySpentUsd: 1.0, heldUsd: 0.7 });
+    expect(d.mode).toBe('primary');
   });
 });
