@@ -2,11 +2,21 @@ FROM node:22-slim AS build
 WORKDIR /src
 RUN corepack enable
 
+# Manifests first: dependency layers survive source edits.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
+COPY packages/config/package.json ./packages/config/
+COPY packages/db/package.json ./packages/db/
+COPY packages/core/package.json ./packages/core/
+COPY packages/application/package.json ./packages/application/
+COPY packages/tools/package.json ./packages/tools/
+COPY packages/modules/package.json ./packages/modules/
+COPY packages/setup/package.json ./packages/setup/
+COPY apps/web/package.json ./apps/web/
+RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --filter @assistant/web...
+
 COPY packages ./packages
 COPY apps/web ./apps/web
-
-RUN pnpm install --frozen-lockfile --filter @assistant/web...
 ARG GIT_SHA=unknown
 ENV BUILD_SHA=${GIT_SHA}
 RUN pnpm --filter @assistant/web build

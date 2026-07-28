@@ -102,3 +102,7 @@ substitutions:
 options:
   machineType: E2_HIGHCPU_8
   logging: CLOUD_LOGGING_ONLY
+  # The Dockerfiles use RUN --mount=type=cache for the pnpm store, which needs
+  # BuildKit; the classic builder errors on the syntax.
+  env:
+    - DOCKER_BUILDKIT=1

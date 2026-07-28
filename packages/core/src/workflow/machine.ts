@@ -510,7 +510,9 @@ export async function findDueTasks(db: Db, limit = 10): Promise<TaskRow[]> {
   // If the delivery is exhausted or the process dies after acknowledgement,
   // turn the expired lease into a new runnable generation exactly once. The
   // status guard makes concurrent sweepers converge on the same transition.
-  const expiredRunning = db
+  // The expired set is almost always empty; check before issuing the UPDATE so
+  // the local 2s poll loop does not write on every idle tick.
+  const expiredRunning = await db
     .select({ id: tasks.id })
     .from(tasks)
     .where(
@@ -521,24 +523,34 @@ export async function findDueTasks(db: Db, limit = 10): Promise<TaskRow[]> {
     )
     .orderBy(tasks.lockedUntil)
     .limit(limit);
-  await db
-    .update(tasks)
-    .set({
-      // Count the reclaim, and dead-letter to needs_attention once a task has
-      // been reclaimed MAX_RECLAIMS times without ever checkpointing progress
-      // (a deterministically hanging/crashing step) instead of resurrecting it
-      // to churn a worker forever with no owner-visible terminal state.
-      status: sql`CASE WHEN ${tasks.reclaimCount} + 1 >= ${MAX_RECLAIMS} THEN 'needs_attention' ELSE 'pending' END`,
-      reclaimCount: sql`${tasks.reclaimCount} + 1`,
-      progress: sql`CASE WHEN ${tasks.reclaimCount} + 1 >= ${MAX_RECLAIMS} THEN 'stopped after a worker repeatedly failed to complete a step without recording progress (hung or killed ' || (${tasks.reclaimCount} + 1)::text || ' times)' ELSE ${tasks.progress} END`,
-      runAfter: sql`CASE WHEN ${tasks.reclaimCount} + 1 >= ${MAX_RECLAIMS} THEN NULL ELSE ${tasks.runAfter} END`,
-      // This dead-letter path has no notify at all — let the re-notify sweep
-      // reach it. Null on the pending branch is never read (sweep skips it).
-      attentionNotifiedAt: null,
-      lockedUntil: null,
-      queueGeneration: sql`${tasks.queueGeneration} + 1`,
-    })
-    .where(and(eq(tasks.status, 'running'), inArray(tasks.id, expiredRunning)));
+  if (expiredRunning.length > 0) {
+    await db
+      .update(tasks)
+      .set({
+        // Count the reclaim, and dead-letter to needs_attention once a task has
+        // been reclaimed MAX_RECLAIMS times without ever checkpointing progress
+        // (a deterministically hanging/crashing step) instead of resurrecting it
+        // to churn a worker forever with no owner-visible terminal state.
+        status: sql`CASE WHEN ${tasks.reclaimCount} + 1 >= ${MAX_RECLAIMS} THEN 'needs_attention' ELSE 'pending' END`,
+        reclaimCount: sql`${tasks.reclaimCount} + 1`,
+        progress: sql`CASE WHEN ${tasks.reclaimCount} + 1 >= ${MAX_RECLAIMS} THEN 'stopped after a worker repeatedly failed to complete a step without recording progress (hung or killed ' || (${tasks.reclaimCount} + 1)::text || ' times)' ELSE ${tasks.progress} END`,
+        runAfter: sql`CASE WHEN ${tasks.reclaimCount} + 1 >= ${MAX_RECLAIMS} THEN NULL ELSE ${tasks.runAfter} END`,
+        // This dead-letter path has no notify at all — let the re-notify sweep
+        // reach it. Null on the pending branch is never read (sweep skips it).
+        attentionNotifiedAt: null,
+        lockedUntil: null,
+        queueGeneration: sql`${tasks.queueGeneration} + 1`,
+      })
+      .where(
+        and(
+          eq(tasks.status, 'running'),
+          inArray(
+            tasks.id,
+            expiredRunning.map((row) => row.id),
+          ),
+        ),
+      );
+  }
 
   return db
     .select()

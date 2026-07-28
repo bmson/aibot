@@ -4,11 +4,15 @@ ENV ASSISTANT_REPO_ROOT=/app
 WORKDIR /app
 RUN corepack enable
 
+# Manifests first: dependency layers survive source edits.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages/config/package.json ./packages/config/
+COPY packages/db/package.json ./packages/db/
+RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --filter @assistant/db...
+
 COPY packages/config ./packages/config
 COPY packages/db ./packages/db
-
-RUN pnpm install --frozen-lockfile --filter @assistant/db...
 RUN chown -R node:node /app
 USER node
 CMD ["pnpm", "--filter", "@assistant/db", "reconcile"]

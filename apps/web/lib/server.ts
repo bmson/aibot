@@ -54,6 +54,7 @@ import {
   LocalWorkspaceStore,
   type WorkspaceStore,
 } from '@assistant/tools/workspace';
+import { unstable_cache } from 'next/cache';
 import { cache } from 'react';
 
 const globalCache = globalThis as unknown as {
@@ -168,7 +169,14 @@ function createApplication() {
       register?: string;
     }) => uploadImport(db, workspace, input),
     getPrimaryConversationId: () => getPrimaryConversationId(db),
-    getShellStatus: (agentId: string) => getShellStatus(db, agentId),
+    // The layout calls this on every request of every route (force-dynamic),
+    // and memory health aggregates the whole knowledge-memory table. A sidebar
+    // badge does not need transactional freshness; 30 seconds keeps the scan
+    // off the per-navigation path as the table grows.
+    getShellStatus: (agentId: string) =>
+      unstable_cache(() => getShellStatus(db, agentId), ['shell-status', agentId], {
+        revalidate: 30,
+      })(),
     createChat: () => createChatConversation(db),
     changeChatModel: (conversationId: string, modelId: string | null) =>
       changeChatModel(db, conversationId, modelId),

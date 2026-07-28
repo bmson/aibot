@@ -84,6 +84,8 @@ jobs:
         run: pnpm modules:plan --github-output="$GITHUB_OUTPUT"
       - name: Build immutable images
         env:
+          # RUN --mount=type=cache in the Dockerfiles requires BuildKit.
+          DOCKER_BUILDKIT: '1'
           GCP_PROJECT: ${{ vars.GCP_PROJECT }}
           GCP_REGION: ${{ vars.GCP_REGION || 'us-west1' }}
           ARTIFACT_REPOSITORY: ${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}
