@@ -1,4 +1,10 @@
 {
+  // This app pins typescript ^5.9 in its own devDependencies while the rest of
+  // the workspace is on 7.x. Verified 2026-07: `tsc --noEmit` passes on 7.0.2,
+  // but `next build` then fails to resolve the `@/*` path alias (module-not-found
+  // for '@/lib/ui-client') — Next 16's webpack path-alias integration reads the
+  // installed TypeScript API and does not understand 7.x yet. Re-try unifying
+  // whenever Next ships TS 7 support.
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["dom", "dom.iterable", "esnext"],

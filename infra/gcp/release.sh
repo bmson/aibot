@@ -300,7 +300,7 @@ roll_out_job() {
 # site which commit it is serving. It is what turns a stranded web rollout from
 # an invisible non-event into a red release.
 verify_web_serving_release() {
-  local url payload sha attempt
+  local url payload sha
   url="$(gcloud run services describe assistant-web \
     --project "$PROJECT" --region "$REGION" --format='value(status.url)')" || return 1
   if [[ -z "$url" ]]; then
@@ -308,7 +308,7 @@ verify_web_serving_release() {
     return 1
   fi
   sha=""
-  for attempt in $(seq 1 30); do
+  for _attempt in $(seq 1 30); do
     payload="$(curl --fail --silent --max-time 10 "${url}/api/health")" || payload=""
     sha="$(sed -n 's/.*"sha":"\([^"]*\)".*/\1/p' <<<"$payload")"
     if [[ "$sha" == "$TAG" ]]; then
