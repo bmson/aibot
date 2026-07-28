@@ -187,14 +187,22 @@ async function recallFromSegments(
   const sources: RecallSource[] = [];
   let used = 0;
   let chars = 0;
+  // One query fetches every candidate's key message; the loop below then only
+  // formats. Sequential per-segment selects were the recall path's tax.
+  const keyMessageRows = await db
+    .select({ id: messages.id, role: messages.role, text: messages.text })
+    .from(messages)
+    .where(
+      inArray(
+        messages.id,
+        qualifying.map((seg) => seg.startMessageId),
+      ),
+    );
+  const keyMessages = new Map(keyMessageRows.map((row) => [row.id, row]));
   for (const seg of qualifying) {
     if (used >= opts.limit) break;
     // One verbatim key line grounds the summary.
-    const [keyMessage] = await db
-      .select({ role: messages.role, text: messages.text })
-      .from(messages)
-      .where(eq(messages.id, seg.startMessageId))
-      .limit(1);
+    const keyMessage = keyMessages.get(seg.startMessageId);
     const keyLine = keyMessage
       ? `\n  ${roleLabel(keyMessage.role)}: ${clip(keyMessage.text, opts.maxMessageChars)}`
       : '';
@@ -304,7 +312,7 @@ async function neighborhoodOf(
     return [{ id: anchor.id, role: anchor.role, text: anchor.text, createdAt: anchor.createdAt }];
   }
   const sameConversation = anchor.conversationId === exclude.conversationId;
-  const before = await db
+  const beforeQuery = db
     .select({
       id: messages.id,
       role: messages.role,
@@ -321,7 +329,7 @@ async function neighborhoodOf(
     )
     .orderBy(desc(messages.createdAt))
     .limit(radius);
-  const after = await db
+  const afterQuery = db
     .select({
       id: messages.id,
       role: messages.role,
@@ -339,6 +347,7 @@ async function neighborhoodOf(
     )
     .orderBy(asc(messages.createdAt))
     .limit(radius);
+  const [before, after] = await Promise.all([beforeQuery, afterQuery]);
   return [
     ...before.reverse(),
     { id: anchor.id, role: anchor.role, text: anchor.text, createdAt: anchor.createdAt },

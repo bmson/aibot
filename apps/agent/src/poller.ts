@@ -19,7 +19,7 @@ import { executeAgentTask } from './task-runner.js';
 import { reapExpiredWatches } from './watches.js';
 
 const POLL_INTERVAL_MS = 2000;
-const SWEEP_EVERY_TICKS = 150; // ~5 min, matching the prod Cloud Scheduler cadence
+const SWEEP_EVERY_TICKS = 30; // ~1 min, matching the prod Cloud Scheduler cadence
 const EMAIL_SYNC_EVERY_TICKS = 15; // ~30s — local fallback; prod uses Pub/Sub push
 
 /**

@@ -320,6 +320,10 @@ export const tasks = pgTable(
     index('tasks_status_run_after_idx').on(t.status, t.runAfter),
     index('tasks_agent_status_idx').on(t.agentId, t.status, t.updatedAt),
     index('tasks_parent_idx').on(t.parentTaskId),
+    // The chat view and its status poller filter by conversation on every
+    // render/poll; goal views filter by goal. Postgres does not index FKs.
+    index('tasks_conversation_idx').on(t.conversationId, t.status),
+    index('tasks_goal_idx').on(t.goalId),
     index('tasks_pending_updated_idx').on(t.updatedAt).where(sql`${t.status} = 'pending'`),
     index('tasks_sleeping_run_after_idx')
       .on(t.runAfter)

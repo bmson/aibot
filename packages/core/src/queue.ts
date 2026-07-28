@@ -51,13 +51,21 @@ export function getQueueNotifier(): QueueNotifier {
   const callbackAudience = new URL('/internal/tasks/execute', INTERNAL_OIDC_AUDIENCE).toString();
   const queuePath = `projects/${GCP_PROJECT}/locations/${GCP_LOCATION}/queues/${CLOUD_TASKS_QUEUE}`;
 
+  // Metadata tokens live ~an hour; refetching per enqueue added a round trip
+  // to every notify. Reuse until five minutes before expiry.
+  let tokenCache: { value: string; expiresAtMs: number } | undefined;
   async function accessToken(): Promise<string> {
+    if (tokenCache && Date.now() < tokenCache.expiresAtMs) return tokenCache.value;
     const res = await fetch(
       'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
       { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(5_000) },
     );
     if (!res.ok) throw new Error(`metadata token fetch failed: ${res.status}`);
-    const data = (await res.json()) as { access_token: string };
+    const data = (await res.json()) as { access_token: string; expires_in?: number };
+    tokenCache = {
+      value: data.access_token,
+      expiresAtMs: Date.now() + (Math.max(0, data.expires_in ?? 0) - 300) * 1000,
+    };
     return data.access_token;
   }
 
