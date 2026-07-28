@@ -26,6 +26,7 @@ export const codeModule = defineModule<CodeJobLauncher>({
     registerCodeTools(registry, {
       launcher,
       callbackUrl: `${config.PUBLIC_URL}/webhooks/code/callback`,
+      isolated: config.CODE_DRIVER === 'cloudrun',
     });
     return { exports: launcher };
   },

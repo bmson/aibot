@@ -9,6 +9,7 @@ import {
   persistMessage,
   quotesExternalContent,
   startDocumentIngest,
+  TaskRateLimitError,
 } from '@assistant/core';
 import {
   channelBindings,
@@ -443,27 +444,39 @@ export async function processMessage(
         : existing.origin === 'known_contact'
           ? 'known'
           : 'unknown';
-    const { created } = await enqueueTask(deps.db, {
-      type: 'email_triage',
-      // Email triage now reasons with tools (roleForTask → reason); give it the
-      // same step headroom as a goal session so a browse-and-reply can complete.
-      maxSteps: 16,
-      event: {
-        source: 'email',
-        externalEventId: channelMessageId,
-        agentId,
-        conversationId: existing.conversationId,
-        trust: persistedTrust,
-        payload: {
-          threadId: msg.threadId,
-          messageId: msg.id,
-          rfcMessageId,
-          from,
-          subject,
-          quotesExternalContent: quotesExternalContent({ subject, body: text }),
+    let created = false;
+    try {
+      ({ created } = await enqueueTask(deps.db, {
+        type: 'email_triage',
+        // Email triage now reasons with tools (roleForTask → reason); give it the
+        // same step headroom as a goal session so a browse-and-reply can complete.
+        maxSteps: 16,
+        event: {
+          source: 'email',
+          externalEventId: channelMessageId,
+          agentId,
+          conversationId: existing.conversationId,
+          trust: persistedTrust,
+          payload: {
+            threadId: msg.threadId,
+            messageId: msg.id,
+            rfcMessageId,
+            from,
+            subject,
+            quotesExternalContent: quotesExternalContent({ subject, body: text }),
+          },
         },
-      },
-    });
+      }));
+    } catch (error) {
+      // The flood backstop skips this message rather than failing the sync:
+      // a thrown error here would stall the history cursor and make Pub/Sub
+      // redeliver the same burst that tripped the limit.
+      if (error instanceof TaskRateLimitError) {
+        console.warn(`email-sync: task rate limit reached; skipping triage for ${from}`);
+        return 'skipped';
+      }
+      throw error;
+    }
     return created ? 'triaged' : 'skipped';
   }
 
@@ -520,27 +533,37 @@ export async function processMessage(
     );
   }
 
-  const { created } = await enqueueTask(deps.db, {
-    type: 'email_triage',
-    // Email triage now reasons with tools (roleForTask → reason); give it the
-    // same step headroom as a goal session so a browse-and-reply can complete.
-    maxSteps: 16,
-    event: {
-      source: 'email',
-      externalEventId: `gmail:${msg.id}`,
-      agentId,
-      conversationId,
-      trust,
-      payload: {
-        threadId: msg.threadId,
-        messageId: msg.id,
-        rfcMessageId,
-        from,
-        subject,
-        quotesExternalContent: quotesExternalContent({ subject, body: text }),
+  let created = false;
+  try {
+    ({ created } = await enqueueTask(deps.db, {
+      type: 'email_triage',
+      // Email triage now reasons with tools (roleForTask → reason); give it the
+      // same step headroom as a goal session so a browse-and-reply can complete.
+      maxSteps: 16,
+      event: {
+        source: 'email',
+        externalEventId: `gmail:${msg.id}`,
+        agentId,
+        conversationId,
+        trust,
+        payload: {
+          threadId: msg.threadId,
+          messageId: msg.id,
+          rfcMessageId,
+          from,
+          subject,
+          quotesExternalContent: quotesExternalContent({ subject, body: text }),
+        },
       },
-    },
-  });
+    }));
+  } catch (error) {
+    // Same skip-not-stall reasoning as the persisted-thread path above.
+    if (error instanceof TaskRateLimitError) {
+      console.warn(`email-sync: task rate limit reached; skipping triage for ${from}`);
+      return 'skipped';
+    }
+    throw error;
+  }
   if (created) console.log(`email-sync: triage task for ${from} ("${subject.slice(0, 40)}")`);
   return 'triaged';
 }

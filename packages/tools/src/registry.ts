@@ -42,7 +42,12 @@ export class ToolRegistry {
     return [...this.tools.values()]
       .filter(
         ({ tool, flags }) =>
-          (!untrusted || !flags.outwardFacing) &&
+          // A task triggered by an unknown sender gets no attacker-observable
+          // network requests at all: neither outward-facing sends nor nominal
+          // reads with egress (web.fetch, web.search). Without the egress
+          // strip, any DKIM-valid stranger's email could drive blind HTTP
+          // requests and paid searches from the owner's IP.
+          (!untrusted || (!flags.outwardFacing && !flags.networkEgress)) &&
           (!external || tool.acceptsUntrustedInput) &&
           (!external ||
             (!flags.writesMemory &&

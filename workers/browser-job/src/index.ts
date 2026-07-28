@@ -150,11 +150,46 @@ async function run(input: JobInput): Promise<JobResult> {
   }
 }
 
+/**
+ * The agent's webhook routes cap request bodies at 512 KiB, and a rejected
+ * callback strands the task until its timeout backstop. Shrink oversized
+ * results here — dropping extracted text from the largest outputs first — so
+ * the callback always fits. 400 KiB leaves headroom for JSON overhead.
+ */
+const CALLBACK_BODY_BUDGET = 400 * 1024;
+
+function fitResultToBudget(result: JobResult): JobResult {
+  if (JSON.stringify(result).length <= CALLBACK_BODY_BUDGET) return result;
+  const outputs = [...result.outputs];
+  // Repeatedly halve the largest serialized output until the body fits.
+  for (let round = 0; round < 16; round++) {
+    let largest = -1;
+    let largestLength = 0;
+    for (const [index, output] of outputs.entries()) {
+      const length = JSON.stringify(output)?.length ?? 0;
+      if (length > largestLength) {
+        largest = index;
+        largestLength = length;
+      }
+    }
+    if (largest < 0 || largestLength < 1024) break;
+    const serialized = JSON.stringify(outputs[largest]) ?? '';
+    outputs[largest] = {
+      truncated: true,
+      note: `output truncated from ${serialized.length} chars to fit the callback size limit`,
+      preview: serialized.slice(0, Math.floor(largestLength / 2)),
+    };
+    const candidate = { ...result, outputs };
+    if (JSON.stringify(candidate).length <= CALLBACK_BODY_BUDGET) return candidate;
+  }
+  return { ...result, outputs };
+}
+
 async function postCallback(input: JobInput, result: JobResult): Promise<void> {
   const body = JSON.stringify({
     taskId: input.taskId,
     token: input.callbackToken,
-    result,
+    result: fitResultToBudget(result),
   });
   const delaysMs = [0, 2_000, 5_000, 15_000];
   for (const [attempt, delay] of delaysMs.entries()) {

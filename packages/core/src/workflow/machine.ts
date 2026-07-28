@@ -1,5 +1,5 @@
-import { type Db, type TaskRow, tasks } from '@assistant/db';
-import { and, eq, gt, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
+import { type Db, rateLimits, type TaskRow, tasks } from '@assistant/db';
+import { and, eq, gt, gte, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import type { InboundEvent, Plan } from '../events.js';
 import { type TaskState, TaskStateSchema } from '../events.js';
 import { getQueueNotifier } from '../queue.js';
@@ -71,6 +71,44 @@ function activeLease(task: TaskLease) {
  * re-delivered events (Pub/Sub, Cloud Tasks are at-least-once) return the
  * existing task instead of creating a duplicate.
  */
+/** Thrown when the externally-triggered task backstop is exhausted. */
+export class TaskRateLimitError extends Error {
+  constructor() {
+    super('externally-triggered task rate limit exceeded');
+    this.name = 'TaskRateLimitError';
+  }
+}
+
+/**
+ * The `task`-scope rate limit is a flood backstop for externally-triggered
+ * work: root tasks whose trust is `known` or `unknown`, i.e. anything a third
+ * party can create by sending mail. Owner/assistant tasks and internal
+ * children are never throttled — schedules and reply children must not stall
+ * behind a stranger's burst.
+ */
+async function underExternalTaskLimit(db: Db): Promise<boolean> {
+  const [limit] = await db.select().from(rateLimits).where(eq(rateLimits.scope, 'task'));
+  if (!limit) return true;
+
+  const countSince = async (interval: string) => {
+    const [row] = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(tasks)
+      .where(
+        and(
+          inArray(tasks.trust, ['known', 'unknown']),
+          isNull(tasks.parentTaskId),
+          gte(tasks.createdAt, sql`now() - ${interval}::interval`),
+        ),
+      );
+    return Number(row?.n ?? 0);
+  };
+
+  if (limit.maxPerHour !== null && (await countSince('1 hour')) >= limit.maxPerHour) return false;
+  if (limit.maxPerDay !== null && (await countSince('1 day')) >= limit.maxPerDay) return false;
+  return true;
+}
+
 export async function enqueueTask(
   db: Db,
   input: {
@@ -98,6 +136,12 @@ export async function enqueueTask(
     deferNotification?: boolean;
   },
 ): Promise<{ task: TaskRow; created: boolean }> {
+  const externalRoot =
+    (input.event.trust === 'known' || input.event.trust === 'unknown') && !input.parentTaskId;
+  if (externalRoot && !(await underExternalTaskLimit(db))) {
+    throw new TaskRateLimitError();
+  }
+
   const values = {
     agentId: input.event.agentId,
     conversationId: input.event.conversationId,

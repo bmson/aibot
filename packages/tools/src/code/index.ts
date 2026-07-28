@@ -24,6 +24,14 @@ export interface CodeDeps {
   launcher: CodeJobLauncher;
   /** POST target for the job's one-shot-token result callback. */
   callbackUrl: string;
+  /**
+   * True when the launcher is a genuinely isolated runtime (a Cloud Run Job
+   * with no egress connector). The local child-process launcher withholds
+   * credentials from the env but shares the filesystem and network, so the
+   * tool must neither describe itself as a sandbox nor run autonomously for
+   * anything but the owner's own untainted work.
+   */
+  isolated: boolean;
 }
 
 /** Extra grace on top of the script's own timeout before the sweeper gives up. */
@@ -35,12 +43,22 @@ export function registerCodeTools(registry: ToolRegistry, deps: CodeDeps): ToolR
     {
       name: 'code.execute',
       description:
-        'Run a short script you write (JavaScript or Python) in an isolated, credential-free sandbox to compute, transform, analyze, or chart data. Python has pandas, numpy, matplotlib, and openpyxl preinstalled. Stage Workspace files into the run via `inputs` (read them at ./input/<as>); files the script writes to ./output are saved to the Workspace and listed in the result (a chart PNG, a CSV, an .xlsx). The sandbox has no database access and no API keys. A pure computation (no network) runs autonomously; set allowNetwork only if it truly needs the internet, which requires owner approval. Results arrive asynchronously in the next turn — call it ONCE and wait; only one job runs per task at a time. Never put secrets in the source.',
+        (deps.isolated
+          ? 'Run a short script you write (JavaScript or Python) in an isolated, credential-free sandbox to compute, transform, analyze, or chart data.'
+          : 'Run a short script you write (JavaScript or Python) in a local, credential-free child process to compute, transform, analyze, or chart data. This local runner is NOT a sandbox: it shares the filesystem and network with the agent.') +
+        ' Python has pandas, numpy, matplotlib, and openpyxl preinstalled. Stage Workspace files into the run via `inputs` (read them at ./input/<as>); files the script writes to ./output are saved to the Workspace and listed in the result (a chart PNG, a CSV, an .xlsx). The runner has no database access and no API keys. A pure computation (no network) runs autonomously; set allowNetwork only if it truly needs the internet, which requires owner approval. Results arrive asynchronously in the next turn — call it ONCE and wait; only one job runs per task at a time. Never put secrets in the source.',
       inputSchema: z.object({ spec: CodeSpecSchema }),
       // Pure compute is autonomous; anything reaching the network needs the
       // owner. (The networkEgress flag additionally forces approval once any
       // untrusted content has entered a task — see the dispatcher's taint gate.)
-      risk: (args) => ((args as { spec: CodeSpec }).spec.allowNetwork ? 'approval' : 'autonomous'),
+      // The local child-process runner is not actually isolated, so outside an
+      // owner/assistant task it always needs the owner's eyes.
+      risk: (args, ctx) => {
+        const spec = (args as { spec: CodeSpec }).spec;
+        if (spec.allowNetwork) return 'approval';
+        if (!deps.isolated && ctx.trust !== 'owner' && ctx.trust !== 'assistant') return 'approval';
+        return 'autonomous';
+      },
       acceptsUntrustedInput: true,
       // Reserve worst-case runtime against the budget before launch; the
       // executor reconciles to actual seconds at settle (shared Cloud Run rate).
@@ -119,6 +137,10 @@ export function registerCodeTools(registry: ToolRegistry, deps: CodeDeps): ToolR
       autonomyFloor: true,
       returnsUntrustedContent: true,
       networkEgress: true,
+      // The job persists artifacts into the owner's Workspace, so external
+      // (known/unknown) tasks must lose this tool along with the other
+      // persistent-write capabilities — not merely the unknown tier.
+      writesWorkspace: true,
     },
   );
 

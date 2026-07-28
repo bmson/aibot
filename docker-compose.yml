@@ -18,7 +18,7 @@ x-runtime-environment: &runtime-environment
   INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-local-compose-only}
   AUTH_SECRET: ${AUTH_SECRET:-local-compose-auth-secret-change-before-sharing}
   AUTH_DEV_BYPASS: "false"
-  AUTH_LOCALHOST_BYPASS: "true"
+  AUTH_LOCALHOST_BYPASS: ${AUTH_LOCALHOST_BYPASS:-true}
   OTEL_EXPORTER: none
 
 services:

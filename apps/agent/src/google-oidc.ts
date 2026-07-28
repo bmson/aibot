@@ -63,12 +63,16 @@ export async function verifyInternalAuthorization(
     | 'INTERNAL_API_SECRET'
     | 'INTERNAL_OIDC_AUDIENCE'
     | 'INTERNAL_OIDC_SERVICE_ACCOUNT'
+    | 'QUEUE_DRIVER'
   >,
   jwks?: JWTVerifyGetKey,
   nodeEnv = process.env.NODE_ENV,
 ): Promise<boolean> {
   if (config.INTERNAL_AUTH_MODE === 'shared-secret') {
-    if (nodeEnv === 'production') return false;
+    // Refuse on either prod signal. NODE_ENV covers the container images (they
+    // hardcode production); QUEUE_DRIVER covers a bare deployment that forgot
+    // it — a cloudtasks-shaped installation is internet-facing by definition.
+    if (nodeEnv === 'production' || config.QUEUE_DRIVER === 'cloudtasks') return false;
     const token = bearerToken(authorization);
     return Boolean(
       token && config.INTERNAL_API_SECRET && secretsEqual(token, config.INTERNAL_API_SECRET),

@@ -33,9 +33,12 @@ import type { AgentDeps } from './deps.js';
 import { notifyApprovalsBySms, notifyOwnerBySms } from './sms-channel.js';
 
 function fakeDeps(): AgentDeps {
+  // The channel rate-limit lookup runs before every send; an empty result
+  // means "no limit configured", which keeps these tests about budgeting.
+  const noRows = { from: () => ({ where: async () => [] }) };
   return {
     config: { OWNER_PHONE: '+14155550100' } as AgentDeps['config'],
-    db: {} as AgentDeps['db'],
+    db: { select: () => noRows } as unknown as AgentDeps['db'],
     twilio: {
       configured: () => true,
       send: async () => ({ sid: 'SM-fake' }),

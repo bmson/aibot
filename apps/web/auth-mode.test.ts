@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveAuthMode } from './auth-mode.js';
+import { requestLooksLoopback, resolveAuthMode } from './auth-mode.js';
 
 describe('resolveAuthMode', () => {
   it('fails closed when Google auth and the explicit bypass are absent', () => {
@@ -63,5 +63,41 @@ describe('resolveAuthMode', () => {
     expect(
       resolveAuthMode({ googleClientId: 'client-id', devBypass: false, nodeEnv: 'production' }),
     ).toBe('google');
+  });
+});
+
+describe('requestLooksLoopback', () => {
+  const request = (overrides: Partial<Parameters<typeof requestLooksLoopback>[0]>) =>
+    requestLooksLoopback({ host: null, forwardedFor: null, forwardedHost: null, ...overrides });
+
+  it('accepts direct loopback requests, with and without ports', () => {
+    expect(request({ host: 'localhost:3000' })).toBe(true);
+    expect(request({ host: '127.0.0.1:3000' })).toBe(true);
+    expect(request({ host: '[::1]:3000' })).toBe(true);
+    expect(request({ host: 'localhost' })).toBe(true);
+  });
+
+  it('accepts self-mirrored forwarded headers that still name loopback', () => {
+    expect(
+      request({
+        host: 'localhost:3000',
+        forwardedFor: '127.0.0.1',
+        forwardedHost: 'localhost:3000',
+      }),
+    ).toBe(true);
+    expect(request({ host: '127.0.0.1:3000', forwardedFor: '::1' })).toBe(true);
+  });
+
+  it('rejects a request whose Host names the machine on the network', () => {
+    expect(request({ host: '192.168.1.20:3000' })).toBe(false);
+    expect(request({ host: 'assistant.example.com' })).toBe(false);
+    expect(request({ host: null })).toBe(false);
+  });
+
+  it('rejects proxied requests whose forwarded values crossed the network', () => {
+    expect(request({ host: 'localhost:3000', forwardedFor: '203.0.113.9' })).toBe(false);
+    expect(request({ host: 'localhost:3000', forwardedHost: 'assistant.example.com' })).toBe(false);
+    // A spoofed loopback Host cannot rescue a forwarded chain that starts remote.
+    expect(request({ host: '127.0.0.1', forwardedFor: '203.0.113.9, 127.0.0.1' })).toBe(false);
   });
 });

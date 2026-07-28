@@ -237,7 +237,10 @@ describe('builtin trust capabilities', () => {
     expect(unknown).not.toContain('workspace.list');
     expect(unknown).not.toContain('workspace.write');
     expect(unknown).not.toContain('owner.notify');
-    expect(unknown).toContain('web.fetch');
+    // Egress is denied to strangers too: a DKIM-valid unknown sender must not
+    // drive HTTP requests or paid searches from the owner's IP.
+    expect(unknown).not.toContain('web.fetch');
+    expect(registry.toolsForTask('known').map((tool) => tool.name)).toContain('web.fetch');
   });
 
   it('lets mission/goal progress writers run under taint without an approval', () => {

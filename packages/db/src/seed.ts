@@ -187,6 +187,11 @@ for (const r of rateSeed) {
 const rateLimitSeed = [
   { scope: 'tool:gmail.send', maxPerHour: 10, maxPerDay: 50 },
   { scope: 'tool:sms.send', maxPerHour: 10, maxPerDay: 50 },
+  // Egress reads are cheap individually but unmetered in aggregate: web.fetch
+  // records no cost event and web.search bills the provider per query, so both
+  // need a ceiling that survives a burst of triage tasks.
+  { scope: 'tool:web.fetch', maxPerHour: 60, maxPerDay: 300 },
+  { scope: 'tool:web.search', maxPerHour: 20, maxPerDay: 100 },
   { scope: 'channel:sms', maxPerHour: 30, maxPerDay: 200 },
   { scope: 'task', maxPerHour: 120, maxPerDay: 1000 },
 ] as const;

@@ -2,6 +2,7 @@ import { isModuleEnabled, loadConfig } from '@assistant/config';
 import {
   getAgent,
   LocationPingSchema,
+  locationPingFresh,
   recordBrowserJobResult,
   recordCodeJobResult,
   recordDocumentProcessorResult,
@@ -161,6 +162,9 @@ webhooks.post('/location', async (c) => {
   }
   const parsed = LocationPingSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: 'invalid ping' }, 400);
+  // The signature has no expiry of its own; a stale capturedAt is the replay
+  // signal. 409 (not 403) so the Shortcut can tell clock skew from a bad key.
+  if (!locationPingFresh(parsed.data)) return c.json({ error: 'stale ping' }, 409);
 
   const deps = buildDeps();
   const agent = await getAgent(deps.db);

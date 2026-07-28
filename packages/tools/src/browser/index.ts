@@ -207,6 +207,10 @@ export function registerBrowserTools(registry: ToolRegistry, deps: BrowserDeps):
       autonomyFloor: true,
       returnsUntrustedContent: true,
       networkEgress: true,
+      // The job persists artifacts into the owner's Workspace, so external
+      // (known/unknown) tasks must lose this tool along with the other
+      // persistent-write capabilities — not merely the unknown tier.
+      writesWorkspace: true,
     },
   );
 

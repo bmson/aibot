@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { type Db, documents, files, type TaskRow } from '@assistant/db';
-import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, eq, gte, isNull, lt, or, sql } from 'drizzle-orm';
 import { hashCallbackToken } from '../browse.js';
 import { withSpan } from '../otel.js';
 import { getQueueNotifier } from '../queue.js';
@@ -28,6 +28,10 @@ import type { CodeJobOutcome } from './jobs.js';
 
 const PROCESS_BATCH = 5; // documents launched per sweep tick
 const STALE_MS = 15 * 60 * 1000; // relaunch a run that never called back
+// A worker that repeatedly dies without calling back (OOM on a crafted
+// archive, an OCR hang) must not relaunch forever: each launch bills job
+// runtime. Three attempts covers transient infrastructure failures.
+const PROCESSOR_MAX_ATTEMPTS = 3;
 const CALLBACK_GRACE_SECONDS = 600; // Cloud Run task-timeout ceiling for the worker
 
 /** Deterministic Workspace path for a document's extracted text. The callback
@@ -225,6 +229,24 @@ export async function runDocumentProcessing(
       isNull(documents.processorStartedAt),
       lt(documents.processorStartedAt, staleCutoff),
     );
+
+    // Retire documents that have burned through their launch budget before
+    // selecting fresh work, so an exhausted row can never be claimed again.
+    await db
+      .update(documents)
+      .set({
+        status: 'failed',
+        processorTokenHash: null,
+        error: `processor did not report back after ${PROCESSOR_MAX_ATTEMPTS} launches`,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(documents.extractor, 'pending_processor'),
+          eq(documents.status, 'pending'),
+          gte(documents.processorAttempts, PROCESSOR_MAX_ATTEMPTS),
+        ),
+      );
     const rows = await db
       .select({
         id: documents.id,
@@ -256,6 +278,7 @@ export async function runDocumentProcessing(
         .set({
           processorTokenHash: hashCallbackToken(callbackToken),
           processorStartedAt: now,
+          processorAttempts: sql`${documents.processorAttempts} + 1`,
           updatedAt: sql`now()`,
         })
         .where(

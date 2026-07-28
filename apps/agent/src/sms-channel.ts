@@ -9,9 +9,17 @@ import {
   reserveCost,
   resolveApproval,
 } from '@assistant/core';
-import { approvals, channelBindings, conversations, type TaskRow, toolCalls } from '@assistant/db';
+import {
+  approvals,
+  channelBindings,
+  conversations,
+  costEvents,
+  rateLimits,
+  type TaskRow,
+  toolCalls,
+} from '@assistant/db';
 import { isAmbiguousTwilioDeliveryError, parseApprovalReply } from '@assistant/tools';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gte, sql } from 'drizzle-orm';
 import type { AgentDeps } from './deps.js';
 
 export interface InboundSms {
@@ -26,6 +34,45 @@ export type SmsHandled =
   | { kind: 'task'; taskId: string; created: boolean }
   | { kind: 'ignored'; reason: string };
 
+/**
+ * The `channel:sms` rate limit covers every outbound SMS regardless of origin
+ * — tool sends, final-answer delivery, approval pings, owner notifications —
+ * counted against the cost events each reconciled send records. The per-tool
+ * `tool:sms.send` limit alone misses the channel deliverers, which is how a
+ * notification loop could otherwise spend without a ceiling.
+ */
+async function underSmsChannelLimit(deps: AgentDeps): Promise<boolean> {
+  const [limit] = await deps.db
+    .select()
+    .from(rateLimits)
+    .where(eq(rateLimits.scope, 'channel:sms'));
+  if (!limit) return true;
+
+  const countSince = async (interval: string) => {
+    const [row] = await deps.db
+      .select({ n: sql<number>`count(*)` })
+      .from(costEvents)
+      .where(
+        and(
+          eq(costEvents.source, 'twilio_sms'),
+          gte(costEvents.createdAt, sql`now() - ${interval}::interval`),
+        ),
+      );
+    return Number(row?.n ?? 0);
+  };
+
+  if (limit.maxPerHour !== null && (await countSince('1 hour')) >= limit.maxPerHour) return false;
+  if (limit.maxPerDay !== null && (await countSince('1 day')) >= limit.maxPerDay) return false;
+  return true;
+}
+
+export class SmsChannelRateLimitError extends Error {
+  constructor() {
+    super('SMS channel rate limit exceeded');
+    this.name = 'SmsChannelRateLimitError';
+  }
+}
+
 async function sendMeteredSms(
   deps: AgentDeps,
   input: {
@@ -36,6 +83,11 @@ async function sendMeteredSms(
     critical?: boolean;
   },
 ): Promise<{ deliveryStatus: 'accepted' | 'unknown'; sid?: string }> {
+  if (!(await underSmsChannelLimit(deps))) {
+    // Callers already treat delivery errors as retryable-later without
+    // re-running the model, so failing here is safe and visible.
+    throw new SmsChannelRateLimitError();
+  }
   const rate = await getRate(deps.db, 'twilio_sms');
   const reservation = await reserveCost(deps.db, {
     source: 'twilio_sms',
