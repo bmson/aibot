@@ -116,6 +116,24 @@ attaches its SPDX SBOM.
 GitHub OIDC deployment is optional and documented in `infra/gcp/github-actions.md`.
 Restore instructions and migration compatibility rules are in [recovery.md](recovery.md).
 
+## Guided setup
+
+`pnpm setup:wizard` checks what would stop a deploy before anything is created — the Google Cloud
+CLI, an authenticated account, a linked billing account, an organization policy that would forbid
+publishing the services, and the settings the provisioner requires — then prints what this
+installation contains, what it costs, and the steps that genuinely cannot be automated. It hands
+over to `infra/gcp/deploy.sh` once you confirm.
+
+```sh
+pnpm setup:wizard --plan   # briefing only, changes nothing
+pnpm setup:wizard          # briefing, then provision after confirmation
+```
+
+The manual steps it lists are limited to the ones with no API behind them: the OAuth consent screen
+and client, authorizing the assistant account, Workspace allowlisting, DNS, and the Twilio webhook.
+Each says why it cannot be done for you, and the ones that produce settings are marked done once
+those settings exist. Everything else, API enablement included, is provisioned.
+
 ## Costs and scaling
 
 Both services default to zero minimum instances. Worker jobs exist only for bounded tasks. The fixed

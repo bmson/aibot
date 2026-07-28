@@ -123,6 +123,10 @@ region, repository, custom domain, identity, and modules are no longer hard-code
 gcloud auth login
 gcloud config set project YOUR_PROJECT_ID
 
+# Guided setup: preflight checks, what it contains, what it costs, then deploy.
+pnpm setup:wizard --plan   # briefing only
+pnpm setup:wizard
+
 # In .env, set at least:
 # PROD_DATABASE_URL, OPENROUTER_API_KEY, GCP_PROJECT,
 # OWNER_EMAIL, ASSISTANT_EMAIL, and Google OAuth values for web login.

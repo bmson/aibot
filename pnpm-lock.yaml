@@ -17,6 +17,9 @@ importers:
       '@assistant/modules':
         specifier: workspace:*
         version: link:packages/modules
+      '@assistant/setup':
+        specifier: workspace:*
+        version: link:packages/setup
     devDependencies:
       '@assistant/config':
         specifier: workspace:^
@@ -267,6 +270,15 @@ importers:
       '@assistant/tools':
         specifier: workspace:*
         version: link:../tools
+
+  packages/setup:
+    dependencies:
+      '@assistant/config':
+        specifier: workspace:*
+        version: link:../config
+      '@assistant/modules':
+        specifier: workspace:*
+        version: link:../modules
 
   packages/tools:
     dependencies:
