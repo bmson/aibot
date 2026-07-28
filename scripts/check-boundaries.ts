@@ -127,6 +127,32 @@ if (!/^COPY\b.*\bassistant\.config\.ts\b/m.test(agentDockerfile)) {
   failures.push('infra/docker/agent.Dockerfile must COPY assistant.config.ts into the build');
 }
 
+/**
+ * Modules communicate through platform ports (OwnerNotifier, email observers,
+ * channels — see packages/modules/src/platform.ts), never by importing each
+ * other. A shared type belongs in the contract, not in a sibling module. This
+ * is what lets any module be removed from the composition without another
+ * module's import breaking.
+ */
+const modulesSrc = path.join(repoRoot, 'packages/modules/src');
+const moduleDirs = new Set(
+  readdirSync(modulesSrc, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name),
+);
+for (const moduleDir of moduleDirs) {
+  for (const file of sourceFiles(path.join(modulesSrc, moduleDir))) {
+    const source = readFileSync(file, 'utf8');
+    for (const match of source.matchAll(/from ['"]\.\.\/([^'"/]+)\//g)) {
+      if (moduleDirs.has(match[1] as string)) {
+        failures.push(
+          `${path.relative(repoRoot, file)} imports sibling module ${match[1]}; use a platform port`,
+        );
+      }
+    }
+  }
+}
+
 if (failures.length > 0) {
   console.error('Architecture boundary violations:');
   for (const failure of failures) console.error(`  - ${failure}`);

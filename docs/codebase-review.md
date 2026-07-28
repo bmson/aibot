@@ -233,7 +233,12 @@ Larger projects, recorded here so they stay visible:
   changes can be measured instead of vibed.
 - **Per-goal autonomy defaults** — a product decision about how much standing
   authority a goal should carry.
-- **Relocating module-owned behavior out of `apps/agent`** (email triage, SMS
-  channel wiring) into the owning modules — mechanical but wide.
+- ~~Relocating module-owned behavior out of `apps/agent`~~ — done in a
+  follow-up: the module platform gained a runtime hook surface (webhooks,
+  internal routes, sweep steps, poller ticks, task handlers, channels, an
+  owner-notifier port, and inbound-email observers), and mail sync, the email
+  channel, application confirmations, the SMS channel, and watch matching all
+  moved into their modules. `AgentDeps` no longer names a provider; canaries
+  are the one remaining agent-owned module consumer.
 - **Pulumi/Terraform port** of `infra/gcp` — the bash provisioner is now
   shellcheck-gated, which lowers the urgency.

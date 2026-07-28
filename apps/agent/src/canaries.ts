@@ -18,7 +18,7 @@ import {
   type StepCallOutcome,
 } from '@assistant/core';
 import { approvals, canaryRuns, conversations, type Db, messages, tasks } from '@assistant/db';
-import { sendCanarySms } from '@assistant/modules';
+import { googleModule, sendCanarySms, smsModule } from '@assistant/modules';
 import {
   AmbiguousBrowserJobLaunchError,
   buildRawEmail,
@@ -27,6 +27,11 @@ import {
 import type { ModelMessage } from 'ai';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { type AgentDeps, smsDeps } from './deps.js';
+
+// Canaries probe the real providers, so they reach the module exports through
+// the installed set — the null-object `absent` values keep these total.
+const googleClientOf = (deps: AgentDeps) => deps.modules.requireExports(googleModule);
+const twilioOf = (deps: AgentDeps) => deps.modules.requireExports(smsModule);
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const CHAT_BUDGET_USD = 0.01;
@@ -167,7 +172,7 @@ async function assertRunCostCeiling(deps: AgentDeps): Promise<void> {
 
 function assertCanaryConfiguration(deps: AgentDeps): void {
   const missing: string[] = [];
-  if (!deps.googleClient.configured()) missing.push('Google OAuth');
+  if (!googleClientOf(deps).configured()) missing.push('Google OAuth');
   if (!deps.browserLauncher) missing.push('browser module');
   if (!deps.config.OPENROUTER_API_KEY) missing.push('OPENROUTER_API_KEY');
   if (deps.config.BROWSER_DRIVER === 'cloudrun') {
@@ -191,7 +196,7 @@ async function cleanupGmailMarker(
   const signal = AbortSignal.timeout(15_000);
   const ids = new Set(knownIds);
   const query = `in:anywhere subject:"${marker}"`;
-  const list = await deps.googleClient.api<{ messages?: Array<{ id: string }> }>(
+  const list = await googleClientOf(deps).api<{ messages?: Array<{ id: string }> }>(
     `${GMAIL}/messages?q=${encodeURIComponent(query)}&maxResults=10`,
     { signal },
   );
@@ -201,7 +206,7 @@ async function cleanupGmailMarker(
     // marker to Trash still removes it from the mailbox under test and lets
     // Gmail's retention policy clean it up without requiring the broader
     // full-mailbox scope.
-    await deps.googleClient.api(`${GMAIL}/messages/${encodeURIComponent(id)}/trash`, {
+    await googleClientOf(deps).api(`${GMAIL}/messages/${encodeURIComponent(id)}/trash`, {
       method: 'POST',
       signal,
     });
@@ -209,9 +214,9 @@ async function cleanupGmailMarker(
 }
 
 async function gmailCanary(deps: AgentDeps, runId: string, signal: AbortSignal): Promise<string> {
-  if (!deps.googleClient.configured()) throw new Error('Google OAuth is not configured');
+  if (!googleClientOf(deps).configured()) throw new Error('Google OAuth is not configured');
   const agent = await getAgent(deps.db);
-  const profile = await deps.googleClient.api<{ emailAddress: string }>(`${GMAIL}/profile`, {
+  const profile = await googleClientOf(deps).api<{ emailAddress: string }>(`${GMAIL}/profile`, {
     signal,
   });
   if (profile.emailAddress.toLowerCase() !== agent.email.toLowerCase()) {
@@ -222,7 +227,7 @@ async function gmailCanary(deps: AgentDeps, runId: string, signal: AbortSignal):
   const knownIds: string[] = [];
   try {
     try {
-      const sent = await deps.googleClient.api<{ id: string }>(`${GMAIL}/messages/send`, {
+      const sent = await googleClientOf(deps).api<{ id: string }>(`${GMAIL}/messages/send`, {
         method: 'POST',
         signal,
         body: JSON.stringify({
@@ -243,7 +248,7 @@ async function gmailCanary(deps: AgentDeps, runId: string, signal: AbortSignal):
     const query = `in:inbox subject:"${marker}"`;
     const deadline = Date.now() + 45_000;
     while (Date.now() < deadline) {
-      const list = await deps.googleClient.api<{ messages?: Array<{ id: string }> }>(
+      const list = await googleClientOf(deps).api<{ messages?: Array<{ id: string }> }>(
         `${GMAIL}/messages?q=${encodeURIComponent(query)}&maxResults=5`,
         { signal },
       );
@@ -268,7 +273,7 @@ async function smsCanary(deps: AgentDeps, runId: string, signal: AbortSignal): P
   const terminalSuccess = new Set(['sent', 'delivered']);
   const terminalFailure = new Set(['failed', 'undelivered', 'canceled']);
   while (!signal.aborted) {
-    const status = await deps.twilio.getMessageStatus(sent.sid, signal);
+    const status = await twilioOf(deps).getMessageStatus(sent.sid, signal);
     if (terminalSuccess.has(status.status)) {
       return `Twilio reported terminal delivery status ${status.status}`;
     }
@@ -627,7 +632,7 @@ async function browserCanary(deps: AgentDeps, runId: string, signal: AbortSignal
 }
 
 function canaryOperations(deps: AgentDeps, runId: string): CanaryOperations {
-  const smsConfigured = deps.twilio.configured() && /^\+\d{7,15}$/.test(deps.config.OWNER_PHONE);
+  const smsConfigured = twilioOf(deps).configured() && /^\+\d{7,15}$/.test(deps.config.OWNER_PHONE);
   return {
     gmail: (signal) => gmailCanary(deps, runId, signal),
     sms: smsConfigured

@@ -238,10 +238,13 @@ not yet what is compiled: `apps/agent` still imports the `@assistant/tools` root
 pulls every provider in regardless. Measured on a build with browser and code removed from the
 composition, the bundle shrank by 35 bytes. Removing that barrel import is the prerequisite.
 
-*Relocating provider behavior.* Mail sync, the SMS and email channels, watches, canaries, and
-application confirmations still live in `apps/agent` because they take `AgentDeps`, which the
-modules produce. They need narrow interfaces before they can move, and that refactor is large
-enough to deserve its own change rather than riding along with the contract.
+*Relocating provider behavior.* Done in a follow-up refactor: the module contract gained a
+runtime hook surface (webhooks with a closed auth union, internal routes, sweep steps, poller
+ticks, deterministic task handlers, delivery channels, an owner-notifier port, and inbound-email
+observers), and mail sync, the SMS and email channels, watches, and application confirmations all
+moved into their modules behind narrow deps types. Modules may not import each other (enforced by
+`pnpm check:boundaries`); cross-module needs flow through the ports. Canaries remain agent-owned —
+the one recorded exception, alongside the platform's own `/webhooks/location`.
 
 *Infrastructure as code.* `deploy.sh` remains the provisioner. Preview, teardown, and drift
 detection are real gaps that Pulumi would close, but replacing working, idempotent provisioning
