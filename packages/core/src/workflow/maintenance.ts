@@ -1,5 +1,15 @@
-import { type Db, memories, messages, toolCache } from '@assistant/db';
-import { and, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import {
+  approvals,
+  conversationSegments,
+  costEvents,
+  type Db,
+  memories,
+  messages,
+  modelCalls,
+  toolCache,
+  toolCalls,
+} from '@assistant/db';
+import { and, eq, inArray, isNotNull, isNull, lte, notExists, or, sql } from 'drizzle-orm';
 import { loadConfig } from '../config.js';
 import { releaseStaleReservations } from '../cost.js';
 import { purgeStaleLocations } from '../memory/location.js';
@@ -80,4 +90,118 @@ export async function purgeExpired(
     locations,
     dreamNotes,
   };
+}
+
+export interface AgedHistoryCounts {
+  messages: number;
+  toolCalls: number;
+  modelCalls: number;
+  costEvents: number;
+}
+
+/**
+ * Age-based retention for the four tables that otherwise grow without bound:
+ * messages, tool_calls, model_calls, and cost_events. Ships disabled — both
+ * retention knobs default to 0 (keep forever) because pruning the owner's
+ * history is their policy call, not the platform's. Batched so a first run
+ * against years of backlog drains across sweeps instead of locking tables.
+ *
+ * What survives its cutoff, and why:
+ * - messages anchored by a conversation segment — the segment summary is the
+ *   recall unit and references its message range by id.
+ * - tool_calls referenced by an approval (the owner's decision record) or by
+ *   a still-retained cost event; those become eligible once the cost ledger's
+ *   own retention passes.
+ */
+export async function purgeAgedHistory(
+  db: Db,
+  overrides?: { historyDays?: number; costDays?: number; batch?: number },
+): Promise<AgedHistoryCounts> {
+  const config = loadConfig();
+  const historyDays = overrides?.historyDays ?? config.HISTORY_RETENTION_DAYS;
+  const costDays = overrides?.costDays ?? config.COST_RETENTION_DAYS;
+  const batch = overrides?.batch ?? 1000;
+  const counts: AgedHistoryCounts = { messages: 0, toolCalls: 0, modelCalls: 0, costEvents: 0 };
+
+  // Cost first: deleting an aged cost event frees its tool_call for the
+  // history pass below within the same sweep.
+  if (costDays > 0) {
+    const costCutoff = sql`now() - make_interval(days => ${costDays})`;
+    const agedCostEvents = db
+      .select({ id: costEvents.id })
+      .from(costEvents)
+      .where(lte(costEvents.createdAt, costCutoff))
+      .limit(batch);
+    const deleted = await db
+      .delete(costEvents)
+      .where(inArray(costEvents.id, agedCostEvents))
+      .returning({ id: costEvents.id });
+    counts.costEvents = deleted.length;
+  }
+
+  if (historyDays > 0) {
+    const cutoff = sql`now() - make_interval(days => ${historyDays})`;
+    const agedMessages = db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          lte(messages.createdAt, cutoff),
+          notExists(
+            db
+              .select({ one: sql`1` })
+              .from(conversationSegments)
+              .where(
+                or(
+                  eq(conversationSegments.startMessageId, messages.id),
+                  eq(conversationSegments.endMessageId, messages.id),
+                ),
+              ),
+          ),
+        ),
+      )
+      .limit(batch);
+    const agedToolCalls = db
+      .select({ id: toolCalls.id })
+      .from(toolCalls)
+      .where(
+        and(
+          lte(toolCalls.createdAt, cutoff),
+          notExists(
+            db
+              .select({ one: sql`1` })
+              .from(approvals)
+              .where(eq(approvals.toolCallId, toolCalls.id)),
+          ),
+          notExists(
+            db
+              .select({ one: sql`1` })
+              .from(costEvents)
+              .where(eq(costEvents.toolCallId, toolCalls.id)),
+          ),
+        ),
+      )
+      .limit(batch);
+    const agedModelCalls = db
+      .select({ id: modelCalls.id })
+      .from(modelCalls)
+      .where(lte(modelCalls.createdAt, cutoff))
+      .limit(batch);
+    const [deletedMessages, deletedToolCalls, deletedModelCalls] = await Promise.all([
+      db.delete(messages).where(inArray(messages.id, agedMessages)).returning({ id: messages.id }),
+      db
+        .delete(toolCalls)
+        .where(inArray(toolCalls.id, agedToolCalls))
+        .returning({ id: toolCalls.id }),
+      db
+        .delete(modelCalls)
+        .where(inArray(modelCalls.id, agedModelCalls))
+        .returning({ id: modelCalls.id }),
+    ]);
+    counts.messages = deletedMessages.length;
+    counts.toolCalls = deletedToolCalls.length;
+    counts.modelCalls = deletedModelCalls.length;
+  }
+
+  return counts;
 }

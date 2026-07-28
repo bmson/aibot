@@ -1,9 +1,23 @@
-import { conversations, createDb, type Db, memories, messages, toolCache } from '@assistant/db';
+import {
+  approvals,
+  conversationSegments,
+  conversations,
+  costEvents,
+  createDb,
+  type Db,
+  memories,
+  messages,
+  modelCalls,
+  toolCache,
+  toolCalls,
+} from '@assistant/db';
 import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
+import type { InboundEvent } from '../events.js';
 import type { ModelRouter } from '../model-router/router.js';
-import { backfillMessageEmbeddings, purgeExpired } from './maintenance.js';
+import { enqueueTask } from './machine.js';
+import { backfillMessageEmbeddings, purgeAgedHistory, purgeExpired } from './maintenance.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -13,6 +27,7 @@ let dbUp = false;
 let agentId: string;
 let conversationId: string;
 const messageIds: string[] = [];
+let retentionTaskId: string | undefined;
 
 const fakeRouter = {
   async embed(texts: string[]) {
@@ -37,6 +52,19 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (dbUp) {
+    if (retentionTaskId) {
+      // FK order: children of the retention task first, then the task itself.
+      await db.delete(approvals).where(eq(approvals.taskId, retentionTaskId));
+      await db.delete(costEvents).where(eq(costEvents.taskId, retentionTaskId));
+      await db.delete(toolCalls).where(eq(toolCalls.taskId, retentionTaskId));
+      await db.delete(modelCalls).where(eq(modelCalls.taskId, retentionTaskId));
+      const { tasks, responseChecks } = await import('@assistant/db');
+      await db.delete(responseChecks).where(eq(responseChecks.taskId, retentionTaskId));
+      await db.delete(tasks).where(eq(tasks.id, retentionTaskId));
+    }
+    await db
+      .delete(conversationSegments)
+      .where(eq(conversationSegments.conversationId, conversationId));
     if (messageIds.length) await db.delete(messages).where(inArray(messages.id, messageIds));
     await db.delete(conversations).where(eq(conversations.id, conversationId));
     await db.delete(toolCache).where(eq(toolCache.toolName, 'maint.test'));
@@ -117,5 +145,129 @@ describe('maintenance (integration)', () => {
 
     const remaining = await db.select().from(toolCache).where(eq(toolCache.toolName, 'maint.test'));
     expect(remaining.map((r) => r.cacheKey)).toEqual(['maint-live']);
+  });
+
+  it('does nothing when retention is disabled (the default)', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const counts = await purgeAgedHistory(db, { historyDays: 0, costDays: 0 });
+    expect(counts).toEqual({ messages: 0, toolCalls: 0, modelCalls: 0, costEvents: 0 });
+  });
+
+  it('prunes aged history but keeps segment anchors and referenced tool calls', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const daysAgo = (days: number) => new Date(Date.now() - days * 86400e3);
+
+    // Three messages: aged (goes), aged-but-anchoring-a-segment (stays), recent (stays).
+    const inserted = await db
+      .insert(messages)
+      .values([
+        {
+          conversationId,
+          role: 'user',
+          origin: 'owner',
+          text: 'aged unanchored',
+          createdAt: daysAgo(100),
+        },
+        {
+          conversationId,
+          role: 'user',
+          origin: 'owner',
+          text: 'aged segment anchor',
+          createdAt: daysAgo(100),
+        },
+        { conversationId, role: 'user', origin: 'owner', text: 'recent' },
+      ])
+      .returning({ id: messages.id });
+    const [agedGone, agedAnchor, recent] = inserted.map((row) => row.id);
+    if (!agedGone || !agedAnchor || !recent) throw new Error('fixture insert failed');
+    messageIds.push(agedAnchor, recent); // agedGone is deleted by the purge under test
+    await db.insert(conversationSegments).values({
+      agentId,
+      conversationId,
+      startMessageId: agedAnchor,
+      endMessageId: agedAnchor,
+      summary: 'retention test segment',
+      startedAt: daysAgo(100),
+      endedAt: daysAgo(100),
+    });
+
+    const { task } = await enqueueTask(db, {
+      event: { source: 'chat', trust: 'owner', agentId, payload: { text: 'retention fixture' } },
+      type: 'adhoc',
+    } as { event: InboundEvent; type: 'adhoc' });
+    retentionTaskId = task.id;
+    const toolCallRow = (over: Partial<typeof toolCalls.$inferInsert>) => ({
+      taskId: task.id,
+      step: 1,
+      toolName: 'maint.retention',
+      risk: 'autonomous',
+      status: 'succeeded',
+      ...over,
+    });
+    const [plainAged, approvalHeld, costHeld, recentCall] = (
+      await db
+        .insert(toolCalls)
+        .values([
+          toolCallRow({ createdAt: daysAgo(100) }),
+          toolCallRow({ createdAt: daysAgo(100) }),
+          toolCallRow({ createdAt: daysAgo(100) }),
+          toolCallRow({}),
+        ])
+        .returning({ id: toolCalls.id })
+    ).map((row) => row.id);
+    if (!plainAged || !approvalHeld || !costHeld || !recentCall) {
+      throw new Error('tool-call fixture insert failed');
+    }
+    await db.insert(approvals).values({
+      taskId: task.id,
+      toolCallId: approvalHeld,
+      shortCode: 'R1',
+      summary: 'retention fixture approval',
+      status: 'approved',
+      expiresAt: daysAgo(99),
+    });
+    await db.insert(costEvents).values([
+      // Recent cost event referencing an aged tool call — holds it in place.
+      { source: 'external_api', taskId: task.id, toolCallId: costHeld, usd: '0.01' },
+      // Aged standalone cost event — pruned by the cost pass.
+      { source: 'external_api', taskId: task.id, usd: '0.01', createdAt: daysAgo(100) },
+    ]);
+    await db.insert(modelCalls).values([
+      { taskId: task.id, role: 'chat', model: 'maint/retention', createdAt: daysAgo(100) },
+      { taskId: task.id, role: 'chat', model: 'maint/retention' },
+    ]);
+
+    const counts = await purgeAgedHistory(db, { historyDays: 30, costDays: 60, batch: 500 });
+    // Other suites share this database, so counts are lower bounds, and the
+    // real assertions are which of OUR rows survived.
+    expect(counts.messages).toBeGreaterThanOrEqual(1);
+    expect(counts.toolCalls).toBeGreaterThanOrEqual(1);
+    expect(counts.modelCalls).toBeGreaterThanOrEqual(1);
+    expect(counts.costEvents).toBeGreaterThanOrEqual(1);
+
+    const surviving = (rows: { id: string }[]) => rows.map((row) => row.id).sort();
+    const keptMessages = await db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(inArray(messages.id, [agedGone, agedAnchor, recent]));
+    expect(surviving(keptMessages)).toEqual([agedAnchor, recent].sort());
+
+    const keptCalls = await db
+      .select({ id: toolCalls.id })
+      .from(toolCalls)
+      .where(eq(toolCalls.taskId, task.id));
+    expect(surviving(keptCalls)).toEqual([approvalHeld, costHeld, recentCall].sort());
+
+    const keptModelCalls = await db
+      .select({ id: modelCalls.id })
+      .from(modelCalls)
+      .where(eq(modelCalls.taskId, task.id));
+    expect(keptModelCalls).toHaveLength(1);
+
+    const keptCostEvents = await db
+      .select({ toolCallId: costEvents.toolCallId })
+      .from(costEvents)
+      .where(eq(costEvents.taskId, task.id));
+    expect(keptCostEvents).toEqual([{ toolCallId: costHeld }]);
   });
 });

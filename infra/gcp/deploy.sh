@@ -522,6 +522,69 @@ fi
 gcloud run services update assistant-web --region "$REGION" \
   --update-env-vars "AGENT_URL=${AGENT_URL},PUBLIC_URL=${AGENT_URL},INTERNAL_OIDC_AUDIENCE=${AGENT_URL},AUTH_URL=${AUTH_URL}" --quiet
 
+echo "── monitoring (error-log metric + owner email alert)"
+gcloud services enable monitoring.googleapis.com logging.googleapis.com --quiet
+
+# One metric over every platform service and worker job: anything the code
+# writes at error severity. The agent already routes real failures through
+# console.error, so this is the honest "something needs a human" signal.
+ERROR_LOG_FILTER='severity>=ERROR AND ((resource.type="cloud_run_revision" AND resource.labels.service_name=~"^assistant-") OR (resource.type="cloud_run_job" AND resource.labels.job_name=~"^assistant-"))'
+if gcloud logging metrics describe assistant-error-logs >/dev/null 2>&1; then
+  gcloud logging metrics update assistant-error-logs \
+    --description="Error-severity log entries from assistant services and jobs" \
+    --log-filter="$ERROR_LOG_FILTER" --quiet
+else
+  gcloud logging metrics create assistant-error-logs \
+    --description="Error-severity log entries from assistant services and jobs" \
+    --log-filter="$ERROR_LOG_FILTER" --quiet
+fi
+
+# Email channel to the owner, matched by display name so re-runs reuse it.
+ALERT_CHANNEL="$(gcloud beta monitoring channels list \
+  --filter='displayName="Assistant owner email"' --format='value(name)' 2>/dev/null | head -1)"
+if [ -z "$ALERT_CHANNEL" ]; then
+  ALERT_CHANNEL="$(gcloud beta monitoring channels create \
+    --display-name="Assistant owner email" --type=email \
+    --channel-labels="email_address=${OWNER_EMAIL}" --format='value(name)')"
+fi
+
+# Create-once alert policy: a burst of error logs emails the owner. Threshold
+# tuning after that belongs in the console, so re-runs leave an existing
+# policy (and any edits to it) alone.
+if [ -z "$(gcloud alpha monitoring policies list \
+  --filter='displayName="Assistant error burst"' --format='value(name)' 2>/dev/null | head -1)" ]; then
+  ALERT_POLICY_FILE="$(mktemp)"
+  cat >"$ALERT_POLICY_FILE" <<JSON
+{
+  "displayName": "Assistant error burst",
+  "combiner": "OR",
+  "conditions": [
+    {
+      "displayName": "More than 5 error logs across 5 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/assistant-error-logs\"",
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_DELTA",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ],
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 5,
+        "duration": "0s",
+        "trigger": { "count": 1 }
+      }
+    }
+  ],
+  "notificationChannels": ["${ALERT_CHANNEL}"],
+  "alertStrategy": { "autoClose": "86400s" }
+}
+JSON
+  gcloud alpha monitoring policies create --policy-from-file="$ALERT_POLICY_FILE" --quiet
+  rm -f "$ALERT_POLICY_FILE"
+fi
+
 echo ""
 echo "══════════════════════════════════════════════════════"
 echo " agent: ${AGENT_URL}"

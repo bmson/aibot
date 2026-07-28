@@ -4,6 +4,7 @@ import {
   expireStaleApprovals,
   findDueTasks,
   getAgent,
+  purgeAgedHistory,
   purgeExpired,
   renotifyStalledApprovals,
   renotifyStalledAttention,
@@ -76,6 +77,7 @@ export function startPoller(deps: AgentDeps): () => void {
             console.log(`schedule fired: ${f.schedule} → ${f.taskId.slice(0, 8)}`);
         });
         await runStep('purgeExpired', () => purgeExpired(deps.db));
+        await runStep('purgeAgedHistory', () => purgeAgedHistory(deps.db));
         await runStep('backfillMessageEmbeddings', () =>
           backfillMessageEmbeddings(deps.db, deps.router),
         );

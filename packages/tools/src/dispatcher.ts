@@ -8,6 +8,7 @@ import {
   reconcileReservation,
   releaseReservation,
   reserveCost,
+  withSpan,
 } from '@assistant/core';
 import type { Db, TaskRow } from '@assistant/db';
 import {
@@ -383,14 +384,19 @@ export class ToolDispatcher {
     }
 
     try {
-      const result = await registered.tool.execute(
-        parsed.data,
-        this.executionContext(
-          ctx,
-          toolCallId,
-          call.toolName,
-          ((call.decision ?? {}) as { modelToolCallId?: string }).modelToolCallId,
-        ),
+      const result = await withSpan(
+        'tool.execute',
+        { tool: call.toolName, taskId: call.taskId, step: call.step, approved: true },
+        async () =>
+          registered.tool.execute(
+            parsed.data,
+            this.executionContext(
+              ctx,
+              toolCallId,
+              call.toolName,
+              ((call.decision ?? {}) as { modelToolCallId?: string }).modelToolCallId,
+            ),
+          ),
       );
       await this.db
         .update(toolCalls)
@@ -912,9 +918,21 @@ export class ToolDispatcher {
     }
 
     try {
-      const result = await registered.tool.execute(
-        args,
-        this.executionContext(input.ctx, row.id, input.toolName, input.modelToolCallId),
+      // The span brackets only the provider call itself — risk gating, budget
+      // reservation, and ledger writes are the dispatcher's own fast work.
+      const result = await withSpan(
+        'tool.execute',
+        {
+          tool: input.toolName,
+          taskId: input.task.id,
+          step: input.step,
+          trust: input.ctx.trust,
+        },
+        async () =>
+          registered.tool.execute(
+            args,
+            this.executionContext(input.ctx, row.id, input.toolName, input.modelToolCallId),
+          ),
       );
       await this.db
         .update(toolCalls)
