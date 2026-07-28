@@ -1,7 +1,7 @@
 import { type ExecutorDeps, TrustSchema } from '@assistant/core';
-import type { AgentDeps } from './deps.js';
+import { deliverSmsFinal, notifyApprovalsBySms, notifyOwnerBySms } from '@assistant/modules';
+import { type AgentDeps, smsDeps } from './deps.js';
 import { deliverEmailFinal } from './email-channel.js';
-import { deliverSmsFinal, notifyApprovalsBySms, notifyOwnerBySms } from './sms-channel.js';
 
 /**
  * The in-thread version of the parked-approval notice. It deliberately does NOT
@@ -48,7 +48,7 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
       }
       await deliverEmailFinal(deps, task, text);
       await deliverSmsFinal(
-        deps,
+        smsDeps(deps),
         {
           id: task.id,
           conversationId: task.conversationId,
@@ -65,9 +65,9 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
     // shows nothing at all. deliverEmailFinal guards on its own channel, so
     // this is a no-op for every non-email task.
     notifyApproval: async (task, approvals) => {
-      await notifyApprovalsBySms(deps, approvals);
+      await notifyApprovalsBySms(smsDeps(deps), approvals);
       await deliverEmailFinal(deps, task, approvalNoticeEmail(approvals));
     },
-    notifyOwner: ({ taskId, text }) => notifyOwnerBySms(deps, { taskId, text }),
+    notifyOwner: ({ taskId, text }) => notifyOwnerBySms(smsDeps(deps), { taskId, text }),
   };
 }

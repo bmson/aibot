@@ -29,21 +29,20 @@ vi.mock('@assistant/core', async (importOriginal) => {
   };
 });
 
-import type { AgentDeps } from './deps.js';
-import { notifyApprovalsBySms, notifyOwnerBySms } from './sms-channel.js';
+import { notifyApprovalsBySms, notifyOwnerBySms, type SmsChannelDeps } from './channel.js';
 
-function fakeDeps(): AgentDeps {
+function fakeDeps(): SmsChannelDeps {
   // The channel rate-limit lookup runs before every send; an empty result
   // means "no limit configured", which keeps these tests about budgeting.
   const noRows = { from: () => ({ where: async () => [] }) };
   return {
-    config: { OWNER_PHONE: '+14155550100' } as AgentDeps['config'],
-    db: { select: () => noRows } as unknown as AgentDeps['db'],
+    config: { OWNER_PHONE: '+14155550100' } as SmsChannelDeps['config'],
+    db: { select: () => noRows } as unknown as SmsChannelDeps['db'],
     twilio: {
       configured: () => true,
       send: async () => ({ sid: 'SM-fake' }),
-    } as unknown as AgentDeps['twilio'],
-  } as AgentDeps;
+    } as unknown as SmsChannelDeps['twilio'],
+  } as SmsChannelDeps;
 }
 
 describe('owner-facing SMS pings are budget-critical', () => {

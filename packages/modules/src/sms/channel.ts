@@ -1,3 +1,4 @@
+import type { Config } from '@assistant/config';
 import {
   BudgetReservationError,
   enqueueTask,
@@ -14,13 +15,27 @@ import {
   channelBindings,
   conversations,
   costEvents,
+  type Db,
   rateLimits,
   type TaskRow,
   toolCalls,
 } from '@assistant/db';
 import { isAmbiguousTwilioDeliveryError, parseApprovalReply } from '@assistant/tools';
+import type { TwilioClient } from '@assistant/tools/modules/sms';
+import type { ToolRegistry } from '@assistant/tools/registry';
 import { and, eq, gte, sql } from 'drizzle-orm';
-import type { AgentDeps } from './deps.js';
+
+/**
+ * What the SMS channel actually consumes — the module builds this from its
+ * own client plus the platform context, so nothing here depends on the agent
+ * app's dependency graph.
+ */
+export interface SmsChannelDeps {
+  config: Config;
+  db: Db;
+  registry: ToolRegistry;
+  twilio: TwilioClient;
+}
 
 export interface InboundSms {
   messageSid: string;
@@ -41,7 +56,7 @@ export type SmsHandled =
  * `tool:sms.send` limit alone misses the channel deliverers, which is how a
  * notification loop could otherwise spend without a ceiling.
  */
-async function underSmsChannelLimit(deps: AgentDeps): Promise<boolean> {
+async function underSmsChannelLimit(deps: SmsChannelDeps): Promise<boolean> {
   const [limit] = await deps.db
     .select()
     .from(rateLimits)
@@ -74,7 +89,7 @@ export class SmsChannelRateLimitError extends Error {
 }
 
 async function sendMeteredSms(
-  deps: AgentDeps,
+  deps: SmsChannelDeps,
   input: {
     to: string;
     text: string;
@@ -133,7 +148,7 @@ async function sendMeteredSms(
 
 /** One short, metered owner-only SMS for the deployed integration canary. */
 export async function sendCanarySms(
-  deps: AgentDeps,
+  deps: SmsChannelDeps,
   marker: string,
 ): Promise<{ deliveryStatus: 'accepted' | 'unknown'; sid?: string }> {
   if (!deps.twilio.configured() || !deps.config.OWNER_PHONE) {
@@ -151,7 +166,7 @@ export async function sendCanarySms(
 }
 
 async function conversationForPeer(
-  deps: AgentDeps,
+  deps: SmsChannelDeps,
   agentId: string,
   peer: string,
   trust: 'owner' | 'unknown',
@@ -178,7 +193,7 @@ async function conversationForPeer(
  * Inbound SMS → approval resolution ("YES A7", owner only) or an sms_turn
  * workflow. Idempotent on MessageSid.
  */
-export async function handleInboundSms(deps: AgentDeps, sms: InboundSms): Promise<SmsHandled> {
+export async function handleInboundSms(deps: SmsChannelDeps, sms: InboundSms): Promise<SmsHandled> {
   const isOwner = sms.from === deps.config.OWNER_PHONE;
 
   // SMS is a private owner channel, not a public chatbot. Fail closed before
@@ -252,7 +267,7 @@ export async function handleInboundSms(deps: AgentDeps, sms: InboundSms): Promis
 
 /** Executor hook: deliver a finished sms_turn's final text back to the peer. */
 export async function deliverSmsFinal(
-  deps: AgentDeps,
+  deps: SmsChannelDeps,
   task: Pick<TaskRow, 'id' | 'conversationId' | 'trust'>,
   text: string,
 ): Promise<void> {
@@ -289,7 +304,7 @@ export async function deliverSmsFinal(
  * always to the owner's own number, metered, and best-effort at the call site.
  */
 export async function notifyOwnerBySms(
-  deps: AgentDeps,
+  deps: SmsChannelDeps,
   input: { taskId?: string; text: string },
 ): Promise<void> {
   // Optional chaining: some internal/test call paths build a partial deps
@@ -309,7 +324,7 @@ export async function notifyOwnerBySms(
 
 /** Executor hook: SMS the owner when approvals park a task. */
 export async function notifyApprovalsBySms(
-  deps: AgentDeps,
+  deps: SmsChannelDeps,
   approvals: Array<{ taskId: string; shortCode: string; summary: string; toolName?: string }>,
 ): Promise<void> {
   if (!deps.twilio.configured() || !deps.config.OWNER_PHONE) return;

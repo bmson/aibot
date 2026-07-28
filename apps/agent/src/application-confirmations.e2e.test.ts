@@ -11,6 +11,7 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
+import { type InstalledModuleSet, noopOwnerNotifier } from '@assistant/modules';
 import {
   AmbiguousGoogleMutationError,
   type GoogleClient,
@@ -26,7 +27,6 @@ import {
   executeApplicationConfirmationTask,
   processApplicationConfirmation,
 } from './application-confirmations.js';
-import { type InstalledModuleSet, noopOwnerNotifier } from '@assistant/modules';
 import type { AgentDeps } from './deps.js';
 import { processMessage } from './email-sync.js';
 import { executeAgentTask } from './task-runner.js';

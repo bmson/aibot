@@ -23,4 +23,7 @@ export const smsMeta = {
       },
     ],
   },
+  // Inbound Twilio webhook; the platform validates X-Twilio-Signature before
+  // the module's handler runs.
+  webhooks: [{ path: '/twilio/sms', auth: { kind: 'twilioSignature' } }],
 } satisfies ModuleMeta;

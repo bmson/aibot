@@ -1,12 +1,11 @@
 import { createHmac } from 'node:crypto';
 import { agents, approvals, createDb, type Db, tasks, toolCalls } from '@assistant/db';
+import { deliverSmsFinal, handleInboundSms, type SmsChannelDeps } from '@assistant/modules';
 import { ToolRegistry } from '@assistant/tools';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createApp } from './app.js';
-import type { AgentDeps } from './deps.js';
-import { deliverSmsFinal, handleInboundSms } from './sms-channel.js';
 
 /** Registry with one SMS-approvable and one restricted (outward) approval tool. */
 function fakeRegistry(): ToolRegistry {
@@ -39,14 +38,14 @@ let agentId: string;
 const cleanupTaskIds: string[] = [];
 const sentSms: Array<{ to: string; body: string }> = [];
 
-/** Minimal AgentDeps — only what the sms channel touches. */
-function fakeDeps(): AgentDeps {
+/** Minimal SmsChannelDeps — only what the sms channel touches. */
+function fakeDeps(): SmsChannelDeps {
   return {
     config: {
       OWNER_PHONE,
       TWILIO_AUTH_TOKEN: AUTH_TOKEN,
       PUBLIC_URL,
-    } as AgentDeps['config'],
+    } as SmsChannelDeps['config'],
     db,
     registry: fakeRegistry(),
     twilio: {
@@ -55,8 +54,8 @@ function fakeDeps(): AgentDeps {
         sentSms.push({ to, body });
         return { sid: `SM-fake-${sentSms.length}` };
       },
-    } as unknown as AgentDeps['twilio'],
-  } as AgentDeps;
+    } as unknown as SmsChannelDeps['twilio'],
+  } as SmsChannelDeps;
 }
 
 function _sign(url: string, params: Record<string, string>): string {
