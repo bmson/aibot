@@ -852,7 +852,7 @@ export const modelRoles = pgTable(
   (t) => [
     check(
       'model_roles_role_check',
-      sql`${t.role} IN ('plan','classify','extract','draft','reason','rewrite','embed')`,
+      sql`${t.role} IN ('plan','classify','extract','draft','reason','rewrite','embed','batch')`,
     ),
   ],
 );
@@ -1405,6 +1405,38 @@ export type MemoryRow = typeof memories.$inferSelect;
 export type MemoryTombstoneRow = typeof memoryTombstones.$inferSelect;
 export type OwnerCardRow = typeof ownerCard.$inferSelect;
 export type ImportSourceRow = typeof importSources.$inferSelect;
+/**
+ * One row per finalized model-driven task: the response-contract verdict plus
+ * loop-health counters. This is the queryable quality signal — contract-block
+ * rate per prompt version, no-tool-call retries per model — that a console.warn
+ * could never aggregate. Written by the executor at finalize.
+ */
+export const responseChecks = pgTable(
+  'response_checks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    promptVersion: integer('prompt_version').notNull(),
+    plannerVersion: integer('planner_version'),
+    /** The honesty gate rewrote or blocked an unsupported action claim. */
+    blocked: boolean('blocked').notNull().default(false),
+    unsupportedCount: integer('unsupported_count').notNull().default(0),
+    /** Steps that were required to act but returned no tool call and were retried. */
+    mustActRetries: integer('must_act_retries').notNull().default(0),
+    /** Steps served by a fallback model (budget degradation or forced). */
+    degradedSteps: integer('degraded_steps').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('response_checks_task_idx').on(t.taskId),
+    index('response_checks_created_idx').on(t.createdAt),
+  ],
+);
+
+export type ResponseCheckRow = typeof responseChecks.$inferSelect;
+
 export type CostEventRow = typeof costEvents.$inferSelect;
 export type CostReservationRow = typeof costReservations.$inferSelect;
 export type RateRow = typeof rateTable.$inferSelect;

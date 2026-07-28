@@ -91,6 +91,9 @@ export const PendingFinalSchema = z.object({
   outcome: z.enum(['done', 'clarify', 'failed', 'needs_attention']),
   /** Persisted before channel send; retries never duplicate an ambiguous accepted delivery. */
   deliveryAttempted: z.boolean().optional(),
+  /** Response-contract verdict, persisted to response_checks at finalize. */
+  contractBlocked: z.boolean().optional(),
+  contractUnsupportedCount: z.number().int().optional(),
   /**
    * The response contract replaced the model's draft with its own honest
    * fallback — the chat UI renders such messages as a compact system notice
@@ -124,5 +127,15 @@ export const TaskStateSchema = z.object({
    * task. Nullish: old checkpoints simply have no watermark and none is applied.
    */
   seenConversationAt: z.string().nullish(),
+  /**
+   * Loop-health counters for the response_checks record written at finalize:
+   * steps served by a fallback model, and forced retries after a step that was
+   * required to act returned no tool call. Checkpointed so parks don't reset
+   * them.
+   */
+  degradedSteps: z.number().int().default(0),
+  mustActRetries: z.number().int().default(0),
+  /** Skills whose advice was injected, so finalize can record their outcome. */
+  usedSkillIds: z.array(z.string()).default([]),
 });
 export type TaskState = z.infer<typeof TaskStateSchema>;

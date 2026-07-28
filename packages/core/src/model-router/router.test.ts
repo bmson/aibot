@@ -53,7 +53,7 @@ describe('ModelRouter.route (integration)', () => {
     const route = await router.route('classify');
     expect(route.ok).toBe(true);
     if (route.ok) {
-      expect(route.modelId).toBe('qwen/qwen3-30b-a3b-instruct-2507');
+      expect(route.modelId).toBe('deepseek/deepseek-chat');
       expect(route.degraded).toBe(false);
       // OpenRouter must not route feature-dependent requests (json_schema,
       // tools) to providers that cannot honor them.
@@ -154,7 +154,7 @@ describe('ModelRouter.route (integration)', () => {
 
     expect(prepared.ok).toBe(true);
     if (prepared.ok) {
-      expect(prepared.route.modelId).toBe('deepseek/deepseek-chat');
+      expect(prepared.route.modelId).toBe('openai/gpt-oss-120b');
       expect(prepared.route.degraded).toBe(true);
       await releaseReservation(db, prepared.reservationId);
     }

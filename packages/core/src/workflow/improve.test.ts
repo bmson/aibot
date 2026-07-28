@@ -139,6 +139,8 @@ describe('self-improvement loop', () => {
         title: 'xtest-swap-draft',
         rationale: 'draft underperforms',
         change: { role: 'draft', primaryModel: otherModel.id, fallbackModel: '' },
+        // A live routing swap is refused without cited evidence rows.
+        evidenceIds: ['draft:xtest-signature'],
       })
       .returning();
     createdProposalIds.push(proposal?.id ?? '');

@@ -193,7 +193,9 @@ export async function resumePendingJob(rc: RunContext): Promise<void> {
     });
 
     if (settled.kind === 'result') {
-      replaceToolResultMessage(window, pending.toolCallId, pending.toolName, settled.row.result);
+      replaceToolResultMessage(window, pending.toolCallId, pending.toolName, settled.row.result, {
+        dbToolCallId: pending.dbToolCallId,
+      });
       if (dispatcher.resultIsUntrusted(pending.toolName)) {
         state.untrustedContext = true;
         ctx.tainted = true;

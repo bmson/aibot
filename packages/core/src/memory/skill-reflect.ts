@@ -14,6 +14,27 @@ import { saveSkill } from './skills.js';
  * `state.untrustedContext` (taint can be acquired mid-run).
  */
 
+/**
+ * A compact, redacted rendering of a tool call's arguments for the reflection
+ * prompt. Keys always; values only when short and not secret-shaped. This is
+ * what turns "gmail.search → succeeded" into something a procedure can be
+ * learned from without copying message bodies into a skill.
+ */
+function sketchArgs(args: unknown): string {
+  if (!args || typeof args !== 'object') return '';
+  const SECRET_KEY = /token|secret|password|key|auth/i;
+  return Object.entries(args as Record<string, unknown>)
+    .slice(0, 6)
+    .map(([key, value]) => {
+      if (SECRET_KEY.test(key)) return `${key}: …`;
+      if (typeof value === 'string' && value.length <= 60)
+        return `${key}: ${JSON.stringify(value)}`;
+      if (typeof value === 'number' || typeof value === 'boolean') return `${key}: ${value}`;
+      return `${key}: …`;
+    })
+    .join(', ');
+}
+
 const WINDOW_HOURS = 26;
 const MAX_TASKS = 8;
 const MIN_SUCCEEDED_CALLS = 2;
@@ -120,6 +141,7 @@ export async function runSkillReflection(
           toolName: toolCalls.toolName,
           status: toolCalls.status,
           error: toolCalls.error,
+          args: toolCalls.args,
         })
         .from(toolCalls)
         .where(eq(toolCalls.taskId, task.id))
@@ -128,17 +150,22 @@ export async function runSkillReflection(
       if (succeeded.length < MIN_SUCCEEDED_CALLS) continue;
       result.tasksReviewed += 1;
 
+      // A name-and-status list ("gmail.search → succeeded") gives the model
+      // nothing to distill a procedure from. Include a redacted sketch of the
+      // arguments (keys, and short values that are not obviously sensitive)
+      // and the task's recorded outcome, which is what carries the "how".
       const transcript = [
         `Goal: ${taskGoal(task)}`,
         'Actions taken (in order):',
         ...calls.map(
           (c) =>
-            `- ${c.toolName} → ${c.status}${c.error ? ` (error: ${c.error.slice(0, 120)})` : ''}`,
+            `- ${c.toolName}(${sketchArgs(c.args)}) → ${c.status}${c.error ? ` (error: ${c.error.slice(0, 120)})` : ''}`,
         ),
+        ...(task.progress ? ['', `Recorded outcome: ${task.progress.slice(0, 400)}`] : []),
       ].join('\n');
 
       const outcome = await router
-        .object<z.infer<typeof SkillDraftSchema>>('reason', {
+        .object<z.infer<typeof SkillDraftSchema>>('batch', {
           taskId: opts.taskId,
           schema: SkillDraftSchema,
           system: REFLECT_SYSTEM,

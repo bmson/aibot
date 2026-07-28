@@ -207,7 +207,10 @@ export function registerCalendarTools(
         };
       },
     },
-    { confidentialRead: true, returnsUntrustedContent: true },
+    // Free/busy is time ranges and owner-chosen calendar labels — no
+    // third-party-authored prose — so checking availability does not taint the
+    // session the way reading event bodies (external invites) does.
+    { confidentialRead: true },
   );
 
   register(
@@ -233,7 +236,10 @@ export function registerCalendarTools(
         };
       },
     },
-    { confidentialRead: true, returnsUntrustedContent: true },
+    // The roster of calendars the owner subscribed to is owner-curated
+    // metadata, not third-party content; listing it must not strip the owner
+    // card mid-task.
+    { confidentialRead: true },
   );
 
   register(

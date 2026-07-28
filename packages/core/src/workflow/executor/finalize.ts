@@ -1,14 +1,16 @@
 import type { Db, TaskRow } from '@assistant/db';
-import { messages, tasks, toolCalls } from '@assistant/db';
+import { messages, responseChecks, tasks, toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import {
   assistantMessageParts,
   getOrCreateNotificationsConversation,
+  PROMPT_VERSION,
   persistMessage,
 } from '../../chat.js';
 import type { PendingFinal, TaskState } from '../../events.js';
 import type { RecallSource } from '../../memory/recall.js';
+import { recordSkillOutcome } from '../../memory/skills.js';
 import { type ArtifactIntent, artifactExecutionFailure } from '../artifact-intent.js';
 import { isGoalWorkEvidence } from '../goal-evidence.js';
 import {
@@ -21,6 +23,7 @@ import {
   type TaskLease,
   taskState,
 } from '../machine.js';
+import { PLANNER_VERSION } from '../planner.js';
 import { type ActionEvidence, enforceResponseContract } from '../response-contract.js';
 import { isUnattendedGoalSession, KNOWN_SENDER_REPLY_KIND } from './context-helpers.js';
 import { notifyOwnerAndConversation, recordGoalBlocked } from './notices.js';
@@ -194,6 +197,38 @@ export async function stageFinalResponse(
 }
 
 /**
+ * Persist the per-task quality signals that used to vanish into console.warn:
+ * the response-contract verdict and the loop-health counters, keyed by prompt
+ * and planner version so a wording change shows up in the block rate; and the
+ * outcome of every skill whose advice was injected, which is what lets a
+ * repeatedly failing skill hit its three-strikes deprecation instead of being
+ * recommended forever. Best-effort — a metrics write must never fail a final.
+ */
+async function recordQualitySignals(
+  db: Db,
+  task: TaskRow,
+  state: TaskState,
+  pending: PendingFinal,
+): Promise<void> {
+  await db
+    .insert(responseChecks)
+    .values({
+      taskId: task.id,
+      promptVersion: PROMPT_VERSION,
+      plannerVersion: PLANNER_VERSION,
+      blocked: pending.contractBlocked ?? false,
+      unsupportedCount: pending.contractUnsupportedCount ?? 0,
+      mustActRetries: state.mustActRetries,
+      degradedSteps: state.degradedSteps,
+    })
+    .onConflictDoNothing({ target: responseChecks.taskId });
+  if (state.usedSkillIds.length > 0) {
+    const success = pending.terminalStatus === 'done';
+    await Promise.all(state.usedSkillIds.map((id) => recordSkillOutcome(db, id, success)));
+  }
+}
+
+/**
  * The prose model is never the evidence source for an external action. Query
  * the durable ledger immediately before publishing a free-form final answer;
  * this also covers tool failures that were visible to the model but ignored.
@@ -254,6 +289,13 @@ export async function stageModelFinalResponse(
   ].join('\n');
   const checked = enforceResponseContract(pending.text, evidence, { urlCorpus });
   const text = checked.text;
+  pending.contractBlocked = checked.blocked;
+  pending.contractUnsupportedCount = checked.unsupported.length;
+  // Written here, after the verdict exists; a unique task_id plus
+  // do-nothing keeps delivery retries from double-counting.
+  await recordQualitySignals(deps.db, task, state, pending).catch((error) =>
+    console.error('quality signal record failed', error),
+  );
   if (checked.blocked) {
     console.warn('blocked unsupported assistant action claim', {
       taskId: task.id,

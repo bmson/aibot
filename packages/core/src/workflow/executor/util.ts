@@ -1,24 +1,61 @@
 import type { ModelMessage } from 'ai';
 
-// A fetched page or read document is clipped to this before the model reasons
-// over it; 4000 chars starved complex tasks. Both models in use have ample
-// context (deepseek 64k+, Claude 200k), so the larger window is affordable and
-// the checkpoint stays small because most tool results are far under the cap.
-export const RESULT_CHAR_LIMIT = 8000;
-export const CONTEXT_WINDOW_LIMIT = 60;
+/**
+ * Default clip for a tool result before the model reasons over it. Read-heavy
+ * tools get a larger, per-tool limit below: clipping a fetched page or a mail
+ * thread to 8 KB paid for content the model never saw, which starved research
+ * tasks and invited guessing. The checkpoint stays bounded because the full
+ * result lives in its tool_calls row, which `tools.read_result` can page
+ * through on demand.
+ */
+export const RESULT_CHAR_LIMIT = 8_000;
+const RESULT_CHAR_LIMITS: Readonly<Record<string, number>> = {
+  'web.fetch': 24_000,
+  'gmail.read_thread': 24_000,
+  'docs.get': 24_000,
+  'drive.read': 24_000,
+  'sheets.get_rows': 24_000,
+  'documents.search': 16_000,
+  'tools.read_result': 32_000,
+};
 
-function truncateResult(result: unknown): unknown {
+export function resultCharLimit(toolName: string): number {
+  return RESULT_CHAR_LIMITS[toolName] ?? RESULT_CHAR_LIMIT;
+}
+
+export const CONTEXT_WINDOW_LIMIT = 60;
+/**
+ * Estimated-token budget for the compacted tail. Bounding by message count
+ * alone let 60 large results add up to hundreds of KB — enough to overflow a
+ * fallback model's real context and to make a single step's cost reservation
+ * exceed a task budget. Chars-per-token ≈ 3.5 for English prose and JSON.
+ */
+export const CONTEXT_TOKEN_BUDGET = 25_000;
+const CHARS_PER_TOKEN = 3.5;
+const CONTEXT_CHAR_BUDGET = CONTEXT_TOKEN_BUDGET * CHARS_PER_TOKEN;
+
+function messageChars(message: ModelMessage | undefined): number {
+  return message ? JSON.stringify(message).length : 0;
+}
+
+function truncateResult(toolName: string, result: unknown, dbToolCallId?: string): unknown {
   const json = JSON.stringify(result ?? null);
+  const limit = resultCharLimit(toolName);
   // Round-trip through JSON: results straight from tools may hold Date
   // instances (drizzle rows) or undefined props, which fail the AI SDK's
   // ModelMessage schema on the NEXT step's validation (checkpointed windows
   // don't hit this — jsonb already serialized them, which is why retries
   // succeeded where first attempts crashed).
-  if (json.length <= RESULT_CHAR_LIMIT) return JSON.parse(json);
+  if (json.length <= limit) return JSON.parse(json);
   return {
     truncated: true,
-    note: `result truncated from ${json.length} chars; full result stored in tool_calls`,
-    preview: json.slice(0, RESULT_CHAR_LIMIT),
+    // Only claim the remainder is reachable when this call has a durable row
+    // the read tool can address; a false promise of retrievability is an
+    // invitation to hallucinate a retrieval path.
+    note: dbToolCallId
+      ? `result truncated from ${json.length} chars; read more with tools.read_result({ toolCallId: "${dbToolCallId}", offset: ${limit} })`
+      : `result truncated from ${json.length} chars; the remainder is not retrievable`,
+    preview: json.slice(0, limit),
   };
 }
 
@@ -26,6 +63,7 @@ export function toolResultMessage(
   toolCallId: string,
   toolName: string,
   value: unknown,
+  options?: { dbToolCallId?: string },
 ): ModelMessage {
   return {
     role: 'tool',
@@ -34,7 +72,7 @@ export function toolResultMessage(
         type: 'tool-result',
         toolCallId,
         toolName,
-        output: { type: 'json', value: truncateResult(value) },
+        output: { type: 'json', value: truncateResult(toolName, value, options?.dbToolCallId) },
       },
     ],
   } as ModelMessage;
@@ -53,6 +91,7 @@ export function replaceToolResultMessage(
   toolCallId: string,
   toolName: string,
   value: unknown,
+  options?: { dbToolCallId?: string },
 ): void {
   for (let index = window.length - 1; index >= 0; index -= 1) {
     const message = window[index];
@@ -67,11 +106,11 @@ export function replaceToolResultMessage(
       window[index] = { ...message, content } as ModelMessage;
     }
   }
-  window.push(toolResultMessage(toolCallId, toolName, value));
+  window.push(toolResultMessage(toolCallId, toolName, value, options));
 }
 
 /**
- * Drop-oldest compaction: the storage bound and the model context bound in one.
+ * Drop-oldest compaction bounded by BOTH message count and estimated tokens.
  *
  * The slice must never begin on an orphaned tool-result — a `tool` message whose
  * originating tool-call (in an earlier assistant message) was dropped. Strict
@@ -88,13 +127,26 @@ export function replaceToolResultMessage(
  * lone user message never breaks pairing (it carries no tool-call).
  */
 export function compact(window: ModelMessage[]): ModelMessage[] {
-  if (window.length <= CONTEXT_WINDOW_LIMIT) return window;
+  const totalChars = window.reduce((sum, message) => sum + messageChars(message), 0);
+  if (window.length <= CONTEXT_WINDOW_LIMIT && totalChars <= CONTEXT_CHAR_BUDGET) return window;
+
   const firstUserIndex = window.findIndex((m) => m.role === 'user');
   const pin = firstUserIndex >= 0 ? window[firstUserIndex] : undefined;
 
-  // Leave room for the pinned instruction so the total still respects the bound.
-  const tailBudget = pin ? CONTEXT_WINDOW_LIMIT - 1 : CONTEXT_WINDOW_LIMIT;
-  let start = window.length - tailBudget;
+  // Leave room for the pinned instruction so the totals still respect both bounds.
+  const tailMessageBudget = pin ? CONTEXT_WINDOW_LIMIT - 1 : CONTEXT_WINDOW_LIMIT;
+  const tailCharBudget = Math.max(0, CONTEXT_CHAR_BUDGET - messageChars(pin));
+
+  // Walk back from the newest message until either bound is spent. The newest
+  // message is always kept, whatever its size — it is the turn being answered.
+  let start = window.length;
+  let chars = 0;
+  while (start > 0 && window.length - start < tailMessageBudget) {
+    const next = messageChars(window[start - 1]);
+    if (window.length - start >= 1 && chars + next > tailCharBudget) break;
+    chars += next;
+    start -= 1;
+  }
   while (start < window.length && window[start]?.role === 'tool') start += 1;
   const tail = window.slice(start);
 

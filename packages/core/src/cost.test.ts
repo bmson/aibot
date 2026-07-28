@@ -78,6 +78,7 @@ describe('evaluateBudget critical carve-out', () => {
     dailySpentUsd: 0,
     monthlyLimitUsd: 20,
     monthlySpentUsd: 0,
+    heldUsd: 0,
     softPct: 80,
   };
   it('hard cap blocks non-critical work', () => {

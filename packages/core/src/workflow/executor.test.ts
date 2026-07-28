@@ -37,11 +37,31 @@ describe('toolResultMessage', () => {
     expect(JSON.stringify(msg)).not.toContain('undefined');
   });
 
-  it('still truncates oversized results', () => {
-    const msg = toolResultMessage('call_3', 'web.fetch', { body: 'x'.repeat(10_000) });
-    const part = (msg.content as Array<{ output: { value: { truncated?: boolean } } }>)[0];
-    expect(part?.output.value.truncated).toBe(true);
-    expect(modelMessageSchema.safeParse(msg).success).toBe(true);
+  it('still truncates oversized results, honoring the per-tool limit', () => {
+    // web.fetch reads get a 24k budget: 10k passes through whole...
+    const under = toolResultMessage('call_3', 'web.fetch', { body: 'x'.repeat(10_000) });
+    const underPart = (under.content as Array<{ output: { value: { truncated?: boolean } } }>)[0];
+    expect(underPart?.output.value.truncated).toBeUndefined();
+    // ...while an ordinary tool still clips at the 8k default,
+    const clipped = toolResultMessage('call_4', 'contacts.lookup', { body: 'x'.repeat(10_000) });
+    const clippedPart = (
+      clipped.content as Array<{ output: { value: { truncated?: boolean; note?: string } } }>
+    )[0];
+    expect(clippedPart?.output.value.truncated).toBe(true);
+    // ...and without a durable row id the note must not promise retrieval.
+    expect(clippedPart?.output.value.note).toContain('not retrievable');
+    // A call with a tool_calls row advertises the paging tool instead.
+    const paged = toolResultMessage(
+      'call_5',
+      'contacts.lookup',
+      { body: 'x'.repeat(10_000) },
+      {
+        dbToolCallId: 'row-1',
+      },
+    );
+    const pagedPart = (paged.content as Array<{ output: { value: { note?: string } } }>)[0];
+    expect(pagedPart?.output.value.note).toContain('tools.read_result');
+    expect(modelMessageSchema.safeParse(clipped).success).toBe(true);
   });
 
   it('replaces provisional and duplicate results when a call settles', () => {

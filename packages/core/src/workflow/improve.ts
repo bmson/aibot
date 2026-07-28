@@ -30,7 +30,16 @@ import { notifyOwnerInNotifications } from './anomaly.js';
 const WINDOW_DAYS = 7;
 const MIN_FAILURES = 2;
 const COST_OUTLIER_USD = 0.1;
-const VALID_ROLES = new Set(['plan', 'classify', 'extract', 'draft', 'reason', 'rewrite', 'embed']);
+const VALID_ROLES = new Set([
+  'plan',
+  'classify',
+  'extract',
+  'draft',
+  'reason',
+  'rewrite',
+  'embed',
+  'batch',
+]);
 
 /** Collapse a tool error to a stable signature so repeats group together. */
 function errorSignature(error: string | null): string {
@@ -167,7 +176,7 @@ export async function runSelfImprove(
 
     // Draft concrete proposals.
     const outcome = await router
-      .object<z.infer<typeof ProposalsOutputSchema>>('reason', {
+      .object<z.infer<typeof ProposalsOutputSchema>>('batch', {
         taskId: opts.taskId,
         schema: ProposalsOutputSchema,
         system: IMPROVE_SYSTEM,
@@ -277,6 +286,12 @@ export async function applyProposal(
   const change = (proposal.change ?? {}) as Record<string, unknown>;
 
   if (proposal.kind === 'model_role') {
+    // A live routing swap must point at the pattern it claims to fix. A
+    // proposal with no evidence rows is an opinion, and opinions do not get to
+    // change which model answers the owner.
+    if (proposal.evidenceIds.length === 0) {
+      return { enacted: false, detail: 'model_role change refused: proposal cites no evidence' };
+    }
     const role = typeof change.role === 'string' ? change.role : '';
     const primaryModel = typeof change.primaryModel === 'string' ? change.primaryModel : '';
     const fallbackModel = typeof change.fallbackModel === 'string' ? change.fallbackModel : '';

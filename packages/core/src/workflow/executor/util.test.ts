@@ -1,6 +1,6 @@
 import type { ModelMessage } from 'ai';
 import { describe, expect, it } from 'vitest';
-import { CONTEXT_WINDOW_LIMIT, compact } from './util.js';
+import { CONTEXT_TOKEN_BUDGET, CONTEXT_WINDOW_LIMIT, compact } from './util.js';
 
 const toolCall = (id: string): ModelMessage =>
   ({
@@ -75,5 +75,32 @@ describe('compact', () => {
     const res = result.find((m) => m.role === 'tool');
     expect(call).toBeDefined();
     expect(res).toBeDefined();
+  });
+});
+
+describe('compact token budget', () => {
+  it('trims well below the message-count bound when messages are large', () => {
+    // 40 messages × ~10 KB each ≈ 400 KB — far over the ~87 KB char budget
+    // while comfortably under the 60-message bound.
+    const window: ModelMessage[] = [text('user', 'instruction')];
+    for (let i = 0; i < 40; i += 1) window.push(text('assistant', 'x'.repeat(10_000)));
+    const result = compact(window);
+
+    expect(result.length).toBeLessThan(window.length);
+    const chars = result.reduce((sum, m) => sum + JSON.stringify(m).length, 0);
+    expect(chars).toBeLessThanOrEqual(CONTEXT_TOKEN_BUDGET * 3.5 + 10_100);
+    // The instruction is pinned and the newest message survives.
+    expect(result[0]).toEqual(text('user', 'instruction'));
+    expect(result.at(-1)).toEqual(window.at(-1));
+  });
+
+  it('always keeps the newest message even when it alone busts the budget', () => {
+    const window: ModelMessage[] = [
+      text('user', 'instruction'),
+      text('assistant', 'a'),
+      text('user', 'y'.repeat(200_000)),
+    ];
+    const result = compact(window);
+    expect(result.at(-1)).toEqual(window.at(-1));
   });
 });

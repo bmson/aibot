@@ -288,6 +288,20 @@
       "when": 1785264608622,
       "tag": "0040_futuristic_skin",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1785265227019,
+      "tag": "0041_clear_may_parker",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1785265447082,
+      "tag": "0042_flippant_argent",
+      "breakpoints": true
     }
   ]
 }
