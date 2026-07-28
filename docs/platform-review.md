@@ -211,3 +211,40 @@ rules (modules may not import each other except metadata; web imports only
 dispatcher); the `release.sh` health poll asserts module readiness from `/ready`, not just the
 served SHA; canary definitions move onto the module contract so a converted module proves
 itself in production.
+
+
+## Implementation status
+
+Steps one and two of the roadmap are implemented, and the wizard from step three is in place.
+
+**Done.** `packages/modules` holds the module contract and all eight modules. Metadata is plain
+data — owned settings, readiness, production rules, infrastructure, billing, navigation, code jobs
+— so `@assistant/modules/meta` is importable by the web app, scripts, and diagnostics without
+pulling provider code along. `installModules` replaced the hand-written if-chain, and
+`apps/agent/src/modules.ts` is gone. Config no longer knows any individual module, and core no
+longer knows that documents is one: `runCodeJob` asks the composition root whether a job's owning
+module is installed. `assistant.config.ts` composes the installation, `ASSISTANT_MODULES` narrows
+it at runtime and warns rather than silently failing when it names something absent, and
+`pnpm modules:plan` derives worker images, APIs, topics, scheduler jobs, secrets, and billing from
+the same file. The provisioner sources that plan instead of reparsing modules in bash, which also
+turned a silently-ignored module typo into a loud failure and removed six manual API enablements.
+`pnpm setup:wizard` runs preflight checks, explains composition and cost, lists only the manual
+steps the composed modules actually need, and then runs the provisioner.
+
+**Deliberately not done, with reasons.**
+
+*Bundle-level tree-shaking.* Composition controls what is installed, built, and provisioned, but
+not yet what is compiled: `apps/agent` still imports the `@assistant/tools` root barrel, which
+pulls every provider in regardless. Measured on a build with browser and code removed from the
+composition, the bundle shrank by 35 bytes. Removing that barrel import is the prerequisite.
+
+*Relocating provider behavior.* Mail sync, the SMS and email channels, watches, canaries, and
+application confirmations still live in `apps/agent` because they take `AgentDeps`, which the
+modules produce. They need narrow interfaces before they can move, and that refactor is large
+enough to deserve its own change rather than riding along with the contract.
+
+*Infrastructure as code.* `deploy.sh` remains the provisioner. Preview, teardown, and drift
+detection are real gaps that Pulumi would close, but replacing working, idempotent provisioning
+with a program that cannot be exercised against a real project is not an improvement. The module
+manifest that a Pulumi program would consume now exists, so that work is unblocked whenever a
+project is available to test against.
