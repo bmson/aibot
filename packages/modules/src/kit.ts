@@ -107,6 +107,12 @@ export interface ModuleMeta {
   billing: ModuleBilling;
   /** Navigation the web app reveals when the module is enabled. */
   ui?: { nav?: readonly ModuleNavItem[] };
+  /**
+   * Code-job names this module owns. Declared in metadata rather than at
+   * runtime so the platform can recognise a job belonging to a module that is
+   * not installed and complete it benignly instead of dead-lettering it.
+   */
+  jobs?: readonly string[];
 }
 
 /** Identity helper that keeps module metadata literals type-checked. */

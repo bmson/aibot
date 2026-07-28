@@ -1,4 +1,3 @@
-import { isModuleEnabled, loadConfig } from '@assistant/config';
 import type { Db, TaskRow } from '@assistant/db';
 import type { ModelRouter } from '../model-router/router.js';
 import { runAnomalyScan } from '../workflow/anomaly.js';
@@ -72,13 +71,19 @@ export async function runCodeJob(
     workspace?: WorkspaceReader;
     documentProcessor?: DocumentProcessorConfig;
     heartbeat?: () => Promise<void>;
+    /**
+     * Supplied by the composition root: returns a completion summary when the
+     * module owning this job is not installed. A job queued before its module
+     * was removed then completes benignly instead of dead-lettering. Core does
+     * not know which module owns which job.
+     */
+    jobUnavailable?: (job: CodeJobName) => string | null;
   },
   job: CodeJobName,
   task: TaskRow,
 ): Promise<CodeJobOutcome> {
-  if (job.startsWith('documents.') && !isModuleEnabled(loadConfig(), 'documents')) {
-    return { done: true, summary: 'document job skipped because the documents module is disabled' };
-  }
+  const unavailable = deps.jobUnavailable?.(job);
+  if (unavailable) return { done: true, summary: unavailable };
   switch (job) {
     case 'memory.extract': {
       await deps.heartbeat?.();

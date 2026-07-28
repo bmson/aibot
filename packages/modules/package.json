@@ -6,12 +6,16 @@
   "exports": {
     ".": "./src/index.ts",
     "./kit": "./src/kit.ts",
-    "./meta": "./src/meta.ts"
+    "./meta": "./src/meta.ts",
+    "./runtime": "./src/runtime.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@assistant/config": "workspace:*"
+    "@assistant/config": "workspace:*",
+    "@assistant/core": "workspace:*",
+    "@assistant/db": "workspace:*",
+    "@assistant/tools": "workspace:*"
   }
 }

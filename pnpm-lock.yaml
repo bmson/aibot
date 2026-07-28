@@ -257,6 +257,15 @@ importers:
       '@assistant/config':
         specifier: workspace:*
         version: link:../config
+      '@assistant/core':
+        specifier: workspace:*
+        version: link:../core
+      '@assistant/db':
+        specifier: workspace:*
+        version: link:../db
+      '@assistant/tools':
+        specifier: workspace:*
+        version: link:../tools
 
   packages/tools:
     dependencies:

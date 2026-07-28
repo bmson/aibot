@@ -78,6 +78,11 @@ export interface ExecutorDeps {
   workspace?: WorkspaceReader;
   /** Document-processor launcher + callback URL (Phase 14). Absent = feature inert. */
   documentProcessor?: DocumentProcessorConfig;
+  /**
+   * Returns a completion summary when a code job belongs to a module this
+   * installation does not have, so the job completes instead of failing.
+   */
+  jobUnavailable?: (job: string) => string | null;
   /** Channel delivery for a task's final text (e.g. SMS reply). Errors are retried by the workflow. */
   deliverFinal?: (task: TaskRow, text: string) => Promise<void>;
   /**

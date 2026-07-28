@@ -2,15 +2,28 @@ import path from 'node:path';
 import { type Config, isModuleEnabled, loadConfig, repoRoot } from '@assistant/config';
 import { type DocumentProcessorConfig, ModelRouter } from '@assistant/core';
 import { createDb, type Db } from '@assistant/db';
+import {
+  assistantModules,
+  browserModule,
+  documentsModule,
+  googleModule,
+  type InstalledModuleSet,
+  installModules,
+  smsModule,
+  unconfiguredGoogleClient,
+  unconfiguredTwilioClient,
+} from '@assistant/modules';
+import type { BrowserJobLauncher } from '@assistant/tools/browser';
 import { registerBuiltinTools } from '@assistant/tools/builtin';
 import { ToolDispatcher } from '@assistant/tools/dispatcher';
+import type { GoogleClient } from '@assistant/tools/modules/google';
+import type { TwilioClient } from '@assistant/tools/modules/sms';
 import { ToolRegistry } from '@assistant/tools/registry';
 import {
   GcsWorkspaceStore,
   LocalWorkspaceStore,
   type WorkspaceStore,
 } from '@assistant/tools/workspace';
-import { type InstalledModules, installAssistantModules } from './modules.js';
 
 /**
  * Process-level dependency graph. Apps compose concrete adapters here while
@@ -23,9 +36,11 @@ export interface AgentDeps {
   registry: ToolRegistry;
   dispatcher: ToolDispatcher;
   workspace: WorkspaceStore;
-  googleClient: InstalledModules['googleClient'];
-  twilio: InstalledModules['twilio'];
-  browserLauncher?: InstalledModules['browserLauncher'];
+  /** Installed capabilities, for code that asks a module what it produced. */
+  modules: InstalledModuleSet;
+  googleClient: GoogleClient;
+  twilio: TwilioClient;
+  browserLauncher?: BrowserJobLauncher;
   documentProcessor?: DocumentProcessorConfig;
 }
 
@@ -51,7 +66,7 @@ export function buildDeps(): AgentDeps {
     workspace,
     documentsEnabled: isModuleEnabled(config, 'documents'),
   });
-  const installed = installAssistantModules({
+  const modules = installModules(assistantModules, {
     config,
     db,
     registry,
@@ -62,6 +77,8 @@ export function buildDeps(): AgentDeps {
     workspaceRoot,
   });
 
+  const browserLauncher = modules.exportsOf(browserModule);
+  const documentProcessor = modules.exportsOf(documentsModule);
   cached = {
     config,
     db,
@@ -69,7 +86,13 @@ export function buildDeps(): AgentDeps {
     registry,
     dispatcher: new ToolDispatcher(db, registry),
     workspace,
-    ...installed,
+    modules,
+    // Callers query these unconditionally, so an uninstalled provider becomes a
+    // client that reports itself unconfigured rather than an absent field.
+    googleClient: modules.exportsOf(googleModule) ?? unconfiguredGoogleClient(),
+    twilio: modules.exportsOf(smsModule) ?? unconfiguredTwilioClient(),
+    ...(browserLauncher ? { browserLauncher } : {}),
+    ...(documentProcessor ? { documentProcessor } : {}),
   };
   return cached;
 }

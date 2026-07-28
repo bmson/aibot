@@ -33,4 +33,5 @@ export const documentsMeta = defineModuleMeta({
     ],
   },
   ui: { nav: [{ href: '/documents', label: 'Documents' }] },
+  jobs: ['documents.extract', 'documents.process'],
 });
