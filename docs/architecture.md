@@ -64,12 +64,18 @@ only register a capability when called by the agent composition root.
 
 ### `@assistant/modules`
 
-Owns the module contract and every module. `src/kit.ts` and `src/runtime-kit.ts` define what a
-module is; each `src/<name>/` directory holds that module's metadata and its factory. Metadata is
-plain data — name, owned settings, readiness, production rules, infrastructure, billing,
-navigation, and code jobs — so the web app, deployment scripts, and diagnostics import
-`@assistant/modules/meta` without pulling provider code into their bundles. It may depend on
-config, core, db, and tools, and nothing may depend on it except the agent composition root and
+Owns the module contract and every module. `src/contract.ts` defines the plain-data half — name,
+owned settings, readiness, production rules, infrastructure, billing, navigation, and code jobs —
+and `src/platform.ts` the runtime half, the context a module receives and the definition it
+returns. `src/registry.ts` lists the metadata, `src/diagnostics.ts` derives readiness and
+validation from it, `src/plan.ts` derives the deployment plan, `src/install.ts` installs, and
+`src/compose.ts` declares a composition. Each `src/<name>/` directory holds one module's `meta.ts`
+and `module.ts`.
+
+Two entry points: `@assistant/modules/meta` reaches only plain data, so the web app, scripts, and
+diagnostics import it without pulling provider code into their bundles; `@assistant/modules` adds
+the runtime and is for the agent composition root and `assistant.config.ts` alone. The package may
+depend on config, core, db, and tools, and nothing may depend on it except the composition root and
 metadata consumers.
 
 ### `@assistant/agent`
@@ -101,7 +107,9 @@ input and never import the agent, web app, database package, or provider clients
 - core depends on tools/apps;
 - application depends on tools/apps or leaks persistence into migrated UI features;
 - tools acquires an unsupported workspace dependency;
-- modules acquires a workspace dependency outside config, core, db, and tools.
+- modules acquires a workspace dependency outside config, core, db, and tools;
+- the composition file moves out from under one of its importers, or the agent image stops
+  copying it.
 
 The check runs as part of `pnpm lint` and CI.
 
@@ -132,8 +140,8 @@ install, and naming it in the environment logs a warning rather than silently do
    check, any production rules, its infrastructure, its billing, and any code jobs it owns.
 3. Create `packages/modules/src/<name>/module.ts` with `defineModule`, registering its tools on
    the registry it is handed and returning whatever the composition root must hold onto.
-4. Add its metadata to `assistantModuleMetas` in `packages/modules/src/meta.ts`, export the
-   definition from `packages/modules/src/runtime.ts`, and add it to `assistant.config.ts`.
+4. Add its metadata to `assistantModuleMetas` in `packages/modules/src/registry.ts`, export the
+   definition from `packages/modules/src/index.ts`, and add it to `assistant.config.ts`.
 5. Document its credentials, infrastructure, side effects, and removal behavior.
 
 Nothing else changes: readiness diagnostics, production validation, navigation, worker image

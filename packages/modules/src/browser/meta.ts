@@ -1,28 +1,16 @@
-import { defineModuleMeta } from '../kit.js';
+import { isModuleEnabled } from '@assistant/config';
+import type { ModuleMeta } from '../contract.js';
 
-export const browserMeta = defineModuleMeta({
+export const browserMeta = {
   name: 'browser',
   title: 'Browser',
   summary: 'Planned web interaction executed by an isolated, credential-free browser job.',
   configKeys: ['BROWSER_DRIVER', 'BROWSER_JOB_NAME', 'PROFILE_ENC_KEY', 'TRACES_BUCKET'],
   prodProblems: (config) =>
-    config.CANARY_ENABLED && !config.ASSISTANT_MODULES.includes('browser')
+    config.CANARY_ENABLED && !isModuleEnabled(config, 'browser')
       ? ['the browser module is required when CANARY_ENABLED=true']
       : [],
-  infra: {
-    worker: {
-      planKey: 'browser',
-      image: 'browser',
-      dockerfile: 'infra/docker/browser-job.Dockerfile',
-      jobNameKey: 'BROWSER_JOB_NAME',
-      serviceAccount: 'assistant-browser',
-      storagePrefixes: ['browser-jobs/'],
-    },
-    serviceAccounts: [
-      { id: 'assistant-browser', displayName: 'Assistant sandboxed browser runtime' },
-    ],
-    secretKeys: ['PROFILE_ENC_KEY'],
-  },
+  infra: { workerImage: 'browser' },
   billing: {
     gcp: [
       {
@@ -42,4 +30,4 @@ export const browserMeta = defineModuleMeta({
       },
     ],
   },
-});
+} satisfies ModuleMeta;

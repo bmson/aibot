@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { type Config, isModuleEnabled, loadConfig, repoRoot } from '@assistant/config';
+import { type Config, loadConfig, repoRoot } from '@assistant/config';
 import { type DocumentProcessorConfig, ModelRouter } from '@assistant/core';
 import { createDb, type Db } from '@assistant/db';
 import {
@@ -9,8 +9,6 @@ import {
   type InstalledModuleSet,
   installModules,
   smsModule,
-  unconfiguredGoogleClient,
-  unconfiguredTwilioClient,
 } from '@assistant/modules';
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
 import { registerBuiltinTools } from '@assistant/tools/builtin';
@@ -62,11 +60,11 @@ export function buildDeps(): AgentDeps {
       : new LocalWorkspaceStore(workspaceRoot);
 
   // Built-ins are the base platform: memory, goals, approvals, missions, and
-  // workspace tools. Optional provider/worker modules are installed below.
+  // workspace tools. Optional provider/worker modules are installed below, and
+  // each registers its own tools — the composition root names none of them.
   const registry = registerBuiltinTools(new ToolRegistry(), {
     embed: (texts) => router.embed(texts),
     workspace,
-    documentsEnabled: isModuleEnabled(config, 'documents'),
   });
   const modules = installModules(composition.modules, {
     config,
@@ -89,10 +87,10 @@ export function buildDeps(): AgentDeps {
     dispatcher: new ToolDispatcher(db, registry),
     workspace,
     modules,
-    // Callers query these unconditionally, so an uninstalled provider becomes a
-    // client that reports itself unconfigured rather than an absent field.
-    googleClient: modules.exportsOf(googleModule) ?? unconfiguredGoogleClient(),
-    twilio: modules.exportsOf(smsModule) ?? unconfiguredTwilioClient(),
+    // These are queried unconditionally, so an uninstalled provider resolves to
+    // the module's declared null object rather than to an absent field.
+    googleClient: modules.requireExports(googleModule),
+    twilio: modules.requireExports(smsModule),
     ...(browserLauncher ? { browserLauncher } : {}),
     ...(documentProcessor ? { documentProcessor } : {}),
   };

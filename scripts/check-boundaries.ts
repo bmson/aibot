@@ -98,20 +98,33 @@ for (const directory of readdirSync(path.join(repoRoot, 'packages'), { withFileT
 
 /**
  * The composition file is agent source even though it sits at the repository
- * root. If the image build stops copying it the bundle fails to resolve it, so
- * this is checked rather than remembered.
+ * root, and it is reached by relative path from three directories. Nothing else
+ * notices when one of those paths stops resolving: the agent's would surface as
+ * a failure deep inside an image build, and a missing Dockerfile COPY the same
+ * way. Both are cheaper to assert here.
  */
-const compositionFile = path.join(repoRoot, 'assistant.config.ts');
-if (!existsSync(compositionFile)) {
-  failures.push('assistant.config.ts is missing; the agent composes its modules from it');
-} else {
-  const agentDockerfile = readFileSync(
-    path.join(repoRoot, 'infra/docker/agent.Dockerfile'),
-    'utf8',
-  );
-  if (!/^COPY\s+assistant\.config\.ts\b/m.test(agentDockerfile)) {
-    failures.push('infra/docker/agent.Dockerfile must COPY assistant.config.ts into the build');
+const compositionImporters = [
+  'apps/agent/src/deps.ts',
+  'scripts/module-plan.ts',
+  'scripts/wizard.ts',
+];
+for (const importer of compositionImporters) {
+  const source = readFileSync(path.join(repoRoot, importer), 'utf8');
+  const specifier = /from ['"](\.[^'"]*assistant\.config\.js)['"]/.exec(source)?.[1];
+  if (!specifier) {
+    failures.push(`${importer} no longer imports the composition file`);
+    continue;
   }
+  // Written as .js for ESM resolution; the file on disk is TypeScript.
+  const resolved = path.resolve(path.dirname(path.join(repoRoot, importer)), specifier);
+  if (!existsSync(resolved.replace(/\.js$/, '.ts'))) {
+    failures.push(`${importer} imports ${specifier}, which does not resolve to a file`);
+  }
+}
+
+const agentDockerfile = readFileSync(path.join(repoRoot, 'infra/docker/agent.Dockerfile'), 'utf8');
+if (!/^COPY\b.*\bassistant\.config\.ts\b/m.test(agentDockerfile)) {
+  failures.push('infra/docker/agent.Dockerfile must COPY assistant.config.ts into the build');
 }
 
 if (failures.length > 0) {

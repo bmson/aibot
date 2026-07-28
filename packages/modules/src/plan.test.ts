@@ -1,8 +1,11 @@
 import { loadConfig, resetConfigForTest } from '@assistant/config';
 import { afterEach, describe, expect, it } from 'vitest';
 import { billingSummary, deploymentPlan } from './plan.js';
+import { assistantModuleMetas } from './registry.js';
 
-const planFor = (modules: string) => deploymentPlan(loadConfig({ ASSISTANT_MODULES: modules }));
+/** A plan over every module in the repository, as a full composition would give. */
+const planFor = (modules: string) =>
+  deploymentPlan(loadConfig({ ASSISTANT_MODULES: modules }), assistantModuleMetas);
 
 describe('deploymentPlan', () => {
   afterEach(() => resetConfigForTest());
@@ -24,21 +27,17 @@ describe('deploymentPlan', () => {
   it('collects only the infrastructure the enabled modules declare', () => {
     const plan = planFor('google');
     expect(plan.workers.processor).toBe(false);
-    expect(plan.pubsubTopics).toEqual(['gmail-events']);
     expect(plan.gcpApis).toContain('gmail.googleapis.com');
     expect(plan.schedulerJobs.map((job) => job.name)).toEqual([
       'assistant-gmail-sync',
       'assistant-gmail-watch',
     ]);
-    expect(plan.secretKeys).toContain('BOT_GOOGLE_REFRESH_TOKEN');
   });
 
   it('maps the documents module onto the processor worker image', () => {
     const plan = planFor('documents');
     expect(plan.workers).toEqual({ browser: false, code: false, processor: true });
-    expect(plan.workerDetails.map((worker) => worker.dockerfile)).toEqual([
-      'infra/docker/document-processor.Dockerfile',
-    ]);
+    expect(plan.schedulerJobs).toEqual([]);
   });
 
   it('normalizes whitespace and duplicates the way the running services do', () => {

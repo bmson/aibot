@@ -77,7 +77,7 @@ await db
   .update(schedules)
   .set({ nextRunAt: new Date(Date.now() - 1000) })
   .where(eq(schedules.id, schedule.id));
-await runDueSchedules(db);
+await runDueSchedules(db, agent.timezone);
 
 const [task] = await db
   .select()

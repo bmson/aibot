@@ -3,12 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { z } from 'zod';
-import {
-  type AssistantModule,
-  assistantModuleNames,
-  isModuleEnabled,
-  parseAssistantModules,
-} from './modules.js';
+import { type AssistantModule, assistantModuleNames, parseAssistantModules } from './modules.js';
 
 export {
   type AssistantModule,
@@ -152,9 +147,9 @@ const ConfigSchema = z.object({
 export type Config = z.infer<typeof ConfigSchema>;
 
 /**
- * Every setting name in the schema, including optional ones absent from a
- * parsed configuration. Modules declare the keys they own against this list and
- * deployment tooling uses it to map settings onto Secret Manager entries.
+ * Every setting name in the schema, including optional ones that are absent
+ * from a parsed configuration. Modules declare the keys they own, and a
+ * conformance test checks those declarations against this list.
  */
 export const configKeyNames = Object.keys(ConfigSchema.shape) as readonly (keyof Config)[];
 
@@ -197,13 +192,6 @@ export function validateProdConfig(config: Config = loadConfig()): string[] {
     problems.push('WORKSPACE_BUCKET is required when FILES_DRIVER=gcs');
   }
   return problems;
-}
-
-export function gmailSyncEnabled(config: Config = loadConfig()): boolean {
-  if (!isModuleEnabled(config, 'google')) return false;
-  if (config.GMAIL_SYNC_ENABLED === 'true') return true;
-  if (config.GMAIL_SYNC_ENABLED === 'false') return false;
-  return process.env.NODE_ENV === 'production';
 }
 
 /** Test seam — clears the process-level config cache. */

@@ -4,13 +4,17 @@ import type { CommandRunner } from './runner.js';
 
 export type CheckStatus = 'pass' | 'warn' | 'fail';
 
-export interface CheckOutcome {
-  id: string;
-  title: string;
+/** What a check concluded. Its identity comes from the check that produced it. */
+export interface CheckResult {
   status: CheckStatus;
   detail: string;
-  /** What the operator must do when this check does not pass. */
+  /** What the operator must do. Required for anything that did not pass. */
   guidance?: string;
+}
+
+export interface CheckOutcome extends CheckResult {
+  id: string;
+  title: string;
 }
 
 export interface PreflightContext {
@@ -20,221 +24,222 @@ export interface PreflightContext {
 }
 
 /**
- * Checks that run before anything is provisioned. Each one is a probe plus the
- * guidance for fixing it, because the failures that matter here — no billing
- * account, an org policy that forbids public services — are the ones that
- * otherwise surface as an opaque error halfway through a deploy.
+ * A preflight check: a probe plus the guidance for fixing what it finds.
+ *
+ * The failures worth checking here — no billing account, an organization policy
+ * that forbids public services — are the ones that otherwise surface as an
+ * opaque error partway through a deploy, after resources already exist.
  */
-export type PreflightCheck = (context: PreflightContext) => Promise<CheckOutcome>;
+export interface PreflightCheck {
+  id: string;
+  title: string;
+  /** Skip with a uniform message when no project could be resolved. */
+  needsProject?: boolean;
+  run(context: PreflightContext): Promise<CheckResult>;
+}
 
-const checkGcloud: PreflightCheck = async ({ runner }) => {
-  const result = await runner.run('gcloud', ['version', '--format=value(Google Cloud SDK)']);
-  return result.ok
-    ? { id: 'gcloud', title: 'Google Cloud CLI', status: 'pass', detail: 'installed' }
-    : {
-        id: 'gcloud',
-        title: 'Google Cloud CLI',
-        status: 'fail',
-        detail: 'not found on PATH',
-        guidance: 'Install the Google Cloud CLI: https://cloud.google.com/sdk/docs/install',
-      };
+const pass = (detail: string): CheckResult => ({ status: 'pass', detail });
+const warn = (detail: string, guidance: string): CheckResult => ({
+  status: 'warn',
+  detail,
+  guidance,
+});
+const fail = (detail: string, guidance: string): CheckResult => ({
+  status: 'fail',
+  detail,
+  guidance,
+});
+
+const gcloudInstalled: PreflightCheck = {
+  id: 'gcloud',
+  title: 'Google Cloud CLI',
+  async run({ runner }) {
+    const result = await runner.run('gcloud', ['version', '--format=value(Google Cloud SDK)']);
+    return result.ok
+      ? pass('installed')
+      : fail(
+          'not found on PATH',
+          'Install the Google Cloud CLI: https://cloud.google.com/sdk/docs/install',
+        );
+  },
 };
 
-const checkAuth: PreflightCheck = async ({ runner }) => {
-  const result = await runner.run('gcloud', [
-    'auth',
-    'list',
-    '--filter=status:ACTIVE',
-    '--format=value(account)',
-  ]);
-  const account = result.stdout.split('\n')[0]?.trim() ?? '';
-  return result.ok && account
-    ? { id: 'auth', title: 'Authenticated account', status: 'pass', detail: account }
-    : {
-        id: 'auth',
-        title: 'Authenticated account',
-        status: 'fail',
-        detail: 'no active account',
-        guidance: 'Run: gcloud auth login',
-      };
+const authenticated: PreflightCheck = {
+  id: 'auth',
+  title: 'Authenticated account',
+  async run({ runner }) {
+    const result = await runner.run('gcloud', [
+      'auth',
+      'list',
+      '--filter=status:ACTIVE',
+      '--format=value(account)',
+    ]);
+    const account = result.stdout.split('\n')[0]?.trim() ?? '';
+    return result.ok && account
+      ? pass(account)
+      : fail('no active account', 'Run: gcloud auth login');
+  },
 };
 
-const checkProject: PreflightCheck = async ({ project }) =>
-  project
-    ? { id: 'project', title: 'Target project', status: 'pass', detail: project }
-    : {
-        id: 'project',
-        title: 'Target project',
-        status: 'fail',
-        detail: 'no project resolved',
-        guidance: 'Set GCP_PROJECT in .env, or run: gcloud config set project YOUR_PROJECT_ID',
-      };
+const targetProject: PreflightCheck = {
+  id: 'project',
+  title: 'Target project',
+  async run({ project }) {
+    return project
+      ? pass(project)
+      : fail(
+          'no project resolved',
+          'Set GCP_PROJECT in .env, or run: gcloud config set project YOUR_PROJECT_ID',
+        );
+  },
+};
 
 /**
- * Billing is the check most worth doing early: without it, API enablement
- * fails partway through provisioning and leaves half a deployment behind.
+ * Billing is the check most worth doing early: without it, API enablement fails
+ * partway through provisioning and leaves half a deployment behind.
  */
-const checkBilling: PreflightCheck = async ({ runner, project }) => {
-  if (!project) {
-    return {
-      id: 'billing',
-      title: 'Billing account',
-      status: 'fail',
-      detail: 'skipped — no project',
-    };
-  }
-  const result = await runner.run('gcloud', [
-    'billing',
-    'projects',
-    'describe',
-    project,
-    '--format=value(billingEnabled)',
-  ]);
-  if (!result.ok) {
-    return {
-      id: 'billing',
-      title: 'Billing account',
-      status: 'warn',
-      detail: 'could not be verified',
-      guidance:
+const billingLinked: PreflightCheck = {
+  id: 'billing',
+  title: 'Billing account',
+  needsProject: true,
+  async run({ runner, project }) {
+    const result = await runner.run('gcloud', [
+      'billing',
+      'projects',
+      'describe',
+      project,
+      '--format=value(billingEnabled)',
+    ]);
+    if (!result.ok) {
+      return warn(
+        'could not be verified',
         'Checking billing needs the Cloud Billing API and billing.viewer. Confirm manually: https://console.cloud.google.com/billing/linkedaccount',
-    };
-  }
-  return result.stdout.trim().toLowerCase() === 'true'
-    ? { id: 'billing', title: 'Billing account', status: 'pass', detail: 'linked' }
-    : {
-        id: 'billing',
-        title: 'Billing account',
-        status: 'fail',
-        detail: 'not linked to this project',
-        guidance:
+      );
+    }
+    return result.stdout.trim().toLowerCase() === 'true'
+      ? pass('linked')
+      : fail(
+          'not linked to this project',
           'Link a billing account before deploying — Cloud Run, Artifact Registry, and Secret Manager all require it: https://console.cloud.google.com/billing/linkedaccount',
-      };
+        );
+  },
 };
 
 /**
  * `iam.allowedPolicyMemberDomains` blocks granting `allUsers` the invoker role,
- * which is how both services are published. Deploy fails at the very last step
- * without this warning.
+ * which is how both services are published — so a deploy fails at its very last
+ * step without this warning.
  */
-const checkPublicAccessPolicy: PreflightCheck = async ({ runner, project }) => {
-  if (!project) {
-    return {
-      id: 'org-policy',
-      title: 'Public access policy',
-      status: 'warn',
-      detail: 'skipped — no project',
-    };
-  }
-  const result = await runner.run('gcloud', [
-    'resource-manager',
-    'org-policies',
-    'describe',
-    'iam.allowedPolicyMemberDomains',
-    `--project=${project}`,
-    '--effective',
-    '--format=value(listPolicy.allValues)',
-  ]);
-  if (!result.ok) {
-    return {
-      id: 'org-policy',
-      title: 'Public access policy',
-      status: 'pass',
-      detail: 'no domain restriction found',
-    };
-  }
-  return result.stdout.trim() === 'ALLOW'
-    ? { id: 'org-policy', title: 'Public access policy', status: 'pass', detail: 'unrestricted' }
-    : {
-        id: 'org-policy',
-        title: 'Public access policy',
-        status: 'warn',
-        detail: 'domain-restricted sharing may be enforced',
-        guidance:
+const publicAccessAllowed: PreflightCheck = {
+  id: 'org-policy',
+  title: 'Public access policy',
+  needsProject: true,
+  async run({ runner, project }) {
+    const result = await runner.run('gcloud', [
+      'resource-manager',
+      'org-policies',
+      'describe',
+      'iam.allowedPolicyMemberDomains',
+      `--project=${project}`,
+      '--effective',
+      '--format=value(listPolicy.allValues)',
+    ]);
+    // The command exits non-zero when no such policy exists, which is the
+    // common and entirely healthy case for a personal project.
+    if (!result.ok) return pass('no domain restriction found');
+    return result.stdout.trim() === 'ALLOW'
+      ? pass('unrestricted')
+      : warn(
+          'domain-restricted sharing may be enforced',
           'This organization may forbid granting allUsers the Cloud Run invoker role, which publishing the web and agent services requires. Ask an administrator to exempt this project, or expect the final deploy step to fail.',
-      };
+        );
+  },
 };
 
 /** The settings `infra/gcp/deploy.sh` refuses to start without. */
-const checkRequiredSettings: PreflightCheck = async ({ config }) => {
-  const missing = (
-    [
-      ['PROD_DATABASE_URL', config.PROD_DATABASE_URL],
-      ['OPENROUTER_API_KEY', config.OPENROUTER_API_KEY],
-      ['ASSISTANT_EMAIL', config.ASSISTANT_EMAIL],
-      ['OWNER_EMAIL', config.OWNER_EMAIL],
-    ] as const
-  )
-    .filter(([, value]) => !value)
-    .map(([name]) => name);
-  return missing.length === 0
-    ? { id: 'settings', title: 'Required settings', status: 'pass', detail: 'present' }
-    : {
-        id: 'settings',
-        title: 'Required settings',
-        status: 'fail',
-        detail: `missing ${missing.join(', ')}`,
-        guidance: 'Set these in .env, then re-run. Values are never printed by this tool.',
-      };
+const requiredSettings: PreflightCheck = {
+  id: 'settings',
+  title: 'Required settings',
+  async run({ config }) {
+    const missing = (
+      [
+        ['PROD_DATABASE_URL', config.PROD_DATABASE_URL],
+        ['OPENROUTER_API_KEY', config.OPENROUTER_API_KEY],
+        ['ASSISTANT_EMAIL', config.ASSISTANT_EMAIL],
+        ['OWNER_EMAIL', config.OWNER_EMAIL],
+      ] as const
+    )
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    return missing.length === 0
+      ? pass('present')
+      : fail(
+          `missing ${missing.join(', ')}`,
+          'Set these in .env, then re-run. Values are never printed by this tool.',
+        );
+  },
 };
 
-const checkConfiguration: PreflightCheck = async ({ config }) => {
-  const problems = validateAssistantConfig(config);
-  return problems.length === 0
-    ? { id: 'config', title: 'Configuration', status: 'pass', detail: 'valid' }
-    : {
-        id: 'config',
-        title: 'Configuration',
-        status: 'fail',
-        detail: `${problems.length} problem(s)`,
-        guidance: problems.map((problem) => `- ${problem}`).join('\n'),
-      };
+const configurationValid: PreflightCheck = {
+  id: 'config',
+  title: 'Configuration',
+  async run({ config }) {
+    const problems = validateAssistantConfig(config);
+    return problems.length === 0
+      ? pass('valid')
+      : fail(`${problems.length} problem(s)`, problems.map((problem) => `- ${problem}`).join('\n'));
+  },
 };
 
 /**
  * An enabled-but-unconfigured module is not fatal: the platform keeps its tools
- * unregistered and the installation stays recoverable, so this warns.
+ * unregistered and the installation stays recoverable, so this only warns.
  */
-const checkModuleReadiness: PreflightCheck = async ({ config }) => {
-  const unready = moduleDiagnostics(config).filter(
-    (diagnostic) => diagnostic.enabled && !diagnostic.ready,
-  );
-  return unready.length === 0
-    ? {
-        id: 'modules',
-        title: 'Module readiness',
-        status: 'pass',
-        detail: 'all enabled modules ready',
-      }
-    : {
-        id: 'modules',
-        title: 'Module readiness',
-        status: 'warn',
-        detail: unready
-          .map((diagnostic) => `${diagnostic.module} (${diagnostic.detail})`)
-          .join(', '),
-        guidance:
+const modulesReady: PreflightCheck = {
+  id: 'modules',
+  title: 'Module readiness',
+  async run({ config }) {
+    const unready = moduleDiagnostics(config).filter(
+      (diagnostic) => diagnostic.enabled && !diagnostic.ready,
+    );
+    return unready.length === 0
+      ? pass('all enabled modules ready')
+      : warn(
+          unready.map((diagnostic) => `${diagnostic.module} (${diagnostic.detail})`).join(', '),
           'These modules deploy but stay inactive until their settings exist. The manual steps below cover the credentials they need.',
-      };
+        );
+  },
 };
 
 export const preflightChecks: readonly PreflightCheck[] = [
-  checkGcloud,
-  checkAuth,
-  checkProject,
-  checkBilling,
-  checkPublicAccessPolicy,
-  checkRequiredSettings,
-  checkConfiguration,
-  checkModuleReadiness,
+  gcloudInstalled,
+  authenticated,
+  targetProject,
+  billingLinked,
+  publicAccessAllowed,
+  requiredSettings,
+  configurationValid,
+  modulesReady,
 ];
 
+/**
+ * Run every check, concurrently — they are independent, and several are gcloud
+ * round trips the operator would otherwise wait through one at a time. Results
+ * keep the declared order so the report reads the same every run.
+ */
 export async function runPreflight(context: PreflightContext): Promise<CheckOutcome[]> {
-  const outcomes: CheckOutcome[] = [];
-  for (const check of preflightChecks) outcomes.push(await check(context));
-  return outcomes;
+  return Promise.all(
+    preflightChecks.map(async (check) => {
+      const result =
+        check.needsProject && !context.project
+          ? warn('skipped — no project resolved', 'Resolve the target project first.')
+          : await check.run(context);
+      return { id: check.id, title: check.title, ...result };
+    }),
+  );
 }
 
+/** Checks that must be resolved before provisioning can safely start. */
 export function blocking(outcomes: readonly CheckOutcome[]): CheckOutcome[] {
   return outcomes.filter((outcome) => outcome.status === 'fail');
 }

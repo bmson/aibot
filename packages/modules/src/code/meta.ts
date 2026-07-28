@@ -1,21 +1,11 @@
-import { defineModuleMeta } from '../kit.js';
+import type { ModuleMeta } from '../contract.js';
 
-export const codeMeta = defineModuleMeta({
+export const codeMeta = {
   name: 'code',
   title: 'Code execution',
   summary: 'Sandboxed code execution in a job with no database access and no provider credentials.',
   configKeys: ['CODE_DRIVER', 'CODE_JOB_NAME'],
-  infra: {
-    worker: {
-      planKey: 'code',
-      image: 'code',
-      dockerfile: 'infra/docker/code-runner.Dockerfile',
-      jobNameKey: 'CODE_JOB_NAME',
-      serviceAccount: 'assistant-code',
-      storagePrefixes: ['code-jobs/'],
-    },
-    serviceAccounts: [{ id: 'assistant-code', displayName: 'Assistant sandboxed code runtime' }],
-  },
+  infra: { workerImage: 'code' },
   billing: {
     gcp: [
       {
@@ -25,4 +15,4 @@ export const codeMeta = defineModuleMeta({
       },
     ],
   },
-});
+} satisfies ModuleMeta;

@@ -1,8 +1,12 @@
 import type { Config } from '@assistant/config';
 import { billingSummary, type DeploymentPlan } from '@assistant/modules/meta';
 import { manualStepsFor } from './manual.js';
-import { blocking, type CheckOutcome } from './preflight.js';
+import type { CheckOutcome } from './preflight.js';
 
+/**
+ * Rendering for the setup briefing. Everything here is a pure string function so
+ * the wording is testable without a project to point at.
+ */
 const MARKER: Record<CheckOutcome['status'], string> = { pass: '✓', warn: '!', fail: '✗' };
 
 export function renderPreflight(outcomes: readonly CheckOutcome[]): string {
@@ -32,9 +36,6 @@ export function renderComposition(plan: DeploymentPlan): string {
   lines.push(`  worker images: ${workers.length > 0 ? workers.join(', ') : 'none'}`);
   if (plan.schedulerJobs.length > 0) {
     lines.push(`  scheduled jobs: ${plan.schedulerJobs.map((job) => job.name).join(', ')}`);
-  }
-  if (plan.pubsubTopics.length > 0) {
-    lines.push(`  pub/sub topics: ${plan.pubsubTopics.join(', ')}`);
   }
   if (plan.gcpApis.length > 0) {
     lines.push(`  additional APIs: ${plan.gcpApis.length} enabled automatically`);
@@ -85,8 +86,4 @@ export function renderReport(report: WizardReport): string {
     '',
     renderManualSteps(report.config),
   ].join('\n');
-}
-
-export function canProceed(outcomes: readonly CheckOutcome[]): boolean {
-  return blocking(outcomes).length === 0;
 }

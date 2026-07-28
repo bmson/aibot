@@ -3,7 +3,13 @@ import type { ModelRouter } from '@assistant/core';
 import type { Db } from '@assistant/db';
 import type { ToolRegistry } from '@assistant/tools/registry';
 import type { WorkspaceStore } from '@assistant/tools/workspace';
-import type { ModuleMeta } from './kit.js';
+import type { ModuleMeta } from './contract.js';
+
+/**
+ * The runtime half of the module contract. Unlike `contract.ts`, this reaches
+ * into core, db, and tools, so only the agent composition root imports it —
+ * never the web app or the deployment scripts.
+ */
 
 /**
  * Infrastructure every module receives. It stays deliberately small: modules
@@ -32,8 +38,17 @@ export interface ModuleRuntime<Exports = void> {
 
 export interface ModuleDefinition<Exports = void> {
   meta: ModuleMeta;
-  /** Called only when the module is enabled. */
+  /** Called only when the module is installed. */
   create: (context: ModulePlatformContext) => ModuleRuntime<Exports>;
+  /**
+   * What this module's exports look like when it is *not* installed.
+   *
+   * Providers that callers query unconditionally — `deps.googleClient`,
+   * `deps.twilio` — declare a null object here whose `configured()` reports
+   * false. `requireExports` then always has a value to return, so the
+   * composition root holds a plain field rather than an optional one.
+   */
+  absent?: () => Exports;
 }
 
 /** Identity helper that infers a module's export type from its factory. */

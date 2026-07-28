@@ -5,5 +5,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["mobile-smoke.ts"]
+  "include": ["*.ts"]
 }

@@ -1,106 +1,74 @@
-import { type AssistantModule, type Config, isModuleEnabled, loadConfig } from '@assistant/config';
+import { type AssistantModule, type Config, isModuleEnabled } from '@assistant/config';
 import type {
-  ConfigKey,
+  ModuleBillingLine,
   ModuleExternalCost,
   ModuleMeta,
   ModuleSchedulerJob,
-  ModuleWorker,
-} from './kit.js';
-import { assistantModuleMetas } from './meta.js';
+} from './contract.js';
 
-export interface DeploymentPlanBillingLine {
-  module: AssistantModule;
-  service: string;
-  tier: 'free-tier-likely' | 'usage';
-  note: string;
-}
-
-export interface DeploymentPlanExternalCost extends ModuleExternalCost {
-  module: AssistantModule;
-}
+/** A declaration tagged with the module that brought it. */
+type FromModule<T> = T & { module: AssistantModule };
 
 /**
- * Everything deployment needs to know about an installation's composition,
- * derived from module metadata. Provisioning, CI image selection, and the
- * billing explanation all read this one structure, so bash never re-parses
- * `ASSISTANT_MODULES` and cannot drift from the configuration schema.
+ * Everything deployment needs to know about an installation's composition.
+ *
+ * Every field is consumed: CI builds images from `workers`, the provisioner
+ * enables `gcpApis` and creates `schedulerJobs`, and the wizard renders
+ * `billing`. Deriving them all from module metadata is what stops bash from
+ * re-parsing `ASSISTANT_MODULES` and drifting from the schema.
  */
 export interface DeploymentPlan {
   modules: readonly AssistantModule[];
-  /** Worker images by plan key, including the ones this installation excludes. */
+  /** Worker images by name, including the ones this installation excludes. */
   workers: Readonly<Record<string, boolean>>;
-  workerDetails: readonly (ModuleWorker & { module: AssistantModule })[];
-  /** APIs required beyond the always-on platform set. */
   gcpApis: readonly string[];
-  pubsubTopics: readonly string[];
-  schedulerJobs: readonly (ModuleSchedulerJob & { module: AssistantModule })[];
-  serviceAccounts: readonly { id: string; displayName: string; module: AssistantModule }[];
-  secretKeys: readonly ConfigKey[];
+  schedulerJobs: readonly FromModule<ModuleSchedulerJob>[];
   billing: {
-    gcp: readonly DeploymentPlanBillingLine[];
-    external: readonly DeploymentPlanExternalCost[];
+    gcp: readonly FromModule<ModuleBillingLine>[];
+    external: readonly FromModule<ModuleExternalCost>[];
   };
 }
 
 /**
- * @param metas the modules this build contains; defaults to every module in the
- * repository. Deployment passes the composition file's modules so CI builds
- * images for what is actually compiled in.
+ * @param metas the modules this build contains, from `assistant.config.ts`.
+ * There is deliberately no default: a plan covering every module in the
+ * repository would describe an installation nobody composed, which is the drift
+ * this mechanism exists to prevent.
  */
-export function deploymentPlan(
-  config: Config = loadConfig(),
-  metas: readonly ModuleMeta[] = assistantModuleMetas,
-): DeploymentPlan {
-  const modules: AssistantModule[] = [];
+export function deploymentPlan(config: Config, metas: readonly ModuleMeta[]): DeploymentPlan {
+  const installed = metas.filter((meta) => isModuleEnabled(config, meta.name));
+
+  // Every worker key stays present, so a module this installation excludes
+  // yields an explicit false rather than a key the deploy workflow must guess.
   const workers: Record<string, boolean> = {};
-  const workerDetails: (ModuleWorker & { module: AssistantModule })[] = [];
-  const gcpApis: string[] = [];
-  const pubsubTopics: string[] = [];
-  const schedulerJobs: (ModuleSchedulerJob & { module: AssistantModule })[] = [];
-  const serviceAccounts: { id: string; displayName: string; module: AssistantModule }[] = [];
-  const secretKeys: ConfigKey[] = [];
-  const gcp: DeploymentPlanBillingLine[] = [];
-  const external: DeploymentPlanExternalCost[] = [];
-
   for (const meta of metas) {
-    // Every worker key is present regardless, so a disabled module produces an
-    // explicit false rather than a missing key the deploy workflow must guess.
-    if (meta.infra?.worker) workers[meta.infra.worker.planKey] = false;
-    if (!isModuleEnabled(config, meta.name)) continue;
-
-    modules.push(meta.name);
-    const infra = meta.infra;
-    if (infra?.worker) {
-      workers[infra.worker.planKey] = true;
-      workerDetails.push({ ...infra.worker, module: meta.name });
-    }
-    for (const api of infra?.gcpApis ?? []) gcpApis.push(api);
-    for (const topic of infra?.pubsubTopics ?? []) pubsubTopics.push(topic);
-    for (const job of infra?.schedulerJobs ?? []) schedulerJobs.push({ ...job, module: meta.name });
-    for (const account of infra?.serviceAccounts ?? []) {
-      serviceAccounts.push({ ...account, module: meta.name });
-    }
-    for (const key of infra?.secretKeys ?? []) secretKeys.push(key);
-    for (const line of meta.billing.gcp ?? []) gcp.push({ ...line, module: meta.name });
-    for (const cost of meta.billing.external ?? []) external.push({ ...cost, module: meta.name });
+    const image = meta.infra?.workerImage;
+    if (image) workers[image] = installed.includes(meta);
   }
 
+  /** Collect a repeated declaration across installed modules, tagged by module. */
+  const fromInstalled = <T>(pick: (meta: ModuleMeta) => readonly T[] | undefined) =>
+    installed.flatMap((meta) => (pick(meta) ?? []).map((item) => ({ ...item, module: meta.name })));
+
   return {
-    modules,
+    modules: installed.map((meta) => meta.name),
     workers,
-    workerDetails,
-    gcpApis,
-    pubsubTopics,
-    schedulerJobs,
-    serviceAccounts,
-    secretKeys,
-    billing: { gcp, external },
+    gcpApis: installed.flatMap((meta) => meta.infra?.gcpApis ?? []),
+    schedulerJobs: fromInstalled((meta) => meta.infra?.schedulerJobs),
+    billing: {
+      gcp: fromInstalled((meta) => meta.billing.gcp),
+      external: fromInstalled((meta) => meta.billing.external),
+    },
   };
 }
 
-/** Human-readable cost explanation for the modules this installation enables. */
+/**
+ * Human-readable cost explanation. Vendor-billed services come first because
+ * they are the ones needing an account before anything can be deployed at all.
+ */
 export function billingSummary(plan: DeploymentPlan): string {
   const lines: string[] = [];
+
   if (plan.billing.external.length > 0) {
     lines.push('Third-party services (billed by the vendor, not Google Cloud):');
     for (const cost of plan.billing.external) {
@@ -109,6 +77,7 @@ export function billingSummary(plan: DeploymentPlan): string {
       if (cost.url) lines.push(`    ${cost.url}`);
     }
   }
+
   if (plan.billing.gcp.length > 0) {
     if (lines.length > 0) lines.push('');
     lines.push('Google Cloud services added by these modules:');
@@ -117,6 +86,7 @@ export function billingSummary(plan: DeploymentPlan): string {
       lines.push(`  ${line.module} — ${line.service} (${tier}): ${line.note}`);
     }
   }
-  if (lines.length === 0) lines.push('These modules add no infrastructure or vendor cost.');
+
+  if (lines.length === 0) return 'These modules add no infrastructure or vendor cost.';
   return lines.join('\n');
 }

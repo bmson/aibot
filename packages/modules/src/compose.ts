@@ -1,5 +1,5 @@
-import type { AssistantModule } from '@assistant/config';
-import type { ModuleDefinition } from './runtime-kit.js';
+import type { ModuleMeta } from './contract.js';
+import type { ModuleDefinition } from './platform.js';
 
 export interface AssistantComposition {
   /**
@@ -28,7 +28,7 @@ export function defineAssistant(composition: AssistantComposition): AssistantCom
   return composition;
 }
 
-/** The modules a composition contains, in declaration order. */
-export function composedModuleNames(composition: AssistantComposition): readonly AssistantModule[] {
-  return composition.modules.map((definition) => definition.meta.name);
+/** The metadata of everything a composition contains, for the deployment plan. */
+export function composedModuleMetas(composition: AssistantComposition): readonly ModuleMeta[] {
+  return composition.modules.map((definition) => definition.meta);
 }

@@ -3,9 +3,9 @@ import type { Db } from '@assistant/db';
 import { ToolRegistry } from '@assistant/tools/registry';
 import { afterEach, describe, expect, it } from 'vitest';
 import { documentsModule } from './documents/module.js';
+import { installModules } from './install.js';
+import type { ModulePlatformContext } from './platform.js';
 import { remindersModule } from './reminders/module.js';
-import { installModules } from './runtime.js';
-import type { ModulePlatformContext } from './runtime-kit.js';
 import { watchesModule } from './watches/module.js';
 
 /**
@@ -17,7 +17,7 @@ function contextFor(config: Config): ModulePlatformContext {
     config,
     db: {} as Db,
     registry: new ToolRegistry(),
-    router: {} as ModulePlatformContext['router'],
+    router: { embed: async () => [] } as unknown as ModulePlatformContext['router'],
     workspace: {} as ModulePlatformContext['workspace'],
     workspacePrefix: 'workspace/test',
     workspaceRoot: '/tmp/assistant-test',
@@ -32,7 +32,7 @@ describe('installModules', () => {
     const context = contextFor(loadConfig({ ASSISTANT_MODULES: 'reminders' }));
     const installed = installModules([remindersModule, watchesModule], context);
 
-    expect(installed.enabled).toEqual(['reminders']);
+    expect(installed.installed).toEqual(['reminders']);
     expect(context.registry.get('reminder.create')).toBeDefined();
     expect(context.registry.get('watch.create')).toBeUndefined();
   });
@@ -41,7 +41,7 @@ describe('installModules', () => {
     const context = contextFor(loadConfig({ ASSISTANT_MODULES: 'minimal' }));
     const installed = installModules([remindersModule, watchesModule], context);
 
-    expect(installed.enabled).toEqual([]);
+    expect(installed.installed).toEqual([]);
     expect(context.registry.all()).toHaveLength(0);
   });
 
@@ -91,6 +91,21 @@ describe('composition as a restrictor', () => {
   it('installs the intersection of the composition and the configuration', () => {
     const context = contextFor(loadConfig({ ASSISTANT_MODULES: 'reminders' }));
     const installed = installModules([remindersModule, watchesModule], context);
-    expect(installed.enabled).toEqual(['reminders']);
+    expect(installed.installed).toEqual(['reminders']);
+  });
+});
+
+describe('module-owned tools', () => {
+  afterEach(() => resetConfigForTest());
+
+  it('registers document search only when the documents module is installed', () => {
+    const withDocuments = contextFor(loadConfig({ ASSISTANT_MODULES: 'documents' }));
+    installModules([documentsModule], withDocuments);
+    expect(withDocuments.registry.get('documents.search')).toBeDefined();
+
+    resetConfigForTest();
+    const without = contextFor(loadConfig({ ASSISTANT_MODULES: 'minimal' }));
+    installModules([documentsModule], without);
+    expect(without.registry.get('documents.search')).toBeUndefined();
   });
 });

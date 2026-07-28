@@ -1,17 +1,18 @@
 import { loadVoiceContext, rewriteInVoice } from '@assistant/core';
 import { registerSmsTools, TwilioClient } from '@assistant/tools/modules/sms';
-import { defineModule } from '../runtime-kit.js';
+import { defineModule } from '../platform.js';
 import { smsMeta } from './meta.js';
 
 /**
  * A client with no credentials: `configured()` is false and every send is
- * refused. The composition root uses this when the module is not installed, so
- * callers can query the client unconditionally.
+ * refused. Declared as the module's `absent` value so the
+ * composition root can hold a plain field and callers can query it freely.
  */
-export const unconfiguredTwilioClient = () => new TwilioClient('', '', '');
+const unconfiguredTwilioClient = () => new TwilioClient('', '', '');
 
 export const smsModule = defineModule<TwilioClient>({
   meta: smsMeta,
+  absent: unconfiguredTwilioClient,
   create: ({ config, db, registry, router }) => {
     const client = new TwilioClient(
       config.TWILIO_ACCOUNT_SID,

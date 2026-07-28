@@ -1,5 +1,5 @@
 import { registerReminderTools } from '@assistant/tools/reminders';
-import { defineModule } from '../runtime-kit.js';
+import { defineModule } from '../platform.js';
 import { remindersMeta } from './meta.js';
 
 export const remindersModule = defineModule({

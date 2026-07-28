@@ -6,7 +6,6 @@ import { isIP, type LookupFunction } from 'node:net';
 import {
   getOrCreateNotificationsConversation,
   saveOccasion,
-  searchDocumentChunks,
   upcomingOccasions,
 } from '@assistant/core';
 import {
@@ -20,8 +19,8 @@ import {
 } from '@assistant/db';
 import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import { register } from '../register.js';
 import type { ToolRegistry } from '../registry.js';
-import type { AssistantTool, ToolFlags } from '../types.js';
 import type { WorkspaceStore } from '../workspace-store.js';
 
 export interface BuiltinDeps {
@@ -29,8 +28,6 @@ export interface BuiltinDeps {
   embed: (texts: string[]) => Promise<number[][]>;
   /** Workspace file store: local FS in dev, GCS in prod. */
   workspace: WorkspaceStore;
-  /** Document search belongs to the optional documents module. */
-  documentsEnabled?: boolean;
 }
 
 export const WEB_FETCH_MAX_BYTES = 256 * 1024;
@@ -323,14 +320,6 @@ export function looksLikeBotChallenge(status: number, text: string): boolean {
   return challengeStatus || text.length < 4000;
 }
 
-function register<S extends z.ZodType, Out>(
-  registry: ToolRegistry,
-  tool: AssistantTool<S, Out>,
-  flags: ToolFlags = {},
-) {
-  registry.register(tool as unknown as AssistantTool, flags);
-}
-
 export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps): ToolRegistry {
   // ── memory ─────────────────────────────────────────────────────────────────
   register(
@@ -453,45 +442,6 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     },
     { confidentialRead: true, returnsUntrustedContent: true },
   );
-
-  // ── documents (Phase 11) ─────────────────────────────────────────────────────
-  if (deps.documentsEnabled !== false) {
-    register(
-      registry,
-      {
-        name: 'documents.search',
-        description:
-          "Search the owner's filed documents — files they uploaded and attachments the assistant filed from trusted senders — by meaning. Returns the most relevant passages with their document title. Use this to answer a question about the content of a document (a PDF, a note, an export).",
-        inputSchema: z.object({
-          query: z.string().min(2).max(500),
-          limit: z.number().int().min(1).max(10).default(5),
-        }),
-        risk: 'autonomous',
-        acceptsUntrustedInput: true,
-        execute: async (args, ctx) => {
-          const [embedding] = await deps.embed([args.query]);
-          if (!embedding) return { passages: [] };
-          const hits = await searchDocumentChunks(ctx.db, {
-            agentId: ctx.agentId,
-            embedding,
-            limit: args.limit,
-          });
-          return {
-            passages: hits.map((h) => ({
-              document: h.title,
-              source: h.source,
-              snippet: h.text.slice(0, 1000),
-              similarity: Number(h.similarity.toFixed(3)),
-            })),
-          };
-        },
-      },
-      // Document content is third-party-authored by nature — a filed PDF or
-      // attachment can carry injected instructions — so its text taints the
-      // session (owner-approval gates any outward action afterwards).
-      { confidentialRead: true, returnsUntrustedContent: true },
-    );
-  }
 
   // ── occasions (Phase 17) ─────────────────────────────────────────────────────
   register(
