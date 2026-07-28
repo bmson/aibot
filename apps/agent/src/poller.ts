@@ -17,7 +17,6 @@ import { type AgentDeps, agentServices } from './deps.js';
 import { syncMailbox } from './email-sync.js';
 import { executorDeps } from './executor-deps.js';
 import { executeAgentTask } from './task-runner.js';
-import { reapExpiredWatches } from './watches.js';
 
 const POLL_INTERVAL_MS = 2000;
 const SWEEP_EVERY_TICKS = 30; // ~1 min, matching the prod Cloud Scheduler cadence
@@ -87,7 +86,6 @@ export function startPoller(deps: AgentDeps): () => void {
           await runStep(sweepStep.name, () => sweepStep.run(agentServices(deps)));
         }
         await runStep('reapExpiredApplicationWatches', () => reapExpiredApplicationWatches(deps));
-        await runStep('reapExpiredWatches', () => reapExpiredWatches(deps));
       }
       // Module-declared recurring work (mail sync once relocated). Cadence is
       // the module's everyTicks against the shared 2s tick.

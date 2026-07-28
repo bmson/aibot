@@ -1,20 +1,20 @@
 import { persistMessage } from '@assistant/core';
-import { type WatchRow, watches, watchFires } from '@assistant/db';
-import { notifyOwnerBySms } from '@assistant/modules';
+import { type Db, type WatchRow, watches, watchFires } from '@assistant/db';
 import { emailWatchMatches } from '@assistant/tools';
 import { and, eq, gt, lte, sql } from 'drizzle-orm';
-import { type AgentDeps, smsDeps } from './deps.js';
+import type { InboundEmailEvent, OwnerNotifier } from '../platform.js';
 
-export interface EmailWatchInput {
-  agentId: string;
-  messageId: string;
-  from: string;
-  subject: string;
-  body: string;
-  /** True only for Gmail receiver-authenticated, From-aligned SPF/DKIM/DMARC. */
-  authenticated: boolean;
-  now?: Date;
+/** What watch matching consumes: the database and the owner-notifier port. */
+export interface WatchesDeps {
+  db: Db;
+  notifyOwner: OwnerNotifier['notifyOwner'];
 }
+
+/**
+ * The authenticated-inbound-email shape watches match against — structurally
+ * the platform's observer event, re-exported under the historical name.
+ */
+export type EmailWatchInput = InboundEmailEvent;
 
 export interface EmailWatchResult {
   fired: string[];
@@ -39,7 +39,7 @@ function noticeText(watch: WatchRow, input: EmailWatchInput): string {
  * Gmail history replays and at-least-once redelivery never double-notify.
  */
 export async function matchEmailWatches(
-  deps: AgentDeps,
+  deps: WatchesDeps,
   input: EmailWatchInput,
 ): Promise<EmailWatchResult> {
   const fired: string[] = [];
@@ -118,9 +118,9 @@ export async function matchEmailWatches(
         channelMessageId: `watch-fire:${watch.id}:${input.messageId}`,
       }).catch((err) => console.error('watch notice failed', err));
     }
-    await notifyOwnerBySms(smsDeps(deps), { text }).catch((err) =>
-      console.error('watch owner notification failed', err),
-    );
+    await deps
+      .notifyOwner({ text })
+      .catch((err) => console.error('watch owner notification failed', err));
     fired.push(watch.id);
   }
   return { fired };
@@ -131,7 +131,10 @@ export async function matchEmailWatches(
  * reapExpiredApplicationWatches; runs from the sweep. Idempotent — the
  * status-guarded UPDATE transitions each row once.
  */
-export async function reapExpiredWatches(deps: AgentDeps, now = new Date()): Promise<number> {
+export async function reapExpiredWatches(
+  deps: Pick<WatchesDeps, 'db'>,
+  now = new Date(),
+): Promise<number> {
   const expired = await deps.db
     .update(watches)
     .set({ status: 'expired', updatedAt: now })

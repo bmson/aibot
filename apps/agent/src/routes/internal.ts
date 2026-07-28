@@ -152,11 +152,6 @@ internal.post('/sweep', async (c) => {
       (await import('../application-confirmations.js')).reapExpiredApplicationWatches(deps),
     0,
   );
-  const expiredInboxWatches = await step(
-    'reapExpiredWatches',
-    async () => (await import('../watches.js')).reapExpiredWatches(deps),
-    0,
-  );
   return c.json({
     expiredApprovalsWoke: woken.length,
     resumedApprovalTasks: resumedApprovalTasks.length,
@@ -168,7 +163,6 @@ internal.post('/sweep', async (c) => {
     budgetNotices: budgetNotices.length,
     ...moduleSteps,
     expiredWatches,
-    expiredInboxWatches,
     purged,
     aged,
   });

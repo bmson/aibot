@@ -19,10 +19,12 @@ export default defineConfig({
       'packages/application',
       'packages/core',
       'packages/db',
+      // Serial since the watches e2e suite moved in with the watches module —
+      // it shares the one database with the other integration projects.
+      'packages/modules',
       'packages/tools',
       'apps/agent',
       parallel('packages/config'),
-      parallel('packages/modules'),
       parallel('packages/setup'),
       parallel('apps/web'),
       parallel('workers/browser-job'),

@@ -1,8 +1,8 @@
 import { conversations, createDb, type Db, messages, watches, watchFires } from '@assistant/db';
 import { and, eq, inArray, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AgentDeps } from './deps.js';
-import { matchEmailWatches, reapExpiredWatches } from './watches.js';
+import { noopOwnerNotifier } from '../platform.js';
+import { matchEmailWatches, reapExpiredWatches, type WatchesDeps } from './email-watches.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -12,7 +12,7 @@ const NOW = new Date('2026-07-18T12:00:00.000Z');
 let db: Db;
 let dbUp = false;
 let agentId: string;
-let deps: AgentDeps;
+let deps: WatchesDeps;
 
 interface WatchInput {
   senders?: string[];
@@ -72,7 +72,7 @@ beforeAll(async () => {
     const [agent] = await db.query.agents.findMany({ limit: 1 });
     if (!agent) throw new Error('unseeded');
     agentId = agent.id;
-    deps = { db } as unknown as AgentDeps;
+    deps = { db, notifyOwner: noopOwnerNotifier.notifyOwner };
     dbUp = true;
   } catch {
     console.warn('watches.e2e: database unreachable — skipping');
