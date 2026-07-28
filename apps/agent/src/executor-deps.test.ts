@@ -1,5 +1,8 @@
+import type { TaskRow } from '@assistant/db';
+import type { InstalledModuleSet, ModuleChannel } from '@assistant/modules';
 import { describe, expect, it } from 'vitest';
-import { approvalNoticeEmail } from './executor-deps.js';
+import type { AgentDeps } from './deps.js';
+import { approvalNoticeEmail, executorDeps } from './executor-deps.js';
 
 describe('approvalNoticeEmail', () => {
   const notice = approvalNoticeEmail([
@@ -32,5 +35,73 @@ describe('approvalNoticeEmail', () => {
     ]);
     expect(many).toContain('[A8] first');
     expect(many).toContain('[A9] second');
+  });
+});
+
+/**
+ * The channel fan-out semantics carried over from the hardcoded era: every
+ * channel's configured-check runs before ANY channel delivers, delivery order
+ * is composition order (email before sms), and the approval flow pings the
+ * owner out-of-band before posting the in-thread notice.
+ */
+describe('executorDeps channel composition', () => {
+  const calls: string[] = [];
+  const channel = (name: string, over: Partial<ModuleChannel> = {}): ModuleChannel => ({
+    deliverFinal: async () => {
+      calls.push(`deliver:${name}`);
+    },
+    deliverApprovalNotice: async () => {
+      calls.push(`notice:${name}`);
+    },
+    ...over,
+  });
+  const depsWith = (channels: ModuleChannel[]): AgentDeps =>
+    ({
+      db: {},
+      modules: {
+        channels,
+        ownerNotifier: {
+          notifyOwner: async () => {
+            calls.push('ping:owner');
+          },
+          notifyApprovals: async () => {
+            calls.push('ping:approvals');
+          },
+        },
+        emailObservers: [],
+        jobUnavailable: () => null,
+      } as unknown as InstalledModuleSet,
+    }) as unknown as AgentDeps;
+  const task = { id: 't1', type: 'email_triage', trust: 'owner' } as TaskRow;
+
+  it('runs every assertDeliverable before any delivery', async () => {
+    calls.length = 0;
+    const throwing = channel('email', {
+      assertDeliverable: () => {
+        throw new Error('email final delivery is not configured');
+      },
+    });
+    const deps = depsWith([throwing, channel('sms')]);
+    await expect(executorDeps(deps).deliverFinal?.(task, 'answer')).rejects.toThrow(
+      /email final delivery is not configured/,
+    );
+    // The failing check fired before EITHER channel delivered anything.
+    expect(calls).toEqual([]);
+  });
+
+  it('delivers through every channel in composition order', async () => {
+    calls.length = 0;
+    const deps = depsWith([channel('email'), channel('sms')]);
+    await executorDeps(deps).deliverFinal?.(task, 'answer');
+    expect(calls).toEqual(['deliver:email', 'deliver:sms']);
+  });
+
+  it('pings the owner before posting the in-thread approval notice', async () => {
+    calls.length = 0;
+    const deps = depsWith([channel('email')]);
+    await executorDeps(deps).notifyApproval?.(task, [
+      { taskId: 't1', shortCode: 'A7', summary: 's' },
+    ]);
+    expect(calls).toEqual(['ping:approvals', 'notice:email']);
   });
 });

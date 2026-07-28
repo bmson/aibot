@@ -19,6 +19,11 @@ import {
   toolCalls,
 } from '@assistant/db';
 import {
+  type ApplicationConfirmationTaskDeps,
+  executeApplicationConfirmationTask,
+  processApplicationConfirmation,
+} from '@assistant/modules';
+import {
   type BrowserJobLaunchInput,
   type GoogleClient,
   registerApplicationTools,
@@ -31,10 +36,6 @@ import {
 import type { ModelMessage } from 'ai';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import {
-  executeApplicationConfirmationTask,
-  processApplicationConfirmation,
-} from './application-confirmations.js';
 import type { AgentDeps } from './deps.js';
 
 const DATABASE_URL =
@@ -253,7 +254,13 @@ function workflowHarness() {
   });
   registerApplicationTools(registry, { client: google });
   const dispatcher = new ToolDispatcher(db, registry);
-  const agentDeps = { db, dispatcher, registry, googleClient: google } as unknown as AgentDeps;
+  const agentDeps = {
+    db,
+    dispatcher,
+    registry,
+    googleClient: google,
+    notifyOwner: async () => {},
+  } as unknown as AgentDeps & ApplicationConfirmationTaskDeps;
   return { dispatcher, googleApi, launches, writes, agentDeps };
 }
 

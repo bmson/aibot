@@ -1,4 +1,4 @@
-import { planBrowse } from '@assistant/core';
+import { planBrowse, recordBrowserJobResult } from '@assistant/core';
 import {
   type BrowserJobLauncher,
   CloudRunJobLauncher,
@@ -39,6 +39,37 @@ export const browserModule = defineModule<BrowserJobLauncher | undefined>({
       launcher,
       callbackUrl: `${config.PUBLIC_URL}/webhooks/browser/callback`,
     });
-    return { exports: launcher };
+    return {
+      exports: launcher,
+      hooks: {
+        /**
+         * Browser-job result callback. Auth is the per-launch one-shot token
+         * minted by browser.execute and checkpointed in the task state — the
+         * job carries no shared secrets, so a leaked job env can wake exactly
+         * one task, once.
+         */
+        webhooks: [
+          {
+            path: '/browser/callback',
+            handler: async (services, request) => {
+              const body = await request.json<{
+                taskId?: string;
+                token?: string;
+                result?: Record<string, unknown>;
+              }>();
+              if (!body?.taskId || !body?.token)
+                return { status: 400, json: { error: 'bad request' } };
+              const outcome = await recordBrowserJobResult(services.db, {
+                taskId: body.taskId,
+                token: body.token,
+                result: body.result ?? { ok: false, error: 'job reported no result' },
+              });
+              if (!outcome.ok) return { status: outcome.status, json: { error: outcome.error } };
+              return { status: 200, json: { ok: true } };
+            },
+          },
+        ],
+      },
+    };
   },
 });

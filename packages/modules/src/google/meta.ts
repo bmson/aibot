@@ -51,6 +51,28 @@ export const googleMeta = {
       { name: 'assistant-gmail-watch', schedule: '0 4 * * *', path: '/internal/gmail/watch' },
     ],
   },
+  // Gmail push: the platform verifies the Google-signed OIDC token against the
+  // configured push service account before the module's handler runs.
+  webhooks: [
+    {
+      path: '/gmail/pubsub',
+      auth: { kind: 'googleOidc', serviceAccountKey: 'GMAIL_PUSH_SERVICE_ACCOUNT' },
+    },
+  ],
+  // The handlers for the scheduler jobs above, declared together so the
+  // schedule and the route cannot drift apart.
+  internalRoutes: [
+    { path: '/gmail/watch' },
+    {
+      // Not the uniform disabled-404: the every-minute scheduler job must stay
+      // green when sync is off, so a disabled module reports a 200 skip.
+      path: '/gmail/sync',
+      whenDisabled: {
+        status: 200,
+        body: { skipped: true, reason: 'gmail sync disabled by module or setting' },
+      },
+    },
+  ],
   billing: {
     gcp: [
       {

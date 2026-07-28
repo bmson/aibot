@@ -11,16 +11,12 @@ import {
   resumeResolvedApprovalTasks,
   runDueSchedules,
 } from '@assistant/core';
-import { gmailSyncEnabled } from '@assistant/modules/meta';
-import { reapExpiredApplicationWatches } from './application-confirmations.js';
 import { type AgentDeps, agentServices } from './deps.js';
-import { syncMailbox } from './email-sync.js';
 import { executorDeps } from './executor-deps.js';
 import { executeAgentTask } from './task-runner.js';
 
 const POLL_INTERVAL_MS = 2000;
 const SWEEP_EVERY_TICKS = 30; // ~1 min, matching the prod Cloud Scheduler cadence
-const EMAIL_SYNC_EVERY_TICKS = 15; // ~30s — local fallback; prod uses Pub/Sub push
 
 /**
  * Local queue driver: polls for due tasks and executes them in-process.
@@ -85,23 +81,15 @@ export function startPoller(deps: AgentDeps): () => void {
         for (const sweepStep of deps.modules.sweepSteps) {
           await runStep(sweepStep.name, () => sweepStep.run(agentServices(deps)));
         }
-        await runStep('reapExpiredApplicationWatches', () => reapExpiredApplicationWatches(deps));
       }
-      // Module-declared recurring work (mail sync once relocated). Cadence is
-      // the module's everyTicks against the shared 2s tick.
+      // Module-declared recurring work (google's mail sync, most notably).
+      // Cadence is the module's everyTicks against the shared 2s tick.
       for (const moduleTick of deps.modules.ticks) {
         if (tick % moduleTick.everyTicks === 0) {
           await moduleTick
             .run(agentServices(deps))
             .catch((err) => console.error(`${moduleTick.name} error`, err));
         }
-      }
-      if (
-        tick % EMAIL_SYNC_EVERY_TICKS === 0 &&
-        deps.googleClient.configured() &&
-        gmailSyncEnabled()
-      ) {
-        await syncMailbox(deps).catch((err) => console.error('email-sync error', err));
       }
       const due = await findDueTasks(deps.db, 5);
       for (const task of due) {

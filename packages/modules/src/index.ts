@@ -9,6 +9,30 @@ export { browserModule } from './browser/module.js';
 export { codeModule } from './code/module.js';
 export * from './compose.js';
 export { documentsModule } from './documents/module.js';
+export {
+  type ApplicationConfirmationDeps,
+  type ApplicationConfirmationInput,
+  type ApplicationConfirmationResult,
+  type ApplicationConfirmationTaskDeps,
+  type ApplicationConfirmationTaskResult,
+  applicationConfirmationTaskHandlers,
+  confirmationTokenHashes,
+  executeAmbiguousApplicationConfirmationTask,
+  executeApplicationConfirmationTask,
+  processApplicationConfirmation,
+  reapExpiredApplicationWatches,
+} from './google/application-confirmations.js';
+export { deliverEmailFinal, type EmailChannelDeps } from './google/email-channel.js';
+export {
+  type EmailSyncDeps,
+  gmailSenderAuthenticated,
+  MailboxSyncCoordinator,
+  type MailboxSyncResult,
+  processMessage,
+  renewWatch,
+  syncMailboxOnce,
+  syncMailboxWithDistributedLock,
+} from './google/email-sync.js';
 export { googleModule } from './google/module.js';
 export * from './install.js';
 export * from './meta.js';

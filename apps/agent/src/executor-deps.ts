@@ -1,7 +1,5 @@
-import { type ExecutorDeps, TrustSchema } from '@assistant/core';
-import { deliverSmsFinal, notifyApprovalsBySms, notifyOwnerBySms } from '@assistant/modules';
-import { type AgentDeps, smsDeps } from './deps.js';
-import { deliverEmailFinal } from './email-channel.js';
+import type { ExecutorDeps } from '@assistant/core';
+import { type AgentDeps, agentServices } from './deps.js';
 
 /**
  * The in-thread version of the parked-approval notice. It deliberately does NOT
@@ -21,11 +19,16 @@ export function approvalNoticeEmail(
 }
 
 /**
- * The executor wired with this app's channel hooks: final answers route back
- * through the channel the request came from (email thread reply, SMS), plus
- * approval pings. Each deliverer guards on its own channel, so chaining is safe.
+ * The executor wired with the installed modules' channels: final answers route
+ * back through the channel the request came from (email thread reply, SMS),
+ * plus approval pings. Every channel self-guards on its own conversation
+ * shape, so fanning out to all of them is safe; composition order (google
+ * before sms in assistant.config.ts) preserves the email-then-sms sequence
+ * from the hardcoded era. This file names no provider.
  */
 export function executorDeps(deps: AgentDeps): ExecutorDeps {
+  const services = agentServices(deps);
+  const channels = deps.modules.channels;
   return {
     db: deps.db,
     router: deps.router,
@@ -34,40 +37,25 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
     documentProcessor: deps.documentProcessor,
     jobUnavailable: (job) => deps.modules.jobUnavailable(job),
     deliverFinal: async (task, text) => {
-      // Let provider failures escape: the workflow has already checkpointed
-      // the exact final text and will retry delivery without rerunning the model.
-      if (
-        task.type === 'email_triage' &&
-        task.trust === 'owner' &&
-        !deps.googleClient.configured()
-      ) {
-        throw new Error('email final delivery is not configured');
-      }
-      if (task.type === 'sms_turn' && task.trust === 'owner' && !deps.twilio.configured()) {
-        throw new Error('SMS final delivery is not configured');
-      }
-      await deliverEmailFinal(deps, task, text);
-      await deliverSmsFinal(
-        smsDeps(deps),
-        {
-          id: task.id,
-          conversationId: task.conversationId,
-          trust: TrustSchema.parse(task.trust),
-        },
-        text,
-      );
+      // Every channel's configured-check runs BEFORE any channel delivers, so
+      // a half-configured installation fails the task loudly instead of
+      // delivering on one channel and silently dropping the other. Provider
+      // failures escape: the workflow has already checkpointed the exact final
+      // text and will retry delivery without rerunning the model.
+      for (const channel of channels) channel.assertDeliverable?.(task);
+      for (const channel of channels) await channel.deliverFinal(services, task, text);
     },
-    // A parked approval has to reach the owner where they actually are. SMS is
-    // the out-of-band ping and the only channel that can RESOLVE an approval
-    // (sms-channel parses "YES A7"). The email reply is what stops an
-    // email-triggered request from going silent: postConversationNotice only
-    // writes a dashboard row, so without this the thread the owner is watching
-    // shows nothing at all. deliverEmailFinal guards on its own channel, so
-    // this is a no-op for every non-email task.
+    // A parked approval has to reach the owner where they actually are. The
+    // out-of-band ping (SMS today) goes first and is the only channel that can
+    // RESOLVE an approval; the in-thread notice is what stops an
+    // email-triggered request from going silent. Each notice deliverer guards
+    // on its own channel, so this is a no-op for every non-email task.
     notifyApproval: async (task, approvals) => {
-      await notifyApprovalsBySms(smsDeps(deps), approvals);
-      await deliverEmailFinal(deps, task, approvalNoticeEmail(approvals));
+      await services.ownerNotifier.notifyApprovals(approvals);
+      for (const channel of channels) {
+        await channel.deliverApprovalNotice?.(services, task, approvalNoticeEmail(approvals));
+      }
     },
-    notifyOwner: ({ taskId, text }) => notifyOwnerBySms(smsDeps(deps), { taskId, text }),
+    notifyOwner: ({ taskId, text }) => services.ownerNotifier.notifyOwner({ taskId, text }),
   };
 }

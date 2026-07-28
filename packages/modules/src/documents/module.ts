@@ -2,15 +2,51 @@ import {
   CloudRunDocumentJobLauncher,
   type DocumentProcessorConfig,
   LocalDocumentProcessLauncher,
+  recordDocumentProcessorResult,
 } from '@assistant/core';
 import { registerDocumentTools } from '@assistant/tools/documents';
-import { defineModule } from '../platform.js';
+import { defineModule, type ModuleHooks } from '../platform.js';
 import { documentsMeta } from './meta.js';
 
 export const documentsModule = defineModule<DocumentProcessorConfig | undefined>({
   meta: documentsMeta,
   create: ({ config, registry, repoRoot, router, workspacePrefix, workspaceRoot }) => {
     registerDocumentTools(registry, { embed: (texts) => router.embed(texts) });
+
+    const hooks: ModuleHooks = {
+      /**
+       * Document-processor result callback. Same one-shot-token auth as the
+       * code/browser callbacks, but keyed on the document row rather than a
+       * task: the per-launch token minted by the processor sweep and
+       * checkpointed on the `documents` row is the only credential the
+       * credential-free worker carries.
+       */
+      webhooks: [
+        {
+          path: '/document/callback',
+          handler: async (services, request) => {
+            const body = await request.json<{
+              documentId?: string;
+              token?: string;
+              result?: { ok?: boolean; kind?: string; chars?: number; error?: string };
+            }>();
+            if (!body?.documentId || !body?.token) {
+              return { status: 400, json: { error: 'bad request' } };
+            }
+            const r = body.result;
+            const outcome = await recordDocumentProcessorResult(services.db, {
+              documentId: body.documentId,
+              token: body.token,
+              result: r
+                ? { ok: r.ok === true, kind: r.kind, chars: r.chars, error: r.error }
+                : { ok: false, error: 'job reported no result' },
+            });
+            if (!outcome.ok) return { status: outcome.status, json: { error: outcome.error } };
+            return { status: 200, json: { ok: true } };
+          },
+        },
+      ],
+    };
 
     const callbackUrl = `${config.PUBLIC_URL}/webhooks/document/callback`;
     if (config.PROCESSOR_DRIVER === 'cloudrun') {
@@ -28,6 +64,7 @@ export const documentsModule = defineModule<DocumentProcessorConfig | undefined>
           }),
           callbackUrl,
         },
+        hooks,
       };
     }
     if (config.QUEUE_DRIVER === 'local') {
@@ -36,10 +73,13 @@ export const documentsModule = defineModule<DocumentProcessorConfig | undefined>
           launcher: new LocalDocumentProcessLauncher({ repoRoot, workspaceRoot }),
           callbackUrl,
         },
+        hooks,
       };
     }
     // A cloud installation without a processor job has nowhere to run
     // extraction; document tools stay registered but produce no launches.
-    return {};
+    // The callback still answers: a worker launched before a driver change
+    // must be able to report its result.
+    return { hooks };
   },
 });

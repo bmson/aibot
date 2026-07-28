@@ -11,7 +11,17 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
-import { type InstalledModuleSet, noopOwnerNotifier } from '@assistant/modules';
+import {
+  type ApplicationConfirmationTaskDeps,
+  applicationConfirmationTaskHandlers,
+  confirmationTokenHashes,
+  type EmailSyncDeps,
+  executeApplicationConfirmationTask,
+  type InstalledModuleSet,
+  noopOwnerNotifier,
+  processApplicationConfirmation,
+  processMessage,
+} from '@assistant/modules';
 import {
   AmbiguousGoogleMutationError,
   type GoogleClient,
@@ -22,13 +32,7 @@ import {
 } from '@assistant/tools';
 import { and, eq, inArray, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import {
-  confirmationTokenHashes,
-  executeApplicationConfirmationTask,
-  processApplicationConfirmation,
-} from './application-confirmations.js';
 import type { AgentDeps } from './deps.js';
-import { processMessage } from './email-sync.js';
 import { executeAgentTask } from './task-runner.js';
 
 const DATABASE_URL =
@@ -46,7 +50,8 @@ interface Harness {
   client: GoogleClient;
   dispatcher: ToolDispatcher;
   registry: ToolRegistry;
-  deps: AgentDeps;
+  /** One object satisfying every consumer: the agent runner and the module deps. */
+  deps: AgentDeps & ApplicationConfirmationTaskDeps & EmailSyncDeps;
 }
 
 function harness(
@@ -56,10 +61,11 @@ function harness(
   const client = { api, configured: () => true } as unknown as GoogleClient;
   const registry = registerApplicationTools(new ToolRegistry(), { client });
   const dispatcher = new ToolDispatcher(db, registry);
-  // The stub covers what executeAgentTask consults on this path: no module
-  // claims the task kinds, no notifier is installed, no observers exist.
+  // The stub routes the confirmation task kinds through the real module
+  // handlers (as the installed google module would) and no-ops the rest.
   const modules = {
-    taskHandlerFor: () => undefined,
+    taskHandlerFor: (kind: string) =>
+      applicationConfirmationTaskHandlers.find((handler) => handler.kind === kind),
     ownerNotifier: noopOwnerNotifier,
     emailObservers: [],
     sweepSteps: [],
@@ -67,7 +73,16 @@ function harness(
     channels: [],
     jobUnavailable: () => null,
   } as unknown as InstalledModuleSet;
-  const deps = { db, dispatcher, registry, googleClient: client, modules } as unknown as AgentDeps;
+  const deps = {
+    db,
+    dispatcher,
+    registry,
+    googleClient: client,
+    modules,
+    config: { ASSISTANT_MODULES: [] },
+    notifyOwner: async () => {},
+    observeInboundEmail: async () => {},
+  } as unknown as Harness['deps'];
   return { api, client, dispatcher, registry, deps };
 }
 

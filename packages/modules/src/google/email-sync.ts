@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { isModuleEnabled } from '@assistant/config';
-import type { Trust } from '@assistant/core';
+import { type Config, isModuleEnabled } from '@assistant/config';
+import type { ModelRouter, Trust } from '@assistant/core';
 import {
   captureOwnerWritingSample,
   enqueueTask,
@@ -15,11 +15,11 @@ import {
   channelBindings,
   contacts,
   conversations,
+  type Db,
   gmailSyncState,
   messages as storedMessages,
   tasks,
 } from '@assistant/db';
-import { notifyOwnerBySms } from '@assistant/modules';
 import {
   collectGmailAttachments,
   extractGmailText,
@@ -27,10 +27,28 @@ import {
   gmailHeader,
   safeRelPath,
 } from '@assistant/tools';
+import type { GoogleClient } from '@assistant/tools/modules/google';
+import type { WorkspaceStore } from '@assistant/tools/workspace';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import type { InboundEmailEvent, OwnerNotifier } from '../platform.js';
 import { processApplicationConfirmation } from './application-confirmations.js';
-import { type AgentDeps, agentServices, smsDeps } from './deps.js';
+
+/**
+ * What mail sync consumes. The client comes from the module's own create()
+ * closure; the notifier and observer fan-out are platform ports, so this file
+ * needs neither the sms module nor the agent's dependency graph.
+ */
+export interface EmailSyncDeps {
+  config: Config;
+  db: Db;
+  router: ModelRouter;
+  workspace: WorkspaceStore;
+  googleClient: GoogleClient;
+  notifyOwner: OwnerNotifier['notifyOwner'];
+  /** Fan an authenticated inbound message out to observing modules (watches). */
+  observeInboundEmail: (event: InboundEmailEvent) => Promise<void>;
+}
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const HISTORY_PAGE_SIZE = 25;
@@ -238,7 +256,7 @@ type SenderDrop = 'automated' | 'unauthenticated';
 
 /** owner → known → (model: automated?) → unknown */
 async function classifySender(
-  deps: AgentDeps,
+  deps: EmailSyncDeps,
   contactTrustByEmail: ContactTrustByEmail,
   fromEmail: string,
   subject: string,
@@ -277,7 +295,7 @@ const OWNER_SPOOF_NOTICE_INTERVAL_MS = 60 * 60 * 1000;
 const lastUnauthenticatedNoticeAt = new Map<string, number>();
 
 async function reportUnauthenticatedTrustedSender(
-  deps: AgentDeps,
+  deps: EmailSyncDeps,
   fromEmail: string,
   subject: string,
 ): Promise<void> {
@@ -285,16 +303,18 @@ async function reportUnauthenticatedTrustedSender(
   const previous = lastUnauthenticatedNoticeAt.get(fromEmail);
   if (previous !== undefined && now - previous < OWNER_SPOOF_NOTICE_INTERVAL_MS) return;
   lastUnauthenticatedNoticeAt.set(fromEmail, now);
-  await notifyOwnerBySms(smsDeps(deps), {
-    text:
-      `Dropped an email claiming to be from ${fromEmail} ("${subject.slice(0, 60)}") — ` +
-      'it failed SPF/DKIM/DMARC checks. If you sent it, that domain is missing email ' +
-      'authentication records and the assistant cannot accept its mail.',
-  }).catch((err) => console.error('unauthenticated-sender notice failed', err));
+  await deps
+    .notifyOwner({
+      text:
+        `Dropped an email claiming to be from ${fromEmail} ("${subject.slice(0, 60)}") — ` +
+        'it failed SPF/DKIM/DMARC checks. If you sent it, that domain is missing email ' +
+        'authentication records and the assistant cannot accept its mail.',
+    })
+    .catch((err) => console.error('unauthenticated-sender notice failed', err));
 }
 
 async function conversationForThread(
-  deps: AgentDeps,
+  deps: EmailSyncDeps,
   agentId: string,
   threadId: string,
   trust: Trust,
@@ -326,7 +346,7 @@ async function conversationForThread(
  * Dedup is by content hash, so a Gmail history replay re-files nothing.
  */
 async function fileMessageAttachments(
-  deps: AgentDeps,
+  deps: EmailSyncDeps,
   input: { agentId: string; message: GmailMessage; trust: Trust },
 ): Promise<void> {
   if (!isModuleEnabled(deps.config, 'documents')) return;
@@ -368,7 +388,7 @@ async function fileMessageAttachments(
 }
 
 export async function processMessage(
-  deps: AgentDeps,
+  deps: EmailSyncDeps,
   agentId: string,
   botEmail: string,
   contactTrustByEmail: ContactTrustByEmail,
@@ -426,12 +446,9 @@ export async function processMessage(
   // module observing inbound email (watches today). Side effects only (a
   // notice + owner ping) — a watched message is still an ordinary email, so
   // this never short-circuits normal triage.
-  const emailEvent = { agentId, messageId: msg.id, from, subject, body: text, authenticated };
-  for (const observe of deps.modules?.emailObservers ?? []) {
-    await observe(agentServices(deps), emailEvent).catch((err) =>
-      console.error('inbound email observer failed', err),
-    );
-  }
+  await deps
+    .observeInboundEmail({ agentId, messageId: msg.id, from, subject, body: text, authenticated })
+    .catch((err) => console.error('inbound email observer failed', err));
 
   // Recover the narrow crash window after message persistence but before task
   // creation without paying for sender classification again.
@@ -573,7 +590,7 @@ export async function processMessage(
  * A stale history cursor falls back to a resumable current-inbox reconciliation
  * instead of silently advancing past messages we have never inspected.
  */
-async function syncMailboxOnce(deps: AgentDeps): Promise<MailboxSyncResult> {
+export async function syncMailboxOnce(deps: EmailSyncDeps): Promise<MailboxSyncResult> {
   if (!deps.googleClient.configured()) return { processed: 0 };
   const agent = await getAgent(deps.db);
   const botEmail = agent.email;
@@ -742,7 +759,9 @@ async function syncMailboxOnce(deps: AgentDeps): Promise<MailboxSyncResult> {
  * on one Cloud Run instance; this session advisory lock prevents two scaled
  * instances from both paying to classify the same not-yet-persisted message.
  */
-async function syncMailboxWithDistributedLock(deps: AgentDeps): Promise<MailboxSyncResult> {
+export async function syncMailboxWithDistributedLock(
+  deps: EmailSyncDeps,
+): Promise<MailboxSyncResult> {
   const connection = await deps.db.$client.reserve();
   let acquired = false;
   try {
@@ -765,20 +784,8 @@ async function syncMailboxWithDistributedLock(deps: AgentDeps): Promise<MailboxS
   }
 }
 
-let nextSyncDeps: AgentDeps | undefined;
-const mailboxSyncCoordinator = new MailboxSyncCoordinator(async () => {
-  if (!nextSyncDeps) throw new Error('mailbox sync dependencies unavailable');
-  return syncMailboxWithDistributedLock(nextSyncDeps);
-});
-
-/** Single-flight entry point used by polling, internal calls, and Pub/Sub. */
-export function syncMailbox(deps: AgentDeps): Promise<MailboxSyncResult> {
-  nextSyncDeps = deps;
-  return mailboxSyncCoordinator.sync();
-}
-
 /** Renew users.watch (Gmail push). Requires GMAIL_PUBSUB_TOPIC; expires in 7 days. */
-export async function renewWatch(deps: AgentDeps, topicName: string): Promise<Date> {
+export async function renewWatch(deps: EmailSyncDeps, topicName: string): Promise<Date> {
   const res = await deps.googleClient.api<{ historyId: string; expiration: string }>(
     `${GMAIL}/watch`,
     {

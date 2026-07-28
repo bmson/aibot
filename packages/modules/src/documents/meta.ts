@@ -23,4 +23,7 @@ export const documentsMeta = {
   ui: { navHrefs: ['/documents'] },
   // Keep in step with the documents.* members of CodeJobName in @assistant/core.
   jobs: ['documents.extract', 'documents.process'],
+  // Worker result callback; the per-launch one-shot token in the body is
+  // the credential, validated by the handler itself.
+  webhooks: [{ path: '/document/callback', auth: { kind: 'oneShotToken' } }],
 } satisfies ModuleMeta;

@@ -9,8 +9,7 @@ import {
 } from '@assistant/db';
 import { inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AgentDeps } from './deps.js';
-import { deliverEmailFinal } from './email-channel.js';
+import { deliverEmailFinal, type EmailChannelDeps } from './email-channel.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -26,7 +25,7 @@ const createdConversationIds: string[] = [];
 const createdTaskIds: string[] = [];
 
 /** Captures Gmail sends instead of performing them; serves Message-ID metadata reads. */
-function makeDeps(): { deps: AgentDeps; sent: Array<{ url: string; body: string }> } {
+function makeDeps(): { deps: EmailChannelDeps; sent: Array<{ url: string; body: string }> } {
   const sent: Array<{ url: string; body: string }> = [];
   const deps = {
     db,
@@ -40,7 +39,7 @@ function makeDeps(): { deps: AgentDeps; sent: Array<{ url: string; body: string 
         return { id: 'sent-1', threadId: 'thread-1' };
       },
     },
-  } as unknown as AgentDeps;
+  } as unknown as EmailChannelDeps;
   return { deps, sent };
 }
 

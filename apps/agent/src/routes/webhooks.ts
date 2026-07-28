@@ -3,9 +3,6 @@ import {
   getAgent,
   LocationPingSchema,
   locationPingFresh,
-  recordBrowserJobResult,
-  recordCodeJobResult,
-  recordDocumentProcessorResult,
   recordLocationPing,
   verifyLocationSignature,
 } from '@assistant/core';
@@ -16,7 +13,6 @@ import { bodyLimit } from 'hono/body-limit';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { recordCanaryBrowserResult } from '../canaries.js';
 import { agentServices, buildDeps, composedModuleMetas } from '../deps.js';
-import { syncMailbox } from '../email-sync.js';
 import { verifyGoogleServiceAccountToken } from '../google-oidc.js';
 
 /**
@@ -34,113 +30,6 @@ webhooks.use(
     onError: (c) => c.json({ error: 'request body too large' }, 413),
   }),
 );
-
-webhooks.post('/gmail/pubsub', async (c) => {
-  const config = loadConfig();
-  if (!isModuleEnabled(config, 'google')) return c.json({ error: 'google module disabled' }, 404);
-  const authorization = c.req.header('authorization');
-  if (!authorization) return c.json({ error: 'missing token' }, 401);
-  if (
-    !(await verifyGoogleServiceAccountToken(authorization, {
-      audience: `${config.PUBLIC_URL}/webhooks/gmail/pubsub`,
-      serviceAccount: config.GMAIL_PUSH_SERVICE_ACCOUNT,
-    }))
-  ) {
-    return c.json({ error: 'invalid token' }, 403);
-  }
-
-  // The push payload is only a poke — history.list is the source of truth.
-  // Acknowledge only after the durable history cursor advances. Pub/Sub retries
-  // a non-2xx response, so a process crash or transient API failure loses no poke.
-  const deps = buildDeps();
-  try {
-    await syncMailbox(deps);
-  } catch (error) {
-    console.error('pubsub-triggered sync failed', error);
-    return c.json({ error: 'mailbox sync failed' }, 503);
-  }
-  return c.json({ ok: true });
-});
-
-/**
- * Browser-job result callback. Auth is the per-launch one-shot token minted by
- * browser.execute and checkpointed in the task state — the job carries no
- * shared secrets, so a leaked job env can wake exactly one task, once.
- */
-webhooks.post('/browser/callback', async (c) => {
-  if (!isModuleEnabled(loadConfig(), 'browser')) {
-    return c.json({ error: 'browser module disabled' }, 404);
-  }
-  const body = await c.req
-    .json<{ taskId?: string; token?: string; result?: Record<string, unknown> }>()
-    .catch(() => null);
-  if (!body?.taskId || !body?.token) return c.json({ error: 'bad request' }, 400);
-
-  const deps = buildDeps();
-  const outcome = await recordBrowserJobResult(deps.db, {
-    taskId: body.taskId,
-    token: body.token,
-    result: body.result ?? { ok: false, error: 'job reported no result' },
-  });
-  if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
-  return c.json({ ok: true });
-});
-
-/**
- * Code-job result callback (Phase 13). Same one-shot-token auth as the browser
- * callback: the per-launch token minted by code.execute and checkpointed in the
- * task state is the only credential the credential-free job carries.
- */
-webhooks.post('/code/callback', async (c) => {
-  if (!isModuleEnabled(loadConfig(), 'code')) {
-    return c.json({ error: 'code module disabled' }, 404);
-  }
-  const body = await c.req
-    .json<{ taskId?: string; token?: string; result?: Record<string, unknown> }>()
-    .catch(() => null);
-  if (!body?.taskId || !body?.token) return c.json({ error: 'bad request' }, 400);
-
-  const deps = buildDeps();
-  const outcome = await recordCodeJobResult(deps.db, {
-    taskId: body.taskId,
-    token: body.token,
-    result: body.result ?? { ok: false, error: 'job reported no result' },
-  });
-  if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
-  return c.json({ ok: true });
-});
-
-/**
- * Document-processor result callback (Phase 14). Same one-shot-token auth as the
- * code/browser callbacks, but keyed on the document row rather than a task: the
- * per-launch token minted by the processor sweep and checkpointed on the
- * `documents` row is the only credential the credential-free worker carries.
- */
-webhooks.post('/document/callback', async (c) => {
-  if (!isModuleEnabled(loadConfig(), 'documents')) {
-    return c.json({ error: 'documents module disabled' }, 404);
-  }
-  const body = await c.req
-    .json<{
-      documentId?: string;
-      token?: string;
-      result?: { ok?: boolean; kind?: string; chars?: number; error?: string };
-    }>()
-    .catch(() => null);
-  if (!body?.documentId || !body?.token) return c.json({ error: 'bad request' }, 400);
-
-  const r = body.result;
-  const deps = buildDeps();
-  const outcome = await recordDocumentProcessorResult(deps.db, {
-    documentId: body.documentId,
-    token: body.token,
-    result: r
-      ? { ok: r.ok === true, kind: r.kind, chars: r.chars, error: r.error }
-      : { ok: false, error: 'job reported no result' },
-  });
-  if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
-  return c.json({ ok: true });
-});
 
 /**
  * Owner location ping (Phase 15). Authenticated by an HMAC-SHA256 signature

@@ -15,4 +15,7 @@ export const codeMeta = {
       },
     ],
   },
+  // Worker result callback; the per-launch one-shot token in the body is
+  // the credential, validated by the handler itself.
+  webhooks: [{ path: '/code/callback', auth: { kind: 'oneShotToken' } }],
 } satisfies ModuleMeta;
