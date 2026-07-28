@@ -72,6 +72,9 @@ const allowedWorkspaceDependencies: Record<string, readonly string[]> = {
     '@assistant/db',
     '@assistant/tools',
   ],
+  // Setup tooling reads configuration and module metadata; it must never reach
+  // into the database, provider clients, or the running platform.
+  '@assistant/setup': ['@assistant/config', '@assistant/modules'],
 };
 
 for (const directory of readdirSync(path.join(repoRoot, 'packages'), { withFileTypes: true })) {

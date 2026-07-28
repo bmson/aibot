@@ -36,7 +36,8 @@
     "seed": "pnpm --filter @assistant/db seed",
     "auth:bot": "tsx scripts/auth-bot.ts",
     "voice:ingest": "tsx scripts/ingest-voice.ts",
-    "smoke:mobile": "tsx scripts/mobile-smoke.ts"
+    "smoke:mobile": "tsx scripts/mobile-smoke.ts",
+    "setup:wizard": "tsx scripts/wizard.ts"
   },
   "devDependencies": {
     "@assistant/config": "workspace:^",
@@ -53,6 +54,7 @@
     "zod": "^4.4.3"
   },
   "dependencies": {
-    "@assistant/modules": "workspace:*"
+    "@assistant/modules": "workspace:*",
+    "@assistant/setup": "workspace:*"
   }
 }
