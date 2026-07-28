@@ -3,7 +3,6 @@ import {
   gmailSyncEnabled,
   isModuleEnabled,
   loadConfig,
-  moduleDiagnostics,
   parseAssistantModules,
   resetConfigForTest,
   validateProdConfig,
@@ -39,27 +38,6 @@ describe('config', () => {
     const config = loadConfig({ ASSISTANT_MODULES: 'google,search' });
     expect(isModuleEnabled(config, 'google')).toBe(true);
     expect(isModuleEnabled(config, 'sms')).toBe(false);
-  });
-
-  it('reports module readiness without exposing secrets', () => {
-    const config = loadConfig({
-      ASSISTANT_MODULES: 'google,search',
-      GOOGLE_OAUTH_CLIENT_ID: 'client',
-      GOOGLE_OAUTH_CLIENT_SECRET: 'secret',
-      BOT_GOOGLE_REFRESH_TOKEN: 'refresh',
-    });
-    expect(moduleDiagnostics(config)).toEqual(
-      expect.arrayContaining([
-        { module: 'google', enabled: true, ready: true, detail: 'ready' },
-        {
-          module: 'search',
-          enabled: true,
-          ready: false,
-          detail: 'missing search provider or key',
-        },
-        { module: 'sms', enabled: false, ready: false, detail: 'disabled' },
-      ]),
-    );
   });
 
   it('rejects invalid driver and boolean values', () => {
@@ -111,29 +89,8 @@ describe('config', () => {
     expect(validateProdConfig(config)).toEqual([]);
   });
 
-  it('validates enabled modules against production integrations', () => {
-    const problems = validateProdConfig(
-      loadConfig({
-        ASSISTANT_MODULES: 'minimal',
-        QUEUE_DRIVER: 'cloudtasks',
-        INTERNAL_AUTH_MODE: 'shared-secret',
-        INTERNAL_API_SECRET: 'secret',
-        AGENT_URL: 'https://agent.example',
-        GCP_PROJECT: 'proj',
-        OPENROUTER_API_KEY: 'key',
-        PUBLIC_URL: 'https://agent.example',
-        GMAIL_PUBSUB_TOPIC: 'projects/proj/topics/gmail',
-        GMAIL_PUSH_SERVICE_ACCOUNT: 'push@proj.iam.gserviceaccount.com',
-        CANARY_ENABLED: 'true',
-      }),
-    );
-    expect(problems).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('google module'),
-        expect.stringContaining('browser module'),
-      ]),
-    );
-  });
+  // Module-specific production rules moved to each module's metadata; they are
+  // covered by the conformance suite in @assistant/modules.
 });
 
 describe('gmailSyncEnabled', () => {

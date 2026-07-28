@@ -10,6 +10,7 @@ export default defineConfig({
       'packages/config',
       'packages/core',
       'packages/db',
+      'packages/modules',
       'packages/tools',
       'apps/agent',
       'apps/web',

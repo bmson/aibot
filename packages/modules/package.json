@@ -1,0 +1,17 @@
+{
+  "name": "@assistant/modules",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./kit": "./src/kit.ts",
+    "./meta": "./src/meta.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@assistant/config": "workspace:*"
+  }
+}

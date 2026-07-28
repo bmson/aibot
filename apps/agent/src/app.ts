@@ -1,4 +1,4 @@
-import { moduleDiagnostics } from '@assistant/config';
+import { moduleDiagnostics } from '@assistant/modules/meta';
 import { Hono } from 'hono';
 import { buildDeps } from './deps.js';
 import { api } from './routes/api.js';

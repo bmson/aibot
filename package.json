@@ -42,6 +42,7 @@
     "@assistant/config": "workspace:^",
     "@assistant/core": "workspace:^",
     "@assistant/db": "workspace:^",
+    "@assistant/modules": "workspace:*",
     "@biomejs/biome": "^2.5.5",
     "@types/node": "^26.1.1",
     "drizzle-orm": "^0.45.2",

@@ -1,4 +1,5 @@
-import { loadConfig, validateProdConfig } from '@assistant/config';
+import { loadConfig } from '@assistant/config';
+import { validateAssistantConfig } from '@assistant/modules/meta';
 import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
 import { buildDeps } from './deps.js';
@@ -9,7 +10,7 @@ const config = loadConfig();
 
 // Fail fast on a misconfigured production deploy rather than breaking the queue
 // on the first task or accepting unauthenticated internal calls.
-const configProblems = validateProdConfig(config);
+const configProblems = validateAssistantConfig(config);
 if (configProblems.length > 0) {
   console.error('FATAL: invalid production configuration:');
   for (const problem of configProblems) console.error(`  - ${problem}`);

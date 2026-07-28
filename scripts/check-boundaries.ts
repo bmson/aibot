@@ -39,9 +39,14 @@ for (const file of sourceFiles(path.join(repoRoot, 'apps/web'))) {
   ) {
     failures.push(`${relative} bypasses the application-service boundary`);
   }
+  // Modules ship provider code behind their root entry point. The web app may
+  // read module metadata, which is plain data, but never the runtime.
+  if (/from ['"]@assistant\/modules(?!\/meta)/.test(source)) {
+    failures.push(`${relative} must import module metadata from @assistant/modules/meta`);
+  }
   if (!/^\s*['"]use client['"];/.test(source)) continue;
   const forbidden = [
-    /from ['"]@assistant\/(?:config|core|db|tools)/,
+    /from ['"]@assistant\/(?:config|core|db|modules|tools)/,
     /from ['"]drizzle-orm/,
     /from ['"]@\/lib\/server/,
   ];
@@ -59,6 +64,14 @@ const allowedWorkspaceDependencies: Record<string, readonly string[]> = {
   '@assistant/core': ['@assistant/config', '@assistant/db'],
   '@assistant/application': ['@assistant/config', '@assistant/core', '@assistant/db'],
   '@assistant/tools': ['@assistant/core', '@assistant/db'],
+  // Modules compose the layers below them; nothing may depend on modules except
+  // the agent composition root and metadata consumers.
+  '@assistant/modules': [
+    '@assistant/config',
+    '@assistant/core',
+    '@assistant/db',
+    '@assistant/tools',
+  ],
 };
 
 for (const directory of readdirSync(path.join(repoRoot, 'packages'), { withFileTypes: true })) {
