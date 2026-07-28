@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./kit": "./src/kit.ts",
     "./meta": "./src/meta.ts",
+    "./plan": "./src/plan.ts",
     "./runtime": "./src/runtime.ts"
   },
   "scripts": {

@@ -6,14 +6,12 @@ itself once through `pnpm auth:bot`.
 
 ## 1. Project and APIs
 
-In the Google Cloud project configured by `GCP_PROJECT`, enable:
+`infra/gcp/deploy.sh` enables the APIs the google module declares — Gmail, Calendar, Docs, Sheets,
+Slides, and Drive — so there is nothing to enable by hand once the module is selected. Run
+`pnpm modules:plan` to see the exact list for your installation.
 
-- Gmail API
-- Google Calendar API
-- Google Docs API
-- Google Sheets API
-- Google Slides API
-- Google Drive API
+Enable them manually in the project configured by `GCP_PROJECT` only if you are running
+`pnpm auth:bot` before the first deployment.
 
 Workspace organizations can use an internal consent screen. Personal Google accounts or assistants
 outside the organization require an external consent screen and its corresponding Google testing or

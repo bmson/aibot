@@ -122,3 +122,14 @@ Both services default to zero minimum instances. Worker jobs exist only for boun
 cost is primarily the PostgreSQL provider and any Google Workspace seat; model, search, Twilio, job,
 and storage usage scale with activity. Configure provider-side spending limits in addition to the
 application budgets.
+
+For what your specific selection costs, ask the module plan:
+
+```sh
+pnpm modules:plan --billing
+```
+
+It lists third-party services that bill directly — the model gateway, the PostgreSQL provider,
+Twilio, a search provider — separately from the Google Cloud services each enabled module adds,
+noting which normally stay inside the always-free allowance. The same declarations drive
+provisioning, so the explanation cannot drift from what is actually deployed.

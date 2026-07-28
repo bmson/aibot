@@ -1,28 +1,49 @@
 import { appendFileSync } from 'node:fs';
-import { parseAssistantModules } from '@assistant/config';
+import { loadConfig } from '@assistant/config';
+import { billingSummary, deploymentPlan } from '@assistant/modules/meta';
 
-const requested = process.env.ASSISTANT_MODULES?.trim() || 'all';
-const enabled = new Set(parseAssistantModules(requested));
-const plan = {
-  modules: [...enabled],
-  browser: enabled.has('browser'),
-  code: enabled.has('code'),
-  processor: enabled.has('documents'),
-};
+/**
+ * The one place deployment learns what an installation contains. CI selects
+ * worker images from it, the provisioner sources it instead of re-parsing
+ * ASSISTANT_MODULES in bash, and `--billing` explains what enabling these
+ * modules costs.
+ */
+const config = loadConfig();
+const plan = deploymentPlan(config);
+const workerKeys = Object.keys(plan.workers).sort();
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+const format = process.argv.find((argument) => argument.startsWith('--format='))?.slice(9);
 const githubOutput = process.argv.find((argument) => argument.startsWith('--github-output='));
-if (githubOutput) {
-  const path = githubOutput.slice('--github-output='.length);
+
+if (process.argv.includes('--billing')) {
+  process.stdout.write(`${billingSummary(plan)}\n`);
+} else if (githubOutput) {
+  // Keys consumed by .github/workflows/deploy.yml; each worker key is always
+  // present so a disabled module yields an explicit false.
   appendFileSync(
-    path,
+    githubOutput.slice('--github-output='.length),
     [
       `modules=${plan.modules.join(',')}`,
-      `browser=${String(plan.browser)}`,
-      `code=${String(plan.code)}`,
-      `processor=${String(plan.processor)}`,
+      ...workerKeys.map((key) => `${key}=${String(plan.workers[key])}`),
       '',
     ].join('\n'),
   );
+} else if (format === 'env') {
+  const lines = [
+    `PLAN_MODULES=${shellQuote(plan.modules.join(','))}`,
+    `PLAN_GCP_APIS=${shellQuote(plan.gcpApis.join(' '))}`,
+    `PLAN_PUBSUB_TOPICS=${shellQuote(plan.pubsubTopics.join(' '))}`,
+    ...workerKeys.map(
+      (key) => `PLAN_WORKER_${key.toUpperCase()}=${shellQuote(String(plan.workers[key]))}`,
+    ),
+  ];
+  process.stdout.write(`${lines.join('\n')}\n`);
 } else {
-  process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
+  // Worker booleans stay at the top level for compatibility with readers that
+  // predate the richer plan.
+  process.stdout.write(`${JSON.stringify({ ...plan.workers, ...plan }, null, 2)}\n`);
 }
