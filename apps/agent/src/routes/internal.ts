@@ -5,7 +5,6 @@ import {
   findDueTasks,
   resumeResolvedApprovalTasks,
 } from '@assistant/core';
-import { gmailSyncEnabled } from '@assistant/modules/meta';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -146,12 +145,6 @@ internal.post('/sweep', async (c) => {
       0,
     );
   }
-  const expiredWatches = await step(
-    'reapExpiredApplicationWatches',
-    async () =>
-      (await import('../application-confirmations.js')).reapExpiredApplicationWatches(deps),
-    0,
-  );
   return c.json({
     expiredApprovalsWoke: woken.length,
     resumedApprovalTasks: resumedApprovalTasks.length,
@@ -162,37 +155,9 @@ internal.post('/sweep', async (c) => {
     messagesEmbedded: embedded,
     budgetNotices: budgetNotices.length,
     ...moduleSteps,
-    expiredWatches,
     purged,
     aged,
   });
-});
-
-internal.post('/gmail/watch', async (c) => {
-  const config = loadConfig();
-  if (!isModuleEnabled(config, 'google')) {
-    return c.json({ error: 'google module disabled' }, 404);
-  }
-  if (!config.GMAIL_PUBSUB_TOPIC) {
-    return c.json(
-      { error: 'GMAIL_PUBSUB_TOPIC not set — local dev uses polling; push arrives with deploy' },
-      501,
-    );
-  }
-  const deps = buildDeps();
-  const { renewWatch } = await import('../email-sync.js');
-  const expiration = await renewWatch(deps, config.GMAIL_PUBSUB_TOPIC);
-  return c.json({ renewed: true, expiration: expiration.toISOString() });
-});
-
-internal.post('/gmail/sync', async (c) => {
-  if (!gmailSyncEnabled()) {
-    return c.json({ skipped: true, reason: 'gmail sync disabled by module or setting' });
-  }
-  const deps = buildDeps();
-  const { syncMailbox } = await import('../email-sync.js');
-  const result = await syncMailbox(deps);
-  return c.json(result);
 });
 
 /**

@@ -1,5 +1,5 @@
 import { appendSignature, getAgent } from '@assistant/core';
-import type { TaskRow } from '@assistant/db';
+import type { Db, TaskRow } from '@assistant/db';
 import { channelBindings, conversations, tasks, voiceProfile } from '@assistant/db';
 import {
   buildRawEmail,
@@ -9,8 +9,14 @@ import {
   markdownToEmailHtml,
   markdownToPlainText,
 } from '@assistant/tools';
+import type { GoogleClient } from '@assistant/tools/modules/google';
 import { and, asc, eq } from 'drizzle-orm';
-import type { AgentDeps } from './deps.js';
+
+/** What email delivery consumes: the database and the module's own client. */
+export interface EmailChannelDeps {
+  db: Db;
+  googleClient: GoogleClient;
+}
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
@@ -31,7 +37,7 @@ interface EmailThreadTarget {
  * than only the dashboard.
  */
 async function resolveEmailThreadTarget(
-  deps: AgentDeps,
+  deps: EmailChannelDeps,
   task: TaskRow,
 ): Promise<EmailThreadTarget | null> {
   const ownPayload = (task.trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
@@ -88,7 +94,7 @@ async function resolveEmailThreadTarget(
  * gmail.create_draft / gmail.send and their approval gates.
  */
 export async function deliverEmailFinal(
-  deps: AgentDeps,
+  deps: EmailChannelDeps,
   task: TaskRow,
   text: string,
 ): Promise<boolean> {

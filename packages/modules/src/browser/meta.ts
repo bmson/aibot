@@ -30,4 +30,7 @@ export const browserMeta = {
       },
     ],
   },
+  // Worker result callback; the per-launch one-shot token in the body is
+  // the credential, validated by the handler itself.
+  webhooks: [{ path: '/browser/callback', auth: { kind: 'oneShotToken' } }],
 } satisfies ModuleMeta;

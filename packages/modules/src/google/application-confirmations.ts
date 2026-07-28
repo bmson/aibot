@@ -8,10 +8,10 @@ import {
 import {
   type ApplicationConfirmationRow,
   applicationConfirmations,
+  type Db,
   tasks,
   toolCalls,
 } from '@assistant/db';
-import { notifyOwnerBySms } from '@assistant/modules';
 import {
   type ApplicationActionState,
   ApplicationDocumentUpdateSchema,
@@ -19,8 +19,20 @@ import {
   hashConfirmationToken,
   parseApplicationActionState,
 } from '@assistant/tools';
+import type { ToolDispatcher } from '@assistant/tools/dispatcher';
 import { and, eq, gt, lte, sql } from 'drizzle-orm';
-import { type AgentDeps, smsDeps } from './deps.js';
+import type { ModuleTaskHandler, OwnerNotifier } from '../platform.js';
+
+/** What confirmation matching consumes: the database and the owner-notifier port. */
+export interface ApplicationConfirmationDeps {
+  db: Db;
+  notifyOwner: OwnerNotifier['notifyOwner'];
+}
+
+/** The deterministic task executors additionally dispatch the google tools. */
+export interface ApplicationConfirmationTaskDeps extends ApplicationConfirmationDeps {
+  dispatcher: ToolDispatcher;
+}
 
 const MAX_TOKEN_CANDIDATES = 1_000;
 const TOKEN_PATTERN = /[a-zA-Z0-9][a-zA-Z0-9_-]{5,99}/g;
@@ -72,7 +84,7 @@ function eventId(messageId: string): string {
 }
 
 async function postNotice(
-  deps: AgentDeps,
+  deps: ApplicationConfirmationDeps,
   record: ApplicationConfirmationRow,
   taskId: string,
   text: string,
@@ -91,7 +103,7 @@ async function postNotice(
 }
 
 async function reportAmbiguous(
-  deps: AgentDeps,
+  deps: ApplicationConfirmationDeps,
   input: ApplicationConfirmationInput,
   matches: ApplicationConfirmationRow[],
 ): Promise<void> {
@@ -132,14 +144,16 @@ async function reportAmbiguous(
       `ambiguous:${record.id}`,
     );
   }
-  await notifyOwnerBySms(smsDeps(deps), {
-    taskId: task.id,
-    text: `An authenticated confirmation from ${input.from.toLowerCase()} matched ${matches.length} application watches; I changed nothing and it needs your review.`,
-  }).catch((err) => console.error('ambiguous confirmation owner notification failed', err));
+  await deps
+    .notifyOwner({
+      taskId: task.id,
+      text: `An authenticated confirmation from ${input.from.toLowerCase()} matched ${matches.length} application watches; I changed nothing and it needs your review.`,
+    })
+    .catch((err) => console.error('ambiguous confirmation owner notification failed', err));
 }
 
 async function enqueueAuthorizedUpdate(
-  deps: AgentDeps,
+  deps: ApplicationConfirmationDeps,
   input: ApplicationConfirmationInput,
   record: ApplicationConfirmationRow,
 ): Promise<ApplicationConfirmationResult> {
@@ -177,7 +191,7 @@ export type ApplicationConfirmationTaskResult = {
 
 /** Deterministic recovery route for an ambiguous multi-record match. */
 export async function executeAmbiguousApplicationConfirmationTask(
-  deps: AgentDeps,
+  deps: ApplicationConfirmationDeps,
   taskId: string,
 ): Promise<ApplicationConfirmationTaskResult> {
   const [queued] = await deps.db.select().from(tasks).where(eq(tasks.id, taskId));
@@ -234,7 +248,7 @@ function normalizedActionState(record: ApplicationConfirmationRow): ApplicationA
   };
 }
 
-async function loadApplicationRecord(deps: AgentDeps, id: string) {
+async function loadApplicationRecord(deps: ApplicationConfirmationDeps, id: string) {
   const [record] = await deps.db
     .select()
     .from(applicationConfirmations)
@@ -243,7 +257,7 @@ async function loadApplicationRecord(deps: AgentDeps, id: string) {
 }
 
 async function setActionOutcome(
-  deps: AgentDeps,
+  deps: ApplicationConfirmationDeps,
   id: string,
   action: ApplicationAction,
   status: 'failed' | 'unknown',
@@ -265,7 +279,7 @@ async function setActionOutcome(
 }
 
 async function rejectedOutcomeIsUnknown(
-  deps: AgentDeps,
+  deps: ApplicationConfirmationDeps,
   recordId: string,
   action: ApplicationAction,
   reason: string,
@@ -325,7 +339,7 @@ function resultCopy(record: ApplicationConfirmationRow, state: ApplicationAction
 }
 
 async function reconcileSucceededLedger(
-  deps: AgentDeps,
+  deps: ApplicationConfirmationDeps,
   taskId: string,
   record: ApplicationConfirmationRow,
   state: ApplicationActionState,
@@ -374,7 +388,7 @@ async function reconcileSucceededLedger(
 
 /** Durable queue handler: confirmation tasks never enter the model executor. */
 export async function executeApplicationConfirmationTask(
-  deps: AgentDeps,
+  deps: ApplicationConfirmationTaskDeps,
   taskId: string,
 ): Promise<ApplicationConfirmationTaskResult> {
   const [queued] = await deps.db.select().from(tasks).where(eq(tasks.id, taskId));
@@ -503,9 +517,9 @@ export async function executeApplicationConfirmationTask(
   // message, on an internal task that never routes through the channel
   // deliverers. Push the outcome to the owner's channel so an SMS/email-
   // originated flow is not silently finished on the dashboard alone.
-  await notifyOwnerBySms(smsDeps(deps), { taskId: claimed.id, text: copy.notice }).catch((err) =>
-    console.error('application confirmation owner notification failed', err),
-  );
+  await deps
+    .notifyOwner({ taskId: claimed.id, text: copy.notice })
+    .catch((err) => console.error('application confirmation owner notification failed', err));
   if (status === 'updated') {
     await completeTask(deps.db, claimed, { status: 'done', progress: copy.progress });
     return { outcome: 'done', applicationId };
@@ -523,7 +537,7 @@ export async function executeApplicationConfirmationTask(
  * notice channelMessageId dedupes the dashboard message.
  */
 export async function reapExpiredApplicationWatches(
-  deps: AgentDeps,
+  deps: ApplicationConfirmationDeps,
   now = new Date(),
 ): Promise<number> {
   const expired = await deps.db
@@ -549,9 +563,9 @@ export async function reapExpiredApplicationWatches(
         channelMessageId: `application-watch-expired:${record.id}`,
       }).catch((err) => console.error('watch expiry notice failed', err));
     }
-    await notifyOwnerBySms(smsDeps(deps), { text }).catch((err) =>
-      console.error('watch expiry owner notification failed', err),
-    );
+    await deps
+      .notifyOwner({ text })
+      .catch((err) => console.error('watch expiry owner notification failed', err));
   }
   return expired.length;
 }
@@ -562,7 +576,7 @@ export async function reapExpiredApplicationWatches(
  * internal assistant task or model context.
  */
 export async function processApplicationConfirmation(
-  deps: AgentDeps,
+  deps: ApplicationConfirmationDeps,
   input: ApplicationConfirmationInput,
 ): Promise<ApplicationConfirmationResult> {
   if (!input.authenticated) return { kind: 'ignored' };
@@ -654,3 +668,30 @@ export async function processApplicationConfirmation(
 
   return enqueueAuthorizedUpdate(deps, input, claimed);
 }
+
+/**
+ * The deterministic task handlers this module claims, exported as one list so
+ * the module definition and test harnesses register the identical routing.
+ */
+export const applicationConfirmationTaskHandlers: readonly ModuleTaskHandler[] = [
+  {
+    kind: 'application_confirmation',
+    run: (services, taskId) =>
+      executeApplicationConfirmationTask(
+        {
+          db: services.db,
+          notifyOwner: services.ownerNotifier.notifyOwner,
+          dispatcher: services.dispatcher,
+        },
+        taskId,
+      ),
+  },
+  {
+    kind: 'application_confirmation_ambiguous',
+    run: (services, taskId) =>
+      executeAmbiguousApplicationConfirmationTask(
+        { db: services.db, notifyOwner: services.ownerNotifier.notifyOwner },
+        taskId,
+      ),
+  },
+];

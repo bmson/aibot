@@ -35,6 +35,42 @@ describe('agent app', () => {
     }
   });
 
+  it('reports a 200 skip from /internal/gmail/sync when sync is off, never a 404', async () => {
+    // The every-minute scheduler job must stay green when sync is disabled —
+    // by the module being off OR by the sync setting. Both paths must produce
+    // the same 200 skip body (meta.whenDisabled and the handler, respectively).
+    const auth = { INTERNAL_AUTH_MODE: 'shared-secret', INTERNAL_API_SECRET: 'test-secret' };
+    const headers = { authorization: 'Bearer test-secret' };
+    try {
+      resetConfigForTest();
+      loadConfig({ ...process.env, ...auth, ASSISTANT_MODULES: 'minimal' });
+      const disabledModule = await createApp().request('/internal/gmail/sync', {
+        method: 'POST',
+        headers,
+      });
+      expect(disabledModule.status).toBe(200);
+      expect(await disabledModule.json()).toEqual({
+        skipped: true,
+        reason: 'gmail sync disabled by module or setting',
+      });
+
+      resetConfigForTest();
+      loadConfig({ ...process.env, ...auth, GMAIL_SYNC_ENABLED: 'false' });
+      const disabledSetting = await createApp().request('/internal/gmail/sync', {
+        method: 'POST',
+        headers,
+      });
+      expect(disabledSetting.status).toBe(200);
+      expect(await disabledSetting.json()).toEqual({
+        skipped: true,
+        reason: 'gmail sync disabled by module or setting',
+      });
+    } finally {
+      resetConfigForTest();
+      loadConfig(process.env);
+    }
+  });
+
   it('rejects Pub/Sub pushes without a valid Google OIDC token', async () => {
     const app = createApp();
     const noToken = await app.request('/webhooks/gmail/pubsub', { method: 'POST' });
