@@ -19,6 +19,7 @@ import {
   messages as storedMessages,
   tasks,
 } from '@assistant/db';
+import { notifyOwnerBySms } from '@assistant/modules';
 import {
   collectGmailAttachments,
   extractGmailText,
@@ -29,8 +30,7 @@ import {
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { processApplicationConfirmation } from './application-confirmations.js';
-import type { AgentDeps } from './deps.js';
-import { notifyOwnerBySms } from './sms-channel.js';
+import { type AgentDeps, smsDeps } from './deps.js';
 import { matchEmailWatches } from './watches.js';
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -286,7 +286,7 @@ async function reportUnauthenticatedTrustedSender(
   const previous = lastUnauthenticatedNoticeAt.get(fromEmail);
   if (previous !== undefined && now - previous < OWNER_SPOOF_NOTICE_INTERVAL_MS) return;
   lastUnauthenticatedNoticeAt.set(fromEmail, now);
-  await notifyOwnerBySms(deps, {
+  await notifyOwnerBySms(smsDeps(deps), {
     text:
       `Dropped an email claiming to be from ${fromEmail} ("${subject.slice(0, 60)}") — ` +
       'it failed SPF/DKIM/DMARC checks. If you sent it, that domain is missing email ' +

@@ -15,5 +15,16 @@ export * from './meta.js';
 export * from './platform.js';
 export { remindersModule } from './reminders/module.js';
 export { searchModule } from './search/module.js';
+export {
+  deliverSmsFinal,
+  handleInboundSms,
+  type InboundSms,
+  notifyApprovalsBySms,
+  notifyOwnerBySms,
+  type SmsChannelDeps,
+  SmsChannelRateLimitError,
+  type SmsHandled,
+  sendCanarySms,
+} from './sms/channel.js';
 export { smsModule } from './sms/module.js';
 export { watchesModule } from './watches/module.js';

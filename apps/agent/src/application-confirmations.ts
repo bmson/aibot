@@ -11,6 +11,7 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
+import { notifyOwnerBySms } from '@assistant/modules';
 import {
   type ApplicationActionState,
   ApplicationDocumentUpdateSchema,
@@ -19,8 +20,7 @@ import {
   parseApplicationActionState,
 } from '@assistant/tools';
 import { and, eq, gt, lte, sql } from 'drizzle-orm';
-import type { AgentDeps } from './deps.js';
-import { notifyOwnerBySms } from './sms-channel.js';
+import { type AgentDeps, smsDeps } from './deps.js';
 
 const MAX_TOKEN_CANDIDATES = 1_000;
 const TOKEN_PATTERN = /[a-zA-Z0-9][a-zA-Z0-9_-]{5,99}/g;
@@ -132,7 +132,7 @@ async function reportAmbiguous(
       `ambiguous:${record.id}`,
     );
   }
-  await notifyOwnerBySms(deps, {
+  await notifyOwnerBySms(smsDeps(deps), {
     taskId: task.id,
     text: `An authenticated confirmation from ${input.from.toLowerCase()} matched ${matches.length} application watches; I changed nothing and it needs your review.`,
   }).catch((err) => console.error('ambiguous confirmation owner notification failed', err));
@@ -503,7 +503,7 @@ export async function executeApplicationConfirmationTask(
   // message, on an internal task that never routes through the channel
   // deliverers. Push the outcome to the owner's channel so an SMS/email-
   // originated flow is not silently finished on the dashboard alone.
-  await notifyOwnerBySms(deps, { taskId: claimed.id, text: copy.notice }).catch((err) =>
+  await notifyOwnerBySms(smsDeps(deps), { taskId: claimed.id, text: copy.notice }).catch((err) =>
     console.error('application confirmation owner notification failed', err),
   );
   if (status === 'updated') {
@@ -549,7 +549,7 @@ export async function reapExpiredApplicationWatches(
         channelMessageId: `application-watch-expired:${record.id}`,
       }).catch((err) => console.error('watch expiry notice failed', err));
     }
-    await notifyOwnerBySms(deps, { text }).catch((err) =>
+    await notifyOwnerBySms(smsDeps(deps), { text }).catch((err) =>
       console.error('watch expiry owner notification failed', err),
     );
   }

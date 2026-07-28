@@ -14,6 +14,8 @@
     "@assistant/config": "workspace:*",
     "@assistant/core": "workspace:*",
     "@assistant/db": "workspace:*",
-    "@assistant/tools": "workspace:*"
+    "@assistant/tools": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "zod": "^4.0.0"
   }
 }

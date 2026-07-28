@@ -18,6 +18,7 @@ import {
   type StepCallOutcome,
 } from '@assistant/core';
 import { approvals, canaryRuns, conversations, type Db, messages, tasks } from '@assistant/db';
+import { sendCanarySms } from '@assistant/modules';
 import {
   AmbiguousBrowserJobLaunchError,
   buildRawEmail,
@@ -25,8 +26,7 @@ import {
 } from '@assistant/tools';
 import type { ModelMessage } from 'ai';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
-import type { AgentDeps } from './deps.js';
-import { sendCanarySms } from './sms-channel.js';
+import { type AgentDeps, smsDeps } from './deps.js';
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const CHAT_BUDGET_USD = 0.01;
@@ -260,7 +260,7 @@ async function gmailCanary(deps: AgentDeps, runId: string, signal: AbortSignal):
 }
 
 async function smsCanary(deps: AgentDeps, runId: string, signal: AbortSignal): Promise<string> {
-  const sent = await sendCanarySms(deps, runId);
+  const sent = await sendCanarySms(smsDeps(deps), runId);
   if (sent.deliveryStatus !== 'accepted' || !sent.sid) {
     throw new Error('Twilio accepted status is ambiguous; automatic retry suppressed');
   }

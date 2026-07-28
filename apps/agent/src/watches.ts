@@ -1,9 +1,9 @@
 import { persistMessage } from '@assistant/core';
 import { type WatchRow, watches, watchFires } from '@assistant/db';
+import { notifyOwnerBySms } from '@assistant/modules';
 import { emailWatchMatches } from '@assistant/tools';
 import { and, eq, gt, lte, sql } from 'drizzle-orm';
-import type { AgentDeps } from './deps.js';
-import { notifyOwnerBySms } from './sms-channel.js';
+import { type AgentDeps, smsDeps } from './deps.js';
 
 export interface EmailWatchInput {
   agentId: string;
@@ -118,7 +118,7 @@ export async function matchEmailWatches(
         channelMessageId: `watch-fire:${watch.id}:${input.messageId}`,
       }).catch((err) => console.error('watch notice failed', err));
     }
-    await notifyOwnerBySms(deps, { text }).catch((err) =>
+    await notifyOwnerBySms(smsDeps(deps), { text }).catch((err) =>
       console.error('watch owner notification failed', err),
     );
     fired.push(watch.id);

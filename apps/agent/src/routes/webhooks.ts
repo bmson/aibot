@@ -18,7 +18,6 @@ import { recordCanaryBrowserResult } from '../canaries.js';
 import { agentServices, buildDeps, composedModuleMetas } from '../deps.js';
 import { syncMailbox } from '../email-sync.js';
 import { verifyGoogleServiceAccountToken } from '../google-oidc.js';
-import { handleInboundSms } from '../sms-channel.js';
 
 /**
  * External ingress. Every route authenticates its caller before anything else:
@@ -198,39 +197,6 @@ webhooks.post('/canaries/browser', async (c) => {
   });
   if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
   return c.json({ ok: true, duplicate: outcome.duplicate });
-});
-
-webhooks.post('/twilio/sms', async (c) => {
-  const config = loadConfig();
-  if (!isModuleEnabled(config, 'sms')) return c.text('SMS module disabled', 404);
-  if (!config.TWILIO_AUTH_TOKEN) return c.text('Twilio not configured', 501);
-
-  const form = await c.req.parseBody();
-  const params: Record<string, string> = {};
-  for (const [k, v] of Object.entries(form)) if (typeof v === 'string') params[k] = v;
-
-  const valid = validateTwilioSignature({
-    authToken: config.TWILIO_AUTH_TOKEN,
-    url: `${config.PUBLIC_URL}/webhooks/twilio/sms`,
-    params,
-    signature: c.req.header('x-twilio-signature') ?? '',
-  });
-  if (!valid) return c.text('invalid signature', 403);
-
-  const deps = buildDeps();
-  const handled = await handleInboundSms(deps, {
-    messageSid: params.MessageSid ?? '',
-    from: params.From ?? '',
-    to: params.To ?? '',
-    body: params.Body ?? '',
-  });
-
-  // Avoid an unmetered, billable TwiML reply. Normal task replies and approval
-  // notifications use the budget-reserved delivery path.
-  void handled;
-  return c.text('<?xml version="1.0" encoding="UTF-8"?><Response/>', 200, {
-    'content-type': 'text/xml',
-  });
 });
 
 /**

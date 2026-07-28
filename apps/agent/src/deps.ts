@@ -11,6 +11,7 @@ import {
   installModules,
   type ModuleMeta,
   type ModuleServices,
+  type SmsChannelDeps,
   smsModule,
 } from '@assistant/modules';
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
@@ -53,6 +54,16 @@ export interface AgentDeps {
  * enabled-guards evaluate per request.
  */
 export const composedModuleMetas: readonly ModuleMeta[] = collectModuleMetas(composition);
+
+/**
+ * The sms channel's narrow deps, from the agent graph. Interim shim: callers
+ * that still live in the agent (email sync, watches, canaries) reach the
+ * channel through this until they relocate into their modules and consume the
+ * owner-notifier port instead.
+ */
+export function smsDeps(deps: AgentDeps): SmsChannelDeps {
+  return { config: deps.config, db: deps.db, registry: deps.registry, twilio: deps.twilio };
+}
 
 /** The invocation-time services module hooks receive. */
 export function agentServices(deps: AgentDeps): ModuleServices {
