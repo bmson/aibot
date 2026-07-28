@@ -46,6 +46,10 @@ PLAN_ENV="$(ASSISTANT_MODULES="$ASSISTANT_MODULES" pnpm -s modules:plan --format
   exit 1
 }
 eval "$PLAN_ENV"
+# PLAN_MODULES is the composition narrowed by ASSISTANT_MODULES — what this
+# installation actually runs. It is what the services are given, so config-driven
+# consumers that cannot see the composition file (the web app, most of all)
+# still agree with what the agent installed.
 module_enabled() {
   case ",${PLAN_MODULES}," in
     *",$1,"*) return 0 ;;
@@ -365,7 +369,7 @@ gcloud run deploy assistant-agent \
   --image "${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/agent:latest" \
   --region "$REGION" --allow-unauthenticated --service-account "$AGENT_SA" \
   --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3 --concurrency 4 --timeout 900 \
-  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${ASSISTANT_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|GMAIL_PUBSUB_TOPIC=${GMAIL_TOPIC_VALUE}|GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_IDENTITY}|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|BROWSER_DRIVER=cloudrun|BROWSER_JOB_NAME=assistant-browser|CODE_DRIVER=cloudrun|CODE_JOB_NAME=assistant-code|PROCESSOR_DRIVER=cloudrun|PROCESSOR_JOB_NAME=assistant-processor|TRACES_BUCKET=${TRACES_BUCKET}|CANARY_ENABLED=${CANARY_VALUE}|CANARY_MAX_COST_USD=0.03|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none${SEARCH_ENV}${GITHUB_ENV}${TWILIO_ENV}${SELF_URL_ENV}" \
+  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|GMAIL_PUBSUB_TOPIC=${GMAIL_TOPIC_VALUE}|GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_IDENTITY}|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|BROWSER_DRIVER=cloudrun|BROWSER_JOB_NAME=assistant-browser|CODE_DRIVER=cloudrun|CODE_JOB_NAME=assistant-code|PROCESSOR_DRIVER=cloudrun|PROCESSOR_JOB_NAME=assistant-processor|TRACES_BUCKET=${TRACES_BUCKET}|CANARY_ENABLED=${CANARY_VALUE}|CANARY_MAX_COST_USD=0.03|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none${SEARCH_ENV}${GITHUB_ENV}${TWILIO_ENV}${SELF_URL_ENV}" \
   --set-secrets "$AGENT_SECRETS" \
   --quiet
 
@@ -463,10 +467,13 @@ make_job() {
   fi
 }
 make_job assistant-sweep "* * * * *" "/internal/sweep"
-if module_enabled google; then
-  make_job assistant-gmail-sync "* * * * *" "/internal/gmail/sync"
-  make_job assistant-gmail-watch "0 4 * * *" "/internal/gmail/watch"
-fi
+# Module-owned schedules come from the plan, so a module declares its cron once
+# in metadata rather than here as well. The value is read as quoted lines: cron
+# expressions contain spaces and `*`, which unquoted word splitting would glob.
+while IFS='|' read -r job_name job_schedule job_path; do
+  [ -n "$job_name" ] || continue
+  make_job "$job_name" "$job_schedule" "$job_path"
+done <<<"${PLAN_SCHEDULER_JOBS:-}"
 if [ "$CANARY_VALUE" = "true" ]; then
   make_job assistant-canaries "17 15 * * *" "/internal/canaries/run"
   make_job assistant-canary-health "30 * * * *" "/internal/canaries/health"
@@ -501,7 +508,7 @@ gcloud run deploy assistant-web \
   --image "${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/web:latest" \
   --region "$REGION" --allow-unauthenticated --service-account "$WEB_SA" \
   --memory 1Gi --cpu 1 --min-instances 0 --max-instances 2 --timeout 300 \
-  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${ASSISTANT_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|AUTH_TRUST_HOST=true|AUTH_DEV_BYPASS=false|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none" \
+  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|AUTH_TRUST_HOST=true|AUTH_DEV_BYPASS=false|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none" \
   --set-secrets "DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,AUTH_SECRET=auth-secret:latest,AUTH_GOOGLE_ID=google-oauth-client-id:latest,AUTH_GOOGLE_SECRET=google-oauth-client-secret:latest" \
   --quiet
 
@@ -520,18 +527,17 @@ echo "════════════════════════�
 echo " agent: ${AGENT_URL}"
 echo " web:   ${WEB_URL}"
 echo ""
-echo " REMAINING MANUAL STEPS:"
-echo " 1. Add OAuth redirect URI in the Google console:"
-echo "    ${AUTH_URL}/api/auth/callback/google"
-if [ -n "$WEB_DOMAIN" ]; then
-  echo " 2. Point ${WEB_DOMAIN} at the DNS records shown by Cloud Run domain mappings."
-fi
-if module_enabled google; then
-  echo " 3. Kick the Gmail watch (uses the Scheduler OIDC identity):"
-  echo "    gcloud scheduler jobs run assistant-gmail-watch --location=${REGION}"
-fi
+# The checklist itself lives in @assistant/setup, which scopes it to the modules
+# this installation composes and tracks which steps its settings already satisfy.
+# Only the values that are not knowable until now are printed here.
+echo " Values you need for the remaining manual steps:"
+echo "   OAuth redirect URI:  ${AUTH_URL}/api/auth/callback/google"
 if module_enabled sms; then
-  echo " 4. Point the Twilio number's webhook at:"
-  echo "    ${AGENT_URL}/webhooks/twilio/sms"
+  echo "   Twilio SMS webhook:  ${AGENT_URL}/webhooks/twilio/sms"
 fi
+if [ -n "$WEB_DOMAIN" ]; then
+  echo "   Domain to point:     ${WEB_DOMAIN}"
+fi
+echo ""
+echo " For the full checklist:  pnpm setup:wizard --plan"
 echo "══════════════════════════════════════════════════════"

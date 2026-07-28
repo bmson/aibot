@@ -1,4 +1,3 @@
-import { gmailSyncEnabled } from '@assistant/config';
 import {
   backfillMessageEmbeddings,
   emitBudgetNotices,
@@ -11,6 +10,7 @@ import {
   resumeResolvedApprovalTasks,
   runDueSchedules,
 } from '@assistant/core';
+import { gmailSyncEnabled } from '@assistant/modules/meta';
 import { reapExpiredApplicationWatches } from './application-confirmations.js';
 import type { AgentDeps } from './deps.js';
 import { syncMailbox } from './email-sync.js';

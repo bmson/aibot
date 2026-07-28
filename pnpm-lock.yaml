@@ -13,13 +13,6 @@ overrides:
 importers:
 
   .:
-    dependencies:
-      '@assistant/modules':
-        specifier: workspace:*
-        version: link:packages/modules
-      '@assistant/setup':
-        specifier: workspace:*
-        version: link:packages/setup
     devDependencies:
       '@assistant/config':
         specifier: workspace:^
@@ -30,6 +23,12 @@ importers:
       '@assistant/db':
         specifier: workspace:^
         version: link:packages/db
+      '@assistant/modules':
+        specifier: workspace:*
+        version: link:packages/modules
+      '@assistant/setup':
+        specifier: workspace:*
+        version: link:packages/setup
       '@biomejs/biome':
         specifier: ^2.5.5
         version: 2.5.5

@@ -3,12 +3,15 @@ import {
   type DocumentProcessorConfig,
   LocalDocumentProcessLauncher,
 } from '@assistant/core';
-import { defineModule } from '../runtime-kit.js';
+import { registerDocumentTools } from '@assistant/tools/documents';
+import { defineModule } from '../platform.js';
 import { documentsMeta } from './meta.js';
 
 export const documentsModule = defineModule<DocumentProcessorConfig | undefined>({
   meta: documentsMeta,
-  create: ({ config, repoRoot, workspacePrefix, workspaceRoot }) => {
+  create: ({ config, registry, repoRoot, router, workspacePrefix, workspaceRoot }) => {
+    registerDocumentTools(registry, { embed: (texts) => router.embed(texts) });
+
     const callbackUrl = `${config.PUBLIC_URL}/webhooks/document/callback`;
     if (config.PROCESSOR_DRIVER === 'cloudrun') {
       return {

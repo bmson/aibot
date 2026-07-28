@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { loadConfig } from '@assistant/config';
+import { composedModuleMetas } from '@assistant/modules';
 import { deploymentPlan } from '@assistant/modules/meta';
-import { canProceed, renderReport, runPreflight, systemRunner } from '@assistant/setup';
+import { blocking, renderReport, runPreflight, systemRunner } from '@assistant/setup';
 import composition from '../assistant.config.js';
 
 /**
@@ -16,10 +17,7 @@ const planOnly = process.argv.includes('--plan');
 const assumeYes = process.argv.includes('--yes');
 
 const config = loadConfig();
-const plan = deploymentPlan(
-  config,
-  composition.modules.map((definition) => definition.meta),
-);
+const plan = deploymentPlan(config, composedModuleMetas(composition));
 
 const project =
   config.GCP_PROJECT ||
@@ -29,7 +27,7 @@ const outcomes = await runPreflight({ config, runner: systemRunner, project });
 console.log(renderReport({ outcomes, plan, config }));
 console.log('');
 
-const ready = canProceed(outcomes);
+const ready = blocking(outcomes).length === 0;
 
 if (planOnly) {
   console.log(

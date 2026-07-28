@@ -1,6 +1,6 @@
-import { defineModuleMeta } from '../kit.js';
+import type { ModuleMeta } from '../contract.js';
 
-export const searchMeta = defineModuleMeta({
+export const searchMeta = {
   name: 'search',
   title: 'Web search',
   summary: 'Link-returning web search through a configured provider.',
@@ -12,7 +12,6 @@ export const searchMeta = defineModuleMeta({
       detail: ready ? `ready (${config.SEARCH_PROVIDER})` : 'missing search provider or key',
     };
   },
-  infra: { secretKeys: ['SEARCH_API_KEY'] },
   billing: {
     external: [
       {
@@ -22,4 +21,4 @@ export const searchMeta = defineModuleMeta({
       },
     ],
   },
-});
+} satisfies ModuleMeta;

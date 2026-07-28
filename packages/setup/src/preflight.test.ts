@@ -1,10 +1,10 @@
 import { loadConfig, resetConfigForTest } from '@assistant/config';
-import { deploymentPlan } from '@assistant/modules/meta';
+import { assistantModuleMetas, deploymentPlan } from '@assistant/modules/meta';
 import { afterEach, describe, expect, it } from 'vitest';
 import { manualStepsFor } from './manual.js';
 import { blocking, runPreflight } from './preflight.js';
+import { renderManualSteps, renderReport } from './report.js';
 import type { CommandRunner } from './runner.js';
-import { canProceed, renderManualSteps, renderReport } from './wizard.js';
 
 /** A gcloud that answers exactly what each test needs and nothing else. */
 function fakeRunner(responses: Record<string, { ok?: boolean; stdout?: string }>): CommandRunner {
@@ -47,7 +47,7 @@ describe('preflight', () => {
       project: 'proj',
     });
     expect(blocking(outcomes)).toEqual([]);
-    expect(canProceed(outcomes)).toBe(true);
+    expect(blocking(outcomes)).toEqual([]);
   });
 
   it('blocks when billing is not linked, before anything is provisioned', async () => {
@@ -62,7 +62,7 @@ describe('preflight', () => {
     const billing = outcomes.find((outcome) => outcome.id === 'billing');
     expect(billing?.status).toBe('fail');
     expect(billing?.guidance).toContain('billing');
-    expect(canProceed(outcomes)).toBe(false);
+    expect(blocking(outcomes)).not.toEqual([]);
   });
 
   it('warns about an org policy that would block publishing the services', async () => {
@@ -78,7 +78,7 @@ describe('preflight', () => {
     expect(policy?.status).toBe('warn');
     expect(policy?.guidance).toContain('allUsers');
     // A warning explains a likely failure; it does not stop the operator.
-    expect(canProceed(outcomes)).toBe(true);
+    expect(blocking(outcomes)).toEqual([]);
   });
 
   it('blocks on missing settings and names them without printing values', async () => {
@@ -102,7 +102,7 @@ describe('preflight', () => {
     const modules = outcomes.find((outcome) => outcome.id === 'modules');
     expect(modules?.status).toBe('warn');
     expect(modules?.detail).toContain('google');
-    expect(canProceed(outcomes)).toBe(true);
+    expect(blocking(outcomes)).toEqual([]);
   });
 
   it('fails when gcloud is absent', async () => {
@@ -164,7 +164,11 @@ describe('report', () => {
       runner: fakeRunner(healthyGcloud),
       project: 'proj',
     });
-    const rendered = renderReport({ outcomes, plan: deploymentPlan(config), config });
+    const rendered = renderReport({
+      outcomes,
+      plan: deploymentPlan(config, assistantModuleMetas),
+      config,
+    });
     expect(rendered).toContain('Composition:');
     expect(rendered).toContain('processor');
     expect(rendered).toContain('What this costs:');

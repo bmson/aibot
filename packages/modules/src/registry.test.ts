@@ -6,12 +6,12 @@ import {
 } from '@assistant/config';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  assistantModuleMetas,
   hiddenModuleNavHrefs,
   moduleDiagnostics,
   moduleProdProblems,
   validateAssistantConfig,
-} from './meta.js';
+} from './diagnostics.js';
+import { assistantModuleMetas } from './registry.js';
 
 describe('module metadata', () => {
   afterEach(() => resetConfigForTest());
@@ -24,7 +24,6 @@ describe('module metadata', () => {
     const schemaKeys = new Set<string>(configKeyNames);
     for (const meta of assistantModuleMetas) {
       for (const key of meta.configKeys) expect(schemaKeys).toContain(key);
-      for (const key of meta.infra?.secretKeys ?? []) expect(meta.configKeys).toContain(key);
     }
   });
 

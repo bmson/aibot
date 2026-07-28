@@ -5,10 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./kit": "./src/kit.ts",
-    "./meta": "./src/meta.ts",
-    "./plan": "./src/plan.ts",
-    "./runtime": "./src/runtime.ts"
+    "./meta": "./src/meta.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

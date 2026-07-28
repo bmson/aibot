@@ -9,19 +9,20 @@ import {
   registerSheetsTools,
   registerSlidesTools,
 } from '@assistant/tools/modules/google';
-import { defineModule } from '../runtime-kit.js';
+import { defineModule } from '../platform.js';
 import { googleMeta } from './meta.js';
 
 /**
  * A client with no credentials: `configured()` is false and every call is
- * refused. The composition root uses this when the module is not installed, so
- * callers can query the client unconditionally.
+ * refused. Declared as the module's `absent` value so the
+ * composition root can hold a plain field and callers can query it freely.
  */
-export const unconfiguredGoogleClient = () =>
+const unconfiguredGoogleClient = () =>
   new GoogleClient({ clientId: '', clientSecret: '', refreshToken: '' });
 
 export const googleModule = defineModule<GoogleClient>({
   meta: googleMeta,
+  absent: unconfiguredGoogleClient,
   create: ({ config, db, registry, router, workspace }) => {
     const client = new GoogleClient({
       clientId: config.GOOGLE_OAUTH_CLIENT_ID,

@@ -1,6 +1,6 @@
-import { defineModuleMeta } from '../kit.js';
+import type { ModuleMeta } from '../contract.js';
 
-export const smsMeta = defineModuleMeta({
+export const smsMeta = {
   name: 'sms',
   title: 'SMS',
   summary: 'Twilio owner channel, including approval replies from a phone.',
@@ -11,15 +11,16 @@ export const smsMeta = defineModuleMeta({
     );
     return { ready, detail: ready ? 'ready' : 'missing Twilio settings' };
   },
-  infra: { secretKeys: ['TWILIO_AUTH_TOKEN'] },
   billing: {
     external: [
       {
         vendor: 'Twilio',
         required: true,
+        // The per-message figure the assistant meters its own spend against
+        // is the twilio_sms entry in the rate table seeded by @assistant/db.
         note: 'A phone number rents monthly and messages bill per segment (about $0.0079 each in the US).',
         url: 'https://www.twilio.com/en-us/sms/pricing',
       },
     ],
   },
-});
+} satisfies ModuleMeta;

@@ -4,7 +4,7 @@ import {
   LocalCodeProcessLauncher,
   registerCodeTools,
 } from '@assistant/tools/code';
-import { defineModule } from '../runtime-kit.js';
+import { defineModule } from '../platform.js';
 import { codeMeta } from './meta.js';
 
 export const codeModule = defineModule<CodeJobLauncher>({

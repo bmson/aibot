@@ -1,10 +1,11 @@
-import { gmailSyncEnabled, isModuleEnabled, loadConfig } from '@assistant/config';
+import { isModuleEnabled, loadConfig } from '@assistant/config';
 import {
   evaluateCanaryHealth,
   expireStaleApprovals,
   findDueTasks,
   resumeResolvedApprovalTasks,
 } from '@assistant/core';
+import { gmailSyncEnabled } from '@assistant/modules/meta';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { latestCanaryRun, runCanaries } from '../canaries.js';

@@ -5,7 +5,7 @@ import {
   LocalProcessLauncher,
   registerBrowserTools,
 } from '@assistant/tools/browser';
-import { defineModule } from '../runtime-kit.js';
+import { defineModule } from '../platform.js';
 import { browserMeta } from './meta.js';
 
 export const browserModule = defineModule<BrowserJobLauncher | undefined>({

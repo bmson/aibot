@@ -9,6 +9,7 @@
     "./builtin": "./src/builtin/index.ts",
     "./code": "./src/code/index.ts",
     "./dispatcher": "./src/dispatcher.ts",
+    "./documents": "./src/documents.ts",
     "./modules/google": "./src/modules/google.ts",
     "./modules/sms": "./src/modules/sms.ts",
     "./registry": "./src/registry.ts",

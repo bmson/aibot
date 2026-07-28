@@ -1,23 +1,11 @@
-import { defineModuleMeta } from '../kit.js';
+import type { ModuleMeta } from '../contract.js';
 
-export const documentsMeta = defineModuleMeta({
+export const documentsMeta = {
   name: 'documents',
   title: 'Documents',
   summary: 'Office and PDF ingestion into searchable workspace text.',
   configKeys: ['PROCESSOR_DRIVER', 'PROCESSOR_JOB_NAME'],
-  infra: {
-    worker: {
-      planKey: 'processor',
-      image: 'processor',
-      dockerfile: 'infra/docker/document-processor.Dockerfile',
-      jobNameKey: 'PROCESSOR_JOB_NAME',
-      serviceAccount: 'assistant-processor',
-      storagePrefixes: ['documents/', 'uploads/'],
-    },
-    serviceAccounts: [
-      { id: 'assistant-processor', displayName: 'Assistant sandboxed document processor runtime' },
-    ],
-  },
+  infra: { workerImage: 'processor' },
   billing: {
     gcp: [
       {
@@ -32,6 +20,7 @@ export const documentsMeta = defineModuleMeta({
       },
     ],
   },
-  ui: { nav: [{ href: '/documents', label: 'Documents' }] },
+  ui: { navHrefs: ['/documents'] },
+  // Keep in step with the documents.* members of CodeJobName in @assistant/core.
   jobs: ['documents.extract', 'documents.process'],
-});
+} satisfies ModuleMeta;

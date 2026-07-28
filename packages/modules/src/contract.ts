@@ -1,6 +1,18 @@
 import type { AssistantModule, Config } from '@assistant/config';
 
 /**
+ * The plain-data half of the module contract.
+ *
+ * Nothing here imports provider code, so the web app, deployment scripts, and
+ * diagnostics can read module metadata without pulling tools, core, or the
+ * database into their bundles. `scripts/check-boundaries.ts` enforces that.
+ *
+ * Every field below is consumed by something. Declaring infrastructure that no
+ * code reads would leave the wizard confidently describing resources it does
+ * not control, so a field is added here only once a consumer exists.
+ */
+
+/**
  * A configuration key a module owns. Modules pick from the single flat schema in
  * `@assistant/config` rather than contributing their own, so one environment
  * variable name keeps mapping to one Secret Manager entry.
@@ -13,39 +25,25 @@ export interface ModuleReadiness {
   detail: string;
 }
 
-/** A Cloud Run Job image built and provisioned only when the module is enabled. */
-export interface ModuleWorker {
-  /** Key emitted by `pnpm modules:plan` and consumed by the deploy workflow. */
-  planKey: string;
-  image: string;
-  dockerfile: string;
-  jobNameKey: ConfigKey;
-  serviceAccount: string;
-  /** Workspace prefixes the job's service account may read and write. */
-  storagePrefixes?: readonly string[];
-}
-
+/** A Cloud Scheduler job that calls one of the agent's internal routes. */
 export interface ModuleSchedulerJob {
   name: string;
-  /** Cron expression in the deployment region's Cloud Scheduler. */
+  /** Cron expression, evaluated in the deployment region. */
   schedule: string;
-  /** Internal agent route the job invokes with a route-scoped OIDC token. */
+  /** Internal agent route invoked with a route-scoped OIDC token. */
   path: string;
 }
 
-/**
- * Infrastructure a module requires. Deployment derives its resource plan from
- * these declarations so provisioning has one source of truth with composition.
- */
+/** Infrastructure a module needs, which deployment provisions when it is enabled. */
 export interface ModuleInfra {
-  worker?: ModuleWorker;
+  /**
+   * Name of the worker image to build, which is also this module's key in the
+   * deployment plan. CI builds the image only when the module is composed in.
+   */
+  workerImage?: string;
   /** Google APIs to enable beyond the always-on platform set. */
   gcpApis?: readonly string[];
-  pubsubTopics?: readonly string[];
   schedulerJobs?: readonly ModuleSchedulerJob[];
-  serviceAccounts?: readonly { id: string; displayName: string }[];
-  /** Config keys stored in Secret Manager rather than the revision environment. */
-  secretKeys?: readonly ConfigKey[];
 }
 
 export interface ModuleBillingLine {
@@ -76,21 +74,17 @@ export interface ModuleBilling {
   external?: readonly ModuleExternalCost[];
 }
 
-export interface ModuleNavItem {
-  href: string;
-  label: string;
-}
-
 /**
- * Everything about a module that is plain data. Metadata carries no provider
- * code, so the web app, deployment scripts, and diagnostics can import it
- * without pulling tool implementations into their bundles.
+ * Everything about a module that is plain data.
+ *
+ * Declare metadata with `satisfies ModuleMeta` so the literal keeps its narrow
+ * inferred type while still being checked against this contract.
  */
 export interface ModuleMeta {
   name: AssistantModule;
   title: string;
   summary: string;
-  /** Configuration this module reads. Used by diagnostics and deployment. */
+  /** Configuration this module reads. Diagnostics and deployment use it. */
   configKeys: readonly ConfigKey[];
   /**
    * Readiness of an enabled module. Omit when a module has no settings that can
@@ -105,17 +99,12 @@ export interface ModuleMeta {
   prodProblems?: (config: Config) => string[];
   infra?: ModuleInfra;
   billing: ModuleBilling;
-  /** Navigation the web app reveals when the module is enabled. */
-  ui?: { nav?: readonly ModuleNavItem[] };
+  /** Routes the web shell hides while this module is not installed. */
+  ui?: { navHrefs?: readonly string[] };
   /**
-   * Code-job names this module owns. Declared in metadata rather than at
-   * runtime so the platform can recognise a job belonging to a module that is
-   * not installed and complete it benignly instead of dead-lettering it.
+   * Code-job names this module owns, so a job queued before the module was
+   * removed completes benignly instead of dead-lettering. Keep in step with
+   * `CodeJobName` in `@assistant/core`.
    */
   jobs?: readonly string[];
-}
-
-/** Identity helper that keeps module metadata literals type-checked. */
-export function defineModuleMeta(meta: ModuleMeta): ModuleMeta {
-  return meta;
 }
