@@ -20,7 +20,6 @@ import { formatUsd, relativeTime, stripMarkdown, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import {
   btn,
-  btnSm,
   cardShellClass,
   EmptyState,
   PageHeader,
@@ -219,36 +218,46 @@ export default async function TasksPage({
                         <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-muted">
                           {truncate(stripMarkdown(task.progress), 180) || 'No update recorded yet.'}
                         </p>
-                        <div className="mt-2 flex flex-wrap gap-1.5 text-2xs text-muted">
-                          <span className="rounded-md bg-sunken/65 px-2 py-1">
+                        {/* Facts, not chips: three boxed labels per row made every
+                            task read as a small dashboard. A quiet line scans. */}
+                        <p className="mt-1.5 flex flex-wrap gap-x-2 gap-y-0.5 text-xs leading-5 text-muted">
+                          <span className="whitespace-nowrap">
                             Started by {trustLabel(task.trust)}
                           </span>
-                          <span className="rounded-md bg-sunken/65 px-2 py-1">
-                            Spent {formatUsd(task.spentUsd)} / {formatUsd(task.budgetUsdLimit)}
+                          <span aria-hidden="true" className="text-muted/60">
+                            ·
                           </span>
-                          <span className="rounded-md bg-sunken/65 px-2 py-1">
+                          <span className="whitespace-nowrap">
+                            {formatUsd(task.spentUsd)} of {formatUsd(task.budgetUsdLimit)}
+                          </span>
+                          <span aria-hidden="true" className="text-muted/60">
+                            ·
+                          </span>
+                          <span className="whitespace-nowrap">
                             Updated {relativeTime(task.updatedAt, now)}
                           </span>
+                        </p>
+                      </div>
+                      {/* The title already opens the task — a per-row "Open"
+                          button restated the link as chrome. Only a real
+                          state change earns a button here. */}
+                      {archived || terminal ? (
+                        <div className="col-start-2 flex items-center gap-2 sm:col-start-auto sm:justify-end">
+                          {archived ? (
+                            <form action={restoreTask.bind(null, task.id)}>
+                              <SubmitButton size="sm" pendingLabel="Restoring…">
+                                Restore
+                              </SubmitButton>
+                            </form>
+                          ) : (
+                            <form action={archiveTask.bind(null, task.id)}>
+                              <SubmitButton size="sm" pendingLabel="Archiving…">
+                                Archive
+                              </SubmitButton>
+                            </form>
+                          )}
                         </div>
-                      </div>
-                      <div className="col-start-2 flex items-center gap-2 sm:col-start-auto sm:justify-end">
-                        <Link href={`/tasks/${task.id}`} className={btnSm.outline}>
-                          Open
-                        </Link>
-                        {archived ? (
-                          <form action={restoreTask.bind(null, task.id)}>
-                            <SubmitButton size="sm" pendingLabel="Restoring…">
-                              Restore
-                            </SubmitButton>
-                          </form>
-                        ) : terminal ? (
-                          <form action={archiveTask.bind(null, task.id)}>
-                            <SubmitButton size="sm" pendingLabel="Archiving…">
-                              Archive
-                            </SubmitButton>
-                          </form>
-                        ) : null}
-                      </div>
+                      ) : null}
                     </article>
                   );
                 })}

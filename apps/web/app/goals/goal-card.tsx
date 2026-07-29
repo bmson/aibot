@@ -239,7 +239,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
             {goal.blockedLabel ? (
               <Badge tone="amber">Needs you</Badge>
             ) : goal.workActive ? (
-              <Badge tone="blue">Working</Badge>
+              <Badge tone="accent">Working</Badge>
             ) : null}
             {goal.autonomy ? (
               <Badge
@@ -252,7 +252,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
             ) : null}
             {goal.mirrorToPrimary ? (
               <Badge
-                tone="indigo"
+                tone="neutral"
                 size="xs"
                 title="Background updates from this goal also appear in your main chat."
               >
@@ -329,38 +329,38 @@ export function GoalCard({ goal }: { goal: GoalView }) {
                 type="button"
                 data-menu-close
                 onClick={() => setEditing((value) => !value)}
-                className={outlineButton}
+                className={btn.menu}
               >
                 {editing ? 'Close editor' : 'Edit goal'}
               </button>
               {goal.taintedOrigin ? (
-                <p className="px-1 text-2xs leading-4 text-muted">
+                <p className="px-3 py-1 text-2xs leading-4 text-muted">
                   Autonomy is unavailable — this goal came from outside content, so every action
                   asks you first.
                 </p>
               ) : (
                 <form action={setGoalAutonomy.bind(null, goal.id, !goal.autonomy)}>
-                  <SubmitButton variant="outline" pendingLabel="Updating…" className="w-full">
+                  <SubmitButton variant="menu" pendingLabel="Updating…">
                     {goal.autonomy ? 'Require approvals' : 'Run autonomously'}
                   </SubmitButton>
                 </form>
               )}
               {open ? (
                 <form action={setGoalStatus.bind(null, goal.id, 'done')}>
-                  <SubmitButton variant="outline" pendingLabel="Finishing…" className="w-full">
+                  <SubmitButton variant="menu" pendingLabel="Finishing…">
                     Mark done
                   </SubmitButton>
                 </form>
               ) : (
                 <form action={setGoalStatus.bind(null, goal.id, 'active')}>
-                  <SubmitButton variant="outline" pendingLabel="Reactivating…" className="w-full">
+                  <SubmitButton variant="menu" pendingLabel="Reactivating…">
                     Reactivate
                   </SubmitButton>
                 </form>
               )}
               {!goal.workActive ? (
                 <form action={archiveGoal.bind(null, goal.id)}>
-                  <SubmitButton variant="outline" pendingLabel="Archiving…" className="w-full">
+                  <SubmitButton variant="menu" pendingLabel="Archiving…">
                     Archive
                   </SubmitButton>
                 </form>
@@ -368,9 +368,9 @@ export function GoalCard({ goal }: { goal: GoalView }) {
               {goal.status !== 'abandoned' ? (
                 <form action={setGoalStatus.bind(null, goal.id, 'abandoned')}>
                   <ConfirmButton
+                    variant="menuDanger"
                     confirmLabel="Confirm — stop goal"
                     pendingLabel="Stopping…"
-                    className="w-full"
                   >
                     Stop goal
                   </ConfirmButton>

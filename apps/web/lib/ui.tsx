@@ -33,6 +33,18 @@ const btnVariants = {
   success: 'bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800',
 } as const;
 
+/**
+ * Rows inside an <ActionMenu> panel. A dropdown is a list of choices, not a
+ * stack of buttons — so menu items are quiet, full-width, left-aligned rows
+ * that only light up under the pointer. Not built on btnBase: its
+ * justify-center would win the stylesheet-order fight against justify-start.
+ */
+const menuItem = `mobile-touch-target inline-flex h-9 w-full items-center gap-2 rounded-lg px-3 text-left text-[13px] font-medium whitespace-nowrap motion-safe:transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
+const menuVariants = {
+  menu: `${menuItem} text-strong hover:bg-sunken active:bg-sunken/80`,
+  menuDanger: `${menuItem} text-red-700 hover:bg-red-50 active:bg-red-100 dark:text-red-400 dark:hover:bg-red-950/40 dark:active:bg-red-950/70`,
+} as const;
+
 /** Default button scale — comfortable for primary actions and card controls. */
 export const btn = {
   outline: `${btnBase} ${btnMd} ${btnVariants.outline}`,
@@ -40,6 +52,7 @@ export const btn = {
   primary: `${btnBase} ${btnMd} ${btnVariants.primary}`,
   danger: `${btnBase} ${btnMd} ${btnVariants.danger}`,
   success: `${btnBase} ${btnMd} ${btnVariants.success}`,
+  ...menuVariants,
 } as const;
 
 /** Dense scale for table rows and per-item micro-actions (old default size). */
@@ -49,6 +62,7 @@ export const btnSm = {
   primary: `${btnBase} ${btnXs} ${btnVariants.primary}`,
   danger: `${btnBase} ${btnXs} ${btnVariants.danger}`,
   success: `${btnBase} ${btnXs} ${btnVariants.success}`,
+  ...menuVariants,
 } as const;
 
 /**
@@ -277,35 +291,28 @@ export function Panel({
 }
 
 /**
- * One status/label pill for the whole app. Tones copy the exact light/dark
- * pairs already used by status chips (views.tsx), so migrating the ~10 bespoke
- * pills to <Badge> shifts nothing visually. Count pills keep <CountBadge>.
+ * One status/label pill for the whole app, and one color vocabulary behind it.
+ * Each tone is a meaning, not a decoration:
+ *
+ *   neutral — a resting fact (queued, scheduled, a plain label)
+ *   muted   — an ended state that no longer matters (cancelled, expired)
+ *   accent  — the assistant is doing something right now
+ *   green   — finished well / verified
+ *   amber   — waiting on the owner
+ *   red     — failed or declined
+ *
+ * Anything new must pick one of these meanings rather than a new hue; if none
+ * fits, the pill is probably a neutral label. Count pills keep <CountBadge>.
  */
-export type BadgeTone =
-  | 'neutral'
-  | 'muted'
-  | 'accent'
-  | 'blue'
-  | 'green'
-  | 'amber'
-  | 'red'
-  | 'orange'
-  | 'violet'
-  | 'purple'
-  | 'indigo';
+export type BadgeTone = 'neutral' | 'muted' | 'accent' | 'green' | 'amber' | 'red';
 
 const pillTones: Record<BadgeTone, string> = {
   neutral: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
   muted: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
   accent: 'bg-accent/10 text-accent',
-  blue: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
   green: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300',
   amber: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
   red: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
-  orange: 'bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300',
-  violet: 'bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300',
-  purple: 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300',
-  indigo: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300',
 };
 
 export function Badge({
@@ -341,11 +348,10 @@ const badgeTones = {
   // (#f4f4f5 vs #f4f6fa) are the same colour to the eye, so a count sitting
   // directly on the page background simply vanished. `sunken` is defined as one
   // step below the canvas, so it reads on the page and on a raised card alike,
-  // in both themes.
+  // in both themes. Amber is the only other count tone — a count is either a
+  // quiet figure or a "needs you" figure, nothing in between.
   zinc: 'bg-sunken text-muted',
   amber: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
-  blue: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
-  green: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300',
 } as const;
 
 export function CountBadge({

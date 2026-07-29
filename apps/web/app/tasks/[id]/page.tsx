@@ -5,7 +5,15 @@ import type { ReactNode } from 'react';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, prettyJson, relativeTime, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
-import { BackLink, cardShellClass, InfoGrid, InfoItem, PageShell } from '@/lib/ui';
+import {
+  BackLink,
+  Badge,
+  cardShellClass,
+  InfoGrid,
+  InfoItem,
+  inputClass,
+  PageShell,
+} from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { actionLabel, displayTaskStatus, StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 import {
@@ -42,10 +50,10 @@ interface TimelineEntry {
 function JsonDetails({ summary, value }: { summary: string; value: unknown }) {
   return (
     <details className="mt-1">
-      <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs text-zinc-600 select-none dark:text-zinc-400">
+      <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs text-muted select-none">
         {summary}
       </summary>
-      <pre className="mt-1 overscroll-x-contain overflow-x-auto rounded bg-zinc-100 p-2 font-mono text-xs dark:bg-zinc-900">
+      <pre className="mt-1 overscroll-x-contain overflow-x-auto rounded bg-sunken p-2 font-mono text-xs">
         {typeof value === 'string' ? value : prettyJson(value)}
       </pre>
     </details>
@@ -100,12 +108,12 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           <div>
             <p className="text-sm">
               <span className="font-mono font-medium">{tc.toolName}</span>{' '}
-              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+              <span className="text-xs text-muted">
                 step {tc.step} · <StatusChip status={tc.status} />
               </span>
             </p>
             {decision?.riskTier ? (
-              <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="mt-0.5 text-xs text-muted">
                 risk {decision.riskTier}
                 {decision.policyId ? ` · policy ${decision.policyId}` : ''}
               </p>
@@ -126,8 +134,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         content: (
           <p className="text-sm">
             <span className="font-medium">{mc.role}</span>{' '}
-            <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{mc.model}</span>{' '}
-            <span className="text-xs text-zinc-500 dark:text-zinc-500">
+            <span className="font-mono text-xs text-muted">{mc.model}</span>{' '}
+            <span className="text-xs text-muted">
               {formatUsd(mc.costUsd)}
               {mc.latencyMs != null ? ` · ${mc.latencyMs}ms` : ''}
             </span>
@@ -149,7 +157,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                 <StatusChip status={approval.status} />
               </span>
             </p>
-            <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+            <p className="mt-0.5 text-xs text-muted">
               {approval.shortCode}
               {approval.resolvedVia ? ` · resolved via ${approval.resolvedVia}` : ''}
               {approval.resolvedAt ? ` at ${formatDateTime(approval.resolvedAt, timezone)}` : ''}
@@ -167,7 +175,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         content: (
           <p className="text-sm">
             <span className="font-medium">{message.role}</span>{' '}
-            <span className="text-zinc-600 dark:text-zinc-400">{truncate(message.text, 200)}</span>
+            <span className="text-muted">{truncate(message.text, 200)}</span>
           </p>
         ),
       }),
@@ -193,12 +201,14 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             <StatusChip status={displayTaskStatus(task.status, !stuckWaiting)} />
           </div>
           {activeGrant ? (
-            <span
-              className="mt-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-              title={`Free-range granted via ${activeGrant.grantedVia}. I act without asking, except the hard floor (memory from web content, unknown recipients, logged-in browsing, networked code) and budget caps.`}
-            >
-              ⚡ Free-range
-            </span>
+            <p className="mt-2">
+              <Badge
+                tone="amber"
+                title={`Free-range granted via ${activeGrant.grantedVia}. I act without asking, except the hard floor (memory from web content, unknown recipients, logged-in browsing, networked code) and budget caps.`}
+              >
+                ⚡ Free-range
+              </Badge>
+            </p>
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:justify-end">
@@ -257,7 +267,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
               max="10000"
               defaultValue={suggestedBudget.toFixed(2)}
               required
-              className="w-32 rounded-md border border-amber-300 bg-white px-2 py-1 text-base text-zinc-900 sm:text-sm dark:border-amber-800 dark:bg-zinc-900 dark:text-zinc-100"
+              className={`${inputClass} w-32`}
             />
           </label>
           <SubmitButton variant="primary" pendingLabel="Raising budget…">
@@ -297,21 +307,21 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
       <section className={`${cardShellClass} mt-5 p-5`}>
         <h2 className="text-sm font-semibold">What actually happened</h2>
-        <p className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 text-xs leading-5 text-muted">
           This list is built from completed tool results, not from the assistant’s wording.
         </p>
         {completedActions.length === 0 ? (
-          <p className="mt-4 rounded-lg bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+          <p className="mt-4 rounded-lg bg-sunken/60 px-3 py-2 text-sm text-muted">
             No external action completed for this item.
           </p>
         ) : (
-          <ul className="mt-4 divide-y divide-zinc-100 dark:divide-zinc-800">
+          <ul className="mt-4 divide-y divide-edge/60">
             {completedActions.map((call) => (
               <li key={call.id} className="py-3 first:pt-0 last:pb-0">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-medium">{actionLabel(call.toolName)}</p>
-                    <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                    <p className="mt-0.5 text-xs text-muted">
                       {relativeTime(call.finishedAt ?? call.createdAt, now)}
                     </p>
                   </div>
@@ -344,19 +354,19 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       {downloadableFiles.length > 0 ? (
         <section className={`${cardShellClass} mt-5 p-5`}>
           <h2 className="text-sm font-semibold">Files produced</h2>
-          <p className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+          <p className="mt-1 text-xs leading-5 text-muted">
             Artifacts this task saved to the workspace — click to download.
           </p>
-          <ul className="mt-4 divide-y divide-zinc-100 dark:divide-zinc-800">
+          <ul className="mt-4 divide-y divide-edge/60">
             {downloadableFiles.map((file) => (
               <li key={file.id} className="flex items-center justify-between gap-3 py-2">
                 <a
                   href={`/api/files?path=${encodeURIComponent(file.workspacePath)}`}
-                  className="truncate text-sm font-medium text-indigo-700 hover:underline dark:text-indigo-300"
+                  className="truncate text-sm font-medium text-accent hover:underline"
                 >
                   {file.workspacePath.split('/').pop()}
                 </a>
-                <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
+                <span className="shrink-0 text-xs text-muted">
                   {file.bytes > 0 ? `${Math.max(1, Math.round(file.bytes / 1024))} KB` : ''}
                 </span>
               </li>
@@ -366,33 +376,28 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       ) : null}
 
       <details className={`${cardShellClass} mt-5 p-5`}>
-        <summary className="disclosure flex items-center gap-2 cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">
+        <summary className="disclosure flex items-center gap-2 cursor-pointer text-sm font-medium text-strong">
           Full technical record
         </summary>
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 text-xs text-muted">
           Tool calls, approvals, messages, and model activity for troubleshooting.
         </p>
         {task.plan != null ? <JsonDetails summary="Plan" value={task.plan} /> : null}
         {timeline.length === 0 ? (
-          <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-            No activity recorded for this item yet.
-          </p>
+          <p className="mt-3 text-sm text-muted">No activity recorded for this item yet.</p>
         ) : (
           <ol className="mt-4 flex flex-col gap-3">
             {timeline.map((entry) => {
               const EntryIcon = timelineIcons[entry.icon];
               return (
-                <li
-                  key={entry.key}
-                  className="flex gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
-                >
+                <li key={entry.key} className="flex gap-3 rounded-lg border border-edge p-3">
                   <EntryIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline justify-between gap-3">
-                      <span className="text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">
+                      <span className="text-xs font-medium tracking-wide text-muted uppercase">
                         {entry.label}
                       </span>
-                      <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
+                      <span className="shrink-0 text-xs text-muted">
                         {formatDateTime(entry.at, timezone)}
                       </span>
                     </div>

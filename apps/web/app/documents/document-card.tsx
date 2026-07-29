@@ -31,10 +31,12 @@ export interface DocumentCardView {
   askHref: string;
 }
 
+// Queued is neutral, not amber — a document waiting its turn asks nothing of
+// the owner, and amber is reserved for things that do.
 const STATUS: Record<string, { label: string; tone: BadgeTone }> = {
   ready: { label: 'Ready', tone: 'green' },
-  extracting: { label: 'Reading…', tone: 'blue' },
-  pending: { label: 'Queued', tone: 'amber' },
+  extracting: { label: 'Reading…', tone: 'accent' },
+  pending: { label: 'Queued', tone: 'neutral' },
   unsupported: { label: 'Unsupported', tone: 'neutral' },
   failed: { label: 'Failed', tone: 'red' },
 };

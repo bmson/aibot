@@ -25,8 +25,12 @@ export interface PendingApprovalView {
    */
   fields: ApprovalField[];
   payloadJson: string;
+  /** Relative phrasing for the card's meta line ("requested 2h ago"). */
   requestedLabel: string;
+  /** Exact timestamp, surfaced on hover rather than inline. */
+  requestedExact: string;
   expiresLabel: string;
+  expiresExact: string;
   provenance: string;
   reason: string;
   rememberLabel: string | null;
@@ -243,8 +247,10 @@ export function toPendingApprovalView(
     summary: approval.summary,
     fields: approvalFields(toolCall.toolName, approval.payload),
     payloadJson: prettyJson(approval.payload),
-    requestedLabel: `requested ${relativeTime(approval.requestedAt, now)} (${formatFriendlyDateTime(approval.requestedAt, timeZone, now)})`,
-    expiresLabel: `expires ${relativeTime(approval.expiresAt, now)} (${formatFriendlyDateTime(approval.expiresAt, timeZone, now)})`,
+    requestedLabel: `requested ${relativeTime(approval.requestedAt, now)}`,
+    requestedExact: formatFriendlyDateTime(approval.requestedAt, timeZone, now),
+    expiresLabel: `expires ${relativeTime(approval.expiresAt, now)}`,
+    expiresExact: formatFriendlyDateTime(approval.expiresAt, timeZone, now),
     provenance: `${taskTypeLabel(task.type)} · requested by ${trustLabel(task.trust)}`,
     reason: approvalReason(toolCall.decision),
     rememberLabel: rememberLabel(toolCall.toolName, approval.payload),
@@ -255,25 +261,30 @@ export function toPendingApprovalView(
   };
 }
 
-/** Task/approval/goal status → shared Badge tone. */
+/**
+ * Task/approval/goal status → shared Badge tone. The tones are a fixed
+ * vocabulary (see BadgeTone in ui.tsx): accent = in motion, amber = waiting on
+ * the owner, green = finished well, red = failed, neutral/muted = at rest.
+ * Scanning any list, the only colored rows are the ones that matter right now.
+ */
 const statusTone: Record<string, BadgeTone> = {
   pending: 'neutral',
-  running: 'blue',
+  running: 'accent',
   waiting_approval: 'amber',
-  waiting_event: 'purple',
+  waiting_event: 'neutral',
   waiting_budget: 'amber',
-  sleeping: 'indigo',
+  sleeping: 'neutral',
   done: 'green',
   failed: 'red',
-  needs_attention: 'orange',
+  needs_attention: 'amber',
   cancelled: 'muted',
   approved: 'green',
   denied: 'red',
   expired: 'muted',
-  active: 'blue',
-  paused: 'amber',
+  active: 'accent',
+  paused: 'neutral',
   abandoned: 'muted',
-  stuck: 'orange',
+  stuck: 'amber',
 };
 
 export function StatusChip({ status }: { status: string }) {

@@ -35,10 +35,11 @@ const kindLabels: Record<string, string> = {
   off_hours: 'Off-hours',
 };
 
+// Every anomaly is a "look at this" — color carries severity, not category.
 const kindBadgeTone: Record<string, BadgeTone> = {
   burst: 'red',
   frequency: 'amber',
-  off_hours: 'blue',
+  off_hours: 'amber',
 };
 
 export function AnomalyCard({ anomaly }: { anomaly: AnomalyView }) {

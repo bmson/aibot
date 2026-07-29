@@ -44,7 +44,7 @@ const dangerButton = btn.danger;
 // the generic task vocabulary), rendered through the shared Badge tones.
 const statusTone: Record<string, BadgeTone> = {
   pending: 'neutral',
-  running: 'blue',
+  running: 'accent',
   done: 'green',
   failed: 'red',
   purged: 'muted',
