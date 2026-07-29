@@ -68,7 +68,7 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
           Raise this task’s cap from ${part.currentBudgetUsd.toFixed(2)} to $
           {part.proposedBudgetUsd.toFixed(2)}?
         </p>
-        <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+        <p className="mt-1 text-xs text-muted">
           ${part.spentUsd.toFixed(4)} has been spent. Approval applies only to this task.
         </p>
         {status === 'approved' ? (
@@ -76,13 +76,9 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
             Approved — work is resuming.
           </p>
         ) : status === 'denied' ? (
-          <p className="mt-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
-            Declined — the task was cancelled.
-          </p>
+          <p className="mt-2 text-xs font-medium text-muted">Declined — the task was cancelled.</p>
         ) : status === 'missing' ? (
-          <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-            This request is no longer available.
-          </p>
+          <p className="mt-2 text-xs text-muted">This request is no longer available.</p>
         ) : (
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button type="button" disabled={pending} onClick={approve} className={btn.success}>

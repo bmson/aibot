@@ -12,8 +12,7 @@ import {
   cardHeaderClass,
   cardShellClass,
   cardTitleClass,
-  InfoGrid,
-  InfoItem,
+  MetaLine,
 } from '@/lib/ui';
 import { toolLabel } from '@/lib/views';
 
@@ -35,10 +34,11 @@ const kindLabels: Record<string, string> = {
   off_hours: 'Off-hours',
 };
 
+// Every anomaly is a "look at this" — color carries severity, not category.
 const kindBadgeTone: Record<string, BadgeTone> = {
   burst: 'red',
   frequency: 'amber',
-  off_hours: 'blue',
+  off_hours: 'amber',
 };
 
 export function AnomalyCard({ anomaly }: { anomaly: AnomalyView }) {
@@ -69,11 +69,14 @@ export function AnomalyCard({ anomaly }: { anomaly: AnomalyView }) {
           <span className="shrink-0 text-xs text-muted">{anomaly.createdLabel}</span>
         </div>
         <p className="text-[14px] leading-6 text-strong">{anomaly.detail}</p>
-        <InfoGrid columns={3}>
-          <InfoItem label="Observed">{anomaly.observed}</InfoItem>
-          <InfoItem label="Expected">{anomaly.expected}</InfoItem>
-          <InfoItem label="Evidence">{anomaly.citationCount} calls</InfoItem>
-        </InfoGrid>
+        <MetaLine
+          className="tabular-nums"
+          segments={[
+            `Observed ${anomaly.observed}×`,
+            `expected ${anomaly.expected}×`,
+            `${anomaly.citationCount} calls of evidence`,
+          ]}
+        />
       </div>
       <footer className={cardFooterClass}>
         {anomaly.hasPolicy ? (

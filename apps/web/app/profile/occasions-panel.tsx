@@ -6,7 +6,7 @@ import {
   forgetOccasionAction,
   reviewOccasionAction,
 } from '@/app/profile/actions';
-import { btn, inputClass, labelClass } from '@/lib/ui';
+import { Badge, btn, btnSm, EmptyState, inputClass, labelClass, SectionHeading } from '@/lib/ui';
 
 /** Plain-serializable occasion view built in the page. */
 export interface OccasionView {
@@ -91,13 +91,8 @@ export function OccasionsPanel({
 
   return (
     <section className="mt-8">
-      <h2 className="flex items-baseline gap-2 text-sm font-medium">
-        Occasions
-        <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-          {occasions.length}
-        </span>
-      </h2>
-      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+      <SectionHeading title="Occasions" count={occasions.length} />
+      <p className="mt-1 text-xs text-muted">
         Birthdays, anniversaries, and other recurring dates. The assistant reminds you at lead time
         in your morning brief.
       </p>
@@ -110,18 +105,16 @@ export function OccasionsPanel({
               className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border p-3 ${
                 o.quarantined
                   ? 'border-amber-200 bg-amber-50/50 dark:border-amber-900 dark:bg-amber-950/20'
-                  : 'border-zinc-200 dark:border-zinc-800'
+                  : 'border-edge'
               }`}
             >
               <span className="text-sm font-medium capitalize">{kindLabel(o)}</span>
-              <span className="text-sm text-zinc-600 dark:text-zinc-400">{dateLabel(o)}</span>
-              {o.notes ? (
-                <span className="text-xs text-zinc-500 dark:text-zinc-500">— {o.notes}</span>
-              ) : null}
+              <span className="text-sm text-muted">{dateLabel(o)}</span>
+              {o.notes ? <span className="text-xs text-muted">— {o.notes}</span> : null}
               {o.quarantined ? (
-                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-2xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                  unverified
-                </span>
+                <Badge tone="amber" size="xs">
+                  Unverified
+                </Badge>
               ) : null}
               <span className="ml-auto flex gap-2">
                 {o.quarantined ? (
@@ -130,7 +123,7 @@ export function OccasionsPanel({
                       type="button"
                       disabled={pending}
                       onClick={() => startTransition(() => reviewOccasionAction(o.id, 'approve'))}
-                      className={btn.outline}
+                      className={btnSm.outline}
                     >
                       Confirm
                     </button>
@@ -138,7 +131,7 @@ export function OccasionsPanel({
                       type="button"
                       disabled={pending}
                       onClick={() => startTransition(() => reviewOccasionAction(o.id, 'reject'))}
-                      className={btn.dangerOutline}
+                      className={btnSm.dangerOutline}
                     >
                       Reject
                     </button>
@@ -148,7 +141,7 @@ export function OccasionsPanel({
                     type="button"
                     disabled={pending}
                     onClick={() => startTransition(() => forgetOccasionAction(o.id))}
-                    className={btn.dangerOutline}
+                    className={btnSm.dangerOutline}
                   >
                     Forget
                   </button>
@@ -158,9 +151,7 @@ export function OccasionsPanel({
           ))}
         </div>
       ) : (
-        <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-          No occasions saved for {personName} yet.
-        </p>
+        <EmptyState>No occasions saved for {personName} yet.</EmptyState>
       )}
 
       {visibleSuggestions.length > 0 ? (

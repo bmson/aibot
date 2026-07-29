@@ -3,7 +3,15 @@
 import { Plus } from 'lucide-react';
 import { useActionState, useRef, useState } from 'react';
 import { createGoal } from '@/app/goals/actions';
-import { btn, cardShellClass, focusRing, inputClass, labelClass, textareaClass } from '@/lib/ui';
+import {
+  btn,
+  cardShellClass,
+  cardTitleClass,
+  focusRing,
+  inputClass,
+  labelClass,
+  textareaClass,
+} from '@/lib/ui';
 import { PACE_OPTIONS } from './pace';
 
 /**
@@ -47,8 +55,8 @@ export function GoalCreateForm({ startOpen = false }: { startOpen?: boolean }) {
 
   return (
     <form action={formAction} className={`${cardShellClass} mt-6 p-5`}>
-      <h2 className="text-sm font-medium">Create a goal</h2>
-      <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-400">
+      <h2 className={cardTitleClass}>Create a goal</h2>
+      <p className="mt-1 text-xs leading-5 text-muted">
         Tell the assistant what outcome you want. It will start now and keep the work moving.
       </p>
       <div className="mt-3 flex flex-col gap-3">
@@ -75,7 +83,7 @@ export function GoalCreateForm({ startOpen = false }: { startOpen?: boolean }) {
           />
         </label>
         <details className="rounded-xl bg-sunken/55 px-3 py-2">
-          <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs font-medium text-zinc-600 dark:text-zinc-400">
+          <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs font-medium text-muted">
             Pace, target date, and updates
           </summary>
           <div className="mt-3 flex flex-col gap-3">
@@ -104,7 +112,7 @@ export function GoalCreateForm({ startOpen = false }: { startOpen?: boolean }) {
                 />
               </label>
             </div>
-            <label className="flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+            <label className="flex items-start gap-2 text-xs text-muted">
               <input type="checkbox" name="mirrorToPrimary" className="mt-0.5" />
               <span>Also show background updates in my main chat.</span>
             </label>

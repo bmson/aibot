@@ -20,9 +20,10 @@ import { formatUsd, relativeTime, stripMarkdown, truncate } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import {
   btn,
-  btnSm,
   cardShellClass,
+  cardTitleClass,
   EmptyState,
+  MetaLine,
   PageHeader,
   PageShell,
   segmentedControlClass,
@@ -210,7 +211,7 @@ export default async function TasksPage({
                         <div className="flex flex-wrap items-center gap-2">
                           <Link
                             href={`/tasks/${task.id}`}
-                            className="text-[15px] font-semibold tracking-[-0.01em] hover:underline"
+                            className={`${cardTitleClass} hover:underline`}
                           >
                             {task.title || taskTypeLabel(task.type)}
                           </Link>
@@ -219,36 +220,35 @@ export default async function TasksPage({
                         <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-muted">
                           {truncate(stripMarkdown(task.progress), 180) || 'No update recorded yet.'}
                         </p>
-                        <div className="mt-2 flex flex-wrap gap-1.5 text-2xs text-muted">
-                          <span className="rounded-md bg-sunken/65 px-2 py-1">
-                            Started by {trustLabel(task.trust)}
-                          </span>
-                          <span className="rounded-md bg-sunken/65 px-2 py-1">
-                            Spent {formatUsd(task.spentUsd)} / {formatUsd(task.budgetUsdLimit)}
-                          </span>
-                          <span className="rounded-md bg-sunken/65 px-2 py-1">
-                            Updated {relativeTime(task.updatedAt, now)}
-                          </span>
+                        <MetaLine
+                          className="mt-1.5"
+                          segments={[
+                            `Started by ${trustLabel(task.trust)}`,
+                            `${formatUsd(task.spentUsd)} of ${formatUsd(task.budgetUsdLimit)}`,
+                            `Updated ${relativeTime(task.updatedAt, now)}`,
+                          ]}
+                        />
+                      </div>
+                      {/* The title already opens the task — a per-row "Open"
+                          button restated the link as chrome. Only a real
+                          state change earns a button here. */}
+                      {archived || terminal ? (
+                        <div className="col-start-2 flex items-center gap-2 sm:col-start-auto sm:justify-end">
+                          {archived ? (
+                            <form action={restoreTask.bind(null, task.id)}>
+                              <SubmitButton size="sm" pendingLabel="Restoring…">
+                                Restore
+                              </SubmitButton>
+                            </form>
+                          ) : (
+                            <form action={archiveTask.bind(null, task.id)}>
+                              <SubmitButton size="sm" pendingLabel="Archiving…">
+                                Archive
+                              </SubmitButton>
+                            </form>
+                          )}
                         </div>
-                      </div>
-                      <div className="col-start-2 flex items-center gap-2 sm:col-start-auto sm:justify-end">
-                        <Link href={`/tasks/${task.id}`} className={btnSm.outline}>
-                          Open
-                        </Link>
-                        {archived ? (
-                          <form action={restoreTask.bind(null, task.id)}>
-                            <SubmitButton size="sm" pendingLabel="Restoring…">
-                              Restore
-                            </SubmitButton>
-                          </form>
-                        ) : terminal ? (
-                          <form action={archiveTask.bind(null, task.id)}>
-                            <SubmitButton size="sm" pendingLabel="Archiving…">
-                              Archive
-                            </SubmitButton>
-                          </form>
-                        ) : null}
-                      </div>
+                      ) : null}
                     </article>
                   );
                 })}

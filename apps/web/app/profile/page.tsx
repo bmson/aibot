@@ -17,7 +17,9 @@ import {
   CountBadge,
   cardInteractiveClass,
   cardShellClass,
+  cardTitleClass,
   countBadgeClass,
+  EmptyState,
   PageHeader,
   PageShell,
   Panel,
@@ -132,7 +134,7 @@ export default async function ProfilePage() {
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <Link
             href="/profile/memories"
-            className="group rounded-2xl bg-raised p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.08)] sm:p-5"
+            className={`${cardShellClass} ${cardInteractiveClass} group p-4 sm:p-5`}
           >
             <div className="flex items-start justify-between gap-4">
               <span className="inline-flex size-9 items-center justify-center rounded-xl bg-accent/10 text-accent">
@@ -161,7 +163,7 @@ export default async function ProfilePage() {
 
           <Link
             href="/profile/memories?state=review"
-            className={`group rounded-2xl p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.08)] sm:p-5 ${
+            className={`${cardInteractiveClass} group rounded-2xl p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 sm:p-5 ${
               memoryHealth.awaitingReview > 0
                 ? 'bg-amber-50/70 ring-amber-200 dark:bg-amber-950/20 dark:ring-amber-900'
                 : 'bg-raised ring-edge/60'
@@ -230,7 +232,7 @@ export default async function ProfilePage() {
             Awaiting your review
             <CountBadge tone="amber">{quarantined.length}</CountBadge>
           </h2>
-          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+          <p className="mt-1 text-xs text-muted">
             These came from unverified sources. The assistant will not use them until you approve
             them.
           </p>
@@ -248,7 +250,7 @@ export default async function ProfilePage() {
           <summary className={summaryClass}>
             Used in conversations
             <span className={countBadge}>{pinnedCount} pinned</span>
-            <span className="text-xs font-normal text-zinc-500 dark:text-zinc-500">
+            <span className="text-xs font-normal text-muted">
               {card ? `refreshed ${relativeTime(card.compiledAt, now)}` : 'not prepared yet'}
             </span>
           </summary>
@@ -257,7 +259,7 @@ export default async function ProfilePage() {
               {card.content}
             </div>
           ) : (
-            <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
+            <p className="mt-3 text-sm text-muted">
               Nothing is selected yet. Pin a fact below or refresh this summary after adding one.
             </p>
           )}
@@ -280,7 +282,7 @@ export default async function ProfilePage() {
           <summary className={summaryClass}>
             About {owner?.name ?? 'you'}
             <span className={countBadge}>{ownerFacts.length} facts</span>
-            <span className="text-xs font-normal text-zinc-500 dark:text-zinc-500">
+            <span className="text-xs font-normal text-muted">
               Open when you need to edit, add, or verify something.
             </span>
           </summary>
@@ -290,9 +292,9 @@ export default async function ProfilePage() {
             </div>
           ) : null}
           {ownerByDomain.length === 0 ? (
-            <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
+            <EmptyState>
               No details yet — they are added from conversations only after review.
-            </p>
+            </EmptyState>
           ) : (
             <div className="mt-3 flex flex-col gap-2">
               {ownerByDomain.map((group) => {
@@ -300,12 +302,12 @@ export default async function ProfilePage() {
                 return (
                   <details key={group.domain} className="rounded-xl bg-sunken/55 p-3.5">
                     <summary className={summaryClass}>
-                      <span className="text-xs font-medium text-zinc-600 uppercase tracking-wide dark:text-zinc-400">
+                      <span className="text-xs font-medium text-muted uppercase tracking-wide">
                         {group.domain}
                       </span>
                       <span className={countBadge}>{group.facts.length}</span>
                       {pinnedInDomain > 0 ? (
-                        <span className="text-2xs text-blue-700 dark:text-blue-400">
+                        <span className="text-2xs font-medium text-accent">
                           {pinnedInDomain} pinned
                         </span>
                       ) : null}
@@ -336,21 +338,22 @@ export default async function ProfilePage() {
 
       {/* People — one collapsed card per person */}
       <section className="mt-8">
-        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-[-0.02em]">
-          <CheckCircle2 className="size-4 text-accent" aria-hidden="true" />
+        {/* No icon — a decorative check next to "People" said nothing, and no
+            other section heading on this page carries one. */}
+        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-[-0.025em]">
           People
           <span className={countBadge}>{people.length}</span>
         </h2>
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+        <p className="mt-1 text-xs text-muted">
           Open a person to review what the assistant knows about them.
         </p>
         <div className="mt-3">
           <AddPerson />
         </div>
         {people.length === 0 ? (
-          <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
+          <EmptyState>
             No people yet — new names in conversations become contacts automatically.
-          </p>
+          </EmptyState>
         ) : (
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             {people.map(({ contact, factCount }) => (
@@ -360,9 +363,7 @@ export default async function ProfilePage() {
                 className={`${cardShellClass} ${cardInteractiveClass} group grid grid-cols-[minmax(0,1fr)_auto] gap-3 p-4`}
               >
                 <div className="min-w-0">
-                  <h3 className="truncate text-[15px] font-semibold tracking-[-0.01em]">
-                    {contact.name}
-                  </h3>
+                  <h3 className={`truncate ${cardTitleClass}`}>{contact.name}</h3>
                   <p className="mt-0.5 truncate text-xs text-muted">
                     {contact.relationship || 'Relationship not set'}
                   </p>

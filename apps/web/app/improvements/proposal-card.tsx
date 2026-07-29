@@ -11,8 +11,7 @@ import {
   cardHeaderClass,
   cardShellClass,
   cardTitleClass,
-  InfoGrid,
-  InfoItem,
+  MetaLine,
 } from '@/lib/ui';
 
 export interface ProposalView {
@@ -77,14 +76,12 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
             </section>
           ) : null}
         </div>
-        <InfoGrid>
-          <InfoItem label="Evidence">
-            {proposal.evidenceCount} pattern{proposal.evidenceCount === 1 ? '' : 's'}
-          </InfoItem>
-          <InfoItem label="Outcome">
-            {proposal.applyable ? 'Can apply directly' : 'Advisory'}
-          </InfoItem>
-        </InfoGrid>
+        <MetaLine
+          segments={[
+            `Based on ${proposal.evidenceCount} pattern${proposal.evidenceCount === 1 ? '' : 's'}`,
+            proposal.applyable ? 'Can apply directly' : 'Advisory',
+          ]}
+        />
       </div>
       <footer className={cardFooterClass}>
         <button

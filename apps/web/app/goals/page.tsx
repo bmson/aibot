@@ -198,11 +198,11 @@ export default async function GoalsPage({
               ) : null}
               <ActionMenu label="More" panelClassName="w-64">
                 <form action={archiveInactiveGoals}>
-                  <SubmitButton pendingLabel="Archiving…" className="w-full">
+                  <SubmitButton variant="menu" pendingLabel="Archiving…">
                     Archive old finished goals
                   </SubmitButton>
                 </form>
-                <p className="px-1 text-xs text-zinc-500">
+                <p className="px-3 py-1 text-xs text-muted">
                   Hides goals finished more than 30 days ago. Their history is kept.
                 </p>
               </ActionMenu>

@@ -18,8 +18,7 @@ import {
   cardFooterClass,
   cardShellClass,
   focusRing,
-  InfoGrid,
-  InfoItem,
+  MetaLine,
   textareaClass,
 } from '@/lib/ui';
 
@@ -103,12 +102,12 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
         </p>
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {fact.pinned ? (
-            <Badge tone="blue" size="xs">
+            <Badge tone="accent" size="xs">
               Pinned
             </Badge>
           ) : fact.inCard ? (
             <Badge
-              tone="blue"
+              tone="accent"
               size="xs"
               title="Auto-selected into the compiled owner card (high importance)"
             >
@@ -122,7 +121,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
           ) : null}
           {!quarantine && !fact.organized ? (
             <Badge
-              tone="violet"
+              tone="neutral"
               size="xs"
               title="This fact has not been checked for repetition or conflicts yet."
             >
@@ -146,22 +145,23 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
             </Link>
           ) : null}
         </div>
-        <InfoGrid className="sm:grid-cols-4">
-          <InfoItem label={quarantine ? 'Source' : 'About'}>
-            {/* The owner reads as "You" whether or not the row carries their
-                contact name — the library was showing "You" and the owner's name for
-                the same person depending on which query loaded the fact. */}
-            {quarantine
-              ? `${fact.originTrust} source`
-              : fact.aboutOwner || !fact.subjectLabel
-                ? 'You'
-                : fact.subjectLabel}
-          </InfoItem>
-          <InfoItem label="Type">{fact.kind}</InfoItem>
-          <InfoItem label="Topic">{fact.domain || 'General'}</InfoItem>
-          <InfoItem label="Confidence">{confidencePct}%</InfoItem>
-        </InfoGrid>
-        <p className="text-2xs text-muted">Saved {fact.createdLabel}</p>
+        {/* A fact is a sentence with provenance, not a form — the old
+            About/Type/Topic/Confidence grid made every memory read as a mini
+            dashboard. One quiet line carries the same facts. */}
+        <MetaLine
+          segments={[
+            // The owner reads as "You" whether or not the row carries their
+            // contact name — the library was showing "You" and the owner's name
+            // for the same person depending on which query loaded the fact.
+            quarantine
+              ? `From ${/^[aeiou]/i.test(fact.originTrust) ? 'an' : 'a'} ${fact.originTrust} source`
+              : `About ${fact.aboutOwner || !fact.subjectLabel ? 'you' : fact.subjectLabel}`,
+            fact.kind,
+            fact.domain || 'General',
+            `${confidencePct}% confident`,
+            `Saved ${fact.createdLabel}`,
+          ]}
+        />
       </div>
 
       <footer className={cardFooterClass}>

@@ -4,7 +4,6 @@ import {
   ArrowUpRight,
   CalendarDays,
   Check,
-  CircleHelp,
   FileText,
   Globe2,
   Mail,
@@ -28,8 +27,10 @@ import {
   cardFooterClass,
   cardInteractiveClass,
   cardShellClass,
+  cardTitleClass,
   InfoGrid,
   InfoItem,
+  MetaLine,
 } from '@/lib/ui';
 import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 import type { PendingApprovalView } from '@/lib/views';
@@ -73,38 +74,39 @@ export function ApprovalCard({
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-xs font-medium text-accent">{actionLabel} · waiting for you</p>
-            <h3 className="mt-1 text-[15px] leading-6 font-semibold tracking-[-0.015em]">
-              {approval.summary}
-            </h3>
+            <h3 className={`mt-1 ${cardTitleClass}`}>{approval.summary}</h3>
+            {/* Provenance and timing are context, not content — one quiet line,
+                with exact timestamps on hover, instead of a grid of cells that
+                competed with what is actually being approved below. */}
+            <MetaLine
+              className="mt-1.5"
+              segments={[
+                approval.provenance,
+                <span key="requested" title={approval.requestedExact}>
+                  {approval.requestedLabel}
+                </span>,
+                <span key="expires" title={approval.expiresExact}>
+                  {approval.expiresLabel}
+                </span>,
+                <span
+                  key="code"
+                  className="font-mono"
+                  title="A short identifier for recognizing this request in chat, text messages, and activity."
+                >
+                  {approval.shortCode}
+                </span>,
+                <Link
+                  key="task"
+                  href={`/tasks/${approval.taskId}`}
+                  className="inline-flex items-center gap-0.5 hover:text-strong"
+                >
+                  View activity
+                  <ArrowUpRight className="size-3" aria-hidden="true" />
+                </Link>,
+              ]}
+            />
           </div>
         </div>
-        <InfoGrid className="sm:grid-cols-4">
-          <InfoItem label="Source">
-            <span className="block truncate" title={approval.provenance}>
-              {approval.provenance}
-            </span>
-            <span className="block font-normal">
-              <Link
-                href={`/tasks/${approval.taskId}`}
-                className="inline-flex items-center gap-0.5 text-xs text-muted hover:text-strong"
-              >
-                View activity
-                <ArrowUpRight className="size-3" aria-hidden="true" />
-              </Link>
-            </span>
-          </InfoItem>
-          <InfoItem label="Requested">{approval.requestedLabel}</InfoItem>
-          <InfoItem label="Expires">{approval.expiresLabel}</InfoItem>
-          <InfoItem label="Reference">
-            <span
-              className="inline-flex items-center gap-1 font-mono"
-              title="A short identifier for recognizing this request in chat, text messages, and activity."
-            >
-              {approval.shortCode}
-              <CircleHelp className="size-3" aria-hidden="true" />
-            </span>
-          </InfoItem>
-        </InfoGrid>
         {approval.voiceFlag ? (
           <div className="rounded-xl bg-amber-100/80 px-3 py-2.5 dark:bg-amber-950/45">
             <p className="flex items-center gap-1 text-xs font-semibold text-amber-900 dark:text-amber-200">
@@ -125,22 +127,18 @@ export function ApprovalCard({
             ))}
           </InfoGrid>
         ) : null}
-        <div className="grid gap-2 sm:grid-cols-2">
-          <details className="rounded-xl bg-sunken/45 px-3 py-2.5">
-            <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs font-medium text-muted select-none">
-              Why the assistant paused
-            </summary>
-            <p className="mt-2 max-w-[72ch] text-xs leading-5 text-muted">{approval.reason}</p>
-          </details>
-          <details className="rounded-xl bg-sunken/45 px-3 py-2.5">
-            <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs font-medium text-muted select-none">
-              Technical details
-            </summary>
-            <pre className="mt-2 overscroll-x-contain overflow-x-auto rounded-lg bg-sunken p-3 font-mono text-xs">
-              {approval.payloadJson}
-            </pre>
-          </details>
-        </div>
+        {/* One disclosure, not two side-by-side panels: the why and the exact
+            payload are both "more detail", and a deciding owner opens them
+            together or not at all. */}
+        <details className="rounded-xl bg-sunken/45 px-3 py-2.5">
+          <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs font-medium text-muted select-none">
+            Why this asks, and the exact request
+          </summary>
+          <p className="mt-2 max-w-[72ch] text-xs leading-5 text-muted">{approval.reason}</p>
+          <pre className="mt-2 overscroll-x-contain overflow-x-auto rounded-lg bg-sunken p-3 font-mono text-xs">
+            {approval.payloadJson}
+          </pre>
+        </details>
       </div>
 
       {approval.expired ? (

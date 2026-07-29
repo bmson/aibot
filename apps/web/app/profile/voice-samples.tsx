@@ -4,14 +4,15 @@ import { useState, useTransition } from 'react';
 import { purgeVoiceSamplesAction } from '@/app/profile/actions';
 import {
   btn,
+  CountBadge,
   cardBodyClass,
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
+  cardTitleClass,
   fileInputClass,
-  InfoGrid,
-  InfoItem,
   inputClass,
+  MetaLine,
 } from '@/lib/ui';
 
 /** Plain-serializable view built in page.tsx. */
@@ -65,21 +66,26 @@ export function VoiceSamplesPanel({
       <div className={cardBodyClass}>
         <div className={cardHeaderClass}>
           <div className="min-w-0">
-            <h2 className="text-[15px] font-semibold">Your writing voice</h2>
+            <h2 className={cardTitleClass}>Your writing voice</h2>
             <p className="mt-1 max-w-2xl text-xs leading-5 text-muted">
               The assistant learns from your own sent messages so its drafts sound more like you.
               Forwarded and quoted text is skipped.
             </p>
           </div>
-          <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+          <CountBadge>
             {total} {total === 1 ? 'sample' : 'samples'}
-          </span>
+          </CountBadge>
         </div>
-        <InfoGrid columns={3}>
-          <InfoItem label="Total">{total}</InfoItem>
-          <InfoItem label="Learned">{auto}</InfoItem>
-          <InfoItem label="Uploaded">{uploaded}</InfoItem>
-        </InfoGrid>
+        {/* The pill already carries the total — the breakdown is one quiet
+            line, not a grid of three boxed figures. */}
+        {total > 0 ? (
+          <MetaLine
+            segments={[
+              `${auto.toLocaleString()} learned from your sent mail`,
+              `${uploaded.toLocaleString()} uploaded`,
+            ]}
+          />
+        ) : null}
 
         {/* Upload */}
         <form

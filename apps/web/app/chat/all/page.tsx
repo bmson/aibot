@@ -3,7 +3,15 @@ import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getApplication } from '@/lib/server';
-import { btn, cardShellClass, EmptyState, PageHeader, PageShell } from '@/lib/ui';
+import {
+  Badge,
+  btn,
+  cardShellClass,
+  cardTitleClass,
+  EmptyState,
+  PageHeader,
+  PageShell,
+} from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import {
   archiveConversation,
@@ -113,19 +121,20 @@ export default async function ChatListPage({
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex min-w-0 items-center gap-2">
-                      <span className="truncate text-[14px] font-semibold">
+                      <span className={`truncate ${cardTitleClass}`}>
                         {conversation.title && conversation.title !== 'Untitled'
                           ? conversation.title
                           : 'New conversation'}
                       </span>
                       {conversation.isPrimary ? (
-                        <span className="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-2xs font-semibold tracking-wide text-indigo-700 uppercase dark:bg-indigo-950 dark:text-indigo-300">
+                        <Badge tone="neutral" size="xs" uppercase>
                           Main
-                        </span>
+                        </Badge>
                       ) : activeConversationIds.has(conversation.id) ? (
-                        <span className="shrink-0 rounded-full bg-blue-100 px-1.5 py-0.5 text-2xs font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">
-                          Work active
-                        </span>
+                        // Same word and tone the goal cards use for live work.
+                        <Badge tone="accent" size="xs">
+                          Working
+                        </Badge>
                       ) : null}
                     </span>
                     <span className="mt-0.5 block text-xs text-muted">
@@ -135,21 +144,13 @@ export default async function ChatListPage({
                 </Link>
                 {conversation.isPrimary ? null : archived ? (
                   <form action={restoreConversation.bind(null, conversation.id)}>
-                    <SubmitButton
-                      variant="outline"
-                      pendingLabel="Restoring…"
-                      className="h-8 px-3 text-xs"
-                    >
+                    <SubmitButton variant="outline" size="sm" pendingLabel="Restoring…">
                       Restore
                     </SubmitButton>
                   </form>
                 ) : activeConversationIds.has(conversation.id) ? null : (
                   <form action={archiveConversation.bind(null, conversation.id)}>
-                    <SubmitButton
-                      variant="outline"
-                      pendingLabel="Archiving…"
-                      className="h-8 px-3 text-xs"
-                    >
+                    <SubmitButton variant="outline" size="sm" pendingLabel="Archiving…">
                       Archive
                     </SubmitButton>
                   </form>

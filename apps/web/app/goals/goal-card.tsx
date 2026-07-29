@@ -2,7 +2,7 @@
 
 import { CircleAlert, CornerDownRight } from 'lucide-react';
 import Link from 'next/link';
-import { type ReactNode, useActionState, useEffect, useRef, useState } from 'react';
+import { useActionState, useEffect, useRef, useState } from 'react';
 import {
   archiveGoal,
   restoreGoal,
@@ -18,6 +18,8 @@ import {
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
+  cardTitleClass,
+  MetaLine,
   inputClass as sharedInputClass,
   labelClass as sharedLabelClass,
   textareaClass,
@@ -151,62 +153,42 @@ function TargetRunway({ goal }: { goal: GoalView }) {
 }
 
 /** 'Updated 2h ago · Checks in daily · next in 4h · Due Oct 9 · Last session …' */
-function MetaLine({ goal }: { goal: GoalView }) {
-  const segments: ReactNode[] = [];
-  segments.push(
-    <span key="updated" className="whitespace-nowrap">
-      Updated {goal.updatedLabel}
-    </span>,
-  );
-  if (goal.paceMeta) {
-    segments.push(
-      <span key="pace" className="whitespace-nowrap">
-        {goal.paceMeta}
-        {goal.automationNextLabel ? (
-          <span className="text-muted/80"> · {goal.automationNextLabel}</span>
-        ) : null}
-      </span>,
-    );
-  }
-  if (goal.targetMeta) {
-    segments.push(
-      <span
-        key="target"
-        className={`whitespace-nowrap ${
-          goal.targetMeta.overdue ? 'font-medium text-amber-700 dark:text-amber-400' : ''
-        }`}
-      >
-        {goal.targetMeta.label}
-      </span>,
-    );
-  }
-  if (goal.lastSessionLabel && goal.lastSessionHref) {
-    segments.push(
-      <span key="session" className="whitespace-nowrap">
-        Last session{' '}
-        <Link
-          href={goal.lastSessionHref}
-          className="underline decoration-edge underline-offset-2 hover:decoration-current"
-        >
-          {goal.lastSessionLabel}
-        </Link>
-      </span>,
-    );
-  }
+function GoalMeta({ goal }: { goal: GoalView }) {
   return (
-    <p className="flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs leading-5 text-muted">
-      {segments.flatMap((segment, index) =>
-        index === 0
-          ? [segment]
-          : [
-              // biome-ignore lint/suspicious/noArrayIndexKey: separators are positional
-              <span key={`separator-${index}`} aria-hidden="true" className="text-muted/60">
-                ·
-              </span>,
-              segment,
-            ],
-      )}
-    </p>
+    <MetaLine
+      segments={[
+        `Updated ${goal.updatedLabel}`,
+        goal.paceMeta ? (
+          <span key="pace">
+            {goal.paceMeta}
+            {goal.automationNextLabel ? (
+              <span className="text-muted/80"> · {goal.automationNextLabel}</span>
+            ) : null}
+          </span>
+        ) : null,
+        goal.targetMeta ? (
+          <span
+            key="target"
+            className={
+              goal.targetMeta.overdue ? 'font-medium text-amber-700 dark:text-amber-400' : ''
+            }
+          >
+            {goal.targetMeta.label}
+          </span>
+        ) : null,
+        goal.lastSessionLabel && goal.lastSessionHref ? (
+          <span key="session">
+            Last session{' '}
+            <Link
+              href={goal.lastSessionHref}
+              className="underline decoration-edge underline-offset-2 hover:decoration-current"
+            >
+              {goal.lastSessionLabel}
+            </Link>
+          </span>
+        ) : null,
+      ]}
+    />
   );
 }
 
@@ -228,9 +210,10 @@ export function GoalCard({ goal }: { goal: GoalView }) {
             blocked state keeps a panel: it's an alert, not a property. */}
         <div className={cardHeaderClass}>
           <div className="min-w-0">
-            <h3 className="font-display text-[16px] leading-6 font-semibold tracking-[-0.02em] text-strong">
-              {goal.title}
-            </h3>
+            {/* The one shared card-title scale — the display face is reserved
+                for page titles and the brand, and a 16px one-off made goal
+                cards read a half-step louder than every other card. */}
+            <h3 className={cardTitleClass}>{goal.title}</h3>
             {goal.description ? (
               <p className="mt-1 text-[13px] leading-5 text-muted">{goal.description}</p>
             ) : null}
@@ -239,7 +222,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
             {goal.blockedLabel ? (
               <Badge tone="amber">Needs you</Badge>
             ) : goal.workActive ? (
-              <Badge tone="blue">Working</Badge>
+              <Badge tone="accent">Working</Badge>
             ) : null}
             {goal.autonomy ? (
               <Badge
@@ -252,7 +235,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
             ) : null}
             {goal.mirrorToPrimary ? (
               <Badge
-                tone="indigo"
+                tone="neutral"
                 size="xs"
                 title="Background updates from this goal also appear in your main chat."
               >
@@ -285,7 +268,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
 
         <div className="grid min-w-0 gap-2">
           <TargetRunway goal={goal} />
-          <MetaLine goal={goal} />
+          <GoalMeta goal={goal} />
         </div>
       </div>
 
@@ -329,38 +312,38 @@ export function GoalCard({ goal }: { goal: GoalView }) {
                 type="button"
                 data-menu-close
                 onClick={() => setEditing((value) => !value)}
-                className={outlineButton}
+                className={btn.menu}
               >
                 {editing ? 'Close editor' : 'Edit goal'}
               </button>
               {goal.taintedOrigin ? (
-                <p className="px-1 text-2xs leading-4 text-muted">
+                <p className="px-3 py-1 text-2xs leading-4 text-muted">
                   Autonomy is unavailable — this goal came from outside content, so every action
                   asks you first.
                 </p>
               ) : (
                 <form action={setGoalAutonomy.bind(null, goal.id, !goal.autonomy)}>
-                  <SubmitButton variant="outline" pendingLabel="Updating…" className="w-full">
+                  <SubmitButton variant="menu" pendingLabel="Updating…">
                     {goal.autonomy ? 'Require approvals' : 'Run autonomously'}
                   </SubmitButton>
                 </form>
               )}
               {open ? (
                 <form action={setGoalStatus.bind(null, goal.id, 'done')}>
-                  <SubmitButton variant="outline" pendingLabel="Finishing…" className="w-full">
+                  <SubmitButton variant="menu" pendingLabel="Finishing…">
                     Mark done
                   </SubmitButton>
                 </form>
               ) : (
                 <form action={setGoalStatus.bind(null, goal.id, 'active')}>
-                  <SubmitButton variant="outline" pendingLabel="Reactivating…" className="w-full">
+                  <SubmitButton variant="menu" pendingLabel="Reactivating…">
                     Reactivate
                   </SubmitButton>
                 </form>
               )}
               {!goal.workActive ? (
                 <form action={archiveGoal.bind(null, goal.id)}>
-                  <SubmitButton variant="outline" pendingLabel="Archiving…" className="w-full">
+                  <SubmitButton variant="menu" pendingLabel="Archiving…">
                     Archive
                   </SubmitButton>
                 </form>
@@ -368,9 +351,9 @@ export function GoalCard({ goal }: { goal: GoalView }) {
               {goal.status !== 'abandoned' ? (
                 <form action={setGoalStatus.bind(null, goal.id, 'abandoned')}>
                   <ConfirmButton
+                    variant="menuDanger"
                     confirmLabel="Confirm — stop goal"
                     pendingLabel="Stopping…"
-                    className="w-full"
                   >
                     Stop goal
                   </ConfirmButton>
@@ -446,7 +429,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
               className={inputClass}
             />
           </label>
-          <label className="flex items-start gap-2 text-xs font-normal text-zinc-600 dark:text-zinc-400">
+          <label className="flex items-start gap-2 text-xs font-normal text-muted">
             <input
               type="checkbox"
               name="mirrorToPrimary"

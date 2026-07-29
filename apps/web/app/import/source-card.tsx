@@ -17,8 +17,7 @@ import {
   cardHeaderClass,
   cardShellClass,
   cardTitleClass,
-  InfoGrid,
-  InfoItem,
+  MetaLine,
 } from '@/lib/ui';
 
 /** Plain-serializable source view built in page.tsx. */
@@ -44,7 +43,7 @@ const dangerButton = btn.danger;
 // the generic task vocabulary), rendered through the shared Badge tones.
 const statusTone: Record<string, BadgeTone> = {
   pending: 'neutral',
-  running: 'blue',
+  running: 'accent',
   done: 'green',
   failed: 'red',
   purged: 'muted',
@@ -82,13 +81,20 @@ export function SourceCard({ view }: { view: SourceView }) {
           </Badge>
         </div>
 
-        <InfoGrid className="sm:grid-cols-3">
-          <InfoItem label="Processed">
-            {pct !== null ? `${view.itemsProcessed} of ${view.itemsTotal}` : 'Waiting'}
-          </InfoItem>
-          <InfoItem label="Memories">{view.memoriesSaved}</InfoItem>
-          <InfoItem label="Needs review">{view.quarantinedNow}</InfoItem>
-        </InfoGrid>
+        <MetaLine
+          className="tabular-nums"
+          segments={[
+            pct !== null
+              ? `${view.itemsProcessed} of ${view.itemsTotal} processed`
+              : 'Waiting to process',
+            `${view.memoriesSaved} memories saved`,
+            view.quarantinedNow > 0 ? (
+              <span key="review" className="font-medium text-amber-700 dark:text-amber-400">
+                {view.quarantinedNow} need review
+              </span>
+            ) : null,
+          ]}
+        />
         {pct !== null && view.status === 'running' ? (
           <div>
             <div className="flex items-center justify-between gap-3 text-xs text-muted">
@@ -96,7 +102,7 @@ export function SourceCard({ view }: { view: SourceView }) {
               <span>{pct}%</span>
             </div>
             <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-sunken">
-              <div className="h-full rounded-full bg-blue-500" style={{ width: `${pct}%` }} />
+              <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
             </div>
           </div>
         ) : null}
@@ -150,10 +156,7 @@ export function SourceCard({ view }: { view: SourceView }) {
           {view.taskId ? (
             <>
               {' · '}
-              <Link
-                href={`/tasks/${view.taskId}`}
-                className="underline hover:text-zinc-800 dark:hover:text-zinc-200"
-              >
+              <Link href={`/tasks/${view.taskId}`} className="underline hover:text-strong">
                 View task
               </Link>
             </>

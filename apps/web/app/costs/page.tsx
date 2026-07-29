@@ -18,9 +18,9 @@ function Bar({ spent, held, limit }: { spent: number; held: number; limit: numbe
   const heldPct = Math.min(100 - spentPct, (held / limit) * 100);
   const color = spentPct >= 100 ? 'bg-red-500' : spentPct >= 80 ? 'bg-amber-500' : 'bg-accent';
   return (
-    <div className="mt-2 flex h-2 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+    <div className="mt-2 flex h-2 w-full overflow-hidden rounded-full bg-sunken">
       <div className={`h-full ${color}`} style={{ width: `${spentPct}%` }} />
-      <div className="h-full bg-zinc-400/60 dark:bg-zinc-500/60" style={{ width: `${heldPct}%` }} />
+      <div className="h-full bg-muted/50" style={{ width: `${heldPct}%` }} />
     </div>
   );
 }
@@ -87,7 +87,7 @@ export default async function CostsPage() {
       {/* Cap editing */}
       <section className="mt-6">
         <form action={updateCaps} className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+          <label className="flex flex-col gap-1 text-xs font-medium text-muted">
             Default task cap (USD)
             <input
               type="number"
@@ -98,7 +98,7 @@ export default async function CostsPage() {
               className={`${inputClass} w-28`}
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+          <label className="flex flex-col gap-1 text-xs font-medium text-muted">
             Daily cap (USD)
             <input
               type="number"
@@ -109,7 +109,7 @@ export default async function CostsPage() {
               className={`${inputClass} w-28`}
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+          <label className="flex flex-col gap-1 text-xs font-medium text-muted">
             Monthly cap (USD)
             <input
               type="number"
@@ -136,7 +136,7 @@ export default async function CostsPage() {
           {held.length > 0 ? (
             <section className="mt-5">
               <h2 className="text-sm font-medium">In-progress work</h2>
-              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+              <p className="mt-1 text-xs text-muted">
                 Estimated costs reserved for work that has not finished yet.
               </p>
               <div className="mt-3 flex flex-col gap-2">
@@ -148,7 +148,7 @@ export default async function CostsPage() {
                     <span className="min-w-0 truncate">
                       {r.source} — {r.description || 'No description'}
                     </span>
-                    <span className="shrink-0 text-xs text-zinc-500">
+                    <span className="shrink-0 text-xs text-muted">
                       {formatUsd(r.estimatedUsd)} estimated
                     </span>
                   </div>
@@ -163,9 +163,9 @@ export default async function CostsPage() {
               <table className="mt-3 w-full text-sm">
                 <tbody>
                   {bySource.map((row) => (
-                    <tr key={row.source} className="border-t border-zinc-100 dark:border-zinc-900">
+                    <tr key={row.source} className="border-t border-edge/60">
                       <td className="py-1.5">{row.source}</td>
-                      <td className="py-1.5 text-right text-xs text-zinc-500">{row.count}×</td>
+                      <td className="py-1.5 text-right text-xs text-muted">{row.count}×</td>
                       <td className="py-1.5 text-right tabular-nums">
                         {formatUsd(String(row.usd ?? '0'))}
                       </td>
@@ -173,7 +173,7 @@ export default async function CostsPage() {
                   ))}
                   {bySource.length === 0 ? (
                     <tr>
-                      <td className="py-1.5 text-zinc-500">No spending yet this month</td>
+                      <td className="py-1.5 text-muted">No spending yet this month</td>
                     </tr>
                   ) : null}
                 </tbody>
@@ -184,9 +184,9 @@ export default async function CostsPage() {
               <table className="mt-3 w-full text-sm">
                 <tbody>
                   {byModel.map((row) => (
-                    <tr key={row.model} className="border-t border-zinc-100 dark:border-zinc-900">
+                    <tr key={row.model} className="border-t border-edge/60">
                       <td className="max-w-0 truncate py-1.5">{row.model}</td>
-                      <td className="py-1.5 text-right text-xs text-zinc-500">{row.count}×</td>
+                      <td className="py-1.5 text-right text-xs text-muted">{row.count}×</td>
                       <td className="py-1.5 text-right tabular-nums">
                         {formatUsd(String(row.usd ?? '0'))}
                       </td>
@@ -194,7 +194,7 @@ export default async function CostsPage() {
                   ))}
                   {byModel.length === 0 ? (
                     <tr>
-                      <td className="py-1.5 text-zinc-500">No model calls this month</td>
+                      <td className="py-1.5 text-muted">No model calls this month</td>
                     </tr>
                   ) : null}
                 </tbody>
@@ -212,16 +212,14 @@ export default async function CostsPage() {
                   className="flex items-center justify-between gap-3 rounded-xl bg-raised px-3 py-2 text-sm motion-safe:transition-transform hover:-translate-y-0.5"
                 >
                   <span className="min-w-0 truncate">
-                    <span className="text-xs text-zinc-500">[{taskTypeLabel(row.type)}]</span>{' '}
+                    <span className="text-xs text-muted">[{taskTypeLabel(row.type)}]</span>{' '}
                     {truncate(row.progress || row.taskId || '', 80)}
                   </span>
                   <span className="shrink-0">{formatUsd(String(row.usd ?? '0'))}</span>
                 </Link>
               ))}
               {topTasks.length === 0 ? (
-                <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                  No task spending yet this month
-                </p>
+                <p className="text-sm text-muted">No task spending yet this month</p>
               ) : null}
             </div>
           </section>
@@ -231,12 +229,12 @@ export default async function CostsPage() {
             <table className="mt-3 w-full text-sm">
               <tbody>
                 {recent.map((e) => (
-                  <tr key={e.id} className="border-t border-zinc-100 dark:border-zinc-900">
-                    <td className="py-1.5 text-xs text-zinc-500 whitespace-nowrap">
+                  <tr key={e.id} className="border-t border-edge/60">
+                    <td className="py-1.5 text-xs text-muted whitespace-nowrap">
                       {formatDateTime(e.createdAt, tz)}
                     </td>
                     <td className="px-2 py-1.5">{e.source}</td>
-                    <td className="max-w-0 truncate px-2 py-1.5 text-xs text-zinc-500">
+                    <td className="max-w-0 truncate px-2 py-1.5 text-xs text-muted">
                       {e.description}
                     </td>
                     <td className="py-1.5 text-right tabular-nums">{formatUsd(e.usd)}</td>
@@ -244,7 +242,7 @@ export default async function CostsPage() {
                 ))}
                 {recent.length === 0 ? (
                   <tr>
-                    <td className="py-1.5 text-zinc-500">No charges yet</td>
+                    <td className="py-1.5 text-muted">No charges yet</td>
                   </tr>
                 ) : null}
               </tbody>

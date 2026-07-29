@@ -16,7 +16,7 @@ const components: Components = {
       {...props}
       target="_blank"
       rel="noopener noreferrer"
-      className="font-medium [overflow-wrap:anywhere] underline decoration-zinc-400 underline-offset-2 hover:decoration-current"
+      className="font-medium [overflow-wrap:anywhere] underline decoration-muted/70 underline-offset-2 hover:decoration-current"
     >
       {children}
     </a>
@@ -56,15 +56,13 @@ const components: Components = {
   blockquote: ({ node: _node, ...props }) => (
     <blockquote {...props} className="my-3 border-l-2 border-accent/50 py-0.5 pl-3 text-muted" />
   ),
-  hr: ({ node: _node, ...props }) => (
-    <hr {...props} className="my-3 border-zinc-300 dark:border-zinc-700" />
-  ),
+  hr: ({ node: _node, ...props }) => <hr {...props} className="my-3 border-edge" />,
   // react-markdown v10 has no `inline` flag: `code` gets inline styling, and
   // `pre` (block code wrapper) resets it on its child so blocks stay flat.
   code: ({ node: _node, ...props }) => (
     <code
       {...props}
-      className="break-words rounded bg-zinc-200 px-1 py-0.5 font-mono text-[0.85em] [overflow-wrap:anywhere] dark:bg-zinc-800"
+      className="break-words rounded bg-sunken px-1 py-0.5 font-mono text-[0.85em] [overflow-wrap:anywhere]"
     />
   ),
   pre: ({ node: _node, ...props }) => (

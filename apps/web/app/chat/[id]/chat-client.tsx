@@ -257,7 +257,7 @@ function ContractNotice({ text }: { text: string }) {
         </p>
       </div>
       <div className="px-4 py-3">
-        <p className="break-words text-[13px] leading-5 text-zinc-600 [overflow-wrap:anywhere] dark:text-zinc-300">
+        <p className="break-words text-[13px] leading-5 text-muted [overflow-wrap:anywhere]">
           {text}
         </p>
         <details className="mt-2">

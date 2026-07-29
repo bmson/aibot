@@ -11,8 +11,8 @@ import {
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
-  InfoGrid,
-  InfoItem,
+  cardTitleClass,
+  MetaLine,
 } from '@/lib/ui';
 import { purgeDocumentAction } from './actions';
 
@@ -31,10 +31,12 @@ export interface DocumentCardView {
   askHref: string;
 }
 
+// Queued is neutral, not amber — a document waiting its turn asks nothing of
+// the owner, and amber is reserved for things that do.
 const STATUS: Record<string, { label: string; tone: BadgeTone }> = {
   ready: { label: 'Ready', tone: 'green' },
-  extracting: { label: 'Reading…', tone: 'blue' },
-  pending: { label: 'Queued', tone: 'amber' },
+  extracting: { label: 'Reading…', tone: 'accent' },
+  pending: { label: 'Queued', tone: 'neutral' },
   unsupported: { label: 'Unsupported', tone: 'neutral' },
   failed: { label: 'Failed', tone: 'red' },
 };
@@ -58,7 +60,7 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
               <FileText className="size-4" aria-hidden="true" />
             </span>
             <div className="min-w-0">
-              <h3 className="truncate text-[15px] font-semibold tracking-[-0.01em]">{doc.title}</h3>
+              <h3 className={`truncate ${cardTitleClass}`}>{doc.title}</h3>
               <p className="mt-0.5 text-xs text-muted">
                 {sourceLabel}
                 {doc.trust !== 'owner' ? ' · Third-party source' : ''}
@@ -68,16 +70,16 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
           <Badge tone={status.tone}>{status.label}</Badge>
         </div>
 
-        <InfoGrid className="sm:grid-cols-4">
-          <InfoItem label="Format">{formatLabel}</InfoItem>
-          <InfoItem label="Size">{doc.bytesLabel}</InfoItem>
-          <InfoItem label="Added">{doc.createdLabel}</InfoItem>
-          <InfoItem label="Searchable">
-            {doc.status === 'ready'
-              ? `${doc.chunkCount} passage${doc.chunkCount === 1 ? '' : 's'}`
-              : 'Not yet'}
-          </InfoItem>
-        </InfoGrid>
+        <MetaLine
+          segments={[
+            formatLabel,
+            doc.bytesLabel,
+            `Added ${doc.createdLabel}`,
+            doc.status === 'ready'
+              ? `${doc.chunkCount} searchable passage${doc.chunkCount === 1 ? '' : 's'}`
+              : 'Not searchable yet',
+          ]}
+        />
 
         {waitingForProcessor ? (
           <p className="rounded-xl bg-sunken/65 px-3 py-2.5 text-xs leading-5 text-muted">

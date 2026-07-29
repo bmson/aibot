@@ -11,16 +11,15 @@ import {
 import {
   Badge,
   btn,
-  CountBadge,
   cardBodyClass,
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
+  cardTitleClass,
   EmptyState,
-  InfoGrid,
-  InfoItem,
+  MetaLine,
+  SectionHeading,
   inputClass as sharedInputClass,
-  textareaClass as sharedTextareaClass,
 } from '@/lib/ui';
 
 export interface SkillView {
@@ -59,7 +58,7 @@ function SkillForm({
         defaultValue={initial?.name ?? ''}
         placeholder="Name (e.g. Booking flights)"
         required
-        className={`${sharedTextareaClass} w-full`}
+        className={inputClass}
       />
       <input
         name="preconditions"
@@ -115,10 +114,7 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
   return (
     <section className="mt-8">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="flex items-baseline gap-2 text-sm font-medium">
-          Skills
-          <CountBadge>{skills.length}</CountBadge>
-        </h2>
+        <SectionHeading title="Skills" count={skills.length} />
         {!adding ? (
           <button type="button" onClick={() => setAdding(true)} className={btn.outline}>
             Add skill
@@ -184,16 +180,15 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
                   <div className={`${cardBodyClass} flex-1`}>
                     <div className={cardHeaderClass}>
                       <div className="min-w-0">
-                        <h3 className="text-[15px] font-semibold tracking-[-0.01em]">{s.name}</h3>
+                        <h3 className={cardTitleClass}>{s.name}</h3>
                         <p className="mt-0.5 text-xs text-muted">
                           {s.ownerAuthored ? 'Written by you' : 'Learned from completed work'}
                         </p>
                       </div>
-                      {s.deprecated ? (
-                        <Badge tone="amber">Retired</Badge>
-                      ) : (
-                        <Badge tone="green">Active</Badge>
-                      )}
+                      {/* Active is the default state — badging every live
+                          skill green was color spent on saying nothing. Only
+                          the exception gets a label. */}
+                      {s.deprecated ? <Badge tone="muted">Retired</Badge> : null}
                     </div>
                     <section>
                       <h4 className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
@@ -225,12 +220,22 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
                         ) : null}
                       </div>
                     ) : null}
-                    <InfoGrid className="sm:grid-cols-4">
-                      <InfoItem label="Used">{s.useCount}</InfoItem>
-                      <InfoItem label="Succeeded">{s.successCount}</InfoItem>
-                      <InfoItem label="Failed">{s.failureCount}</InfoItem>
-                      <InfoItem label="Added">{s.createdLabel}</InfoItem>
-                    </InfoGrid>
+                    <MetaLine
+                      className="tabular-nums"
+                      segments={[
+                        `Used ${s.useCount}×`,
+                        `${s.successCount} succeeded`,
+                        <span
+                          key="failed"
+                          className={
+                            s.failureCount > 0 ? 'font-medium text-red-600 dark:text-red-400' : ''
+                          }
+                        >
+                          {s.failureCount} failed
+                        </span>,
+                        `Added ${s.createdLabel}`,
+                      ]}
+                    />
                   </div>
                   <footer className={cardFooterClass}>
                     <button

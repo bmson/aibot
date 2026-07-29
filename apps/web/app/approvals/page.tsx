@@ -5,7 +5,7 @@ import { AutoRefresh } from '@/app/auto-refresh';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getAgentTimezone, getDb } from '@/lib/server';
-import { EmptyState, InfoGrid, InfoItem, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
+import { EmptyState, MetaLine, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, toPendingApprovalView } from '@/lib/views';
 import { ApprovalCard } from './approval-card';
 
@@ -85,21 +85,23 @@ export default async function ApprovalsPage() {
                       <StatusChip status={displayStatus} />
                     </span>
                   </div>
-                  <InfoGrid className="mt-2 sm:grid-cols-3">
-                    <InfoItem label="Activity">
-                      <Link href={`/tasks/${approval.taskId}`} className="hover:underline">
+                  {/* A settled approval is a receipt — one line, not a grid. */}
+                  <MetaLine
+                    className="mt-1"
+                    segments={[
+                      <Link
+                        key="task"
+                        href={`/tasks/${approval.taskId}`}
+                        className="hover:text-strong hover:underline"
+                      >
                         {taskTypeLabel(taskType)}
-                      </Link>
-                    </InfoItem>
-                    <InfoItem label="Requested">
-                      {formatDateTime(approval.requestedAt, tz)}
-                    </InfoItem>
-                    <InfoItem label="Outcome">
-                      {approval.resolvedAt
-                        ? `${relativeTime(approval.resolvedAt, now)}${approval.resolvedVia ? ` via ${approval.resolvedVia}` : ''}${approval.resolutionPayload ? ' · edited' : ''}`
-                        : `Expired ${relativeTime(approval.expiresAt, now)}`}
-                    </InfoItem>
-                  </InfoGrid>
+                      </Link>,
+                      `requested ${formatDateTime(approval.requestedAt, tz)}`,
+                      approval.resolvedAt
+                        ? `resolved ${relativeTime(approval.resolvedAt, now)}${approval.resolvedVia ? ` via ${approval.resolvedVia}` : ''}${approval.resolutionPayload ? ' · edited' : ''}`
+                        : `expired ${relativeTime(approval.expiresAt, now)}`,
+                    ]}
+                  />
                 </div>
               );
             })}

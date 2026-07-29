@@ -58,7 +58,7 @@ export function ApprovalRow({
             : 'No longer available';
     return (
       <p
-        className="flex min-w-0 items-center gap-1.5 py-0.5 text-xs text-zinc-600 dark:text-zinc-300"
+        className="flex min-w-0 items-center gap-1.5 py-0.5 text-xs text-muted"
         title={`${part.shortCode} · ${part.summary}`}
       >
         {icon}
@@ -84,16 +84,14 @@ export function ApprovalRow({
       </div>
       {part.details && part.details.length > 0 ? (
         <details open={detailsOpenByDefault} className="mt-2 border-y border-edge py-2.5">
-          <summary className="disclosure flex items-center gap-2 cursor-pointer text-2xs font-semibold tracking-[0.1em] text-zinc-500 uppercase select-none dark:text-zinc-400">
+          <summary className="disclosure flex items-center gap-2 cursor-pointer text-2xs font-semibold tracking-[0.1em] text-muted uppercase select-none">
             Exact details
           </summary>
           <dl className="mt-2 flex max-h-64 flex-col gap-2 overscroll-contain overflow-y-auto">
             {part.details.map((detail, index) => (
               <div key={`${detail.label}-${index.toString()}`}>
-                <dt className="text-2xs font-medium text-zinc-500 dark:text-zinc-400">
-                  {detail.label}
-                </dt>
-                <dd className="mt-0.5 text-xs break-words whitespace-pre-wrap text-zinc-800 [overflow-wrap:anywhere] dark:text-zinc-200">
+                <dt className="text-2xs font-medium text-muted">{detail.label}</dt>
+                <dd className="mt-0.5 text-xs break-words whitespace-pre-wrap text-strong [overflow-wrap:anywhere]">
                   {detail.value}
                 </dd>
               </div>
