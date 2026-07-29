@@ -163,10 +163,17 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   }
 
   // Skill library (Phase 26): retrieve learned procedures relevant to this task
-  // as ADVICE (never auto-run). Owner-private, mirrors the owner-card gate;
-  // fetched once and reused across loop iterations — the library is task-stable.
+  // as ADVICE (never auto-run). Unlike the owner card / recall / ambient blocks,
+  // skills are NOT gated on taint: they are the assistant's own procedural
+  // advice ("how to handle an application confirmation"), not owner-private
+  // facts, and email triage — the most-used actionable path — is set tainted
+  // before step 0, so gating them there stripped learned competence from
+  // exactly the path that needs it. The dispatcher's taint-approval gate still
+  // holds every outward action, so surfacing a procedure changes how well the
+  // task is done, not what it is allowed to do. Fetched once and reused across
+  // loop iterations — the library is task-stable.
   let skillsBlock: string | undefined;
-  if (privilegedTask && !state.untrustedContext) {
+  if (privilegedTask) {
     const lastUser = [...rc.window].reverse().find((m) => m.role === 'user');
     const skillQuery = [
       plan?.reasoning,

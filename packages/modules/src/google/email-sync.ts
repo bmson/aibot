@@ -504,9 +504,15 @@ export async function processMessage(
     try {
       ({ created } = await enqueueTask(deps.db, {
         type: 'email_triage',
-        // Email triage now reasons with tools (roleForTask → reason); give it the
-        // same step headroom as a goal session so a browse-and-reply can complete.
+        // Email triage reasons with tools (roleForTask → reason) on Sonnet, so
+        // its 16-step headroom for a browse-and-reply only exists if the budget
+        // covers it: the default $0.50 cap trips the soft-fallback threshold
+        // around step 6 and the hard cap around step 10, leaving the tail
+        // unrunnable. This is a per-task CEILING, not typical spend — most
+        // emails finish in a few steps — and daily/monthly caps still bound the
+        // total. Keeping the pair honest matters more than a lower ceiling.
         maxSteps: 16,
+        budgetUsdLimit: '1.20',
         event: {
           source: 'email',
           externalEventId: channelMessageId,
