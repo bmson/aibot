@@ -115,7 +115,12 @@ export async function planTask(
       system: 'Classify whether the latest owner message needs planning/tools or is trivial chat.',
       prompt: contextText,
     });
-    if (!triage.ok || triage.object.trivial) return null;
+    // Only short-circuit when classify SUCCEEDED and judged the message trivial.
+    // A classify failure (budget-blocked, truncated) is not evidence of
+    // triviality — falling through to the planner is the safe default, since
+    // skipping the plan for an actionable message drops the forced first tool
+    // call and revives the zero-tool-call path this guard exists to prevent.
+    if (triage.ok && triage.object.trivial) return null;
   }
 
   let planned: Awaited<ReturnType<typeof deps.router.object<Plan>>>;

@@ -344,13 +344,32 @@ export interface DocumentSearchHit {
   similarity: number;
 }
 
-/** Cosine-nearest document chunks across the agent's ready documents. */
+/**
+ * Cosine-nearest document chunks across the agent's ready documents.
+ *
+ * A relevance floor is applied (like recall's 0.75 and skills' 0.72): without
+ * it, an unrelated question still returned the five nearest passages from the
+ * owner's filed PDFs at any distance, which read as confident evidence and
+ * invited the model to answer from irrelevant material. Callers scoped to a
+ * single `documentId` (the model already knows which document) can lower it.
+ */
 export async function searchDocumentChunks(
   db: Db,
-  input: { agentId: string; embedding: number[]; limit: number; documentId?: string },
+  input: {
+    agentId: string;
+    embedding: number[];
+    limit: number;
+    documentId?: string;
+    minSimilarity?: number;
+  },
 ): Promise<DocumentSearchHit[]> {
   const vec = JSON.stringify(input.embedding);
-  const filters = [eq(documentChunks.agentId, input.agentId), eq(documents.status, 'ready')];
+  const minSimilarity = input.minSimilarity ?? 0.7;
+  const filters = [
+    eq(documentChunks.agentId, input.agentId),
+    eq(documents.status, 'ready'),
+    sql`1 - (${documentChunks.embedding} <=> ${vec}::vector) >= ${minSimilarity}`,
+  ];
   if (input.documentId) filters.push(eq(documentChunks.documentId, input.documentId));
   return db
     .select({

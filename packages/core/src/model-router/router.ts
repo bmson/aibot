@@ -427,6 +427,15 @@ export class ModelRouter {
   ): { maxOutputTokens: number; providerOptions?: ProviderOptions } {
     const visibleLimit = this.outputLimit(role, route, opts);
     if (!route.thinking) return { maxOutputTokens: visibleLimit };
+    // Extended thinking is incompatible with forced tool use (Anthropic). When
+    // the step loop forces a specific tool (`required` / `{type:'tool'}`) —
+    // every mustAct step and every goal-bookkeeping turn — omit the reasoning
+    // option so a provider that enforces the incompatibility cannot error the
+    // call into the retry-until-dead-letter loop. Costless when unfounded.
+    const toolChoice = (opts as { toolChoice?: StepToolChoice }).toolChoice;
+    const forcedTool =
+      toolChoice === 'required' || (typeof toolChoice === 'object' && toolChoice?.type === 'tool');
+    if (forcedTool) return { maxOutputTokens: visibleLimit };
     return {
       maxOutputTokens: visibleLimit + REASONING_HEADROOM_TOKENS,
       providerOptions: {
@@ -600,8 +609,9 @@ export class ModelRouter {
       return await withSpan('model.generate', { role, model: route.modelId }, async () => {
         const result = await generateText({
           model: route.model,
-          system: opts.system,
-          ...promptArgs(opts),
+          ...(opts.messages
+            ? { messages: ModelRouter.cacheHinted(opts.system, opts.messages) }
+            : { system: opts.system, ...promptArgs(opts) }),
           temperature: opts.temperature ?? (route.params.temperature as number | undefined),
           maxOutputTokens,
           providerOptions,
@@ -652,8 +662,12 @@ export class ModelRouter {
     try {
       result = streamText({
         model: route.model,
-        system: opts.system,
-        ...promptArgs(opts),
+        // Cache-hint the system prefix on the messages path (the owner's chat
+        // turn is the highest-frequency call in the system, and re-billed the
+        // whole system prompt every turn without this). Mirrors stepOnce.
+        ...(opts.messages
+          ? { messages: ModelRouter.cacheHinted(opts.system, opts.messages) }
+          : { system: opts.system, ...promptArgs(opts) }),
         temperature: opts.temperature ?? (route.params.temperature as number | undefined),
         maxOutputTokens,
         providerOptions,
@@ -846,8 +860,9 @@ export class ModelRouter {
         return await withSpan('model.object', { role, model: route.modelId }, async () => {
           const result = await generateObject({
             model: route.model,
-            system: opts.system,
-            ...promptArgs(opts),
+            ...(opts.messages
+              ? { messages: ModelRouter.cacheHinted(opts.system, opts.messages) }
+              : { system: opts.system, ...promptArgs(opts) }),
             schema: opts.schema,
             temperature: opts.temperature ?? (route.params.temperature as number | undefined),
             maxOutputTokens,
