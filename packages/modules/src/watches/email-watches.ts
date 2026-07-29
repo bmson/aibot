@@ -1,14 +1,11 @@
-import { persistMessage } from '@assistant/core';
-import { type Db, type WatchRow, watches, watchFires } from '@assistant/db';
+import { type WatchRow, watches } from '@assistant/db';
 import { emailWatchMatches } from '@assistant/tools';
-import { and, eq, gt, lte, sql } from 'drizzle-orm';
-import type { InboundEmailEvent, OwnerNotifier } from '../platform.js';
+import { and, eq, gt, lte } from 'drizzle-orm';
+import type { InboundEmailEvent } from '../platform.js';
+import { recordWatchFire, type WatchFireDeps } from './fire.js';
 
 /** What watch matching consumes: the database and the owner-notifier port. */
-export interface WatchesDeps {
-  db: Db;
-  notifyOwner: OwnerNotifier['notifyOwner'];
-}
+export type WatchesDeps = WatchFireDeps;
 
 /**
  * The authenticated-inbound-email shape watches match against — structurally
@@ -78,50 +75,19 @@ export async function matchEmailWatches(
   const triggerRef = `gmail:${input.messageId}`;
   for (const watch of candidates) {
     if (!emailWatchMatches(watch.match, input)) continue;
-
-    // Record the firing first. The unique (watch_id, trigger_ref) index makes
-    // this the idempotency fence: if the row already exists this message has
-    // already fired this watch, so skip without re-notifying or re-counting.
-    const [recorded] = await deps.db
-      .insert(watchFires)
-      .values({
-        watchId: watch.id,
-        agentId: watch.agentId,
+    // The unique (watch_id, trigger_ref) index is the idempotency fence: a
+    // message that already fired this watch returns false without re-notifying.
+    const didFire = await recordWatchFire(
+      deps,
+      watch,
+      {
         triggerRef,
-        summary: noticeText(watch, input),
-      })
-      .onConflictDoNothing({ target: [watchFires.watchId, watchFires.triggerRef] })
-      .returning({ id: watchFires.id });
-    if (!recorded) continue;
-
-    const [updated] = await deps.db
-      .update(watches)
-      .set({ fireCount: sql`${watches.fireCount} + 1`, lastFiredAt: now, updatedAt: now })
-      .where(eq(watches.id, watch.id))
-      .returning();
-    // Exhaust a bounded watch once it has fired its allotted number of times.
-    if (updated?.maxFires != null && updated.fireCount >= updated.maxFires) {
-      await deps.db
-        .update(watches)
-        .set({ status: 'fired', updatedAt: now })
-        .where(and(eq(watches.id, watch.id), eq(watches.status, 'active')));
-    }
-
-    const text = noticeText(watch, input);
-    if (watch.conversationId) {
-      await persistMessage(deps.db, {
-        conversationId: watch.conversationId,
-        role: 'assistant',
-        origin: 'assistant',
-        parts: [{ type: 'text', text }],
-        text,
+        text: noticeText(watch, input),
         channelMessageId: `watch-fire:${watch.id}:${input.messageId}`,
-      }).catch((err) => console.error('watch notice failed', err));
-    }
-    await deps
-      .notifyOwner({ text })
-      .catch((err) => console.error('watch owner notification failed', err));
-    fired.push(watch.id);
+      },
+      now,
+    );
+    if (didFire) fired.push(watch.id);
   }
   return { fired };
 }

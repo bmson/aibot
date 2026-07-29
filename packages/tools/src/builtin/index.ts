@@ -215,7 +215,7 @@ async function nodeGet(
 
 const DEFAULT_WEB_FETCH_IO: WebFetchIo = { resolve: nodeResolve, get: nodeGet };
 
-function validateWebUrl(url: URL): void {
+export function validateWebUrl(url: URL): void {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('http(s) only');
   if (url.username || url.password) throw new Error('URL credentials are blocked');
   if (!url.hostname) throw new Error('URL hostname is required');
@@ -312,6 +312,22 @@ export async function fetchPublicWebPage(
  * page, and only when the response also has a challenge-ish status or is
  * suspiciously small, so an article ABOUT captchas does not trip it.
  */
+/**
+ * Crude visible-text extraction (v1): drop scripts/styles/tags and collapse
+ * whitespace so a page fingerprints stably across loads. Non-HTML bodies pass
+ * through unchanged. Shared by `web.fetch` and the web-watch poller so both see
+ * exactly the same normalized text — a real readability pass is a later step.
+ */
+export function extractWebText(contentType: string, body: string): string {
+  if (!contentType.includes('html')) return body;
+  return body
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function looksLikeBotChallenge(status: number, text: string): boolean {
   const head = text.slice(0, 2000).toLowerCase();
   const phrase =
@@ -638,15 +654,7 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
           args.url,
           AbortSignal.any([ctx.signal, AbortSignal.timeout(15000)]),
         );
-        // crude extraction v1: strip tags/scripts; a real readability pass comes with the browser phase
-        const text = fetched.contentType.includes('html')
-          ? fetched.body
-              .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-              .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-              .replace(/<[^>]+>/g, ' ')
-              .replace(/\s+/g, ' ')
-              .trim()
-          : fetched.body;
+        const text = extractWebText(fetched.contentType, fetched.body);
         if (looksLikeBotChallenge(fetched.status, text)) {
           throw new Error(
             `bot-challenge wall instead of content: ${fetched.finalUrl} answered HTTP ${fetched.status} with a CAPTCHA/verification page. ` +

@@ -81,7 +81,8 @@ Hooks receive invocation-time `ModuleServices` rather than richer `create()` con
 tool dispatcher can only exist after every module has registered its tools. Modules never import
 each other: cross-module needs flow through platform ports — the sms module *provides* the
 `OwnerNotifier`, google and watches consume it; watches observes google's inbound mail through the
-email-observer port. The mounters in the agent apply transport-level route auth (Google OIDC,
+email-observer port and polls owner-defined web watches through a sweep step. The mounters in the
+agent apply transport-level route auth (Google OIDC,
 Twilio signature) from the closed union in the meta before any module handler runs; `oneShotToken`
 routes are the exception — the mounter runs no auth for them, and the per-launch token carried in
 the request body is validated inside the handler itself.

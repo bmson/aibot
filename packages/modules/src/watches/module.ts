@@ -2,6 +2,7 @@ import { registerWatchTools } from '@assistant/tools/watches';
 import { defineModule } from '../platform.js';
 import { matchEmailWatches, reapExpiredWatches } from './email-watches.js';
 import { watchesMeta } from './meta.js';
+import { pollDueWebWatches } from './web-watches.js';
 
 export const watchesModule = defineModule({
   meta: watchesMeta,
@@ -26,6 +27,17 @@ export const watchesModule = defineModule({
             // Preserves the /internal/sweep response key from the hardcoded era.
             reportKey: 'expiredInboxWatches',
             run: (services) => reapExpiredWatches({ db: services.db }),
+          },
+          {
+            // Poll due web watches ("watch.poll_web"): fetch each watched page
+            // through the SSRF-guarded fetch and notify the owner on a change.
+            name: 'pollWebWatches',
+            reportKey: 'webWatchFires',
+            run: (services) =>
+              pollDueWebWatches({
+                db: services.db,
+                notifyOwner: services.ownerNotifier.notifyOwner,
+              }),
           },
         ],
       },
