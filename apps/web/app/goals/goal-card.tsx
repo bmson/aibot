@@ -22,6 +22,7 @@ import {
   MetaLine,
   inputClass as sharedInputClass,
   labelClass as sharedLabelClass,
+  selectClass as sharedSelectClass,
   textareaClass,
 } from '@/lib/ui';
 import { ActionMenu, ConfirmButton, SubmitButton } from '@/lib/ui-client';
@@ -75,6 +76,7 @@ export interface GoalView {
 
 const outlineButton = btn.outline;
 const inputClass = `${sharedInputClass} w-full`;
+const selectClass = `${sharedSelectClass} w-full`;
 const labelClass = `flex flex-col gap-1 ${sharedLabelClass}`;
 
 /**
@@ -392,7 +394,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
               <select
                 name="priority"
                 defaultValue={value('priority', String(goal.priority))}
-                className={inputClass}
+                className={selectClass}
               >
                 {PACE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -434,7 +436,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
               type="checkbox"
               name="mirrorToPrimary"
               defaultChecked={goal.mirrorToPrimary}
-              className="mt-0.5"
+              className="mt-0.5 size-4"
             />
             <span>Show this goal’s background updates in my main chat thread</span>
           </label>

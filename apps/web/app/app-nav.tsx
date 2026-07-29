@@ -24,7 +24,7 @@ import { createElement, type ReactElement, useCallback, useEffect, useRef, useSt
 import { focusRing } from '@/lib/ui';
 import { ActionMenu } from '@/lib/ui-client';
 import { signOutAction } from './actions';
-import { type AssistantPresence, BrandLockup } from './brand-mark';
+import { type AssistantPresence, AvatarMark, BrandLockup } from './brand-mark';
 import { type JellyButtonElement, JellyIconButton } from './jelly-icon-button';
 import { ThemeToggle } from './theme-toggle';
 
@@ -338,8 +338,8 @@ export function AppNav({
     return (
       <details className="group mt-1" open={containsCurrent || undefined}>
         <summary
-          className={`nav-tile mobile-touch-target grid h-10 cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-xl pr-3 text-sm select-none hover:bg-sunken hover:text-strong dark:hover:text-zinc-100 ${focusRing} ${
-            containsCurrent ? 'text-accent' : 'text-zinc-500 dark:text-zinc-400'
+          className={`nav-tile mobile-touch-target grid h-10 cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-xl pr-3 text-sm font-medium select-none hover:bg-sunken hover:text-strong dark:hover:text-zinc-100 ${focusRing} ${
+            containsCurrent ? 'text-accent' : 'text-zinc-600 dark:text-zinc-400'
           }`}
         >
           <span className="flex size-10 shrink-0 items-center justify-center">
@@ -373,7 +373,7 @@ export function AppNav({
           </>
         }
         triggerTitle={collapsed ? 'System' : undefined}
-        triggerClassName={`nav-tile mobile-touch-target grid h-10 w-full cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-xl text-sm motion-safe:transition-colors hover:bg-sunken hover:text-strong dark:hover:text-zinc-100 ${containsCurrent ? 'text-accent' : 'text-zinc-500 dark:text-zinc-400'} ${collapsed ? '' : 'pr-3'} ${focusRing}`}
+        triggerClassName={`nav-tile mobile-touch-target grid h-10 w-full cursor-pointer grid-cols-[2.5rem_1fr_auto] items-center gap-1 rounded-xl text-sm font-medium motion-safe:transition-colors hover:bg-sunken hover:text-strong dark:hover:text-zinc-100 ${containsCurrent ? 'text-accent' : 'text-zinc-600 dark:text-zinc-400'} ${collapsed ? '' : 'pr-3'} ${focusRing}`}
         panelClassName="w-48"
       >
         {renderLinks(items, 'drawer')}
@@ -392,7 +392,7 @@ export function AppNav({
     <form action={signOutAction}>
       <button
         type="submit"
-        className={`rounded text-xs text-zinc-500 hover:text-strong hover:underline dark:text-zinc-400 dark:hover:text-zinc-100 ${focusRing}`}
+        className={`rounded text-xs text-muted hover:text-strong hover:underline ${focusRing}`}
       >
         Sign out
       </button>
@@ -416,14 +416,31 @@ export function AppNav({
       <aside
         className={`nav-rail hidden shrink-0 flex-col rounded-[1.4rem] border border-edge bg-raised text-strong shadow-[0_20px_50px_-24px_rgb(15_23_42/0.32)] dark:shadow-[0_20px_50px_-24px_rgb(0_0_0/0.7)] lg:m-4 lg:flex lg:sticky lg:top-4 lg:h-[calc(100dvh-var(--app-chrome,0px)-2rem)] xl:m-5 xl:top-5 xl:h-[calc(100dvh-var(--app-chrome,0px)-2.5rem)]`}
       >
-        {/* No brand mark here — the rail has a single owner, so a name/logo
-            row is pure overhead. The toggle sits in the same fixed-width
-            gutter as every tile icon below it (`nav-header`'s padding matches
-            the tile nav's `px-3`), so the whole
-            column — toggle, tiles, footer icon — shares one left edge and one
-            visual center in both rail states instead of each row inventing
-            its own inset. */}
-        <div className="nav-header flex shrink-0 items-center pt-6 pb-7">
+        {/* Brand row: the mark anchors the rail's identity and doubles as a
+            home (chat) link, with the collapse toggle in the trailing slot.
+            The mark sits in the same fixed-width gutter as every tile icon
+            below it (`nav-header`'s padding matches the tile nav's `px-3`),
+            so the whole column — mark, tiles, footer icon — shares one left
+            edge and one visual center in both rail states. Collapsed, the
+            name leaves layout and the toggle stacks under the mark
+            (globals.css), so the rail still leads with the assistant's face.
+            The visible name is decoration for the link beside it — the link
+            itself carries the accessible label. */}
+        <div className="nav-header flex shrink-0 items-center gap-1 pt-5 pb-6">
+          <Link
+            href="/chat"
+            aria-label={`${agentName} — open chat`}
+            title={collapsed ? agentName : undefined}
+            className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${focusRing}`}
+          >
+            <AvatarMark name={agentName} presence={presence} />
+          </Link>
+          <span
+            aria-hidden="true"
+            className="nav-label min-w-0 flex-1 truncate font-display text-[15px] font-semibold tracking-[-0.02em]"
+          >
+            {agentName}
+          </span>
           <span className="flex size-10 shrink-0 items-center justify-center">
             <JellyIconButton
               onClick={toggleCollapsed}
@@ -439,7 +456,7 @@ export function AppNav({
             {renderLinks(primaryItems, 'rail')}
           </nav>
           <div className="nav-manage-group px-3">
-            <p className="nav-label px-3 font-display text-2xs font-semibold tracking-[0.14em] text-zinc-500 uppercase">
+            <p className="nav-label px-3 font-display text-2xs font-semibold tracking-[0.14em] text-muted uppercase">
               Manage
             </p>
             <nav className="nav-tile-list mt-2 flex flex-col gap-1">
@@ -521,8 +538,13 @@ export function AppNav({
             }}
             className="nav-drawer absolute inset-y-3 right-3 flex w-72 max-w-[calc(84%-0.75rem)] flex-col rounded-2xl border border-edge bg-raised shadow-2xl"
           >
-            <div className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
-              <span id="mobile-nav-title" className="text-sm font-semibold tracking-[-0.02em]">
+            <div className="flex h-14 shrink-0 items-center justify-between border-b border-edge px-4">
+              {/* Same eyebrow vocabulary as the "Manage" group label below —
+                  the drawer's chrome shouldn't out-weigh its destinations. */}
+              <span
+                id="mobile-nav-title"
+                className="font-display text-2xs font-semibold tracking-[0.14em] text-muted uppercase"
+              >
                 Menu
               </span>
               <JellyIconButton
@@ -536,18 +558,18 @@ export function AppNav({
             </div>
             <nav className="scroll-subtle flex flex-1 flex-col gap-1 overflow-y-auto p-3">
               {renderLinks(primaryItems, 'drawer')}
-              <p className="mt-5 px-3 font-display text-2xs font-semibold tracking-[0.12em] text-zinc-400 uppercase">
+              <p className="mt-6 px-3 font-display text-2xs font-semibold tracking-[0.14em] text-muted uppercase">
                 Manage
               </p>
               {renderLinks(utilityItems, 'drawer')}
               {renderSystemGroup(systemItems, 'drawer')}
             </nav>
             {signOut ? (
-              <div className="shrink-0 border-t border-zinc-200 px-5 py-4 dark:border-zinc-800">
+              <div className="shrink-0 border-t border-edge px-5 py-4">
                 <form action={signOutAction}>
                   <button
                     type="submit"
-                    className={`inline-flex min-h-11 items-center rounded text-xs text-zinc-500 hover:text-zinc-950 hover:underline dark:text-zinc-500 dark:hover:text-zinc-100 ${focusRing}`}
+                    className={`inline-flex min-h-11 items-center rounded text-xs text-muted hover:text-strong hover:underline ${focusRing}`}
                   >
                     Sign out
                   </button>

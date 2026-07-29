@@ -27,6 +27,7 @@ import {
   PageHeader,
   PageShell,
   segmentedControlClass,
+  segmentedItemActiveClass,
   segmentedItemClass,
 } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
@@ -133,7 +134,7 @@ export default async function TasksPage({
       />
 
       {!archived ? (
-        <nav aria-label="Filter activity" className={`${segmentedControlClass} mt-7`}>
+        <nav aria-label="Filter activity" className={`${segmentedControlClass} mt-6`}>
           {FILTERS.map((item) => {
             const active = filter === item.value;
             return (
@@ -141,9 +142,7 @@ export default async function TasksPage({
                 key={item.value}
                 href={item.value === 'all' ? '/tasks' : `/tasks?filter=${item.value}`}
                 aria-current={active ? 'page' : undefined}
-                className={`${segmentedItemClass} ${
-                  active ? 'bg-raised text-strong shadow-sm' : ''
-                }`}
+                className={active ? segmentedItemActiveClass : segmentedItemClass}
               >
                 {item.label}
               </Link>

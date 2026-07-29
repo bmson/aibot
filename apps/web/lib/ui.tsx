@@ -92,6 +92,16 @@ export function Skeleton({ className = '' }: { className?: string }) {
 export const inputClass =
   'h-9 rounded-lg border border-edge bg-raised px-3 text-base text-strong outline-none placeholder:text-muted/70 motion-safe:transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/20 sm:text-sm';
 
+/**
+ * Native <select>, sharing inputClass's metrics and focus treatment. The UA's
+ * own arrow is dropped (`appearance-none`) — each engine drew a different
+ * glyph and none of them followed the field's colours — and a token-coloured
+ * chevron takes its place, supplied by globals.css as a custom property so
+ * dark mode can swap the stroke without a second class here. The wider right
+ * padding keeps the selected label clear of the arrow.
+ */
+export const selectClass = `${inputClass} cursor-pointer appearance-none bg-[image:var(--select-chevron)] bg-[length:1rem_1rem] bg-[position:right_0.625rem_center] bg-no-repeat pr-9`;
+
 /** `field-sizing: content` grows the box with what's typed, so these need no
  *  resize grabber and no JS measuring — the min/max keep it in a sane band. */
 export const textareaClass =
@@ -457,6 +467,20 @@ export function EmptyState({
 export const segmentedControlClass =
   'inline-flex flex-wrap items-center gap-1 rounded-xl bg-sunken/80 p-1';
 
-export const segmentedItemClass = `mobile-touch-target inline-flex h-8 items-center justify-center rounded-lg px-3 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-raised hover:text-strong ${focusRing}`;
+const segmentedItemBase = `mobile-touch-target inline-flex h-8 items-center justify-center rounded-lg px-3 text-xs font-medium motion-safe:transition-colors ${focusRing}`;
+
+/** Resting segment — quiet until hovered. */
+export const segmentedItemClass = `${segmentedItemBase} text-muted hover:bg-raised hover:text-strong`;
+
+/**
+ * Selected segment. Pages used to append `bg-raised shadow-sm` themselves,
+ * which read fine in light mode but inverted in dark, where the raised panel
+ * is *darker* than the sunken track it sits on — the current filter looked
+ * like a hole, and shadow-sm is invisible on charcoal anyway. The accent text
+ * plus accent hairline is the same "you are here" vocabulary as the nav's
+ * active tile, and reads on both tracks. A separate class (not a bolt-on)
+ * so the resting hover styles can't fight the selected ones.
+ */
+export const segmentedItemActiveClass = `${segmentedItemBase} bg-raised text-accent shadow-[0_1px_2px_rgb(23_25_35/0.08)] ring-1 ring-accent/25`;
 
 export const iconButtonClass = `mobile-touch-target inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-edge bg-raised text-muted motion-safe:transition-[background-color,color,transform] hover:bg-sunken hover:text-strong active:bg-sunken/80 motion-safe:active:translate-y-px ${focusRing}`;

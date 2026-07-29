@@ -17,6 +17,7 @@ import {
   PageHeader,
   PageShell,
   segmentedControlClass,
+  segmentedItemActiveClass,
   segmentedItemClass,
 } from '@/lib/ui';
 
@@ -144,9 +145,7 @@ export default async function MemoryLibraryPage({
               key={item}
               href={hrefFor({ state: item, q: query })}
               aria-current={item === state ? 'page' : undefined}
-              className={`${segmentedItemClass} ${
-                item === state ? 'bg-raised text-strong shadow-sm' : ''
-              }`}
+              className={item === state ? segmentedItemActiveClass : segmentedItemClass}
             >
               {stateCopy[item].label}
             </Link>

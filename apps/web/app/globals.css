@@ -18,6 +18,18 @@
   --content-muted: #667085;
   --accent: #5b5ce2; /* Iris */
   --accent-hover: #4b4cc9;
+  /* Native control chrome follows the theme: without color-scheme the browser
+     keeps painting light scrollbars, checkboxes, and <option> lists into the
+     dark UI. accent-color puts the brand on the parts we don't hand-style
+     (checkbox ticks, radios, progress) — it inherits, so one declaration
+     covers every form control and flips with the token in dark mode. */
+  color-scheme: light;
+  accent-color: var(--accent);
+  /* The chevron native selects paint once `appearance-none` strips the UA's
+     own glyph (selectClass in lib/ui.tsx). A data URI per theme because a
+     background image can't read currentColor; the strokes are the two
+     --content-muted values. */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23667085' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 .dark {
   /* A soft charcoal, not OLED-black: the conversation is the point, and a
@@ -30,6 +42,8 @@
   --content-muted: #9ca3b2;
   --accent: #7375ee;
   --accent-hover: #8385f4;
+  color-scheme: dark;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239ca3b2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
 @theme {
@@ -143,18 +157,22 @@ html.nav-collapsed {
 }
 
 /* Same 0.75rem inset as the tile nav's `px-3` in both rail states, so the
-   collapse toggle sits in the exact column the tile icons do instead of
-   drifting to whatever center a wider header padding would put it at.
-   Collapsed, it's the row's only child — centering it keeps equal space on
-   both sides instead of hugging the left edge with a lopsided gap on the
-   right (the tile-gutter inset was never meant to double as "how far this
-   button sits from the rail's own edge", just as "where the icon column
-   starts"). */
+   brand mark sits in the exact column the tile icons do instead of drifting
+   to whatever center a wider header padding would put it at. Collapsed, the
+   row becomes a stack: the mark stays on top (the rail keeps leading with
+   the assistant's face, not a bare chrome button) and the collapse toggle
+   tucks under it, both centered in the narrow rail. The name has no column
+   to fade back into once the header stacks, so it leaves layout entirely
+   instead of holding a phantom row between the two. */
 .nav-header {
   padding-inline: 0.75rem;
 }
 html.nav-collapsed .nav-header {
-  justify-content: center;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+html.nav-collapsed .nav-header .nav-label {
+  display: none;
 }
 
 /* The "Manage" label fades out with every other label once collapsed, which
@@ -352,6 +370,10 @@ html.nav-collapsed .nav-badge-dot {
    are what it transitions between. */
 .nav-scrim {
   opacity: 0;
+  /* iOS ignores the body overflow lock for touch drags that start on an
+     overlay — declaring the scrim gesture-free keeps a swipe on it from
+     rubber-banding the page underneath the open drawer. */
+  touch-action: none;
 }
 .nav-scrim[data-open='true'] {
   opacity: 1;
@@ -442,9 +464,33 @@ html.nav-collapsed .nav-badge-dot {
 html {
   overscroll-behavior-y: none;
 }
+/* Blink reads the rule from <html>, but WebKit propagates it from <body> —
+   both carry it so the no-rubber-band contract holds on an iPhone too. */
+body {
+  overscroll-behavior-y: none;
+}
 
 .scroll-subtle {
   overscroll-behavior: contain;
+}
+
+/* ── Touch feedback ───────────────────────────────────────────────────────────
+   Every control paints its own pressed state (active: backgrounds, the
+   translate-y nudge), so WebKit's gray tap-highlight flash on top of that
+   read as double feedback. `manipulation` on the controls themselves drops
+   the double-tap-to-zoom wait, so taps commit immediately — pinch zoom and
+   the rest of the page's gestures are untouched. */
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+a,
+button,
+summary,
+label,
+input,
+select,
+textarea {
+  touch-action: manipulation;
 }
 
 /* ── Page gutters ─────────────────────────────────────────────────────────────
@@ -480,6 +526,11 @@ a {
 ::selection {
   background: color-mix(in oklab, var(--accent) 24%, transparent);
   color: var(--content-strong);
+}
+/* The 24% wash that reads clearly on a white canvas all but vanishes against
+   the charcoal one — dark mode needs a denser tint for the same emphasis. */
+.dark ::selection {
+  background: color-mix(in oklab, var(--accent) 40%, transparent);
 }
 
 /* Scrollbars in app-owned scrollers (the chat log, the nav rail) recede until

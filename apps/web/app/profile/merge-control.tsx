@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { mergeContactAction } from '@/app/profile/actions';
-import { btnSm, inputClass } from '@/lib/ui';
+import { btnSm, selectClass } from '@/lib/ui';
 
 /** Fold a duplicate person into another contact (facts move, duplicate disappears). */
 export function MergeControl({
@@ -38,7 +38,7 @@ export function MergeControl({
           setTargetId(e.target.value);
           setConfirming(false);
         }}
-        className={`${inputClass} min-w-44`}
+        className={`${selectClass} min-w-44`}
       >
         <option value="">merge into…</option>
         {options.map((o) => (

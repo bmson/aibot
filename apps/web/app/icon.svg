@@ -1,9 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <title>Assistant</title>
   <defs>
+    <!-- Same iris the UI's --accent/--accent-hover tokens use, so the favicon
+         and the in-app avatar mark read as one brand rather than two blues. -->
     <linearGradient id="g" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#6366f1"/>
-      <stop offset="1" stop-color="#4338ca"/>
+      <stop offset="0" stop-color="#5b5ce2"/>
+      <stop offset="1" stop-color="#4b4cc9"/>
     </linearGradient>
   </defs>
   <rect width="64" height="64" rx="16" fill="url(#g)"/>
