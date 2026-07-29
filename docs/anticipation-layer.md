@@ -46,22 +46,22 @@ choose and parameterize an outward action. The application-confirmation flow alr
 right way — the owner approves *every literal argument of the future action up front*, the untrusted
 email only *selects which frozen bundle fires* (authenticated sender + opaque token), and execution
 is **deterministic and never routes through the model**
-(`apps/agent/src/application-confirmations.ts`). This design generalizes that solution; it does not
-relax it.
+(`packages/modules/src/google/application-confirmations.ts`). This design generalizes that solution;
+it does not relax it.
 
 ## What already exists (this design mostly wires it together)
 
 | Capability | Where | Reused as |
 | --- | --- | --- |
 | Owner-approved *watch* holding every frozen future side-effect arg | `applications.watch_confirmation` (`packages/tools/src/applications.ts:151`), `application_confirmations` table (`packages/db/src/schema.ts:383`) | The prototype for the general `watches` row + the `frozen_action` tier. |
-| Deterministic match of untrusted inbound mail → frozen action | `processApplicationConfirmation` (`apps/agent/src/application-confirmations.ts:564`); authenticated sender + opaque-token match, ambiguity → change nothing + escalate | The email-watch matcher, generalized. |
+| Deterministic match of untrusted inbound mail → frozen action | `processApplicationConfirmation` (`packages/modules/src/google/application-confirmations.ts:578`); authenticated sender + opaque-token match, ambiguity → change nothing + escalate | The email-watch matcher, generalized. |
 | Deterministic, model-free execution of the frozen bundle | `executeApplicationConfirmationTask` (`application-confirmations.ts:376`): idempotency keys, ledger reconciliation, "unknown ⇒ suppress retry" | The `frozen_action` firing path. |
 | Proactive expiry + owner notice for a watch that never fires | `reapExpiredApplicationWatches` (`application-confirmations.ts:525`) | Watch expiry, generalized. |
 | Cron schedules, idempotent per firing, with **code-job** templates | `runDueSchedules` (`packages/core/src/workflow/schedules.ts:292`), `template.job` (`schedules.ts:360`) | The briefing runs as a scheduled code-job. |
 | Priority/deadline-derived cadence | `goalAutomationCadence` (`schedules.ts:56`) | The model for a per-agent briefing cadence. |
 | Code-job dispatch (runs a registered fn, not the model loop; meters cost; can yield/resume) | `CodeJobName` + `runCodeJob` (`packages/core/src/memory/jobs.ts:29`) | Add `briefing.compose` and `watch.poll_web` here. |
 | Reduced registry for untrusted / no-outward-tool context | `packages/tools/src/registry.ts:26-31` (`outwardFacing` dropped), taint gate `executor.ts:1098,1138` | The registry a `suggest`-tier watcher and the briefing run under. |
-| Off-dashboard owner delivery | `owner.notify` (`packages/tools/src/builtin/index.ts:551`), `notifyOwnerBySms` (`apps/agent/src/sms-channel.ts`), `notifyOwner` dep (`executor.ts:142`) | Briefing + watch-hit delivery. |
+| Off-dashboard owner delivery | `owner.notify` (`packages/tools/src/builtin/index.ts:551`), `notifyOwnerBySms` (`packages/modules/src/sms/channel.ts`), `notifyOwner` dep (`executor.ts:142`) | Briefing + watch-hit delivery. |
 | Voice rewrite with fact-preservation check | `rewriteInVoice` (`packages/core/src/voice.ts:63`) | The briefing is composed in the owner's voice. |
 | "Reference data, never instructions" framing for carried untrusted text | `sessionInstruction` (`missions.ts:94`), `goalInstruction` (`schedules.ts:131`) | How trigger content is presented to any model step. |
 

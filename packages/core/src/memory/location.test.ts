@@ -6,6 +6,7 @@ import { getAgent } from '../chat.js';
 import {
   formatLocationLine,
   latestLocation,
+  locationPingFresh,
   purgeStaleLocations,
   recordLocationPing,
   verifyLocationSignature,
@@ -25,6 +26,24 @@ describe('location context — pure helpers', () => {
     expect(verifyLocationSignature(secret, `${body} `, sig)).toBe(false); // body tampered
     expect(verifyLocationSignature(secret, body, null)).toBe(false);
     expect(verifyLocationSignature('', body, sig)).toBe(false); // ingest disabled
+  });
+
+  it('requires a recent capturedAt so a captured body cannot replay', () => {
+    const now = new Date('2026-07-21T12:00:00Z');
+    const at = (iso: string) => ({
+      lat: 0,
+      lng: 0,
+      label: '',
+      source: 'shortcut',
+      capturedAt: iso,
+    });
+    // Fresh within the skew window.
+    expect(locationPingFresh(at('2026-07-21T11:58:00Z'), now)).toBe(true);
+    // Stale beyond the window — a replayed old ping.
+    expect(locationPingFresh(at('2026-07-21T11:00:00Z'), now)).toBe(false);
+    // Fail closed with no timestamp: a captured signed body would otherwise
+    // replay forever, re-asserting a stale location as current.
+    expect(locationPingFresh({ lat: 0, lng: 0, label: '', source: 'shortcut' }, now)).toBe(false);
   });
 
   it('formats an ambient location line, or nothing when there is no ping', () => {

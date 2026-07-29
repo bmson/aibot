@@ -81,8 +81,10 @@ Hooks receive invocation-time `ModuleServices` rather than richer `create()` con
 tool dispatcher can only exist after every module has registered its tools. Modules never import
 each other: cross-module needs flow through platform ports — the sms module *provides* the
 `OwnerNotifier`, google and watches consume it; watches observes google's inbound mail through the
-email-observer port. The mounters in the agent apply route auth (Google OIDC, Twilio signature,
-one-shot token) from the closed union in the meta before any module handler runs.
+email-observer port. The mounters in the agent apply transport-level route auth (Google OIDC,
+Twilio signature) from the closed union in the meta before any module handler runs; `oneShotToken`
+routes are the exception — the mounter runs no auth for them, and the per-launch token carried in
+the request body is validated inside the handler itself.
 
 Two entry points: `@assistant/modules/meta` reaches only plain data, so the web app, scripts, and
 diagnostics import it without pulling provider code into their bundles; `@assistant/modules` adds
@@ -163,10 +165,14 @@ Nothing else changes: readiness diagnostics, production validation, navigation, 
 selection, the deployment plan, route mounting, sweep scheduling, task routing, and channel
 delivery are all derived from metadata and hooks. No module requires a conditional inside the
 planner, business workflow, or agent app — a module that owns code jobs declares them in metadata
-so a job queued before the module was removed completes benignly, and a module's routes answer 404
-the moment the configuration disables it. Absence from the tool registry is the capability
-boundary. The two remaining agent-owned webhooks are `/webhooks/location` (platform HMAC ingest)
-and `/webhooks/canaries/browser` (canaries are still agent-owned).
+so a job queued before the module was removed completes benignly, and a module's external webhook
+routes answer 404 the moment the configuration disables it. Internal scheduler routes are the
+deliberate exception: `/internal/gmail/sync` answers `200` with a `{ skipped: true }` body when the
+module or the `GMAIL_SYNC_ENABLED` setting is off, so the every-minute scheduler job stays green
+instead of alerting on a 404. Absence from the tool registry is the capability boundary. The two
+remaining agent-owned webhooks are `/webhooks/location` (platform HMAC ingest) and
+`/webhooks/canaries/browser`; the browser canaries themselves import the module barrel
+(`@assistant/modules`) rather than being platform-native.
 
 ## Configuration lifecycle
 

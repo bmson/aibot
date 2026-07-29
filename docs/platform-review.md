@@ -43,7 +43,9 @@ already-platform-shaped codebase":
    A module contributes across up to seven surfaces — tools, long-lived clients on `AgentDeps`,
    public webhooks, internal routes, poller ticks, a worker image, and web nav gating — so
    adding one touches roughly sixteen files, not the seven steps `docs/architecture.md`
-   describes.
+   describes. (The module contract this review proposes has since landed: those per-module
+   clients now reach consumers through `InstalledModuleSet.requireExports`, not bespoke fields
+   on `AgentDeps` — see `docs/architecture.md`.)
 
 2. **The two hardest couplings are not tool registration.** First, the `loadConfig()` process
    singleton is reached ad hoc, including inside core:

@@ -114,18 +114,23 @@ for (const meta of composedModuleMetas) {
         });
         if (!verified) return c.json({ error: 'invalid token' }, 403);
       } else if (route.auth.kind === 'twilioSignature') {
-        if (!config.TWILIO_AUTH_TOKEN) return c.text('Twilio not configured', 501);
+        // A missing auth token returns the SAME 403 as a bad signature, not a
+        // distinguishable 501: an unauthenticated caller must not be able to
+        // probe whether TWILIO_AUTH_TOKEN is configured. The operator learns of
+        // the missing token from `pnpm config:check` / /ready, not from here.
         const parsed = await c.req.parseBody();
         form = {};
         for (const [key, value] of Object.entries(parsed)) {
           if (typeof value === 'string') form[key] = value;
         }
-        const valid = validateTwilioSignature({
-          authToken: config.TWILIO_AUTH_TOKEN,
-          url: `${config.PUBLIC_URL}/webhooks${route.path}`,
-          params: form,
-          signature: c.req.header('x-twilio-signature') ?? '',
-        });
+        const valid =
+          Boolean(config.TWILIO_AUTH_TOKEN) &&
+          validateTwilioSignature({
+            authToken: config.TWILIO_AUTH_TOKEN,
+            url: `${config.PUBLIC_URL}/webhooks${route.path}`,
+            params: form,
+            signature: c.req.header('x-twilio-signature') ?? '',
+          });
         if (!valid) return c.text('invalid signature', 403);
       }
       // 'oneShotToken' routes authenticate inside the handler: the per-launch
