@@ -3,7 +3,15 @@
 import { Plus } from 'lucide-react';
 import { useActionState, useRef, useState } from 'react';
 import { createGoal } from '@/app/goals/actions';
-import { btn, cardShellClass, focusRing, inputClass, labelClass, textareaClass } from '@/lib/ui';
+import {
+  btn,
+  cardShellClass,
+  cardTitleClass,
+  focusRing,
+  inputClass,
+  labelClass,
+  textareaClass,
+} from '@/lib/ui';
 import { PACE_OPTIONS } from './pace';
 
 /**
@@ -47,7 +55,7 @@ export function GoalCreateForm({ startOpen = false }: { startOpen?: boolean }) {
 
   return (
     <form action={formAction} className={`${cardShellClass} mt-6 p-5`}>
-      <h2 className="text-sm font-medium">Create a goal</h2>
+      <h2 className={cardTitleClass}>Create a goal</h2>
       <p className="mt-1 text-xs leading-5 text-muted">
         Tell the assistant what outcome you want. It will start now and keep the work moving.
       </p>

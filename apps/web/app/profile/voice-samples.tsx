@@ -9,6 +9,7 @@ import {
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
+  cardTitleClass,
   fileInputClass,
   inputClass,
   MetaLine,
@@ -65,7 +66,7 @@ export function VoiceSamplesPanel({
       <div className={cardBodyClass}>
         <div className={cardHeaderClass}>
           <div className="min-w-0">
-            <h2 className="text-[15px] font-semibold">Your writing voice</h2>
+            <h2 className={cardTitleClass}>Your writing voice</h2>
             <p className="mt-1 max-w-2xl text-xs leading-5 text-muted">
               The assistant learns from your own sent messages so its drafts sound more like you.
               Forwarded and quoted text is skipped.

@@ -3,7 +3,15 @@ import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getApplication } from '@/lib/server';
-import { Badge, btn, cardShellClass, EmptyState, PageHeader, PageShell } from '@/lib/ui';
+import {
+  Badge,
+  btn,
+  cardShellClass,
+  cardTitleClass,
+  EmptyState,
+  PageHeader,
+  PageShell,
+} from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import {
   archiveConversation,
@@ -113,7 +121,7 @@ export default async function ChatListPage({
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex min-w-0 items-center gap-2">
-                      <span className="truncate text-[14px] font-semibold">
+                      <span className={`truncate ${cardTitleClass}`}>
                         {conversation.title && conversation.title !== 'Untitled'
                           ? conversation.title
                           : 'New conversation'}

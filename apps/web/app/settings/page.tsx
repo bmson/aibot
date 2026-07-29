@@ -12,6 +12,7 @@ import {
   Card,
   cardInteractiveClass,
   cardShellClass,
+  cardTitleClass,
   EmptyState,
   focusRing,
   PageHeader,
@@ -49,7 +50,7 @@ function SettingRow({
       className={`${cardShellClass} flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-3 px-4 py-4 sm:px-5`}
     >
       <div className="min-w-0 flex-1 basis-64">
-        <p className="flex min-w-0 flex-wrap items-center gap-2 text-[15px] leading-6 font-semibold tracking-[-0.01em] text-strong">
+        <p className={`flex min-w-0 flex-wrap items-center gap-2 ${cardTitleClass}`}>
           {title}
           {badges}
         </p>
@@ -167,9 +168,7 @@ export default async function SettingsPage() {
           className={`${cardShellClass} ${cardInteractiveClass} ${focusRing} mt-3 flex min-w-0 items-center justify-between gap-4 px-4 py-4 sm:px-5`}
         >
           <span className="min-w-0">
-            <span className="block text-[15px] leading-6 font-semibold tracking-[-0.01em] text-strong">
-              Usage and limits
-            </span>
+            <span className={`block ${cardTitleClass}`}>Usage and limits</span>
             <span className="mt-1 block text-[13px] leading-5 text-muted">
               Today’s spend, the monthly total, and the caps that pause work.
             </span>

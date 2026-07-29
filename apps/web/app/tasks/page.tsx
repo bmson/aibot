@@ -21,6 +21,7 @@ import { getDb } from '@/lib/server';
 import {
   btn,
   cardShellClass,
+  cardTitleClass,
   EmptyState,
   MetaLine,
   PageHeader,
@@ -210,7 +211,7 @@ export default async function TasksPage({
                         <div className="flex flex-wrap items-center gap-2">
                           <Link
                             href={`/tasks/${task.id}`}
-                            className="text-[15px] font-semibold tracking-[-0.01em] hover:underline"
+                            className={`${cardTitleClass} hover:underline`}
                           >
                             {task.title || taskTypeLabel(task.type)}
                           </Link>

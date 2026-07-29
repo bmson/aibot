@@ -6,7 +6,7 @@ import {
   forgetOccasionAction,
   reviewOccasionAction,
 } from '@/app/profile/actions';
-import { Badge, btn, btnSm, inputClass, labelClass, SectionHeading } from '@/lib/ui';
+import { Badge, btn, btnSm, EmptyState, inputClass, labelClass, SectionHeading } from '@/lib/ui';
 
 /** Plain-serializable occasion view built in the page. */
 export interface OccasionView {
@@ -151,7 +151,7 @@ export function OccasionsPanel({
           ))}
         </div>
       ) : (
-        <p className="mt-3 text-sm text-muted">No occasions saved for {personName} yet.</p>
+        <EmptyState>No occasions saved for {personName} yet.</EmptyState>
       )}
 
       {visibleSuggestions.length > 0 ? (

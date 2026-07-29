@@ -18,6 +18,7 @@ import {
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
+  cardTitleClass,
   MetaLine,
   inputClass as sharedInputClass,
   labelClass as sharedLabelClass,
@@ -209,9 +210,10 @@ export function GoalCard({ goal }: { goal: GoalView }) {
             blocked state keeps a panel: it's an alert, not a property. */}
         <div className={cardHeaderClass}>
           <div className="min-w-0">
-            <h3 className="font-display text-[16px] leading-6 font-semibold tracking-[-0.02em] text-strong">
-              {goal.title}
-            </h3>
+            {/* The one shared card-title scale — the display face is reserved
+                for page titles and the brand, and a 16px one-off made goal
+                cards read a half-step louder than every other card. */}
+            <h3 className={cardTitleClass}>{goal.title}</h3>
             {goal.description ? (
               <p className="mt-1 text-[13px] leading-5 text-muted">{goal.description}</p>
             ) : null}

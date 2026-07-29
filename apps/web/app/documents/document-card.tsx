@@ -11,6 +11,7 @@ import {
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
+  cardTitleClass,
   MetaLine,
 } from '@/lib/ui';
 import { purgeDocumentAction } from './actions';
@@ -59,7 +60,7 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
               <FileText className="size-4" aria-hidden="true" />
             </span>
             <div className="min-w-0">
-              <h3 className="truncate text-[15px] font-semibold tracking-[-0.01em]">{doc.title}</h3>
+              <h3 className={`truncate ${cardTitleClass}`}>{doc.title}</h3>
               <p className="mt-0.5 text-xs text-muted">
                 {sourceLabel}
                 {doc.trust !== 'owner' ? ' · Third-party source' : ''}

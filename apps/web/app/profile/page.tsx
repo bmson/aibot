@@ -17,7 +17,9 @@ import {
   CountBadge,
   cardInteractiveClass,
   cardShellClass,
+  cardTitleClass,
   countBadgeClass,
+  EmptyState,
   PageHeader,
   PageShell,
   Panel,
@@ -290,9 +292,9 @@ export default async function ProfilePage() {
             </div>
           ) : null}
           {ownerByDomain.length === 0 ? (
-            <p className="mt-3 text-sm text-muted">
+            <EmptyState>
               No details yet — they are added from conversations only after review.
-            </p>
+            </EmptyState>
           ) : (
             <div className="mt-3 flex flex-col gap-2">
               {ownerByDomain.map((group) => {
@@ -349,9 +351,9 @@ export default async function ProfilePage() {
           <AddPerson />
         </div>
         {people.length === 0 ? (
-          <p className="mt-3 text-sm text-muted">
+          <EmptyState>
             No people yet — new names in conversations become contacts automatically.
-          </p>
+          </EmptyState>
         ) : (
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             {people.map(({ contact, factCount }) => (
@@ -361,9 +363,7 @@ export default async function ProfilePage() {
                 className={`${cardShellClass} ${cardInteractiveClass} group grid grid-cols-[minmax(0,1fr)_auto] gap-3 p-4`}
               >
                 <div className="min-w-0">
-                  <h3 className="truncate text-[15px] font-semibold tracking-[-0.01em]">
-                    {contact.name}
-                  </h3>
+                  <h3 className={`truncate ${cardTitleClass}`}>{contact.name}</h3>
                   <p className="mt-0.5 truncate text-xs text-muted">
                     {contact.relationship || 'Relationship not set'}
                   </p>

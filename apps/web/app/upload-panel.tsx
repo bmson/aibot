@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { fileInputClass, inputClass, Panel } from '@/lib/ui';
+import { cardTitleClass, fileInputClass, inputClass, Panel } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 
 /**
@@ -34,7 +34,7 @@ export function UploadPanel({
 }) {
   return (
     <Panel tone="sunken" className={className}>
-      <h2 className="text-[15px] font-semibold">{title}</h2>
+      <h2 className={cardTitleClass}>{title}</h2>
       <form
         action={action}
         method="post"

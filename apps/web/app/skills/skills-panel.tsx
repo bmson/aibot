@@ -15,6 +15,7 @@ import {
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
+  cardTitleClass,
   EmptyState,
   MetaLine,
   SectionHeading,
@@ -179,7 +180,7 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
                   <div className={`${cardBodyClass} flex-1`}>
                     <div className={cardHeaderClass}>
                       <div className="min-w-0">
-                        <h3 className="text-[15px] font-semibold tracking-[-0.01em]">{s.name}</h3>
+                        <h3 className={cardTitleClass}>{s.name}</h3>
                         <p className="mt-0.5 text-xs text-muted">
                           {s.ownerAuthored ? 'Written by you' : 'Learned from completed work'}
                         </p>
