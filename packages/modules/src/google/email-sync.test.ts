@@ -176,6 +176,39 @@ describe('Gmail sender authentication', () => {
     ).toBe(false);
   });
 
+  it('does not let a sender forge a pass clause inside an SPF comment or quoted mailfrom', () => {
+    // The attacker uses an RFC-5321-legal quoted local part in MAIL FROM so
+    // Gmail echoes attacker-controlled text — carrying a ';' and a synthetic
+    // 'dkim=pass header.d=<owner>' — into the SPF clause. A naive split on ';'
+    // would mint that clause and authenticate the spoof.
+    expect(
+      gmailSenderAuthenticated(
+        payload(
+          'mx.google.com; spf=softfail (google.com: domain of "; dkim=pass header.d=example.com "@evil.test does not designate) smtp.mailfrom="; dkim=pass header.d=example.com "@evil.test',
+        ),
+        'owner@example.com',
+      ),
+    ).toBe(false);
+    // The same smuggling attempt via a nested comment must also fail.
+    expect(
+      gmailSenderAuthenticated(
+        payload(
+          'mx.google.com; spf=none (a (b; dkim=pass header.d=example.com) c) smtp.mailfrom=x@evil.test',
+        ),
+        'owner@example.com',
+      ),
+    ).toBe(false);
+    // A genuine comment in a legitimate header does not break real authentication.
+    expect(
+      gmailSenderAuthenticated(
+        payload(
+          'mx.google.com; spf=pass (google.com: domain of owner@example.com designates 1.2.3.4 as permitted sender) smtp.mailfrom=owner@example.com; dmarc=pass (p=reject) header.from=example.com',
+        ),
+        'owner@example.com',
+      ),
+    ).toBe(true);
+  });
+
   it('reads only the topmost Authentication-Results header (S6)', () => {
     const multi = (values: string[]) => ({
       headers: values.map((value) => ({ name: 'Authentication-Results', value })),

@@ -34,6 +34,12 @@ export interface InstalledModuleSet {
    * complete benignly instead of dead-lettering.
    */
   jobUnavailable(job: string): string | null;
+  /**
+   * A failure message when this task type's owner-facing delivery channel
+   * belongs to a module that is not installed, otherwise null. The executor
+   * throws it instead of completing the task with the answer undelivered.
+   */
+  channelUnavailable(taskType: string): string | null;
   /** Runtime handler for an installed module's webhook path, if any. */
   webhookHandler(path: string): ModuleWebhookHandler | undefined;
   /** Runtime handler for an installed module's internal route, if any. */
@@ -66,6 +72,7 @@ export function installModules(
   const installed: AssistantModule[] = [];
   const exports = new Map<ModuleDefinition<unknown>, unknown>();
   const jobOwners = new Map<string, AssistantModule>();
+  const channelOwners = new Map<string, AssistantModule>();
   const webhookHandlers = new Map<string, ModuleWebhookHandler>();
   const internalHandlers = new Map<string, ModuleInternalHandler>();
   const taskHandlers = new Map<string, ModuleTaskHandler>();
@@ -83,9 +90,13 @@ export function installModules(
   };
 
   for (const definition of definitions) {
-    // Job ownership is recorded for every composed module, installed or not, so
-    // a job belonging to a disabled one is still recognised rather than failing.
+    // Job and delivery-channel ownership is recorded for every composed module,
+    // installed or not, so an owner-facing task whose owning module is disabled
+    // is still recognised (and fails loudly) rather than silently undelivered.
     for (const job of definition.meta.jobs ?? []) jobOwners.set(job, definition.meta.name);
+    for (const type of definition.meta.deliversTaskTypes ?? []) {
+      channelOwners.set(type, definition.meta.name);
+    }
     if (!isModuleEnabled(context.config, definition.meta.name)) continue;
     installed.push(definition.meta.name);
     const runtime = definition.create(context);
@@ -168,6 +179,11 @@ export function installModules(
       const owner = jobOwners.get(job);
       if (!owner || installed.includes(owner)) return null;
       return `${job} skipped because the ${owner} module is disabled`;
+    },
+    channelUnavailable: (taskType) => {
+      const owner = channelOwners.get(taskType);
+      if (!owner || installed.includes(owner)) return null;
+      return `${taskType} cannot be delivered because the ${owner} module is not installed`;
     },
     webhookHandler: (path) => webhookHandlers.get(path),
     internalHandler: (path) => internalHandlers.get(path),

@@ -10,14 +10,25 @@ function isLoopbackUrl(value: string): boolean {
 }
 
 /**
- * Whether a request itself arrived on loopback, judged from its headers.
+ * Best-effort tripwire: whether a request *appears* to have arrived on loopback,
+ * judged only from its headers.
  *
- * The localhost bypass is validated against *configuration* (AUTH_URL,
- * QUEUE_DRIVER) at boot, but configuration cannot see how the process is
- * published: re-binding the container port to 0.0.0.0 or fronting it with a
- * reverse proxy exposes the same config on the network. A proxied request
- * carries `x-forwarded-*` headers and a direct remote one carries a non-local
- * Host, so both are rejected here per-request.
+ * IMPORTANT — this is not, and cannot be, a security boundary on its own. Next
+ * populates `x-forwarded-for` from the socket only when the client did not send
+ * it (`??=`), so a deliberately crafted `Host: localhost` +
+ * `X-Forwarded-For: 127.0.0.1` is byte-identical to a genuine local request. A
+ * determined attacker who can reach the port defeats this check. What it DOES
+ * block is the cases that matter in practice for the loopback-published
+ * quickstart image: a browser on another machine pointed at an exposed IP (a
+ * browser cannot set `x-forwarded-for`, so Next fills it with the real remote
+ * address → rejected) and a naive `Host:` override.
+ *
+ * The real control for AUTH_LOCALHOST_BYPASS is binding the port to loopback
+ * (docker-compose does; see the .env.example warning) plus the boot-time gate
+ * in resolveAuthMode (loopback AUTH_URL + QUEUE_DRIVER=local). A sound
+ * per-request check would need the socket remote address, which the App Router
+ * does not expose without a custom server — recorded as a follow-up. Do NOT
+ * expose this port to the network with the bypass enabled.
  */
 export function requestLooksLoopback(headers: {
   host: string | null;
@@ -31,9 +42,9 @@ export function requestLooksLoopback(headers: {
       : value.replace(/:\d+$/, '');
     return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
   };
-  // Next itself mirrors direct requests into x-forwarded-*, so presence alone
-  // proves nothing; a forwarded value naming a non-loopback client or host is
-  // what proves the request crossed the network.
+  // A forwarded value naming a non-loopback client or host proves the request
+  // crossed the network (Next mirrors direct requests into x-forwarded-* too,
+  // so a loopback value there is necessary but — see above — not sufficient).
   if (headers.forwardedFor !== null) {
     const client = headers.forwardedFor.split(',')[0]?.trim() ?? '';
     if (client !== '127.0.0.1' && client !== '::1' && client !== '::ffff:127.0.0.1') return false;

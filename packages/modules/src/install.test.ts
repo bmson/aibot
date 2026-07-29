@@ -4,9 +4,11 @@ import { ToolRegistry } from '@assistant/tools/registry';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ModuleMeta } from './contract.js';
 import { documentsModule } from './documents/module.js';
+import { googleModule } from './google/module.js';
 import { installModules } from './install.js';
 import { defineModule, type ModulePlatformContext } from './platform.js';
 import { remindersModule } from './reminders/module.js';
+import { smsModule } from './sms/module.js';
 import { watchesModule } from './watches/module.js';
 
 /**
@@ -68,6 +70,24 @@ describe('installModules', () => {
     const installed = installModules([documentsModule], context);
 
     expect(installed.jobUnavailable('documents.extract')).toBeNull();
+  });
+
+  it('reports an owner-facing task type undeliverable when its channel module is absent', () => {
+    const context = contextFor(loadConfig({ ASSISTANT_MODULES: 'reminders' }));
+    const installed = installModules([remindersModule, googleModule, smsModule], context);
+
+    expect(installed.channelUnavailable('email_triage')).toContain('google');
+    expect(installed.channelUnavailable('sms_turn')).toContain('sms');
+    // A task type no module claims delivery for is never a delivery failure.
+    expect(installed.channelUnavailable('chat_turn')).toBeNull();
+  });
+
+  it('reports a task type deliverable while its channel module is installed', () => {
+    const context = contextFor(loadConfig({ ASSISTANT_MODULES: 'google,sms' }));
+    const installed = installModules([googleModule, smsModule], context);
+
+    expect(installed.channelUnavailable('email_triage')).toBeNull();
+    expect(installed.channelUnavailable('sms_turn')).toBeNull();
   });
 });
 

@@ -37,6 +37,15 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
     documentProcessor: deps.documentProcessor,
     jobUnavailable: (job) => deps.modules.jobUnavailable(job),
     deliverFinal: async (task, text) => {
+      // An owner-facing task whose owning channel module is UNINSTALLED has no
+      // channel to assert against, so it would otherwise complete with the
+      // answer silently undelivered. Fail loudly first (the pre-refactor code
+      // did this via the module's absent() null object). The installed-but-
+      // unconfigured case is still handled by the channel's own assertDeliverable.
+      if (task.trust === 'owner') {
+        const unavailable = deps.modules.channelUnavailable(task.type);
+        if (unavailable) throw new Error(unavailable);
+      }
       // Every channel's configured-check runs BEFORE any channel delivers, so
       // a half-configured installation fails the task loudly instead of
       // delivering on one channel and silently dropping the other. Provider

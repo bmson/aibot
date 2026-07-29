@@ -164,4 +164,13 @@ export interface ModuleMeta {
    * `CodeJobName` in `@assistant/core`.
    */
   jobs?: readonly string[];
+  /**
+   * Task types whose owner-facing final answer this module is the delivery
+   * channel for (google → `email_triage`, sms → `sms_turn`). Declared as plain
+   * data — read even for a DISABLED module — so the executor can fail an
+   * owner-facing task loudly when its owning channel module is not installed,
+   * rather than completing it with the answer silently undelivered. The runtime
+   * `channel` hook still handles the installed-but-unconfigured case.
+   */
+  deliversTaskTypes?: readonly string[];
 }

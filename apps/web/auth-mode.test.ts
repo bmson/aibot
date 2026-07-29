@@ -100,4 +100,13 @@ describe('requestLooksLoopback', () => {
     // A spoofed loopback Host cannot rescue a forwarded chain that starts remote.
     expect(request({ host: '127.0.0.1', forwardedFor: '203.0.113.9, 127.0.0.1' })).toBe(false);
   });
+
+  it('KNOWN LIMITATION: a fully crafted loopback header set passes (not a boundary)', () => {
+    // A determined attacker who can reach the port sends Host: localhost and
+    // X-Forwarded-For: 127.0.0.1, which Next preserves — byte-identical to a
+    // genuine local request. This check cannot distinguish them; the real
+    // control is binding the port to loopback. Pinned so the limitation is
+    // explicit and any future "fix" that claims to close it is scrutinised.
+    expect(request({ host: 'localhost', forwardedFor: '127.0.0.1' })).toBe(true);
+  });
 });
