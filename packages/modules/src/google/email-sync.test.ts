@@ -117,6 +117,23 @@ describe('Gmail sender authentication', () => {
         'owner@example.com',
       ),
     ).toBe(false);
+    // The lossy dots→hyphens map: a subdomain victim (mail.example.com) shares a
+    // tenant label with the registrable sibling mail-example.com, so the
+    // exemption must not authenticate it — the attacker's mail-example.com key
+    // produces the same 'mail-example-com' label.
+    expect(
+      gmailSenderAuthenticated(
+        payload('mx.google.com; dkim=pass header.i=@mail-example-com.20251104.gappssmtp.com'),
+        'user@mail.example.com',
+      ),
+    ).toBe(false);
+    // A hyphenated victim domain is likewise ambiguous and refused.
+    expect(
+      gmailSenderAuthenticated(
+        payload('mx.google.com; dkim=pass header.i=@my-corp-com.20251104.gappssmtp.com'),
+        'owner@my-corp.com',
+      ),
+    ).toBe(false);
   });
 
   it('rejects unverified, misaligned, and sender-supplied authentication claims', () => {

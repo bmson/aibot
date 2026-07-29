@@ -146,12 +146,20 @@ const moduleDirs = new Set(
 for (const moduleDir of moduleDirs) {
   for (const file of sourceFiles(path.join(modulesSrc, moduleDir))) {
     const source = readFileSync(file, 'utf8');
+    const relative = path.relative(repoRoot, file);
+    // A relative import of a sibling module directory.
     for (const match of source.matchAll(/from ['"]\.\.\/([^'"/]+)\//g)) {
       if (moduleDirs.has(match[1] as string)) {
-        failures.push(
-          `${path.relative(repoRoot, file)} imports sibling module ${match[1]}; use a platform port`,
-        );
+        failures.push(`${relative} imports sibling module ${match[1]}; use a platform port`);
       }
+    }
+    // The barrel bypass: index.ts re-exports module internals, so a bare
+    // `from '@assistant/modules'` inside a module dir reaches a sibling's code
+    // (and forms an import cycle) while dodging the relative-path check above.
+    if (/from ['"]@assistant\/modules['"]/.test(source)) {
+      failures.push(
+        `${relative} imports the @assistant/modules barrel; a module must use a platform port, not the package it belongs to`,
+      );
     }
   }
 }

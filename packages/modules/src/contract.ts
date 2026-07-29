@@ -173,4 +173,13 @@ export interface ModuleMeta {
    * `channel` hook still handles the installed-but-unconfigured case.
    */
   deliversTaskTypes?: readonly string[];
+  /**
+   * `trigger.payload.kind` values this module handles deterministically (google
+   * → `application_confirmation*`). Declared as plain data — read even for a
+   * DISABLED module — so a queued deterministic task whose owning module was
+   * removed completes benignly instead of falling through to the general model
+   * executor, which would run it with a payload it does not understand. Keep in
+   * step with the module's runtime `taskHandlers`.
+   */
+  taskKinds?: readonly string[];
 }
