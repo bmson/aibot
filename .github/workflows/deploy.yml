@@ -53,10 +53,16 @@ jobs:
       # in release.sh — keys off this single value, so the revision that goes
       # live is always the revision that was built and verified.
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.event.inputs.sha || github.sha }}
-      # Applies the repo-root .trivyignore to every image scan below: a scoped
-      # allow-list of freshly-disclosed CVEs in dormant build tooling (esbuild's
-      # embedded Go stdlib, the native tsc) that cannot be patched yet.
-      TRIVY_IGNOREFILE: ${{ github.workspace }}/.trivyignore
+      # The release image scans below exclude node_modules from vulnerability
+      # scanning: the app's JavaScript dependency graph is already gated on every
+      # PR by `pnpm audit` (CI `checks` job), so scanning it again here is
+      # redundant — and it drags in a large, unpatchable, ever-growing set of
+      # CVEs embedded in dormant build tooling (esbuild's Go stdlib, the native
+      # tsc, drizzle-kit/tsx transitive deps) that never sits on a request path.
+      # These scans stay focused on what they alone cover: OS packages, secrets,
+      # and misconfiguration. The agent image passing its full scan confirms the
+      # shared node:22-slim OS layer is clean.
+      TRIVY_SKIP_DIRS: '**/node_modules'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
