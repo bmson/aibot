@@ -5,7 +5,7 @@
   "engines": {
     "node": ">=22"
   },
-  "packageManager": "pnpm@10.11.0",
+  "packageManager": "pnpm@10.34.5",
   "pnpm": {
     "overrides": {
       "esbuild@<=0.24.2": "0.25.12",
