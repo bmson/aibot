@@ -19,8 +19,12 @@ RUN groupadd --system browser && useradd --system --gid browser --create-home br
 
 # Runtime uses pnpm via corepack, never npm. Strip the base image's bundled npm
 # so its vendored deps (tar/sigstore/brace-expansion/picomatch, all HIGH/
-# CRITICAL) don't ship or fail the deploy vulnerability scan.
-RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+# CRITICAL) don't ship or fail the deploy vulnerability scan. Also strip the
+# corepack download cache the root-run install left under /root: the runtime
+# user can't read /root (mode 700) — corepack resolves its own per-user cache —
+# so the copy is dead weight that only feeds pnpm advisories to the scan.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+  /root/.cache/node
 
 ENV NODE_ENV=production \
   CHROMIUM_SANDBOX=true \
