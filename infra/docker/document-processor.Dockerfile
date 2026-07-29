@@ -19,6 +19,11 @@ RUN pnpm install --frozen-lockfile --filter @assistant/document-processor...
 RUN groupadd --system docproc && useradd --system --gid docproc --create-home docproc \
   && chown -R docproc:docproc /app /home/docproc
 
+# Runtime uses pnpm via corepack, never npm. Strip the base image's bundled npm
+# so its vendored deps (tar/sigstore/brace-expansion/picomatch, all HIGH/
+# CRITICAL) don't ship or fail the deploy vulnerability scan.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 ENV NODE_ENV=production
 USER docproc
 CMD ["pnpm", "--filter", "@assistant/document-processor", "start"]

@@ -31,6 +31,11 @@ WORKDIR /app
 COPY --from=build --chown=node:node /src/apps/web/.next/standalone ./
 COPY --from=build --chown=node:node /src/apps/web/.next/static ./apps/web/.next/static
 
+# The standalone server runs on node directly; npm is never invoked at runtime.
+# Strip the base image's bundled npm so its vendored deps (tar/sigstore/
+# brace-expansion/picomatch, all HIGH/CRITICAL) don't ship or fail the scan.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 ARG GIT_SHA=unknown
 ENV BUILD_SHA=${GIT_SHA}
 USER node

@@ -27,6 +27,11 @@ RUN pnpm install --frozen-lockfile --filter @assistant/code-runner...
 RUN groupadd --system coderun && useradd --system --gid coderun --create-home coderun \
   && chown -R coderun:coderun /app /home/coderun
 
+# Runtime uses pnpm via corepack, never npm. Strip the base image's bundled npm
+# so its vendored deps (tar/sigstore/brace-expansion/picomatch, all HIGH/
+# CRITICAL) don't ship or fail the deploy vulnerability scan.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 ENV NODE_ENV=production
 USER coderun
 CMD ["pnpm", "--filter", "@assistant/code-runner", "start"]

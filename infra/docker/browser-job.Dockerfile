@@ -17,6 +17,11 @@ RUN pnpm --filter @assistant/browser-job exec playwright install --with-deps chr
 RUN groupadd --system browser && useradd --system --gid browser --create-home browser \
   && chown -R browser:browser /app /home/browser
 
+# Runtime uses pnpm via corepack, never npm. Strip the base image's bundled npm
+# so its vendored deps (tar/sigstore/brace-expansion/picomatch, all HIGH/
+# CRITICAL) don't ship or fail the deploy vulnerability scan.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 ENV NODE_ENV=production \
   CHROMIUM_SANDBOX=true \
   BROWSER_TRACES=false
