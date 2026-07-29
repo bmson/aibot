@@ -42,15 +42,18 @@ export function verifyLocationSignature(
 
 /**
  * Replay guard: the HMAC covers only the body, so a captured signed ping stays
- * valid forever unless its embedded timestamp is checked. A ping that carries
- * `capturedAt` must be recent; one without it is accepted (the Shortcut may
- * not send it) but gets receipt time, so replaying it cannot re-assert a
- * *stale* location — only repeat the current one.
+ * valid forever unless its embedded timestamp is checked. `capturedAt` is the
+ * only varying field that binds a ping to a moment, so it is REQUIRED here: a
+ * ping without it is rejected (fail closed). Accepting a timestamp-less ping
+ * and stamping it with receipt time would let a captured body be replayed hours
+ * later and re-assert a stale location AS the owner's current one. The owner's
+ * Shortcut must include a current-date field in the signed body (see
+ * docs/operations.md).
  */
 export const LOCATION_PING_MAX_SKEW_MS = 5 * 60 * 1000;
 
 export function locationPingFresh(input: LocationPingInput, now = new Date()): boolean {
-  if (!input.capturedAt) return true;
+  if (!input.capturedAt) return false;
   return (
     Math.abs(now.getTime() - new Date(input.capturedAt).getTime()) <= LOCATION_PING_MAX_SKEW_MS
   );

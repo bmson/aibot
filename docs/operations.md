@@ -34,6 +34,29 @@ prunes in batches of 1000 per run, so a large backlog drains gradually. Two kind
 their cutoff by design: messages anchoring a conversation-segment summary (the recall unit
 references them), and tool calls still referenced by an approval or a retained cost event.
 
+## Location context (owner Shortcut)
+
+The owner's phone POSTs an HMAC-signed location ping to `/webhooks/location`, keyed by the shared
+`LOCATION_PING_SECRET`. Ingest is off entirely when no secret is configured. The signature covers
+only the request body, so the body **must carry a `capturedAt` field** — an ISO-8601 timestamp of
+when the reading was taken — for the ping to be accepted. This is the replay guard: without it a
+captured signed body could be re-sent hours later and re-assert a stale location as current, so a
+ping with no `capturedAt` is rejected `409 stale ping` (fail closed), as is one whose `capturedAt`
+is outside the ±5-minute skew window.
+
+When building the owner's iOS Shortcut:
+
+1. Compute the JSON body with the live reading, e.g.
+   `{ "lat": 64.1466, "lng": -21.9426, "label": "Reykjavík", "capturedAt": "<Current Date, ISO 8601>" }`.
+   Use the Shortcut's *Format Date* action with the ISO 8601 preset for `capturedAt` — do not
+   hardcode it.
+2. HMAC-SHA256 the exact body bytes with `LOCATION_PING_SECRET`, hex-encoded, into the
+   `X-Signature` header.
+3. POST to `https://<PUBLIC_URL>/webhooks/location`.
+
+A `409` response means the Shortcut's clock or its `capturedAt` value drifted past the skew window;
+a `403` means the signature (and therefore the secret) is wrong.
+
 ## Release artifacts
 
 CI scans every selected container for HIGH/CRITICAL vulnerabilities, generates an SPDX JSON SBOM,

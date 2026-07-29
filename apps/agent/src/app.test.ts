@@ -10,10 +10,14 @@ describe('agent app', () => {
     expect(await res.json()).toEqual({ ok: true, service: 'agent' });
   });
 
-  it('stubs the Twilio webhook as 501 until Phase 4', async () => {
+  it('rejects an unsigned Twilio webhook with the same 403 as a bad signature', async () => {
+    // A missing TWILIO_AUTH_TOKEN must not answer with a distinguishable status
+    // (it once returned 501). An unauthenticated caller gets a uniform 403
+    // whether the token is unset or the signature is wrong, so the endpoint
+    // cannot be used to probe whether Twilio is configured.
     const app = createApp();
     const twilio = await app.request('/webhooks/twilio/sms', { method: 'POST' });
-    expect(twilio.status).toBe(501);
+    expect(twilio.status).toBe(403);
   });
 
   it('keeps disabled module entry points inactive', async () => {

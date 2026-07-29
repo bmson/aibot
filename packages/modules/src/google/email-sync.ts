@@ -648,7 +648,7 @@ export async function processMessage(
  * A stale history cursor falls back to a resumable current-inbox reconciliation
  * instead of silently advancing past messages we have never inspected.
  */
-export async function syncMailboxOnce(deps: EmailSyncDeps): Promise<MailboxSyncResult> {
+async function syncMailboxOnce(deps: EmailSyncDeps): Promise<MailboxSyncResult> {
   if (!deps.googleClient.configured()) return { processed: 0 };
   const agent = await getAgent(deps.db);
   const botEmail = agent.email;

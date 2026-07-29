@@ -36,4 +36,20 @@ describe('module tool labels', () => {
     expect(past.get('gmail.send')).toBe('Sent an email');
     expect(present.size).toBe(past.size);
   });
+
+  it('aggregates EVERY meta-declared label — no module silently unwired', () => {
+    // `ui.ts` imports each module's labels by hand; a new module that declares
+    // `ui.toolLabels` in its meta but is never added to that import list would
+    // ship labels the web UI can't render. The aggregate must therefore cover
+    // exactly the union of every meta's declarations, no more and no less.
+    const declared = new Set<string>();
+    for (const meta of assistantModuleMetas) {
+      for (const tool of Object.keys(meta.ui?.toolLabels ?? {})) declared.add(tool);
+    }
+    const { present } = moduleToolLabels();
+    expect(present.size).toBe(declared.size);
+    for (const tool of declared) {
+      expect(present.has(tool), `${tool} declared in a meta but missing from ui.ts`).toBe(true);
+    }
+  });
 });

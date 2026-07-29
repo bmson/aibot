@@ -301,8 +301,8 @@ describe('twilio webhook (e2e via app.request)', () => {
       },
       body: formBody(params),
     });
-    // config is cached from the process env at first load — if TWILIO_AUTH_TOKEN
-    // was empty there, the route 501s; both prove the gate is closed.
-    expect([403, 501]).toContain(res.status);
+    // A forged signature is rejected 403 — the same status returned when no
+    // TWILIO_AUTH_TOKEN is configured, so the gate never leaks its own state.
+    expect(res.status).toBe(403);
   });
 });
