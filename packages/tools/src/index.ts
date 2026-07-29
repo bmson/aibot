@@ -19,4 +19,5 @@ export * from './twilio/client.js';
 export * from './twilio/sms.js';
 export * from './types.js';
 export * from './watches.js';
+export * from './web-watches.js';
 export * from './workspace-store.js';

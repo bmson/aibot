@@ -128,6 +128,19 @@ and fires on change from the stored hash. Polite polling: honor `ETag`/`Last-Mod
 backoff on failure, and a per-watch min interval. A transient fetch failure must **not** count as a
 change.
 
+> **Status: built (notify-tier v1).** The `notify`-tier web watch ships. The owner creates one with
+> the `watch.web` tool (`packages/tools/src/watches.ts`) — `{ url, mode, pattern?, intervalMinutes }`
+> — and `pollDueWebWatches` (`packages/modules/src/watches/web-watches.ts`) runs as a **sweep step**,
+> claiming due rows atomically (bump `next_poll_at`, so a concurrent instance claims none), fetching
+> through `fetchPublicWebPage`, and firing through the shared `recordWatchFire`. Detection
+> (`webWatchOutcome`, `packages/tools/src/web-watches.ts`) is deterministic and never enters a model
+> context; it records a baseline on the first poll and fires only on a transition. Modes shipped:
+> `change` (content hash), `contains`, `absent` — `pattern`-based rather than the `hash`/`text` +
+> `selector` sketch above. A bot-challenge wall or fetch error never counts as a change and, after
+> five consecutive failures, expires the watch with one owner notice. Deltas from this design, still
+> deferred: promotion to a durable, cost-metered **code-job** (v1 is a sweep step); CSS-`selector`
+> scoping; `ETag`/`Last-Modified` conditional polling; and the `suggest`/`frozen_action` tiers.
+
 ### Firing
 
 - **`frozen_action`** → enqueue an `internal` task carrying `{ kind: 'watch_fire', watchId }` and run

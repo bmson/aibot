@@ -1090,21 +1090,37 @@ export const watches = pgTable(
     kind: text('kind').notNull().default('email'),
     tier: text('tier').notNull().default('notify'),
     name: text('name').notNull(),
-    /** Match spec. email: { expectedSenderEmails: string[], keywords?: string[] }. */
+    /**
+     * Match spec. email: { expectedSenderEmails: string[], keywords?: string[] }.
+     * web: { url: string, mode: 'change'|'contains'|'absent', pattern?: string }.
+     */
     match: jsonb('match').notNull().default({}),
     status: text('status').notNull().default('active'),
     fireCount: integer('fire_count').notNull().default(0),
     /** Stop after this many fires; null = fire on every match until expiry. */
     maxFires: integer('max_fires'),
     lastFiredAt: timestamp('last_fired_at', { withTimezone: true }),
+    /**
+     * Polling watches only (kind='web'): when this watch is next due to be
+     * polled, and how often. Null for event-driven ('email') watches.
+     */
+    nextPollAt: timestamp('next_poll_at', { withTimezone: true }),
+    pollIntervalSeconds: integer('poll_interval_seconds'),
+    /**
+     * Poller-owned observation state, e.g. { fingerprint, present, failures }
+     * for a web watch. Opaque to everything but the matcher; empty for email.
+     */
+    state: jsonb('state').notNull().default({}),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     ...timestamps,
   },
   (t) => [
-    check('watches_kind_check', sql`${t.kind} IN ('email')`),
+    check('watches_kind_check', sql`${t.kind} IN ('email','web')`),
     check('watches_tier_check', sql`${t.tier} IN ('notify')`),
     check('watches_status_check', sql`${t.status} IN ('active','fired','expired','cancelled')`),
     index('watches_active_idx').on(t.agentId, t.status, t.kind, t.expiresAt),
+    // The web-watch poller's due-selection/claim query.
+    index('watches_due_web_idx').on(t.status, t.kind, t.nextPollAt),
   ],
 );
 
