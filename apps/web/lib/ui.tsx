@@ -370,6 +370,43 @@ export function CountBadge({
   );
 }
 
+/**
+ * The app's one metadata row: a quiet, dot-separated line of facts under a
+ * title ("Started by You · $0.12 of $0.50 · Updated 2h ago"). Falsy segments
+ * are dropped, so callers can pass conditional entries without ceremony.
+ * Replaces the boxed chips and mini fact-grids that used to make every card
+ * read like a dashboard.
+ */
+export function MetaLine({
+  segments,
+  className = '',
+}: {
+  segments: ReactNode[];
+  className?: string;
+}) {
+  const visible = segments.filter(
+    (segment) => segment !== null && segment !== undefined && segment !== false && segment !== '',
+  );
+  if (visible.length === 0) return null;
+  return (
+    <p
+      className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs leading-5 text-muted ${className}`}
+    >
+      {visible.map((segment, index) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: segments are positional
+        <span key={index} className="flex min-w-0 items-center gap-x-2 whitespace-nowrap">
+          {index > 0 ? (
+            <span aria-hidden="true" className="text-muted/60">
+              ·
+            </span>
+          ) : null}
+          {segment}
+        </span>
+      ))}
+    </p>
+  );
+}
+
 export function SectionHeading({
   title,
   count,

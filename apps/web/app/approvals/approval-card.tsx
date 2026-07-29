@@ -29,6 +29,7 @@ import {
   cardShellClass,
   InfoGrid,
   InfoItem,
+  MetaLine,
 } from '@/lib/ui';
 import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 import type { PendingApprovalView } from '@/lib/views';
@@ -78,40 +79,33 @@ export function ApprovalCard({
             {/* Provenance and timing are context, not content — one quiet line,
                 with exact timestamps on hover, instead of a grid of cells that
                 competed with what is actually being approved below. */}
-            <p className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs leading-5 text-muted">
-              <span className="whitespace-nowrap">{approval.provenance}</span>
-              <span aria-hidden="true" className="text-muted/60">
-                ·
-              </span>
-              <span className="whitespace-nowrap" title={approval.requestedExact}>
-                {approval.requestedLabel}
-              </span>
-              <span aria-hidden="true" className="text-muted/60">
-                ·
-              </span>
-              <span className="whitespace-nowrap" title={approval.expiresExact}>
-                {approval.expiresLabel}
-              </span>
-              <span aria-hidden="true" className="text-muted/60">
-                ·
-              </span>
-              <span
-                className="font-mono whitespace-nowrap"
-                title="A short identifier for recognizing this request in chat, text messages, and activity."
-              >
-                {approval.shortCode}
-              </span>
-              <span aria-hidden="true" className="text-muted/60">
-                ·
-              </span>
-              <Link
-                href={`/tasks/${approval.taskId}`}
-                className="inline-flex items-center gap-0.5 whitespace-nowrap hover:text-strong"
-              >
-                View activity
-                <ArrowUpRight className="size-3" aria-hidden="true" />
-              </Link>
-            </p>
+            <MetaLine
+              className="mt-1.5"
+              segments={[
+                approval.provenance,
+                <span key="requested" title={approval.requestedExact}>
+                  {approval.requestedLabel}
+                </span>,
+                <span key="expires" title={approval.expiresExact}>
+                  {approval.expiresLabel}
+                </span>,
+                <span
+                  key="code"
+                  className="font-mono"
+                  title="A short identifier for recognizing this request in chat, text messages, and activity."
+                >
+                  {approval.shortCode}
+                </span>,
+                <Link
+                  key="task"
+                  href={`/tasks/${approval.taskId}`}
+                  className="inline-flex items-center gap-0.5 hover:text-strong"
+                >
+                  View activity
+                  <ArrowUpRight className="size-3" aria-hidden="true" />
+                </Link>,
+              ]}
+            />
           </div>
         </div>
         {approval.voiceFlag ? (

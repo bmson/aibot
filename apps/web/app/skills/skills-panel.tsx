@@ -16,6 +16,7 @@ import {
   cardHeaderClass,
   cardShellClass,
   EmptyState,
+  MetaLine,
   SectionHeading,
   inputClass as sharedInputClass,
 } from '@/lib/ui';
@@ -218,27 +219,22 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
                         ) : null}
                       </div>
                     ) : null}
-                    <p className="flex flex-wrap gap-x-2 gap-y-0.5 text-xs leading-5 text-muted tabular-nums">
-                      <span className="whitespace-nowrap">Used {s.useCount}×</span>
-                      <span aria-hidden="true" className="text-muted/60">
-                        ·
-                      </span>
-                      <span className="whitespace-nowrap">{s.successCount} succeeded</span>
-                      <span aria-hidden="true" className="text-muted/60">
-                        ·
-                      </span>
-                      <span
-                        className={`whitespace-nowrap ${
-                          s.failureCount > 0 ? 'font-medium text-red-600 dark:text-red-400' : ''
-                        }`}
-                      >
-                        {s.failureCount} failed
-                      </span>
-                      <span aria-hidden="true" className="text-muted/60">
-                        ·
-                      </span>
-                      <span className="whitespace-nowrap">Added {s.createdLabel}</span>
-                    </p>
+                    <MetaLine
+                      className="tabular-nums"
+                      segments={[
+                        `Used ${s.useCount}×`,
+                        `${s.successCount} succeeded`,
+                        <span
+                          key="failed"
+                          className={
+                            s.failureCount > 0 ? 'font-medium text-red-600 dark:text-red-400' : ''
+                          }
+                        >
+                          {s.failureCount} failed
+                        </span>,
+                        `Added ${s.createdLabel}`,
+                      ]}
+                    />
                   </div>
                   <footer className={cardFooterClass}>
                     <button

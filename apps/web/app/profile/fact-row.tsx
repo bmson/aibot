@@ -12,7 +12,15 @@ import {
   rejectQuarantined,
   setFactProminence,
 } from '@/app/profile/actions';
-import { Badge, btnSm, cardFooterClass, cardShellClass, focusRing, textareaClass } from '@/lib/ui';
+import {
+  Badge,
+  btnSm,
+  cardFooterClass,
+  cardShellClass,
+  focusRing,
+  MetaLine,
+  textareaClass,
+} from '@/lib/ui';
 
 /** Plain-serializable fact view, built server-side in page.tsx. */
 export interface FactView {
@@ -140,8 +148,8 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
         {/* A fact is a sentence with provenance, not a form — the old
             About/Type/Topic/Confidence grid made every memory read as a mini
             dashboard. One quiet line carries the same facts. */}
-        <p className="flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-xs leading-5 text-muted">
-          {[
+        <MetaLine
+          segments={[
             // The owner reads as "You" whether or not the row carries their
             // contact name — the library was showing "You" and the owner's name
             // for the same person depending on which query loaded the fact.
@@ -152,17 +160,8 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
             fact.domain || 'General',
             `${confidencePct}% confident`,
             `Saved ${fact.createdLabel}`,
-          ].map((segment, index) => (
-            <span key={segment} className="flex items-center gap-x-2 whitespace-nowrap">
-              {index > 0 ? (
-                <span aria-hidden="true" className="text-muted/60">
-                  ·
-                </span>
-              ) : null}
-              {segment}
-            </span>
-          ))}
-        </p>
+          ]}
+        />
       </div>
 
       <footer className={cardFooterClass}>

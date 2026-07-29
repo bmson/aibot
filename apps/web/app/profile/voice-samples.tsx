@@ -11,6 +11,7 @@ import {
   cardShellClass,
   fileInputClass,
   inputClass,
+  MetaLine,
 } from '@/lib/ui';
 
 /** Plain-serializable view built in page.tsx. */
@@ -77,10 +78,12 @@ export function VoiceSamplesPanel({
         {/* The pill already carries the total — the breakdown is one quiet
             line, not a grid of three boxed figures. */}
         {total > 0 ? (
-          <p className="text-xs leading-5 text-muted">
-            {auto.toLocaleString()} learned from your sent mail · {uploaded.toLocaleString()}{' '}
-            uploaded
-          </p>
+          <MetaLine
+            segments={[
+              `${auto.toLocaleString()} learned from your sent mail`,
+              `${uploaded.toLocaleString()} uploaded`,
+            ]}
+          />
         ) : null}
 
         {/* Upload */}

@@ -68,8 +68,10 @@ export function MemoryOrganizer({
 
   return (
     <div className={`${cardShellClass} relative`}>
+      {/* Accent only — the violet/sky rainbow was the one strip in the app
+          speaking colors outside the shared vocabulary. */}
       <div
-        className={`h-1 origin-left bg-gradient-to-r from-accent via-violet-400 to-sky-400 ${
+        className={`h-1 origin-left bg-gradient-to-r from-accent to-accent-hover ${
           active ? 'motion-safe:animate-pulse' : ''
         }`}
       />

@@ -2,7 +2,7 @@
 
 import { CircleAlert, CornerDownRight } from 'lucide-react';
 import Link from 'next/link';
-import { type ReactNode, useActionState, useEffect, useRef, useState } from 'react';
+import { useActionState, useEffect, useRef, useState } from 'react';
 import {
   archiveGoal,
   restoreGoal,
@@ -18,6 +18,7 @@ import {
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
+  MetaLine,
   inputClass as sharedInputClass,
   labelClass as sharedLabelClass,
   textareaClass,
@@ -151,62 +152,42 @@ function TargetRunway({ goal }: { goal: GoalView }) {
 }
 
 /** 'Updated 2h ago · Checks in daily · next in 4h · Due Oct 9 · Last session …' */
-function MetaLine({ goal }: { goal: GoalView }) {
-  const segments: ReactNode[] = [];
-  segments.push(
-    <span key="updated" className="whitespace-nowrap">
-      Updated {goal.updatedLabel}
-    </span>,
-  );
-  if (goal.paceMeta) {
-    segments.push(
-      <span key="pace" className="whitespace-nowrap">
-        {goal.paceMeta}
-        {goal.automationNextLabel ? (
-          <span className="text-muted/80"> · {goal.automationNextLabel}</span>
-        ) : null}
-      </span>,
-    );
-  }
-  if (goal.targetMeta) {
-    segments.push(
-      <span
-        key="target"
-        className={`whitespace-nowrap ${
-          goal.targetMeta.overdue ? 'font-medium text-amber-700 dark:text-amber-400' : ''
-        }`}
-      >
-        {goal.targetMeta.label}
-      </span>,
-    );
-  }
-  if (goal.lastSessionLabel && goal.lastSessionHref) {
-    segments.push(
-      <span key="session" className="whitespace-nowrap">
-        Last session{' '}
-        <Link
-          href={goal.lastSessionHref}
-          className="underline decoration-edge underline-offset-2 hover:decoration-current"
-        >
-          {goal.lastSessionLabel}
-        </Link>
-      </span>,
-    );
-  }
+function GoalMeta({ goal }: { goal: GoalView }) {
   return (
-    <p className="flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs leading-5 text-muted">
-      {segments.flatMap((segment, index) =>
-        index === 0
-          ? [segment]
-          : [
-              // biome-ignore lint/suspicious/noArrayIndexKey: separators are positional
-              <span key={`separator-${index}`} aria-hidden="true" className="text-muted/60">
-                ·
-              </span>,
-              segment,
-            ],
-      )}
-    </p>
+    <MetaLine
+      segments={[
+        `Updated ${goal.updatedLabel}`,
+        goal.paceMeta ? (
+          <span key="pace">
+            {goal.paceMeta}
+            {goal.automationNextLabel ? (
+              <span className="text-muted/80"> · {goal.automationNextLabel}</span>
+            ) : null}
+          </span>
+        ) : null,
+        goal.targetMeta ? (
+          <span
+            key="target"
+            className={
+              goal.targetMeta.overdue ? 'font-medium text-amber-700 dark:text-amber-400' : ''
+            }
+          >
+            {goal.targetMeta.label}
+          </span>
+        ) : null,
+        goal.lastSessionLabel && goal.lastSessionHref ? (
+          <span key="session">
+            Last session{' '}
+            <Link
+              href={goal.lastSessionHref}
+              className="underline decoration-edge underline-offset-2 hover:decoration-current"
+            >
+              {goal.lastSessionLabel}
+            </Link>
+          </span>
+        ) : null,
+      ]}
+    />
   );
 }
 
@@ -285,7 +266,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
 
         <div className="grid min-w-0 gap-2">
           <TargetRunway goal={goal} />
-          <MetaLine goal={goal} />
+          <GoalMeta goal={goal} />
         </div>
       </div>
 

@@ -11,8 +11,7 @@ import {
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
-  InfoGrid,
-  InfoItem,
+  MetaLine,
 } from '@/lib/ui';
 import { purgeDocumentAction } from './actions';
 
@@ -70,16 +69,16 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
           <Badge tone={status.tone}>{status.label}</Badge>
         </div>
 
-        <InfoGrid className="sm:grid-cols-4">
-          <InfoItem label="Format">{formatLabel}</InfoItem>
-          <InfoItem label="Size">{doc.bytesLabel}</InfoItem>
-          <InfoItem label="Added">{doc.createdLabel}</InfoItem>
-          <InfoItem label="Searchable">
-            {doc.status === 'ready'
-              ? `${doc.chunkCount} passage${doc.chunkCount === 1 ? '' : 's'}`
-              : 'Not yet'}
-          </InfoItem>
-        </InfoGrid>
+        <MetaLine
+          segments={[
+            formatLabel,
+            doc.bytesLabel,
+            `Added ${doc.createdLabel}`,
+            doc.status === 'ready'
+              ? `${doc.chunkCount} searchable passage${doc.chunkCount === 1 ? '' : 's'}`
+              : 'Not searchable yet',
+          ]}
+        />
 
         {waitingForProcessor ? (
           <p className="rounded-xl bg-sunken/65 px-3 py-2.5 text-xs leading-5 text-muted">

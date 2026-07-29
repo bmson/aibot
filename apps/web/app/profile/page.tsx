@@ -336,8 +336,9 @@ export default async function ProfilePage() {
 
       {/* People — one collapsed card per person */}
       <section className="mt-8">
-        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-[-0.02em]">
-          <CheckCircle2 className="size-4 text-accent" aria-hidden="true" />
+        {/* No icon — a decorative check next to "People" said nothing, and no
+            other section heading on this page carries one. */}
+        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-[-0.025em]">
           People
           <span className={countBadge}>{people.length}</span>
         </h2>

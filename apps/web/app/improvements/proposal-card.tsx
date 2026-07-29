@@ -11,6 +11,7 @@ import {
   cardHeaderClass,
   cardShellClass,
   cardTitleClass,
+  MetaLine,
 } from '@/lib/ui';
 
 export interface ProposalView {
@@ -75,17 +76,12 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
             </section>
           ) : null}
         </div>
-        <p className="flex flex-wrap gap-x-2 gap-y-0.5 text-xs leading-5 text-muted">
-          <span className="whitespace-nowrap">
-            Based on {proposal.evidenceCount} pattern{proposal.evidenceCount === 1 ? '' : 's'}
-          </span>
-          <span aria-hidden="true" className="text-muted/60">
-            ·
-          </span>
-          <span className="whitespace-nowrap">
-            {proposal.applyable ? 'Can apply directly' : 'Advisory'}
-          </span>
-        </p>
+        <MetaLine
+          segments={[
+            `Based on ${proposal.evidenceCount} pattern${proposal.evidenceCount === 1 ? '' : 's'}`,
+            proposal.applyable ? 'Can apply directly' : 'Advisory',
+          ]}
+        />
       </div>
       <footer className={cardFooterClass}>
         <button

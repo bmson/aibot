@@ -22,6 +22,7 @@ import {
   btn,
   cardShellClass,
   EmptyState,
+  MetaLine,
   PageHeader,
   PageShell,
   segmentedControlClass,
@@ -218,25 +219,14 @@ export default async function TasksPage({
                         <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-muted">
                           {truncate(stripMarkdown(task.progress), 180) || 'No update recorded yet.'}
                         </p>
-                        {/* Facts, not chips: three boxed labels per row made every
-                            task read as a small dashboard. A quiet line scans. */}
-                        <p className="mt-1.5 flex flex-wrap gap-x-2 gap-y-0.5 text-xs leading-5 text-muted">
-                          <span className="whitespace-nowrap">
-                            Started by {trustLabel(task.trust)}
-                          </span>
-                          <span aria-hidden="true" className="text-muted/60">
-                            ·
-                          </span>
-                          <span className="whitespace-nowrap">
-                            {formatUsd(task.spentUsd)} of {formatUsd(task.budgetUsdLimit)}
-                          </span>
-                          <span aria-hidden="true" className="text-muted/60">
-                            ·
-                          </span>
-                          <span className="whitespace-nowrap">
-                            Updated {relativeTime(task.updatedAt, now)}
-                          </span>
-                        </p>
+                        <MetaLine
+                          className="mt-1.5"
+                          segments={[
+                            `Started by ${trustLabel(task.trust)}`,
+                            `${formatUsd(task.spentUsd)} of ${formatUsd(task.budgetUsdLimit)}`,
+                            `Updated ${relativeTime(task.updatedAt, now)}`,
+                          ]}
+                        />
                       </div>
                       {/* The title already opens the task — a per-row "Open"
                           button restated the link as chrome. Only a real

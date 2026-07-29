@@ -12,6 +12,7 @@ import {
   cardHeaderClass,
   cardShellClass,
   cardTitleClass,
+  MetaLine,
 } from '@/lib/ui';
 import { toolLabel } from '@/lib/views';
 
@@ -68,17 +69,14 @@ export function AnomalyCard({ anomaly }: { anomaly: AnomalyView }) {
           <span className="shrink-0 text-xs text-muted">{anomaly.createdLabel}</span>
         </div>
         <p className="text-[14px] leading-6 text-strong">{anomaly.detail}</p>
-        <p className="flex flex-wrap gap-x-2 gap-y-0.5 text-xs leading-5 text-muted tabular-nums">
-          <span className="whitespace-nowrap">Observed {anomaly.observed}×</span>
-          <span aria-hidden="true" className="text-muted/60">
-            ·
-          </span>
-          <span className="whitespace-nowrap">expected {anomaly.expected}×</span>
-          <span aria-hidden="true" className="text-muted/60">
-            ·
-          </span>
-          <span className="whitespace-nowrap">{anomaly.citationCount} calls of evidence</span>
-        </p>
+        <MetaLine
+          className="tabular-nums"
+          segments={[
+            `Observed ${anomaly.observed}×`,
+            `expected ${anomaly.expected}×`,
+            `${anomaly.citationCount} calls of evidence`,
+          ]}
+        />
       </div>
       <footer className={cardFooterClass}>
         {anomaly.hasPolicy ? (
