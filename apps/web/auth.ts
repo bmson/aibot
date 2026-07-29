@@ -25,6 +25,13 @@ export const authMode = resolveAuthMode({
 
 if (authMode === 'dev-bypass') {
   console.warn('[auth] explicit local bypass enabled — owner authentication is disabled');
+  if (config.AUTH_LOCALHOST_BYPASS && process.env.NODE_ENV === 'production') {
+    console.warn(
+      '[auth] AUTH_LOCALHOST_BYPASS is active. The per-request loopback check is a best-effort ' +
+        'tripwire, NOT a boundary — a crafted X-Forwarded-For defeats it. Bind this port to ' +
+        'loopback (127.0.0.1) only; do not expose it to the network.',
+    );
+  }
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
@@ -52,11 +59,11 @@ export interface OwnerSession {
 export async function isAuthed(): Promise<OwnerSession | null> {
   if (authMode === 'dev-bypass') {
     // The production-built localhost bypass (Compose quickstart) additionally
-    // requires the request itself to look loopback-direct. Config alone cannot
-    // tell a 127.0.0.1-published container from one re-published on 0.0.0.0 or
-    // behind a reverse proxy — the request headers can. AUTH_DEV_BYPASS cannot
-    // reach here in production builds (resolveAuthMode throws), so this branch
-    // is exactly the Compose case.
+    // requires the request itself to look loopback-direct. This is a best-effort
+    // tripwire, not a boundary: see requestLooksLoopback — a crafted
+    // X-Forwarded-For defeats it, so the real control is binding the port to
+    // loopback. AUTH_DEV_BYPASS cannot reach here in production builds
+    // (resolveAuthMode throws), so this branch is exactly the Compose case.
     if (process.env.NODE_ENV === 'production') {
       const h = await headers();
       const loopback = requestLooksLoopback({

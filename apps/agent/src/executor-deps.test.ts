@@ -55,7 +55,10 @@ describe('executorDeps channel composition', () => {
     },
     ...over,
   });
-  const depsWith = (channels: ModuleChannel[]): AgentDeps =>
+  const depsWith = (
+    channels: ModuleChannel[],
+    channelUnavailable: (taskType: string) => string | null = () => null,
+  ): AgentDeps =>
     ({
       db: {},
       modules: {
@@ -70,6 +73,7 @@ describe('executorDeps channel composition', () => {
         },
         emailObservers: [],
         jobUnavailable: () => null,
+        channelUnavailable,
       } as unknown as InstalledModuleSet,
     }) as unknown as AgentDeps;
   const task = { id: 't1', type: 'email_triage', trust: 'owner' } as TaskRow;
@@ -103,5 +107,29 @@ describe('executorDeps channel composition', () => {
       { taskId: 't1', shortCode: 'A7', summary: 's' },
     ]);
     expect(calls).toEqual(['ping:approvals', 'notice:email']);
+  });
+
+  it('fails an owner-facing task loudly when its owning channel module is uninstalled', async () => {
+    // With zero channels installed there is no assertDeliverable to fire, so
+    // without the channelUnavailable guard the task would complete as done with
+    // the answer silently undelivered.
+    calls.length = 0;
+    const deps = depsWith([], (type) =>
+      type === 'email_triage'
+        ? 'email_triage cannot be delivered because the google module is not installed'
+        : null,
+    );
+    await expect(executorDeps(deps).deliverFinal?.(task, 'answer')).rejects.toThrow(
+      /google module is not installed/,
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it('does not block a non-owner task when a channel is absent', async () => {
+    calls.length = 0;
+    const unknownTask = { id: 't2', type: 'email_triage', trust: 'unknown' } as TaskRow;
+    const deps = depsWith([], () => 'should not be consulted for non-owner tasks');
+    await executorDeps(deps).deliverFinal?.(unknownTask, 'answer');
+    expect(calls).toEqual([]); // no channels, nothing delivered, no throw
   });
 });

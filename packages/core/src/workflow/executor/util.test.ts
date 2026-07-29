@@ -103,4 +103,48 @@ describe('compact token budget', () => {
     const result = compact(window);
     expect(result.at(-1)).toEqual(window.at(-1));
   });
+
+  it('keeps the tool result when the assistant tool-call args alone bust the budget', () => {
+    // The reproduced data-loss case: a large artifact body in docs.create args
+    // used to collapse the window to just the instruction, discarding the tool
+    // result (the created document's URL) the model had just obtained.
+    const bigCall: ModelMessage = {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool-call',
+          toolCallId: 'D',
+          toolName: 'docs.create',
+          input: { body: 'z'.repeat(200_000) },
+        },
+      ],
+    } as ModelMessage;
+    const result: ModelMessage = {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-result',
+          toolCallId: 'D',
+          toolName: 'docs.create',
+          output: { type: 'json', value: { url: 'https://docs.example/d/abc123' } },
+        },
+      ],
+    } as ModelMessage;
+    const window: ModelMessage[] = [text('user', 'write me a doc'), bigCall, result];
+
+    const compacted = compact(window);
+
+    // The tool result (with the URL) survives, paired with its tool-call.
+    const toolResultMsg = compacted.find((m) => m.role === 'tool');
+    expect(JSON.stringify(toolResultMsg)).toContain('abc123');
+    const callMsg = compacted.find(
+      (m) =>
+        m.role === 'assistant' && Array.isArray(m.content) && m.content[0]?.type === 'tool-call',
+    );
+    expect(callMsg).toBeDefined();
+    // The instruction is still pinned, and the oversized args are elided.
+    expect(compacted[0]).toEqual(text('user', 'write me a doc'));
+    expect(JSON.stringify(compacted)).not.toContain('z'.repeat(200_000));
+    expect(JSON.stringify(callMsg)).toContain('elided');
+  });
 });

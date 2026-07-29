@@ -55,6 +55,9 @@ export const googleMeta = {
   ui: {
     toolLabels: googleToolLabels,
   },
+  // The email channel delivers owner-facing email_triage finals; declared so the
+  // executor fails such a task loudly if the google module is uninstalled.
+  deliversTaskTypes: ['email_triage'],
   // Gmail push: the platform verifies the Google-signed OIDC token against the
   // configured push service account before the module's handler runs.
   webhooks: [

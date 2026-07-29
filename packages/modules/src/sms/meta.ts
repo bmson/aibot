@@ -27,6 +27,9 @@ export const smsMeta = {
   ui: {
     toolLabels: smsToolLabels,
   },
+  // The SMS channel delivers owner-facing sms_turn finals; declared so the
+  // executor fails such a task loudly if the sms module is uninstalled.
+  deliversTaskTypes: ['sms_turn'],
   // Inbound Twilio webhook; the platform validates X-Twilio-Signature before
   // the module's handler runs.
   webhooks: [{ path: '/twilio/sms', auth: { kind: 'twilioSignature' } }],

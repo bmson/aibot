@@ -206,6 +206,45 @@ function googleDefaultDkimAligned(fromDomain: string, propertyDomain: string): b
  * non-Gmail receiver that does not strip the sender's copies). Reading only
  * the first header keeps this pinned to the receiver's own line.
  */
+/**
+ * Strip RFC-5322 comments `( ... )` (which nest) and quoted strings `"..."`
+ * from a structured header value before it is split on `;`.
+ *
+ * Gmail echoes the sender's envelope-from into the SPF clause — both inside a
+ * `(google.com: domain of <addr> ...)` comment and in `smtp.mailfrom=<addr>`.
+ * An attacker using an RFC-5321-legal quoted local part can smuggle a `;` and a
+ * synthetic `dkim=pass header.d=<owner>` clause through the naive split, forging
+ * authentication for the owner's domain. Dropping comments and quoted spans
+ * first removes every sender-controlled span that could carry a delimiter.
+ */
+function stripCommentsAndQuotes(value: string): string {
+  let out = '';
+  let commentDepth = 0;
+  let inQuote = false;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (ch === '\\') {
+      // A backslash escapes the next char inside a comment or quoted string.
+      if (inQuote || commentDepth > 0) i += 1;
+      else out += ch;
+      continue;
+    }
+    if (inQuote) {
+      if (ch === '"') inQuote = false;
+      continue;
+    }
+    if (commentDepth > 0) {
+      if (ch === '(') commentDepth += 1;
+      else if (ch === ')') commentDepth -= 1;
+      continue;
+    }
+    if (ch === '"') inQuote = true;
+    else if (ch === '(') commentDepth += 1;
+    else out += ch;
+  }
+  return out;
+}
+
 export function gmailSenderAuthenticated(
   payload: GmailPayload | undefined,
   fromEmail: string,
@@ -217,7 +256,9 @@ export function gmailSenderAuthenticated(
   )?.value;
   if (!topmost) return false;
 
-  const clauses = topmost.split(';').map((clause) => clause.trim());
+  const clauses = stripCommentsAndQuotes(topmost)
+    .split(';')
+    .map((clause) => clause.trim());
   // The receiver's Authentication-Results must carry Google's authserv-id. If
   // the top header is a sender-supplied one with a different authserv-id, we do
   // not fall through to a lower header — that lower header is untrusted too.

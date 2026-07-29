@@ -65,10 +65,24 @@ async function resolveEmailThreadTarget(
     )
     .limit(1);
   if (!binding?.externalId) return null;
+  // Resolve the recipient from the earliest OWNER-TRUST email_triage task only.
+  // A conversation is bound to a Gmail threadId regardless of trust
+  // (conversationForThread), so an authenticated stranger can seed the first
+  // email_triage task on a thread the owner later joins. Without this filter a
+  // follow-up owner task (a scheduled continuation, a mission session) would
+  // email its final answer — and its parked-approval notices, with short codes
+  // — to that stranger. No owner-trust origin means no auto-reply target: the
+  // answer still lands on the dashboard via postConversationNotice.
   const [origin] = await deps.db
     .select({ trigger: tasks.trigger })
     .from(tasks)
-    .where(and(eq(tasks.conversationId, task.conversationId), eq(tasks.type, 'email_triage')))
+    .where(
+      and(
+        eq(tasks.conversationId, task.conversationId),
+        eq(tasks.type, 'email_triage'),
+        eq(tasks.trust, 'owner'),
+      ),
+    )
     .orderBy(asc(tasks.createdAt))
     .limit(1);
   const originPayload =

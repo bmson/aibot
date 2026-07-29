@@ -110,15 +110,63 @@ export function replaceToolResultMessage(
 }
 
 /**
+ * A tool-call message whose serialized size alone exceeds this has its `input`
+ * elided when it must be kept to preserve pairing. Small tool-call args (a
+ * calendar event's fields, a search query) stay legible; only artifact bodies
+ * — a whole document/sheet/deck passed to `docs.create` etc. — are shed.
+ */
+const TOOL_CALL_INPUT_ELIDE_CHARS = 16_000;
+
+/** Whether an assistant message proposes tool calls (so it anchors tool results). */
+function hasToolCalls(message: ModelMessage | undefined): boolean {
+  return (
+    message?.role === 'assistant' &&
+    Array.isArray(message.content) &&
+    message.content.some((part) => (part as { type?: string }).type === 'tool-call')
+  );
+}
+
+/**
+ * Replace an oversized assistant message's tool-call `input` with a stand-in.
+ * The arguments were already dispatched and are durable in `tool_calls.args`;
+ * the model does not re-read them, but the message must stay to anchor its tool
+ * results (which carry the answer — e.g. the created document's URL).
+ */
+function elideToolCallInputs(message: ModelMessage): ModelMessage {
+  if (!hasToolCalls(message) || !Array.isArray(message.content)) return message;
+  if (messageChars(message) <= TOOL_CALL_INPUT_ELIDE_CHARS) return message;
+  return {
+    ...message,
+    content: message.content.map((part) =>
+      (part as { type?: string }).type === 'tool-call'
+        ? {
+            ...(part as object),
+            input: {
+              elided: true,
+              note: 'tool arguments elided after dispatch (durable in the ledger)',
+            },
+          }
+        : part,
+    ),
+  } as ModelMessage;
+}
+
+/**
  * Drop-oldest compaction bounded by BOTH message count and estimated tokens.
  *
- * The slice must never begin on an orphaned tool-result — a `tool` message whose
- * originating tool-call (in an earlier assistant message) was dropped. Strict
- * providers (Azure, Anthropic) require one-to-one tool_use/tool_result pairing
- * and reject an unpaired leading tool-result, which dead-lettered resumed tasks.
- * A retained assistant tool-call is always safe: its result comes AFTER it, so it
- * is retained too. So it is sufficient to advance the cut past any leading `tool`
- * messages until the window starts on a real turn (or an assistant tool-call).
+ * Messages are partitioned into atomic GROUPS: an assistant message that
+ * proposes tool calls is inseparable from the `tool` messages that answer it —
+ * strict providers (Azure, Anthropic) require one-to-one tool_use/tool_result
+ * pairing and reject an orphaned leading tool-result. Grouping (rather than the
+ * older "advance past leading tool messages" cut) guarantees the tail can never
+ * begin on an orphan AND can never become empty: the newest group — the turn
+ * being answered, including the result just obtained — is always kept whole.
+ *
+ * When that newest group alone busts the char budget (a large artifact body in
+ * its tool-call args), the args are elided rather than the group dropped, so the
+ * tool RESULT survives. Without this a `[instruction, assistant(big docs.create),
+ * tool(doc url)]` window collapsed to just the instruction and the model lost
+ * the URL it had just created.
  *
  * The first user message (the original instruction) is PINNED: a long task must
  * not lose "what am I doing and why" to drop-oldest. Goal sessions re-seed the
@@ -133,22 +181,55 @@ export function compact(window: ModelMessage[]): ModelMessage[] {
   const firstUserIndex = window.findIndex((m) => m.role === 'user');
   const pin = firstUserIndex >= 0 ? window[firstUserIndex] : undefined;
 
+  // Partition into atomic groups over half-open [start, end) ranges.
+  const groups: Array<{ start: number; end: number }> = [];
+  for (let index = 0; index < window.length; ) {
+    let end = index + 1;
+    if (hasToolCalls(window[index])) {
+      while (end < window.length && window[end]?.role === 'tool') end += 1;
+    }
+    groups.push({ start: index, end });
+    index = end;
+  }
+
   // Leave room for the pinned instruction so the totals still respect both bounds.
   const tailMessageBudget = pin ? CONTEXT_WINDOW_LIMIT - 1 : CONTEXT_WINDOW_LIMIT;
   const tailCharBudget = Math.max(0, CONTEXT_CHAR_BUDGET - messageChars(pin));
+  const groupChars = ({ start, end }: { start: number; end: number }) =>
+    window.slice(start, end).reduce((sum, message) => sum + messageChars(message), 0);
 
-  // Walk back from the newest message until either bound is spent. The newest
-  // message is always kept, whatever its size — it is the turn being answered.
-  let start = window.length;
+  // Walk groups newest-first; the newest is kept unconditionally, older ones
+  // only while both bounds hold.
+  let firstGroup = groups.length - 1;
   let chars = 0;
-  while (start > 0 && window.length - start < tailMessageBudget) {
-    const next = messageChars(window[start - 1]);
-    if (window.length - start >= 1 && chars + next > tailCharBudget) break;
-    chars += next;
-    start -= 1;
+  let count = 0;
+  for (let g = groups.length - 1; g >= 0; g -= 1) {
+    const group = groups[g];
+    if (!group) break;
+    const thisChars = groupChars(group);
+    const thisCount = group.end - group.start;
+    const isNewest = g === groups.length - 1;
+    if (
+      !isNewest &&
+      (chars + thisChars > tailCharBudget || count + thisCount > tailMessageBudget)
+    ) {
+      break;
+    }
+    chars += thisChars;
+    count += thisCount;
+    firstGroup = g;
   }
-  while (start < window.length && window[start]?.role === 'tool') start += 1;
-  const tail = window.slice(start);
+
+  const start = groups[firstGroup]?.start ?? 0;
+  let tail = window.slice(start);
+
+  // Elide oversized tool-call args only if the kept tail still busts the budget.
+  if (
+    tail.reduce((sum, message) => sum + messageChars(message), 0) + messageChars(pin) >
+    CONTEXT_CHAR_BUDGET
+  ) {
+    tail = tail.map(elideToolCallInputs);
+  }
 
   // If the instruction already survived inside the tail, return it unchanged.
   if (!pin || start <= firstUserIndex) return tail;
