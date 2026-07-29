@@ -34,6 +34,12 @@ COPY --from=build --chown=node:node /src/apps/agent/dist/index.mjs.map ./index.m
 # is rare in-agent), so the runtime installs exactly that one package.
 RUN npm install --no-save --omit=dev unpdf@1.6.2 && chown -R node:node /app/node_modules
 
+# npm is only needed for the install above, never at runtime (the app runs on
+# node directly). Strip it so the base image's bundled npm — whose vendored deps
+# tar/sigstore/brace-expansion/picomatch carry HIGH/CRITICAL CVEs — neither ships
+# in the released image nor fails the deploy vulnerability scan.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 USER node
 EXPOSE 8080
 CMD ["node", "--enable-source-maps", "/app/index.mjs"]
