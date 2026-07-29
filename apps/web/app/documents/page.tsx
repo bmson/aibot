@@ -1,20 +1,11 @@
 import { isModuleEnabled, loadConfig } from '@assistant/config';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { UploadPanel } from '@/app/upload-panel';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getApplication } from '@/lib/server';
-import {
-  btn,
-  cardGridClass,
-  EmptyState,
-  fileInputClass,
-  inputClass,
-  PageHeader,
-  PageShell,
-  Panel,
-} from '@/lib/ui';
-import { SubmitButton } from '@/lib/ui-client';
+import { btn, cardGridClass, EmptyState, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
 import { DocumentCard, type DocumentCardView } from './document-card';
 
 export const metadata = { title: 'Documents' };
@@ -62,49 +53,30 @@ export default async function DocumentsPage() {
         }
       />
 
-      <Panel tone="sunken" className="mt-8">
-        <h2 className="text-[15px] font-semibold">Upload a document</h2>
-        <form
-          action="/api/documents/upload"
-          method="post"
-          encType="multipart/form-data"
-          className="mt-3 flex flex-col items-start gap-3"
-        >
-          <div className="flex flex-wrap items-center gap-3">
-            <input type="file" name="file" required className={fileInputClass} />
-            <SubmitButton variant="primary" pendingLabel="Uploading…">
-              Upload
-            </SubmitButton>
-          </div>
-          <details className="text-xs text-zinc-500 dark:text-zinc-400">
-            <summary className="disclosure flex items-center gap-2 cursor-pointer">
-              Give it a title
-            </summary>
-            <label className="mt-2 flex flex-col gap-1">
-              Title
-              <input
-                type="text"
-                name="title"
-                placeholder="For example, Apartment lease"
-                className={`${inputClass} w-64`}
-              />
-            </label>
-          </details>
-        </form>
-        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">Files can be up to 25MB.</p>
-      </Panel>
+      <UploadPanel
+        className="mt-8"
+        title="Upload a document"
+        action="/api/documents/upload"
+        submitLabel="Upload"
+        labelSummary="Give it a title"
+        labelName="title"
+        labelCaption="Title"
+        labelPlaceholder="For example, Apartment lease"
+        hint="Files can be up to 25MB."
+      />
 
       <section className="mt-8">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-sm font-medium">Filed documents</h2>
-          {stats.total > 0 ? (
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">
-              {stats.ready} ready · {stats.chunks} searchable passage
-              {stats.chunks === 1 ? '' : 's'}
-              {stats.pending > 0 ? ` · ${stats.pending} in progress` : ''}
-            </span>
-          ) : null}
-        </div>
+        <SectionHeading
+          title="Filed documents"
+          count={stats.total > 0 ? stats.total : undefined}
+          hint={
+            stats.total > 0
+              ? `${stats.ready} ready · ${stats.chunks} searchable passage${
+                  stats.chunks === 1 ? '' : 's'
+                }${stats.pending > 0 ? ` · ${stats.pending} in progress` : ''}`
+              : undefined
+          }
+        />
         {views.length === 0 ? (
           <div className="mt-3">
             <EmptyState>

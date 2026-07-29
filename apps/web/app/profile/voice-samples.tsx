@@ -4,13 +4,12 @@ import { useState, useTransition } from 'react';
 import { purgeVoiceSamplesAction } from '@/app/profile/actions';
 import {
   btn,
+  CountBadge,
   cardBodyClass,
   cardFooterClass,
   cardHeaderClass,
   cardShellClass,
   fileInputClass,
-  InfoGrid,
-  InfoItem,
   inputClass,
 } from '@/lib/ui';
 
@@ -71,15 +70,18 @@ export function VoiceSamplesPanel({
               Forwarded and quoted text is skipped.
             </p>
           </div>
-          <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-2xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+          <CountBadge>
             {total} {total === 1 ? 'sample' : 'samples'}
-          </span>
+          </CountBadge>
         </div>
-        <InfoGrid columns={3}>
-          <InfoItem label="Total">{total}</InfoItem>
-          <InfoItem label="Learned">{auto}</InfoItem>
-          <InfoItem label="Uploaded">{uploaded}</InfoItem>
-        </InfoGrid>
+        {/* The pill already carries the total — the breakdown is one quiet
+            line, not a grid of three boxed figures. */}
+        {total > 0 ? (
+          <p className="text-xs leading-5 text-muted">
+            {auto.toLocaleString()} learned from your sent mail · {uploaded.toLocaleString()}{' '}
+            uploaded
+          </p>
+        ) : null}
 
         {/* Upload */}
         <form

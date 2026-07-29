@@ -11,8 +11,6 @@ import {
   cardHeaderClass,
   cardShellClass,
   cardTitleClass,
-  InfoGrid,
-  InfoItem,
 } from '@/lib/ui';
 
 export interface ProposalView {
@@ -77,14 +75,17 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
             </section>
           ) : null}
         </div>
-        <InfoGrid>
-          <InfoItem label="Evidence">
-            {proposal.evidenceCount} pattern{proposal.evidenceCount === 1 ? '' : 's'}
-          </InfoItem>
-          <InfoItem label="Outcome">
+        <p className="flex flex-wrap gap-x-2 gap-y-0.5 text-xs leading-5 text-muted">
+          <span className="whitespace-nowrap">
+            Based on {proposal.evidenceCount} pattern{proposal.evidenceCount === 1 ? '' : 's'}
+          </span>
+          <span aria-hidden="true" className="text-muted/60">
+            ·
+          </span>
+          <span className="whitespace-nowrap">
             {proposal.applyable ? 'Can apply directly' : 'Advisory'}
-          </InfoItem>
-        </InfoGrid>
+          </span>
+        </p>
       </div>
       <footer className={cardFooterClass}>
         <button

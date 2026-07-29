@@ -446,7 +446,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
               className={inputClass}
             />
           </label>
-          <label className="flex items-start gap-2 text-xs font-normal text-zinc-600 dark:text-zinc-400">
+          <label className="flex items-start gap-2 text-xs font-normal text-muted">
             <input
               type="checkbox"
               name="mirrorToPrimary"
