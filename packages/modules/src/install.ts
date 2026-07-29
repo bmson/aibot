@@ -40,6 +40,12 @@ export interface InstalledModuleSet {
    * throws it instead of completing the task with the answer undelivered.
    */
   channelUnavailable(taskType: string): string | null;
+  /**
+   * A message when this deterministic task kind belongs to a module that is not
+   * installed, otherwise null. Lets a queued task complete benignly instead of
+   * falling through to the general model executor.
+   */
+  taskKindUnavailable(kind: string): string | null;
   /** Runtime handler for an installed module's webhook path, if any. */
   webhookHandler(path: string): ModuleWebhookHandler | undefined;
   /** Runtime handler for an installed module's internal route, if any. */
@@ -73,6 +79,7 @@ export function installModules(
   const exports = new Map<ModuleDefinition<unknown>, unknown>();
   const jobOwners = new Map<string, AssistantModule>();
   const channelOwners = new Map<string, AssistantModule>();
+  const taskKindOwners = new Map<string, AssistantModule>();
   const webhookHandlers = new Map<string, ModuleWebhookHandler>();
   const internalHandlers = new Map<string, ModuleInternalHandler>();
   const taskHandlers = new Map<string, ModuleTaskHandler>();
@@ -96,6 +103,9 @@ export function installModules(
     for (const job of definition.meta.jobs ?? []) jobOwners.set(job, definition.meta.name);
     for (const type of definition.meta.deliversTaskTypes ?? []) {
       channelOwners.set(type, definition.meta.name);
+    }
+    for (const kind of definition.meta.taskKinds ?? []) {
+      taskKindOwners.set(kind, definition.meta.name);
     }
     if (!isModuleEnabled(context.config, definition.meta.name)) continue;
     installed.push(definition.meta.name);
@@ -184,6 +194,11 @@ export function installModules(
       const owner = channelOwners.get(taskType);
       if (!owner || installed.includes(owner)) return null;
       return `${taskType} cannot be delivered because the ${owner} module is not installed`;
+    },
+    taskKindUnavailable: (kind) => {
+      const owner = taskKindOwners.get(kind);
+      if (!owner || installed.includes(owner)) return null;
+      return `${kind} skipped because the ${owner} module is not installed`;
     },
     webhookHandler: (path) => webhookHandlers.get(path),
     internalHandler: (path) => internalHandlers.get(path),

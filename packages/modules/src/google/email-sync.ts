@@ -181,13 +181,24 @@ function authDomainAligned(fromDomain: string, propertyDomain: string, relaxed: 
  *
  * Accepting it is not a weakening: only Google can sign under gappssmtp.com,
  * the tenant label is derived from the domain rather than chosen by the sender,
- * and the shape is pinned to exactly <domain-as-hyphens>.<selector>.gappssmtp.com
- * so an attacker cannot smuggle a victim's domain in as a deeper subdomain.
- * Publishing real SPF/DKIM/DMARC records remains strictly better.
+ * and the shape is pinned to exactly <domain-as-hyphens>.<selector>.gappssmtp.com.
+ *
+ * BUT the domain→label map (dots→hyphens) is lossy: `mail.example.com` and the
+ * registrable sibling `mail-example.com` both produce `mail-example-com`, so an
+ * attacker who registers a hyphenated sibling of a victim domain and onboards
+ * Workspace is issued an identical tenant label. The label alone cannot
+ * disambiguate them. The exemption is therefore restricted to the ONE shape
+ * whose label reverses unambiguously — a registrable domain with exactly one
+ * dot and no hyphen (`example.com` → `example-com`, and no valid registrable
+ * domain other than `example.com` maps to that label). Subdomains and
+ * hyphenated domains must publish real SPF/DKIM/DMARC, or align to their org
+ * domain via the relaxed rule. Publishing real records remains strictly better.
  */
 function googleDefaultDkimAligned(fromDomain: string, propertyDomain: string): boolean {
   const suffix = '.gappssmtp.com';
   if (!fromDomain || !propertyDomain.endsWith(suffix)) return false;
+  // Only a hyphen-free, single-dot registrable domain has an unambiguous label.
+  if (fromDomain.includes('-') || fromDomain.split('.').length !== 2) return false;
   const labels = propertyDomain.slice(0, -suffix.length).split('.');
   if (labels.length !== 2 || !labels[1]) return false;
   return labels[0] === fromDomain.replaceAll('.', '-');

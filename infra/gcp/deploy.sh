@@ -7,7 +7,18 @@ set -euo pipefail
 # ── read .env ────────────────────────────────────────────────────────────────
 ENV_FILE="${ASSISTANT_ENV_FILE:-.env}"
 [ -f "$ENV_FILE" ] || { echo "${ENV_FILE} does not exist; run pnpm setup first"; exit 1; }
-envval() { { grep -E "^$1=" "$ENV_FILE" || true; } | head -1 | cut -d= -f2-; }
+envval() {
+  local value
+  value="$( { grep -E "^$1=" "$ENV_FILE" || true; } | head -1 | cut -d= -f2- )"
+  # These values are interpolated into a '|'-delimited `--set-env-vars` list, so
+  # a '|' in a value would inject additional Cloud Run environment variables
+  # (e.g. overriding AUTH_DEV_BYPASS). Reject rather than silently corrupt the
+  # deploy. set -e turns this subshell exit into a script abort.
+  case "$value" in
+    *"|"*) echo "FATAL: $1 in ${ENV_FILE} must not contain a '|' character" >&2; exit 1 ;;
+  esac
+  printf '%s' "$value"
+}
 
 # Nothing installation-specific is hard-coded: shell variables win, followed by
 # the single .env file, followed by safe infrastructure defaults.

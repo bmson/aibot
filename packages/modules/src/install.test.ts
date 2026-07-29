@@ -89,6 +89,19 @@ describe('installModules', () => {
     expect(installed.channelUnavailable('email_triage')).toBeNull();
     expect(installed.channelUnavailable('sms_turn')).toBeNull();
   });
+
+  it('reports a deterministic task kind orphaned when its owning module is absent', () => {
+    const disabled = contextFor(loadConfig({ ASSISTANT_MODULES: 'reminders' }));
+    const withoutGoogle = installModules([remindersModule, googleModule], disabled);
+    expect(withoutGoogle.taskKindUnavailable('application_confirmation')).toContain('google');
+    // A kind no module owns (e.g. known-sender-reply) still goes to the executor.
+    expect(withoutGoogle.taskKindUnavailable('known_sender_reply')).toBeNull();
+
+    resetConfigForTest(); // loadConfig caches; the second config needs a reset
+    const enabled = contextFor(loadConfig({ ASSISTANT_MODULES: 'google' }));
+    const withGoogle = installModules([googleModule], enabled);
+    expect(withGoogle.taskKindUnavailable('application_confirmation')).toBeNull();
+  });
 });
 
 describe('composition as a restrictor', () => {

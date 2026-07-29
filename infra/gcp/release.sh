@@ -72,10 +72,15 @@ if [[ "${SKIP_IMAGE_BUILD:-false}" != "true" ]]; then
   echo "Building release ${TAG} with Cloud Build"
   RELEASE_MODULES="${ASSISTANT_MODULES:-$(agent_env_value ASSISTANT_MODULES)}"
   RELEASE_MODULES="${RELEASE_MODULES:-all}"
+  # ASSISTANT_MODULES is legitimately comma-separated (google,sms,...), and the
+  # default ',' substitution delimiter would parse each module after the first
+  # as another KEY=VALUE pair — breaking the build, and a crafted value could
+  # override _REGION/_REPO/_TAG (which pick the image registry and tag). Use
+  # gcloud's custom-delimiter form so commas inside a value stay literal.
   gcloud builds submit . \
     --project "$PROJECT" \
     --config infra/gcp/cloudbuild.yaml \
-    --substitutions "_REGION=${REGION},_REPO=${REPO},_TAG=${TAG},_MODULES=${RELEASE_MODULES}" \
+    --substitutions "^@@^_REGION=${REGION}@@_REPO=${REPO}@@_TAG=${TAG}@@_MODULES=${RELEASE_MODULES}" \
     --quiet
 else
   echo "Using pre-built release images ${TAG}"

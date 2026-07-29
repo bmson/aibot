@@ -170,6 +170,14 @@ export async function finalizePendingResponse(
           progress: pending.progress,
         });
   if (!completed) return LOST_LEASE;
+  // Record quality signals here — the single funnel every terminal path AND
+  // every resume passes through — so response_checks captures the failures it
+  // exists to measure (step-cap exhaustion, forced-no-tool, budget stalls),
+  // not just successful prose finals. Best-effort: a metrics write must never
+  // fail a completed task.
+  await recordQualitySignals(deps.db, task, checkpointState ?? taskState(task), pending).catch(
+    (error) => console.error('quality signal record failed', error),
+  );
   // A needs_attention final that reached an owner-visible thread (the task's own
   // conversation or the Notifications sink) is already notified — stamp it so the
   // re-notify sweep leaves it alone. If it delivered nowhere, leave it unstamped
@@ -210,7 +218,10 @@ async function recordQualitySignals(
   state: TaskState,
   pending: PendingFinal,
 ): Promise<void> {
-  await db
+  // The unique task_id + do-nothing makes the row idempotent across delivery
+  // retries and resumes; `.returning()` tells us whether THIS call was the one
+  // that inserted it.
+  const inserted = await db
     .insert(responseChecks)
     .values({
       taskId: task.id,
@@ -221,8 +232,14 @@ async function recordQualitySignals(
       mustActRetries: state.mustActRetries,
       degradedSteps: state.degradedSteps,
     })
-    .onConflictDoNothing({ target: responseChecks.taskId });
-  if (state.usedSkillIds.length > 0) {
+    .onConflictDoNothing({ target: responseChecks.taskId })
+    .returning({ taskId: responseChecks.taskId });
+  // recordSkillOutcome increments success/failure counters — NOT idempotent —
+  // so run it only on the fresh insert. terminalStatus is now the ACTUAL final
+  // status (this is called after completion), so a failed/needs_attention run
+  // finally records a failure, which is what lets the three-strikes skill
+  // deprecation fire instead of a bad skill being recommended forever.
+  if (inserted.length > 0 && state.usedSkillIds.length > 0) {
     const success = pending.terminalStatus === 'done';
     await Promise.all(state.usedSkillIds.map((id) => recordSkillOutcome(db, id, success)));
   }
@@ -289,13 +306,11 @@ export async function stageModelFinalResponse(
   ].join('\n');
   const checked = enforceResponseContract(pending.text, evidence, { urlCorpus });
   const text = checked.text;
+  // Stamp the contract verdict on pending; recordQualitySignals reads it from
+  // the single funnel in finalizePendingResponse, so every terminal path — not
+  // just this prose-model one — persists its verdict and loop-health counters.
   pending.contractBlocked = checked.blocked;
   pending.contractUnsupportedCount = checked.unsupported.length;
-  // Written here, after the verdict exists; a unique task_id plus
-  // do-nothing keeps delivery retries from double-counting.
-  await recordQualitySignals(deps.db, task, state, pending).catch((error) =>
-    console.error('quality signal record failed', error),
-  );
   if (checked.blocked) {
     console.warn('blocked unsupported assistant action claim', {
       taskId: task.id,

@@ -19,8 +19,17 @@ if (configProblems.length > 0) {
 
 initOtel();
 
+// Build the dependency graph — and with it install the modules — at boot, not
+// lazily on the first request. installModules validates the composition (every
+// declared webhook/internal route has a handler; no duplicate paths or task
+// kinds), and that check is worthless if it only runs when Cloud Tasks delivers
+// the first task in production. A composition mistake now crashes startup, the
+// same way validateAssistantConfig above does, instead of surfacing as a
+// silent 404 on a live webhook.
+const deps = buildDeps();
+
 if (config.QUEUE_DRIVER === 'local') {
-  startPoller(buildDeps());
+  startPoller(deps);
   console.log('local queue poller started (2s interval)');
 }
 const app = createApp();
