@@ -53,6 +53,10 @@ jobs:
       # in release.sh — keys off this single value, so the revision that goes
       # live is always the revision that was built and verified.
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.event.inputs.sha || github.sha }}
+      # Applies the repo-root .trivyignore to every image scan below: a scoped
+      # allow-list of freshly-disclosed CVEs in dormant build tooling (esbuild's
+      # embedded Go stdlib, the native tsc) that cannot be patched yet.
+      TRIVY_IGNOREFILE: ${{ github.workspace }}/.trivyignore
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
