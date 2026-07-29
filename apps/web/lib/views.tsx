@@ -1,6 +1,7 @@
 // Server-side mappers turning DB rows into plain serializable view props for
 // client components (approval cards) and shared status-chip styling.
 import type { ApprovalSnapshot } from '@assistant/application/approvals';
+import { moduleToolLabels } from '@assistant/modules/ui';
 import { formatFriendlyDateTime, prettyJson, relativeTime } from './format';
 import { Badge, type BadgeTone } from './ui';
 
@@ -138,50 +139,41 @@ export function taskTypeLabel(type: string): string {
 
 /**
  * Human labels for tool names, shared by the task-detail "What actually
- * happened" list and the chat's live activity chips. Falls back to the dotted
- * name with the dot spelled as a space.
+ * happened" list and the chat's live activity chips. Module tools carry their
+ * labels in module metadata (`ui.toolLabels`); only the platform's built-in
+ * tools are named here. Falls back to the dotted name with the dot spelled as
+ * a space.
  */
-const toolLabels: Record<string, string> = {
-  'docs.create': 'Creating a document',
-  'docs.append': 'Updating a document',
-  'docs.get': 'Reading a document',
-  'docs.share': 'Sharing a document',
-  'sheets.create': 'Creating a spreadsheet',
-  'sheets.append_rows': 'Updating a spreadsheet',
-  'sheets.write_rows': 'Updating a spreadsheet',
-  'sheets.get_rows': 'Reading a spreadsheet',
-  'slides.create': 'Creating a presentation',
-  'slides.append': 'Updating a presentation',
-  'calendar.create_event': 'Creating a calendar event',
-  'calendar.update_event': 'Updating a calendar event',
-  'calendar.search_events': 'Checking the calendar',
-  'calendar.list_events': 'Checking the calendar',
-  'gmail.send': 'Sending an email',
-  'gmail.create_draft': 'Drafting an email',
-  'gmail.search': 'Searching email',
-  'gmail.modify': 'Tidying email',
-  'sms.send': 'Sending a text',
-  'web.fetch': 'Reading a web page',
-  'web.search': 'Searching the web',
-  'browser.plan': 'Planning a browser task',
-  'browser.execute': 'Running a browser task',
-  'code.execute': 'Running code',
-  'drive.search': 'Searching Drive',
-  'drive.read': 'Reading a Drive file',
-  'drive.ingest': 'Filing a Drive document',
-  'documents.search': 'Searching documents',
-  'memory.recall': 'Recalling memory',
-  'memory.save': 'Saving a note to memory',
-  'contacts.lookup': 'Looking up a contact',
-  'conversations.search': 'Searching past chats',
-  'goals.update_progress': 'Updating goal progress',
-  'mission.update': 'Updating ongoing work',
-  'task.schedule': 'Scheduling follow-up work',
-  'owner.notify': 'Leaving you a note',
+const platformToolLabels: Record<string, { present: string; past: string }> = {
+  'web.fetch': { present: 'Reading a web page', past: 'Read a web page' },
+  'memory.recall': { present: 'Recalling memory', past: 'Recalled memory' },
+  'memory.save': { present: 'Saving a note to memory', past: 'Saved a note to memory' },
+  'contacts.lookup': { present: 'Looking up a contact', past: 'Looked up a contact' },
+  'conversations.search': { present: 'Searching past chats', past: 'Searched past chats' },
+  'goals.update_progress': { present: 'Updating goal progress', past: 'Updated goal progress' },
+  'mission.update': { present: 'Updating ongoing work', past: 'Updated ongoing work' },
+  'task.schedule': { present: 'Scheduling follow-up work', past: 'Scheduled follow-up work' },
+  'owner.notify': { present: 'Leaving you a note', past: 'Left you a note' },
 };
 
+const { present: modulePresentLabels, past: modulePastLabels } = moduleToolLabels();
+
+/** Present tense — the chat's live activity chips ("Sending an email"). */
 export function toolLabel(toolName: string): string {
-  return toolLabels[toolName] ?? toolName.replaceAll('.', ' ');
+  return (
+    modulePresentLabels.get(toolName) ??
+    platformToolLabels[toolName]?.present ??
+    toolName.replaceAll('.', ' ')
+  );
+}
+
+/** Past tense — the completed-task log ("Sent an email"). */
+export function actionLabel(toolName: string): string {
+  return (
+    modulePastLabels.get(toolName) ??
+    platformToolLabels[toolName]?.past ??
+    toolName.replaceAll('.', ' ')
+  );
 }
 
 const trustLabels: Record<string, string> = {

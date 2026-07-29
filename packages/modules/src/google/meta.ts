@@ -1,5 +1,6 @@
 import { type Config, isModuleEnabled, loadConfig } from '@assistant/config';
 import type { ModuleMeta } from '../contract.js';
+import { googleToolLabels } from './labels.js';
 
 export const googleMeta = {
   name: 'google',
@@ -50,6 +51,9 @@ export const googleMeta = {
       { name: 'assistant-gmail-sync', schedule: '* * * * *', path: '/internal/gmail/sync' },
       { name: 'assistant-gmail-watch', schedule: '0 4 * * *', path: '/internal/gmail/watch' },
     ],
+  },
+  ui: {
+    toolLabels: googleToolLabels,
   },
   // Gmail push: the platform verifies the Google-signed OIDC token against the
   // configured push service account before the module's handler runs.

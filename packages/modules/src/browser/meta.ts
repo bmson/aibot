@@ -1,5 +1,6 @@
 import { isModuleEnabled } from '@assistant/config';
 import type { ModuleMeta } from '../contract.js';
+import { browserToolLabels } from './labels.js';
 
 export const browserMeta = {
   name: 'browser',
@@ -11,6 +12,9 @@ export const browserMeta = {
       ? ['the browser module is required when CANARY_ENABLED=true']
       : [],
   infra: { workerImage: 'browser' },
+  ui: {
+    toolLabels: browserToolLabels,
+  },
   billing: {
     gcp: [
       {

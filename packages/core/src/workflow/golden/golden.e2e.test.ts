@@ -120,4 +120,104 @@ describe('golden tasks', () => {
     expect(check?.blocked).toBe(false);
     expect(check?.mustActRetries).toBe(0);
   });
+
+  it('lets an action claim WITH tool evidence through untouched', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // The inverse of the fabricated-claim fixture: the send actually ran, so
+    // the contract must not rewrite the honest confirmation. This pins the
+    // false-positive side — a claim-detection tightening that starts blocking
+    // real confirmations fails here, not on a user.
+    const fixture: GoldenFixture = {
+      name: 'evidence-supported-send',
+      event: { source: 'chat', trust: 'owner', payload: { text: 'Text me the door code.' } },
+      taskType: 'adhoc',
+      plan: workflowPlan,
+      script: [
+        { toolCalls: [{ toolName: 'sms.send', input: { to: 'owner', body: 'Door code: 4821' } }] },
+        { text: "Done — I've sent the text with the door code." },
+      ],
+      tools: {
+        'sms.send': {
+          schema: z.object({ to: z.string(), body: z.string() }),
+          execute: async () => ({ deliveryStatus: 'accepted', sid: 'SM-golden-1' }),
+        },
+      },
+    };
+    const result = await runGoldenTask(db, agentId, fixture);
+    createdTaskIds.push(result.taskId);
+
+    expect(result.toolNames).toEqual(['sms.send']);
+    expect(result.finalText).toContain("I've sent the text");
+
+    const [check] = await db
+      .select()
+      .from(responseChecks)
+      .where(eq(responseChecks.taskId, result.taskId));
+    expect(check?.blocked).toBe(false);
+    expect(check?.unsupportedCount).toBe(0);
+  });
+
+  it('strips a fabricated link but does not block the answer around it', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // The REWRITE verdict path: an unevidenced URL loses its href while the
+    // answer survives — distinct from blocking, and the only place the
+    // urlCorpus assembly in finalize.ts is exercised end to end.
+    const fixture: GoldenFixture = {
+      name: 'fabricated-link',
+      event: { source: 'chat', trust: 'owner', payload: { text: 'Where do I manage this?' } },
+      taskType: 'adhoc',
+      plan: { ...workflowPlan, action: 'reply' as const },
+      script: [
+        {
+          text: 'You can manage it at https://acme.example/settings/9f3a2b under Preferences.',
+        },
+      ],
+      tools: {},
+    };
+    const result = await runGoldenTask(db, agentId, fixture);
+    createdTaskIds.push(result.taskId);
+
+    expect(result.finalText).not.toContain('https://acme.example/settings/9f3a2b');
+    expect(result.finalText).toMatch(/removed a link/i);
+
+    const [check] = await db
+      .select()
+      .from(responseChecks)
+      .where(eq(responseChecks.taskId, result.taskId));
+    expect(check?.blocked).toBe(false);
+  });
+
+  it('forces a workflow plan to act, and counts the retry it took', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // A workflow plan whose first step proposes no tool is retried with the
+    // forced-action nudge; the retry consumes the next script entry. Closes
+    // the carve-out the fabricated-send fixture's comment notes.
+    const fixture: GoldenFixture = {
+      name: 'must-act-retry',
+      event: { source: 'chat', trust: 'owner', payload: { text: 'Look up the wifi password.' } },
+      taskType: 'adhoc',
+      plan: workflowPlan,
+      script: [
+        { text: 'I will look that up now.' }, // toolless first step → forced retry
+        { toolCalls: [{ toolName: 'facts.lookup', input: { key: 'wifi' } }] },
+        { text: 'It is hunter2.' },
+      ],
+      tools: {
+        'facts.lookup': {
+          schema: z.object({ key: z.string() }),
+          execute: async () => ({ value: 'hunter2' }),
+        },
+      },
+    };
+    const result = await runGoldenTask(db, agentId, fixture);
+    createdTaskIds.push(result.taskId);
+
+    expect(result.toolNames).toEqual(['facts.lookup']);
+    const [check] = await db
+      .select()
+      .from(responseChecks)
+      .where(eq(responseChecks.taskId, result.taskId));
+    expect(check?.mustActRetries).toBe(1);
+    expect(check?.blocked).toBe(false);
+  });
 });

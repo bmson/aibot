@@ -7,7 +7,7 @@ import { formatDateTime, formatUsd, prettyJson, relativeTime, truncate } from '@
 import { getDb } from '@/lib/server';
 import { BackLink, cardShellClass, InfoGrid, InfoItem, PageShell } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
-import { displayTaskStatus, StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
+import { actionLabel, displayTaskStatus, StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 import {
   archiveTask,
   cancelTask,
@@ -52,22 +52,6 @@ function JsonDetails({ summary, value }: { summary: string; value: unknown }) {
   );
 }
 
-const actionLabels: Record<string, string> = {
-  'docs.create': 'Created a document',
-  'docs.append': 'Updated a document',
-  'docs.share': 'Shared a document',
-  'sheets.create': 'Created a spreadsheet',
-  'sheets.append_rows': 'Updated a spreadsheet',
-  'slides.create': 'Created a presentation',
-  'slides.append': 'Updated a presentation',
-  'calendar.create_event': 'Created a calendar event',
-  'gmail.send': 'Sent an email',
-  'sms.send': 'Sent a text message',
-  'web.fetch': 'Read a web page',
-  'browser.execute': 'Ran a browser task',
-  'mission.update': 'Updated ongoing work',
-};
-
 function completedSuccessfully(call: { status: string; result: unknown }) {
   if (call.status !== 'succeeded') return false;
   if (!call.result || typeof call.result !== 'object') return true;
@@ -77,10 +61,6 @@ function completedSuccessfully(call: { status: string; result: unknown }) {
     !(typeof result.status === 'number' && result.status >= 400) &&
     result.deliveryStatus !== 'unknown'
   );
-}
-
-function actionLabel(toolName: string) {
-  return actionLabels[toolName] ?? toolName.replaceAll('.', ' ');
 }
 
 export default async function TaskDetailPage({ params }: { params: Promise<{ id: string }> }) {

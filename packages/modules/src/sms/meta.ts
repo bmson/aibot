@@ -1,4 +1,5 @@
 import type { ModuleMeta } from '../contract.js';
+import { smsToolLabels } from './labels.js';
 
 export const smsMeta = {
   name: 'sms',
@@ -22,6 +23,9 @@ export const smsMeta = {
         url: 'https://www.twilio.com/en-us/sms/pricing',
       },
     ],
+  },
+  ui: {
+    toolLabels: smsToolLabels,
   },
   // Inbound Twilio webhook; the platform validates X-Twilio-Signature before
   // the module's handler runs.

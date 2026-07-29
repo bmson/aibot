@@ -125,8 +125,13 @@ in `5ca6680`:
   degraded steps per task, written after the contract runs. `applyProposal`
   refuses model-role swaps with no evidence attached. A golden-task harness
   (`packages/core/src/workflow/golden/`) runs scripted conversations through
-  the real executor, dispatcher ledger, and response contract — three fixtures
-  to start, and the place to pin any behavior a prompt change must not break.
+  the real executor, dispatcher ledger, and response contract — six fixtures
+  (fabricated claim blocked, evidenced claim untouched, fabricated link
+  rewritten, forced-action retry counted, plus the basics), and the place to
+  pin any behavior a prompt change must not break. Two fixture ideas need
+  harness changes and stay deferred: the step-cap message (needs `maxSteps`
+  on GoldenFixture) and tool-error recovery (ledger rows are hardwired
+  `succeeded`).
 - **Batch work on batch models.** Nightly reflect/dream/improve run on a new
   `batch` role (gpt-oss-120b), and `classify` moved to deepseek-chat.
 

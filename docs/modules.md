@@ -21,7 +21,7 @@ Run `pnpm config:check` after any change.
 | `google` | Gmail, Calendar, Drive, Docs, Sheets, Slides, job confirmations | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `BOT_GOOGLE_REFRESH_TOKEN` | Gmail Pub/Sub and Scheduler in production |
 | `reminders` | Reminder create/list/cancel tools | none | none |
 | `search` | Link-returning web search | `SEARCH_PROVIDER`, `SEARCH_API_KEY` | provider API |
-| `sms` | Twilio owner channel and approval replies | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `OWNER_PHONE` | Twilio webhook |
+| `sms` | Twilio owner channel and approval replies | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`; plus `OWNER_PHONE` for the owner channel | Twilio webhook |
 | `watches` | Durable inbox/content watches | none | none |
 
 ## Module behavior
