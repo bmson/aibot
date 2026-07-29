@@ -68,14 +68,19 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
-          project_id: ${{ vars.GCP_PROJECT }}
+          # TEMPORARY: identifiers hardcoded to restore deploys. #14 parameterized
+          # these to GitHub Actions Variables (vars.*) that were never populated,
+          # so every deploy since has failed here with an empty provider. Revert to
+          # ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }} / GCP_DEPLOY_SERVICE_ACCOUNT /
+          # GCP_PROJECT once those repo/environment Variables are set.
+          workload_identity_provider: projects/83709630368/locations/global/workloadIdentityPools/github/providers/github-actions
+          service_account: assistant-github-deploy@bmson-assistant.iam.gserviceaccount.com
+          project_id: bmson-assistant
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
       - name: Authorize Artifact Registry
         env:
-          GCP_REGION: ${{ vars.GCP_REGION || 'us-west1' }}
+          GCP_REGION: us-west1
         run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
       - name: Resolve optional runtime images
         id: modules
@@ -86,9 +91,9 @@ jobs:
         env:
           # RUN --mount=type=cache in the Dockerfiles requires BuildKit.
           DOCKER_BUILDKIT: '1'
-          GCP_PROJECT: ${{ vars.GCP_PROJECT }}
-          GCP_REGION: ${{ vars.GCP_REGION || 'us-west1' }}
-          ARTIFACT_REPOSITORY: ${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}
+          GCP_PROJECT: bmson-assistant
+          GCP_REGION: us-west1
+          ARTIFACT_REPOSITORY: assistant
           IMAGE_TAG: ${{ env.RELEASE_SHA }}
         run: |
           IMAGE_ROOT="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${ARTIFACT_REPOSITORY}"
@@ -108,28 +113,28 @@ jobs:
       - name: Scan agent image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ vars.GCP_REGION || 'us-west1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT }}/${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}/agent:${{ env.RELEASE_SHA }}
+          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/agent:${{ env.RELEASE_SHA }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
       - name: Scan migration image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ vars.GCP_REGION || 'us-west1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT }}/${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}/migrate:${{ env.RELEASE_SHA }}
+          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/migrate:${{ env.RELEASE_SHA }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
       - name: Scan backup image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ vars.GCP_REGION || 'us-west1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT }}/${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}/backup:${{ env.RELEASE_SHA }}
+          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/backup:${{ env.RELEASE_SHA }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
       - name: Scan web image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ vars.GCP_REGION || 'us-west1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT }}/${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}/web:${{ env.RELEASE_SHA }}
+          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/web:${{ env.RELEASE_SHA }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
@@ -137,7 +142,7 @@ jobs:
         if: steps.modules.outputs.browser == 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ vars.GCP_REGION || 'us-west1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT }}/${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}/browser:${{ env.RELEASE_SHA }}
+          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/browser:${{ env.RELEASE_SHA }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
@@ -145,7 +150,7 @@ jobs:
         if: steps.modules.outputs.code == 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ vars.GCP_REGION || 'us-west1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT }}/${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}/code:${{ env.RELEASE_SHA }}
+          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/code:${{ env.RELEASE_SHA }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
@@ -153,7 +158,7 @@ jobs:
         if: steps.modules.outputs.processor == 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ vars.GCP_REGION || 'us-west1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT }}/${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}/processor:${{ env.RELEASE_SHA }}
+          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/processor:${{ env.RELEASE_SHA }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
@@ -161,9 +166,9 @@ jobs:
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       - name: Generate SBOMs and push images
         env:
-          GCP_PROJECT: ${{ vars.GCP_PROJECT }}
-          GCP_REGION: ${{ vars.GCP_REGION || 'us-west1' }}
-          ARTIFACT_REPOSITORY: ${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}
+          GCP_PROJECT: bmson-assistant
+          GCP_REGION: us-west1
+          ARTIFACT_REPOSITORY: assistant
           IMAGE_TAG: ${{ env.RELEASE_SHA }}
           BUILD_BROWSER: ${{ steps.modules.outputs.browser }}
           BUILD_CODE: ${{ steps.modules.outputs.code }}
@@ -190,9 +195,9 @@ jobs:
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Sign images and attach SBOM attestations
         env:
-          GCP_PROJECT: ${{ vars.GCP_PROJECT }}
-          GCP_REGION: ${{ vars.GCP_REGION || 'us-west1' }}
-          ARTIFACT_REPOSITORY: ${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}
+          GCP_PROJECT: bmson-assistant
+          GCP_REGION: us-west1
+          ARTIFACT_REPOSITORY: assistant
           IMAGE_TAG: ${{ env.RELEASE_SHA }}
         run: |
           IMAGE_ROOT="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${ARTIFACT_REPOSITORY}"
@@ -203,9 +208,9 @@ jobs:
           done
       - name: Release immutable images
         env:
-          GCP_PROJECT: ${{ vars.GCP_PROJECT }}
-          GCP_REGION: ${{ vars.GCP_REGION || 'us-west1' }}
-          ARTIFACT_REPOSITORY: ${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}
+          GCP_PROJECT: bmson-assistant
+          GCP_REGION: us-west1
+          ARTIFACT_REPOSITORY: assistant
           IMAGE_TAG: ${{ env.RELEASE_SHA }}
           ASSISTANT_MODULES: ${{ steps.modules.outputs.modules }}
           SKIP_IMAGE_BUILD: 'true'
