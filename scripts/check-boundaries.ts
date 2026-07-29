@@ -40,9 +40,12 @@ for (const file of sourceFiles(path.join(repoRoot, 'apps/web'))) {
     failures.push(`${relative} bypasses the application-service boundary`);
   }
   // Modules ship provider code behind their root entry point. The web app may
-  // read module metadata, which is plain data, but never the runtime.
-  if (/from ['"]@assistant\/modules(?!\/meta)/.test(source)) {
-    failures.push(`${relative} must import module metadata from @assistant/modules/meta`);
+  // read module metadata (plain data, server-side) and module UI data (the
+  // browser-safe /ui entry), but never the runtime.
+  if (/from ['"]@assistant\/modules(?!\/(?:meta|ui))/.test(source)) {
+    failures.push(
+      `${relative} must import module data from @assistant/modules/meta or @assistant/modules/ui`,
+    );
   }
   if (!/^\s*['"]use client['"];/.test(source)) continue;
   const forbidden = [

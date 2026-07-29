@@ -1,4 +1,5 @@
 import type { ModuleMeta } from '../contract.js';
+import { searchToolLabels } from './labels.js';
 
 export const searchMeta = {
   name: 'search',
@@ -11,6 +12,9 @@ export const searchMeta = {
       ready,
       detail: ready ? `ready (${config.SEARCH_PROVIDER})` : 'missing search provider or key',
     };
+  },
+  ui: {
+    toolLabels: searchToolLabels,
   },
   billing: {
     external: [

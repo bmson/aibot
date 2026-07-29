@@ -1,4 +1,5 @@
 import type { ModuleMeta } from '../contract.js';
+import { codeToolLabels } from './labels.js';
 
 export const codeMeta = {
   name: 'code',
@@ -6,6 +7,9 @@ export const codeMeta = {
   summary: 'Sandboxed code execution in a job with no database access and no provider credentials.',
   configKeys: ['CODE_DRIVER', 'CODE_JOB_NAME'],
   infra: { workerImage: 'code' },
+  ui: {
+    toolLabels: codeToolLabels,
+  },
   billing: {
     gcp: [
       {

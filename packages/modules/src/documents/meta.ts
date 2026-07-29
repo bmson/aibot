@@ -1,4 +1,5 @@
 import type { ModuleMeta } from '../contract.js';
+import { documentsToolLabels } from './labels.js';
 
 export const documentsMeta = {
   name: 'documents',
@@ -20,7 +21,10 @@ export const documentsMeta = {
       },
     ],
   },
-  ui: { navHrefs: ['/documents'] },
+  ui: {
+    navHrefs: ['/documents'],
+    toolLabels: documentsToolLabels,
+  },
   // Keep in step with the documents.* members of CodeJobName in @assistant/core.
   jobs: ['documents.extract', 'documents.process'],
   // Worker result callback; the per-launch one-shot token in the body is

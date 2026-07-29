@@ -133,8 +133,19 @@ export interface ModuleMeta {
   prodProblems?: (config: Config) => string[];
   infra?: ModuleInfra;
   billing: ModuleBilling;
-  /** Routes the web shell hides while this module is not installed. */
-  ui?: { navHrefs?: readonly string[] };
+  ui?: {
+    /** Routes the web shell hides while this module is not installed. */
+    navHrefs?: readonly string[];
+    /**
+     * Human labels for this module's tools, in the two tenses the web UI
+     * renders: present ("Sending an email") for live activity chips, past
+     * ("Sent an email") for the completed-task log. Aggregated across every
+     * composed module by `moduleToolLabels` — deliberately NOT filtered by
+     * enablement, because task history must still render labels for a module
+     * that was disabled later.
+     */
+    toolLabels?: Readonly<Record<string, { present: string; past: string }>>;
+  };
   /**
    * Public webhooks this module serves. Declared here (plain data) so the
    * deployment plan and docs can see them; the matching handlers come from the
