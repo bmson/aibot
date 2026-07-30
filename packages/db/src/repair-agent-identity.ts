@@ -6,11 +6,11 @@ const sql = postgres(DATABASE_URL, { max: 1 });
 
 try {
   await sql.begin(async (tx) => {
-    const [{ count }] = await tx<{ count: number }[]>`
+    const [agentCount] = await tx<{ count: number }[]>`
       select count(*)::int as count from agents
     `;
 
-    if (count <= 1) return;
+    if (!agentCount || agentCount.count <= 1) return;
 
     const [canonical] = await tx<{ id: string }[]>`
       select id
