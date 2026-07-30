@@ -75,6 +75,19 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The stock runner image leaves this job ~14GB of headroom, and it has
+      # to build seven images (the chromium-carrying browser image among them)
+      # and then export each one to a tar for SBOM generation. That margin is
+      # a coin flip: run 30512378494 died at the syft step with "no space left
+      # on device" on browser:TAG while an otherwise-identical run the day
+      # before squeaked through. The preinstalled toolchains this job never
+      # touches (.NET, Android, GHC, CodeQL) plus the runner's preloaded
+      # docker images are ~30GB of reclaimable space — drop them up front so
+      # disk stops being a variable.
+      - name: Reclaim runner disk for the image builds
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker image prune --all --force
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
