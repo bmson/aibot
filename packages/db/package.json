@@ -10,7 +10,8 @@
   "scripts": {
     "generate": "drizzle-kit generate",
     "migrate": "drizzle-kit migrate",
-    "reconcile": "pnpm migrate && pnpm seed",
+    "repair-agent-identity": "tsx src/repair-agent-identity.ts",
+    "reconcile": "pnpm migrate && pnpm repair-agent-identity && pnpm seed",
     "seed": "tsx src/seed.ts",
     "typecheck": "tsc --noEmit"
   },
