@@ -1,0 +1,156 @@
+/* Conversation polish
+ *
+ * Keeps the chat visually quiet while improving hierarchy, rhythm, and tactile
+ * feedback. Selectors intentionally build on the existing semantic structure so
+ * behavior and accessibility remain unchanged.
+ */
+
+:root {
+  --conversation-hairline: color-mix(in srgb, currentColor 7%, transparent);
+  --conversation-hover: color-mix(in srgb, currentColor 3%, transparent);
+  --conversation-glow: color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+.dark {
+  --conversation-hairline: color-mix(in srgb, currentColor 10%, transparent);
+  --conversation-hover: color-mix(in srgb, currentColor 4.5%, transparent);
+  --conversation-glow: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* The opening state should read as an invitation, not a mini dashboard. */
+.scroll-subtle .my-auto {
+  padding-inline: clamp(0.5rem, 4vw, 2rem);
+}
+
+.scroll-subtle .my-auto > span:first-child {
+  position: relative;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-sunken));
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.5) inset,
+    0 12px 32px var(--conversation-glow);
+}
+
+.scroll-subtle .my-auto > span:first-child::after {
+  position: absolute;
+  inset: -0.45rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 1.1rem;
+  content: "";
+  opacity: 0.7;
+}
+
+.scroll-subtle .my-auto > .grid {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--conversation-hairline);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--surface-raised) 82%, transparent);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.45) inset,
+    0 18px 50px rgb(23 25 35 / 0.06);
+}
+
+.scroll-subtle .my-auto > .grid > button {
+  min-height: 4.5rem;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transition:
+    background-color 150ms ease,
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.scroll-subtle .my-auto > .grid > button + button {
+  border-top: 1px solid var(--conversation-hairline);
+}
+
+.scroll-subtle .my-auto > .grid > button:hover {
+  background: var(--conversation-hover);
+  transform: none;
+  box-shadow: none;
+}
+
+.scroll-subtle .my-auto > .grid > button:active {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  transform: scale(0.995);
+}
+
+.scroll-subtle .my-auto > .grid > button svg {
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.scroll-subtle .my-auto > .grid > button:hover svg {
+  transform: translateX(1px) scale(1.04);
+}
+
+@media (min-width: 640px) {
+  .scroll-subtle .my-auto > .grid > button + button {
+    border-top: 0;
+    border-left: 1px solid var(--conversation-hairline);
+  }
+}
+
+/* Messages get more breathing room without turning into disconnected cards. */
+.group\/msg {
+  padding-block: 0.35rem;
+}
+
+.group\/msg + .group\/msg {
+  margin-top: 0.2rem;
+}
+
+.group\/msg:hover {
+  filter: drop-shadow(0 8px 18px rgb(23 25 35 / 0.035));
+}
+
+.dark .group\/msg:hover {
+  filter: drop-shadow(0 8px 18px rgb(0 0 0 / 0.12));
+}
+
+.msg-actions {
+  margin-left: 0.125rem;
+}
+
+/* The composer should feel composed even before focus, then quietly wake up. */
+[data-testid="chat-composer-surface"] {
+  border-color: var(--conversation-hairline);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.28), transparent 32%),
+    color-mix(in srgb, var(--surface-raised) 94%, transparent);
+  backdrop-filter: blur(20px) saturate(1.08);
+}
+
+.dark [data-testid="chat-composer-surface"] {
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent 32%),
+    color-mix(in srgb, var(--surface-raised) 94%, transparent);
+}
+
+[data-testid="chat-composer-surface"]:hover:not(:focus-within) {
+  border-color: color-mix(in srgb, var(--accent) 15%, var(--conversation-hairline));
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 16px 46px color-mix(in srgb, var(--conversation-glow) 55%, var(--surface-shadow));
+}
+
+[data-testid="chat-composer-surface"] textarea {
+  letter-spacing: -0.008em;
+}
+
+[data-testid="chat-composer-surface"] textarea::placeholder {
+  letter-spacing: -0.006em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll-subtle .my-auto > .grid > button,
+  .scroll-subtle .my-auto > .grid > button svg,
+  .group\/msg,
+  [data-testid="chat-composer-surface"] {
+    transition: none;
+  }
+
+  .scroll-subtle .my-auto > .grid > button:active,
+  .scroll-subtle .my-auto > .grid > button:hover svg {
+    transform: none;
+  }
+}
