@@ -1,0 +1,343 @@
+/*
+ * Spatial motion system
+ *
+ * Motion communicates origin, destination, hierarchy, and state. Everything in
+ * this file is progressive enhancement: unsupported features fall back to the
+ * existing layout and reduced-motion users get immediate state changes.
+ */
+
+:root {
+  --motion-instant: 100ms;
+  --motion-fast: 160ms;
+  --motion-medium: 260ms;
+  --motion-slow: 420ms;
+  --motion-enter: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-move: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --motion-exit: cubic-bezier(0.4, 0, 1, 1);
+}
+
+/* Routes move as surfaces, not as unrelated controls fading independently. */
+.route-surface {
+  min-width: 0;
+  transform-origin: 50% 0;
+  animation: route-enter var(--motion-medium) var(--motion-enter) both;
+}
+
+@keyframes route-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.992);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
+  }
+}
+
+/* One visual lens follows the selected destination. The active link remains the
+   source of truth, so there is no duplicated navigation state. */
+.nav-tile {
+  isolation: isolate;
+  overflow: clip;
+}
+
+.nav-tile::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border: 1px solid transparent;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--accent, currentColor) 0%, transparent);
+  box-shadow: 0 0 0 0 transparent;
+  content: "";
+  opacity: 0;
+  transform: scale(0.94);
+  transition:
+    opacity var(--motion-fast) ease,
+    transform var(--motion-medium) var(--motion-enter),
+    background-color var(--motion-medium) ease,
+    box-shadow var(--motion-medium) ease,
+    border-color var(--motion-medium) ease;
+}
+
+.nav-tile[aria-current="page"]::before,
+.nav-tile-active::before {
+  border-color: color-mix(in srgb, var(--accent, currentColor) 16%, transparent);
+  background: color-mix(in srgb, var(--accent, currentColor) 9%, transparent);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.35) inset,
+    0 8px 24px color-mix(in srgb, var(--accent, currentColor) 8%, transparent);
+  opacity: 1;
+  transform: scale(1);
+}
+
+.nav-tile > * {
+  transition:
+    transform var(--motion-medium) var(--motion-enter),
+    opacity var(--motion-fast) ease;
+}
+
+.nav-tile:hover > :first-child {
+  transform: translateX(1px) scale(1.04);
+}
+
+.nav-tile:active > :first-child {
+  transform: scale(0.94);
+  transition-duration: var(--motion-instant);
+}
+
+/* Collapsed navigation is a preview surface rather than a plain tooltip. */
+.nav-collapsed .nav-tooltip::part(tooltip),
+.nav-collapsed jelly-tooltip::part(tooltip) {
+  min-width: 10rem;
+  border: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  border-radius: 0.875rem;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.16);
+  backdrop-filter: blur(18px) saturate(1.15);
+}
+
+/* Sticky page headers compact themselves once their scroll container is stuck.
+   Browsers without scroll-state queries simply keep the existing header. */
+@supports (container-type: scroll-state) {
+  .page-header,
+  [data-page-header] {
+    container-type: scroll-state;
+    position: sticky;
+    z-index: 20;
+    top: 0;
+    transition:
+      padding var(--motion-medium) var(--motion-enter),
+      background-color var(--motion-medium) ease,
+      box-shadow var(--motion-medium) ease,
+      backdrop-filter var(--motion-medium) ease;
+  }
+
+  @container scroll-state(stuck: top) {
+    .page-header,
+    [data-page-header] {
+      margin-inline: -0.75rem;
+      padding: 0.65rem 0.75rem;
+      border-radius: 1rem;
+      background: color-mix(in srgb, var(--surface, Canvas) 82%, transparent);
+      box-shadow: 0 10px 40px rgb(0 0 0 / 0.08);
+      backdrop-filter: blur(18px) saturate(1.2);
+    }
+
+    .page-header h1,
+    [data-page-header] h1 {
+      transform: scale(0.9);
+      transform-origin: left center;
+    }
+  }
+}
+
+/* Menus and popovers reveal from the edge nearest their trigger. Existing JS
+   placement can set data-side; CSS anchor positioning can replace it later. */
+[role="menu"],
+[data-action-menu],
+[popover] {
+  --menu-origin-y: -8px;
+  transform-origin: 50% 0;
+}
+
+[data-side="top"][role="menu"],
+[data-side="top"][data-action-menu],
+[data-side="top"][popover] {
+  --menu-origin-y: 8px;
+  transform-origin: 50% 100%;
+}
+
+[role="menu"][data-state="open"],
+[data-action-menu][data-state="open"],
+[popover]:popover-open {
+  animation: menu-enter var(--motion-fast) var(--motion-enter) both;
+}
+
+@keyframes menu-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, var(--menu-origin-y), 0) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+/* Native popovers get a real exit animation where discrete transitions exist. */
+@supports (transition-behavior: allow-discrete) {
+  [popover] {
+    opacity: 0;
+    transform: translate3d(0, var(--menu-origin-y), 0) scale(0.96);
+    transition:
+      opacity var(--motion-fast) var(--motion-exit),
+      transform var(--motion-fast) var(--motion-exit),
+      overlay var(--motion-fast) allow-discrete,
+      display var(--motion-fast) allow-discrete;
+  }
+
+  [popover]:popover-open {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  @starting-style {
+    [popover]:popover-open {
+      opacity: 0;
+      transform: translate3d(0, var(--menu-origin-y), 0) scale(0.96);
+    }
+  }
+}
+
+/* Composer states are inferred from focus, content, menus, and busy controls.
+   This keeps the visual state machine aligned with actual DOM state. */
+form:has(textarea) {
+  --composer-glow: transparent;
+}
+
+form:has(textarea:focus-visible),
+form:has(textarea:not(:placeholder-shown)) {
+  --composer-glow: color-mix(in srgb, var(--accent, currentColor) 14%, transparent);
+}
+
+form:has(textarea) > :where(div, section):has(textarea) {
+  transition:
+    border-color var(--motion-fast) ease,
+    box-shadow var(--motion-medium) var(--motion-enter),
+    transform var(--motion-medium) var(--motion-enter),
+    background-color var(--motion-medium) ease;
+}
+
+form:has(textarea:focus-visible) > :where(div, section):has(textarea) {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent, currentColor) 28%, transparent),
+    0 14px 44px var(--composer-glow);
+  transform: translateY(-1px);
+}
+
+textarea {
+  field-sizing: content;
+}
+
+/* Command/model palettes visually attach to the composer that produced them. */
+form:has(textarea) [role="listbox"],
+form:has(textarea) [role="menu"] {
+  transform-origin: 50% 100%;
+  animation: composer-palette-enter var(--motion-medium) var(--motion-enter) both;
+}
+
+@keyframes composer-palette-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Streaming and tool work progress by events. New steps enter once; completed
+   steps settle instead of continuing to shimmer forever. */
+[aria-label*="activity" i] > *,
+[data-activity-trail] > * {
+  animation: activity-step-enter var(--motion-medium) var(--motion-enter) both;
+}
+
+[aria-label*="activity" i] > *:nth-child(2),
+[data-activity-trail] > *:nth-child(2) {
+  animation-delay: 35ms;
+}
+[aria-label*="activity" i] > *:nth-child(3),
+[data-activity-trail] > *:nth-child(3) {
+  animation-delay: 70ms;
+}
+[aria-label*="activity" i] > *:nth-child(4),
+[data-activity-trail] > *:nth-child(4) {
+  animation-delay: 105ms;
+}
+
+@keyframes activity-step-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Message and event cards arrive from their conversational origin. */
+.group\/msg,
+[data-message],
+[data-event-card] {
+  animation: message-enter var(--motion-medium) var(--motion-enter) both;
+}
+
+@keyframes message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* View Transition API enhancement. Next's experimental integration is not
+   required: same-document transitions and future opt-in navigation can reuse
+   these names without changing component styling. */
+::view-transition-old(root) {
+  animation: view-old var(--motion-fast) var(--motion-exit) both;
+}
+
+::view-transition-new(root) {
+  animation: view-new var(--motion-medium) var(--motion-enter) both;
+}
+
+@keyframes view-old {
+  to {
+    opacity: 0;
+    transform: scale(0.995);
+  }
+}
+
+@keyframes view-new {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.995);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+  }
+
+  .route-surface,
+  .group\/msg,
+  [data-message],
+  [data-event-card],
+  [aria-label*="activity" i] > *,
+  [data-activity-trail] > *,
+  form:has(textarea) [role="listbox"],
+  form:has(textarea) [role="menu"],
+  [role="menu"][data-state="open"],
+  [data-action-menu][data-state="open"],
+  [popover]:popover-open {
+    animation: none !important;
+  }
+
+  .nav-tile::before,
+  .nav-tile > *,
+  form:has(textarea) > :where(div, section):has(textarea),
+  [popover] {
+    transition: none !important;
+  }
+}
