@@ -11,6 +11,7 @@ import './globals.css';
 import './motion-system.css';
 import './visual-refinement.css';
 import './conversation-polish.css';
+import './navigation-rethink.css';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
 const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });
@@ -26,9 +27,9 @@ const display = Bricolage_Grotesque({
 // there is no light→dark flash and OS-dark users still default to dark.
 const THEME_SCRIPT = `(()=>{try{const t=localStorage.getItem('theme');const d=t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches);document.documentElement.classList.toggle('dark',d);document.documentElement.dataset.jellyMode=d?'dark':'light';}catch{}})()`;
 
-// Same shape as THEME_SCRIPT: stamps the rail's collapsed state pre-paint so
-// there's no flash of the wrong width on load.
-const NAV_SCRIPT = `(()=>{try{document.documentElement.classList.toggle('nav-collapsed',localStorage.getItem('nav-collapsed')==='1');}catch{}})()`;
+// The dock is compact by default. An explicit expanded choice is preserved,
+// while hover/focus can still reveal the full menu without shifting the page.
+const NAV_SCRIPT = `(()=>{try{document.documentElement.classList.toggle('nav-collapsed',localStorage.getItem('nav-collapsed')!=='0');}catch{document.documentElement.classList.add('nav-collapsed');}})()`;
 
 export async function generateMetadata(): Promise<Metadata> {
   const { name } = await getAgentIdentity();
@@ -161,7 +162,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             memoryReviewCount={memoryHealth.awaitingReview}
             needsAttentionCount={needsAttentionCount}
           />
-          <main className="page-gutter min-w-0 flex-1 py-7 lg:py-10">{children}</main>
+          <main className="page-gutter min-w-0 flex-1 py-5 lg:py-7">{children}</main>
         </div>
       </body>
     </html>
