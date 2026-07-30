@@ -55,7 +55,6 @@
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-  ring: none;
   transition:
     background-color 150ms ease,
     transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
