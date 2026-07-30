@@ -141,7 +141,8 @@ export const fileInputClass =
  * from tone (raised/sunken) and hairlines, which keeps every surface sitting
  * *in* the page's grid rather than hovering over it.
  */
-export const cardShellClass = 'reveal min-w-0 overflow-hidden rounded-xl bg-raised ring-1 ring-edge/70';
+export const cardShellClass =
+  'reveal min-w-0 overflow-hidden rounded-xl bg-raised ring-1 ring-edge/70';
 export const cardBodyClass = 'grid min-w-0 gap-4 p-4 sm:p-5';
 export const cardHeaderClass = 'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3';
 /** Footer chrome (divider + tonal well + padding), shared by the button-row
