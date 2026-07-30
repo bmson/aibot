@@ -3,7 +3,7 @@
 import { Plus } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { createMemoryAction } from '@/app/profile/actions';
-import { btn, btnSm, inputClass, labelClass, textareaClass } from '@/lib/ui';
+import { btn, btnSm, labelClass, selectClass, textareaClass } from '@/lib/ui';
 
 const TOPICS: Array<{ value: string; label: string }> = [
   { value: 'identity', label: 'Identity' },
@@ -74,7 +74,7 @@ export function AddFact({
       <div className="flex flex-wrap items-end gap-3">
         <label className={`flex flex-col gap-1 ${labelClass}`}>
           Topic
-          <select name="domain" defaultValue={defaultDomain} className={inputClass}>
+          <select name="domain" defaultValue={defaultDomain} className={selectClass}>
             {TOPICS.map((topic) => (
               <option key={topic.value} value={topic.value}>
                 {topic.label}
@@ -84,7 +84,7 @@ export function AddFact({
         </label>
         <label className={`flex flex-col gap-1 ${labelClass}`}>
           Importance
-          <select name="importance" defaultValue="3" className={inputClass}>
+          <select name="importance" defaultValue="3" className={selectClass}>
             <option value="5">Very high</option>
             <option value="4">High</option>
             <option value="3">Normal</option>
@@ -93,7 +93,8 @@ export function AddFact({
           </select>
         </label>
         <label className="mobile-touch-target flex items-center gap-2 text-[13px] font-medium text-muted">
-          <input name="pinned" type="checkbox" className="size-4 accent-accent" />
+          {/* Tick colour comes from the global accent-color token (globals.css). */}
+          <input name="pinned" type="checkbox" className="size-4" />
           Keep in profile summary
         </label>
       </div>

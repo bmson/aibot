@@ -191,7 +191,7 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
                       {s.deprecated ? <Badge tone="muted">Retired</Badge> : null}
                     </div>
                     <section>
-                      <h4 className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+                      <h4 className="font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
                         How it works
                       </h4>
                       <p className="mt-1 text-[13px] leading-5 whitespace-pre-wrap text-strong">
@@ -202,7 +202,7 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
                       <div className="grid gap-2 sm:grid-cols-2">
                         {s.preconditions ? (
                           <section className="rounded-xl bg-sunken/65 px-3 py-2.5">
-                            <h4 className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+                            <h4 className="font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
                               When to use it
                             </h4>
                             <p className="mt-1 text-xs leading-5 text-strong">{s.preconditions}</p>
@@ -210,7 +210,7 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
                         ) : null}
                         {s.gotchas ? (
                           <section className="rounded-xl bg-amber-50 px-3 py-2.5 dark:bg-amber-950/25">
-                            <h4 className="text-2xs font-semibold tracking-[0.08em] text-amber-800 uppercase dark:text-amber-300">
+                            <h4 className="font-mono text-2xs font-medium tracking-[0.08em] text-amber-800 uppercase dark:text-amber-300">
                               Watch for
                             </h4>
                             <p className="mt-1 text-xs leading-5 text-amber-900 dark:text-amber-200">

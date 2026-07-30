@@ -84,7 +84,7 @@ export function ApprovalRow({
       </div>
       {part.details && part.details.length > 0 ? (
         <details open={detailsOpenByDefault} className="mt-2 border-y border-edge py-2.5">
-          <summary className="disclosure flex items-center gap-2 cursor-pointer text-2xs font-semibold tracking-[0.1em] text-muted uppercase select-none">
+          <summary className="disclosure flex items-center gap-2 cursor-pointer font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase select-none">
             Exact details
           </summary>
           <dl className="mt-2 flex max-h-64 flex-col gap-2 overscroll-contain overflow-y-auto">

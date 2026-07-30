@@ -123,7 +123,7 @@ function DayDivider({ label }: { label: string }) {
   return (
     <div aria-hidden="true" className="flex items-center gap-4 pt-7 pb-3 [div:first-child>&]:pt-1">
       <span className="h-px flex-1 bg-gradient-to-r from-transparent to-edge" />
-      <span className="rounded-full bg-sunken/80 px-2.5 py-1 text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+      <span className="rounded-full bg-sunken/80 px-2.5 py-1 font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
         {label}
       </span>
       <span className="h-px flex-1 bg-gradient-to-l from-transparent to-edge" />
@@ -252,7 +252,7 @@ function ContractNotice({ text }: { text: string }) {
         <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-sunken text-muted">
           <ShieldCheck className="size-3.5" aria-hidden="true" />
         </span>
-        <p className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">
+        <p className="font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
           System check
         </p>
       </div>
@@ -312,7 +312,7 @@ function AssistantUpdate({ text, sources }: { text: string; sources: RecallSourc
           >
             <Icon className="size-3.5" aria-hidden="true" />
           </span>
-          <p className={`text-2xs font-semibold tracking-[0.1em] uppercase ${tone.label}`}>
+          <p className={`font-mono text-2xs font-medium tracking-[0.08em] uppercase ${tone.label}`}>
             {label}
           </p>
         </div>
@@ -337,7 +337,7 @@ function ActivityTrail({
       className="min-w-0 max-w-full rounded-xl bg-sunken/50 px-4 py-3 ring-1 ring-edge/50"
       aria-label="Work trail"
     >
-      <p className="mb-2 text-2xs font-semibold tracking-[0.1em] text-muted uppercase">
+      <p className="mb-2 font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
         Work trail
       </p>
       <ol className="space-y-2">
@@ -893,7 +893,7 @@ export function ChatClient({
               <span className="inline-flex size-12 items-center justify-center rounded-2xl bg-sunken text-accent">
                 <Sparkles className="size-5" aria-hidden="true" />
               </span>
-              <p className="mt-4 font-display text-2xl font-semibold tracking-[-0.035em] text-balance text-strong">
+              <p className="mt-4 font-display text-[1.75rem] leading-9 font-semibold tracking-[-0.04em] text-balance text-strong">
                 What should we move forward?
               </p>
               {/* A small hand-drawn stroke that sketches itself in under the

@@ -10,6 +10,7 @@ import {
   focusRing,
   inputClass,
   labelClass,
+  selectClass,
   textareaClass,
 } from '@/lib/ui';
 import { PACE_OPTIONS } from './pace';
@@ -93,7 +94,7 @@ export function GoalCreateForm({ startOpen = false }: { startOpen?: boolean }) {
                 <select
                   name="priority"
                   defaultValue={state.values?.priority || '3'}
-                  className={`${inputClass} w-full`}
+                  className={`${selectClass} w-full`}
                 >
                   {PACE_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -113,7 +114,7 @@ export function GoalCreateForm({ startOpen = false }: { startOpen?: boolean }) {
               </label>
             </div>
             <label className="flex items-start gap-2 text-xs text-muted">
-              <input type="checkbox" name="mirrorToPrimary" className="mt-0.5" />
+              <input type="checkbox" name="mirrorToPrimary" className="mt-0.5 size-4" />
               <span>Also show background updates in my main chat.</span>
             </label>
           </div>

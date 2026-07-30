@@ -6,7 +6,16 @@ import {
   forgetOccasionAction,
   reviewOccasionAction,
 } from '@/app/profile/actions';
-import { Badge, btn, btnSm, EmptyState, inputClass, labelClass, SectionHeading } from '@/lib/ui';
+import {
+  Badge,
+  btn,
+  btnSm,
+  EmptyState,
+  inputClass,
+  labelClass,
+  SectionHeading,
+  selectClass,
+} from '@/lib/ui';
 
 /** Plain-serializable occasion view built in the page. */
 export interface OccasionView {
@@ -200,7 +209,7 @@ export function OccasionsPanel({
           <div className="flex flex-wrap items-end gap-3">
             <label className={`flex flex-col gap-1 ${labelClass}`}>
               Type
-              <select name="kind" defaultValue="birthday" className={inputClass}>
+              <select name="kind" defaultValue="birthday" className={selectClass}>
                 <option value="birthday">Birthday</option>
                 <option value="anniversary">Anniversary</option>
                 <option value="custom">Custom</option>

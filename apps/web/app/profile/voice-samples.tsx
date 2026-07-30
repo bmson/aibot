@@ -11,8 +11,8 @@ import {
   cardShellClass,
   cardTitleClass,
   fileInputClass,
-  inputClass,
   MetaLine,
+  selectClass,
 } from '@/lib/ui';
 
 /** Plain-serializable view built in page.tsx. */
@@ -107,7 +107,7 @@ export function VoiceSamplesPanel({
               />
               <label className="flex items-center gap-1.5 text-xs text-muted">
                 Style
-                <select name="register" defaultValue="email_casual" className={inputClass}>
+                <select name="register" defaultValue="email_casual" className={selectClass}>
                   {registerOptions.map((opt) => (
                     <option key={opt.value} value={opt.value}>
                       {opt.label}

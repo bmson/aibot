@@ -394,7 +394,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                   <EntryIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline justify-between gap-3">
-                      <span className="text-xs font-medium tracking-wide text-muted uppercase">
+                      <span className="font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
                         {entry.label}
                       </span>
                       <span className="shrink-0 text-xs text-muted">

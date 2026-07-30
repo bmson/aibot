@@ -78,7 +78,7 @@ export function ApprovalGroup({ parts }: { parts: InlineApprovalPart[] }) {
   return (
     <section className="min-w-0 max-w-3xl overflow-hidden rounded-xl bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.05)] ring-1 ring-amber-300/80 dark:ring-amber-700/70">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200/70 bg-amber-50/80 px-4 py-2.5 dark:border-amber-900/60 dark:bg-amber-950/40">
-        <p className="flex min-w-0 items-center gap-1.5 text-2xs font-semibold tracking-[0.1em] text-amber-800 uppercase dark:text-amber-300">
+        <p className="flex min-w-0 items-center gap-1.5 font-mono text-2xs font-medium tracking-[0.08em] text-amber-800 uppercase dark:text-amber-300">
           <Hand className="size-3.5 shrink-0" aria-hidden="true" />
           {pendingParts.length > 1
             ? `${pendingParts.length} decisions waiting`
