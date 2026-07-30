@@ -455,19 +455,30 @@ html.nav-collapsed .nav-badge-dot {
 }
 
 /* ── Scrolling ────────────────────────────────────────────────────────────────
-   The document itself never rubber-bands or pulls to refresh: this is an app
-   surface, and a bounce under a fixed rail plus a floating composer reads as a
-   glitch rather than as feedback. Inner scrollers use `contain` instead of
-   `none` so they still bounce at their own ends, but never hand the leftover
-   scroll up to the page behind them (scroll chaining) — reaching the top of the
-   chat log should stop, not start scrolling the document. */
-html {
-  overscroll-behavior-y: none;
-}
-/* Blink reads the rule from <html>, but WebKit propagates it from <body> —
-   both carry it so the no-rubber-band contract holds on an iPhone too. */
+   The document itself never rubber-bands or pulls to refresh, on either axis:
+   this is an app surface, and a bounce under a fixed rail plus a floating
+   composer reads as a glitch rather than as feedback. Locking only the y axis
+   still let a sideways drift on a phone rubber-band the whole page. Inner
+   scrollers use `contain` instead of `none` so they still bounce at their own
+   ends, but never hand the leftover scroll up to the page behind them (scroll
+   chaining) — reaching the top of the chat log should stop, not start
+   scrolling the document.
+
+   The app also never scrolls sideways by design — every wide thing (tables,
+   code blocks) pans inside its own overflow-x-auto container — so a document
+   that *can* pan sideways means one component leaked a few pixels of width.
+   Clipping x at the document turns that from "the entire page wobbles
+   left/right" into a bug you can only find with devtools. `clip`, not
+   `hidden`: hidden makes <body> a scroll container, which would quietly
+   re-parent position:sticky (the mobile top bar) and still allow programmatic
+   sideways scrolling; clip forbids the axis outright.
+
+   Both elements carry the rules: Blink reads them from <html>, WebKit
+   propagates them from <body>. */
+html,
 body {
-  overscroll-behavior-y: none;
+  overscroll-behavior: none;
+  overflow-x: clip;
 }
 
 .scroll-subtle {
