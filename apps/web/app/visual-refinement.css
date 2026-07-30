@@ -10,6 +10,9 @@
   --ambient-ink: rgb(23 25 35 / 0.035);
   --surface-highlight: rgb(255 255 255 / 0.62);
   --surface-shadow: rgb(23 25 35 / 0.12);
+  --nav-hairline: color-mix(in srgb, currentColor 7%, transparent);
+  --nav-hover: color-mix(in srgb, currentColor 3.5%, transparent);
+  --nav-active-glow: color-mix(in srgb, var(--accent, currentColor) 22%, transparent);
 }
 
 .dark {
@@ -17,6 +20,9 @@
   --ambient-ink: rgb(255 255 255 / 0.025);
   --surface-highlight: rgb(255 255 255 / 0.08);
   --surface-shadow: rgb(0 0 0 / 0.38);
+  --nav-hairline: color-mix(in srgb, currentColor 10%, transparent);
+  --nav-hover: color-mix(in srgb, currentColor 5%, transparent);
+  --nav-active-glow: color-mix(in srgb, var(--accent, currentColor) 30%, transparent);
 }
 
 /* A quiet atmospheric layer keeps large empty canvases from feeling flat. */
@@ -45,6 +51,165 @@ main .scroll-subtle:not(nav):not(.nav-tile-list) {
 [data-testid="chat-composer-surface"] ~ * .scroll-subtle,
 [data-testid="chat-composer-surface"] {
   --chat-fade-ready: 1;
+}
+
+/* Navigation is typography-first. The rail behaves like calm application
+   chrome rather than a stack of dashboard pills. */
+.nav-rail {
+  overflow: hidden;
+  border-color: var(--nav-hairline) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-raised) 96%, transparent), var(--surface-raised)),
+    var(--surface-raised) !important;
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 24px 70px rgb(23 25 35 / 0.08);
+}
+
+.dark .nav-rail {
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 24px 70px rgb(0 0 0 / 0.22);
+}
+
+.nav-header {
+  position: relative;
+}
+
+.nav-header::after {
+  position: absolute;
+  right: 1rem;
+  bottom: 0;
+  left: 1rem;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--nav-hairline) 14%, var(--nav-hairline) 86%, transparent);
+  content: "";
+}
+
+.nav-tile-list {
+  gap: 0.125rem !important;
+}
+
+.nav-tile {
+  position: relative;
+  min-height: 2.625rem;
+  border-radius: 0.625rem !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  letter-spacing: -0.012em;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 150ms ease !important;
+}
+
+.nav-tile::before {
+  position: absolute;
+  top: 50%;
+  left: 0.15rem;
+  width: 2px;
+  height: 1.125rem;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 14px var(--nav-active-glow);
+  content: "";
+  opacity: 0;
+  transform: translateY(-50%) scaleY(0.45);
+  transform-origin: center;
+  transition:
+    opacity 140ms ease,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.nav-tile:hover {
+  background: var(--nav-hover) !important;
+  transform: translateX(1px);
+}
+
+.nav-tile:active {
+  transform: translateX(1px) scale(0.985);
+}
+
+.nav-tile-active {
+  color: var(--content-strong) !important;
+  background: transparent !important;
+  font-weight: 650 !important;
+}
+
+.nav-tile-active::before {
+  opacity: 1;
+  transform: translateY(-50%) scaleY(1);
+}
+
+.nav-tile-active svg {
+  color: var(--accent);
+  opacity: 1 !important;
+  filter: drop-shadow(0 0 8px var(--nav-active-glow));
+}
+
+.nav-tile:not(.nav-tile-active) svg {
+  transition:
+    opacity 150ms ease,
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.nav-tile:not(.nav-tile-active):hover svg {
+  opacity: 0.92 !important;
+  transform: scale(1.04);
+}
+
+.nav-label {
+  transform-origin: left center;
+}
+
+.nav-manage-group {
+  position: relative;
+}
+
+.nav-manage-group > p {
+  margin-bottom: 0.25rem;
+  padding-left: 0.625rem !important;
+  font-size: 0.625rem;
+  font-weight: 650;
+  letter-spacing: 0.11em;
+  opacity: 0.72;
+}
+
+.nav-footer {
+  border-color: var(--nav-hairline) !important;
+  background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
+}
+
+html.nav-collapsed .nav-tile::before {
+  left: -0.25rem;
+}
+
+html.nav-collapsed .nav-rail {
+  border-radius: 1.4rem;
+}
+
+html.nav-collapsed .nav-tile:hover {
+  transform: translateY(-1px);
+}
+
+/* Mobile navigation uses the same quiet material language while remaining a
+   conventional drawer for touch and keyboard predictability. */
+.nav-drawer {
+  border-color: var(--nav-hairline) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-raised) 98%, transparent), var(--surface-raised)) !important;
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 30px 90px rgb(0 0 0 / 0.24) !important;
+}
+
+.nav-drawer .nav-tile {
+  min-height: 2.875rem;
+}
+
+.nav-drawer .nav-tile-active {
+  background: color-mix(in srgb, var(--accent) 6%, transparent) !important;
 }
 
 /* The composer reads as one crafted object: a soft rim, inner highlight, and
@@ -81,16 +246,16 @@ main .scroll-subtle:not(nav):not(.nav-tile-list) {
 }
 
 [data-testid="chat-composer-surface"]:focus-within {
-  border-color: color-mix(in srgb, var(--accent, currentColor) 30%, transparent);
+  border-color: color-mix(in srgb, var(--accent, currentColor) 26%, transparent);
   box-shadow:
     0 1px 0 var(--surface-highlight) inset,
-    0 18px 54px color-mix(in srgb, var(--accent, currentColor) 14%, var(--surface-shadow)),
-    0 4px 12px rgb(23 25 35 / 0.08);
-  transform: translateY(-2px);
+    0 20px 58px color-mix(in srgb, var(--accent, currentColor) 12%, var(--surface-shadow)),
+    0 4px 12px rgb(23 25 35 / 0.07);
+  transform: translateY(-1px);
 }
 
 [data-testid="chat-composer-surface"]:focus-within::after {
-  opacity: 1;
+  opacity: 0.78;
 }
 
 [data-testid="chat-composer-surface"] textarea {
@@ -141,6 +306,16 @@ section[aria-label="Choose response model"] [role="option"]:hover {
 }
 
 /* Message controls stay quiet until the message becomes the user's focus. */
+.group\/msg {
+  transition:
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 180ms ease;
+}
+
+.group\/msg:hover {
+  transform: translateY(-1px);
+}
+
 .group\/msg [aria-label*="message" i],
 .group\/msg [data-message-actions] {
   opacity: 0.44;
@@ -184,19 +359,26 @@ button[aria-label="Jump to latest"]:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .nav-tile,
+  .nav-tile::before,
+  .nav-tile svg,
   [data-testid="chat-composer-surface"],
   [data-testid="chat-composer-surface"]::after,
   section[aria-label="Commands"] [role="option"],
   section[aria-label="Choose response model"] [role="option"],
+  .group\/msg,
   .group\/msg [aria-label*="message" i],
   .group\/msg [data-message-actions],
   button[aria-label="Jump to latest"] {
     transition: none !important;
   }
 
+  .nav-tile:hover,
+  .nav-tile:active,
   [data-testid="chat-composer-surface"]:focus-within,
   section[aria-label="Commands"] [role="option"]:hover,
   section[aria-label="Choose response model"] [role="option"]:hover,
+  .group\/msg:hover,
   button[aria-label="Jump to latest"]:hover {
     transform: none;
   }
