@@ -26,12 +26,13 @@ export function AvatarMark({
   const state = presence ?? (active ? 'working' : 'idle');
   return (
     // The initial is set in the display face — the mark and the titles share
-    // one letterform, so the "logo" reads as the same voice as the type. The
-    // inset top highlight and soft drop give the gradient tile a hint of
-    // dimension; flat, it read as a colored square rather than a made object.
+    // one letterform, so the "logo" reads as the same voice as the type. A
+    // flat plane of the accent, not a gradient: the rest of the UI is tone
+    // and hairline, and a gradient chip was the one surface shaded like a
+    // sticker. The inset top highlight alone gives it a made-object edge.
     <span
       aria-hidden="true"
-      className={`relative inline-flex shrink-0 items-center justify-center bg-gradient-to-br from-accent to-accent-hover font-display font-semibold text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.25),0_2px_6px_-2px_rgb(23_25_35/0.4)] ${dims} ${
+      className={`relative inline-flex shrink-0 items-center justify-center bg-accent font-display font-semibold text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.22)] ${dims} ${
         state === 'working' ? 'motion-safe:animate-[presence-breathe_2.4s_ease-in-out_3]' : ''
       } ${className}`}
     >

@@ -268,7 +268,9 @@ html.nav-collapsed .nav-badge-dot {
   align-items: center;
   justify-content: center;
   color: #78350f;
-  font: 650 0.6875rem/1 var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  /* Mono, like every other count in the app (CountBadge et al) — figures are
+     data, and the mono face is the app's voice for structure and data. */
+  font: 550 0.6875rem/1 var(--font-geist-mono), ui-monospace, 'SF Mono', Menlo, monospace;
 }
 .nav-jelly-button {
   position: relative;

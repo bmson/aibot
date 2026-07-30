@@ -27,8 +27,9 @@ const btnVariants = {
     'border border-edge text-zinc-700 hover:bg-sunken/70 hover:text-strong active:bg-sunken dark:text-zinc-300',
   dangerOutline:
     'border border-red-300 text-red-700 hover:bg-red-50 active:bg-red-100 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40 dark:active:bg-red-950/70',
-  primary:
-    'bg-accent text-white shadow-sm hover:bg-accent-hover hover:shadow-[0_5px_14px_rgb(91_92_226/0.22)] active:shadow-none',
+  // Flat: the accent plane is the emphasis. The old hover glow read as a
+  // sticker hovering over the page rather than a control set into it.
+  primary: 'bg-accent text-white hover:bg-accent-hover',
   danger: 'bg-red-600 text-white hover:bg-red-700 active:bg-red-800',
   success: 'bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800',
 } as const;
@@ -74,9 +75,20 @@ export const btnSm = {
  */
 export const tabularNums = 'tabular-nums';
 
+/**
+ * The app's structural voice: every micro-label that names a *part of the
+ * interface* rather than saying something (eyebrow headings, group labels,
+ * uppercase badges, the keys in fact grids) is set in the mono face, small
+ * and letterspaced. Content speaks in Inter and titles in the display face;
+ * structure gets its own third voice instead of being a smaller, bolder
+ * imitation of the content. Colour stays with the caller — most compose this
+ * with text-muted, a few with a status colour.
+ */
+export const microLabelClass = 'font-mono text-2xs font-medium tracking-[0.08em] uppercase';
+
 /** Neutral count-pill as a raw class string, for spans that can't use <CountBadge>. */
 export const countBadgeClass =
-  'rounded-full bg-sunken px-1.5 py-0.5 text-2xs font-medium text-muted tabular-nums whitespace-nowrap';
+  'rounded-full bg-sunken px-1.5 py-0.5 font-mono text-2xs font-medium text-muted whitespace-nowrap';
 
 /** A loading placeholder block — used by route-level loading.tsx skeletons.
  *  A light sheen sweeps across it while motion is allowed; reduced-motion
@@ -123,9 +135,13 @@ export const fileInputClass =
  * Cards use one shared information architecture:
  * identity at the top, primary content in the body, structured facts in a
  * compact grid, and actions in a quiet footer.
+ *
+ * The shell is a hairline-ringed plane, not a floating slab: no drop shadow,
+ * and a radius one step tighter than the old 2xl. Depth in this UI comes
+ * from tone (raised/sunken) and hairlines, which keeps every surface sitting
+ * *in* the page's grid rather than hovering over it.
  */
-export const cardShellClass =
-  'reveal min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60';
+export const cardShellClass = 'reveal min-w-0 overflow-hidden rounded-xl bg-raised ring-1 ring-edge/70';
 export const cardBodyClass = 'grid min-w-0 gap-4 p-4 sm:p-5';
 export const cardHeaderClass = 'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3';
 /** Footer chrome (divider + tonal well + padding), shared by the button-row
@@ -133,12 +149,17 @@ export const cardHeaderClass = 'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] item
 export const cardFooterChromeClass = 'border-t border-edge/70 bg-sunken/35 px-4 py-3 sm:px-5';
 export const cardFooterClass = `flex min-w-0 flex-wrap items-center gap-2 ${cardFooterChromeClass}`;
 
-/** One card-title scale, so every card reads at the same weight. */
-export const cardTitleClass = 'text-[15px] leading-6 font-semibold tracking-[-0.015em] text-strong';
+/** One card-title scale, in the display face — titles are the one place the
+ *  brand's letterforms appear at reading size, so cards carry the same voice
+ *  as the page title above them. */
+export const cardTitleClass =
+  'font-display text-base leading-6 font-semibold tracking-[-0.015em] text-strong';
 
-/** Lift-on-hover for cards that are a link or have one dominant action. */
+/** Interactive cards sharpen rather than levitate: the hairline darkens to
+ *  full strength and a shallow shadow hints at press-ability. The old
+ *  half-rem lift + 30px bloom made every list feel like it was floating. */
 export const cardInteractiveClass =
-  'motion-safe:transition-[box-shadow,transform] hover:-translate-y-0.5 hover:shadow-[0_10px_30px_rgb(23_25_35/0.08)]';
+  'motion-safe:transition-shadow hover:shadow-[0_4px_16px_-8px_rgb(23_25_35/0.16)] hover:ring-edge';
 
 /**
  * Timeline event cards (chat): approvals, budget asks, system checks. A
@@ -146,7 +167,7 @@ export const cardInteractiveClass =
  * should read as things the assistant placed in the conversation, not prose.
  */
 export const eventCardClass =
-  'min-w-0 max-w-full overflow-hidden rounded-xl bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.05)] ring-1 ring-edge/70';
+  'min-w-0 max-w-full overflow-hidden rounded-xl bg-raised ring-1 ring-edge/70';
 
 /** Two grid recipes, so pages stop inventing their own breakpoints. */
 export const cardGridClass = 'grid min-w-0 items-stretch gap-4 lg:grid-cols-2';
@@ -201,7 +222,10 @@ export function PageHeader({
   return (
     <header>
       <div className="flex min-w-0 items-start justify-between gap-3">
-        <h1 className="min-w-0 font-display text-[1.875rem] leading-9 font-semibold tracking-[-0.035em] text-balance text-strong sm:text-[2rem] sm:leading-10">
+        {/* The one heading that speaks at full volume — a size up from where
+            it was, since section headings below it dropped to micro-labels
+            and the title now carries the page's whole typographic weight. */}
+        <h1 className="min-w-0 font-display text-[2rem] leading-10 font-semibold tracking-[-0.04em] text-balance text-strong sm:text-[2.375rem] sm:leading-[2.75rem]">
           {title}
         </h1>
         {actions ? (
@@ -272,7 +296,7 @@ export function InfoItem({
 }) {
   return (
     <div className={`min-w-0 bg-sunken/65 px-3 py-2.5 ${className}`}>
-      <dt className="text-2xs font-semibold tracking-[0.08em] text-muted uppercase">{label}</dt>
+      <dt className={`${microLabelClass} text-muted`}>{label}</dt>
       <dd className="mt-0.5 min-w-0 break-words text-[13px] leading-5 font-medium text-strong tabular-nums [overflow-wrap:anywhere]">
         {children}
       </dd>
@@ -291,8 +315,8 @@ export function Panel({
 }) {
   return (
     <section
-      className={`rounded-2xl p-5 sm:p-6 ${
-        tone === 'raised' ? 'bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.06)]' : 'bg-sunken/70'
+      className={`rounded-xl p-5 sm:p-6 ${
+        tone === 'raised' ? 'bg-raised ring-1 ring-edge/70' : 'bg-sunken/70'
       } ${className}`}
     >
       {children}
@@ -338,8 +362,10 @@ export function Badge({
   uppercase?: boolean;
   title?: string;
 }) {
+  // Uppercase pills join the mono micro-label voice — a status label is
+  // structure, not prose (weight comes from the shared font-medium below).
   const sizeClass = uppercase
-    ? 'px-2 py-0.5 text-2xs font-semibold tracking-[0.06em] uppercase'
+    ? 'px-2 py-0.5 font-mono text-2xs tracking-[0.08em] uppercase'
     : size === 'xs'
       ? 'px-1.5 py-0.5 text-2xs'
       : 'px-2 py-0.5 text-xs';
@@ -373,7 +399,7 @@ export function CountBadge({
 }) {
   return (
     <span
-      className={`rounded-full px-1.5 py-0.5 text-2xs font-semibold tabular-nums whitespace-nowrap ${badgeTones[tone]}`}
+      className={`rounded-full px-1.5 py-0.5 font-mono text-2xs font-medium whitespace-nowrap ${badgeTones[tone]}`}
     >
       {children}
     </span>
@@ -417,6 +443,15 @@ export function MetaLine({
   );
 }
 
+/**
+ * Section headings are the page's grid armature: a mono micro-label with a
+ * hairline rule running out to the full measure, so every section boundary
+ * lands on the same visible line no matter what content follows. The label
+ * is deliberately quiet — the big display title at the top of the page is
+ * the only heading that speaks at content volume; everything below it just
+ * names its region. (The rule is aria-hidden decoration; the h2 semantics
+ * are unchanged.)
+ */
 export function SectionHeading({
   title,
   count,
@@ -427,10 +462,13 @@ export function SectionHeading({
   hint?: string;
 }) {
   return (
-    <h2 className="flex min-w-0 flex-wrap items-baseline gap-2 text-[15px] font-semibold tracking-[-0.01em]">
-      {title}
-      {count !== undefined ? <CountBadge>{count}</CountBadge> : null}
-      {hint ? <span className="text-xs font-normal text-muted">{hint}</span> : null}
+    <h2 className="flex min-w-0 items-center gap-3">
+      <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span className={`${microLabelClass} text-muted`}>{title}</span>
+        {count !== undefined ? <CountBadge>{count}</CountBadge> : null}
+        {hint ? <span className="text-xs font-normal text-muted/80">{hint}</span> : null}
+      </span>
+      <span aria-hidden="true" className="h-px min-w-6 flex-1 bg-edge/80" />
     </h2>
   );
 }
@@ -452,7 +490,7 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="mt-3 flex flex-col items-start gap-3 rounded-2xl bg-sunken/50 px-5 py-5 ring-1 ring-edge/40">
+    <div className="mt-3 flex flex-col items-start gap-3 rounded-xl bg-sunken/50 px-5 py-5 ring-1 ring-edge/40">
       {icon ? (
         <span aria-hidden="true" className="text-muted">
           {icon}

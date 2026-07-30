@@ -59,7 +59,7 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
           className="size-3.5 shrink-0 text-amber-800 dark:text-amber-300"
           aria-hidden="true"
         />
-        <p className="text-2xs font-semibold tracking-[0.1em] text-amber-800 uppercase dark:text-amber-300">
+        <p className="font-mono text-2xs font-medium tracking-[0.08em] text-amber-800 uppercase dark:text-amber-300">
           Spending permission needed
         </p>
       </div>

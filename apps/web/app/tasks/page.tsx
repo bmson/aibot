@@ -176,7 +176,7 @@ export default async function TasksPage({
         <div className="mt-8 flex flex-col gap-8">
           {groups.map((group) => (
             <section key={group.day}>
-              <h2 className="mb-3 text-xs font-semibold tracking-[0.1em] text-muted uppercase">
+              <h2 className="mb-3 font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
                 {group.label}
               </h2>
               <div className={cardShellClass}>

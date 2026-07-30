@@ -21,7 +21,7 @@ import {
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { createElement, type ReactElement, useCallback, useEffect, useRef, useState } from 'react';
-import { focusRing } from '@/lib/ui';
+import { focusRing, microLabelClass } from '@/lib/ui';
 import { ActionMenu } from '@/lib/ui-client';
 import { signOutAction } from './actions';
 import { type AssistantPresence, AvatarMark, BrandLockup } from './brand-mark';
@@ -405,7 +405,7 @@ export function AppNav({
           uses (message bubbles, form cards) — a permanently-dark rail read as
           heavier than the rest of the UI rather than as a floating peer of it. */}
       <aside
-        className={`nav-rail hidden shrink-0 flex-col rounded-[1.4rem] border border-edge bg-raised text-strong shadow-[0_20px_50px_-24px_rgb(15_23_42/0.32)] dark:shadow-[0_20px_50px_-24px_rgb(0_0_0/0.7)] lg:m-4 lg:flex lg:sticky lg:top-4 lg:h-[calc(100dvh-var(--app-chrome,0px)-2rem)] xl:m-5 xl:top-5 xl:h-[calc(100dvh-var(--app-chrome,0px)-2.5rem)]`}
+        className={`nav-rail hidden shrink-0 flex-col rounded-2xl border border-edge bg-raised text-strong lg:m-4 lg:flex lg:sticky lg:top-4 lg:h-[calc(100dvh-var(--app-chrome,0px)-2rem)] xl:m-5 xl:top-5 xl:h-[calc(100dvh-var(--app-chrome,0px)-2.5rem)]`}
       >
         {/* Brand row: the mark anchors the rail's identity and doubles as a
             home (chat) link, with the collapse toggle in the trailing slot.
@@ -447,9 +447,7 @@ export function AppNav({
             {renderLinks(primaryItems, 'rail')}
           </nav>
           <div className="nav-manage-group px-3">
-            <p className="nav-label px-3 font-display text-2xs font-semibold tracking-[0.14em] text-muted uppercase">
-              Manage
-            </p>
+            <p className={`nav-label px-3 ${microLabelClass} text-muted`}>Manage</p>
             <nav className="nav-tile-list mt-2 flex flex-col gap-1">
               {renderLinks(utilityItems, 'rail')}
               {renderSystemGroup(systemItems, 'rail')}
@@ -468,7 +466,7 @@ export function AppNav({
       </aside>
 
       {/* Mobile top bar */}
-      <header className="sticky top-3 z-30 m-3 flex h-14 items-center justify-between rounded-2xl border border-edge bg-raised/95 px-4 text-strong shadow-[0_8px_20px_-6px_rgb(0_0_0/0.14)] backdrop-blur dark:shadow-[0_8px_20px_-6px_rgb(0_0_0/0.35)] lg:hidden">
+      <header className="sticky top-3 z-30 m-3 flex h-14 items-center justify-between rounded-2xl border border-edge bg-raised/95 px-4 text-strong shadow-[0_2px_10px_-6px_rgb(15_23_42/0.2)] backdrop-blur dark:shadow-[0_2px_10px_-6px_rgb(0_0_0/0.5)] lg:hidden">
         <Link
           href="/chat"
           data-mobile-touch-target="true"
@@ -527,15 +525,12 @@ export function AppNav({
             onTransitionEnd={(event) => {
               if (event.target === event.currentTarget && !open) setRendered(false);
             }}
-            className="nav-drawer absolute inset-y-3 right-3 flex w-72 max-w-[calc(84%-0.75rem)] flex-col rounded-2xl border border-edge bg-raised shadow-2xl"
+            className="nav-drawer absolute inset-y-3 right-3 flex w-72 max-w-[calc(84%-0.75rem)] flex-col rounded-2xl border border-edge bg-raised shadow-xl"
           >
             <div className="flex h-14 shrink-0 items-center justify-between border-b border-edge px-4">
-              {/* Same eyebrow vocabulary as the "Manage" group label below —
+              {/* Same micro-label vocabulary as the "Manage" group label below —
                   the drawer's chrome shouldn't out-weigh its destinations. */}
-              <span
-                id="mobile-nav-title"
-                className="font-display text-2xs font-semibold tracking-[0.14em] text-muted uppercase"
-              >
+              <span id="mobile-nav-title" className={`${microLabelClass} text-muted`}>
                 Menu
               </span>
               <JellyIconButton
@@ -549,9 +544,7 @@ export function AppNav({
             </div>
             <nav className="scroll-subtle flex flex-1 flex-col gap-1 overflow-y-auto p-3">
               {renderLinks(primaryItems, 'drawer')}
-              <p className="mt-6 px-3 font-display text-2xs font-semibold tracking-[0.14em] text-muted uppercase">
-                Manage
-              </p>
+              <p className={`mt-6 px-3 ${microLabelClass} text-muted`}>Manage</p>
               {renderLinks(utilityItems, 'drawer')}
               {renderSystemGroup(systemItems, 'drawer')}
             </nav>

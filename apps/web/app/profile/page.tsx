@@ -302,7 +302,7 @@ export default async function ProfilePage() {
                 return (
                   <details key={group.domain} className="rounded-xl bg-sunken/55 p-3.5">
                     <summary className={summaryClass}>
-                      <span className="text-xs font-medium text-muted uppercase tracking-wide">
+                      <span className="font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
                         {group.domain}
                       </span>
                       <span className={countBadge}>{group.facts.length}</span>
