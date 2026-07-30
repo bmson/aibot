@@ -1,213 +1,701 @@
 /*
- * Compact progressive navigation
+ * Navigation palette
  *
- * Desktop keeps a small, persistent icon dock. The full menu reveals on hover
- * or keyboard focus without changing the page width; the existing toggle pins
- * it open when the owner wants labels to stay visible. Mobile uses a small
- * floating control and a bottom sheet instead of a full-width app header.
+ * The shell no longer carries a logo or permanent sidebar. A small card-stack
+ * launcher shows the current place, then opens a layered palette of destinations.
  */
 
 :root {
-  --nav-compact-width: 4.5rem;
-  --nav-expanded-width: 15rem;
+  --nav-palette-width: 23.5rem;
+  --nav-launcher-size: 3.25rem;
+  --nav-card-edge: color-mix(in srgb, currentColor 7%, transparent);
+  --nav-card-hover: color-mix(in srgb, var(--accent) 7%, var(--surface-raised));
+  --nav-card-active: color-mix(in srgb, var(--accent) 11%, var(--surface-raised));
 }
 
-/* The rail header should identify the assistant without consuming a large
-   block before the actual destinations begin. */
-.nav-header {
-  padding-top: 0.75rem;
-  padding-bottom: 0.875rem;
+.dark {
+  --nav-card-edge: color-mix(in srgb, currentColor 11%, transparent);
+  --nav-card-hover: color-mix(in srgb, var(--accent) 12%, var(--surface-raised));
+  --nav-card-active: color-mix(in srgb, var(--accent) 17%, var(--surface-raised));
 }
 
-.nav-header::after {
-  right: 0.75rem;
-  left: 0.75rem;
+.nav-anchor {
+  width: 5rem;
 }
 
-@media (min-width: 1024px) {
-  /* A collapsed rail still renders at its full width, but a negative trailing
-     margin reserves only the compact width in the flex layout. clip-path hides
-     the rest until hover/focus, so expansion overlays the canvas instead of
-     shoving every page sideways. */
-  html.nav-collapsed .nav-rail {
-    --nav-outer-margin: 1rem;
-    z-index: 35;
-    width: var(--nav-expanded-width);
-    margin-right: calc(
-      var(--nav-outer-margin) -
-      (var(--nav-expanded-width) - var(--nav-compact-width))
-    );
-    clip-path: inset(0 calc(var(--nav-expanded-width) - var(--nav-compact-width)) 0 0 round 1.4rem);
-    will-change: clip-path;
-  }
-
-  html.nav-collapsed .nav-rail:hover,
-  html.nav-collapsed .nav-rail:focus-within {
-    clip-path: inset(0 0 0 0 round 1.4rem);
-    box-shadow:
-      0 1px 0 var(--surface-highlight) inset,
-      0 26px 80px rgb(23 25 35 / 0.16);
-  }
-
-  .dark.nav-collapsed .nav-rail:hover,
-  .dark.nav-collapsed .nav-rail:focus-within {
-    box-shadow:
-      0 1px 0 var(--surface-highlight) inset,
-      0 28px 84px rgb(0 0 0 / 0.42);
-  }
-
-  /* Restore the expanded layout while the compact dock is being explored.
-     The menu remains fully keyboard accessible because focus-within uses the
-     same reveal state as pointer hover. */
-  html.nav-collapsed .nav-rail:hover .nav-header,
-  html.nav-collapsed .nav-rail:focus-within .nav-header {
-    flex-direction: row;
-    gap: 0.25rem;
-  }
-
-  html.nav-collapsed .nav-rail:hover .nav-label,
-  html.nav-collapsed .nav-rail:focus-within .nav-label {
-    display: block;
-    opacity: 1;
-    translate: none;
-  }
-
-  html.nav-collapsed .nav-rail:hover .nav-tooltip,
-  html.nav-collapsed .nav-rail:focus-within .nav-tooltip {
-    display: block;
-  }
-
-  html.nav-collapsed .nav-rail:hover .nav-tile-list,
-  html.nav-collapsed .nav-rail:focus-within .nav-tile-list {
-    align-items: stretch;
-  }
-
-  html.nav-collapsed .nav-rail:hover .nav-tile,
-  html.nav-collapsed .nav-rail:focus-within .nav-tile {
-    width: 100%;
-  }
-
-  html.nav-collapsed .nav-rail:hover .nav-manage-group,
-  html.nav-collapsed .nav-rail:focus-within .nav-manage-group {
-    margin-top: 1.5rem;
-    border-top: 0;
-    padding-top: 0;
-  }
-
-  html.nav-collapsed .nav-rail:hover .nav-footer,
-  html.nav-collapsed .nav-rail:focus-within .nav-footer {
-    display: flex;
-    padding-inline: 1.25rem;
-  }
-
-  html.nav-collapsed .nav-rail:hover .nav-footer-icon,
-  html.nav-collapsed .nav-rail:focus-within .nav-footer-icon,
-  html.nav-collapsed .nav-rail:hover .nav-footer > .nav-label,
-  html.nav-collapsed .nav-rail:focus-within .nav-footer > .nav-label {
-    grid-column: auto;
-  }
-
-  html.nav-collapsed .nav-rail:hover .nav-badge-dot,
-  html.nav-collapsed .nav-rail:focus-within .nav-badge-dot {
-    display: none;
-  }
+.nav-anchor-inner {
+  position: sticky;
+  z-index: 30;
+  top: calc(var(--app-chrome, 0px) + 1rem);
+  padding: 1rem 0 0 1rem;
 }
 
-@media (min-width: 1280px) {
-  html.nav-collapsed .nav-rail {
-    --nav-outer-margin: 1.25rem;
-  }
+.nav-launcher {
+  position: relative;
+  display: grid;
+  width: var(--nav-launcher-size);
+  min-width: var(--nav-launcher-size);
+  min-height: var(--nav-launcher-size);
+  grid-template-columns: 2.5rem minmax(0, 1fr) 1rem;
+  align-items: center;
+  gap: 0.25rem;
+  overflow: hidden;
+  border: 1px solid var(--nav-card-edge);
+  border-radius: 1rem;
+  padding: 0.375rem;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-raised) 98%, transparent),
+      transparent
+    ),
+    var(--surface-raised);
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 12px 34px rgb(23 25 35 / 0.1);
+  color: var(--content-strong);
+  cursor: pointer;
+  text-align: left;
+  isolation: isolate;
 }
 
-@media (prefers-reduced-motion: no-preference) and (min-width: 1024px) {
-  html.nav-collapsed .nav-rail {
-    transition:
-      clip-path 240ms cubic-bezier(0.22, 1, 0.36, 1),
-      box-shadow 180ms ease;
-  }
-
-  html.nav-collapsed .nav-rail:hover .nav-label,
-  html.nav-collapsed .nav-rail:focus-within .nav-label {
-    transition-delay: 70ms;
-  }
+.dark .nav-launcher {
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 14px 38px rgb(0 0 0 / 0.34);
 }
 
-/* Mobile chrome is deliberately a small floating pill rather than a second
-   page header. The assistant mark, theme control, and menu trigger are all the
-   shell needs before the owner asks for navigation. */
+.nav-launcher::before,
+.nav-launcher::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0.25rem -0.15rem -0.2rem 0.35rem;
+  border: 1px solid var(--nav-card-edge);
+  border-radius: inherit;
+  background: var(--surface-raised);
+  content: "";
+  pointer-events: none;
+  transform-origin: bottom left;
+}
+
+.nav-launcher::before {
+  rotate: 3deg;
+  opacity: 0.72;
+}
+
+.nav-launcher::after {
+  rotate: 6deg;
+  opacity: 0.38;
+}
+
+.nav-launcher:hover,
+.nav-launcher:focus-visible,
+.nav-launcher[data-open="true"] {
+  width: 10.75rem;
+}
+
+.nav-launcher:hover::before,
+.nav-launcher:focus-visible::before,
+.nav-launcher[data-open="true"]::before {
+  rotate: 1.5deg;
+  translate: 0.125rem 0;
+}
+
+.nav-launcher:hover::after,
+.nav-launcher:focus-visible::after,
+.nav-launcher[data-open="true"]::after {
+  rotate: 3deg;
+  translate: 0.25rem 0;
+}
+
+.nav-launcher-icon {
+  display: inline-flex;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--accent) 11%, var(--surface-sunken));
+  color: var(--accent);
+}
+
+.nav-launcher-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  opacity: 0;
+  translate: -0.35rem 0;
+}
+
+.nav-launcher-copy span {
+  color: var(--content-muted);
+  font-size: 0.625rem;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.nav-launcher-copy strong {
+  overflow: hidden;
+  margin-top: 0.25rem;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-launcher:hover .nav-launcher-copy,
+.nav-launcher:focus-visible .nav-launcher-copy,
+.nav-launcher[data-open="true"] .nav-launcher-copy {
+  opacity: 1;
+  translate: none;
+}
+
+.nav-launcher-arrow {
+  opacity: 0;
+  transition: rotate 180ms ease;
+}
+
+.nav-launcher:hover .nav-launcher-arrow,
+.nav-launcher:focus-visible .nav-launcher-arrow,
+.nav-launcher[data-open="true"] .nav-launcher-arrow {
+  opacity: 0.55;
+}
+
+.nav-launcher[data-open="true"] .nav-launcher-arrow {
+  rotate: 90deg;
+}
+
+.nav-launcher-badge {
+  position: absolute;
+  top: -0.3rem;
+  right: -0.3rem;
+  display: inline-flex;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  padding-inline: 0.25rem;
+  background: #f59e0b;
+  color: #451a03;
+  font: 650 0.625rem/1 var(--font-geist-mono), ui-monospace, monospace;
+}
+
+.nav-mobile-header {
+  top: 0.5rem;
+  width: max-content;
+  margin: 0.5rem;
+}
+
+.nav-launcher-mobile {
+  width: max-content;
+  max-width: min(12rem, calc(100vw - 1rem));
+  min-height: 3rem;
+  border-radius: 999px;
+  padding-right: 0.625rem;
+}
+
+.nav-launcher-mobile .nav-launcher-icon {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+}
+
+.nav-launcher-mobile .nav-launcher-copy {
+  opacity: 1;
+  translate: none;
+}
+
+.nav-launcher-mobile .nav-launcher-arrow {
+  opacity: 0.55;
+}
+
+.nav-overlay {
+  isolation: isolate;
+}
+
+.nav-scrim {
+  border: 0;
+  background: rgb(9 10 16 / 0.14);
+  opacity: 0;
+  backdrop-filter: blur(2px);
+}
+
+.nav-scrim[data-open="true"] {
+  opacity: 1;
+}
+
+.nav-palette {
+  position: absolute;
+  top: calc(var(--app-chrome, 0px) + 1rem);
+  left: 1rem;
+  display: flex;
+  width: min(var(--nav-palette-width), calc(100vw - 2rem));
+  max-height: calc(100dvh - var(--app-chrome, 0px) - 2rem);
+  flex-direction: column;
+  border: 1px solid var(--nav-card-edge);
+  border-radius: 1.5rem;
+  background:
+    radial-gradient(
+      circle at 8% 0%,
+      color-mix(in srgb, var(--accent) 9%, transparent),
+      transparent 15rem
+    ),
+    var(--surface-raised);
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 30px 90px rgb(23 25 35 / 0.2);
+  opacity: 0;
+  scale: 0.965;
+  translate: -0.5rem 0.25rem;
+  transform-origin: top left;
+  isolation: isolate;
+}
+
+.dark .nav-palette {
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 34px 100px rgb(0 0 0 / 0.52);
+}
+
+.nav-palette::before,
+.nav-palette::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0.5rem -0.35rem -0.35rem 0.75rem;
+  border: 1px solid var(--nav-card-edge);
+  border-radius: inherit;
+  background: var(--surface-raised);
+  content: "";
+  pointer-events: none;
+  transform-origin: top left;
+}
+
+.nav-palette::before {
+  rotate: 1.1deg;
+  opacity: 0.72;
+}
+
+.nav-palette::after {
+  rotate: 2.2deg;
+  opacity: 0.36;
+}
+
+.nav-palette[data-open="true"] {
+  opacity: 1;
+  scale: 1;
+  translate: none;
+}
+
+.nav-palette-header {
+  display: flex;
+  min-height: 4.25rem;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--nav-card-edge);
+  padding: 0.75rem 1rem 0.75rem 1.25rem;
+}
+
+.nav-palette-context {
+  margin-top: 0.25rem;
+  color: var(--content-muted);
+  font-size: 0.8125rem;
+}
+
+.nav-palette-context strong {
+  color: var(--content-strong);
+  font-weight: 650;
+}
+
+.nav-palette-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.nav-destination-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.625rem;
+}
+
+.nav-destination-card {
+  position: relative;
+  display: flex;
+  min-height: 7.5rem;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+  border: 1px solid var(--nav-card-edge);
+  border-radius: 1.125rem;
+  padding: 0.875rem;
+  background: color-mix(in srgb, var(--surface-sunken) 42%, var(--surface-raised));
+  color: var(--content-strong);
+  text-decoration: none;
+}
+
+.nav-destination-card::after {
+  position: absolute;
+  right: -2rem;
+  bottom: -2.5rem;
+  width: 6rem;
+  height: 6rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  scale: 0.72;
+}
+
+.nav-destination-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--nav-card-edge));
+  background: var(--nav-card-hover);
+  translate: 0 -2px;
+}
+
+.nav-destination-card:hover::after,
+.nav-destination-card:focus-visible::after {
+  opacity: 1;
+  scale: 1;
+}
+
+.nav-destination-card-active {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--nav-card-edge));
+  background:
+    radial-gradient(
+      circle at 100% 100%,
+      color-mix(in srgb, var(--accent) 20%, transparent),
+      transparent 65%
+    ),
+    var(--nav-card-active);
+}
+
+.nav-destination-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.nav-destination-icon,
+.nav-system-icon {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-raised));
+  color: var(--accent);
+}
+
+.nav-current-chip {
+  border-radius: 999px;
+  padding: 0.25rem 0.5rem;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.nav-card-arrow {
+  color: var(--content-muted);
+  opacity: 0.55;
+}
+
+.nav-destination-card:hover .nav-card-arrow {
+  color: var(--accent);
+  opacity: 1;
+  translate: 2px 0;
+}
+
+.nav-destination-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.nav-destination-title {
+  font-family: var(--font-bricolage), var(--font-inter), sans-serif;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+
+.nav-destination-description {
+  color: var(--content-muted);
+  font-size: 0.6875rem;
+  line-height: 1.35;
+}
+
+.nav-compact-grid,
+.nav-system-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.nav-compact-link {
+  display: flex;
+  min-width: 0;
+  min-height: 3.25rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border: 1px solid transparent;
+  border-radius: 0.875rem;
+  padding: 0.625rem;
+  color: var(--content-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.nav-compact-link:hover,
+.nav-compact-link-active {
+  border-color: var(--nav-card-edge);
+  background: color-mix(in srgb, var(--surface-sunken) 55%, transparent);
+  color: var(--content-strong);
+}
+
+.nav-compact-link-active svg {
+  color: var(--accent);
+}
+
+.nav-system-disclosure {
+  border: 1px solid var(--nav-card-edge);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--surface-sunken) 28%, transparent);
+}
+
+.nav-system-disclosure > summary {
+  display: flex;
+  min-height: 3.75rem;
+  cursor: pointer;
+  align-items: center;
+  gap: 0.75rem;
+  border-radius: inherit;
+  padding: 0.625rem 0.75rem;
+  color: var(--content-strong);
+  user-select: none;
+}
+
+.nav-system-disclosure > summary strong,
+.nav-system-disclosure > summary span span {
+  display: block;
+}
+
+.nav-system-disclosure > summary strong {
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.nav-system-disclosure > summary span span {
+  margin-top: 0.15rem;
+  color: var(--content-muted);
+  font-size: 0.6875rem;
+}
+
+.nav-system-arrow {
+  flex: none;
+  color: var(--content-muted);
+  opacity: 0.6;
+}
+
+.nav-system-disclosure[open] .nav-system-arrow {
+  rotate: 90deg;
+}
+
+.nav-system-grid {
+  border-top: 1px solid var(--nav-card-edge);
+  padding: 0.5rem;
+}
+
+.nav-palette-footer {
+  display: flex;
+  min-height: 4rem;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-top: 1px solid var(--nav-card-edge);
+  padding: 0.625rem 0.875rem 0.625rem 1.25rem;
+}
+
+.nav-appearance-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.625rem;
+  color: var(--content-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.nav-sign-out {
+  min-height: 2.75rem;
+  border: 0;
+  border-radius: 0.75rem;
+  padding-inline: 0.75rem;
+  background: transparent;
+  color: var(--content-muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.nav-sign-out:hover {
+  background: color-mix(in srgb, var(--surface-sunken) 60%, transparent);
+  color: var(--content-strong);
+}
+
+.nav-palette .nav-jelly-button {
+  --nav-jelly-button-size: 44px;
+  --nav-jelly-button-radius: 14px;
+}
+
 @media (max-width: 1023px) {
-  body > div.flex.flex-1.flex-col > header[class~="lg:hidden"] {
-    top: 0.5rem;
-    width: max-content;
-    height: 3rem;
-    margin: 0.5rem;
-    padding: 0.125rem 0.25rem;
-    gap: 0.125rem;
-    border-radius: 999px;
-    box-shadow:
-      0 1px 0 var(--surface-highlight) inset,
-      0 10px 30px rgb(23 25 35 / 0.1);
+  .nav-scrim {
+    background: rgb(9 10 16 / 0.42);
+    backdrop-filter: blur(6px);
   }
 
-  .dark body > div.flex.flex-1.flex-col > header[class~="lg:hidden"] {
-    box-shadow:
-      0 1px 0 var(--surface-highlight) inset,
-      0 12px 34px rgb(0 0 0 / 0.3);
-  }
-
-  body > div.flex.flex-1.flex-col > header[class~="lg:hidden"] > a {
-    min-width: 2.75rem;
-    min-height: 2.75rem;
-    justify-content: center;
-  }
-
-  body > div.flex.flex-1.flex-col > header[class~="lg:hidden"] > a .scale-90 {
-    scale: 1;
-  }
-
-  /* The full assistant name belongs in chat, not in permanent mobile chrome. */
-  body > div.flex.flex-1.flex-col > header[class~="lg:hidden"] > a .flex.min-w-0.flex-col {
-    display: none;
-  }
-
-  body > div.flex.flex-1.flex-col > header[class~="lg:hidden"] .nav-jelly-button {
-    --nav-jelly-button-size: 44px;
-    --nav-jelly-button-radius: 999px;
-  }
-
-  /* Navigation becomes a familiar bottom sheet: easier to reach one-handed,
-     visually connected to mobile system UI, and less like a second sidebar. */
-  .nav-drawer {
+  .nav-palette {
     top: auto;
     right: 0.5rem;
     bottom: calc(0.5rem + env(safe-area-inset-bottom));
     left: 0.5rem;
     width: auto;
-    max-width: none;
-    height: min(78dvh, 40rem);
+    max-height: min(84dvh, 44rem);
     border-radius: 1.5rem;
+    scale: 0.98;
     translate: 0 2rem;
     transform-origin: bottom center;
   }
 
-  .nav-drawer[data-open="true"] {
+  .nav-palette[data-open="true"] {
+    scale: 1;
     translate: none;
   }
 
-  .nav-drawer > div:first-child {
-    height: 3rem;
+  .nav-palette::before,
+  .nav-palette::after {
+    inset: -0.25rem 0.75rem 0.5rem;
+    transform-origin: bottom center;
   }
 
-  .nav-scrim {
-    background: rgb(9 10 16 / 0.42);
-    backdrop-filter: blur(6px);
+  .nav-palette::before {
+    rotate: -0.6deg;
+  }
+
+  .nav-palette::after {
+    rotate: 0.7deg;
   }
 }
 
-@media (prefers-reduced-motion: no-preference) and (max-width: 1023px) {
-  .nav-drawer {
+@media (max-width: 359px) {
+  .nav-destination-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .nav-launcher {
+    transition:
+      width 260ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 180ms ease,
+      translate 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .nav-launcher::before,
+  .nav-launcher::after {
+    transition:
+      rotate 260ms cubic-bezier(0.22, 1, 0.36, 1),
+      translate 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .nav-launcher-copy {
+    transition:
+      opacity 140ms ease,
+      translate 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .nav-launcher-arrow {
+    transition:
+      opacity 140ms ease,
+      rotate 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .nav-scrim {
+    transition: opacity 180ms ease-out;
+  }
+
+  .nav-palette {
     transition:
       opacity 180ms ease-out,
-      translate 260ms cubic-bezier(0.22, 1, 0.36, 1);
+      scale 280ms cubic-bezier(0.22, 1, 0.36, 1),
+      translate 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .nav-destination-card,
+  .nav-destination-card::after,
+  .nav-card-arrow,
+  .nav-system-arrow {
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease,
+      color 160ms ease,
+      opacity 160ms ease,
+      scale 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      translate 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      rotate 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .nav-palette[data-open="true"] .nav-destination-card {
+    animation: nav-card-arrive 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .nav-palette[data-open="true"] .nav-destination-card:nth-child(2) {
+    animation-delay: 35ms;
+  }
+
+  .nav-palette[data-open="true"] .nav-destination-card:nth-child(3) {
+    animation-delay: 70ms;
+  }
+
+  .nav-palette[data-open="true"] .nav-destination-card:nth-child(4) {
+    animation-delay: 105ms;
+  }
+
+  .nav-palette[data-open="true"] .nav-destination-card:nth-child(5) {
+    animation-delay: 140ms;
+  }
+}
+
+@keyframes nav-card-arrive {
+  from {
+    opacity: 0;
+    scale: 0.985;
+    translate: 0 0.5rem;
+  }
+
+  to {
+    opacity: 1;
+    scale: 1;
+    translate: none;
   }
 }
