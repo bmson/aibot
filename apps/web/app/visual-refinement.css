@@ -36,16 +36,15 @@ body::before {
   content: "";
 }
 
-/* The conversation fades naturally into the viewport edges instead of clipping. */
-.scroll-subtle {
+/* Only the chat transcript gets a viewport fade. Applying a mask to navigation
+   scrollers can interfere with pointer hit testing in WebKit. */
+main .scroll-subtle:not(nav):not(.nav-tile-list) {
   scrollbar-gutter: stable;
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    black 2.75rem,
-    black calc(100% - 1.25rem),
-    transparent 100%
-  );
+}
+
+[data-testid="chat-composer-surface"] ~ * .scroll-subtle,
+[data-testid="chat-composer-surface"] {
+  --chat-fade-ready: 1;
 }
 
 /* The composer reads as one crafted object: a soft rim, inner highlight, and
@@ -95,8 +94,16 @@ body::before {
 }
 
 [data-testid="chat-composer-surface"] textarea {
+  outline: none;
+  box-shadow: none;
   caret-color: var(--accent, currentColor);
   line-height: 1.55;
+}
+
+[data-testid="chat-composer-surface"] textarea:focus,
+[data-testid="chat-composer-surface"] textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 [data-testid="chat-composer-surface"] textarea::placeholder {
