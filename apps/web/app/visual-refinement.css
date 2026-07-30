@@ -39,7 +39,13 @@ body::before {
 /* The conversation fades naturally into the viewport edges instead of clipping. */
 .scroll-subtle {
   scrollbar-gutter: stable;
-  mask-image: linear-gradient(to bottom, transparent 0, black 2.75rem, black calc(100% - 1.25rem), transparent 100%);
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 2.75rem,
+    black calc(100% - 1.25rem),
+    transparent 100%
+  );
 }
 
 /* The composer reads as one crafted object: a soft rim, inner highlight, and
@@ -65,7 +71,11 @@ body::before {
   z-index: -1;
   inset: -1px;
   border-radius: inherit;
-  background: linear-gradient(115deg, color-mix(in srgb, var(--accent, currentColor) 12%, transparent), transparent 34%);
+  background: linear-gradient(
+    115deg,
+    color-mix(in srgb, var(--accent, currentColor) 12%, transparent),
+    transparent 34%
+  );
   content: "";
   opacity: 0;
   transition: opacity var(--motion-medium) ease;
