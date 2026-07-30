@@ -326,13 +326,20 @@ export function AppNav({
                   Current place <strong>{activeItem?.label ?? 'Chat'}</strong>
                 </p>
               </div>
-              <JellyIconButton
-                buttonRef={closeButtonRef}
-                onClick={closePalette}
-                label="Close navigation menu"
-              >
-                <X className="size-5" aria-hidden="true" />
-              </JellyIconButton>
+              <div className="nav-palette-actions">
+                <span className="nav-close-control">
+                  <JellyIconButton
+                    buttonRef={closeButtonRef}
+                    onClick={closePalette}
+                    label="Close navigation menu"
+                  >
+                    <X className="size-5" aria-hidden="true" />
+                  </JellyIconButton>
+                </span>
+                <span className="nav-theme-control">
+                  <ThemeToggle />
+                </span>
+              </div>
             </div>
 
             <div className="nav-palette-scroll scroll-subtle">
@@ -376,19 +383,15 @@ export function AppNav({
               ) : null}
             </div>
 
-            <div className="nav-palette-footer">
-              <div className="nav-appearance-control">
-                <span>Appearance</span>
-                <ThemeToggle />
-              </div>
-              {signedIn ? (
+            {signedIn ? (
+              <div className="nav-palette-footer">
                 <form action={signOutAction}>
                   <button type="submit" className={`nav-sign-out mobile-touch-target ${focusRing}`}>
                     Sign out
                   </button>
                 </form>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
