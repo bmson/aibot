@@ -34,11 +34,10 @@
     z-index: 35;
     width: var(--nav-expanded-width);
     margin-right: calc(
-      var(--nav-outer-margin) - (var(--nav-expanded-width) - var(--nav-compact-width))
+      var(--nav-outer-margin) -
+      (var(--nav-expanded-width) - var(--nav-compact-width))
     );
-    clip-path: inset(
-      0 calc(var(--nav-expanded-width) - var(--nav-compact-width)) 0 0 round 1.4rem
-    );
+    clip-path: inset(0 calc(var(--nav-expanded-width) - var(--nav-compact-width)) 0 0 round 1.4rem);
     will-change: clip-path;
   }
 
@@ -166,11 +165,7 @@
   }
 
   /* The full assistant name belongs in chat, not in permanent mobile chrome. */
-  body
-    > div.flex.flex-1.flex-col
-    > header[class~="lg:hidden"]
-    > a
-    .flex.min-w-0.flex-col {
+  body > div.flex.flex-1.flex-col > header[class~="lg:hidden"] > a .flex.min-w-0.flex-col {
     display: none;
   }
 
