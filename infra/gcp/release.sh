@@ -91,10 +91,16 @@ fi
 BACKUP_BUCKET="$(agent_env_value WORKSPACE_BUCKET)"
 BACKUP_WORKSPACE_ID="$(agent_env_value ASSISTANT_WORKSPACE_ID)"
 [ -n "$BACKUP_BUCKET" ] || { echo "WORKSPACE_BUCKET is missing on assistant-agent" >&2; exit 1; }
-[ -n "$BACKUP_WORKSPACE_ID" ] || {
-  echo "ASSISTANT_WORKSPACE_ID is missing on assistant-agent" >&2
-  exit 1
-}
+# The agent service can legitimately omit ASSISTANT_WORKSPACE_ID: the config
+# schema (packages/config) resolves the same 'assistant' default when the
+# variable is absent, so a service without it IS running workspace
+# 'assistant' — hard-failing here declared every release of such a service
+# undeployable while the app itself was perfectly happy. Mirror the app's
+# default (the migration env below already does) so the backup lands under
+# the prefix the running workspace actually uses. WORKSPACE_BUCKET stays a
+# hard gate: it has no derivable default, and a backup with no destination
+# is not a backup.
+BACKUP_WORKSPACE_ID="${BACKUP_WORKSPACE_ID:-assistant}"
 echo "Backing up the database before migration"
 if gcloud run jobs describe assistant-backup --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
   gcloud run jobs update assistant-backup \
