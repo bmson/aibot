@@ -44,6 +44,16 @@
           }
         }
       }
+    },
+    {
+      "includes": ["apps/web/app/visual-refinement.css"],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noImportantStyles": "off"
+          }
+        }
+      }
     }
   ]
 }
