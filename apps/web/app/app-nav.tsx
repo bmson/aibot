@@ -8,6 +8,7 @@ import {
   Gauge,
   Lightbulb,
   ListChecks,
+  type LucideIcon,
   Menu,
   MessageCircle,
   Settings,
@@ -16,7 +17,6 @@ import {
   TrendingUp,
   TriangleAlert,
   X,
-  type LucideIcon,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
