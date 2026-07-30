@@ -287,7 +287,10 @@ export function AppNav({
         >
           <span className="flex size-10 shrink-0 items-center justify-center">
             {Icon ? (
-              <Icon className={`size-4 shrink-0 ${active ? '' : 'opacity-70'}`} aria-hidden="true" />
+              <Icon
+                className={`size-4 shrink-0 ${active ? '' : 'opacity-70'}`}
+                aria-hidden="true"
+              />
             ) : null}
             {collapseAware && count > 0 ? (
               <span
