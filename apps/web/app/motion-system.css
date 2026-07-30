@@ -51,7 +51,7 @@
   border-radius: inherit;
   background: color-mix(in srgb, var(--accent, currentColor) 0%, transparent);
   box-shadow: 0 0 0 0 transparent;
-  content: '';
+  content: "";
   opacity: 0;
   transform: scale(0.94);
   transition:
@@ -62,7 +62,7 @@
     border-color var(--motion-medium) ease;
 }
 
-.nav-tile[aria-current='page']::before,
+.nav-tile[aria-current="page"]::before,
 .nav-tile-active::before {
   border-color: color-mix(in srgb, var(--accent, currentColor) 16%, transparent);
   background: color-mix(in srgb, var(--accent, currentColor) 9%, transparent);
@@ -135,22 +135,22 @@
 
 /* Menus and popovers reveal from the edge nearest their trigger. Existing JS
    placement can set data-side; CSS anchor positioning can replace it later. */
-[role='menu'],
+[role="menu"],
 [data-action-menu],
 [popover] {
   --menu-origin-y: -8px;
   transform-origin: 50% 0;
 }
 
-[data-side='top'][role='menu'],
-[data-side='top'][data-action-menu],
-[data-side='top'][popover] {
+[data-side="top"][role="menu"],
+[data-side="top"][data-action-menu],
+[data-side="top"][popover] {
   --menu-origin-y: 8px;
   transform-origin: 50% 100%;
 }
 
-[role='menu'][data-state='open'],
-[data-action-menu][data-state='open'],
+[role="menu"][data-state="open"],
+[data-action-menu][data-state="open"],
 [popover]:popover-open {
   animation: menu-enter var(--motion-fast) var(--motion-enter) both;
 }
@@ -222,8 +222,8 @@ textarea {
 }
 
 /* Command/model palettes visually attach to the composer that produced them. */
-form:has(textarea) [role='listbox'],
-form:has(textarea) [role='menu'] {
+form:has(textarea) [role="listbox"],
+form:has(textarea) [role="menu"] {
   transform-origin: 50% 100%;
   animation: composer-palette-enter var(--motion-medium) var(--motion-enter) both;
 }
@@ -241,17 +241,23 @@ form:has(textarea) [role='menu'] {
 
 /* Streaming and tool work progress by events. New steps enter once; completed
    steps settle instead of continuing to shimmer forever. */
-[aria-label*='activity' i] > *,
+[aria-label*="activity" i] > *,
 [data-activity-trail] > * {
   animation: activity-step-enter var(--motion-medium) var(--motion-enter) both;
 }
 
-[aria-label*='activity' i] > *:nth-child(2),
-[data-activity-trail] > *:nth-child(2) { animation-delay: 35ms; }
-[aria-label*='activity' i] > *:nth-child(3),
-[data-activity-trail] > *:nth-child(3) { animation-delay: 70ms; }
-[aria-label*='activity' i] > *:nth-child(4),
-[data-activity-trail] > *:nth-child(4) { animation-delay: 105ms; }
+[aria-label*="activity" i] > *:nth-child(2),
+[data-activity-trail] > *:nth-child(2) {
+  animation-delay: 35ms;
+}
+[aria-label*="activity" i] > *:nth-child(3),
+[data-activity-trail] > *:nth-child(3) {
+  animation-delay: 70ms;
+}
+[aria-label*="activity" i] > *:nth-child(4),
+[data-activity-trail] > *:nth-child(4) {
+  animation-delay: 105ms;
+}
 
 @keyframes activity-step-enter {
   from {
@@ -294,11 +300,17 @@ form:has(textarea) [role='menu'] {
 }
 
 @keyframes view-old {
-  to { opacity: 0; transform: scale(0.995); }
+  to {
+    opacity: 0;
+    transform: scale(0.995);
+  }
 }
 
 @keyframes view-new {
-  from { opacity: 0; transform: translateY(8px) scale(0.995); }
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.995);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -312,12 +324,12 @@ form:has(textarea) [role='menu'] {
   .group\/msg,
   [data-message],
   [data-event-card],
-  [aria-label*='activity' i] > *,
+  [aria-label*="activity" i] > *,
   [data-activity-trail] > *,
-  form:has(textarea) [role='listbox'],
-  form:has(textarea) [role='menu'],
-  [role='menu'][data-state='open'],
-  [data-action-menu][data-state='open'],
+  form:has(textarea) [role="listbox"],
+  form:has(textarea) [role="menu"],
+  [role="menu"][data-state="open"],
+  [data-action-menu][data-state="open"],
   [popover]:popover-open {
     animation: none !important;
   }
