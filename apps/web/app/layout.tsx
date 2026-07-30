@@ -8,6 +8,7 @@ import { auth, authMode } from '@/auth';
 import { getAgentIdentity, getApplication } from '@/lib/server';
 import { AppNav } from './app-nav';
 import './globals.css';
+import './motion-system.css';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
 const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });
