@@ -47,6 +47,9 @@
     },
     {
       "includes": ["apps/web/app/visual-refinement.css"],
+      "formatter": {
+        "enabled": false
+      },
       "linter": {
         "rules": {
           "complexity": {
