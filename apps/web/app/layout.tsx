@@ -9,6 +9,7 @@ import { getAgentIdentity, getApplication } from '@/lib/server';
 import { AppNav } from './app-nav';
 import './globals.css';
 import './motion-system.css';
+import './visual-refinement.css';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
 const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });

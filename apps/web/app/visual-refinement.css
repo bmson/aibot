@@ -1,0 +1,196 @@
+/*
+ * Visual refinement pass
+ *
+ * This layer adjusts depth, hierarchy, and tactile feedback without changing
+ * layout semantics or introducing a component dependency.
+ */
+
+:root {
+  --ambient-accent: color-mix(in srgb, var(--accent, currentColor) 7%, transparent);
+  --ambient-ink: rgb(23 25 35 / 0.035);
+  --surface-highlight: rgb(255 255 255 / 0.62);
+  --surface-shadow: rgb(23 25 35 / 0.12);
+}
+
+.dark {
+  --ambient-accent: color-mix(in srgb, var(--accent, currentColor) 9%, transparent);
+  --ambient-ink: rgb(255 255 255 / 0.025);
+  --surface-highlight: rgb(255 255 255 / 0.08);
+  --surface-shadow: rgb(0 0 0 / 0.38);
+}
+
+/* A quiet atmospheric layer keeps large empty canvases from feeling flat. */
+body {
+  position: relative;
+  isolation: isolate;
+}
+
+body::before {
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 72% 4%, var(--ambient-accent), transparent 30rem),
+    radial-gradient(circle at 20% 94%, var(--ambient-ink), transparent 34rem);
+  content: "";
+}
+
+/* The conversation fades naturally into the viewport edges instead of clipping. */
+.scroll-subtle {
+  scrollbar-gutter: stable;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 2.75rem,
+    black calc(100% - 1.25rem),
+    transparent 100%
+  );
+}
+
+/* The composer reads as one crafted object: a soft rim, inner highlight, and
+   restrained lift only while the user is actively composing. */
+[data-testid="chat-composer-surface"] {
+  isolation: isolate;
+  border: 1px solid color-mix(in srgb, currentColor 6%, transparent);
+  background:
+    linear-gradient(180deg, var(--surface-highlight), transparent 34%),
+    color-mix(in srgb, var(--raised, Canvas) 94%, transparent);
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 14px 42px var(--surface-shadow),
+    0 3px 10px rgb(23 25 35 / 0.06);
+  transition:
+    transform var(--motion-medium) var(--motion-enter),
+    box-shadow var(--motion-medium) var(--motion-enter),
+    border-color var(--motion-fast) ease;
+}
+
+[data-testid="chat-composer-surface"]::after {
+  position: absolute;
+  z-index: -1;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    115deg,
+    color-mix(in srgb, var(--accent, currentColor) 12%, transparent),
+    transparent 34%
+  );
+  content: "";
+  opacity: 0;
+  transition: opacity var(--motion-medium) ease;
+}
+
+[data-testid="chat-composer-surface"]:focus-within {
+  border-color: color-mix(in srgb, var(--accent, currentColor) 30%, transparent);
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 18px 54px color-mix(in srgb, var(--accent, currentColor) 14%, var(--surface-shadow)),
+    0 4px 12px rgb(23 25 35 / 0.08);
+  transform: translateY(-2px);
+}
+
+[data-testid="chat-composer-surface"]:focus-within::after {
+  opacity: 1;
+}
+
+[data-testid="chat-composer-surface"] textarea {
+  caret-color: var(--accent, currentColor);
+  line-height: 1.55;
+}
+
+[data-testid="chat-composer-surface"] textarea::placeholder {
+  color: color-mix(in srgb, currentColor 44%, transparent);
+  transition: color var(--motion-fast) ease;
+}
+
+[data-testid="chat-composer-surface"]:focus-within textarea::placeholder {
+  color: color-mix(in srgb, currentColor 32%, transparent);
+}
+
+/* Palettes feel attached to the composer rather than like unrelated dialogs. */
+section[aria-label="Commands"],
+section[aria-label="Choose response model"] {
+  border: 1px solid color-mix(in srgb, currentColor 7%, transparent);
+  background:
+    linear-gradient(180deg, var(--surface-highlight), transparent 22%),
+    color-mix(in srgb, var(--raised, Canvas) 96%, transparent);
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 20px 60px var(--surface-shadow);
+  backdrop-filter: blur(22px) saturate(1.15);
+}
+
+section[aria-label="Commands"] [role="option"],
+section[aria-label="Choose response model"] [role="option"] {
+  transition:
+    background-color var(--motion-fast) ease,
+    transform var(--motion-fast) var(--motion-enter);
+}
+
+section[aria-label="Commands"] [role="option"]:hover,
+section[aria-label="Choose response model"] [role="option"]:hover {
+  transform: translateX(2px);
+}
+
+/* Message controls stay quiet until the message becomes the user's focus. */
+.group\/msg [aria-label*="message" i],
+.group\/msg [data-message-actions] {
+  opacity: 0.44;
+  transform: translateY(2px);
+  transition:
+    opacity var(--motion-fast) ease,
+    transform var(--motion-fast) var(--motion-enter);
+}
+
+.group\/msg:hover [aria-label*="message" i],
+.group\/msg:focus-within [aria-label*="message" i],
+.group\/msg:hover [data-message-actions],
+.group\/msg:focus-within [data-message-actions] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Pills and transient controls use the same material language as the composer. */
+button[aria-label="Jump to latest"] {
+  border: 1px solid color-mix(in srgb, currentColor 8%, transparent);
+  background: color-mix(in srgb, var(--raised, Canvas) 88%, transparent);
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 10px 30px var(--surface-shadow);
+  backdrop-filter: blur(18px) saturate(1.15);
+  transition:
+    transform var(--motion-fast) var(--motion-enter),
+    box-shadow var(--motion-fast) ease;
+}
+
+button[aria-label="Jump to latest"]:hover {
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 14px 38px var(--surface-shadow);
+  transform: translateY(-1px);
+}
+
+/* Selection uses the product accent without overpowering text contrast. */
+::selection {
+  background: color-mix(in srgb, var(--accent, currentColor) 24%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-testid="chat-composer-surface"],
+  [data-testid="chat-composer-surface"]::after,
+  section[aria-label="Commands"] [role="option"],
+  section[aria-label="Choose response model"] [role="option"],
+  .group\/msg [aria-label*="message" i],
+  .group\/msg [data-message-actions],
+  button[aria-label="Jump to latest"] {
+    transition: none !important;
+  }
+
+  [data-testid="chat-composer-surface"]:focus-within,
+  section[aria-label="Commands"] [role="option"]:hover,
+  section[aria-label="Choose response model"] [role="option"]:hover,
+  button[aria-label="Jump to latest"]:hover {
+    transform: none;
+  }
+}
