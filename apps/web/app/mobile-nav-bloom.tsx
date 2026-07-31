@@ -22,13 +22,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import {
-  type CSSProperties,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from 'react';
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
 import { focusRing } from '@/lib/ui';
 import { signOutAction } from './actions';
 
@@ -150,6 +144,7 @@ export function MobileNavBloom({
     });
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recompute after route changes
   useEffect(() => {
     const update = () => updateTriggerPosition();
     update();
@@ -194,6 +189,7 @@ export function MobileNavBloom({
     }, 180);
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: close on navigation
   useEffect(() => {
     if (openRef.current) closeMenu();
   }, [pathname, closeMenu]);
@@ -270,6 +266,7 @@ export function MobileNavBloom({
         key={item.href}
         href={item.href}
         aria-current={active ? 'page' : undefined}
+        aria-label={count > 0 ? `${item.label}, ${count} items need attention` : undefined}
         onClick={closeMenu}
         className={`nav-mobile-menu-row mobile-touch-target ${focusRing}`}
       >
@@ -281,11 +278,11 @@ export function MobileNavBloom({
           <span>{navDescriptions[item.href]}</span>
         </span>
         {count > 0 ? (
-          <span className="nav-mobile-menu-count" aria-label={`${count} items need attention`}>
+          <span className="nav-mobile-menu-count" aria-hidden="true">
             {formatBadgeCount(count)}
           </span>
         ) : active ? (
-          <Check className="size-4 text-accent" aria-label="Current page" />
+          <Check className="size-4 text-accent" aria-hidden="true" />
         ) : null}
       </Link>
     );
