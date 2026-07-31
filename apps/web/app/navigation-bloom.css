@@ -1,0 +1,389 @@
+/*
+ * Mobile navigation bloom
+ *
+ * The mobile menu grows out of a single composer-adjacent seed. A tap opens the
+ * orbit; a continuous press, slide, and release selects a destination. The DOM
+ * remains a labelled dialog so keyboard and assistive technology users get the
+ * same destinations without depending on the gesture.
+ */
+
+:root {
+  --bloom-edge: color-mix(in srgb, currentColor 10%, transparent);
+  --bloom-glass: color-mix(in srgb, var(--surface-raised) 88%, transparent);
+  --bloom-shadow: 0 14px 38px rgb(23 25 35 / 0.18);
+}
+
+.dark {
+  --bloom-edge: color-mix(in srgb, currentColor 16%, transparent);
+  --bloom-glass: color-mix(in srgb, var(--surface-raised) 82%, transparent);
+  --bloom-shadow: 0 16px 42px rgb(0 0 0 / 0.46);
+}
+
+.nav-bloom-trigger,
+.nav-bloom-center {
+  position: fixed;
+  z-index: 35;
+  bottom: calc(2rem + env(safe-area-inset-bottom));
+  left: 50%;
+  display: inline-flex;
+  width: 3.25rem;
+  height: 3.25rem;
+  touch-action: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--bloom-edge);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, white 18%, transparent), transparent 42%),
+    var(--bloom-glass);
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    var(--bloom-shadow);
+  color: var(--accent);
+  cursor: pointer;
+  text-align: center;
+  translate: -50% 50%;
+  backdrop-filter: blur(20px) saturate(1.22);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.nav-bloom-trigger::after,
+.nav-bloom-center::after {
+  position: absolute;
+  inset: -0.35rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
+  border-radius: inherit;
+  content: '';
+  opacity: 0;
+  scale: 0.82;
+  pointer-events: none;
+}
+
+.nav-bloom-trigger:active,
+.nav-bloom-center:active {
+  scale: 0.94;
+}
+
+.nav-bloom-trigger[data-chat='true'] {
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 10px 30px rgb(23 25 35 / 0.14),
+    0 0 0 6px color-mix(in srgb, var(--surface-raised) 72%, transparent);
+}
+
+.nav-bloom-trigger-orbit {
+  position: absolute;
+  inset: -0.45rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: inherit;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.nav-bloom-trigger[data-attention='true'] .nav-bloom-trigger-orbit {
+  border-color: color-mix(in srgb, #f59e0b 44%, transparent);
+}
+
+.nav-bloom-trigger-count,
+.nav-bloom-count {
+  position: absolute;
+  display: inline-flex;
+  min-width: 1.2rem;
+  height: 1.2rem;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--surface-raised);
+  border-radius: 999px;
+  padding-inline: 0.22rem;
+  background: #f59e0b;
+  color: #451a03;
+  font:
+    700 0.58rem / 1 var(--font-geist-mono),
+    ui-monospace,
+    monospace;
+}
+
+.nav-bloom-trigger-count {
+  top: -0.2rem;
+  right: -0.2rem;
+}
+
+.nav-bloom-dialog {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  isolation: isolate;
+}
+
+.nav-bloom-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background:
+    radial-gradient(
+      circle at 50% calc(100% - 2.5rem),
+      color-mix(in srgb, var(--accent) 12%, transparent),
+      transparent 14rem
+    ),
+    rgb(9 10 16 / 0.08);
+  opacity: 0;
+  backdrop-filter: blur(1.5px);
+}
+
+.nav-bloom-dialog[data-open='true'] .nav-bloom-scrim {
+  opacity: 1;
+}
+
+.nav-bloom-stage {
+  position: fixed;
+  z-index: 1;
+  bottom: calc(2rem + env(safe-area-inset-bottom));
+  left: 50%;
+  width: 0;
+  height: 0;
+}
+
+.nav-bloom-center {
+  position: absolute;
+  z-index: 3;
+  inset: auto auto 0 0;
+  color: var(--content-strong);
+}
+
+.nav-bloom-dialog[data-open='false'] .nav-bloom-center {
+  opacity: 0;
+  scale: 0.82;
+}
+
+.nav-bloom-instruction {
+  position: absolute;
+  z-index: 2;
+  top: -12rem;
+  left: 0;
+  width: max-content;
+  margin: 0;
+  border: 1px solid var(--bloom-edge);
+  border-radius: 999px;
+  padding: 0.32rem 0.62rem;
+  background: color-mix(in srgb, var(--surface-raised) 84%, transparent);
+  box-shadow: 0 5px 18px rgb(23 25 35 / 0.08);
+  color: var(--content-muted);
+  font-size: 0.625rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  opacity: 0;
+  translate: -50% 0.4rem;
+  backdrop-filter: blur(16px);
+}
+
+.nav-bloom-dialog[data-open='true'] .nav-bloom-instruction {
+  opacity: 1;
+  translate: -50% 0;
+}
+
+.nav-bloom-item {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  width: 3.25rem;
+  height: 3.25rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--bloom-edge);
+  border-radius: 999px;
+  padding: 0;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, white 16%, transparent), transparent 50%),
+    var(--bloom-glass);
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 11px 28px rgb(23 25 35 / 0.15);
+  color: var(--content-strong);
+  cursor: pointer;
+  opacity: 0;
+  scale: 0.22;
+  text-decoration: none;
+  translate: -50% -50%;
+  backdrop-filter: blur(18px) saturate(1.16);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dark .nav-bloom-item {
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 12px 32px rgb(0 0 0 / 0.4);
+}
+
+.nav-bloom-item[data-visible='true'] {
+  pointer-events: auto;
+  opacity: 1;
+  scale: 1;
+  translate:
+    calc(-50% + var(--bloom-x))
+    calc(-50% + var(--bloom-y));
+}
+
+.nav-bloom-item[data-visible='false'] {
+  pointer-events: none;
+}
+
+.nav-bloom-item[data-current='true'] {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--bloom-edge));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, white 18%, transparent), transparent 50%),
+    color-mix(in srgb, var(--accent) 17%, var(--surface-raised));
+  color: var(--accent);
+}
+
+.nav-bloom-item[data-highlighted='true'],
+.nav-bloom-item:hover,
+.nav-bloom-item:focus-visible {
+  z-index: 4;
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--bloom-edge));
+  box-shadow:
+    0 1px 0 var(--surface-highlight) inset,
+    0 18px 38px color-mix(in srgb, var(--accent) 20%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  scale: 1.14;
+}
+
+.nav-bloom-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.nav-bloom-label {
+  position: absolute;
+  top: calc(100% + 0.34rem);
+  left: 50%;
+  width: max-content;
+  max-width: 6.8rem;
+  overflow: hidden;
+  border: 1px solid var(--bloom-edge);
+  border-radius: 999px;
+  padding: 0.25rem 0.48rem;
+  background: color-mix(in srgb, var(--surface-raised) 90%, transparent);
+  box-shadow: 0 5px 14px rgb(23 25 35 / 0.09);
+  color: var(--content-strong);
+  font-size: 0.625rem;
+  font-weight: 650;
+  line-height: 1;
+  opacity: 0;
+  text-overflow: ellipsis;
+  translate: -50% -0.18rem;
+  white-space: nowrap;
+  pointer-events: none;
+  backdrop-filter: blur(14px);
+}
+
+.nav-bloom-dialog[data-layer='primary'] .nav-bloom-item[data-visible='true'] .nav-bloom-label,
+.nav-bloom-item[data-highlighted='true'] .nav-bloom-label,
+.nav-bloom-item:hover .nav-bloom-label,
+.nav-bloom-item:focus-visible .nav-bloom-label {
+  opacity: 1;
+  translate: -50% 0;
+}
+
+.nav-bloom-count {
+  top: -0.28rem;
+  right: -0.28rem;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .nav-bloom-trigger,
+  .nav-bloom-center,
+  .nav-bloom-trigger::after,
+  .nav-bloom-trigger-orbit {
+    transition:
+      opacity 140ms ease,
+      scale 160ms ease,
+      border-color 180ms ease,
+      box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      rotate 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .nav-bloom-trigger-orbit {
+    animation: nav-bloom-idle 3.4s ease-in-out infinite;
+  }
+
+  .nav-bloom-scrim,
+  .nav-bloom-instruction {
+    transition:
+      opacity 180ms ease,
+      translate 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .nav-bloom-item {
+    transition:
+      opacity 130ms ease,
+      scale 260ms cubic-bezier(0.22, 1, 0.36, 1),
+      translate 330ms cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 160ms ease,
+      box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      color 160ms ease;
+    transition-delay: var(--bloom-delay);
+  }
+
+  .nav-bloom-label {
+    transition:
+      opacity 130ms ease,
+      translate 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .nav-bloom-dialog[data-open='true'] .nav-bloom-center::after {
+    animation: nav-bloom-pulse 520ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+}
+
+@keyframes nav-bloom-idle {
+  0%,
+  100% {
+    opacity: 0.35;
+    scale: 0.96;
+  }
+
+  50% {
+    opacity: 0.7;
+    scale: 1.06;
+  }
+}
+
+@keyframes nav-bloom-pulse {
+  0% {
+    opacity: 0.7;
+    scale: 0.72;
+  }
+
+  100% {
+    opacity: 0;
+    scale: 1.35;
+  }
+}
+
+@media (max-width: 359px) {
+  .nav-bloom-stage {
+    scale: 0.94;
+    transform-origin: bottom center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-bloom-trigger-orbit {
+    animation: none;
+  }
+
+  .nav-bloom-trigger,
+  .nav-bloom-center,
+  .nav-bloom-item,
+  .nav-bloom-label,
+  .nav-bloom-scrim,
+  .nav-bloom-instruction {
+    transition: none;
+  }
+}
