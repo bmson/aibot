@@ -1283,7 +1283,7 @@ export function ChatClient({
         <div className="pointer-events-auto relative min-w-0">
           <div
             data-testid="chat-composer-surface"
-            className="min-w-0 overflow-hidden rounded-2xl bg-raised/90 shadow-[0_10px_36px_rgb(23_25_35/0.14)] ring-1 ring-edge backdrop-blur-xl motion-safe:transition-shadow focus-within:shadow-[0_14px_44px_rgb(91_92_226/0.18)] focus-within:ring-accent/40"
+            className="min-w-0 overflow-hidden rounded-2xl bg-raised/90 shadow-[0_10px_36px_rgb(23_25_35/0.14)] backdrop-blur-xl motion-safe:transition-shadow focus-within:shadow-[0_14px_44px_rgb(91_92_226/0.18)]"
           >
             <textarea
               ref={textareaRef}
