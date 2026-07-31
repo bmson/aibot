@@ -280,12 +280,7 @@ export function MobileNavBloom({
     icon: navIcons[item.href] ?? Menu,
     kind: 'route',
     href: item.href,
-    count: badgeCountFor(
-      item.href,
-      pendingApprovals,
-      memoryReviewCount,
-      needsAttentionCount,
-    ),
+    count: badgeCountFor(item.href, pendingApprovals, memoryReviewCount, needsAttentionCount),
   }));
   if (utilityItems.length > 0 || systemItems.length > 0 || signedIn) {
     primaryEntries.push({
@@ -421,6 +416,8 @@ export function MobileNavBloom({
       'data-highlighted': highlightedKey === entry.key,
       'data-current': active,
       'aria-hidden': !visible,
+      'aria-label':
+        entry.count > 0 ? `${entry.label}, ${entry.count} items need attention` : undefined,
       tabIndex: visible ? undefined : -1,
       style: {
         '--bloom-x': `${position.x}px`,
@@ -436,7 +433,7 @@ export function MobileNavBloom({
         </span>
         <span className="nav-bloom-label">{entry.label}</span>
         {entry.count > 0 ? (
-          <span className="nav-bloom-count" aria-label={`${entry.count} items need attention`}>
+          <span className="nav-bloom-count" aria-hidden="true">
             {formatBadgeCount(entry.count)}
           </span>
         ) : null}
@@ -489,7 +486,11 @@ export function MobileNavBloom({
         type="button"
         data-chat={pathname.startsWith('/chat')}
         data-attention={totalAttention > 0}
-        aria-label="Open navigation menu"
+        aria-label={
+          totalAttention > 0
+            ? `Open navigation menu, ${totalAttention} items need attention`
+            : 'Open navigation menu'
+        }
         aria-expanded={open}
         aria-controls="mobile-nav"
         onClick={() => {
@@ -513,7 +514,7 @@ export function MobileNavBloom({
           <Menu className="size-5" aria-hidden="true" />
         )}
         {totalAttention > 0 ? (
-          <span className="nav-bloom-trigger-count" aria-label={`${totalAttention} items need attention`}>
+          <span className="nav-bloom-trigger-count" aria-hidden="true">
             {formatBadgeCount(totalAttention)}
           </span>
         ) : null}
@@ -542,7 +543,7 @@ export function MobileNavBloom({
             onClick={closeBloom}
             className="nav-bloom-scrim"
           />
-          <div className="nav-bloom-stage" aria-label="Navigation destinations">
+          <nav className="nav-bloom-stage" aria-label="Navigation destinations">
             <button
               ref={closeRef}
               type="button"
@@ -571,7 +572,7 @@ export function MobileNavBloom({
                 open && layer === 'secondary',
               ),
             )}
-          </div>
+          </nav>
           {signedIn ? <form ref={signOutFormRef} action={signOutAction} /> : null}
         </div>
       ) : null}
