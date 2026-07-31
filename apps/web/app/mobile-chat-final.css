@@ -1,0 +1,27 @@
+/* Final mobile chat placement: the menu floats without dimming the conversation,
+   and the composer sits close to the bottom browser edge. */
+
+@media (max-width: 1023px) {
+  /* Keep the invisible outside-tap target and dialog semantics, but remove the
+     visual scrim entirely. The menu panel itself remains above chat content. */
+  .nav-mobile-menu-scrim,
+  .nav-mobile-menu-dialog[data-open="true"] .nav-mobile-menu-scrim {
+    background: transparent;
+    opacity: 1;
+    backdrop-filter: none;
+  }
+
+  /* Mobile Safari already keeps page content above its browser chrome. The old
+     safe-area padding left a large dead zone below the composer in a normal tab. */
+  .mobile-safe-bottom {
+    padding-bottom: 0.125rem;
+  }
+}
+
+/* Installed/home-screen mode reaches the physical bottom edge, so preserve the
+   hardware safe area there. */
+@media (max-width: 1023px) and (display-mode: standalone) {
+  .mobile-safe-bottom {
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+}

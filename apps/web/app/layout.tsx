@@ -13,6 +13,7 @@ import './visual-refinement.css';
 import './conversation-polish.css';
 import './navigation-rethink.css';
 import './navigation-bloom.css';
+import './mobile-chat-final.css';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
 const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });
