@@ -24,6 +24,7 @@ import { createElement, type MouseEvent, useCallback, useEffect, useRef, useStat
 import { focusRing, microLabelClass } from '@/lib/ui';
 import { signOutAction } from './actions';
 import { type JellyButtonElement, JellyIconButton } from './jelly-icon-button';
+import { MobileNavBloom } from './mobile-nav-bloom';
 import { ThemeToggle } from './theme-toggle';
 
 interface NavItem {
@@ -252,49 +253,52 @@ export function AppNav({
   const systemItems = navItems.filter((item) => item.system);
   const systemContainsCurrent = systemItems.some((item) => item.href === activeHref);
 
-  const renderLauncher = (mobile: boolean) => (
-    <button
-      type="button"
-      data-mobile-touch-target="true"
-      data-open={open}
-      aria-label="Open navigation menu"
-      aria-expanded={open}
-      aria-controls="mobile-nav"
-      onClick={openPalette}
-      className={`nav-launcher mobile-touch-target ${
-        mobile ? 'nav-launcher-mobile' : ''
-      } ${focusRing}`}
-    >
-      <span className="nav-launcher-icon">
-        {ActiveIcon ? (
-          <ActiveIcon className="size-4" aria-hidden="true" />
-        ) : (
-          <Menu className="size-4" aria-hidden="true" />
-        )}
-      </span>
-      <span className="nav-launcher-copy">
-        <span>Navigate</span>
-        <strong>{activeItem?.label ?? 'Menu'}</strong>
-      </span>
-      <ChevronRight className="nav-launcher-arrow size-4" aria-hidden="true" />
-      {totalAttention > 0 ? (
-        <span className="nav-launcher-badge" aria-hidden="true">
-          {formatBadgeCount(totalAttention)}
-        </span>
-      ) : null}
-    </button>
-  );
-
   return (
     <>
       <aside className="nav-anchor hidden shrink-0 lg:block">
-        <div className="nav-anchor-inner">{renderLauncher(false)}</div>
+        <div className="nav-anchor-inner">
+          <button
+            ref={menuTriggerRef}
+            type="button"
+            data-mobile-touch-target="true"
+            data-open={open}
+            aria-label="Open navigation menu"
+            aria-expanded={open}
+            aria-controls="desktop-nav"
+            onClick={openPalette}
+            className={`nav-launcher mobile-touch-target ${focusRing}`}
+          >
+            <span className="nav-launcher-icon">
+              {ActiveIcon ? (
+                <ActiveIcon className="size-4" aria-hidden="true" />
+              ) : (
+                <Menu className="size-4" aria-hidden="true" />
+              )}
+            </span>
+            <span className="nav-launcher-copy">
+              <span>Navigate</span>
+              <strong>{activeItem?.label ?? 'Menu'}</strong>
+            </span>
+            <ChevronRight className="nav-launcher-arrow size-4" aria-hidden="true" />
+            {totalAttention > 0 ? (
+              <span className="nav-launcher-badge" aria-hidden="true">
+                {formatBadgeCount(totalAttention)}
+              </span>
+            ) : null}
+          </button>
+        </div>
       </aside>
 
-      <header className="nav-mobile-header sticky z-30 lg:hidden">{renderLauncher(true)}</header>
+      <MobileNavBloom
+        navItems={navItems}
+        pendingApprovals={pendingApprovals}
+        signedIn={signedIn}
+        memoryReviewCount={memoryReviewCount}
+        needsAttentionCount={needsAttentionCount}
+      />
 
       {rendered ? (
-        <div className="nav-overlay fixed inset-0 z-40">
+        <div className="nav-overlay fixed inset-0 z-40 hidden lg:block">
           <button
             type="button"
             aria-label="Close navigation menu"
@@ -306,10 +310,10 @@ export function AppNav({
           />
           <div
             ref={paletteRef}
-            id="mobile-nav"
+            id="desktop-nav"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="mobile-nav-title"
+            aria-labelledby="desktop-nav-title"
             data-open={open}
             inert={!open}
             onTransitionEnd={(event) => {
@@ -319,7 +323,7 @@ export function AppNav({
           >
             <div className="nav-palette-header">
               <div className="min-w-0">
-                <span id="mobile-nav-title" className={`${microLabelClass} text-muted`}>
+                <span id="desktop-nav-title" className={`${microLabelClass} text-muted`}>
                   Navigate
                 </span>
                 <p className="nav-palette-context truncate">
