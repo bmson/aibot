@@ -81,7 +81,7 @@
 
 .nav-mobile-menu-scrim {
   position: absolute;
-  inset: 0;
+  inset: 0 min(17.75rem, calc(100vw - 2.25rem)) 0 0;
   border: 0;
   background: rgb(9 10 16 / 0.08);
   opacity: 0;
