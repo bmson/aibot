@@ -201,23 +201,29 @@ try {
   const menuTrigger = page.getByRole('button', { name: 'Open navigation menu' });
   await targetSize(menuTrigger, 'mobile navigation trigger');
   await menuTrigger.click();
-  const drawer = page.locator('#mobile-nav[role="dialog"]');
-  await drawer.waitFor({ state: 'visible' });
-  assert((await drawer.getAttribute('aria-modal')) === 'true', 'mobile drawer is not modal');
+  const bloom = page.locator('#mobile-nav[role="dialog"]');
+  await bloom.waitFor({ state: 'visible' });
+  assert((await bloom.getAttribute('aria-modal')) === 'true', 'mobile bloom is not modal');
   assert(
-    (await drawer.getAttribute('aria-labelledby')) === 'mobile-nav-title',
-    'mobile drawer is not labelled by its visible title',
+    (await bloom.getAttribute('aria-labelledby')) === 'mobile-nav-title',
+    'mobile bloom is not labelled',
   );
   assert(
     (await page.evaluate(() => document.body.style.overflow)) === 'hidden',
-    'opening the mobile drawer did not lock background scrolling',
+    'opening the mobile bloom did not lock background scrolling',
   );
   assert(
     (await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))) ===
       'Close navigation menu',
-    'opening the mobile drawer did not move focus to its close control',
+    'opening the mobile bloom did not move focus to its close control',
   );
-  const settingsLink = drawer.getByRole('link', { name: 'Settings' });
+  await targetSize(bloom.getByRole('link', { name: 'Chat' }), 'primary bloom destination');
+  const moreButton = bloom.getByRole('button', { name: 'More' });
+  await targetSize(moreButton, 'mobile bloom more control');
+  await moreButton.click();
+  const settingsLink = bloom.getByRole('link', { name: 'Settings' });
+  await settingsLink.waitFor({ state: 'visible' });
+  await targetSize(settingsLink, 'secondary bloom destination');
   await settingsLink.focus();
   await page.keyboard.press('Tab');
   assert(
@@ -226,13 +232,13 @@ try {
     ),
     'Tab escaped the mobile navigation dialog',
   );
-  // Wrap check from the true last focusable (the drawer's tail varies —
-  // System group, sign out — so don't assume Settings is last).
   await page.evaluate(() => {
     const focusable = [
       ...(document
         .querySelector('#mobile-nav')
-        ?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), summary') ?? []),
+        ?.querySelectorAll<HTMLElement>(
+          'a[href]:not([aria-hidden="true"]), button:not([disabled]):not([aria-hidden="true"])',
+        ) ?? []),
     ].filter((element) => element.checkVisibility());
     focusable[focusable.length - 1]?.focus();
   });
@@ -240,16 +246,16 @@ try {
   assert(
     (await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))) ===
       'Close navigation menu',
-    'Tab from the last drawer control did not wrap to the close control',
+    'Tab from the last bloom control did not wrap to the close control',
   );
-  const closeButton = drawer.getByRole('button', { name: 'Close navigation menu' });
+  const closeButton = bloom.getByRole('button', { name: 'Close navigation menu' });
   await targetSize(closeButton, 'mobile navigation close button');
   await closeButton.click();
-  await drawer.waitFor({ state: 'detached' });
+  await bloom.waitFor({ state: 'detached' });
   assert(
     (await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))) ===
       'Open navigation menu',
-    'closing the mobile drawer did not restore focus to its trigger',
+    'closing the mobile bloom did not restore focus to its trigger',
   );
 
   for (const route of testedRoutes.slice(1)) await openRoute(page, route);
@@ -318,7 +324,8 @@ try {
         'no horizontal overflow',
         '44px mobile targets',
         '16px mobile fields',
-        'drawer focus trap',
+        'bloom focus trap',
+        'primary and secondary bloom destinations',
         'root opens the primary chat',
         'activity feed and filters',
       ],
