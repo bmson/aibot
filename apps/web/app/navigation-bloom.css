@@ -202,7 +202,7 @@
   color: var(--content-strong);
   cursor: pointer;
   opacity: 0;
-  scale: 0.22;
+  scale: 0.92;
   text-decoration: none;
   translate: -50% -50%;
   backdrop-filter: blur(18px) saturate(1.16);
