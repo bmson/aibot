@@ -140,11 +140,16 @@ export function MobileNavBloom({
     };
 
     document.addEventListener('keydown', onKeyDown);
-    const frame = window.requestAnimationFrame(() => panelRef.current?.querySelector<HTMLElement>('a, button')?.focus());
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const frame = window.requestAnimationFrame(() =>
+      panelRef.current?.querySelector<HTMLElement>('a, button')?.focus(),
+    );
 
     return () => {
       window.cancelAnimationFrame(frame);
       document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
       triggerRef.current?.focus();
     };
   }, [open, closeMenu]);
@@ -218,11 +223,14 @@ export function MobileNavBloom({
           id="mobile-nav"
           role="dialog"
           aria-modal="true"
-          aria-label="Navigation menu"
+          aria-labelledby="mobile-nav-title"
           data-open={open}
           inert={!open}
           className="nav-mobile-menu-dialog lg:hidden"
         >
+          <span id="mobile-nav-title" className="sr-only">
+            Navigation menu
+          </span>
           <button
             type="button"
             aria-label="Close navigation menu"
