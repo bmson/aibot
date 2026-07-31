@@ -100,7 +100,10 @@
   right: 0.75rem;
   display: flex;
   width: min(17rem, calc(100vw - 1.5rem));
-  max-height: min(31rem, calc(100dvh - 9.5rem - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+  max-height: min(
+    31rem,
+    calc(100dvh - 9.5rem - env(safe-area-inset-top) - env(safe-area-inset-bottom))
+  );
   min-height: 0;
   flex-direction: column;
   overflow: visible;
