@@ -142,9 +142,7 @@ export function MobileNavBloom({
     document.addEventListener('keydown', onKeyDown);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    const frame = window.requestAnimationFrame(() =>
-      panelRef.current?.querySelector<HTMLElement>('a, button')?.focus(),
-    );
+    const frame = window.requestAnimationFrame(() => triggerRef.current?.focus());
 
     return () => {
       window.cancelAnimationFrame(frame);
