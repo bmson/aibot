@@ -127,13 +127,13 @@
     color-mix(in srgb, var(--surface-raised) 94%, transparent);
 }
 
-/* Use one box-shadow halo on the rounded composer itself. This replaces the
-   utility ring and keeps WebKit from drawing a rectangular focus boundary
-   around the composer's outer containing block. */
+/* Keep the focus ring inside the rounded composer. WebKit can square off
+   an outer spread shadow when backdrop-filter is active; the inset ring follows
+   the composer's clipped border radius reliably. */
 [data-testid="chat-composer-surface"]:focus-within {
   outline: none;
   box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--accent) 42%, transparent),
+    inset 0 0 0 2px color-mix(in srgb, var(--accent) 42%, transparent),
     0 1px 0 var(--surface-highlight) inset,
     0 20px 58px color-mix(in srgb, var(--accent) 12%, var(--surface-shadow)),
     0 4px 12px rgb(23 25 35 / 0.07);
