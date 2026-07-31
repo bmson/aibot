@@ -113,6 +113,7 @@
 
 /* The composer should feel composed even before focus, then quietly wake up. */
 [data-testid="chat-composer-surface"] {
+  position: relative;
   border-color: var(--conversation-hairline);
   background:
     linear-gradient(180deg, rgb(255 255 255 / 0.28), transparent 32%),
@@ -124,6 +125,18 @@
   background:
     linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent 32%),
     color-mix(in srgb, var(--surface-raised) 94%, transparent);
+}
+
+/* Use one box-shadow halo on the rounded composer itself. This replaces the
+   utility ring and keeps WebKit from drawing a rectangular focus boundary
+   around the composer's outer containing block. */
+[data-testid="chat-composer-surface"]:focus-within {
+  outline: none;
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 42%, transparent),
+    0 1px 0 var(--surface-highlight) inset,
+    0 20px 58px color-mix(in srgb, var(--accent) 12%, var(--surface-shadow)),
+    0 4px 12px rgb(23 25 35 / 0.07);
 }
 
 [data-testid="chat-composer-surface"]:hover:not(:focus-within) {
