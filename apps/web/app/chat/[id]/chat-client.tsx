@@ -822,7 +822,7 @@ export function ChatClient({
     // above), not this container: prose that runs to 1000px is tiring, and
     // pinning the user's bubbles that far right would make a two-way
     // exchange read as two columns regardless of how wide the column is.
-    <div className="relative mx-auto -my-7 flex h-[calc(100dvh-3.5rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-10 lg:h-[calc(100dvh-var(--app-chrome,0px))] lg:max-w-4xl 2xl:max-w-[56rem]">
+    <div className="relative mx-auto -my-5 flex h-[calc(100dvh-1rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-10 lg:h-[calc(100dvh-var(--app-chrome,0px))] lg:max-w-4xl 2xl:max-w-[56rem]">
       {/* The primary thread is the whole surface — it needs no title. Side and
           goal chats keep a slim header so you know which one you're in. */}
       {!isPrimary ? (
