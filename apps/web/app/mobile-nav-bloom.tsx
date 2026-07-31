@@ -18,11 +18,10 @@ import {
   Target,
   TrendingUp,
   TriangleAlert,
-  X,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { focusRing } from '@/lib/ui';
 import { signOutAction } from './actions';
 
@@ -47,20 +46,6 @@ const navIcons: Record<string, LucideIcon> = {
   '/improvements': TrendingUp,
 };
 
-const navDescriptions: Record<string, string> = {
-  '/chat': 'Talk and work with your assistant',
-  '/approvals': 'Review decisions waiting on you',
-  '/tasks': 'See active and recent work',
-  '/goals': 'Manage longer-term outcomes',
-  '/profile': 'Review what the assistant remembers',
-  '/documents': 'Browse files and generated documents',
-  '/skills': 'Manage connected capabilities',
-  '/settings': 'Preferences and configuration',
-  '/costs': 'Usage and spending',
-  '/anomalies': 'Unexpected system behavior',
-  '/improvements': 'Suggested assistant improvements',
-};
-
 function badgeCountFor(
   href: string,
   pendingApprovals: number,
@@ -75,10 +60,6 @@ function badgeCountFor(
 
 function formatBadgeCount(count: number): string {
   return count >= 1_000 ? `${(count / 1_000).toFixed(1)}k` : String(count);
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(Math.max(value, minimum), maximum);
 }
 
 export function MobileNavBloom({
@@ -98,12 +79,8 @@ export function MobileNavBloom({
   const [open, setOpen] = useState(false);
   const [rendered, setRendered] = useState(false);
   const [layer, setLayer] = useState<'primary' | 'secondary'>('primary');
-  const [overComposer, setOverComposer] = useState(false);
-  const [triggerStyle, setTriggerStyle] = useState<CSSProperties>();
-  const [panelStyle, setPanelStyle] = useState<CSSProperties>();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const closeRef = useRef<HTMLButtonElement>(null);
   const backRef = useRef<HTMLButtonElement>(null);
   const signOutFormRef = useRef<HTMLFormElement>(null);
   const openRef = useRef(open);
@@ -112,71 +89,11 @@ export function MobileNavBloom({
     openRef.current = open;
   }, [open]);
 
-  const updateTriggerPosition = useCallback(() => {
-    if (window.innerWidth >= 1024) return;
-    const composer = document.querySelector<HTMLElement>('[data-testid="chat-composer-surface"]');
-    if (!composer) {
-      setOverComposer(false);
-      setTriggerStyle(undefined);
-      return;
-    }
-
-    const rect = composer.getBoundingClientRect();
-    setOverComposer(true);
-    setTriggerStyle({
-      top: clamp(rect.top - 18, 12, window.innerHeight - 56),
-      left: clamp(rect.left + 10, 12, window.innerWidth - 56),
-      right: 'auto',
-      bottom: 'auto',
-    });
-  }, []);
-
-  const updatePanelPosition = useCallback(() => {
-    const trigger = triggerRef.current;
-    if (!trigger) return;
-    const rect = trigger.getBoundingClientRect();
-    const width = Math.min(320, window.innerWidth - 24);
-    setPanelStyle({
-      width,
-      left: clamp(rect.left, 12, window.innerWidth - width - 12),
-      bottom: Math.max(12, window.innerHeight - rect.top + 8),
-      maxHeight: Math.max(260, rect.top - 24),
-    });
-  }, []);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: recompute after route changes
-  useEffect(() => {
-    const update = () => updateTriggerPosition();
-    update();
-    const frame = window.requestAnimationFrame(update);
-    const delayed = window.setTimeout(update, 240);
-    const viewport = window.visualViewport;
-    window.addEventListener('resize', update);
-    viewport?.addEventListener('resize', update);
-    viewport?.addEventListener('scroll', update);
-
-    const composer = document.querySelector<HTMLElement>('[data-testid="chat-composer-surface"]');
-    const resizeObserver = composer ? new ResizeObserver(update) : undefined;
-    if (composer) resizeObserver?.observe(composer);
-
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.clearTimeout(delayed);
-      window.removeEventListener('resize', update);
-      viewport?.removeEventListener('resize', update);
-      viewport?.removeEventListener('scroll', update);
-      resizeObserver?.disconnect();
-    };
-  }, [pathname, updateTriggerPosition]);
-
   const openMenu = useCallback(() => {
     setLayer('primary');
     setRendered(true);
-    window.requestAnimationFrame(() => {
-      updatePanelPosition();
-      setOpen(true);
-    });
-  }, [updatePanelPosition]);
+    window.requestAnimationFrame(() => setOpen(true));
+  }, []);
 
   const closeMenu = useCallback(() => {
     setOpen(false);
@@ -189,33 +106,29 @@ export function MobileNavBloom({
     }, 180);
   }, []);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: close on navigation
+  // biome-ignore lint/correctness/useExhaustiveDependencies: close after route navigation
   useEffect(() => {
     if (openRef.current) closeMenu();
   }, [pathname, closeMenu]);
 
   useEffect(() => {
     if (!open) return;
-    updatePanelPosition();
-    const viewport = window.visualViewport;
-    const reposition = () => updatePanelPosition();
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         closeMenu();
         return;
       }
       if (event.key !== 'Tab') return;
-      const focusable = Array.from(
+
+      const menuControls = Array.from(
         panelRef.current?.querySelectorAll<HTMLElement>(
           'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
         ) ?? [],
-      ).filter((element) => {
-        if (element.tabIndex < 0 || element.getAttribute('aria-hidden') === 'true') return false;
-        return typeof element.checkVisibility === 'function'
-          ? element.checkVisibility()
-          : element.getClientRects().length > 0;
-      });
+      ).filter((element) => element.getClientRects().length > 0 && element.tabIndex >= 0);
+      const focusable = triggerRef.current ? [triggerRef.current, ...menuControls] : menuControls;
       if (focusable.length === 0) return;
+
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       if (event.shiftKey && document.activeElement === first) {
@@ -227,27 +140,22 @@ export function MobileNavBloom({
       }
     };
 
+    document.addEventListener('keydown', onKeyDown);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    document.addEventListener('keydown', onKeyDown);
-    window.addEventListener('resize', reposition);
-    viewport?.addEventListener('resize', reposition);
-    const frame = window.requestAnimationFrame(() => closeRef.current?.focus());
+    const frame = window.requestAnimationFrame(() => triggerRef.current?.focus());
 
     return () => {
       window.cancelAnimationFrame(frame);
-      document.body.style.overflow = previousOverflow;
       document.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('resize', reposition);
-      viewport?.removeEventListener('resize', reposition);
+      document.body.style.overflow = previousOverflow;
       triggerRef.current?.focus();
     };
-  }, [open, closeMenu, updatePanelPosition]);
+  }, [open, closeMenu]);
 
   const activeHref = navItems
     .filter((item) => (item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)))
     .sort((a, b) => b.href.length - a.href.length)[0]?.href;
-  const activeItem = navItems.find((item) => item.href === activeHref) ?? navItems[0];
   const primaryItems = navItems.filter((item) => !item.utility && !item.system);
   const secondaryItems = navItems.filter((item) => item.utility || item.system);
   const totalAttention = pendingApprovals + memoryReviewCount + needsAttentionCount;
@@ -261,6 +169,7 @@ export function MobileNavBloom({
       memoryReviewCount,
       needsAttentionCount,
     );
+
     return (
       <Link
         key={item.href}
@@ -271,12 +180,9 @@ export function MobileNavBloom({
         className={`nav-mobile-menu-row mobile-touch-target ${focusRing}`}
       >
         <span className="nav-mobile-menu-icon">
-          <Icon className="size-4" aria-hidden="true" />
+          <Icon className="size-5" aria-hidden="true" />
         </span>
-        <span className="nav-mobile-menu-copy">
-          <strong>{item.label}</strong>
-          <span>{navDescriptions[item.href]}</span>
-        </span>
+        <strong>{item.label}</strong>
         {count > 0 ? (
           <span className="nav-mobile-menu-count" aria-hidden="true">
             {formatBadgeCount(count)}
@@ -293,10 +199,8 @@ export function MobileNavBloom({
       <button
         ref={triggerRef}
         type="button"
-        style={triggerStyle}
-        data-over-composer={overComposer}
         data-attention={totalAttention > 0}
-        aria-label="Open navigation menu"
+        aria-label={open ? 'Close navigation menu' : 'Open navigation menu'}
         aria-expanded={open}
         aria-controls="mobile-nav"
         onClick={() => {
@@ -305,7 +209,7 @@ export function MobileNavBloom({
         }}
         className={`nav-mobile-menu-trigger mobile-touch-target lg:hidden ${focusRing}`}
       >
-        <Menu className="size-4.5" aria-hidden="true" />
+        <Menu className="size-5" aria-hidden="true" />
         {totalAttention > 0 ? (
           <span className="nav-mobile-menu-trigger-count" aria-hidden="true">
             {formatBadgeCount(totalAttention)}
@@ -323,17 +227,18 @@ export function MobileNavBloom({
           inert={!open}
           className="nav-mobile-menu-dialog lg:hidden"
         >
+          <span id="mobile-nav-title" className="sr-only">
+            Navigation menu
+          </span>
           <button
             type="button"
-            aria-label="Close navigation menu"
-            aria-hidden="true"
             tabIndex={-1}
+            aria-label="Close navigation menu"
             onClick={closeMenu}
             className="nav-mobile-menu-scrim"
           />
           <div
             ref={panelRef}
-            style={panelStyle}
             data-open={open}
             data-layer={layer}
             onTransitionEnd={(event) => {
@@ -341,43 +246,28 @@ export function MobileNavBloom({
             }}
             className="nav-mobile-menu-panel"
           >
-            <header className="nav-mobile-menu-header">
-              <div className="min-w-0">
-                <p id="mobile-nav-title">Menu</p>
-                <strong className="truncate">{activeItem?.label ?? 'Chat'}</strong>
-              </div>
-              <button
-                ref={closeRef}
-                type="button"
-                aria-label="Close navigation menu"
-                onClick={closeMenu}
-                className={`nav-mobile-menu-close mobile-touch-target ${focusRing}`}
-              >
-                <X className="size-4" aria-hidden="true" />
-              </button>
-            </header>
-
+            <div className="nav-mobile-menu-pointer" aria-hidden="true" />
             <div className="nav-mobile-menu-scroll scroll-subtle">
               <div data-visible={layer === 'primary'} inert={layer !== 'primary'}>
                 <nav aria-label="Primary navigation" className="nav-mobile-menu-list">
                   {primaryItems.map(renderNavItem)}
                   {secondaryItems.length > 0 || signedIn ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setLayer('secondary');
-                        window.requestAnimationFrame(() => backRef.current?.focus());
-                      }}
-                      className={`nav-mobile-menu-row mobile-touch-target ${focusRing}`}
-                    >
-                      <span className="nav-mobile-menu-icon">
-                        <MoreHorizontal className="size-4" aria-hidden="true" />
-                      </span>
-                      <span className="nav-mobile-menu-copy">
+                    <>
+                      <span className="nav-mobile-menu-divider" aria-hidden="true" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLayer('secondary');
+                          window.requestAnimationFrame(() => backRef.current?.focus());
+                        }}
+                        className={`nav-mobile-menu-row mobile-touch-target ${focusRing}`}
+                      >
+                        <span className="nav-mobile-menu-icon">
+                          <MoreHorizontal className="size-5" aria-hidden="true" />
+                        </span>
                         <strong>More</strong>
-                        <span>Documents, skills, settings, and system</span>
-                      </span>
-                    </button>
+                      </button>
+                    </>
                   ) : null}
                 </nav>
               </div>
@@ -392,22 +282,23 @@ export function MobileNavBloom({
                   <ChevronLeft className="size-4" aria-hidden="true" />
                   Back
                 </button>
+                <span className="nav-mobile-menu-divider" aria-hidden="true" />
                 <nav aria-label="More navigation" className="nav-mobile-menu-list">
                   {secondaryItems.map(renderNavItem)}
                   {signedIn ? (
-                    <button
-                      type="button"
-                      onClick={() => signOutFormRef.current?.requestSubmit()}
-                      className={`nav-mobile-menu-row mobile-touch-target ${focusRing}`}
-                    >
-                      <span className="nav-mobile-menu-icon">
-                        <LogOut className="size-4" aria-hidden="true" />
-                      </span>
-                      <span className="nav-mobile-menu-copy">
+                    <>
+                      <span className="nav-mobile-menu-divider" aria-hidden="true" />
+                      <button
+                        type="button"
+                        onClick={() => signOutFormRef.current?.requestSubmit()}
+                        className={`nav-mobile-menu-row mobile-touch-target ${focusRing}`}
+                      >
+                        <span className="nav-mobile-menu-icon">
+                          <LogOut className="size-5" aria-hidden="true" />
+                        </span>
                         <strong>Sign out</strong>
-                        <span>End this session</span>
-                      </span>
-                    </button>
+                      </button>
+                    </>
                   ) : null}
                 </nav>
               </div>
