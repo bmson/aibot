@@ -236,11 +236,12 @@ export function MobileNavBloom({
         dialogRef.current?.querySelectorAll<HTMLElement>(
           'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
         ) ?? [],
-      ).filter((element) =>
-        typeof element.checkVisibility === 'function'
+      ).filter((element) => {
+        if (element.tabIndex < 0 || element.getAttribute('aria-hidden') === 'true') return false;
+        return typeof element.checkVisibility === 'function'
           ? element.checkVisibility()
-          : element.getClientRects().length > 0,
-      );
+          : element.getClientRects().length > 0;
+      });
       if (focusable.length === 0) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
