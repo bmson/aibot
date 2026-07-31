@@ -1,5 +1,5 @@
 /* Final mobile chat placement: the menu floats without dimming the conversation,
-   and the composer sits close to the bottom browser edge. */
+   and the composer sits flush with the bottom browser edge. */
 
 @media (max-width: 1023px) {
   /* Keep the invisible outside-tap target and dialog semantics, but remove the
@@ -11,10 +11,10 @@
     backdrop-filter: none;
   }
 
-  /* Mobile Safari already keeps page content above its browser chrome. The old
-     safe-area padding left a large dead zone below the composer in a normal tab. */
+  /* Mobile Safari already reserves space for its browser chrome. Do not add an
+     extra gap beneath the composer in a normal browser tab. */
   .mobile-safe-bottom {
-    padding-bottom: 0.125rem;
+    padding-bottom: 0;
   }
 }
 
