@@ -1,5 +1,5 @@
 import { getAgent } from '@assistant/core/chat';
-import { agents, approvalPolicies, budgets, type Db, schedules } from '@assistant/db';
+import { agents, approvalPolicies, type Db, schedules } from '@assistant/db';
 import { asc, eq, sql } from 'drizzle-orm';
 
 export interface SettingsOverview {
@@ -64,20 +64,6 @@ export async function setRecurringJobEnabled(
     .update(schedules)
     .set({ enabled, ...(enabled ? { nextRunAt: null } : {}), updatedAt: sql`now()` })
     .where(eq(schedules.id, scheduleId));
-}
-
-export async function updateSpendingBudgets(
-  db: Db,
-  values: Partial<Record<'task_default' | 'daily' | 'monthly', number>>,
-): Promise<void> {
-  for (const scope of ['task_default', 'daily', 'monthly'] as const) {
-    const value = values[scope];
-    if (!Number.isFinite(value) || !value || value <= 0 || value > 10_000) continue;
-    await db
-      .update(budgets)
-      .set({ limitUsd: value.toFixed(2), updatedAt: sql`now()` })
-      .where(eq(budgets.scope, scope));
-  }
 }
 
 export async function setApprovalPolicyEnabled(

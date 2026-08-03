@@ -67,15 +67,6 @@ export const btnSm = {
 } as const;
 
 /**
- * Figures across the app are set in tabular (fixed-width) numerals. Inter's
- * default proportional digits are right for prose but wrong for data: a `1` is
- * narrower than a `7`, so a live count or a spend total visibly reflows every
- * time it refreshes, and columns of numbers fail to line up. Only digits are
- * affected, so this is safe on strings that mix numbers and words.
- */
-export const tabularNums = 'tabular-nums';
-
-/**
  * The app's structural voice: every micro-label that names a *part of the
  * interface* rather than saying something (eyebrow headings, group labels,
  * uppercase badges, the keys in fact grids) is set in the mono face, small
@@ -170,9 +161,8 @@ export const cardInteractiveClass =
 export const eventCardClass =
   'min-w-0 max-w-full overflow-hidden rounded-xl bg-raised ring-1 ring-edge/70';
 
-/** Two grid recipes, so pages stop inventing their own breakpoints. */
+/** The shared grid recipe, so pages stop inventing their own breakpoints. */
 export const cardGridClass = 'grid min-w-0 items-stretch gap-4 lg:grid-cols-2';
-export const tileGridClass = 'grid min-w-0 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3';
 
 /** Collapsible-section summary row (native <details>). The `disclosure` class
  *  draws the rotating chevron and globals.css animates the panel itself, so
@@ -521,5 +511,3 @@ export const segmentedItemClass = `${segmentedItemBase} text-muted hover:bg-rais
  * so the resting hover styles can't fight the selected ones.
  */
 export const segmentedItemActiveClass = `${segmentedItemBase} bg-raised text-accent shadow-[0_1px_2px_rgb(23_25_35/0.08)] ring-1 ring-accent/25`;
-
-export const iconButtonClass = `mobile-touch-target inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-edge bg-raised text-muted motion-safe:transition-[background-color,color,transform] hover:bg-sunken hover:text-strong active:bg-sunken/80 motion-safe:active:translate-y-px ${focusRing}`;

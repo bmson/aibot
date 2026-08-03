@@ -8,7 +8,7 @@ import type { ModelMessage } from 'ai';
  * result lives in its tool_calls row, which `tools.read_result` can page
  * through on demand.
  */
-export const RESULT_CHAR_LIMIT = 8_000;
+const RESULT_CHAR_LIMIT = 8_000;
 const RESULT_CHAR_LIMITS: Readonly<Record<string, number>> = {
   'web.fetch': 24_000,
   'gmail.read_thread': 24_000,
@@ -19,7 +19,7 @@ const RESULT_CHAR_LIMITS: Readonly<Record<string, number>> = {
   'tools.read_result': 32_000,
 };
 
-export function resultCharLimit(toolName: string): number {
+function resultCharLimit(toolName: string): number {
   return RESULT_CHAR_LIMITS[toolName] ?? RESULT_CHAR_LIMIT;
 }
 

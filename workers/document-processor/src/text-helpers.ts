@@ -4,7 +4,7 @@
  * extract.ts build on these.
  */
 
-export const MAX_TEXT_CHARS = 8 * 1024 * 1024;
+const MAX_TEXT_CHARS = 8 * 1024 * 1024;
 
 export function baseMime(mime: string): string {
   return (mime || '').toLowerCase().split(';')[0]?.trim() ?? '';

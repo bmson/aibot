@@ -22,8 +22,6 @@ export type AssistantModule = (typeof assistantModuleNames)[number];
 
 const AssistantModuleSchema = z.enum(assistantModuleNames);
 
-export const allAssistantModules: readonly AssistantModule[] = assistantModuleNames;
-
 /**
  * Parse the human-friendly comma-separated environment value.
  *
@@ -33,7 +31,7 @@ export const allAssistantModules: readonly AssistantModule[] = assistantModuleNa
  */
 export function parseAssistantModules(value: string | undefined): AssistantModule[] {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === undefined || normalized === 'all') return [...allAssistantModules];
+  if (normalized === undefined || normalized === 'all') return [...assistantModuleNames];
   if (normalized === '' || normalized === 'minimal') return [];
 
   const tokens = normalized

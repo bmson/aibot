@@ -28,19 +28,6 @@ export async function setScheduleEnabled(scheduleId: string, enabled: boolean): 
   revalidateSettings();
 }
 
-/** Update spend caps for all three scopes; invalid or out-of-range values are skipped. */
-export async function updateBudgets(formData: FormData): Promise<void> {
-  await requireOwner();
-  const values: Partial<Record<'task_default' | 'daily' | 'monthly', number>> = {};
-  for (const scope of ['task_default', 'daily', 'monthly'] as const) {
-    const value = Number.parseFloat(String(formData.get(scope) ?? '').trim());
-    if (Number.isFinite(value)) values[scope] = value;
-  }
-  await getApplication().updateBudgets(values);
-  revalidateSettings();
-  revalidatePath('/costs');
-}
-
 /** Enable/disable a standing approval rule. */
 export async function setPolicyEnabled(policyId: string, enabled: boolean): Promise<void> {
   await requireOwner();

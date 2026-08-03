@@ -7,7 +7,6 @@ import { type AssistantModule, assistantModuleNames, parseAssistantModules } fro
 
 export {
   type AssistantModule,
-  allAssistantModules,
   assistantModuleNames,
   isModuleEnabled,
   parseAssistantModules,
