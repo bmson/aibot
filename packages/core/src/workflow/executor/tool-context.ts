@@ -35,7 +35,7 @@ const isPlausiblePhone = (normalized: string) => {
  * tasks — the inbound message body. A stranger mentioning victim@example.com
  * in their email must not make sending to that address card-free.
  */
-export function harvestKnownAddresses(
+function harvestKnownAddresses(
   state: TaskState,
   trigger: TaskLease['trigger'],
   trust: Trust,

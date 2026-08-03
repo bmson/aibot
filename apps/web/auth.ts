@@ -34,7 +34,7 @@ if (authMode === 'dev-bypass') {
   }
 }
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
+export const { handlers, auth, signOut } = NextAuth({
   providers: [Google],
   session: { strategy: 'jwt' },
   callbacks: {

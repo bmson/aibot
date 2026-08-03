@@ -186,35 +186,6 @@
     monospace;
 }
 
-.nav-mobile-header {
-  top: 0.5rem;
-  width: max-content;
-  margin: 0.5rem;
-}
-
-.nav-launcher-mobile {
-  width: max-content;
-  max-width: min(12rem, calc(100vw - 1rem));
-  min-height: 3rem;
-  border-radius: 999px;
-  padding-right: 0.625rem;
-}
-
-.nav-launcher-mobile .nav-launcher-icon {
-  width: 2.25rem;
-  height: 2.25rem;
-  border-radius: 999px;
-}
-
-.nav-launcher-mobile .nav-launcher-copy {
-  opacity: 1;
-  translate: none;
-}
-
-.nav-launcher-mobile .nav-launcher-arrow {
-  opacity: 0.55;
-}
-
 .nav-overlay {
   isolation: isolate;
 }
@@ -533,16 +504,6 @@
   gap: 1rem;
   border-top: 1px solid var(--nav-card-edge);
   padding: 0.625rem 0.875rem 0.625rem 1.25rem;
-}
-
-.nav-appearance-control {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 0.625rem;
-  color: var(--content-muted);
-  font-size: 0.75rem;
-  font-weight: 600;
 }
 
 .nav-sign-out {

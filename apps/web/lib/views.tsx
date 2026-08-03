@@ -51,7 +51,7 @@ const asText = (value: unknown): string =>
         : String(value);
 
 /** Turn a gated tool's payload into readable fields — what the owner is approving. */
-export function approvalFields(toolName: string, payload: unknown): ApprovalField[] {
+function approvalFields(toolName: string, payload: unknown): ApprovalField[] {
   const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
   const field = (label: string, value: unknown, block = false): ApprovalField | null => {
     const text = asText(value).trim();

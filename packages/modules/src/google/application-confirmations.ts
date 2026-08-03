@@ -190,7 +190,7 @@ export type ApplicationConfirmationTaskResult = {
 };
 
 /** Deterministic recovery route for an ambiguous multi-record match. */
-export async function executeAmbiguousApplicationConfirmationTask(
+async function executeAmbiguousApplicationConfirmationTask(
   deps: ApplicationConfirmationDeps,
   taskId: string,
 ): Promise<ApplicationConfirmationTaskResult> {

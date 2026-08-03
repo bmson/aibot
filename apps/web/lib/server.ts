@@ -23,7 +23,6 @@ import {
   getChatTaskStatus,
   getDocumentsOverview,
   getImportOverview,
-  getOwnerGivenName,
   getPrimaryConversationId,
   getSettingsOverview,
   getShellStatus,
@@ -42,7 +41,6 @@ import {
   startWorkspaceImport,
   suspendAnomalyRecord,
   updateAssistantSettings,
-  updateSpendingBudgets,
   uploadDocument,
   uploadImport,
 } from '@assistant/application';
@@ -93,14 +91,6 @@ export const getAgentIdentity = cache(
     getAssistantIdentity(getDb()),
 );
 
-/**
- * The owner's first name for greetings, from the owner-trust contact row.
- * Null (never a placeholder) when unset so callers can fall back gracefully.
- */
-export const getOwnerFirstName = cache(async (): Promise<string | null> => {
-  return getOwnerGivenName(getDb());
-});
-
 /** Same workspace identity the agent composition root uses. */
 export function getWorkspace(): WorkspaceStore {
   if (!globalCache.__assistantWorkspace) {
@@ -145,8 +135,6 @@ function createApplication() {
     updateSettings: (input: { timezone: string; locale: string; signature: string }) =>
       updateAssistantSettings(db, input),
     setScheduleEnabled: (id: string, enabled: boolean) => setRecurringJobEnabled(db, id, enabled),
-    updateBudgets: (values: Partial<Record<'task_default' | 'daily' | 'monthly', number>>) =>
-      updateSpendingBudgets(db, values),
     setPolicyEnabled: (id: string, enabled: boolean) => setApprovalPolicyEnabled(db, id, enabled),
     deletePolicy: (id: string) => deleteApprovalPolicy(db, id),
     getDocuments: () => getDocumentsOverview(db),

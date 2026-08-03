@@ -36,103 +36,6 @@
   }
 }
 
-/* One visual lens follows the selected destination. The active link remains the
-   source of truth, so there is no duplicated navigation state. */
-.nav-tile {
-  isolation: isolate;
-  overflow: clip;
-}
-
-.nav-tile::before {
-  position: absolute;
-  z-index: -1;
-  inset: 0;
-  border: 1px solid transparent;
-  border-radius: inherit;
-  background: color-mix(in srgb, var(--accent, currentColor) 0%, transparent);
-  box-shadow: 0 0 0 0 transparent;
-  content: "";
-  opacity: 0;
-  transform: scale(0.94);
-  transition:
-    opacity var(--motion-fast) ease,
-    transform var(--motion-medium) var(--motion-enter),
-    background-color var(--motion-medium) ease,
-    box-shadow var(--motion-medium) ease,
-    border-color var(--motion-medium) ease;
-}
-
-.nav-tile[aria-current="page"]::before,
-.nav-tile-active::before {
-  border-color: color-mix(in srgb, var(--accent, currentColor) 16%, transparent);
-  background: color-mix(in srgb, var(--accent, currentColor) 9%, transparent);
-  box-shadow:
-    0 1px 0 rgb(255 255 255 / 0.35) inset,
-    0 8px 24px color-mix(in srgb, var(--accent, currentColor) 8%, transparent);
-  opacity: 1;
-  transform: scale(1);
-}
-
-.nav-tile > * {
-  transition:
-    transform var(--motion-medium) var(--motion-enter),
-    opacity var(--motion-fast) ease;
-}
-
-.nav-tile:hover > :first-child {
-  transform: translateX(1px) scale(1.04);
-}
-
-.nav-tile:active > :first-child {
-  transform: scale(0.94);
-  transition-duration: var(--motion-instant);
-}
-
-/* Collapsed navigation is a preview surface rather than a plain tooltip. */
-.nav-collapsed .nav-tooltip::part(tooltip),
-.nav-collapsed jelly-tooltip::part(tooltip) {
-  min-width: 10rem;
-  border: 1px solid color-mix(in srgb, currentColor 10%, transparent);
-  border-radius: 0.875rem;
-  box-shadow: 0 18px 48px rgb(0 0 0 / 0.16);
-  backdrop-filter: blur(18px) saturate(1.15);
-}
-
-/* Sticky page headers compact themselves once their scroll container is stuck.
-   Browsers without scroll-state queries simply keep the existing header. */
-@supports (container-type: scroll-state) {
-  .page-header,
-  [data-page-header] {
-    container-type: scroll-state;
-    position: sticky;
-    z-index: 20;
-    top: 0;
-    transition:
-      padding var(--motion-medium) var(--motion-enter),
-      background-color var(--motion-medium) ease,
-      box-shadow var(--motion-medium) ease,
-      backdrop-filter var(--motion-medium) ease;
-  }
-
-  @container scroll-state(stuck: top) {
-    .page-header,
-    [data-page-header] {
-      margin-inline: -0.75rem;
-      padding: 0.65rem 0.75rem;
-      border-radius: 1rem;
-      background: color-mix(in srgb, var(--surface, Canvas) 82%, transparent);
-      box-shadow: 0 10px 40px rgb(0 0 0 / 0.08);
-      backdrop-filter: blur(18px) saturate(1.2);
-    }
-
-    .page-header h1,
-    [data-page-header] h1 {
-      transform: scale(0.9);
-      transform-origin: left center;
-    }
-  }
-}
-
 /* Menus and popovers reveal from the edge nearest their trigger. Existing JS
    placement can set data-side; CSS anchor positioning can replace it later. */
 [role="menu"],
@@ -334,8 +237,6 @@ form:has(textarea) [role="menu"] {
     animation: none !important;
   }
 
-  .nav-tile::before,
-  .nav-tile > *,
   form:has(textarea) > :where(div, section):has(textarea),
   [popover] {
     transition: none !important;

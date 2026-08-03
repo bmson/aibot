@@ -610,7 +610,7 @@ export class ModelRouter {
         const result = await generateText({
           model: route.model,
           ...(opts.messages
-            ? { messages: ModelRouter.cacheHinted(opts.system, opts.messages) }
+            ? ModelRouter.cacheHintedArgs(opts.system, opts.messages)
             : { system: opts.system, ...promptArgs(opts) }),
           temperature: opts.temperature ?? (route.params.temperature as number | undefined),
           maxOutputTokens,
@@ -666,7 +666,7 @@ export class ModelRouter {
         // turn is the highest-frequency call in the system, and re-billed the
         // whole system prompt every turn without this). Mirrors stepOnce.
         ...(opts.messages
-          ? { messages: ModelRouter.cacheHinted(opts.system, opts.messages) }
+          ? ModelRouter.cacheHintedArgs(opts.system, opts.messages)
           : { system: opts.system, ...promptArgs(opts) }),
         temperature: opts.temperature ?? (route.params.temperature as number | undefined),
         maxOutputTokens,
@@ -756,8 +756,18 @@ export class ModelRouter {
    * re-billing it. Anthropic models need the explicit breakpoints (via
    * OpenRouter); OpenAI-family models cache prefixes automatically and ignore
    * the hint.
+   *
+   * Returned as call arguments, not a bare messages array: the system prompt
+   * has to ride inside `messages` (a system-role message is the only shape
+   * that can carry a per-message cache_control providerOption), and AI SDK v7
+   * rejects that with AI_InvalidPromptError unless `allowSystemInMessages` is
+   * set. Bundling the flag with the messages makes it impossible for a call
+   * site to take the hinted messages and forget the opt-in.
    */
-  private static cacheHinted(system: string | undefined, messages: ModelMessage[]): ModelMessage[] {
+  private static cacheHintedArgs(
+    system: string | undefined,
+    messages: ModelMessage[],
+  ): { messages: ModelMessage[]; allowSystemInMessages: true } {
     const hint = { openrouter: { cacheControl: { type: 'ephemeral' } } };
     const hinted = [...messages];
     const last = hinted[hinted.length - 1];
@@ -767,9 +777,12 @@ export class ModelRouter {
         providerOptions: { ...last.providerOptions, ...hint },
       } as ModelMessage;
     }
-    return system
-      ? [{ role: 'system', content: system, providerOptions: hint } as ModelMessage, ...hinted]
-      : hinted;
+    return {
+      messages: system
+        ? [{ role: 'system', content: system, providerOptions: hint } as ModelMessage, ...hinted]
+        : hinted,
+      allowSystemInMessages: true,
+    };
   }
 
   private async stepOnce(
@@ -792,12 +805,7 @@ export class ModelRouter {
         const result = await generateText({
           model: route.model,
           ...(opts.messages
-            ? {
-                messages: ModelRouter.cacheHinted(
-                  opts.system,
-                  encodeMessageToolNames(opts.messages),
-                ),
-              }
+            ? ModelRouter.cacheHintedArgs(opts.system, encodeMessageToolNames(opts.messages))
             : { system: opts.system, ...promptArgs(opts) }),
           tools: encoded,
           toolChoice: toolChoice as never,
@@ -861,7 +869,7 @@ export class ModelRouter {
           const result = await generateObject({
             model: route.model,
             ...(opts.messages
-              ? { messages: ModelRouter.cacheHinted(opts.system, opts.messages) }
+              ? ModelRouter.cacheHintedArgs(opts.system, opts.messages)
               : { system: opts.system, ...promptArgs(opts) }),
             schema: opts.schema,
             temperature: opts.temperature ?? (route.params.temperature as number | undefined),

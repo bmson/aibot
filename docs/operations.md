@@ -25,6 +25,17 @@ attributes), and the nightly self-maintenance jobs. Locally, `OTEL_EXPORTER=cons
 to stdout; `OTEL_EXPORTER=otlp` exports over OTLP/HTTP to whatever `OTEL_EXPORTER_OTLP_ENDPOINT`
 points at.
 
+## Live verification scripts
+
+Two scripts prove end-to-end behavior against a real database with real model calls (they cost
+OpenRouter credit), useful after a deploy or a risky change:
+
+- `pnpm tsx scripts/verify-browse.ts [--prod]` enqueues a read-only browse task and watches it run
+  through plan → browser job → callback → answer.
+- `pnpm tsx scripts/verify-goal-session.ts ["goal description"]` runs one scheduled goal work
+  session through the real executor and prints every tool call it made, then cleans up after
+  itself.
+
 ## History retention
 
 Messages, tool calls, model calls, and cost events are kept forever by default. To bound them, set

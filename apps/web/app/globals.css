@@ -137,130 +137,7 @@ details[open] > .disclosure::before {
   }
 }
 
-/* ── Nav rail ─────────────────────────────────────────────────────────────────
-   The rail floats instead of sitting flush against the viewport edge, and can
-   collapse to an icon-only strip. One custom property drives the width so the
-   rail is the only thing that has to know both numbers — mirrors exactly how
-   `.dark` above overrides tokens on <html>, stamped pre-paint by the same kind
-   of inline script as the theme's no-flash one. Every tile keeps a fixed-width
-   icon gutter that never moves between states: collapsing reads as the label
-   receding from a stationary icon, never the row itself scaling. */
-:root {
-  --rail-w: 15rem;
-}
-html.nav-collapsed {
-  --rail-w: 4.5rem;
-}
-
-.nav-rail {
-  width: var(--rail-w);
-}
-
-/* Same 0.75rem inset as the tile nav's `px-3` in both rail states, so the
-   brand mark sits in the exact column the tile icons do instead of drifting
-   to whatever center a wider header padding would put it at. Collapsed, the
-   row becomes a stack: the mark stays on top (the rail keeps leading with
-   the assistant's face, not a bare chrome button) and the collapse toggle
-   tucks under it, both centered in the narrow rail. The name has no column
-   to fade back into once the header stacks, so it leaves layout entirely
-   instead of holding a phantom row between the two. */
-.nav-header {
-  padding-inline: 0.75rem;
-}
-html.nav-collapsed .nav-header {
-  flex-direction: column;
-  gap: 0.375rem;
-}
-html.nav-collapsed .nav-header .nav-label {
-  display: none;
-}
-
-/* The "Manage" label fades out with every other label once collapsed, which
-   left the primary/utility boundary marked by nothing but blank space — a
-   plain rule takes over as the visible divider once the label can't. Margin
-   moves in here (was Tailwind's mt-6 in the JSX) so the collapsed variant can
-   trade some of it for the divider's own border+padding instead of adding to
-   it — adding a border+padding on top of the full expanded-state gap visibly
-   pushed the first utility icon down and read as too much space. */
-.nav-manage-group {
-  margin-top: 1.5rem;
-}
-html.nav-collapsed .nav-manage-group {
-  margin-top: 0.75rem;
-  border-top: 1px solid var(--edge);
-  padding-top: 0.75rem;
-}
-
-/* Collapsed, every tile is capped to the icon gutter's own 2.5rem width (see
-   `.nav-tile` below) rather than stretching across the row like it does
-   expanded — center that narrower box in the row instead of leaving it
-   flush left with the leftover space stranded on the right. Per-child
-   centering (not a fixed inset) so it's correct regardless of the rail's
-   exact collapsed width or border. Expanded, tiles still need the default
-   stretch (the active/hover background has to span the full row), so this
-   only applies collapsed. */
-html.nav-collapsed .nav-tile-list {
-  align-items: center;
-}
-
-/* The footer's own padding (px-5, wider than the tile nav's px-3) and its
-   space-between layout are right for the expanded "Sign out ⋯ theme toggle"
-   row, but in the collapsed rail they'd leave the theme icon hugging the
-   footer's right edge instead of centered like every other icon. A grid with
-   the icon in a fixed middle column flanked by two equal (and
-   zero-minimum, so the sign-out link's own width can't lopside them) flexible
-   columns centers it regardless of the (invisible but still laid-out)
-   sign-out link's width — which column that link sits in doesn't matter
-   since it's invisible either way. */
-html.nav-collapsed .nav-footer {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 2.5rem minmax(0, 1fr);
-  padding-inline: 0.75rem;
-}
-html.nav-collapsed .nav-footer-icon {
-  grid-column: 2;
-}
-html.nav-collapsed .nav-footer > .nav-label {
-  grid-column: 1;
-}
-
-/* Base/collapsed states apply unconditionally so a reduced-motion user still
-   gets the collapsed layout — just as an instant swap instead of a wipe. */
-.nav-label {
-  opacity: 1;
-  translate: none;
-}
-html.nav-collapsed .nav-label {
-  opacity: 0;
-  translate: -6px 0;
-}
-.nav-toggle-icon {
-  rotate: 0deg;
-}
-html.nav-collapsed .nav-toggle-icon {
-  rotate: 180deg;
-}
-
-/* The compact corner-dot badge only makes sense once the count itself is
-   hidden with the rest of the label — shown only in the collapsed state. */
-.nav-badge-dot {
-  display: none;
-}
-html.nav-collapsed .nav-badge-dot {
-  display: block;
-}
-
-/* Keep the current location present but quiet — and singular: one tinted
-   container is the whole signal. This used to stack three indicators (the
-   tint plus an inset ring, a slim left marker bar, and a second tint chip
-   behind the icon), each restating the same fact a little louder. */
-.nav-tile-active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface-raised));
-}
-
-/* Jelly is limited to compact navigation controls, live counts, and the
-   labels restored by tooltips when the rail collapses. */
+/* Jelly is limited to compact navigation controls and live counts. */
 .nav-jelly-badge {
   display: inline-flex;
   min-width: 1.25rem;
@@ -281,37 +158,6 @@ html.nav-collapsed .nav-badge-dot {
   --nav-jelly-button-size: 36px;
   --nav-jelly-button-radius: 12px;
 }
-.nav-tooltip {
-  display: block;
-  width: 100%;
-  --jelly-font-display: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  --jelly-tooltip-background: var(--content-strong);
-  --jelly-tooltip-color: var(--surface-raised);
-}
-/* A tile's row (Link/summary/ActionMenu trigger) otherwise stretches to the
-   nav's full width regardless of collapse state — fine expanded, but
-   collapsed it left 5-10px of hoverable/active background to the right of
-   the icon (the label/badge columns shrink to 0 width, the row itself
-   didn't). Capping it to the icon gutter's own width makes the hover/active
-   background a clean square instead of a wide box with the icon pinned to
-   its left edge. Popover panels (the System dropdown) reuse the same
-   `.nav-tile` styling for their own links but are still DOM descendants of
-   the rail — `[popover]` renders in the top layer for paint only, not for
-   selector matching — so they need to opt back out of the cap; their rows
-   always show full labels regardless of the rail's own collapse state. */
-@media (min-width: 1024px) {
-  html.nav-collapsed .nav-tooltip {
-    display: flex;
-    justify-content: center;
-  }
-  html.nav-collapsed .nav-tile {
-    width: 2.5rem;
-  }
-  html.nav-collapsed [popover] .nav-tile {
-    width: auto;
-  }
-}
-
 @media (max-width: 639px) {
   .nav-jelly-button {
     --nav-jelly-button-size: 44px;
@@ -319,42 +165,7 @@ html.nav-collapsed .nav-badge-dot {
   }
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .nav-rail {
-    transition: width 280ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-  .nav-tile {
-    transition: width 280ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-  .nav-label {
-    transition:
-      opacity 160ms ease-out,
-      translate 180ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-  /* Expand: labels wait for the rail to have room before fading/sliding in,
-     so text never materializes cramped against a still-widening tile. */
-  html:not(.nav-collapsed) .nav-label {
-    transition-delay: 90ms;
-  }
-  .nav-toggle-icon {
-    transition: rotate 280ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-  /* A one-shot echo of the avatar mark's own arrival vocabulary — settles
-     once on activation, never loops, so it doesn't compete with the mark. */
-  .nav-tile[aria-current='page'] {
-    animation: nav-tile-settle 160ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-}
-@keyframes nav-tile-settle {
-  from {
-    scale: 0.97;
-  }
-  to {
-    scale: 1;
-  }
-}
-
-/* Mobile drawer + scrim, given a real exit animation instead of vanishing on
+/* Desktop palette scrim, given a real exit animation instead of vanishing on
    the first frame: the panel stays mounted through the closing transition
    (app-nav.tsx lags `rendered` one tick behind `open`), and these two states
    are what it transitions between. */
@@ -368,22 +179,9 @@ html.nav-collapsed .nav-badge-dot {
 .nav-scrim[data-open='true'] {
   opacity: 1;
 }
-.nav-drawer {
-  opacity: 0;
-  translate: 100% 0;
-}
-.nav-drawer[data-open='true'] {
-  opacity: 1;
-  translate: none;
-}
 @media (prefers-reduced-motion: no-preference) {
   .nav-scrim {
     transition: opacity 180ms ease-out;
-  }
-  .nav-drawer {
-    transition:
-      opacity 180ms ease-out,
-      translate 220ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 }
 

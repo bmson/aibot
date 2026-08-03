@@ -324,7 +324,7 @@ export function registerWatchTools(registry: ToolRegistry): ToolRegistry {
     {
       name: 'watch.cancel',
       description:
-        'Cancel one active inbox watch by id so it stops notifying. Only an active watch can be cancelled; an already-expired, exhausted, or cancelled watch is reported as-is.',
+        'Cancel one active watch (inbox or web) by id so it stops notifying. Only an active watch can be cancelled; an already-expired, exhausted, or cancelled watch is reported as-is.',
       inputSchema: cancelSchema,
       risk: 'autonomous',
       acceptsUntrustedInput: false,

@@ -81,7 +81,7 @@ async function underSmsChannelLimit(deps: SmsChannelDeps): Promise<boolean> {
   return true;
 }
 
-export class SmsChannelRateLimitError extends Error {
+class SmsChannelRateLimitError extends Error {
   constructor() {
     super('SMS channel rate limit exceeded');
     this.name = 'SmsChannelRateLimitError';

@@ -8,7 +8,7 @@ import type { BlobStore } from './storage.js';
 const exec = promisify(execFile);
 
 /** Where the encrypted profile lives under the agent's workspace prefix. */
-export const PROFILE_OBJECT = 'browser/profile.tar.enc';
+const PROFILE_OBJECT = 'browser/profile.tar.enc';
 
 /** Refuse to persist runaway profiles — cookies + storage should stay small. */
 const MAX_PROFILE_TARBALL_BYTES = 40 * 1024 * 1024;
