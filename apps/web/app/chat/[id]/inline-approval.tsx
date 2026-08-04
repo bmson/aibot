@@ -2,6 +2,7 @@
 
 import type { InlineApprovalDetail, InlineApprovalStatus } from '@assistant/application/chat';
 import { Check, CircleCheck, CircleHelp, CircleX, Clock, LoaderCircle, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { btnSm } from '@/lib/ui';
 
 export interface InlineApprovalPart {
@@ -18,23 +19,34 @@ export type RowResolution = 'approved' | 'denied' | undefined;
 
 /**
  * One approval inside an <ApprovalGroup>. Presentational: the group owns all
- * server calls and resolution state so "Approve all" and per-row buttons stay
- * coherent. Pending rows carry actions; settled rows collapse to a receipt.
+ * server calls and resolution state so per-row buttons stay coherent. Pending
+ * rows carry actions; settled rows collapse to a receipt.
  */
 export function ApprovalRow({
   part,
   resolution,
   busy,
+  busyDecision,
+  disabled,
   detailsOpenByDefault,
   onResolve,
 }: {
   part: InlineApprovalPart;
   resolution: RowResolution;
   busy: boolean;
+  busyDecision: 'approved' | 'denied' | null;
+  disabled: boolean;
   detailsOpenByDefault: boolean;
   onResolve: (approvalId: string, decision: 'approved' | 'denied') => void;
 }) {
   const status: InlineApprovalStatus = resolution ?? part.status ?? 'pending';
+  const [approvalArmed, setApprovalArmed] = useState(false);
+
+  useEffect(() => {
+    if (!approvalArmed) return;
+    const timer = window.setTimeout(() => setApprovalArmed(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [approvalArmed]);
 
   if (status !== 'pending') {
     const justNow = resolution !== undefined;
@@ -58,6 +70,7 @@ export function ApprovalRow({
             : 'No longer available';
     return (
       <p
+        role={justNow ? 'status' : undefined}
         className="flex min-w-0 items-center gap-1.5 py-0.5 text-xs text-muted"
         title={`${part.shortCode} · ${part.summary}`}
       >
@@ -102,25 +115,40 @@ export function ApprovalRow({
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <button
           type="button"
-          disabled={busy}
-          onClick={() => onResolve(part.approvalId, 'approved')}
+          disabled={disabled}
+          onClick={() => {
+            if (approvalArmed) {
+              setApprovalArmed(false);
+              onResolve(part.approvalId, 'approved');
+            } else {
+              setApprovalArmed(true);
+            }
+          }}
           className={btnSm.success}
         >
-          {busy ? (
+          {busy && busyDecision === 'approved' ? (
             <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
           ) : (
             <Check className="size-3.5" aria-hidden="true" />
           )}
-          {busy ? 'Working…' : 'Approve and continue'}
+          {busy && busyDecision === 'approved'
+            ? 'Approving…'
+            : approvalArmed
+              ? 'Confirm approval'
+              : 'Approve and continue'}
         </button>
         <button
           type="button"
-          disabled={busy}
+          disabled={disabled}
           onClick={() => onResolve(part.approvalId, 'denied')}
           className={btnSm.dangerOutline}
         >
-          <X className="size-3.5" aria-hidden="true" />
-          Decline
+          {busy && busyDecision === 'denied' ? (
+            <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
+          ) : (
+            <X className="size-3.5" aria-hidden="true" />
+          )}
+          {busy && busyDecision === 'denied' ? 'Declining…' : 'Decline'}
         </button>
       </div>
     </div>

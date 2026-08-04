@@ -61,7 +61,9 @@ export function ApprovalCard({
   compact?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
-  const [editState, editAction, editPending] = useActionState(editAndApprove, { error: null });
+  const [editState, editAction, editPending] = useActionState(editAndApprove, {
+    error: null,
+  });
   const ActionIcon = actionIcons[approval.actionKind];
   const actionLabel = actionLabels[approval.actionKind];
 
@@ -178,21 +180,25 @@ export function ApprovalCard({
       ) : (
         <div className={`${cardFooterClass} max-sm:grid max-sm:grid-cols-2`}>
           <form action={approveApproval.bind(null, approval.id)} className="min-w-0">
-            <SubmitButton variant="success" pendingLabel="Approving…" className="w-full sm:w-auto">
+            <ConfirmButton
+              variant="success"
+              pendingLabel="Approving…"
+              confirmLabel="Confirm approval"
+              className="w-full sm:w-auto"
+            >
               <Check className="size-4" aria-hidden="true" />
               Approve and continue
-            </SubmitButton>
+            </ConfirmButton>
           </form>
           <form action={denyApproval.bind(null, approval.id)} className="min-w-0">
-            <ConfirmButton
+            <SubmitButton
               variant="dangerOutline"
               pendingLabel="Declining…"
-              confirmLabel="Confirm decline"
               className="w-full sm:w-auto"
             >
               <X className="size-4" aria-hidden="true" />
               Decline
-            </ConfirmButton>
+            </SubmitButton>
           </form>
           <button
             type="button"
@@ -207,9 +213,14 @@ export function ApprovalCard({
               action={approveAndRemember.bind(null, approval.id)}
               className="col-span-2 sm:col-auto"
             >
-              <SubmitButton variant="outline" className="w-full sm:w-auto">
+              <ConfirmButton
+                variant="outline"
+                pendingLabel="Saving…"
+                confirmLabel="Confirm standing rule"
+                className="w-full sm:w-auto"
+              >
                 {approval.rememberLabel}
-              </SubmitButton>
+              </ConfirmButton>
             </form>
           ) : null}
         </div>

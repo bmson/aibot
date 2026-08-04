@@ -167,9 +167,9 @@ export function ActionMenu({
 }
 
 /**
- * A two-step confirm for a destructive server action: the first click arms
+ * A two-step confirm for a consequential server action: the first click arms
  * ("Confirm?") and a second within 3s submits; otherwise it reverts. No modal,
- * no new deps — enough friction to stop an accidental Deny/Delete.
+ * no new deps — enough friction to stop an accidental approval, grant, or delete.
  */
 export function ConfirmButton({
   children,

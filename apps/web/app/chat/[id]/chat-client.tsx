@@ -13,9 +13,11 @@ import {
   Square,
   Zap,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { cancelTask } from '@/app/tasks/actions';
 import { hasContractNoticePart, isApprovalProseNotice, isContractNotice } from '@/lib/chat-notices';
-import { focusRing } from '@/lib/ui';
+import { btnSm, focusRing } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
 import { ApprovalGroup } from './approval-group';
@@ -68,7 +70,11 @@ const ASYNC_ACK_TEXT = 'Got it — I’m working on this now. I’ll post the re
  * command's own palette (e.g. /model) takes over.
  */
 const SLASH_COMMANDS = [
-  { command: '/model', hint: 'Switch which model answers this chat', icon: Sparkles },
+  {
+    command: '/model',
+    hint: 'Switch which model answers this chat',
+    icon: Sparkles,
+  },
 ] as const;
 
 export function ChatClient({
@@ -98,19 +104,27 @@ export function ChatClient({
   /** New messages that arrived while scrolled up (the pill shows a dot). */
   const [unseenCount, setUnseenCount] = useState(0);
   /** Set when the route handed the turn to the executor — we poll until it settles. */
-  const [asyncTurn, setAsyncTurn] = useState<{ taskId: string; cursor: string } | null>(
-    initialAsyncTurn ?? null,
-  );
+  const [asyncTurn, setAsyncTurn] = useState<{
+    taskId: string;
+    cursor: string;
+  } | null>(initialAsyncTurn ?? null);
   const [asyncNote, setAsyncNote] = useState<string | null>(null);
+  const [asyncActionError, setAsyncActionError] = useState<string | null>(null);
+  const [isCancellingAsync, startCancelTransition] = useTransition();
   const [activity, setActivity] = useState<
     Array<{ toolName: string; status: string; step: number }>
   >([]);
   /** Live provenance for the current streaming turn (the persisted part covers reloads). */
   const [liveRecall, setLiveRecall] = useState<RecallSource[] | null>(null);
-  /** "Autonomous" composer toggle: this turn runs free-range (approve-once). */
+  /** This-turn autonomy: one submitted turn can skip routine approvals. */
   const [autonomous, setAutonomous] = useState(false);
   const autonomousRef = useRef(false);
   autonomousRef.current = autonomous;
+  const resetAutonomyAfterSubmitRef = useRef(false);
+  /** The model button temporarily replaces the composer; keep its real draft safe. */
+  const modelPickerDraftRef = useRef<string | null>(null);
+  /** A failed send can put the exact text back into the composer without guesswork. */
+  const [lastSubmittedText, setLastSubmittedText] = useState('');
   const formRef = useRef<HTMLFormElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messageScrollerRef = useRef<HTMLDivElement>(null);
@@ -118,6 +132,9 @@ export function ChatClient({
   const [composerHeight, setComposerHeight] = useState(112);
   const stickToBottomRef = useRef(true);
   const previousMessageCountRef = useRef(initialMessages.length);
+  const previousTranscriptLengthRef = useRef(
+    initialMessages.reduce((total, message) => total + messageText(message).length, 0),
+  );
   /** Messages present at mount render static; only genuinely new ones animate in. */
   const initialMessageIdsRef = useRef<Set<string> | null>(null);
   initialMessageIdsRef.current ??= new Set(initialMessages.map((message) => message.id));
@@ -151,7 +168,10 @@ export function ChatClient({
           const taskId = response.headers.get('x-async-task');
           const cursor = response.headers.get('x-message-cursor');
           setAsyncTurn(taskId && cursor ? { taskId, cursor } : null);
-          if (taskId) setAsyncNote(null);
+          if (taskId) {
+            setAsyncNote(null);
+            setAsyncActionError(null);
+          }
           return response;
         }) as typeof fetch,
       }),
@@ -174,6 +194,16 @@ export function ChatClient({
   useEffect(() => {
     setSelectedModel(modelOverride);
   }, [modelOverride]);
+
+  // The elevated mode belongs to exactly one turn. Wait until useChat has
+  // accepted the request so the memoized transport can read the submitted
+  // value, then return the composer to its safer default.
+  useEffect(() => {
+    if (resetAutonomyAfterSubmitRef.current && (status === 'submitted' || status === 'streaming')) {
+      resetAutonomyAfterSubmitRef.current = false;
+      setAutonomous(false);
+    }
+  }, [status]);
 
   // Action turns run in the executor (tools, approvals) — poll the thread
   // until the task settles, then replace the local ack with the real answer.
@@ -235,7 +265,11 @@ export function ChatClient({
             messages: UIMessage[];
             nextCursor: string | null;
             hasMore: boolean;
-            activity?: Array<{ toolName: string; status: string; step: number }>;
+            activity?: Array<{
+              toolName: string;
+              status: string;
+              step: number;
+            }>;
           };
           setActivity(data.activity ?? []);
           mergeMessages(data.messages);
@@ -256,7 +290,7 @@ export function ChatClient({
           }
           if (data.taskStatus === 'failed' || data.taskStatus === 'cancelled') {
             return settle(
-              `the task ${data.taskStatus === 'cancelled' ? 'was cancelled' : `ended ${data.taskStatus}`} — see the Tasks page`,
+              `The task ${data.taskStatus === 'cancelled' ? 'was cancelled' : 'ended unsuccessfully'}.`,
             );
           }
         }
@@ -289,7 +323,11 @@ export function ChatClient({
   const modelOptions = useMemo(
     () =>
       [
-        { id: null, label: 'Auto', detail: 'Use the best model for the request' },
+        {
+          id: null,
+          label: 'Auto',
+          detail: 'Use the best model for the request',
+        },
         ...models.map((model) => ({ ...model, detail: model.id })),
       ].filter(
         (model) =>
@@ -323,6 +361,7 @@ export function ChatClient({
   const safeCommandHighlight = Math.min(commandHighlight, Math.max(0, commandMatches.length - 1));
 
   const completeCommand = (command: string) => {
+    modelPickerDraftRef.current = null;
     setInput(command);
     textareaRef.current?.focus();
   };
@@ -350,14 +389,21 @@ export function ChatClient({
     return () => window.cancelAnimationFrame(frame);
   });
 
-  // A message landed while the reader was scrolled up — count it so the jump
-  // pill can show there's something new below.
+  // A message or streamed text landed while the reader was scrolled up — keep
+  // the jump pill meaningful even when the message count itself did not grow.
   useEffect(() => {
-    if (messages.length > previousMessageCountRef.current && !stickToBottomRef.current) {
-      setUnseenCount((count) => count + (messages.length - previousMessageCountRef.current));
+    const addedMessages = Math.max(0, messages.length - previousMessageCountRef.current);
+    const transcriptLength = messages.reduce(
+      (total, message) => total + messageText(message).length,
+      0,
+    );
+    const streamedTextGrew = transcriptLength > previousTranscriptLengthRef.current;
+    if (!stickToBottomRef.current && (addedMessages > 0 || streamedTextGrew)) {
+      setUnseenCount((count) => (addedMessages > 0 ? count + addedMessages : Math.max(count, 1)));
     }
     previousMessageCountRef.current = messages.length;
-  }, [messages.length]);
+    previousTranscriptLengthRef.current = transcriptLength;
+  }, [messages]);
 
   // The composer floats over the conversation, so nothing in the log can rely
   // on it taking layout space. Measure the form and feed that height back two
@@ -392,7 +438,25 @@ export function ChatClient({
     const scroller = messageScrollerRef.current;
     if (!scroller) return;
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    scroller.scrollTo({ top: scroller.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' });
+    scroller.scrollTo({
+      top: scroller.scrollHeight,
+      behavior: reduceMotion ? 'auto' : 'smooth',
+    });
+  };
+
+  const sendTurn = (text: string, clearComposer: boolean) => {
+    stickToBottomRef.current = true;
+    setAtBottom(true);
+    setUnseenCount(0);
+    setLastSubmittedText(text);
+    if (clearComposer) setInput('');
+    modelPickerDraftRef.current = null;
+    setFallbackNote(null);
+    setModelError(null);
+    setLiveRecall(null);
+    if (error) clearError();
+    resetAutonomyAfterSubmitRef.current = autonomous;
+    void sendMessage({ text });
   };
 
   const submitCurrentMessage = () => {
@@ -401,10 +465,15 @@ export function ChatClient({
     // Slash commands are local composer controls, never conversation messages.
     if (/^\/model(?:\s.*)?$/i.test(text)) return;
     if (commandPaletteOpen) return;
-    stickToBottomRef.current = true;
-    setInput('');
-    setLiveRecall(null);
-    void sendMessage({ text });
+    sendTurn(text, true);
+  };
+
+  const closeModelPicker = () => {
+    const draft = modelPickerDraftRef.current;
+    modelPickerDraftRef.current = null;
+    setModelError(null);
+    setInput(draft ?? '');
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
   const chooseModel = (modelId: string | null) => {
@@ -414,9 +483,25 @@ export function ChatClient({
       try {
         await changeConversationModel(conversationId, modelId);
         setSelectedModel(modelId);
-        setInput('');
+        closeModelPicker();
       } catch {
         setModelError('Could not switch models. Try again.');
+      }
+    });
+  };
+
+  const cancelAsyncTurn = () => {
+    if (!asyncTurn || isCancellingAsync) return;
+    const taskId = asyncTurn.taskId;
+    setAsyncActionError(null);
+    startCancelTransition(async () => {
+      try {
+        await cancelTask(taskId);
+        setAsyncNote('Stopped by you.');
+        setAsyncTurn(null);
+        setActivity([]);
+      } catch {
+        setAsyncActionError('Could not stop this task. Try again or open Activity.');
       }
     });
   };
@@ -436,7 +521,7 @@ export function ChatClient({
     // above), not this container: prose that runs to 1000px is tiring, and
     // pinning the user's bubbles that far right would make a two-way
     // exchange read as two columns regardless of how wide the column is.
-    <div className="relative mx-auto -my-5 flex h-[calc(100dvh-1rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-10 lg:h-[calc(100dvh-var(--app-chrome,0px))] lg:max-w-4xl 2xl:max-w-[56rem]">
+    <div className="relative mx-auto -my-5 flex h-[calc(100dvh-1rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-7 lg:h-[calc(100dvh-var(--app-chrome,0px))] lg:max-w-4xl 2xl:max-w-[56rem]">
       {/* The primary thread is the whole surface — it needs no title. Side and
           goal chats keep a slim header so you know which one you're in. */}
       {!isPrimary ? (
@@ -487,9 +572,11 @@ export function ChatClient({
 
       <div
         ref={messageScrollerRef}
+        role="log"
+        aria-label="Conversation"
         onScroll={(event) => {
           const element = event.currentTarget;
-          const bottom = element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+          const bottom = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
           stickToBottomRef.current = bottom;
           setAtBottom(bottom);
           if (bottom) setUnseenCount(0);
@@ -551,9 +638,7 @@ export function ChatClient({
                       type="button"
                       disabled={busy}
                       onClick={() => {
-                        stickToBottomRef.current = true;
-                        setAtBottom(true);
-                        void sendMessage({ text: suggestion.text });
+                        sendTurn(suggestion.text, false);
                       }}
                       style={{ animationDelay: `${index * 60}ms` }}
                       className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.10)] active:translate-y-0 disabled:opacity-60 ${focusRing}`}
@@ -710,9 +795,42 @@ export function ChatClient({
                     phase={activity.length > 0 ? 'working' : 'starting'}
                     activity={activity}
                   />
+                  <div className="mt-3 flex flex-wrap items-center gap-2 pl-[18px]">
+                    <Link href={`/tasks/${asyncTurn.taskId}`} className={btnSm.outline}>
+                      View activity
+                    </Link>
+                    <button
+                      type="button"
+                      disabled={isCancellingAsync}
+                      onClick={cancelAsyncTurn}
+                      className={btnSm.dangerOutline}
+                    >
+                      {isCancellingAsync ? (
+                        <Loader2 className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Square className="size-3.5 fill-current" aria-hidden="true" />
+                      )}
+                      {isCancellingAsync ? 'Stopping…' : 'Stop task'}
+                    </button>
+                  </div>
+                  {asyncActionError ? (
+                    <p
+                      role="alert"
+                      className="mt-2 pl-[18px] text-xs text-red-700 dark:text-red-300"
+                    >
+                      {asyncActionError}
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
-              {asyncNote ? <p className="mt-3 text-xs text-muted">{asyncNote}</p> : null}
+              {asyncNote ? (
+                <p role="status" className="mt-3 text-xs text-muted">
+                  {asyncNote}{' '}
+                  <Link href="/tasks" className="font-medium underline underline-offset-2">
+                    Open Activity
+                  </Link>
+                </p>
+              ) : null}
               {liveRecall ? <RecallNote sources={liveRecall} /> : null}
             </div>
           )}
@@ -744,7 +862,7 @@ export function ChatClient({
           aria-hidden="true"
           className="pointer-events-none absolute inset-x-0 -top-16 bottom-0 bg-gradient-to-t from-surface from-35% via-surface/85 to-transparent"
         />
-        {!atBottom && messages.length > 0 ? (
+        {!atBottom && messages.length > 0 && !error && !commandPaletteOpen && !modelCommandOpen ? (
           <div className="pointer-events-none absolute inset-x-0 -top-14 z-10 flex justify-center">
             <button
               type="button"
@@ -762,15 +880,33 @@ export function ChatClient({
         ) : null}
         <div className="pointer-events-none absolute inset-x-0 bottom-full z-20 min-w-0">
           {error ? (
-            <div className="pointer-events-auto mb-2 flex items-start justify-between gap-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 shadow-[0_6px_24px_rgb(23_25_35/0.08)] dark:border-red-800 dark:bg-red-950 dark:text-red-200">
+            <div
+              role="alert"
+              className="pointer-events-auto mb-2 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 shadow-[0_6px_24px_rgb(23_25_35/0.08)] dark:border-red-800 dark:bg-red-950 dark:text-red-200"
+            >
               <span>{errorText(error)}</span>
-              <button
-                type="button"
-                onClick={clearError}
-                className="shrink-0 text-xs underline hover:no-underline"
-              >
-                dismiss
-              </button>
+              <span className="flex shrink-0 items-center gap-2">
+                {lastSubmittedText && input === '' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      clearError();
+                      setInput(lastSubmittedText);
+                      window.requestAnimationFrame(() => textareaRef.current?.focus());
+                    }}
+                    className="text-xs font-medium underline underline-offset-2 hover:no-underline"
+                  >
+                    Restore draft
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={clearError}
+                  className="text-xs underline underline-offset-2 hover:no-underline"
+                >
+                  Dismiss
+                </button>
+              </span>
             </div>
           ) : null}
           {commandPaletteOpen ? (
@@ -901,7 +1037,11 @@ export function ChatClient({
           >
             <textarea
               ref={textareaRef}
+              role="combobox"
               aria-label="Message"
+              aria-expanded={modelCommandOpen || commandPaletteOpen}
+              aria-haspopup="listbox"
+              aria-autocomplete="list"
               aria-controls={
                 modelCommandOpen
                   ? 'model-listbox'
@@ -943,7 +1083,7 @@ export function ChatClient({
                     if (choice && !isSwitching) chooseModel(choice.id);
                   } else if (event.key === 'Escape') {
                     event.preventDefault();
-                    setInput('');
+                    closeModelPicker();
                   }
                   return;
                 }
@@ -987,11 +1127,11 @@ export function ChatClient({
                 aria-pressed={autonomous}
                 aria-label={
                   autonomous
-                    ? 'Autonomous mode on. Tap to ask before acting.'
-                    : 'Ask before acting. Tap to turn on autonomous mode.'
+                    ? 'Act without asking for this turn. Tap to ask first.'
+                    : 'Ask before acting. Tap to act without asking for this turn.'
                 }
                 onClick={() => setAutonomous((value) => !value)}
-                title="Autonomous mode acts without asking for each routine approval. Sensitive steps and budget caps still require permission."
+                title="For this turn only, routine actions can proceed without individual approval. Sensitive steps and budget caps still require permission."
                 // Pressing deepens the fill and draws a ring in place. Nudging
                 // the button down a pixel read as the control slipping.
                 className={`inline-flex h-10 min-w-0 items-center gap-1.5 rounded-xl px-3 text-xs font-medium ring-1 ring-transparent motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
@@ -1001,7 +1141,7 @@ export function ChatClient({
                 }`}
               >
                 <Zap className="size-3.5 shrink-0" aria-hidden="true" />
-                <span className="truncate">{autonomous ? 'Autonomous on' : 'Ask first'}</span>
+                <span className="truncate">{autonomous ? 'Act this turn' : 'Ask first'}</span>
                 <span className="sr-only">
                   . Sensitive steps including unknown recipients and logged-in browsing still ask,
                   and budget caps still apply.
@@ -1011,10 +1151,20 @@ export function ChatClient({
                 <button
                   type="button"
                   onClick={() => {
+                    if (modelCommandOpen) {
+                      closeModelPicker();
+                      return;
+                    }
+                    modelPickerDraftRef.current = input;
+                    setModelError(null);
                     setInput('/model');
                     textareaRef.current?.focus();
                   }}
-                  aria-label={`Response model: ${selectedModelLabel}. Tap to change.`}
+                  aria-label={
+                    modelCommandOpen
+                      ? 'Close response model picker'
+                      : `Response model: ${selectedModelLabel}. Tap to change.`
+                  }
                   title="Switch response model"
                   className={`hidden h-10 items-center gap-1.5 rounded-xl px-3 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong sm:inline-flex ${focusRing}`}
                 >

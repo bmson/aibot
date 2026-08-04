@@ -198,7 +198,9 @@ export function GoalCard({ goal }: { goal: GoalView }) {
   // The parent keys this card by goal.updatedAt, so a successful save/status change
   // remounts it with editing reset — no effects needed.
   const [editing, setEditing] = useState(false);
-  const [editState, editAction, editPending] = useActionState(updateGoal, { error: null });
+  const [editState, editAction, editPending] = useActionState(updateGoal, {
+    error: null,
+  });
 
   const open = goal.status === 'active' || goal.status === 'paused';
   const value = (name: string, fallback: string) => editState.values?.[name] ?? fallback;
@@ -325,9 +327,19 @@ export function GoalCard({ goal }: { goal: GoalView }) {
                 </p>
               ) : (
                 <form action={setGoalAutonomy.bind(null, goal.id, !goal.autonomy)}>
-                  <SubmitButton variant="menu" pendingLabel="Updating…">
-                    {goal.autonomy ? 'Require approvals' : 'Run autonomously'}
-                  </SubmitButton>
+                  {goal.autonomy ? (
+                    <SubmitButton variant="menu" pendingLabel="Updating…">
+                      Require approvals
+                    </SubmitButton>
+                  ) : (
+                    <ConfirmButton
+                      variant="menu"
+                      pendingLabel="Enabling…"
+                      confirmLabel="Confirm — run autonomously"
+                    >
+                      Run autonomously
+                    </ConfirmButton>
+                  )}
                 </form>
               )}
               {open ? (

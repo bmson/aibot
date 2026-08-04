@@ -16,23 +16,19 @@
   --motion-exit: cubic-bezier(0.4, 0, 1, 1);
 }
 
-/* Routes move as surfaces, not as unrelated controls fading independently. */
+/* Route changes should register without making the entire interface feel as if
+   it zoomed or refocused. Keep this to a quick opacity cue. */
 .route-surface {
   min-width: 0;
-  transform-origin: 50% 0;
-  animation: route-enter var(--motion-medium) var(--motion-enter) both;
+  animation: route-enter var(--motion-fast) ease-out both;
 }
 
 @keyframes route-enter {
   from {
     opacity: 0;
-    transform: translate3d(0, 10px, 0) scale(0.992);
-    filter: blur(2px);
   }
   to {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-    filter: blur(0);
   }
 }
 
@@ -94,52 +90,8 @@
   }
 }
 
-/* Composer states are inferred from focus, content, menus, and busy controls.
-   This keeps the visual state machine aligned with actual DOM state. */
-form:has(textarea) {
-  --composer-glow: transparent;
-}
-
-form:has(textarea:focus-visible),
-form:has(textarea:not(:placeholder-shown)) {
-  --composer-glow: color-mix(in srgb, var(--accent, currentColor) 14%, transparent);
-}
-
-form:has(textarea) > :where(div, section):has(textarea) {
-  transition:
-    border-color var(--motion-fast) ease,
-    box-shadow var(--motion-medium) var(--motion-enter),
-    transform var(--motion-medium) var(--motion-enter),
-    background-color var(--motion-medium) ease;
-}
-
-form:has(textarea:focus-visible) > :where(div, section):has(textarea) {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent, currentColor) 28%, transparent),
-    0 14px 44px var(--composer-glow);
-  transform: translateY(-1px);
-}
-
 textarea {
   field-sizing: content;
-}
-
-/* Command/model palettes visually attach to the composer that produced them. */
-form:has(textarea) [role="listbox"],
-form:has(textarea) [role="menu"] {
-  transform-origin: 50% 100%;
-  animation: composer-palette-enter var(--motion-medium) var(--motion-enter) both;
-}
-
-@keyframes composer-palette-enter {
-  from {
-    opacity: 0;
-    transform: translateY(10px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
 }
 
 /* Streaming and tool work progress by events. New steps enter once; completed
@@ -173,8 +125,8 @@ form:has(textarea) [role="menu"] {
   }
 }
 
-/* Message and event cards arrive from their conversational origin. */
-.group\/msg,
+/* Event cards may opt in here. Chat messages own their enter animation in the
+   component so history never replays and a new reply never animates twice. */
 [data-message],
 [data-event-card] {
   animation: message-enter var(--motion-medium) var(--motion-enter) both;
@@ -224,20 +176,16 @@ form:has(textarea) [role="menu"] {
   }
 
   .route-surface,
-  .group\/msg,
   [data-message],
   [data-event-card],
   [aria-label*="activity" i] > *,
   [data-activity-trail] > *,
-  form:has(textarea) [role="listbox"],
-  form:has(textarea) [role="menu"],
   [role="menu"][data-state="open"],
   [data-action-menu][data-state="open"],
   [popover]:popover-open {
     animation: none !important;
   }
 
-  form:has(textarea) > :where(div, section):has(textarea),
   [popover] {
     transition: none !important;
   }

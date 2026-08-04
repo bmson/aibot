@@ -73,7 +73,10 @@ export function dayLabel(date: Date, now: Date): string {
 }
 
 export function timeLabel(date: Date): string {
-  return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(date);
+  return new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
 }
 
 export function DayDivider({ label }: { label: string }) {
@@ -82,12 +85,12 @@ export function DayDivider({ label }: { label: string }) {
   // The chip is tonal rather than raised — a date is a quiet waypoint, and an
   // outlined, shadowed pill competed with the cards the assistant actually places.
   return (
-    <div aria-hidden="true" className="flex items-center gap-4 pt-7 pb-3 [div:first-child>&]:pt-1">
-      <span className="h-px flex-1 bg-gradient-to-r from-transparent to-edge" />
+    <div className="flex items-center gap-4 pt-7 pb-3 [div:first-child>&]:pt-1">
+      <span aria-hidden="true" className="h-px flex-1 bg-gradient-to-r from-transparent to-edge" />
       <span className="rounded-full bg-sunken/80 px-2.5 py-1 font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
         {label}
       </span>
-      <span className="h-px flex-1 bg-gradient-to-l from-transparent to-edge" />
+      <span aria-hidden="true" className="h-px flex-1 bg-gradient-to-l from-transparent to-edge" />
     </div>
   );
 }
@@ -107,9 +110,8 @@ function PresenceOrb() {
 }
 
 /**
- * Copy a reply, and the time it landed — revealed on hover so a resting log
- * stays free of chrome. Phones skip it entirely: a permanent row under every
- * message is heavy on a small screen, and long-press selection already copies.
+ * Copy a reply, and the time it landed — revealed on hover where hover exists.
+ * Touch devices keep the compact row visible so copy is discoverable there too.
  */
 export function MessageActions({ text, date }: { text: string; date: Date | null }) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
@@ -134,7 +136,7 @@ export function MessageActions({ text, date }: { text: string; date: Date | null
   };
 
   return (
-    <div className="msg-actions mt-1.5 hidden items-center gap-2 opacity-0 motion-safe:transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100 sm:flex">
+    <div className="msg-actions mt-1.5 flex items-center gap-2 opacity-0 motion-safe:transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100">
       <button
         type="button"
         onClick={() => void copy()}
@@ -179,14 +181,10 @@ export function PresenceRow({
   const label =
     phase === 'thinking' ? 'Thinking…' : phase === 'starting' ? 'Starting the work…' : 'Working…';
   return (
-    <div className="flex w-full min-w-0 items-start gap-2.5">
+    <div role="status" aria-live="polite" className="flex w-full min-w-0 items-start gap-2.5">
       <PresenceOrb />
       <div className="min-w-0 flex-1">
-        <span className="sr-only">The assistant is working</span>
-        <span
-          aria-hidden="true"
-          className="block text-[13px] leading-5 text-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--content-muted),var(--content-strong),var(--content-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent"
-        >
+        <span className="block text-[13px] leading-5 text-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--content-muted),var(--content-strong),var(--content-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent">
           {label}
         </span>
         {activity.length > 0 ? (
@@ -346,7 +344,10 @@ function ActivityTrail({
 
 /** Auto-recall provenance carried on an assistant message's custom `recall` part. */
 export function recallSourcesOf(message: UIMessage): RecallSource[] {
-  for (const part of message.parts as Array<{ type?: string; sources?: unknown }>) {
+  for (const part of message.parts as Array<{
+    type?: string;
+    sources?: unknown;
+  }>) {
     if (part?.type === 'recall' && Array.isArray(part.sources)) {
       return (part.sources as RecallSource[]).filter(
         (s) => s && typeof s.date === 'string' && typeof s.label === 'string',
@@ -360,7 +361,10 @@ export function recallSourcesOf(message: UIMessage): RecallSource[] {
 function friendlyRecallDate(isoDay: string): string {
   const date = new Date(`${isoDay}T00:00:00`);
   if (Number.isNaN(date.getTime())) return isoDay;
-  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date);
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+  }).format(date);
 }
 
 /** The "recalled from earlier" affordance: what auto-recall drew on for a turn. */
