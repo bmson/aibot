@@ -423,6 +423,7 @@ export function ChatClient({
 
   // Grow the composer with its content, up to the CSS max-height cap. `input`
   // is the trigger; the new height is read from the DOM, not from `input`.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: input drives the re-measure
   useLayoutEffect(() => {
     const element = textareaRef.current;
     if (!element) return;
