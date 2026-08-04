@@ -23,7 +23,7 @@
     "@opentelemetry/sdk-trace-node": "^2.9.0",
     "ai": "^7.0.29",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.7.0",
+    "hono": "^4.13.0",
     "jose": "^6.2.3",
     "zod": "^4.0.0"
   },
