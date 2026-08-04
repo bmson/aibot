@@ -9,11 +9,10 @@ import { getAgentIdentity, getApplication } from '@/lib/server';
 import { AppNav } from './app-nav';
 import './globals.css';
 import './motion-system.css';
-import './visual-refinement.css';
-import './conversation-polish.css';
-import './navigation-rethink.css';
-import './navigation-bloom.css';
-import './mobile-chat-final.css';
+import './chrome.css';
+import './conversation.css';
+import './navigation.css';
+import './navigation-mobile.css';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
 const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });

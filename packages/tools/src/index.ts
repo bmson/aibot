@@ -1,4 +1,5 @@
 export * from './applications.js';
+export * from './approval-summaries.js';
 export * from './browser/index.js';
 export * from './builtin/index.js';
 export * from './code/index.js';

@@ -1,4 +1,6 @@
-/* Compact mobile navigation: one top-right trigger and a menu that overlays chat. */
+/* Mobile navigation and chat placement: one top-right trigger, a menu that
+   floats over the conversation without dimming it, and a composer that sits
+   flush with the bottom browser edge. */
 
 :root {
   --mobile-menu-edge: color-mix(in srgb, currentColor 9%, transparent);
@@ -281,5 +283,30 @@
   .nav-mobile-menu-row,
   .nav-mobile-menu-back {
     transition: none;
+  }
+}
+
+@media (max-width: 1023px) {
+  /* Keep the invisible outside-tap target and dialog semantics, but remove the
+     visual scrim entirely. The menu panel itself remains above chat content. */
+  .nav-mobile-menu-scrim,
+  .nav-mobile-menu-dialog[data-open="true"] .nav-mobile-menu-scrim {
+    background: transparent;
+    opacity: 1;
+    backdrop-filter: none;
+  }
+
+  /* Mobile Safari already reserves space for its browser chrome. Do not add an
+     extra gap beneath the composer in a normal browser tab. */
+  .mobile-safe-bottom {
+    padding-bottom: 0;
+  }
+}
+
+/* Installed/home-screen mode reaches the physical bottom edge, so preserve the
+   hardware safe area there. */
+@media (max-width: 1023px) and (display-mode: standalone) {
+  .mobile-safe-bottom {
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
   }
 }

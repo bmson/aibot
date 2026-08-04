@@ -61,7 +61,7 @@ it does not relax it.
 | Priority/deadline-derived cadence | `goalAutomationCadence` (`schedules.ts:56`) | The model for a per-agent briefing cadence. |
 | Code-job dispatch (runs a registered fn, not the model loop; meters cost; can yield/resume) | `CodeJobName` + `runCodeJob` (`packages/core/src/memory/jobs.ts:29`) | Add `briefing.compose` and `watch.poll_web` here. |
 | Reduced registry for untrusted / no-outward-tool context | `packages/tools/src/registry.ts:26-31` (`outwardFacing` dropped), taint gate `executor.ts:1098,1138` | The registry a `suggest`-tier watcher and the briefing run under. |
-| Off-dashboard owner delivery | `owner.notify` (`packages/tools/src/builtin/index.ts:551`), `notifyOwnerBySms` (`packages/modules/src/sms/channel.ts`), `notifyOwner` dep (`executor.ts:142`) | Briefing + watch-hit delivery. |
+| Off-dashboard owner delivery | `owner.notify` (`packages/tools/src/builtin/index.ts:471`), `notifyOwnerBySms` (`packages/modules/src/sms/channel.ts`), `notifyOwner` dep (`executor.ts:142`) | Briefing + watch-hit delivery. |
 | Voice rewrite with fact-preservation check | `rewriteInVoice` (`packages/core/src/voice.ts:63`) | The briefing is composed in the owner's voice. |
 | "Reference data, never instructions" framing for carried untrusted text | `sessionInstruction` (`missions.ts:94`), `goalInstruction` (`schedules.ts:131`) | How trigger content is presented to any model step. |
 

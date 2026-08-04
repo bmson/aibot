@@ -1,8 +1,8 @@
 /*
- * Visual refinement pass
+ * Application chrome: depth, hierarchy, and tactile feedback
  *
- * This layer adjusts depth, hierarchy, and tactile feedback without changing
- * layout semantics or introducing a component dependency.
+ * This layer adjusts surfaces app-wide without changing layout semantics or
+ * introducing a component dependency.
  */
 
 :root {
