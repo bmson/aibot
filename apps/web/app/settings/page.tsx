@@ -85,7 +85,11 @@ export default async function SettingsPage() {
         <SectionHeading title="Assistant" hint={`${agent.name} · ${agent.email}`} />
         <Card className="mt-3">
           <AgentForm
-            initial={{ timezone: agent.timezone, locale: agent.locale, signature: agent.signature }}
+            initial={{
+              timezone: agent.timezone,
+              locale: agent.locale,
+              signature: agent.signature,
+            }}
           />
           <p className="mt-5 border-t border-edge pt-3 text-xs leading-5 text-muted">
             {agent.phoneE164
@@ -214,12 +218,19 @@ export default async function SettingsPage() {
                 actions={
                   <>
                     <form action={setPolicyEnabled.bind(null, p.id, !p.enabled)}>
-                      <SubmitButton
-                        variant="outline"
-                        pendingLabel={p.enabled ? 'Pausing…' : 'Enabling…'}
-                      >
-                        {p.enabled ? 'Pause' : 'Use'}
-                      </SubmitButton>
+                      {p.enabled ? (
+                        <SubmitButton variant="outline" pendingLabel="Pausing…">
+                          Pause
+                        </SubmitButton>
+                      ) : (
+                        <ConfirmButton
+                          variant="outline"
+                          pendingLabel="Enabling…"
+                          confirmLabel="Confirm use rule"
+                        >
+                          Use
+                        </ConfirmButton>
+                      )}
                     </form>
                     {p.createdVia !== 'seed' ? (
                       <form action={deletePolicy.bind(null, p.id)}>
