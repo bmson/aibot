@@ -110,7 +110,9 @@ async function assertResponsiveContract(page: Page, label: string, mobile: boole
 }
 
 async function openRoute(page: Page, path: string, mobile = true) {
-  const response = await page.goto(`${baseUrl}${path}`, { waitUntil: 'domcontentloaded' });
+  const response = await page.goto(`${baseUrl}${path}`, {
+    waitUntil: 'domcontentloaded',
+  });
   assert(response?.ok(), `${path} returned HTTP ${response?.status() ?? 'unknown'}`);
   assert(
     new URL(page.url()).origin === new URL(baseUrl).origin,
@@ -197,8 +199,10 @@ try {
     new URL(page.url()).pathname === '/chat',
     `Root did not open the primary chat: ${page.url()}`,
   );
-  assert(await page.getByRole('textbox', { name: 'Message' }).isVisible(), 'Chat is not ready');
-  const menuTrigger = page.getByRole('button', { name: 'Open navigation menu' });
+  assert(await page.getByRole('combobox', { name: 'Message' }).isVisible(), 'Chat is not ready');
+  const menuTrigger = page.getByRole('button', {
+    name: 'Open navigation menu',
+  });
   await targetSize(menuTrigger, 'mobile navigation trigger');
   await menuTrigger.click();
   const bloom = page.locator('#mobile-nav[role="dialog"]');
@@ -248,7 +252,9 @@ try {
       'Close navigation menu',
     'Tab from the last bloom control did not wrap to the close control',
   );
-  const closeButton = bloom.getByRole('button', { name: 'Close navigation menu' });
+  const closeButton = bloom.getByRole('button', {
+    name: 'Close navigation menu',
+  });
   await targetSize(closeButton, 'mobile navigation close button');
   await closeButton.click();
   await bloom.waitFor({ state: 'detached' });
@@ -268,7 +274,7 @@ try {
 
   if (fixture) {
     await openRoute(page, `/chat/${fixture.id}`);
-    const message = page.getByRole('textbox', { name: 'Message' });
+    const message = page.getByRole('combobox', { name: 'Message' });
     const send = page.getByRole('button', { name: 'Send' });
     const composerSurface = page.getByTestId('chat-composer-surface');
     const autonomyMode = page.getByTestId('chat-autonomy-mode');
@@ -287,7 +293,22 @@ try {
       (await composerSurface.locator('[data-testid="chat-autonomy-mode"]').count()) === 1,
       'autonomy mode is not integrated into the composer surface',
     );
+    await message.focus();
+    const focusVisual = await composerSurface.evaluate((surface) => {
+      const wrapper = surface.parentElement;
+      return {
+        radius: Number.parseFloat(getComputedStyle(surface).borderRadius),
+        wrapperShadow: wrapper ? getComputedStyle(wrapper).boxShadow : 'missing',
+        wrapperTransform: wrapper ? getComputedStyle(wrapper).transform : 'missing',
+      };
+    });
+    assert(focusVisual.radius > 0, 'chat composer focus surface is not rounded');
+    assert(
+      focusVisual.wrapperShadow === 'none' && focusVisual.wrapperTransform === 'none',
+      `chat composer has a second outer focus treatment: ${JSON.stringify(focusVisual)}`,
+    );
     await message.fill('/model');
+    assert((await message.getAttribute('aria-expanded')) === 'true', 'model picker is not exposed');
     const modelList = page.getByRole('listbox', { name: 'Response model' });
     await modelList.waitFor();
     await targetSize(modelList.getByRole('option').first(), 'slash-command model option');
@@ -304,7 +325,10 @@ try {
     { width: 768, height: 900, label: 'tablet' },
     { width: 1440, height: 900, label: 'desktop' },
   ]) {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.setViewportSize({
+      width: viewport.width,
+      height: viewport.height,
+    });
     for (const route of testedRoutes) {
       await openRoute(page, route, false);
     }
@@ -314,12 +338,26 @@ try {
     );
   }
 
+  if (fixture) {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openRoute(page, `/chat/${fixture.id}`, false);
+    const message = page.getByRole('combobox', { name: 'Message' });
+    const draft = 'Keep this draft while I choose a model';
+    await message.fill(draft);
+    await page.getByRole('button', { name: /^Response model:/ }).click();
+    const modelList = page.getByRole('listbox', { name: 'Response model' });
+    await modelList.waitFor();
+    await modelList.getByRole('option').first().click();
+    await modelList.waitFor({ state: 'detached' });
+    assert((await message.inputValue()) === draft, 'choosing a model discarded the chat draft');
+  }
+
   assert(errors.length === 0, `browser errors were reported: ${errors.join(' | ')}`);
   console.log(
     JSON.stringify({
       ok: true,
       viewports: ['390x844', '768x900', '1440x900'],
-      routes: testedRoutes.length * 3 + (fixture ? 1 : 0),
+      routes: testedRoutes.length * 3 + (fixture ? 2 : 0),
       checks: [
         'no horizontal overflow',
         '44px mobile targets',
@@ -328,6 +366,8 @@ try {
         'primary and secondary bloom destinations',
         'root opens the primary chat',
         'activity feed and filters',
+        'single rounded composer focus treatment',
+        'draft-safe model switching',
       ],
     }),
   );
