@@ -16,7 +16,8 @@ import {
 import { eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { approvalFallbackSummary, ToolDispatcher } from './dispatcher.js';
+import { approvalFallbackSummary } from './approval-summaries.js';
+import { ToolDispatcher } from './dispatcher.js';
 import { registerCalendarTools } from './google/calendar.js';
 import { ToolRegistry } from './registry.js';
 import { AmbiguousTwilioDeliveryError } from './twilio/client.js';

@@ -24,7 +24,7 @@ import { createElement, type MouseEvent, useCallback, useEffect, useRef, useStat
 import { focusRing, microLabelClass } from '@/lib/ui';
 import { signOutAction } from './actions';
 import { type JellyButtonElement, JellyIconButton } from './jelly-icon-button';
-import { MobileNavBloom } from './mobile-nav-bloom';
+import { MobileNavMenu } from './mobile-nav-menu';
 import { ThemeToggle } from './theme-toggle';
 
 interface NavItem {
@@ -289,7 +289,7 @@ export function AppNav({
         </div>
       </aside>
 
-      <MobileNavBloom
+      <MobileNavMenu
         navItems={navItems}
         pendingApprovals={pendingApprovals}
         signedIn={signedIn}

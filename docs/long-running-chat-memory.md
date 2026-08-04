@@ -35,8 +35,8 @@ design is bounded live context + retrieval, never "just keep appending."
 | --- | --- | --- |
 | Bounded live window | `apps/web/app/api/chat/route.ts` (`MODEL_HISTORY_LIMIT = 40`, `boundedModelHistory`); executor `.slice(-20)` at `packages/core/src/workflow/executor.ts:487` | The live context. Unchanged. |
 | Per-message embeddings + HNSW index | `packages/db/src/schema.ts:133-155` (`messages.embedding vector(1536)`, async backfill index) | The recall store. |
-| Semantic search over past chats | `conversations.search`, `packages/tools/src/builtin/index.ts:504-543` | The retrieval query, promoted from a model-invoked tool to automatic injection. |
-| Durable-fact recall + owner card | `memory.recall` (`builtin/index.ts:372-409`), `getOwnerCard`, consolidation in `packages/core/src/memory/` | Complementary; recall of *episodes* is what this adds. |
+| Semantic search over past chats | `conversations.search`, `packages/tools/src/builtin/index.ts:428-468` | The retrieval query, promoted from a model-invoked tool to automatic injection. |
+| Durable-fact recall + owner card | `memory.recall` (`builtin/index.ts:105-160`), `getOwnerCard`, consolidation in `packages/core/src/memory/` | Complementary; recall of *episodes* is what this adds. |
 | Trust gating of private context | `executor.ts:1057-1058,1072` (`privilegedTask && !state.untrustedContext`) | The gate recall must copy. |
 
 The materials are in place. The gap is: (1) `conversations.search` only fires if the *model chooses*

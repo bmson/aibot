@@ -62,7 +62,7 @@ function formatBadgeCount(count: number): string {
   return count >= 1_000 ? `${(count / 1_000).toFixed(1)}k` : String(count);
 }
 
-export function MobileNavBloom({
+export function MobileNavMenu({
   navItems,
   pendingApprovals,
   signedIn,

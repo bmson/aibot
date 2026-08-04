@@ -1,8 +1,8 @@
 /*
- * Navigation palette
+ * Navigation palette (desktop)
  *
- * The shell no longer carries a logo or permanent sidebar. A small card-stack
- * launcher shows the current place, then opens a layered palette of destinations.
+ * The shell carries no logo or permanent sidebar. A small card-stack launcher
+ * shows the current place, then opens a layered palette of destinations.
  */
 
 :root {
