@@ -2,7 +2,7 @@
 
 import { ArrowUpRight, CircleDollarSign, LoaderCircle } from 'lucide-react';
 import Link from 'next/link';
-import { useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import { cancelTask, raiseTaskBudgetAndRetry } from '@/app/tasks/actions';
 import { btn } from '@/lib/ui';
 
@@ -21,10 +21,22 @@ export interface InlineBudgetRequestPart {
 export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart }) {
   const [resolution, setResolution] = useState<'approved' | 'denied' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [approvalArmed, setApprovalArmed] = useState(false);
   const [pending, startTransition] = useTransition();
   const status = resolution ?? part.status ?? 'pending';
 
+  useEffect(() => {
+    if (!approvalArmed) return;
+    const timer = window.setTimeout(() => setApprovalArmed(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [approvalArmed]);
+
   const approve = () => {
+    if (!approvalArmed) {
+      setApprovalArmed(true);
+      return;
+    }
+    setApprovalArmed(false);
     startTransition(async () => {
       try {
         const formData = new FormData();
@@ -72,11 +84,16 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
           ${part.spentUsd.toFixed(4)} has been spent. Approval applies only to this task.
         </p>
         {status === 'approved' ? (
-          <p className="mt-2 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+          <p
+            role="status"
+            className="mt-2 text-xs font-medium text-emerald-700 dark:text-emerald-300"
+          >
             Approved — work is resuming.
           </p>
         ) : status === 'denied' ? (
-          <p className="mt-2 text-xs font-medium text-muted">Declined — the task was cancelled.</p>
+          <p role="status" className="mt-2 text-xs font-medium text-muted">
+            Stopped — the task was cancelled.
+          </p>
         ) : status === 'missing' ? (
           <p className="mt-2 text-xs text-muted">This request is no longer available.</p>
         ) : (
@@ -85,7 +102,11 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
               {pending ? (
                 <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
               ) : null}
-              {pending ? 'Working…' : `Approve $${part.proposedBudgetUsd.toFixed(2)}`}
+              {pending
+                ? 'Working…'
+                : approvalArmed
+                  ? `Confirm $${part.proposedBudgetUsd.toFixed(2)}`
+                  : `Approve $${part.proposedBudgetUsd.toFixed(2)}`}
             </button>
             <button
               type="button"
@@ -93,7 +114,7 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
               onClick={decline}
               className={btn.dangerOutline}
             >
-              Decline
+              Stop task
             </button>
             <Link href={`/tasks/${part.taskId}`} className={btn.outline}>
               Review task
@@ -101,7 +122,11 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
             </Link>
           </div>
         )}
-        {error ? <p className="mt-2 text-xs text-red-700 dark:text-red-300">{error}</p> : null}
+        {error ? (
+          <p role="alert" className="mt-2 text-xs text-red-700 dark:text-red-300">
+            {error}
+          </p>
+        ) : null}
       </div>
     </section>
   );
