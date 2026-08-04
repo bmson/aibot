@@ -5,7 +5,8 @@ file sizes, function and variable naming, comment and documentation quality,
 and overall simplicity. Run after round three on an otherwise green tree, and
 verified against the same four gates: `pnpm lint` (Biome + architecture
 boundaries), `pnpm typecheck` (all 12 workspace tasks plus `scripts/`), the
-full vitest suite against a real pgvector Postgres, and `pnpm build`.
+full vitest suite against a real pgvector Postgres (132 files, 960 passing),
+and `pnpm build`. Green before the changes, green after.
 
 ## What is already in good shape
 
