@@ -90,8 +90,9 @@ function event(conversationId: string): InboundEvent {
   return { source: 'schedule', agentId, trust: 'assistant', conversationId, payload: {} };
 }
 
-function goalWorkRegistry() {
+function goalWorkRegistry(options: { failProgressWrites?: number } = {}) {
   const registry = new ToolRegistry();
+  let remainingProgressFailures = options.failProgressWrites ?? 0;
   registry.register({
     name: 'goal.test_work',
     description: 'Complete one verified test step.',
@@ -114,6 +115,10 @@ function goalWorkRegistry() {
     risk: 'autonomous',
     acceptsUntrustedInput: true,
     execute: async (args, ctx) => {
+      if (remainingProgressFailures > 0) {
+        remainingProgressFailures -= 1;
+        throw new Error('simulated goal checkpoint write failure');
+      }
       const input = args as { goalId: string; progress: string; nextAction: string };
       const [updated] = await ctx.db
         .update(goals)
@@ -258,24 +263,8 @@ describe('unattended goal sessions never report silent success', () => {
       async object() {
         return { ok: true, modelId: 'fake/model', degraded: false, object: workflowPlan };
       },
-      async step(
-        _role: string,
-        opts: { messages?: unknown[]; toolChoice?: { type?: string; toolName?: string } | string },
-      ): Promise<StepCallOutcome> {
+      async step(_role: string, opts: { messages?: unknown[] }): Promise<StepCallOutcome> {
         const transcript = JSON.stringify(opts.messages ?? []);
-        const forcedProgress =
-          typeof opts.toolChoice === 'object' &&
-          opts.toolChoice?.toolName === 'goals.update_progress';
-        if (forcedProgress) {
-          const phase = transcript.includes('"phase":2') ? 2 : 1;
-          return {
-            ok: true,
-            modelId: 'fake/model',
-            degraded: false,
-            text: '',
-            toolCalls: [progressCall(goalId, phase)],
-          };
-        }
         if (!transcript.includes('"phase":1')) {
           return {
             ok: true,
@@ -312,14 +301,15 @@ describe('unattended goal sessions never report silent success', () => {
 
     expect(outcome.outcome).toBe('done');
     const [goal] = await db.select().from(goals).where(eq(goals.id, goalId));
-    expect(goal?.progress).toBe('Finished phase 2');
+    expect(goal?.progress).toContain('goal.test_work succeeded');
+    expect(goal?.nextAction).toContain('do not infer unverified facts');
     const progressRows = await db.select().from(toolCalls).where(eq(toolCalls.taskId, task.id));
     expect(progressRows.filter((row) => row.toolName === 'goals.update_progress')).toHaveLength(2);
   });
 
-  it('uses the fallback when the reasoning model ignores a forced progress call', async (ctx) => {
+  it('does not call a model for mandatory progress bookkeeping', async (ctx) => {
     if (!dbUp) return ctx.skip();
-    const { goalId, conversationId } = await seedGoal('Goal progress fallback');
+    const { goalId, conversationId } = await seedGoal('Runtime goal progress');
     const { task } = await enqueueTask(db, {
       event: event(conversationId),
       type: 'scheduled',
@@ -327,7 +317,7 @@ describe('unattended goal sessions never report silent success', () => {
       maxSteps: 4,
     });
     createdTaskIds.push(task.id);
-    const progressAttempts: boolean[] = [];
+    let stepCalls = 0;
 
     const router = {
       async object() {
@@ -337,14 +327,15 @@ describe('unattended goal sessions never report silent success', () => {
         _role: string,
         opts: {
           messages?: unknown[];
+          tools?: Record<string, unknown>;
           toolChoice?: { type?: string; toolName?: string } | string;
-          forceFallback?: boolean;
         },
       ): Promise<StepCallOutcome> {
+        stepCalls += 1;
+        expect(opts.tools).not.toHaveProperty('goals.update_progress');
+        const forcedTool = typeof opts.toolChoice === 'object' ? opts.toolChoice.toolName : null;
+        expect(forcedTool).not.toBe('goals.update_progress');
         const transcript = JSON.stringify(opts.messages ?? []);
-        const forcedProgress =
-          typeof opts.toolChoice === 'object' &&
-          opts.toolChoice?.toolName === 'goals.update_progress';
         if (!transcript.includes('goal.test_work')) {
           return {
             ok: true,
@@ -352,28 +343,10 @@ describe('unattended goal sessions never report silent success', () => {
             degraded: false,
             text: '',
             toolCalls: [
-              { toolCallId: 'work-fallback', toolName: 'goal.test_work', input: { phase: 1 } },
+              { toolCallId: 'work-runtime', toolName: 'goal.test_work', input: { phase: 1 } },
+              progressCall(goalId, 99),
             ],
           };
-        }
-        if (forcedProgress) {
-          progressAttempts.push(opts.forceFallback === true);
-          return opts.forceFallback
-            ? {
-                ok: true,
-                modelId: 'fake/fallback',
-                degraded: true,
-                text: '',
-                toolCalls: [progressCall(goalId, 1)],
-              }
-            : {
-                ok: true,
-                modelId: 'fake/primary',
-                degraded: false,
-                text: 'I saved the progress.',
-                toolCalls: [],
-                finishReason: 'stop',
-              };
         }
         return {
           ok: true,
@@ -392,17 +365,25 @@ describe('unattended goal sessions never report silent success', () => {
     );
 
     expect(outcome.outcome).toBe('done');
-    expect(progressAttempts).toEqual([false, true]);
+    // One model call performs work and one writes the final prose. The progress
+    // call between them is created and dispatched entirely by the runtime.
+    expect(stepCalls).toBe(2);
     const [goal] = await db.select().from(goals).where(eq(goals.id, goalId));
-    expect(goal?.progress).toBe('Finished phase 1');
+    expect(goal?.progress).toContain('goal.test_work succeeded');
+    const progressRows = await db
+      .select()
+      .from(toolCalls)
+      .where(and(eq(toolCalls.taskId, task.id), eq(toolCalls.toolName, 'goals.update_progress')));
+    expect(progressRows).toHaveLength(1);
+    expect(progressRows[0]?.decision).toMatchObject({ model: 'runtime/verified-tool-ledger' });
   });
 
   it('binds a malformed model progress ID to the task goal', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const { goalId, conversationId } = await seedGoal('Rejected goal progress');
     const { task } = await enqueueTask(db, {
-      event: event(conversationId),
-      type: 'scheduled',
+      event: { ...event(conversationId), source: 'chat', trust: 'owner' },
+      type: 'chat_turn',
       goalId,
       maxSteps: 8,
     });
@@ -511,20 +492,9 @@ describe('unattended goal sessions never report silent success', () => {
       async object() {
         return { ok: true, modelId: 'fake/model', degraded: false, object: workflowPlan };
       },
-      async step(
-        _role: string,
-        opts: { toolChoice?: { type?: string; toolName?: string } | string },
-      ): Promise<StepCallOutcome> {
+      async step(): Promise<StepCallOutcome> {
         stepCalls += 1;
-        // The only turn allowed past the cap is the forced progress write.
-        expect(opts.toolChoice).toMatchObject({ toolName: 'goals.update_progress' });
-        return {
-          ok: true,
-          modelId: 'fake/model',
-          degraded: false,
-          text: '',
-          toolCalls: [progressCall(goalId, 1)],
-        };
+        throw new Error('the model must not run for runtime goal bookkeeping');
       },
     } as unknown as ModelRouter;
 
@@ -536,62 +506,51 @@ describe('unattended goal sessions never report silent success', () => {
     // The session still ends as exhausted, but the goal keeps its progress —
     // not needs_attention, so the automation gate can supersede it.
     expect(outcome.outcome).toBe('failed');
-    expect(stepCalls).toBe(1);
+    expect(stepCalls).toBe(0);
     const [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(row?.status).toBe('failed');
     const [goal] = await db.select().from(goals).where(eq(goals.id, goalId));
-    expect(goal?.progress).toBe('Finished phase 1');
+    expect(goal?.progress).toContain('goal.test_work succeeded');
   });
 
   it('keeps a failed bookkeeping turn retryable — the retry gets a fresh turn', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const { goalId, task } = await seedExhaustedSession(4);
+    let stepCalls = 0;
 
-    const ignoresForcedCall = {
+    const bookkeepingNeverUsesTheModel = {
       async object() {
         return { ok: true, modelId: 'fake/model', degraded: false, object: workflowPlan };
       },
       async step(): Promise<StepCallOutcome> {
-        return {
-          ok: true,
-          modelId: 'fake/model',
-          degraded: false,
-          text: 'I could not save the progress.',
-          toolCalls: [],
-          finishReason: 'stop',
-        };
+        stepCalls += 1;
+        throw new Error('the model must not run for runtime goal bookkeeping');
       },
     } as unknown as ModelRouter;
+    const dispatcher = new ToolDispatcher(db, goalWorkRegistry({ failProgressWrites: 1 }));
 
     const first = await executeTask(
-      { db, router: ignoresForcedCall, dispatcher: new ToolDispatcher(db, goalWorkRegistry()) },
+      { db, router: bookkeepingNeverUsesTheModel, dispatcher },
       task.id,
     );
     expect(first.outcome).toBe('needs_attention');
+    expect(stepCalls).toBe(0);
 
     expect(await wakeTask(db, task.id)).toBe(true);
 
-    const savesProgress = {
-      async object() {
-        return { ok: true, modelId: 'fake/model', degraded: false, object: workflowPlan };
-      },
-      async step(): Promise<StepCallOutcome> {
-        return {
-          ok: true,
-          modelId: 'fake/model',
-          degraded: false,
-          text: '',
-          toolCalls: [progressCall(goalId, 1)],
-        };
-      },
-    } as unknown as ModelRouter;
-
     const second = await executeTask(
-      { db, router: savesProgress, dispatcher: new ToolDispatcher(db, goalWorkRegistry()) },
+      { db, router: bookkeepingNeverUsesTheModel, dispatcher },
       task.id,
     );
     expect(second.outcome).toBe('failed');
+    expect(stepCalls).toBe(0);
     const [goal] = await db.select().from(goals).where(eq(goals.id, goalId));
-    expect(goal?.progress).toBe('Finished phase 1');
+    expect(goal?.progress).toContain('goal.test_work succeeded');
+    const progressRows = await db
+      .select({ status: toolCalls.status })
+      .from(toolCalls)
+      .where(and(eq(toolCalls.taskId, task.id), eq(toolCalls.toolName, 'goals.update_progress')))
+      .orderBy(toolCalls.step);
+    expect(progressRows.map((row) => row.status)).toEqual(['failed', 'succeeded']);
   });
 });

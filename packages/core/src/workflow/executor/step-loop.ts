@@ -10,6 +10,7 @@ import { getAmbientBlock } from '../../memory/ambient.js';
 import { getOwnerCard } from '../../memory/consolidation.js';
 import { recallRelevantContext, recentWindowStart } from '../../memory/recall.js';
 import { bumpSkillUse, recallSkills, renderSkillsBlock } from '../../memory/skills.js';
+import type { StepCallOutcome } from '../../model-router/router.js';
 import { markApprovalsNotified } from '../approvals.js';
 import {
   artifactRoutingFailure,
@@ -17,8 +18,8 @@ import {
   needsArtifactToolRetry,
 } from '../artifact-intent.js';
 import {
+  buildGoalProgressCheckpoint,
   isGoalWorkEvidence,
-  needsGoalProgressToolRetry,
   needsGoalProgressUpdate,
 } from '../goal-evidence.js';
 import {
@@ -237,15 +238,13 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     (task.type === 'chat_turn' || task.type === 'sms_turn') && task.trust === 'owner';
 
   // ── Step loop ─────────────────────────────────────────────────────────────
-  // One turn beyond maxSteps is reserved for goal bookkeeping. A session whose
-  // final work step spent the whole budget — or a retried task already at the
-  // cap — must still be able to save its verified progress; without this it
-  // dead-ends in stopForUnsavedGoalProgress on every retry, with no model turn
-  // ever allowed to write the update. The bonus turn cannot extend real work:
-  // it runs only while a progress update is owed, its tool choice is forced to
-  // goals.update_progress, and every other proposed call is dropped. Measured
-  // from the entry step so a retry after a failed bookkeeping turn gets exactly
-  // one fresh attempt instead of none.
+  // One step beyond maxSteps is reserved for runtime-owned goal bookkeeping. A
+  // session whose final work step spent the whole budget — or a retried task
+  // already at the cap — must still be able to save its verified progress. The
+  // bonus step cannot extend real work: it dispatches only
+  // goals.update_progress with a conservative summary built from the durable
+  // tool ledger. Measured from the entry step so a retry after a real database
+  // failure gets exactly one fresh persistence attempt instead of none.
   const bookkeepingStepCap = Math.max(task.maxSteps, state.step) + 1;
   while (state.step < bookkeepingStepCap) {
     const goalToolEvidence = isUnattendedGoalSession(task)
@@ -271,7 +270,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
           .from(toolCalls)
           .where(eq(toolCalls.taskId, task.id))
       : [];
-    const forcedReadTool = readRequest
+    const forcedReadTool = !mustRecordGoalProgress && readRequest
       ? nextRequiredReadTool(readRequest, readToolEvidence)
       : undefined;
     // Past the ordinary budget, only the owed bookkeeping turn may run.
@@ -290,14 +289,11 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       }),
       channelContext(task),
       isUnattendedGoalSession(task)
-        ? `\nThis automatic session is bound to Goal ID ${task.goalId}. Every goals.update_progress call must use exactly this Goal ID.`
+        ? `\nThis automatic session is bound to Goal ID ${task.goalId}. Work only on this goal; the runtime owns progress persistence.`
         : '',
       plan ? `\n${renderPlan(plan)}` : '',
       readRequest ? readLookupDirective(readRequest) : '',
       plan?.action === 'schedule' ? SCHEDULE_DIRECTIVE : '',
-      mustRecordGoalProgress
-        ? '\nYou completed a verified goal step. Call goals.update_progress now with only what the tool evidence proves and the best concrete next action. Do not finish in prose first.'
-        : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -305,16 +301,22 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     // (isMissionSessionTask). Keying off that — rather than "any adhoc child" —
     // stops unrelated adhoc children (e.g. the D9 known-sender-reply child) from
     // being offered mission.update, which they can only ever call in error.
-    const toolDefs = dispatcher.toolDefs(task.trust as Trust, {
+    const availableToolDefs = dispatcher.toolDefs(task.trust as Trust, {
       isMissionSession: isMissionSessionTask(task),
     });
+    // Automatic goal checkpoints are runtime capabilities, not model
+    // capabilities. Hiding the tool prevents an eager model from persisting
+    // unverified prose before the ledger-backed checkpoint runs.
+    const toolDefs = isUnattendedGoalSession(task)
+      ? availableToolDefs.filter((tool) => tool.name !== 'goals.update_progress')
+      : availableToolDefs;
     const toolSet = Object.fromEntries(
       toolDefs.map((def) => [
         def.name,
         { description: def.description, inputSchema: def.inputSchema },
       ]),
     );
-    const forcedArtifact = state.step === 0 ? artifactIntent : undefined;
+    const forcedArtifact = !mustRecordGoalProgress && state.step === 0 ? artifactIntent : undefined;
     if (forcedArtifact && !toolDefs.some((tool) => tool.name === forcedArtifact.toolName)) {
       const text = artifactToolUnavailable(forcedArtifact);
       rc.window.push({ role: 'assistant', content: text } as ModelMessage);
@@ -335,6 +337,18 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         outcome: 'failed',
       });
     }
+    if (
+      mustRecordGoalProgress &&
+      !availableToolDefs.some((tool) => tool.name === 'goals.update_progress')
+    ) {
+      return stopForUnsavedGoalProgress(
+        deps,
+        lease,
+        state,
+        rc.window,
+        'goals.update_progress is not available to this task',
+      );
+    }
 
     // Open by acting, not talking, when the work is settled. An unattended goal
     // session and any turn the planner routed to a 'workflow' (multi-step work
@@ -345,34 +359,67 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     // is intentionally excluded — those legitimately answer in prose.
     const mustAct =
       !forcedArtifact &&
+      !mustRecordGoalProgress &&
       state.step === 0 &&
       (isUnattendedGoalSession(task) || plan?.action === 'workflow');
 
-    let stepResult = await router.step(role, {
-      taskId: task.id,
-      system,
-      messages: rc.window,
-      tools: toolSet as never,
-      toolChoice: forcedArtifact
-        ? { type: 'tool', toolName: forcedArtifact.toolName }
-        : mustRecordGoalProgress
-          ? { type: 'tool', toolName: 'goals.update_progress' }
+    let stepResult: StepCallOutcome;
+    if (mustRecordGoalProgress) {
+      const checkpoint = buildGoalProgressCheckpoint(goalToolEvidence);
+      if (!task.goalId || !checkpoint) {
+        return stopForUnsavedGoalProgress(
+          deps,
+          lease,
+          state,
+          rc.window,
+          'the verified tool ledger could not produce a goal checkpoint',
+        );
+      }
+      stepResult = {
+        ok: true,
+        modelId: 'runtime/verified-tool-ledger',
+        degraded: false,
+        text: '',
+        toolCalls: [
+          {
+            toolCallId: `runtime-goal-progress-${task.id}-${state.step + 1}`,
+            toolName: 'goals.update_progress',
+            input: { goalId: task.goalId, ...checkpoint },
+          },
+        ],
+        finishReason: 'tool-calls',
+      };
+    } else {
+      stepResult = await router.step(role, {
+        taskId: task.id,
+        system,
+        messages: rc.window,
+        tools: toolSet as never,
+        toolChoice: forcedArtifact
+          ? { type: 'tool', toolName: forcedArtifact.toolName }
           : forcedReadTool
             ? { type: 'tool', toolName: forcedReadTool }
             : mustAct
               ? 'required'
               : undefined,
-      // The primary chat model has intermittently timed out when a named tool
-      // is mandatory. Use the role's configured tool-capable fallback. Goal
-      // bookkeeping stays tightly bounded; artifact arguments may contain the
-      // full document, sheet, or presentation and must not be truncated.
-      forceFallback:
-        useForcedToolFallback &&
-        Boolean(forcedArtifact || mustRecordGoalProgress || forcedReadTool),
-      maxOutputTokens: mustRecordGoalProgress ? 256 : undefined,
-      critical,
-    });
-    if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+        // The primary chat model has intermittently timed out when a named
+        // artifact/read tool is mandatory. Use the role's configured
+        // tool-capable fallback where appropriate.
+        forceFallback:
+          useForcedToolFallback && Boolean(forcedArtifact || forcedReadTool),
+        critical,
+      });
+      if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+    }
+
+    if (stepResult.ok && isUnattendedGoalSession(task) && !mustRecordGoalProgress) {
+      stepResult = {
+        ...stepResult,
+        toolCalls: stepResult.toolCalls.filter(
+          (toolCall) => toolCall.toolName !== 'goals.update_progress',
+        ),
+      };
+    }
 
     // A provider is allowed to return prose despite a forced tool choice. Give
     // it one tightly constrained retry; never turn that prose into a claimed
@@ -410,43 +457,6 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
           terminalStatus: 'failed',
           outcome: 'failed',
         });
-      }
-    }
-
-    // Named tool choice is advisory for some providers. A verified goal step
-    // must not finish in prose while leaving the goal's durable progress stale.
-    if (
-      stepResult.ok &&
-      mustRecordGoalProgress &&
-      needsGoalProgressToolRetry(stepResult.toolCalls)
-    ) {
-      console.warn('retrying missing required goal progress tool call', {
-        taskId: task.id,
-      });
-      stepResult = await router.step(role, {
-        taskId: task.id,
-        system: `${system}\n\nCall goals.update_progress now. Use only the completed tool evidence, and do not answer with prose until that tool call has been emitted.`,
-        messages: rc.window,
-        tools: toolSet as never,
-        toolChoice: { type: 'tool', toolName: 'goals.update_progress' },
-        // The primary provider already ignored this exact named-tool request.
-        // A second attempt on the same route just repeats that failure. Goal
-        // bookkeeping is schema-bounded and simple, so use the configured
-        // fallback to give the task an independent way to save its checkpoint.
-        forceFallback: true,
-        maxOutputTokens: 256,
-        critical,
-      });
-      if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
-
-      if (stepResult.ok && needsGoalProgressToolRetry(stepResult.toolCalls)) {
-        return stopForUnsavedGoalProgress(
-          deps,
-          lease,
-          state,
-          rc.window,
-          'the model did not emit goals.update_progress after a constrained retry',
-        );
       }
     }
 
@@ -517,9 +527,8 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     // A 'required' tool choice is advisory for some providers. If a step we forced
     // to act still returned no tool call, give it one constrained retry on the
     // tool-capable fallback before letting it fall through to prose — otherwise a
-    // forwarded/planned action silently no-ops. (forcedArtifact and goal-progress
-    // have their own dedicated retries above; the simulated-approval retry covers
-    // its own case, so it is excluded here to avoid retrying twice.)
+    // forwarded/planned action silently no-ops. (Forced artifacts and private
+    // reads have dedicated retries; goal progress bypasses the model entirely.)
     if (
       stepResult.ok &&
       mustAct &&
@@ -542,6 +551,17 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         critical,
       });
       if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+    }
+
+    // The must-act retry above is another model boundary, so apply the same
+    // runtime-only checkpoint rule to its output as well.
+    if (stepResult.ok && isUnattendedGoalSession(task) && !mustRecordGoalProgress) {
+      stepResult = {
+        ...stepResult,
+        toolCalls: stepResult.toolCalls.filter(
+          (toolCall) => toolCall.toolName !== 'goals.update_progress',
+        ),
+      };
     }
 
     if (stepResult.ok && stepResult.degraded) {
@@ -594,9 +614,8 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       if (requiredCall) stepResult = { ...stepResult, toolCalls: [requiredCall] };
     }
     if (mustRecordGoalProgress) {
-      // A forced progress turn authorizes only the required bookkeeping write.
-      // Dropping provider-added calls also makes the durable-success check below
-      // unambiguous: this turn either saved progress or stops for owner attention.
+      // A runtime progress step authorizes only the required bookkeeping write,
+      // making the durable-success check below unambiguous.
       const requiredCall = stepResult.toolCalls.find(
         (toolCall) => toolCall.toolName === 'goals.update_progress',
       );
@@ -626,10 +645,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       }
     }
     if (task.goalId) {
-      // Goal identity is runtime-owned. The model supplies the progress prose,
-      // but it must not be responsible for copying an opaque UUID out of the
-      // prompt. Bind every progress call to this task's durable goal before the
-      // call is recorded or dispatched. The dispatcher's independent binding
+      // Goal identity is runtime-owned. Automatic checkpoints are also built by
+      // the runtime; explicit progress calls from owner chat are still rebound
+      // here so no model has to copy an opaque UUID. The dispatcher's binding
       // check remains in place as defense in depth for every other caller.
       stepResult = {
         ...stepResult,

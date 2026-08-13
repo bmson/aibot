@@ -76,7 +76,7 @@ export function channelContext(task: TaskRow): string {
             'Do the work now with your tools — do not describe a plan, promise to report back, or ask a question you could answer yourself by looking.',
             'Ground yourself first if it helps (memory.recall, goals.list, contacts.lookup), then take the outward step that moves the goal (browser.plan → browser.execute, or web.fetch for a plain page).',
             'Not knowing a URL is not a blocker: go to the most likely site. A "verify you are human"/CAPTCHA page is a block, never content.',
-            'Finish by calling goals.update_progress with what you verified and the concrete next step.',
+            'The runtime records goal progress from successful tool results. Do not call goals.update_progress yourself.',
           ].join('\n');
         }
         // Nobody is reading this live, so a message describing what you intend
@@ -90,7 +90,7 @@ export function channelContext(task: TaskRow): string {
           'ORDER MATTERS. Reading third-party content (a fetched page, a mail thread, a workspace file) marks this session as carrying untrusted content, and from that point on every outward call needs the owner to approve it by hand — which, with nobody present, means the session stops. memory.recall and calendar availability are your own vetted state and do not count. So spend your FIRST outward call on the step that moves the goal: browser.plan, then browser.execute (or web.fetch for a plain page).',
           'You get one autonomous outward action, so make it count. browser.plan is free — it only plans. Your ONE outward call comes after it, and it must do the entire job: a single read-only browser.execute plan that searches, opens the promising results, and extracts everything you need. Do not spend that one action on a preliminary web.fetch to see what is there; if you would need several pages, ask browser.plan for a headless plan covering all of them.',
           'Not knowing a URL is not a blocker: go straight to the most likely site (official pages, Wikipedia/Wikivoyage, a company careers page). Big search engines CAPTCHA datacenter traffic — treat a search results page as a last resort, and a "verify you are human" page as a block, never as content.',
-          'Finish by calling goals.update_progress with what you verified and the concrete next step.',
+          'The runtime records goal progress from successful tool results. Do not call goals.update_progress yourself.',
         ].join('\n');
       }
       return '';

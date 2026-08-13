@@ -55,7 +55,7 @@ export async function stopForUnsavedGoalProgress(
   reason: string,
 ): Promise<ExecuteResult> {
   const text =
-    "I completed a verified goal step, but I couldn't save the progress update. Open Activity and retry this task so the goal does not continue from stale information.";
+    "I recorded verified goal activity, but the runtime couldn't save its progress checkpoint. Open Activity and retry this task so the goal does not continue from stale information.";
   console.error('required goal progress was not saved', {
     taskId: task.id,
     reason,
@@ -64,7 +64,7 @@ export async function stopForUnsavedGoalProgress(
   await notifyOwnerAndConversation(
     deps,
     task,
-    'A goal completed work but could not save its progress update. The task needs to be retried from Activity.',
+    'A goal recorded verified activity, but its runtime progress write failed. Retry the task from Activity.',
   );
   window.push({ role: 'assistant', content: text } as ModelMessage);
   return stageFinalResponse(deps, task, state, window, {
