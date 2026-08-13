@@ -15,6 +15,8 @@
  * only the genuinely ambiguous rest.
  */
 
+import { detectPersonalReadRequest } from '@assistant/core/workflow/read-intent';
+
 // Leading imperative verbs that are unambiguous actions in an assistant chat.
 const LEADING_ACTION =
   /^(add|schedule|book|remind|send|email|e-?mail|text|dm|invite|rsvp|order|buy|purchase|pay|cancel|reschedule|postpone|draft|forward|unsubscribe|subscribe)\b/;
@@ -65,6 +67,14 @@ export function looksLikeActionRequest(text: string, priorAssistantText = ''): b
   while (t !== prev) {
     prev = t;
     t = t.replace(LEADING_FILLER, '');
+  }
+  if (
+    detectPersonalReadRequest([
+      ...(priorAssistantText ? [{ role: 'assistant', content: priorAssistantText }] : []),
+      { role: 'user', content: text },
+    ])
+  ) {
+    return true;
   }
   return (
     LEADING_ACTION.test(t) ||

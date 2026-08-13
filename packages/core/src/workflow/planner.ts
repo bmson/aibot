@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { type Plan, PlanSchema } from '../events.js';
 import { type ModelRouter, TruncatedObjectError } from '../model-router/router.js';
+import { detectPersonalReadRequest, type PersonalReadRequest } from './read-intent.js';
 
 /**
  * Bump whenever planner prompting changes behavior — recorded in
@@ -13,8 +14,10 @@ import { type ModelRouter, TruncatedObjectError } from '../model-router/router.j
  * forwarded, and that the owner forwarding something IS a request to handle it.
  * v5: choose 'clarify' when a required outward-facing fact (recipient address,
  * name, exact date/time, link) is absent — never let the executor guess it.
+ * v6: a calendar/email lookup never clarifies which account or asks the owner
+ * for the fact being searched; it is normalized to an executable workflow.
  */
-export const PLANNER_VERSION = 5;
+export const PLANNER_VERSION = 6;
 
 // Widened from 6000: the tighter window dropped the owner's earlier answers out
 // of planner context on longer threads, making it re-derive 'clarify'. This is
@@ -78,6 +81,7 @@ export function plannerSystem(agent: AgentRow, task: TaskRow, tainted: boolean):
     "- 'clarify': you cannot act without more information from the owner — list missingInfo",
     'Never ask for something the owner already answered earlier in the context, and never re-ask a question you already asked. Re-read the conversation for the answer before choosing clarify.',
     "Prefer acting on a reasonable default for reversible, internal choices. But choose clarify (and list missingInfo) when the request needs a specific outward-facing fact you do not have — a recipient email address, a person's exact name, a precise date/time, or a link — and it is not in the context, memory, or contacts. The executor must never guess these, so surface the gap here.",
+    "A request to LOOK UP the owner's schedule, an appointment/interview, or email is different: the missing date, time, provider, calendar, or account is the fact to search for, not information to request from the owner. Choose 'workflow', search the assistant's configured Gmail plus every calendar it can read, and report only successful tool results. Never ask which calendar, Google/Outlook provider, inbox, or account to use. No match is a valid factual result.",
     'Keep steps short and concrete. Do not invent goals.',
     // A "keep doing X as you go" request has no executable step *now*, so
     // planning it as a workflow produced steps that were really intentions
@@ -88,6 +92,27 @@ export function plannerSystem(agent: AgentRow, task: TaskRow, tainted: boolean):
     "If the request is to keep doing something as you go, continue later, watch for something, or update something over time, choose 'schedule' for a bounded follow-up or 'mission' for open-ended work. Never express deferred work as 'workflow' steps.",
     'Note what information is missing.',
   ].join('\n');
+}
+
+export function normalizePersonalReadPlan(plan: Plan, request: PersonalReadRequest | null): Plan {
+  if (!request) return plan;
+  const steps =
+    request.kind === 'calendar'
+      ? ['Read every accessible calendar and report only returned events']
+      : request.kind === 'email'
+        ? ['Search the assistant Gmail account and read any needed matching thread']
+        : [
+            'Search every accessible calendar for the named item',
+            'Search the assistant Gmail account and read a matching thread when present',
+            'Answer using only facts returned by those reads',
+          ];
+  return {
+    ...plan,
+    action: 'workflow',
+    reasoning: 'Verify the answer from the assistant’s configured calendar and email sources',
+    steps,
+    missingInfo: [],
+  };
 }
 
 /**
@@ -104,6 +129,19 @@ export async function planTask(
   opts: { tainted?: boolean } = {},
 ): Promise<Plan | null> {
   const contextText = plannerContext(window);
+  const readRequest = detectPersonalReadRequest(window);
+
+  // Private source reads have a fixed, runtime-enforced plan. Do not spend a
+  // model call asking a planner that may choose "clarify" or fail under budget;
+  // the missing provider/date is exactly what the tools are meant to discover.
+  if (readRequest) {
+    const plan = normalizePersonalReadPlan(
+      { action: 'workflow', reasoning: '', steps: [], missingInfo: [] },
+      readRequest,
+    );
+    await deps.db.update(tasks).set({ plan }).where(eq(tasks.id, task.id));
+    return plan;
+  }
 
   // Only owner chat/SMS short-circuit as trivial. Email deliberately does NOT:
   // mis-classifying an actionable email as trivial would skip the plan, and
@@ -141,7 +179,7 @@ export async function planTask(
   }
   if (!planned.ok) return null;
 
-  const plan = PlanSchema.parse(planned.object);
+  const plan = normalizePersonalReadPlan(PlanSchema.parse(planned.object), readRequest);
   await deps.db.update(tasks).set({ plan }).where(eq(tasks.id, task.id));
   return plan;
 }

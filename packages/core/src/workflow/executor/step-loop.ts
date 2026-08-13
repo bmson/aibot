@@ -30,6 +30,13 @@ import {
   sleepTask,
 } from '../machine.js';
 import { PLANNER_VERSION } from '../planner.js';
+import {
+  detectPersonalReadRequest,
+  groundReadToolInput,
+  nextRequiredReadTool,
+  type PersonalReadRequest,
+  type ReadToolEvidence,
+} from '../read-intent.js';
 import { isSimulatedApprovalNotice } from '../response-contract.js';
 import {
   budgetResumeAt,
@@ -77,18 +84,44 @@ function renderPlan(plan: Plan): string {
   return lines.join('\n');
 }
 
+function readLookupDirective(request: PersonalReadRequest): string {
+  const terms =
+    request.queryTerms.length > 0 ? ` Search terms: ${request.queryTerms.join(' ')}.` : '';
+  return [
+    '\nThis is a private calendar/email lookup. Do not ask which calendar, provider, inbox, or account to use.',
+    request.kind === 'calendar'
+      ? 'Read every calendar available to the assistant. Omit calendarIds so the tool searches all of them.'
+      : request.kind === 'email'
+        ? 'Search the assistant Gmail account (all mail unless the owner explicitly narrowed it).'
+        : 'Search BOTH every calendar available to the assistant and the assistant Gmail account. Read a matching email thread before using details that are not in search metadata.',
+    `Use only literal facts returned by successful reads in this task.${terms}`,
+    'A zero-result search is a valid answer. A failed or partial source is a coverage gap; name it and do not fill it with memory, guesses, likely details, or events from earlier turns.',
+  ].join('\n');
+}
+
+function readRoutingFailure(request: PersonalReadRequest, toolName: string): string {
+  const source =
+    request.kind === 'calendar'
+      ? 'the calendar'
+      : request.kind === 'email'
+        ? 'Gmail'
+        : 'the calendar and Gmail';
+  return `I couldn't complete the required ${source} lookup because ${toolName} was not called successfully. I’m not going to guess at the answer.`;
+}
+
 export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<ExecuteResult> {
   const { deps, db, router, dispatcher, task, agent, state, ctx, artifactIntent } = rc;
   const lease = task;
   // One clock for the whole run: the system prompt embeds it, and a per-step
   // timestamp would break the cacheable prompt prefix on every minute boundary.
   const runStartedAt = new Date();
+  const readRequest = detectPersonalReadRequest(rc.window);
   // Route action requests to the reasoning model (see roleForTask): a goal
   // session, a mission, an email to triage, or a chat/SMS turn the planner
   // routed to real work all drive tools on the strong model. The draft model
   // answers these with plausible prose and no tool calls — how a request can
   // look handled while nothing happened.
-  const role = roleForTask(task, plan);
+  const role = readRequest ? 'reason' : roleForTask(task, plan);
   // Forced-named-tool retries drop to the role's fallback because the DRAFT
   // primary (deepseek) intermittently times out when a tool is mandatory. The
   // reasoning primary (Claude) has no such issue, and its fallback is the
@@ -184,7 +217,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       .trim();
     if (skillQuery) {
       try {
-        const found = await recallSkills(db, router, agent.id, skillQuery, { taskId: task.id });
+        const found = await recallSkills(db, router, agent.id, skillQuery, {
+          taskId: task.id,
+        });
         if (found.length > 0) {
           skillsBlock = renderSkillsBlock(found);
           state.usedSkillIds = found.map((skill) => skill.id);
@@ -225,6 +260,20 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
           .where(eq(toolCalls.taskId, task.id))
       : [];
     const mustRecordGoalProgress = needsGoalProgressUpdate(goalToolEvidence);
+    const readToolEvidence: ReadToolEvidence[] = readRequest
+      ? await db
+          .select({
+            toolName: toolCalls.toolName,
+            status: toolCalls.status,
+            args: toolCalls.args,
+            result: toolCalls.result,
+          })
+          .from(toolCalls)
+          .where(eq(toolCalls.taskId, task.id))
+      : [];
+    const forcedReadTool = readRequest
+      ? nextRequiredReadTool(readRequest, readToolEvidence)
+      : undefined;
     // Past the ordinary budget, only the owed bookkeeping turn may run.
     if (state.step >= task.maxSteps && !mustRecordGoalProgress) break;
     // Rebuild the system prompt after each tool turn. Once an external result
@@ -244,6 +293,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         ? `\nThis automatic session is bound to Goal ID ${task.goalId}. Every goals.update_progress call must use exactly this Goal ID.`
         : '',
       plan ? `\n${renderPlan(plan)}` : '',
+      readRequest ? readLookupDirective(readRequest) : '',
       plan?.action === 'schedule' ? SCHEDULE_DIRECTIVE : '',
       mustRecordGoalProgress
         ? '\nYou completed a verified goal step. Call goals.update_progress now with only what the tool evidence proves and the best concrete next action. Do not finish in prose first.'
@@ -275,6 +325,16 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         outcome: 'done',
       });
     }
+    if (forcedReadTool && !toolDefs.some((tool) => tool.name === forcedReadTool)) {
+      const text = readRoutingFailure(readRequest as PersonalReadRequest, forcedReadTool);
+      rc.window.push({ role: 'assistant', content: text } as ModelMessage);
+      return stageFinalResponse(deps, lease, state, rc.window, {
+        text,
+        progress: text.slice(0, 200),
+        terminalStatus: 'failed',
+        outcome: 'failed',
+      });
+    }
 
     // Open by acting, not talking, when the work is settled. An unattended goal
     // session and any turn the planner routed to a 'workflow' (multi-step work
@@ -297,14 +357,18 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         ? { type: 'tool', toolName: forcedArtifact.toolName }
         : mustRecordGoalProgress
           ? { type: 'tool', toolName: 'goals.update_progress' }
-          : mustAct
-            ? 'required'
-            : undefined,
+          : forcedReadTool
+            ? { type: 'tool', toolName: forcedReadTool }
+            : mustAct
+              ? 'required'
+              : undefined,
       // The primary chat model has intermittently timed out when a named tool
       // is mandatory. Use the role's configured tool-capable fallback. Goal
       // bookkeeping stays tightly bounded; artifact arguments may contain the
       // full document, sheet, or presentation and must not be truncated.
-      forceFallback: useForcedToolFallback && Boolean(forcedArtifact || mustRecordGoalProgress),
+      forceFallback:
+        useForcedToolFallback &&
+        Boolean(forcedArtifact || mustRecordGoalProgress || forcedReadTool),
       maxOutputTokens: mustRecordGoalProgress ? 256 : undefined,
       critical,
     });
@@ -356,7 +420,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       mustRecordGoalProgress &&
       needsGoalProgressToolRetry(stepResult.toolCalls)
     ) {
-      console.warn('retrying missing required goal progress tool call', { taskId: task.id });
+      console.warn('retrying missing required goal progress tool call', {
+        taskId: task.id,
+      });
       stepResult = await router.step(role, {
         taskId: task.id,
         system: `${system}\n\nCall goals.update_progress now. Use only the completed tool evidence, and do not answer with prose until that tool call has been emitted.`,
@@ -384,6 +450,45 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       }
     }
 
+    // Private-account questions have an exact source sequence. A generic
+    // required-tool choice is not strong enough: providers sometimes emit
+    // prose or a different tool, which would reopen the hallucination path.
+    if (
+      stepResult.ok &&
+      forcedReadTool &&
+      !stepResult.toolCalls.some((toolCall) => toolCall.toolName === forcedReadTool)
+    ) {
+      console.warn('retrying missing required private-read tool call', {
+        taskId: task.id,
+        requiredTool: forcedReadTool,
+      });
+      state.mustActRetries += 1;
+      stepResult = await router.step(role, {
+        taskId: task.id,
+        system: `${system}\n\nCall ${forcedReadTool} now. Do not answer, clarify, or call a different tool first.`,
+        messages: rc.window,
+        tools: toolSet as never,
+        toolChoice: { type: 'tool', toolName: forcedReadTool },
+        forceFallback: useForcedToolFallback,
+        critical,
+      });
+      if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+
+      if (
+        stepResult.ok &&
+        !stepResult.toolCalls.some((toolCall) => toolCall.toolName === forcedReadTool)
+      ) {
+        const text = readRoutingFailure(readRequest as PersonalReadRequest, forcedReadTool);
+        rc.window.push({ role: 'assistant', content: text } as ModelMessage);
+        return stageFinalResponse(deps, lease, state, rc.window, {
+          text,
+          progress: text.slice(0, 200),
+          terminalStatus: 'failed',
+          outcome: 'failed',
+        });
+      }
+    }
+
     // Approval cards and codes are runtime records, never prose generated by
     // the model. If it mimics an earlier approval notice without a tool call,
     // give it one constrained chance to emit the real gated action instead of
@@ -393,7 +498,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       stepResult.toolCalls.length === 0 &&
       isSimulatedApprovalNotice(stepResult.text)
     ) {
-      console.warn('retrying simulated approval notice without a tool call', { taskId: task.id });
+      console.warn('retrying simulated approval notice without a tool call', {
+        taskId: task.id,
+      });
       state.mustActRetries += 1;
       stepResult = await router.step(role, {
         taskId: task.id,
@@ -416,11 +523,14 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     if (
       stepResult.ok &&
       mustAct &&
+      !forcedReadTool &&
       !mustRecordGoalProgress &&
       stepResult.toolCalls.length === 0 &&
       !isSimulatedApprovalNotice(stepResult.text)
     ) {
-      console.warn('retrying forced action step with no tool call', { taskId: task.id });
+      console.warn('retrying forced action step with no tool call', {
+        taskId: task.id,
+      });
       state.mustActRetries += 1;
       stepResult = await router.step(role, {
         taskId: task.id,
@@ -491,6 +601,29 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         (toolCall) => toolCall.toolName === 'goals.update_progress',
       );
       if (requiredCall) stepResult = { ...stepResult, toolCalls: [requiredCall] };
+    }
+    if (forcedReadTool && readRequest) {
+      // A forced read authorizes only that read, and runtime-owned bindings
+      // remove model-invented calendar narrowing/query terms/thread ids.
+      const requiredCall = stepResult.toolCalls.find(
+        (toolCall) => toolCall.toolName === forcedReadTool,
+      );
+      if (requiredCall) {
+        stepResult = {
+          ...stepResult,
+          toolCalls: [
+            {
+              ...requiredCall,
+              input: groundReadToolInput(
+                readRequest,
+                forcedReadTool,
+                requiredCall.input,
+                readToolEvidence,
+              ),
+            },
+          ],
+        };
+      }
     }
     if (task.goalId) {
       // Goal identity is runtime-owned. The model supplies the progress prose,
@@ -661,7 +794,11 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
             requiredGoalProgressFailure = 'the progress write unexpectedly required approval';
           }
         } else {
-          rc.window.push(toolResultMessage(tc.toolCallId, tc.toolName, { error: outcome.reason }));
+          rc.window.push(
+            toolResultMessage(tc.toolCallId, tc.toolName, {
+              error: outcome.reason,
+            }),
+          );
           if (tc.toolName === 'goals.update_progress') {
             requiredGoalProgressFailure = outcome.reason;
           }
@@ -716,7 +853,10 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
           approvalNotices.map((notice) => notice.approvalId),
           ownerNotified ? ['owner', 'conversation'] : ['conversation'],
         );
-        return { outcome: 'parked', detail: `${pendingApprovals.length} approval(s) pending` };
+        return {
+          outcome: 'parked',
+          detail: `${pendingApprovals.length} approval(s) pending`,
+        };
       }
 
       if (state.pendingJob) {
@@ -816,7 +956,10 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         task,
         `This goal's automatic session exhausted its work limit without a verified result and needs attention: ${stuckMessage}`,
       );
-      rc.window.push({ role: 'assistant', content: stuckMessage } as ModelMessage);
+      rc.window.push({
+        role: 'assistant',
+        content: stuckMessage,
+      } as ModelMessage);
       return stageFinalResponse(deps, lease, state, rc.window, {
         text: stuckMessage,
         progress: stuck,

@@ -39,6 +39,8 @@ describe('looksLikeActionRequest', () => {
       'can you look at my calendar and tell me when I fly',
       'anything urgent in my inbox?',
       'what do I have planned this weekend',
+      'What is happening on Monday?',
+      'When is my Clay interview?',
     ]) {
       expect(looksLikeActionRequest(t), `should be an action: ${t}`).toBe(true);
     }
@@ -47,6 +49,7 @@ describe('looksLikeActionRequest', () => {
   it('leaves plain conversation for the model to classify', () => {
     for (const t of [
       'what do you think about the plan?',
+      'Why do interviews make me nervous?',
       'thanks, that helps!',
       'that makes sense',
       'how are you doing today?',
@@ -80,6 +83,18 @@ describe('looksLikeActionRequest', () => {
         'Those were not updated',
         'I updated both Google Docs with the new email address.',
       ),
+    ).toBe(true);
+  });
+
+  it('routes calendar-verification follow-ups back to the executor', () => {
+    expect(
+      looksLikeActionRequest(
+        'Was that made up?',
+        'I checked your calendar and found a Linear interview.',
+      ),
+    ).toBe(true);
+    expect(
+      looksLikeActionRequest("Are you sure? I don't see it on my calendar", 'It is on Monday.'),
     ).toBe(true);
   });
 

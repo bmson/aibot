@@ -1,9 +1,16 @@
 import type { AgentRow, TaskRow } from '@assistant/db';
 import type { ModelMessage } from 'ai';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ModelRouter } from '../model-router/router.js';
 import { TruncatedObjectError } from '../model-router/router.js';
-import { PLANNER_VERSION, plannerContext, plannerSystem, planTask } from './planner.js';
+import {
+  normalizePersonalReadPlan,
+  PLANNER_VERSION,
+  plannerContext,
+  plannerSystem,
+  planTask,
+} from './planner.js';
+import { detectPersonalReadRequest } from './read-intent.js';
 
 /**
  * Regression for the goal-clarification loop: repeated assistant questions
@@ -70,6 +77,56 @@ describe('plannerSystem channel/taint awareness (D10)', () => {
     const prompt = plannerSystem(agent, task('email_triage'), false);
     expect(prompt).toMatch(/recipient email address/i);
     expect(prompt).toMatch(/executor must never guess/i);
+  });
+
+  it('tells the planner to search configured accounts instead of asking which one', () => {
+    const prompt = plannerSystem(agent, task('chat_turn'), false);
+    expect(prompt).toMatch(/Never ask which calendar/i);
+    expect(prompt).toMatch(/No match is a valid factual result/i);
+    expect(PLANNER_VERSION).toBeGreaterThanOrEqual(6);
+  });
+});
+
+describe('personal read plan normalization', () => {
+  it('turns a clarify plan for a Clay interview into an executable lookup', () => {
+    const request = detectPersonalReadRequest([
+      { role: 'user', content: 'When is my Clay interview?' },
+    ]);
+    const plan = normalizePersonalReadPlan(
+      {
+        action: 'clarify',
+        reasoning: 'Missing calendar and date',
+        steps: [],
+        missingInfo: ['Which calendar?', 'What date is the interview?'],
+      },
+      request,
+    );
+    expect(plan.action).toBe('workflow');
+    expect(plan.missingInfo).toEqual([]);
+    expect(plan.steps.join(' ')).toMatch(/calendar/i);
+    expect(plan.steps.join(' ')).toMatch(/Gmail/i);
+  });
+
+  it('builds the read plan without asking a model to clarify', async () => {
+    const where = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where }));
+    const update = vi.fn(() => ({ set }));
+    const object = vi.fn(() => {
+      throw new Error('the planner must not run for a deterministic read');
+    });
+    const result = await planTask(
+      {
+        db: { update } as never,
+        router: { object } as unknown as ModelRouter,
+      },
+      { id: 'task-read', type: 'chat_turn' } as TaskRow,
+      { name: 'AI Bot' } as AgentRow,
+      [{ role: 'user', content: 'When is my Clay interview?' }] as ModelMessage[],
+    );
+
+    expect(object).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ action: 'workflow', missingInfo: [] });
+    expect(set).toHaveBeenCalledWith({ plan: result });
   });
 });
 

@@ -1,3 +1,5 @@
+import type { PersonalReadRequest } from './read-intent.js';
+
 /**
  * The model writes prose, but the task/tool ledger is the authority for what
  * happened. This module is deliberately conservative: when a reply describes
@@ -8,6 +10,7 @@
 export interface ActionEvidence {
   toolName: string;
   status: string;
+  args?: unknown;
   result: unknown;
   error?: string | null;
   /**
@@ -35,6 +38,12 @@ export interface ResponseContractResult {
   text: string;
   blocked: boolean;
   unsupported: ActionKind[];
+}
+
+interface ResponseContractOptions {
+  urlCorpus?: string;
+  /** Deterministically detected from the latest owner turn. */
+  readRequest?: PersonalReadRequest | null;
 }
 
 const OUTBOUND_OBJECTS = 'email|message|sms|text|call|outreach|reply|follow-?up';
@@ -690,12 +699,299 @@ export function enforceUrlProvenance(
   return { text: out, strippedUrls: stripped };
 }
 
+const CALENDAR_EVENT_READS = new Set(['calendar.list_events', 'calendar.search_events']);
+
+function currentSuccessfulEvidence(evidence: ActionEvidence[]): ActionEvidence[] {
+  return evidence.filter((item) => item.fromCurrentTask !== false && successful(item));
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function resultItems(row: ActionEvidence, key: string): Record<string, unknown>[] {
+  const items = record(row.result)?.[key];
+  return Array.isArray(items)
+    ? items.map(record).filter((item): item is Record<string, unknown> => Boolean(item))
+    : [];
+}
+
+function queryCovers(row: ActionEvidence, terms: string[]): boolean {
+  if (terms.length === 0) return true;
+  const query = record(row.args)?.query;
+  if (typeof query !== 'string') return false;
+  const lower = query.toLowerCase();
+  return terms.every((term) => lower.includes(term.toLowerCase()));
+}
+
+function matchingCalendarRows(
+  request: PersonalReadRequest,
+  current: ActionEvidence[],
+): ActionEvidence[] {
+  return current.filter((row) => {
+    if (!CALENDAR_EVENT_READS.has(row.toolName) || !queryCovers(row, request.queryTerms)) {
+      return false;
+    }
+    const calendarIds = record(row.args)?.calendarIds;
+    const result = record(row.result);
+    return (
+      (!Array.isArray(calendarIds) || calendarIds.length === 0) &&
+      Array.isArray(result?.events) &&
+      Array.isArray(result.calendarsSearched) &&
+      typeof result.complete === 'boolean'
+    );
+  });
+}
+
+function matchingGmailSearchRows(
+  request: PersonalReadRequest,
+  current: ActionEvidence[],
+): ActionEvidence[] {
+  return current.filter((row) => {
+    if (row.toolName !== 'gmail.search' || !queryCovers(row, request.queryTerms)) return false;
+    const result = record(row.result);
+    return (
+      Array.isArray(result?.results) &&
+      typeof result.mailboxSearched === 'string' &&
+      Boolean(result.mailboxSearched) &&
+      typeof result.complete === 'boolean'
+    );
+  });
+}
+
+function matchingGmailThreadRows(
+  searches: ActionEvidence[],
+  current: ActionEvidence[],
+): ActionEvidence[] {
+  const threadIds = new Set(
+    searches
+      .flatMap((row) => resultItems(row, 'results'))
+      .map((item) => stringField(item, 'threadId'))
+      .filter(Boolean),
+  );
+  return current.filter((row) => {
+    if (row.toolName !== 'gmail.read_thread') return false;
+    const threadId = record(row.args)?.threadId;
+    return (
+      typeof threadId === 'string' &&
+      threadIds.has(threadId) &&
+      resultItems(row, 'messages').length > 0
+    );
+  });
+}
+
+function requiredReadGaps(
+  request: PersonalReadRequest,
+  evidence: ActionEvidence[],
+): { labels: string[]; unsupported: ActionKind[] } {
+  const current = currentSuccessfulEvidence(evidence);
+  const calendars = matchingCalendarRows(request, current);
+  const gmailSearches = matchingGmailSearchRows(request, current);
+  const gmailHits = gmailSearches.flatMap((row) => resultItems(row, 'results'));
+  const gmailThreads = matchingGmailThreadRows(gmailSearches, current);
+  const labels: string[] = [];
+  const unsupported: ActionKind[] = [];
+
+  if (request.kind !== 'email' && calendars.length === 0) {
+    labels.push('a successful all-calendar event search using the requested terms/date range');
+    unsupported.push('calendar_read');
+  }
+  if (request.kind !== 'calendar' && gmailSearches.length === 0) {
+    labels.push('a successful Gmail search using the requested terms');
+    unsupported.push('inbox_read');
+  } else if (request.requiresThreadRead && gmailHits.length > 0 && gmailThreads.length === 0) {
+    labels.push('a successful read of a matching Gmail thread');
+    unsupported.push('inbox_read');
+  }
+  return { labels, unsupported: [...new Set(unsupported)] };
+}
+
+function stringField(item: Record<string, unknown>, key: string): string {
+  const value = item[key];
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 2_000) : '';
+}
+
+function rawStringField(item: Record<string, unknown>, key: string): string {
+  const value = item[key];
+  return typeof value === 'string' ? value.trim().slice(0, 8_000) : '';
+}
+
+function emailExcerpt(text: string, terms: string[]): string {
+  const compacted = text.replace(/\s+/g, ' ').trim();
+  if (!compacted) return '';
+  const sentences = compacted.split(/(?<=[.!?])\s+/);
+  const relevant = sentences.filter((sentence) => {
+    const lower = sentence.toLowerCase();
+    return (
+      terms.some((term) => lower.includes(term.toLowerCase())) ||
+      /\b(?:[01]?\d|2[0-3])(?::[0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)\b|\b\d{4}-\d{2}-\d{2}\b|\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?\b|\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
+        sentence,
+      )
+    );
+  });
+  return (relevant.length > 0 ? relevant : sentences).slice(0, 3).join(' ').slice(0, 700);
+}
+
+/**
+ * Calendar/email answers are rendered from the tool ledger instead of model
+ * prose. This is intentionally less flexible: a deterministic list of literal
+ * fields is preferable to a fluent answer that can add one plausible event.
+ */
+function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvidence[]): string {
+  const current = currentSuccessfulEvidence(evidence);
+  const lines = ['Here’s what I found in the connected sources:'];
+
+  if (request.kind !== 'email') {
+    const calendarRows = matchingCalendarRows(request, current);
+    const events = calendarRows.flatMap((row) => resultItems(row, 'events'));
+    const calendars = new Set<string>();
+    const ranges = new Set<string>();
+    const unavailable: string[] = [];
+    let complete = calendarRows.length > 0;
+    for (const row of calendarRows) {
+      const result = record(row.result);
+      const args = record(row.args);
+      if (result?.complete === false) complete = false;
+      const timeMin = typeof args?.timeMin === 'string' ? args.timeMin : '';
+      const timeMax = typeof args?.timeMax === 'string' ? args.timeMax : '';
+      if (timeMin && timeMax) ranges.add(`${timeMin} to ${timeMax}`);
+      const searched = result?.calendarsSearched;
+      if (Array.isArray(searched)) {
+        for (const value of searched) if (typeof value === 'string') calendars.add(value);
+      }
+      const missing = result?.unavailable;
+      if (Array.isArray(missing)) {
+        for (const value of missing) {
+          const item = record(value);
+          const name = item ? stringField(item, 'calendar') : '';
+          if (name) unavailable.push(name);
+        }
+      }
+    }
+    for (const range of ranges) lines.push(`- Calendar range searched: ${range}`);
+    if (events.length === 0) {
+      lines.push(
+        calendarRows.length > 0
+          ? `- Calendar search returned no matching events${calendars.size > 0 ? ` across ${[...calendars].join(', ')}` : ''}.`
+          : '- Calendar: no successful event read.',
+      );
+    } else {
+      for (const event of events.slice(0, 20)) {
+        const summary = stringField(event, 'summary') || '(untitled event)';
+        const start = stringField(event, 'start');
+        const end = stringField(event, 'end');
+        const location = stringField(event, 'location');
+        const calendar = stringField(event, 'calendar');
+        const attendees = event.attendees;
+        const attendeeText = Array.isArray(attendees)
+          ? attendees.filter((value): value is string => typeof value === 'string').join(', ')
+          : '';
+        lines.push(
+          `- Calendar: ${summary}${start ? ` — ${start}${end ? ` to ${end}` : ''}` : ''}${location ? ` — ${location}` : ''}${attendeeText ? ` — attendees: ${attendeeText}` : ''}${calendar ? ` (${calendar})` : ''}`,
+        );
+      }
+    }
+    if (!complete || unavailable.length > 0) {
+      lines.push(
+        `- Calendar coverage was incomplete${unavailable.length > 0 ? `; unavailable: ${[...new Set(unavailable)].join(', ')}` : ''}.`,
+      );
+    }
+  }
+
+  if (request.kind !== 'calendar') {
+    const searches = matchingGmailSearchRows(request, current);
+    const results = searches.flatMap((row) => resultItems(row, 'results'));
+    const threadRows = matchingGmailThreadRows(searches, current);
+    const threadMessages = threadRows.flatMap((row) => resultItems(row, 'messages'));
+    const queries = new Set(
+      searches.map((row) => stringField(record(row.args) ?? {}, 'query')).filter(Boolean),
+    );
+    const mailboxes = new Set(
+      searches
+        .map((row) => stringField(record(row.result) ?? {}, 'mailboxSearched'))
+        .filter(Boolean),
+    );
+    if (queries.size > 0) {
+      lines.push(
+        `- Gmail ${mailboxes.size > 0 ? `(${[...mailboxes].join(', ')}) ` : ''}searched for: ${[...queries].map((query) => `“${query}”`).join(', ')}`,
+      );
+    }
+    if (results.length === 0) {
+      lines.push(
+        searches.length > 0
+          ? '- Gmail: no matching messages were returned.'
+          : '- Gmail: no successful search.',
+      );
+    } else {
+      for (const message of results.slice(0, 10)) {
+        const subject = stringField(message, 'subject') || '(no subject)';
+        const from = stringField(message, 'from');
+        const date = stringField(message, 'date');
+        const snippet = stringField(message, 'snippet');
+        lines.push(
+          `- Gmail: “${subject}”${from ? ` — from ${from}` : ''}${date ? ` — ${date}` : ''}${snippet ? ` — ${snippet}` : ''}`,
+        );
+      }
+    }
+    for (const message of threadMessages.slice(0, 10)) {
+      const subject = stringField(message, 'subject') || '(no subject)';
+      const from = stringField(message, 'from');
+      const date = stringField(message, 'date');
+      const excerpt = emailExcerpt(rawStringField(message, 'text'), request.queryTerms);
+      lines.push(
+        `- Gmail thread: “${subject}”${from ? ` — from ${from}` : ''}${date ? ` — ${date}` : ''}${excerpt ? ` — ${excerpt}` : ''}`,
+      );
+    }
+    if (searches.some((row) => record(row.result)?.complete === false)) {
+      lines.push('- Gmail returned more matches than this lookup inspected; coverage was partial.');
+    }
+  }
+  return lines.join('\n');
+}
+
+function missingReadResponse(labels: string[], evidence: ActionEvidence[]): string {
+  const failures = failureDetails(evidence);
+  return [
+    `I couldn't verify this from the required sources, so I’m not going to guess. Missing: ${labels.join('; ')}.`,
+    failures.length > 0 ? `What stopped the lookup: ${failures.join('; ')}.` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function enforcePersonalReadGrounding(
+  evidence: ActionEvidence[],
+  opts?: ResponseContractOptions,
+): ResponseContractResult | undefined {
+  const request = opts?.readRequest;
+  if (!request) return undefined;
+
+  const gaps = requiredReadGaps(request, evidence);
+  if (gaps.labels.length > 0) {
+    return {
+      text: missingReadResponse(gaps.labels, evidence),
+      blocked: true,
+      unsupported: gaps.unsupported,
+    };
+  }
+
+  return {
+    text: verifiedReadResponse(request, evidence),
+    blocked: false,
+    unsupported: [],
+  };
+}
+
 /** Replace unsupported action claims with a deterministic, evidence-based reply. */
 export function enforceResponseContract(
   text: string,
   evidence: ActionEvidence[],
-  opts?: { urlCorpus?: string },
+  opts?: ResponseContractOptions,
 ): ResponseContractResult {
+  const readGrounding = enforcePersonalReadGrounding(evidence, opts);
+  if (readGrounding) return readGrounding;
   const claimed = claimedKinds(text);
   const unsupported = claimed.filter(
     (kind) =>
@@ -713,7 +1009,9 @@ export function enforceResponseContract(
     if (opts?.urlCorpus !== undefined) {
       const { text: cleaned, strippedUrls } = enforceUrlProvenance(text, opts.urlCorpus);
       if (strippedUrls.length > 0) {
-        console.warn('stripped unverifiable url(s) from final answer', { strippedUrls });
+        console.warn('stripped unverifiable url(s) from final answer', {
+          strippedUrls,
+        });
       }
       return { text: cleaned, blocked: false, unsupported: [] };
     }

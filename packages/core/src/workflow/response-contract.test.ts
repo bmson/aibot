@@ -36,7 +36,13 @@ describe('response execution contract', () => {
   it('blocks application-submission claims even after a generic browser run', () => {
     const result = enforceResponseContract(
       'I submitted your application and saved the confirmation.',
-      [{ toolName: 'browser.execute', status: 'succeeded', result: { ok: true } }],
+      [
+        {
+          toolName: 'browser.execute',
+          status: 'succeeded',
+          result: { ok: true },
+        },
+      ],
     );
     expect(result.blocked).toBe(true);
     expect(result.unsupported).toContain('application');
@@ -93,14 +99,25 @@ describe('response execution contract', () => {
 
   it('allows a document claim only after a successful workspace tool', () => {
     const result = enforceResponseContract('I created the shared document.', [
-      { toolName: 'docs.create', status: 'succeeded', result: { documentId: 'doc-1' } },
+      {
+        toolName: 'docs.create',
+        status: 'succeeded',
+        result: { documentId: 'doc-1' },
+      },
     ]);
-    expect(result).toMatchObject({ blocked: false, text: 'I created the shared document.' });
+    expect(result).toMatchObject({
+      blocked: false,
+      text: 'I created the shared document.',
+    });
   });
 
   it('does not treat an HTTP error as completed research', () => {
     const result = enforceResponseContract('I researched 22 target companies.', [
-      { toolName: 'web.fetch', status: 'succeeded', result: { status: 429, text: '' } },
+      {
+        toolName: 'web.fetch',
+        status: 'succeeded',
+        result: { status: 429, text: '' },
+      },
     ]);
     expect(result.blocked).toBe(true);
     expect(result.unsupported).toContain('research');
@@ -109,13 +126,19 @@ describe('response execution contract', () => {
   it('keeps an explicit capability limitation and an in-chat draft intact', () => {
     const text =
       "I can't submit an application without a successful portal action. Here is a draft cover letter.";
-    expect(enforceResponseContract(text, [])).toMatchObject({ blocked: false, text });
+    expect(enforceResponseContract(text, [])).toMatchObject({
+      blocked: false,
+      text,
+    });
   });
 
   it('does not rewrite a future-tense plan as if it were a failed action', () => {
     const text =
       "I'll research senior frontend roles at AI companies, compile a shortlist, and share it for your approval. No tool action has happened yet.";
-    expect(enforceResponseContract(text, [])).toMatchObject({ blocked: false, text });
+    expect(enforceResponseContract(text, [])).toMatchObject({
+      blocked: false,
+      text,
+    });
   });
 
   it.each([
@@ -125,7 +148,10 @@ describe('response execution contract', () => {
   ])('does not treat generic "completed"/"confirmed" as an application claim: %s', (text) => {
     // These verbs are ordinary English, not application submissions; without an
     // application object they must not be rewritten into failure boilerplate.
-    expect(enforceResponseContract(text, [])).toMatchObject({ blocked: false, text });
+    expect(enforceResponseContract(text, [])).toMatchObject({
+      blocked: false,
+      text,
+    });
   });
 
   it.each([
@@ -168,7 +194,13 @@ describe('response execution contract', () => {
   it('does not let a successful document action justify a fabricated spreadsheet or email', () => {
     const result = enforceResponseContract(
       'I created the project document, updated the spreadsheet, and sent the client email.',
-      [{ toolName: 'docs.create', status: 'succeeded', result: { documentId: 'doc-1' } }],
+      [
+        {
+          toolName: 'docs.create',
+          status: 'succeeded',
+          result: { documentId: 'doc-1' },
+        },
+      ],
     );
     expect(result.blocked).toBe(true);
     expect(result.unsupported).toEqual(expect.arrayContaining(['spreadsheet', 'outbound']));
@@ -207,7 +239,11 @@ describe('response execution contract', () => {
       "I updated the application tracker. The confirmation watcher is active, and I'll keep monitoring for the receipt.";
     expect(
       enforceResponseContract(text, [
-        { toolName: 'sheets.write_rows', status: 'succeeded', result: { writtenRows: 1 } },
+        {
+          toolName: 'sheets.write_rows',
+          status: 'succeeded',
+          result: { writtenRows: 1 },
+        },
         {
           toolName: 'applications.watch_confirmation',
           status: 'succeeded',
@@ -257,9 +293,21 @@ describe('response execution contract', () => {
       'I created the spreadsheet, sent the email, scheduled the interview, and submitted the application.';
     expect(
       enforceResponseContract(text, [
-        { toolName: 'sheets.create', status: 'succeeded', result: { spreadsheetId: 'sheet-1' } },
-        { toolName: 'gmail.send', status: 'succeeded', result: { deliveryStatus: 'sent' } },
-        { toolName: 'calendar.create', status: 'succeeded', result: { eventId: 'event-1' } },
+        {
+          toolName: 'sheets.create',
+          status: 'succeeded',
+          result: { spreadsheetId: 'sheet-1' },
+        },
+        {
+          toolName: 'gmail.send',
+          status: 'succeeded',
+          result: { deliveryStatus: 'sent' },
+        },
+        {
+          toolName: 'calendar.create',
+          status: 'succeeded',
+          result: { eventId: 'event-1' },
+        },
         {
           toolName: 'application.submit',
           status: 'succeeded',
@@ -275,7 +323,9 @@ describe('response execution contract', () => {
     const text =
       "Got it! I'll continue adding the itinerary details to the Google Doc as I work on them. You can track updates here:\n[Itinerary Doc](https://docs.google.com/document/d/doc-1/edit)";
     // The unbacked "I'll continue" is still caught; the link alone is not.
-    expect(enforceResponseContract(text, [])).toMatchObject({ unsupported: ['background'] });
+    expect(enforceResponseContract(text, [])).toMatchObject({
+      unsupported: ['background'],
+    });
   });
 
   it('still catches a mutation claim made alongside a Workspace link', () => {
@@ -406,7 +456,11 @@ describe('response execution contract', () => {
 
   it('fails closed when a claimed email has a success status but an unknown delivery result', () => {
     const result = enforceResponseContract('The email has been delivered.', [
-      { toolName: 'gmail.send', status: 'succeeded', result: { deliveryStatus: 'unknown' } },
+      {
+        toolName: 'gmail.send',
+        status: 'succeeded',
+        result: { deliveryStatus: 'unknown' },
+      },
     ]);
     expect(result.blocked).toBe(true);
     expect(result.text).toContain('gmail.send');
@@ -446,7 +500,11 @@ describe('response execution contract', () => {
     it('allows a calendar-check claim backed by a calendar read this task', () => {
       expect(
         enforceResponseContract(calendarCheck, [
-          { toolName: 'calendar.list_events', status: 'succeeded', result: { events: [] } },
+          {
+            toolName: 'calendar.list_events',
+            status: 'succeeded',
+            result: { events: [] },
+          },
         ]),
       ).toMatchObject({ blocked: false, text: calendarCheck });
     });
@@ -470,8 +528,242 @@ describe('response execution contract', () => {
         'Want me to check your calendar?',
         "I'll check your calendar now.",
       ]) {
-        expect(enforceResponseContract(text, []), text).toMatchObject({ blocked: false, text });
+        expect(enforceResponseContract(text, []), text).toMatchObject({
+          blocked: false,
+          text,
+        });
       }
+    });
+
+    it('replaces the reported fabricated Linear event with literal calendar evidence', () => {
+      const draft = [
+        'Looking at Monday, August 17, 2026:',
+        '',
+        '**Coffee Chat with Linear Team**',
+        '9:30 AM - 10:00 AM (PDT)',
+        'Virtual (Zoom link in calendar description)',
+        '',
+        '**Freyja’s Back-to-School Prep**',
+        '3:00 PM - 4:30 PM (PDT)',
+        'Location: Home',
+        '',
+        'Open time slots: 7:00 AM - 9:30 AM and after 4:30 PM.',
+      ].join('\n');
+      const result = enforceResponseContract(
+        draft,
+        [
+          {
+            toolName: 'calendar.list_events',
+            status: 'succeeded',
+            args: {
+              timeMin: '2026-08-17T00:00:00-07:00',
+              timeMax: '2026-08-18T00:00:00-07:00',
+            },
+            result: {
+              complete: true,
+              calendarsSearched: ['Assistant', 'Family'],
+              events: [
+                {
+                  eventId: 'evt-freyja',
+                  calendar: 'Family',
+                  summary: 'Freyja’s Back-to-School Prep',
+                  location: 'Home',
+                  start: '2026-08-17T15:00:00-07:00',
+                  end: '2026-08-17T16:30:00-07:00',
+                },
+              ],
+            },
+          },
+        ],
+        {
+          readRequest: {
+            kind: 'calendar',
+            queryTerms: [],
+            firstToolName: 'calendar.list_events',
+            requiresThreadRead: false,
+          },
+        },
+      );
+      expect(result).toMatchObject({ blocked: false, unsupported: [] });
+      expect(result.text).toContain('Freyja’s Back-to-School Prep');
+      expect(result.text).not.toContain('Linear');
+      expect(result.text).not.toContain('Open time slots');
+    });
+
+    it('requires both calendar and Gmail before answering a named interview lookup', () => {
+      const result = enforceResponseContract('Your Clay interview is Monday at 9:30 AM.', [], {
+        readRequest: {
+          kind: 'calendar_email',
+          queryTerms: ['clay', 'interview'],
+          firstToolName: 'calendar.search_events',
+          requiresThreadRead: true,
+        },
+      });
+      expect(result.blocked).toBe(true);
+      expect(result.unsupported).toEqual(expect.arrayContaining(['calendar_read', 'inbox_read']));
+      expect(result.text).toMatch(/not going to guess/i);
+    });
+
+    it('allows interview details only when the searches and thread contain them', () => {
+      const text = 'Your Clay interview is Monday, August 17, 2026 at 9:30 AM.';
+      const readRequest = {
+        kind: 'calendar_email' as const,
+        queryTerms: ['clay', 'interview'],
+        firstToolName: 'calendar.search_events' as const,
+        requiresThreadRead: true,
+      };
+      const evidence = [
+        {
+          toolName: 'calendar.search_events',
+          status: 'succeeded',
+          args: { query: 'clay interview' },
+          result: {
+            complete: true,
+            calendarsSearched: ['Assistant'],
+            events: [],
+          },
+        },
+        {
+          toolName: 'gmail.search',
+          status: 'succeeded',
+          args: { query: 'clay interview' },
+          result: {
+            complete: true,
+            mailboxSearched: 'assistant@example.com',
+            results: [
+              {
+                threadId: 'thread-1',
+                subject: 'Clay interview details',
+                date: 'Aug 10, 2026',
+              },
+            ],
+          },
+        },
+        {
+          toolName: 'gmail.read_thread',
+          status: 'succeeded',
+          args: { threadId: 'thread-1' },
+          result: {
+            messages: [
+              {
+                subject: 'Clay interview details',
+                text: 'Your Clay interview is Monday, August 17, 2026 at 9:30 AM.',
+              },
+            ],
+          },
+        },
+      ];
+      const result = enforceResponseContract(text, evidence, { readRequest });
+      expect(result.blocked).toBe(false);
+      expect(result.text).toContain('Clay interview details');
+      expect(result.text).toContain('Monday, August 17, 2026 at 9:30 AM');
+    });
+
+    it('does not let an unrelated Gmail thread satisfy the lookup', () => {
+      const readRequest = {
+        kind: 'calendar_email' as const,
+        queryTerms: ['clay', 'interview'],
+        firstToolName: 'calendar.search_events' as const,
+        requiresThreadRead: true,
+      };
+      const result = enforceResponseContract(
+        'The interview is Monday.',
+        [
+          {
+            toolName: 'calendar.search_events',
+            status: 'succeeded',
+            args: { query: 'clay interview' },
+            result: { complete: true, calendarsSearched: ['Assistant'], events: [] },
+          },
+          {
+            toolName: 'gmail.search',
+            status: 'succeeded',
+            args: { query: 'clay interview' },
+            result: {
+              complete: true,
+              mailboxSearched: 'assistant@example.com',
+              results: [{ threadId: 'thread-clay' }],
+            },
+          },
+          {
+            toolName: 'gmail.read_thread',
+            status: 'succeeded',
+            args: { threadId: 'thread-unrelated' },
+            result: { messages: [{ text: 'Monday at 9:30 AM' }] },
+          },
+        ],
+        { readRequest },
+      );
+
+      expect(result.blocked).toBe(true);
+      expect(result.text).toMatch(/matching Gmail thread/i);
+    });
+
+    it('treats an empty all-source search as a factual result', () => {
+      const text = 'I found no Clay interview in the calendars or Gmail.';
+      const readRequest = {
+        kind: 'calendar_email' as const,
+        queryTerms: ['clay', 'interview'],
+        firstToolName: 'calendar.search_events' as const,
+        requiresThreadRead: true,
+      };
+      const evidence = [
+        {
+          toolName: 'calendar.search_events',
+          status: 'succeeded',
+          args: { query: 'clay interview' },
+          result: {
+            complete: true,
+            calendarsSearched: ['Assistant'],
+            events: [],
+          },
+        },
+        {
+          toolName: 'gmail.search',
+          status: 'succeeded',
+          args: { query: 'clay interview' },
+          result: {
+            complete: true,
+            mailboxSearched: 'assistant@example.com',
+            results: [],
+          },
+        },
+      ];
+      const result = enforceResponseContract(text, evidence, { readRequest });
+      expect(result.blocked).toBe(false);
+      expect(result.text).toContain('no matching events');
+      expect(result.text).toContain('no matching messages');
+    });
+
+    it('does not allow list-events output to masquerade as a free/busy check', () => {
+      const result = enforceResponseContract(
+        'You are free after 4:30 PM with no conflicts.',
+        [
+          {
+            toolName: 'calendar.list_events',
+            status: 'succeeded',
+            args: {
+              timeMin: '2026-08-17T00:00:00-07:00',
+              timeMax: '2026-08-18T00:00:00-07:00',
+            },
+            result: {
+              complete: true,
+              calendarsSearched: ['Assistant'],
+              events: [],
+            },
+          },
+        ],
+        {
+          readRequest: {
+            kind: 'calendar',
+            queryTerms: [],
+            firstToolName: 'calendar.list_events',
+            requiresThreadRead: false,
+          },
+        },
+      );
+      expect(result.blocked).toBe(false);
+      expect(result.text).not.toContain('free after');
     });
   });
 });

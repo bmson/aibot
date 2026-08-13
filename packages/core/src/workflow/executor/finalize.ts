@@ -24,6 +24,7 @@ import {
   taskState,
 } from '../machine.js';
 import { PLANNER_VERSION } from '../planner.js';
+import { detectPersonalReadRequest } from '../read-intent.js';
 import { type ActionEvidence, enforceResponseContract } from '../response-contract.js';
 import { isUnattendedGoalSession, KNOWN_SENDER_REPLY_KIND } from './context-helpers.js';
 import { notifyOwnerAndConversation, recordGoalBlocked } from './notices.js';
@@ -41,6 +42,7 @@ export const SCHEDULE_DIRECTIVE =
 const EVIDENCE_COLUMNS = {
   toolName: toolCalls.toolName,
   status: toolCalls.status,
+  args: toolCalls.args,
   result: toolCalls.result,
   error: toolCalls.error,
 } as const;
@@ -54,7 +56,10 @@ export async function stopForUnsavedGoalProgress(
 ): Promise<ExecuteResult> {
   const text =
     "I completed a verified goal step, but I couldn't save the progress update. Open Activity and retry this task so the goal does not continue from stale information.";
-  console.error('required goal progress was not saved', { taskId: task.id, reason });
+  console.error('required goal progress was not saved', {
+    taskId: task.id,
+    reason,
+  });
   if (task.goalId) await recordGoalBlocked(deps.db, task.goalId, text);
   await notifyOwnerAndConversation(
     deps,
@@ -296,7 +301,7 @@ export async function stageModelFinalResponse(
   // Corpus for the URL-provenance rule: every tool result (both scopes), the
   // trigger, and the owner/tool turns — but NOT the assistant's own final, which
   // is already in the window and must not evidence its own fabricated link.
-  const urlCorpus = [
+  const sourceCorpus = [
     JSON.stringify(evidence),
     JSON.stringify(task.trigger ?? {}),
     window
@@ -304,7 +309,10 @@ export async function stageModelFinalResponse(
       .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
       .join('\n'),
   ].join('\n');
-  const checked = enforceResponseContract(pending.text, evidence, { urlCorpus });
+  const checked = enforceResponseContract(pending.text, evidence, {
+    urlCorpus: sourceCorpus,
+    readRequest: detectPersonalReadRequest(window),
+  });
   const text = checked.text;
   // Stamp the contract verdict on pending; recordQualitySignals reads it from
   // the single funnel in finalizePendingResponse, so every terminal path — not
@@ -315,7 +323,10 @@ export async function stageModelFinalResponse(
     console.warn('blocked unsupported assistant action claim', {
       taskId: task.id,
       unsupported: checked.unsupported,
-      toolCalls: rows.map((row) => ({ toolName: row.toolName, status: row.status })),
+      toolCalls: rows.map((row) => ({
+        toolName: row.toolName,
+        status: row.status,
+      })),
     });
   }
   // An automatic goal session that produced no verified tool result did no

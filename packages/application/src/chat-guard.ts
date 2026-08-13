@@ -1,3 +1,4 @@
+import type { PersonalReadRequest } from '@assistant/core/workflow/read-intent';
 import {
   type ActionEvidence,
   enforceResponseContract,
@@ -22,8 +23,9 @@ export const CORRECTION =
 export function guardDraft(
   text: string,
   evidence: ActionEvidence[],
+  opts?: { readRequest?: PersonalReadRequest | null },
 ): { text: string; corrected: boolean } {
-  const checked = enforceResponseContract(text, evidence);
+  const checked = enforceResponseContract(text, evidence, opts);
   return checked.blocked
     ? { text: text + CORRECTION, corrected: true }
     : { text, corrected: false };

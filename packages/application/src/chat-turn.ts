@@ -16,6 +16,7 @@ import { type RecallSource, recallRelevantContext } from '@assistant/core/memory
 import type { ModelRouter, StreamOutcome } from '@assistant/core/model-router';
 import { buildAutonomyGrant } from '@assistant/core/workflow/autonomy';
 import { enqueueTask } from '@assistant/core/workflow/machine';
+import { detectPersonalReadRequest } from '@assistant/core/workflow/read-intent';
 import { goalIdForConversation } from '@assistant/core/workflow/schedules';
 import { conversations, type Db } from '@assistant/db';
 import {
@@ -231,7 +232,9 @@ export async function handleChatTurn(
   });
   if (!persistedUser) throw new Error('failed to persist chat message');
   const messageCursor = encodeMessageCursor(persistedUser);
-  const historyRows = await listMessages(db, conversation.id, { limit: MODEL_HISTORY_LIMIT });
+  const historyRows = await listMessages(db, conversation.id, {
+    limit: MODEL_HISTORY_LIMIT,
+  });
   const modelHistory = boundedModelHistory(historyRows);
 
   // Triage: conversation streams below; action requests go to the executor.
@@ -309,7 +312,12 @@ export async function handleChatTurn(
         // goal's own sessions can see it was answered.
         goalId: await goalIdForConversation(db, conversation.id),
         ...(autonomousRequested
-          ? { autonomyGrant: buildAutonomyGrant({ grantedVia: 'composer', nowMs: Date.now() }) }
+          ? {
+              autonomyGrant: buildAutonomyGrant({
+                grantedVia: 'composer',
+                nowMs: Date.now(),
+              }),
+            }
           : {}),
       });
       return acceptedStreamResponse(task.id, {
@@ -361,6 +369,7 @@ export async function handleChatTurn(
   // Honesty-check scope for guardDraft: everything earlier turns actually did,
   // all marked prior-turn. This turn itself runs no tools.
   const toolEvidence = await listConversationToolEvidence(db, conversation.id);
+  const readRequest = detectPersonalReadRequest(modelHistory);
 
   let outcome: StreamOutcome;
   try {
@@ -383,9 +392,11 @@ export async function handleChatTurn(
       ].join('\n'),
       messages: await convertToModelMessages(modelHistory),
       onComplete: async (text) => {
-        const guarded = guardDraft(text, toolEvidence);
+        const guarded = guardDraft(text, toolEvidence, { readRequest });
         if (guarded.corrected) {
-          console.warn('tool-less chat draft claimed unperformed work', { taskId: task.id });
+          console.warn('tool-less chat draft claimed unperformed work', {
+            taskId: task.id,
+          });
         }
         await finishTask(db, task, {
           status: 'done',
@@ -409,7 +420,10 @@ export async function handleChatTurn(
   }
 
   if (!outcome.ok) {
-    await finishTask(db, task, { status: 'failed', progress: outcome.decision.reason });
+    await finishTask(db, task, {
+      status: 'failed',
+      progress: outcome.decision.reason,
+    });
     return Response.json(
       { error: outcome.decision.reason, mode: outcome.decision.mode },
       { status: 402 },
@@ -431,7 +445,7 @@ export async function handleChatTurn(
         writer.write(part as Parameters<typeof writer.write>[0]);
       }
       const draft = await okOutcome.text;
-      if (guardDraft(draft, toolEvidence).corrected) {
+      if (guardDraft(draft, toolEvidence, { readRequest }).corrected) {
         const partId = `contract-${task.id}`;
         writer.write({ type: 'text-start', id: partId });
         writer.write({ type: 'text-delta', id: partId, delta: CORRECTION });

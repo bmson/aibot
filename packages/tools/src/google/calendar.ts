@@ -10,7 +10,7 @@ const CAL = 'https://www.googleapis.com/calendar/v3';
  * typically carries a handful, but subscribed holiday/birthday calendars can
  * push the list up, and every extra calendar is another HTTP round trip.
  */
-const MAX_CALENDAR_FANOUT = 25;
+const MAX_CALENDAR_FANOUT = 50;
 
 /** freeBusy accepts at most 50 items per request. */
 const MAX_FREEBUSY_ITEMS = 50;
@@ -104,7 +104,11 @@ function normalizeEvent(raw: RawEvent, calendar: CalendarEntry) {
  */
 async function collectEvents(
   deps: CalendarToolDeps,
-  opts: { calendarIds?: string[]; maxResults: number; query: (calendarId: string) => string },
+  opts: {
+    calendarIds?: string[];
+    maxResults: number;
+    query: (calendarId: string) => string;
+  },
 ) {
   const available = await fetchCalendars(deps.client);
   const requested = opts.calendarIds?.length
@@ -112,38 +116,66 @@ async function collectEvents(
         (c) => opts.calendarIds?.includes(c.id) || opts.calendarIds?.includes(c.name),
       )
     : available;
+  if (requested.length === 0) {
+    throw new Error(
+      opts.calendarIds?.length
+        ? 'none of the requested calendars are readable by the assistant'
+        : 'the assistant account returned no readable calendars',
+    );
+  }
   const targets = requested.slice(0, MAX_CALENDAR_FANOUT);
 
   const settled = await Promise.allSettled(
     targets.map(async (calendar) => {
-      const res = await deps.client.api<{ items?: RawEvent[] }>(opts.query(calendar.id));
-      return (res.items ?? []).map((raw) => normalizeEvent(raw, calendar));
+      const res = await deps.client.api<{
+        items?: RawEvent[];
+        nextPageToken?: string;
+      }>(opts.query(calendar.id));
+      return {
+        events: (res.items ?? []).map((raw) => normalizeEvent(raw, calendar)),
+        truncated: Boolean(res.nextPageToken),
+      };
     }),
   );
 
   const events: ReturnType<typeof normalizeEvent>[] = [];
   const unavailable: Array<{ calendar: string; reason: string }> = [];
+  const truncatedCalendars: string[] = [];
   settled.forEach((result, index) => {
     const calendar = targets[index];
     if (!calendar) return;
-    if (result.status === 'fulfilled') events.push(...result.value);
-    else
+    if (result.status === 'fulfilled') {
+      events.push(...result.value.events);
+      if (result.value.truncated) truncatedCalendars.push(calendar.name);
+    } else
       unavailable.push({
         calendar: calendar.name,
         reason: result.reason instanceof Error ? result.reason.message : String(result.reason),
       });
   });
   events.sort((a, b) => startedAt(a) - startedAt(b));
+  const mergedTruncated = events.length > opts.maxResults;
+  const notes: string[] = [];
+  if (truncatedCalendars.length > 0) {
+    notes.push(`Google reported additional matching events on: ${truncatedCalendars.join(', ')}.`);
+  }
+  if (mergedTruncated) {
+    notes.push(`Returned the first ${opts.maxResults} events after merging all calendar results.`);
+  }
+  if (requested.length > targets.length) {
+    notes.push(`Searched the first ${targets.length} of ${requested.length} calendars.`);
+  }
 
   return {
     events: events.slice(0, opts.maxResults),
     calendarsSearched: targets.map((c) => c.name),
+    complete:
+      unavailable.length === 0 &&
+      requested.length === targets.length &&
+      truncatedCalendars.length === 0 &&
+      !mergedTruncated,
     ...(unavailable.length > 0 ? { unavailable } : {}),
-    ...(requested.length > targets.length
-      ? {
-          note: `Searched the first ${targets.length} of ${requested.length} calendars; name specific calendars to reach the rest.`,
-        }
-      : {}),
+    ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
   };
 }
 
@@ -181,7 +213,11 @@ export function registerCalendarTools(
           >;
         }>(`${CAL}/freeBusy`, {
           method: 'POST',
-          body: JSON.stringify({ timeMin: args.timeMin, timeMax: args.timeMax, items }),
+          body: JSON.stringify({
+            timeMin: args.timeMin,
+            timeMax: args.timeMax,
+            items,
+          }),
         });
 
         const calendars = res.calendars ?? {};
@@ -202,7 +238,10 @@ export function registerCalendarTools(
           busy,
           calendarsChecked: items.map(({ id }) => nameFor.get(id) ?? id),
           ...(unavailable.length > 0
-            ? { unavailable, note: 'These calendars have not shared free/busy with the assistant.' }
+            ? {
+                unavailable,
+                note: 'These calendars have not shared free/busy with the assistant.',
+              }
             : {}),
         };
       },
@@ -247,7 +286,7 @@ export function registerCalendarTools(
     {
       name: 'calendar.list_events',
       description:
-        'List events in a time range. Reads the owner\'s calendars and every other calendar shared with the assistant, plus its own, and says which calendar each event is on. This is the tool for "what\'s on my calendar". Omit calendarIds to read them all.',
+        'List events in a time range across every calendar the assistant can read: its own plus all shared calendars. This is the default for "what is happening Monday" and "what\'s on my calendar". Do not ask which calendar or provider; omit calendarIds to read them all. The result states whether coverage was complete.',
       inputSchema: z.object({
         timeMin: z.string().datetime({ offset: true }),
         timeMax: z.string().datetime({ offset: true }),
@@ -324,7 +363,11 @@ export function registerCalendarTools(
             }),
           },
         );
-        return { eventId: event.id, link: event.htmlLink, invited: args.attendees };
+        return {
+          eventId: event.id,
+          link: event.htmlLink,
+          invited: args.attendees,
+        };
       },
     },
     { outwardFacing: true },
@@ -335,7 +378,7 @@ export function registerCalendarTools(
     {
       name: 'calendar.search_events',
       description:
-        "Search by keyword (attendee, title, or location) across the owner's calendars, every calendar shared with the assistant, and its own. Says which calendar each hit is on. Times are ISO 8601 with offset.",
+        'Search by keyword (attendee, title, or location) across every calendar the assistant can read: its own plus all shared calendars. Do not ask which calendar or provider; omit calendarIds to search them all. Says which calendar each hit is on, whether coverage was complete, and returns ISO 8601 times with offsets.',
       inputSchema: z.object({
         query: z.string().min(1).max(200),
         timeMin: z.string().datetime({ offset: true }).optional(),
@@ -427,10 +470,13 @@ export function registerCalendarTools(
           for (const email of args.addAttendees) emails.add(email.toLowerCase());
           patch.attendees = [...emails].map((email) => ({ email }));
         }
-        const updated = await deps.client.api<{ id: string; htmlLink?: string }>(
-          `${CAL}/calendars/primary/events/${encodeURIComponent(args.eventId)}?sendUpdates=all`,
-          { method: 'PATCH', body: JSON.stringify(patch) },
-        );
+        const updated = await deps.client.api<{
+          id: string;
+          htmlLink?: string;
+        }>(`${CAL}/calendars/primary/events/${encodeURIComponent(args.eventId)}?sendUpdates=all`, {
+          method: 'PATCH',
+          body: JSON.stringify(patch),
+        });
         return { eventId: updated.id, link: updated.htmlLink, updated: true };
       },
     },

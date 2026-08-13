@@ -14,7 +14,12 @@ function toolsWith(api: ReturnType<typeof vi.fn>) {
 }
 
 const CALENDARS = [
-  { id: 'bot@example.com', summary: 'Assistant', primary: true, accessRole: 'owner' },
+  {
+    id: 'bot@example.com',
+    summary: 'Assistant',
+    primary: true,
+    accessRole: 'owner',
+  },
   { id: 'owner@example.com', summary: 'Baldvin', accessRole: 'reader' },
   { id: 'work@example.com', summary: 'Work', accessRole: 'reader' },
 ];
@@ -52,7 +57,11 @@ describe('calendar.list_events', () => {
     const result = (await toolsWith(api)
       .get('calendar.list_events')
       ?.tool.execute(
-        { timeMin: '2026-07-24T00:00:00Z', timeMax: '2026-07-25T00:00:00Z', maxResults: 20 },
+        {
+          timeMin: '2026-07-24T00:00:00Z',
+          timeMax: '2026-07-25T00:00:00Z',
+          maxResults: 20,
+        },
         {} as never,
       )) as {
       events: Array<{ eventId: string; summary: string; calendar: string }>;
@@ -64,6 +73,7 @@ describe('calendar.list_events', () => {
     expect(result.events.map((e) => e.eventId)).toEqual(['o1', 'w1', 'b1']);
     expect(result.events.map((e) => e.calendar)).toEqual(['Baldvin', 'Work', 'Assistant']);
     expect(result.calendarsSearched).toEqual(['Assistant', 'Baldvin', 'Work']);
+    expect(result).toMatchObject({ complete: true });
   });
 
   it('addresses each calendar by id rather than the hardcoded primary', async () => {
@@ -71,7 +81,11 @@ describe('calendar.list_events', () => {
     await toolsWith(api)
       .get('calendar.list_events')
       ?.tool.execute(
-        { timeMin: '2026-07-24T00:00:00Z', timeMax: '2026-07-25T00:00:00Z', maxResults: 20 },
+        {
+          timeMin: '2026-07-24T00:00:00Z',
+          timeMax: '2026-07-25T00:00:00Z',
+          maxResults: 20,
+        },
         {} as never,
       );
     const requested = api.mock.calls
@@ -90,7 +104,11 @@ describe('calendar.list_events', () => {
     const result = (await toolsWith(api)
       .get('calendar.list_events')
       ?.tool.execute(
-        { timeMin: '2026-07-24T00:00:00Z', timeMax: '2026-07-25T00:00:00Z', maxResults: 20 },
+        {
+          timeMin: '2026-07-24T00:00:00Z',
+          timeMax: '2026-07-25T00:00:00Z',
+          maxResults: 20,
+        },
         {} as never,
       )) as {
       events: Array<{ eventId: string }>;
@@ -100,6 +118,21 @@ describe('calendar.list_events', () => {
     expect(result.unavailable).toEqual([
       { calendar: 'Work', reason: 'Google API 403 on work: forbidden' },
     ]);
+    expect(result).toMatchObject({ complete: false });
+  });
+
+  it('fails instead of treating an empty calendar roster as an empty schedule', async () => {
+    await expect(
+      toolsWith(apiFor({}, []))
+        .get('calendar.list_events')
+        ?.tool.execute(
+          {
+            timeMin: '2026-08-17T00:00:00-07:00',
+            timeMax: '2026-08-18T00:00:00-07:00',
+          },
+          {} as never,
+        ),
+    ).rejects.toThrow(/no readable calendars/i);
   });
 
   it('narrows to named calendars when asked, by name or by id', async () => {
@@ -130,16 +163,45 @@ describe('calendar.list_events', () => {
     const result = (await toolsWith(api)
       .get('calendar.list_events')
       ?.tool.execute(
-        { timeMin: '2026-07-24T00:00:00Z', timeMax: '2026-07-25T00:00:00Z', maxResults: 1 },
+        {
+          timeMin: '2026-07-24T00:00:00Z',
+          timeMax: '2026-07-25T00:00:00Z',
+          maxResults: 1,
+        },
         {} as never,
-      )) as { events: Array<{ eventId: string }> };
+      )) as { events: Array<{ eventId: string }>; complete: boolean };
     expect(result.events.map((e) => e.eventId)).toEqual(['o1']);
+    expect(result.complete).toBe(false);
+  });
+
+  it('marks coverage partial when Google has another page of events', async () => {
+    const api = vi.fn(async (url: string) => {
+      if (url.includes('/users/me/calendarList')) {
+        return { items: [CALENDARS[0]] };
+      }
+      return {
+        items: [event('b1', 'First match', '2026-07-24T09:00:00Z')],
+        nextPageToken: 'another-page',
+      };
+    });
+    const result = (await toolsWith(api)
+      .get('calendar.search_events')
+      ?.tool.execute({ query: 'Clay', maxResults: 20 }, {} as never)) as {
+      complete: boolean;
+      note?: string;
+    };
+
+    expect(result.complete).toBe(false);
+    expect(result.note).toMatch(/additional matching events/i);
   });
 
   it('reads as confidential untrusted content and stays autonomous', () => {
     const entry = toolsWith(vi.fn()).get('calendar.list_events');
     expect(entry?.tool.risk).toBe('autonomous');
-    expect(entry?.flags).toMatchObject({ confidentialRead: true, returnsUntrustedContent: true });
+    expect(entry?.flags).toMatchObject({
+      confidentialRead: true,
+      returnsUntrustedContent: true,
+    });
   });
 });
 
@@ -148,18 +210,42 @@ describe('calendar.list_calendars', () => {
     const result = (await toolsWith(apiFor({}))
       .get('calendar.list_calendars')
       ?.tool.execute({}, {} as never)) as {
-      calendars: Array<{ id: string; name: string; primary: boolean; access: string }>;
+      calendars: Array<{
+        id: string;
+        name: string;
+        primary: boolean;
+        access: string;
+      }>;
     };
     expect(result.calendars).toEqual([
-      { id: 'bot@example.com', name: 'Assistant', primary: true, access: 'owner' },
-      { id: 'owner@example.com', name: 'Baldvin', primary: false, access: 'reader' },
-      { id: 'work@example.com', name: 'Work', primary: false, access: 'reader' },
+      {
+        id: 'bot@example.com',
+        name: 'Assistant',
+        primary: true,
+        access: 'owner',
+      },
+      {
+        id: 'owner@example.com',
+        name: 'Baldvin',
+        primary: false,
+        access: 'reader',
+      },
+      {
+        id: 'work@example.com',
+        name: 'Work',
+        primary: false,
+        access: 'reader',
+      },
     ]);
   });
 
   it('prefers the local name the owner gave a shared calendar', async () => {
     const api = apiFor({}, [
-      { id: 'work@example.com', summary: 'work@example.com', accessRole: 'reader' },
+      {
+        id: 'work@example.com',
+        summary: 'work@example.com',
+        accessRole: 'reader',
+      },
     ]);
     // summaryOverride is what the owner renamed it to in their own UI.
     (api as unknown as { mockImplementation: (f: unknown) => void }).mockImplementation(
@@ -176,7 +262,9 @@ describe('calendar.list_calendars', () => {
     );
     const result = (await toolsWith(api)
       .get('calendar.list_calendars')
-      ?.tool.execute({}, {} as never)) as { calendars: Array<{ name: string }> };
+      ?.tool.execute({}, {} as never)) as {
+      calendars: Array<{ name: string }>;
+    };
     expect(result.calendars[0]?.name).toBe('Day job');
   });
 });
@@ -217,7 +305,10 @@ describe('calendar.search_events', () => {
   it('reads as confidential untrusted content and stays autonomous', () => {
     const entry = toolsWith(vi.fn()).get('calendar.search_events');
     expect(entry?.tool.risk).toBe('autonomous');
-    expect(entry?.flags).toMatchObject({ confidentialRead: true, returnsUntrustedContent: true });
+    expect(entry?.flags).toMatchObject({
+      confidentialRead: true,
+      returnsUntrustedContent: true,
+    });
   });
 });
 
@@ -243,7 +334,10 @@ describe('calendar.availability', () => {
       ?.tool.execute(
         { timeMin: '2026-07-24T00:00:00Z', timeMax: '2026-07-25T00:00:00Z' },
         {} as never,
-      )) as { busy: Array<{ calendar: string; start: string }>; calendarsChecked: string[] };
+      )) as {
+      busy: Array<{ calendar: string; start: string }>;
+      calendarsChecked: string[];
+    };
 
     const freeBusyCall = api.mock.calls.find(([url]) => String(url).includes('/freeBusy'));
     expect(freeBusyCall).toBeDefined();
@@ -296,11 +390,18 @@ describe('calendar.update_event', () => {
     const api = vi
       .fn()
       .mockResolvedValueOnce({ attendees: [{ email: 'existing@example.com' }] }) // GET existing
-      .mockResolvedValueOnce({ id: 'evt-1', htmlLink: 'https://cal.example/evt-1' }); // PATCH
+      .mockResolvedValueOnce({
+        id: 'evt-1',
+        htmlLink: 'https://cal.example/evt-1',
+      }); // PATCH
     await toolsWith(api)
       .get('calendar.update_event')
       ?.tool.execute(
-        { eventId: 'evt-1', start: '2026-07-24T16:00:00-07:00', addAttendees: ['new@example.com'] },
+        {
+          eventId: 'evt-1',
+          start: '2026-07-24T16:00:00-07:00',
+          addAttendees: ['new@example.com'],
+        },
         {} as never,
       );
     const [patchUrl, patchInit] = api.mock.calls[1] as [string, RequestInit];

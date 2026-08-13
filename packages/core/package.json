@@ -30,6 +30,7 @@
     "./workflow/autonomy": "./src/workflow/autonomy.ts",
     "./workflow/improve": "./src/workflow/improve.ts",
     "./workflow/machine": "./src/workflow/machine.ts",
+    "./workflow/read-intent": "./src/workflow/read-intent.ts",
     "./workflow/response-contract": "./src/workflow/response-contract.ts",
     "./workflow/schedules": "./src/workflow/schedules.ts"
   },

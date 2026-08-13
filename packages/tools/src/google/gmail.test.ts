@@ -23,6 +23,42 @@ function context(tainted: boolean): ToolContext {
   };
 }
 
+describe('gmail.search', () => {
+  it('searches all mail and marks a capped result set as partial', async () => {
+    const api = vi.fn(async (url: string) => {
+      if (url.includes('/messages?')) {
+        return {
+          messages: [{ id: 'message-1' }],
+          nextPageToken: 'another-page',
+          resultSizeEstimate: 4,
+        };
+      }
+      return {
+        id: 'message-1',
+        threadId: 'thread-1',
+        snippet: 'Clay interview details',
+      };
+    });
+    const result = (await registerGmailTools(new ToolRegistry(), {
+      client: { api } as never,
+      botEmail: 'bot@example.com',
+    })
+      .get('gmail.search')
+      ?.tool.execute({ query: 'Clay', maxResults: 1 }, {} as never)) as {
+      complete: boolean;
+      mailboxSearched: string;
+      matchingMessagesEstimate?: number;
+    };
+
+    expect(api.mock.calls[0]?.[0]).not.toContain('in%3Ainbox');
+    expect(result).toMatchObject({
+      complete: false,
+      mailboxSearched: 'bot@example.com',
+      matchingMessagesEstimate: 4,
+    });
+  });
+});
+
 describe('Gmail outbound security', () => {
   it('allows owner-led external-content email only through an outward approval boundary', () => {
     const registry = registerGmailTools(new ToolRegistry(), {

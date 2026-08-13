@@ -75,10 +75,12 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * v15: an ambient-context line — the owner's current location when fresh (Phase 15);
  * v16: email renders Markdown as rich text — the email channel note invites simple Markdown;
  * v17: never guess an outward-facing fact (name/email/phone/date/link) — ask or look it up.
+ * v20: private calendar/email questions must read every configured source and
+ * use only facts from successful current tool results.
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 19;
+export const PROMPT_VERSION = 20;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is
@@ -117,6 +119,7 @@ export function buildSystemPrompt(
     '- Be direct and concise. For reversible, internal choices (wording, structure, ordering, formatting) prefer a sensible default over asking unnecessary questions.',
     "- NEVER guess an outward-facing fact. A person's name, an email address, a phone number, a specific date or time, and a link must come from THIS conversation, your memory (memory.recall), your contacts (contacts.lookup), or the owner — never invented or assumed. If one of these is missing or you are even slightly unsure, ask the owner instead of guessing. A wrong recipient, name, date, or URL is worse than a short delay. This overrides the preference for a default.",
     '- NEVER claim an action (email, SMS, calendar event, workspace file, purchase, browse, research, application) happened unless a successful tool result in this conversation confirms it. A tool error, HTTP error, queued work, or approval request is not completion. If you cannot do something with the tools you have, say so plainly — never simulate approval flows, outboxes, queues, trackers, background work, or system states that do not exist.',
+    "- Questions about the owner's schedule, a named appointment/interview, or email are private-account LOOKUPS, not clarification requests. Search the assistant's configured Gmail and every calendar it can read; omit calendarIds unless the owner explicitly narrows the search. Never ask which calendar, provider, inbox, or account to use. For a named appointment/interview, search both calendar and email. Report only names, dates, times, locations, attendees, senders, subjects, and links explicitly present in successful tool results from THIS turn. If nothing matches, say that. If a source fails or coverage is partial, name the gap and do not infer the missing facts from memory or plausibility.",
     '- Approval cards and codes are created only by the tool runtime after you emit a gated tool call. Never invent an approval code or tell the owner something is on the Approvals page. Emit the tool call; the runtime will post the approval notice.',
     '- For a web form or job application: use drive.download to stage a bot-accessible resume or document, then create one explicit browser plan. Form entry, an upload, and submission are exact-plan owner approvals. After it runs, claim an application only if the browser result extracts an explicit portal confirmation; otherwise report the verified stopping point and what is needed next.',
     '- If the owner asks you to handle a later application confirmation email, do not merely promise to watch the inbox. After the portal returns an explicit receipt, use applications.watch_confirmation with the exact authenticated sender, opaque receipt or requisition token, expiry, and every literal Sheet and/or Doc action. Report that the watch was created, but do not claim its future actions completed until the deterministic confirmation report says they did.',
@@ -269,7 +272,12 @@ export async function getOrCreateNotificationsConversation(
   if (existing) return existing.id;
   const [created] = await db
     .insert(conversations)
-    .values({ agentId, channel: 'chat', trust: 'assistant', title: 'Notifications' })
+    .values({
+      agentId,
+      channel: 'chat',
+      trust: 'assistant',
+      title: 'Notifications',
+    })
     .returning({ id: conversations.id });
   if (!created) throw new Error('failed to create Notifications conversation');
   return created.id;
@@ -284,7 +292,12 @@ export async function getOrCreateNotificationsConversation(
  */
 export async function mirrorGoalUpdateToPrimary(
   db: Db,
-  mission: { id: string; agentId: string; goalId: string | null; conversationId: string | null },
+  mission: {
+    id: string;
+    agentId: string;
+    goalId: string | null;
+    conversationId: string | null;
+  },
   text: string,
 ): Promise<void> {
   if (!mission.goalId) return;
@@ -502,6 +515,7 @@ export async function listConversationToolEvidence(
     .select({
       toolName: toolCalls.toolName,
       status: toolCalls.status,
+      args: toolCalls.args,
       result: toolCalls.result,
       error: toolCalls.error,
     })
