@@ -641,7 +641,7 @@ export function ChatClient({
                         sendTurn(suggestion.text, false);
                       }}
                       style={{ animationDelay: `${index * 60}ms` }}
-                      className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgb(23_25_35/0.10)] active:translate-y-0 disabled:opacity-60 ${focusRing}`}
+                      className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left ring-1 ring-edge/60 motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-colors hover:bg-sunken/30 disabled:opacity-60 ${focusRing}`}
                     >
                       <SuggestionIcon className="size-4 text-accent" aria-hidden="true" />
                       <span className="mt-3 text-[13px] font-medium text-strong">
@@ -736,7 +736,7 @@ export function ChatClient({
                           <div className="group/msg min-w-0 max-w-[88%] sm:max-w-[min(76%,42rem)]">
                             <RecallNote sources={recallSources} />
                             <div
-                              className={`min-w-0 max-w-full rounded-2xl rounded-bl-md bg-raised px-4 py-3 text-[15px] text-strong shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 ring-edge/60 ${
+                              className={`min-w-0 max-w-full rounded-2xl rounded-bl-md bg-raised px-4 py-3 text-[15px] text-strong ring-1 ring-edge/60 ${
                                 streamingCaret ? 'chat-caret' : ''
                               }`}
                             >
@@ -754,7 +754,7 @@ export function ChatClient({
                           // bubble made your own words look like a footnote.
                           <div
                             title={date ? date.toLocaleString() : undefined}
-                            className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover px-4 py-3 text-[15px] leading-6 text-white shadow-[0_2px_10px_rgb(91_92_226/0.22)] sm:max-w-[min(76%,42rem)] dark:shadow-[0_1px_3px_rgb(0_0_0/0.45)]"
+                            className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover px-4 py-3 text-[15px] leading-6 text-white sm:max-w-[min(76%,42rem)]"
                           >
                             {visibleTextParts.map((part, index) => (
                               <p
@@ -868,7 +868,7 @@ export function ChatClient({
               type="button"
               onClick={jumpToLatest}
               aria-label="Jump to latest"
-              className={`pointer-events-auto mobile-touch-target inline-flex h-9 items-center gap-1.5 rounded-full bg-raised px-3.5 text-xs font-medium text-strong shadow-[0_4px_16px_rgb(23_25_35/0.14)] ring-1 ring-edge motion-safe:animate-[pop-in_140ms_ease-out] ${focusRing}`}
+              className={`pointer-events-auto mobile-touch-target inline-flex h-9 items-center gap-1.5 rounded-full bg-raised px-3.5 text-xs font-medium text-strong ring-1 ring-edge motion-safe:animate-[pop-in_140ms_ease-out] ${focusRing}`}
             >
               <ArrowDown className="size-3.5" aria-hidden="true" />
               Jump to latest
@@ -882,7 +882,7 @@ export function ChatClient({
           {error ? (
             <div
               role="alert"
-              className="pointer-events-auto mb-2 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 shadow-[0_6px_24px_rgb(23_25_35/0.08)] dark:border-red-800 dark:bg-red-950 dark:text-red-200"
+              className="pointer-events-auto mb-2 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200"
             >
               <span>{errorText(error)}</span>
               <span className="flex shrink-0 items-center gap-2">
@@ -912,7 +912,7 @@ export function ChatClient({
           {commandPaletteOpen ? (
             <section
               aria-label="Commands"
-              className="pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_6px_24px_rgb(23_25_35/0.08)] ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
+              className="pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
             >
               <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-2.5">
                 <p className="text-[13px] font-semibold text-strong">Commands</p>
@@ -933,7 +933,7 @@ export function ChatClient({
                       aria-selected={highlighted}
                       onMouseMove={() => setCommandHighlight(index)}
                       onClick={() => completeCommand(entry.command)}
-                      className={`mobile-touch-target flex min-h-11 w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2 text-left motion-safe:transition-colors ${focusRing} ${
+                      className={`mobile-touch-target flex min-h-11 w-full min-w-0 items-center gap-3 rounded-[var(--radius-shell-inset-6)] px-3 py-2 text-left motion-safe:transition-colors ${focusRing} ${
                         highlighted ? 'bg-sunken text-strong' : 'text-strong hover:bg-sunken'
                       }`}
                     >
@@ -955,7 +955,7 @@ export function ChatClient({
           {modelCommandOpen ? (
             <section
               aria-label="Choose response model"
-              className="pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-2xl bg-raised shadow-[0_6px_24px_rgb(23_25_35/0.08)] ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
+              className="pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
             >
               <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-3">
                 <div className="min-w-0">
@@ -993,7 +993,7 @@ export function ChatClient({
                         disabled={isSwitching}
                         onMouseMove={() => setModelHighlight(index)}
                         onClick={() => chooseModel(model.id)}
-                        className={`mobile-touch-target flex min-h-11 w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2 text-left motion-safe:transition-colors ${focusRing} ${
+                        className={`mobile-touch-target flex min-h-11 w-full min-w-0 items-center gap-3 rounded-[var(--radius-shell-inset-6)] px-3 py-2 text-left motion-safe:transition-colors ${focusRing} ${
                           active
                             ? 'bg-accent/10 text-accent'
                             : highlighted
@@ -1033,7 +1033,7 @@ export function ChatClient({
         <div className="pointer-events-auto relative min-w-0">
           <div
             data-testid="chat-composer-surface"
-            className="min-w-0 overflow-hidden rounded-2xl bg-raised/90 shadow-[0_10px_36px_rgb(23_25_35/0.14)] backdrop-blur-xl motion-safe:transition-shadow focus-within:shadow-[0_14px_44px_rgb(91_92_226/0.18)]"
+            className="min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised/90 backdrop-blur-xl motion-safe:transition-shadow"
           >
             <textarea
               ref={textareaRef}
@@ -1134,7 +1134,7 @@ export function ChatClient({
                 title="For this turn only, routine actions can proceed without individual approval. Sensitive steps and budget caps still require permission."
                 // Pressing deepens the fill and draws a ring in place. Nudging
                 // the button down a pixel read as the control slipping.
-                className={`inline-flex h-10 min-w-0 items-center gap-1.5 rounded-xl px-3 text-xs font-medium ring-1 ring-transparent motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
+                className={`inline-flex h-10 min-w-0 items-center gap-1.5 rounded-[var(--radius-shell-inset-8)] px-3 text-xs font-medium ring-1 ring-transparent motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
                   autonomous
                     ? 'bg-amber-100 text-amber-900 active:bg-amber-200 active:ring-amber-500/50 dark:bg-amber-950 dark:text-amber-300 dark:active:bg-amber-900 dark:active:ring-amber-400/40'
                     : 'bg-sunken text-muted hover:text-strong active:bg-edge active:text-strong active:ring-edge'
@@ -1166,7 +1166,7 @@ export function ChatClient({
                       : `Response model: ${selectedModelLabel}. Tap to change.`
                   }
                   title="Switch response model"
-                  className={`hidden h-10 items-center gap-1.5 rounded-xl px-3 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong sm:inline-flex ${focusRing}`}
+                  className={`hidden h-10 items-center gap-1.5 rounded-[var(--radius-shell-inset-8)] px-3 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong sm:inline-flex ${focusRing}`}
                 >
                   <Sparkles className="size-3.5 shrink-0" aria-hidden="true" />
                   <span className="max-w-[14ch] truncate">{selectedModelLabel}</span>
@@ -1176,7 +1176,7 @@ export function ChatClient({
                     type="button"
                     onClick={() => stop()}
                     title="Stop generating"
-                    className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-edge bg-raised px-4 text-sm font-medium text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
+                    className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-[var(--radius-shell-inset-8)] border border-edge bg-raised px-4 text-sm font-medium text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
                   >
                     <Square className="size-3 fill-current" aria-hidden="true" />
                     Stop
@@ -1184,14 +1184,14 @@ export function ChatClient({
                 ) : (
                   // Readiness is a state change, not a dimmed copy of the live
                   // button: with nothing to send it sits back as a quiet tonal
-                  // disc, then fills with accent and lifts once you have typed.
+                  // control, then fills with accent once you have typed.
                   <button
                     type="submit"
                     disabled={!canSend}
                     aria-label={asyncTurn ? 'Working on your request' : 'Send'}
-                    className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full motion-safe:transition-[transform,background-color,color,box-shadow] ${focusRing} ${
+                    className={`inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-shell-inset-8)] motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
                       canSend
-                        ? 'bg-accent text-white shadow-[0_2px_10px_rgb(91_92_226/0.35)] hover:bg-accent-hover hover:shadow-[0_5px_16px_rgb(91_92_226/0.45)] motion-safe:hover:scale-105 motion-safe:active:scale-95'
+                        ? 'bg-accent text-white hover:bg-accent-hover'
                         : 'cursor-not-allowed bg-sunken text-muted'
                     }`}
                   >

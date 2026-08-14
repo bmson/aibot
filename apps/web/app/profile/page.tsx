@@ -125,10 +125,7 @@ export default async function ProfilePage() {
           </div>
           <Link href="/profile/memories" className={`${btn.outline} group`}>
             Browse all
-            <ArrowRight
-              className="size-3.5 motion-safe:transition-transform group-hover:translate-x-0.5"
-              aria-hidden="true"
-            />
+            <ArrowRight className="size-3.5" aria-hidden="true" />
           </Link>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -154,16 +151,13 @@ export default async function ProfilePage() {
             </p>
             <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-accent">
               Browse and manage
-              <ArrowRight
-                className="size-3 motion-safe:transition-transform group-hover:translate-x-0.5"
-                aria-hidden="true"
-              />
+              <ArrowRight className="size-3" aria-hidden="true" />
             </span>
           </Link>
 
           <Link
             href="/profile/memories?state=review"
-            className={`${cardInteractiveClass} group rounded-2xl p-4 shadow-[0_1px_2px_rgb(23_25_35/0.06)] ring-1 sm:p-5 ${
+            className={`${cardInteractiveClass} group rounded-2xl p-4 ring-1 sm:p-5 ${
               memoryHealth.awaitingReview > 0
                 ? 'bg-amber-50/70 ring-amber-200 dark:bg-amber-950/20 dark:ring-amber-900'
                 : 'bg-raised ring-edge/60'
@@ -197,10 +191,7 @@ export default async function ProfilePage() {
             </p>
             <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-accent">
               {memoryHealth.awaitingReview > 0 ? 'Review now' : 'View'}
-              <ArrowRight
-                className="size-3 motion-safe:transition-transform group-hover:translate-x-0.5"
-                aria-hidden="true"
-              />
+              <ArrowRight className="size-3" aria-hidden="true" />
             </span>
           </Link>
         </div>
@@ -370,10 +361,7 @@ export default async function ProfilePage() {
                 </div>
                 <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent">
                   Manage
-                  <ArrowRight
-                    className="size-3 motion-safe:transition-transform group-hover:translate-x-0.5"
-                    aria-hidden="true"
-                  />
+                  <ArrowRight className="size-3" aria-hidden="true" />
                 </span>
                 <div className="col-span-2 flex flex-wrap items-center gap-2 border-t border-edge/70 pt-3">
                   <span className={countBadge}>

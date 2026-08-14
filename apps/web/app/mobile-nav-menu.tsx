@@ -207,7 +207,7 @@ export function MobileNavMenu({
           if (open) closeMenu();
           else openMenu();
         }}
-        className={`nav-mobile-menu-trigger mobile-touch-target lg:hidden ${focusRing}`}
+        className={`nav-mobile-menu-trigger mobile-touch-target ${focusRing}`}
       >
         <Menu className="size-5" aria-hidden="true" />
         {totalAttention > 0 ? (
@@ -225,7 +225,7 @@ export function MobileNavMenu({
           aria-labelledby="mobile-nav-title"
           data-open={open}
           inert={!open}
-          className="nav-mobile-menu-dialog lg:hidden"
+          className="nav-mobile-menu-dialog"
         >
           <span id="mobile-nav-title" className="sr-only">
             Navigation menu

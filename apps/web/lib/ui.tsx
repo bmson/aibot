@@ -18,7 +18,7 @@ import type { ReactNode } from 'react';
 export const focusRing =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
 
-const btnBase = `mobile-touch-target inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap font-medium motion-safe:transition-[transform,background-color,border-color,color,box-shadow] motion-safe:active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
+const btnBase = `mobile-touch-target inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap font-medium motion-safe:transition-[background-color,border-color,color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
 const btnMd = 'h-9 rounded-lg px-3.5 text-[13px]';
 const btnXs = 'h-8 rounded-lg px-3 text-xs';
 
@@ -108,7 +108,7 @@ export const selectClass = `${inputClass} cursor-pointer appearance-none bg-[ima
 /** `field-sizing: content` grows the box with what's typed, so these need no
  *  resize grabber and no JS measuring — the min/max keep it in a sane band. */
 export const textareaClass =
-  'rounded-xl border border-edge bg-raised px-3 py-2.5 text-base text-strong outline-none resize-none [field-sizing:content] min-h-20 max-h-80 placeholder:text-muted/70 motion-safe:transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/20 sm:text-sm';
+  'rounded-lg border border-edge bg-raised px-3 py-2.5 text-base text-strong outline-none resize-none [field-sizing:content] min-h-20 max-h-80 placeholder:text-muted/70 motion-safe:transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/20 sm:text-sm';
 
 export const labelClass = 'text-[13px] font-medium text-muted';
 
@@ -147,11 +147,10 @@ export const cardFooterClass = `flex min-w-0 flex-wrap items-center gap-2 ${card
 export const cardTitleClass =
   'font-display text-base leading-6 font-semibold tracking-[-0.015em] text-strong';
 
-/** Interactive cards sharpen rather than levitate: the hairline darkens to
- *  full strength and a shallow shadow hints at press-ability. The old
- *  half-rem lift + 30px bloom made every list feel like it was floating. */
+/** Interactive cards sharpen in place: tone and the hairline carry the hover
+ *  state without moving or lifting the card away from the page. */
 export const cardInteractiveClass =
-  'motion-safe:transition-shadow hover:shadow-[0_4px_16px_-8px_rgb(23_25_35/0.16)] hover:ring-edge';
+  'motion-safe:transition-[background-color,box-shadow] hover:bg-sunken/20 hover:ring-edge';
 
 /**
  * Timeline event cards (chat): approvals, budget asks, system checks. A
@@ -174,7 +173,7 @@ export const summaryClass =
  * "Back to the parent surface" link above a detail page's title.
  *
  * There were three hand-rolled versions: two used the ArrowLeft icon and one a
- * literal "←" glyph in indigo link styling, and only one of the three carried
+ * literal "←" glyph in accent link styling, and only one of the three carried
  * the mobile touch target. One component, so a detail page can't drift again.
  */
 export function BackLink({ href, children }: { href: string; children: ReactNode }) {
@@ -510,4 +509,4 @@ export const segmentedItemClass = `${segmentedItemBase} text-muted hover:bg-rais
  * active tile, and reads on both tracks. A separate class (not a bolt-on)
  * so the resting hover styles can't fight the selected ones.
  */
-export const segmentedItemActiveClass = `${segmentedItemBase} bg-raised text-accent shadow-[0_1px_2px_rgb(23_25_35/0.08)] ring-1 ring-accent/25`;
+export const segmentedItemActiveClass = `${segmentedItemBase} bg-raised text-accent ring-1 ring-accent/25`;

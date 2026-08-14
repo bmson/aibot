@@ -92,10 +92,7 @@ export function buildGoalProgressCheckpoint(
       (row.step ?? 0) >= latestProgressStep,
   );
 
-  const summarize = (
-    rows: GoalToolEvidence[],
-    verb: 'succeeded' | 'did not complete',
-  ) => {
+  const summarize = (rows: GoalToolEvidence[], verb: 'succeeded' | 'did not complete') => {
     const counts = new Map<string, number>();
     for (const row of rows) {
       const safeName = row.toolName.slice(0, 60);

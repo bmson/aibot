@@ -30,12 +30,21 @@ describe('detectPersonalReadRequest', () => {
 
   it('reads text from AI SDK UI message parts', () => {
     expect(
-      detectPersonalReadRequest([
-        { role: 'user', parts: [{ type: 'text', text: 'What is happening on Monday?' }] },
-      ]),
+      detectPersonalReadRequest(
+        [{ role: 'user', parts: [{ type: 'text', text: 'What is on my calendar?' }] }],
+        {
+          now: new Date('2026-08-14T19:00:00Z'),
+          timeZone: 'America/Los_Angeles',
+        },
+      ),
     ).toMatchObject({
       kind: 'calendar',
       firstToolName: 'calendar.list_events',
+      timeWindow: {
+        label: 'the next 7 days',
+        timeMin: '2026-08-14T07:00:00.000Z',
+        timeMax: '2026-08-21T07:00:00.000Z',
+      },
     });
   });
 
@@ -48,7 +57,9 @@ describe('detectPersonalReadRequest', () => {
       })}\n\`\`\``;
 
     expect(
-      detectPersonalReadRequest([{ role: 'user', content: envelope('What is our wifi password?') }]),
+      detectPersonalReadRequest([
+        { role: 'user', content: envelope('What is our wifi password?') },
+      ]),
     ).toBeNull();
     expect(
       detectPersonalReadRequest([
@@ -139,11 +150,12 @@ describe('detectPersonalReadRequest', () => {
         timeMax: '2026-08-18T07:00:00.000Z',
       },
     });
-    expect(buildReadToolInput(request as NonNullable<typeof request>, 'calendar.availability', []))
-      .toEqual({
-        timeMin: '2026-08-17T07:00:00.000Z',
-        timeMax: '2026-08-18T07:00:00.000Z',
-      });
+    expect(
+      buildReadToolInput(request as NonNullable<typeof request>, 'calendar.availability', []),
+    ).toEqual({
+      timeMin: '2026-08-17T07:00:00.000Z',
+      timeMax: '2026-08-18T07:00:00.000Z',
+    });
     expect(
       detectPersonalReadRequest(turn('Is Monday free?'), {
         now: new Date('2026-08-13T23:00:00Z'),
@@ -166,12 +178,13 @@ describe('detectPersonalReadRequest', () => {
         timeMax: '2026-08-18T07:00:00.000Z',
       },
     });
-    expect(buildReadToolInput(request as NonNullable<typeof request>, 'calendar.list_events', []))
-      .toEqual({
-        timeMin: '2026-08-17T07:00:00.000Z',
-        timeMax: '2026-08-18T07:00:00.000Z',
-        maxResults: 50,
-      });
+    expect(
+      buildReadToolInput(request as NonNullable<typeof request>, 'calendar.list_events', []),
+    ).toEqual({
+      timeMin: '2026-08-17T07:00:00.000Z',
+      timeMax: '2026-08-18T07:00:00.000Z',
+      maxResults: 50,
+    });
   });
 
   it('resolves a named calendar date without asking which date the owner meant', () => {

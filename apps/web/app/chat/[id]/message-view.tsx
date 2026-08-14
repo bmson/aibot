@@ -252,9 +252,9 @@ export function AssistantUpdate({ text, sources }: { text: string; sources: Reca
       }
     : reflection
       ? {
-          edge: 'border-l-violet-400 dark:border-l-violet-600',
-          chip: 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300',
-          label: 'text-violet-700 dark:text-violet-300',
+          edge: 'border-l-sky-400 dark:border-l-sky-600',
+          chip: 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300',
+          label: 'text-sky-700 dark:text-sky-300',
         }
       : {
           edge: 'border-l-accent/70',

@@ -1,6 +1,6 @@
-/* Mobile navigation and chat placement: one top-right trigger, a menu that
-   floats over the conversation without dimming it, and a composer that sits
-   flush with the bottom browser edge. */
+/* Shared navigation and chat placement: one top-right trigger at every
+   viewport, a menu that floats over the conversation without dimming it, and
+   a composer that sits flush with the bottom browser edge. */
 
 :root {
   --mobile-menu-edge: color-mix(in srgb, currentColor 9%, transparent);
@@ -25,9 +25,7 @@
   border: 1px solid var(--mobile-menu-edge);
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
-  box-shadow:
-    0 1px 0 var(--surface-highlight) inset,
-    0 8px 22px rgb(23 25 35 / 0.12);
+  box-shadow: var(--shadow-soft);
   color: var(--content-strong);
   cursor: pointer;
   backdrop-filter: blur(18px);
@@ -35,9 +33,7 @@
 }
 
 .dark .nav-mobile-menu-trigger {
-  box-shadow:
-    0 1px 0 var(--surface-highlight) inset,
-    0 10px 26px rgb(0 0 0 / 0.38);
+  box-shadow: var(--shadow-soft);
 }
 
 .nav-mobile-menu-trigger:hover,
@@ -112,9 +108,7 @@
   border: 1px solid var(--mobile-menu-edge);
   border-radius: 1rem;
   background: var(--surface-raised);
-  box-shadow:
-    0 1px 0 var(--surface-highlight) inset,
-    0 22px 64px rgb(23 25 35 / 0.2);
+  box-shadow: var(--shadow-overlay);
   opacity: 0;
   scale: 0.98;
   translate: 0 -0.35rem;
@@ -122,9 +116,7 @@
 }
 
 .dark .nav-mobile-menu-panel {
-  box-shadow:
-    0 1px 0 var(--surface-highlight) inset,
-    0 24px 70px rgb(0 0 0 / 0.52);
+  box-shadow: var(--shadow-overlay);
 }
 
 .nav-mobile-menu-panel[data-open="true"] {
@@ -171,7 +163,7 @@
   align-items: center;
   gap: 0.7rem;
   border: 0;
-  border-radius: 0.8rem;
+  border-radius: 0.55rem;
   padding: 0.45rem 0.65rem;
   background: transparent;
   color: var(--content-strong);
@@ -231,7 +223,7 @@
   align-items: center;
   gap: 0.35rem;
   border: 0;
-  border-radius: 0.75rem;
+  border-radius: 0.55rem;
   padding-inline: 0.65rem;
   background: transparent;
   color: var(--content-muted);

@@ -5,19 +5,24 @@
    before first paint, so OS-dark users still get dark by default. */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Semantic surface/text values. One gray family (zinc) everywhere; components
+/* Semantic surface/text values. One neutral blue-gray family everywhere; components
    use the token utilities below (bg-surface, bg-raised, border-edge, text-muted,
    text-strong, bg-accent) instead of raw palette classes, so light and dark stay
    in sync from this one block. */
 :root {
-  --surface: #f4f6fa; /* Canvas — cool, quiet, never beige */
+  --surface: #f5f7f7; /* Canvas */
   --surface-raised: #ffffff; /* Panel */
-  --surface-sunken: #e9edf5; /* Tonal wells and receipts */
-  --edge: #dce1ea;
-  --content-strong: #171923; /* Ink */
-  --content-muted: #667085;
-  --accent: #5b5ce2; /* Iris */
-  --accent-hover: #4b4cc9;
+  --surface-sunken: #edf1f1; /* Tonal wells and receipts */
+  --edge: #dbe2e2;
+  --content-strong: #172022; /* Ink */
+  --content-muted: #667477;
+  --accent: #21666e; /* Deep teal */
+  --accent-hover: #194f56;
+  --radius-shell: 1rem;
+  --radius-shell-inset-6: 0.625rem;
+  --radius-shell-inset-8: 0.5rem;
+  --shadow-soft: 0 1px 2px rgb(23 32 34 / 0.055), 0 6px 18px rgb(23 32 34 / 0.045);
+  --shadow-overlay: 0 2px 6px rgb(23 32 34 / 0.07), 0 12px 30px rgb(23 32 34 / 0.08);
   /* Native control chrome follows the theme: without color-scheme the browser
      keeps painting light scrollbars, checkboxes, and <option> lists into the
      dark UI. accent-color puts the brand on the parts we don't hand-style
@@ -29,21 +34,23 @@
      own glyph (selectClass in lib/ui.tsx). A data URI per theme because a
      background image can't read currentColor; the strokes are the two
      --content-muted values. */
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23667085' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23667477' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 .dark {
   /* A soft charcoal, not OLED-black: the conversation is the point, and a
      true near-black canvas competes with it rather than receding behind it. */
-  --surface: #15171f; /* Night, softened */
-  --surface-raised: #1c1f29;
-  --surface-sunken: #262a36;
-  --edge: #333947;
-  --content-strong: #f4f5f7;
-  --content-muted: #9ca3b2;
-  --accent: #7375ee;
-  --accent-hover: #8385f4;
+  --surface: #151a1b; /* Night, softened */
+  --surface-raised: #1c2324;
+  --surface-sunken: #273032;
+  --edge: #394547;
+  --content-strong: #f1f5f4;
+  --content-muted: #9eaaaa;
+  --accent: #72b7bc;
+  --accent-hover: #8bc7cb;
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.16), 0 6px 18px rgb(0 0 0 / 0.12);
+  --shadow-overlay: 0 2px 6px rgb(0 0 0 / 0.2), 0 12px 30px rgb(0 0 0 / 0.18);
   color-scheme: dark;
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239ca3b2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239eaaaa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
 @theme {
@@ -420,10 +427,10 @@ a {
 @keyframes presence-breathe {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgb(91 92 226 / 0.45);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 38%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 7px rgb(91 92 226 / 0);
+    box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 0%, transparent);
   }
 }
 

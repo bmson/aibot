@@ -209,7 +209,7 @@ export default async function CostsPage() {
                 <Link
                   key={row.taskId}
                   href={`/tasks/${row.taskId}`}
-                  className="flex items-center justify-between gap-3 rounded-xl bg-raised px-3 py-2 text-sm motion-safe:transition-transform hover:-translate-y-0.5"
+                  className="flex items-center justify-between gap-3 rounded-xl bg-raised px-3 py-2 text-sm motion-safe:transition-colors hover:bg-sunken/30"
                 >
                   <span className="min-w-0 truncate">
                     <span className="text-xs text-muted">[{taskTypeLabel(row.type)}]</span>{' '}

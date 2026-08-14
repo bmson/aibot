@@ -298,11 +298,17 @@ try {
       const wrapper = surface.parentElement;
       return {
         radius: Number.parseFloat(getComputedStyle(surface).borderRadius),
+        outlineStyle: getComputedStyle(surface).outlineStyle,
+        surfaceTransform: getComputedStyle(surface).transform,
+        focusGlowOpacity: getComputedStyle(surface, '::after').opacity,
         wrapperShadow: wrapper ? getComputedStyle(wrapper).boxShadow : 'missing',
         wrapperTransform: wrapper ? getComputedStyle(wrapper).transform : 'missing',
       };
     });
     assert(focusVisual.radius > 0, 'chat composer focus surface is not rounded');
+    assert(focusVisual.outlineStyle === 'none', 'chat composer has a second focus outline');
+    assert(focusVisual.surfaceTransform === 'none', 'chat composer moves while focused');
+    assert(focusVisual.focusGlowOpacity === '0', 'chat composer has a second focus glow');
     assert(
       focusVisual.wrapperShadow === 'none' && focusVisual.wrapperTransform === 'none',
       `chat composer has a second outer focus treatment: ${JSON.stringify(focusVisual)}`,
@@ -336,6 +342,22 @@ try {
       (await page.locator('main').count()) === 1,
       `${viewport.label} shell did not render exactly one main region`,
     );
+    const navigationTriggers = page.getByRole('button', { name: 'Open navigation menu' });
+    assert(
+      (await navigationTriggers.count()) === 1,
+      `${viewport.label} shell did not render exactly one navigation trigger`,
+    );
+    await targetSize(navigationTriggers, `${viewport.label} navigation trigger`);
+    const navigationTriggerBox = await navigationTriggers.boundingBox();
+    assert(
+      navigationTriggerBox &&
+        navigationTriggerBox.x + navigationTriggerBox.width / 2 > viewport.width / 2,
+      `${viewport.label} navigation trigger is not on the right`,
+    );
+    assert(
+      (await page.locator('.nav-launcher').count()) === 0,
+      `${viewport.label} shell still rendered the retired left navigation launcher`,
+    );
   }
 
   if (fixture) {
@@ -364,6 +386,7 @@ try {
         '16px mobile fields',
         'bloom focus trap',
         'primary and secondary bloom destinations',
+        'one right-side navigation trigger at every viewport',
         'root opens the primary chat',
         'activity feed and filters',
         'single rounded composer focus treatment',
