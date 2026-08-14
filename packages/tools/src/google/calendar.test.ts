@@ -277,6 +277,9 @@ describe('calendar.search_events', () => {
           id: 'evt-1',
           summary: 'Lunch with Sam',
           location: 'Cafe',
+          description: 'Join at https://meet.example.com/sam-room.',
+          htmlLink: 'https://calendar.google.com/event?eid=evt-1',
+          organizer: { email: 'sam@example.com', displayName: 'Sam' },
           start: { dateTime: '2026-07-24T12:00:00-07:00' },
           end: { dateTime: '2026-07-24T13:00:00-07:00' },
           attendees: [{ email: 'sam@example.com', responseStatus: 'accepted' }],
@@ -286,11 +289,22 @@ describe('calendar.search_events', () => {
     const result = (await toolsWith(api)
       .get('calendar.search_events')
       ?.tool.execute({ query: 'Sam', maxResults: 20 }, {} as never)) as {
-      events: Array<{ eventId: string; attendees: string[]; calendar: string }>;
+      events: Array<{
+        eventId: string;
+        attendees: string[];
+        calendar: string;
+        organizer: string;
+        links: Array<{ url: string }>;
+      }>;
     };
     expect(result.events[0]?.eventId).toBe('evt-1');
     expect(result.events[0]?.attendees).toEqual(['sam@example.com (accepted)']);
     expect(result.events[0]?.calendar).toBe('Baldvin');
+    expect(result.events[0]?.organizer).toBe('Sam <sam@example.com>');
+    expect(result.events[0]?.links.map((link) => link.url)).toEqual([
+      'https://calendar.google.com/event?eid=evt-1',
+      'https://meet.example.com/sam-room',
+    ]);
 
     const eventUrls = api.mock.calls
       .map(([url]) => String(url))
@@ -350,6 +364,7 @@ describe('calendar.availability', () => {
     // Merged and sorted, each block labelled with the calendar it came from.
     expect(result.busy.map((b) => b.calendar)).toEqual(['Work', 'Baldvin']);
     expect(result.calendarsChecked).toContain('Work');
+    expect(result).toMatchObject({ complete: true });
   });
 
   it('names calendars that have not shared free/busy instead of reporting them free', async () => {
@@ -368,8 +383,49 @@ describe('calendar.availability', () => {
       ?.tool.execute(
         { timeMin: '2026-07-24T00:00:00Z', timeMax: '2026-07-25T00:00:00Z' },
         {} as never,
-      )) as { unavailable?: string[] };
+      )) as { complete: boolean; unavailable?: string[] };
     expect(result.unavailable).toEqual(['Baldvin']);
+    expect(result.complete).toBe(false);
+  });
+
+  it('treats an omitted free/busy calendar response as unavailable, not free', async () => {
+    const api = vi.fn(async (url: string) => {
+      if (url.includes('/users/me/calendarList')) return { items: CALENDARS };
+      return {
+        calendars: {
+          'bot@example.com': { busy: [] },
+          'owner@example.com': { busy: [] },
+          // Google omitted work@example.com entirely.
+        },
+      };
+    });
+    const result = (await toolsWith(api)
+      .get('calendar.availability')
+      ?.tool.execute(
+        { timeMin: '2026-07-24T00:00:00Z', timeMax: '2026-07-25T00:00:00Z' },
+        {} as never,
+      )) as { complete: boolean; unavailable?: string[] };
+    expect(result).toMatchObject({ complete: false, unavailable: ['Work'] });
+  });
+
+  it('does not claim complete coverage when the shared-calendar roster fails', async () => {
+    const api = vi.fn(async (url: string) => {
+      if (url.includes('/users/me/calendarList')) throw new Error('calendar list unavailable');
+      return {
+        calendars: {
+          'bot@example.com': { busy: [] },
+          'owner@example.com': { busy: [] },
+        },
+      };
+    });
+    const result = (await toolsWith(api)
+      .get('calendar.availability')
+      ?.tool.execute(
+        { timeMin: '2026-07-24T00:00:00Z', timeMax: '2026-07-25T00:00:00Z' },
+        {} as never,
+      )) as { complete: boolean; note?: string };
+    expect(result.complete).toBe(false);
+    expect(result.note).toMatch(/calendar list could not be loaded/i);
   });
 });
 

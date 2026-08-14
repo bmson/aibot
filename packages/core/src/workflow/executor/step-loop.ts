@@ -32,13 +32,17 @@ import {
 } from '../machine.js';
 import { PLANNER_VERSION } from '../planner.js';
 import {
+  buildReadToolInput,
   detectPersonalReadRequest,
   groundReadToolInput,
   nextRequiredReadTool,
   type PersonalReadRequest,
   type ReadToolEvidence,
 } from '../read-intent.js';
-import { isSimulatedApprovalNotice } from '../response-contract.js';
+import {
+  enforcePersonalReadResponse,
+  isSimulatedApprovalNotice,
+} from '../response-contract.js';
 import {
   budgetResumeAt,
   channelContext,
@@ -107,7 +111,7 @@ function readRoutingFailure(request: PersonalReadRequest, toolName: string): str
       : request.kind === 'email'
         ? 'Gmail'
         : 'the calendar and Gmail';
-  return `I couldn't complete the required ${source} lookup because ${toolName} was not called successfully. I’m not going to guess at the answer.`;
+  return `I couldn't complete the required ${source} lookup because ${toolName} could not be run successfully. I’m not going to guess at the answer.`;
 }
 
 export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<ExecuteResult> {
@@ -116,14 +120,20 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // One clock for the whole run: the system prompt embeds it, and a per-step
   // timestamp would break the cacheable prompt prefix on every minute boundary.
   const runStartedAt = new Date();
-  const readRequest = detectPersonalReadRequest(rc.window);
+  // Relative dates belong to the owner's request, not the worker attempt. A
+  // crash/retry tomorrow must not silently move "Monday" to a different week.
+  const readReferenceAt = task.createdAt;
+  const readRequest = detectPersonalReadRequest(rc.window, {
+    now: readReferenceAt,
+    timeZone: agent.timezone,
+  });
   // Route action requests to the reasoning model (see roleForTask): a goal
   // session, a mission, an email to triage, or a chat/SMS turn the planner
   // routed to real work all drive tools on the strong model. The draft model
   // answers these with plausible prose and no tool calls — how a request can
   // look handled while nothing happened.
   const role = readRequest ? 'reason' : roleForTask(task, plan);
-  // Forced-named-tool retries drop to the role's fallback because the DRAFT
+  // Forced artifact retries drop to the role's fallback because the DRAFT
   // primary (deepseek) intermittently times out when a tool is mandatory. The
   // reasoning primary (Claude) has no such issue, and its fallback is the
   // WEAKER draft model — so on a reason task, forcing the fallback is a pure
@@ -131,13 +141,16 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // the strong model through its retries (the missing escalation path, E2).
   const useForcedToolFallback = role !== 'reason';
   const privilegedTask = task.trust === 'owner' || task.trust === 'assistant';
-  const ownerCard = privilegedTask && !state.untrustedContext ? await getOwnerCard(db) : undefined;
+  const ownerCard =
+    privilegedTask && !readRequest && !state.untrustedContext
+      ? await getOwnerCard(db)
+      : undefined;
 
   // Ambient "right now" context (Phase 25): the fused location + weather block
   // (falls back to location-only when the snapshot is stale). Owner-private and
   // transient, so it mirrors the owner-card gate.
   let ambientBlock: string | undefined;
-  if (privilegedTask && !state.untrustedContext) {
+  if (privilegedTask && !readRequest && !state.untrustedContext) {
     try {
       ambientBlock = await getAmbientBlock(db, agent.id);
     } catch (err) {
@@ -156,6 +169,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   let recallBlock: string | undefined;
   if (
     loadConfig().CHAT_RECALL_ENABLED &&
+    !readRequest &&
     privilegedTask &&
     !state.untrustedContext &&
     (task.type === 'chat_turn' || task.type === 'email_triage' || task.type === 'sms_turn') &&
@@ -207,7 +221,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // task is done, not what it is allowed to do. Fetched once and reused across
   // loop iterations — the library is task-stable.
   let skillsBlock: string | undefined;
-  if (privilegedTask) {
+  if (privilegedTask && !readRequest) {
     const lastUser = [...rc.window].reverse().find((m) => m.role === 'user');
     const skillQuery = [
       plan?.reasoning,
@@ -266,6 +280,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
             status: toolCalls.status,
             args: toolCalls.args,
             result: toolCalls.result,
+            error: toolCalls.error,
           })
           .from(toolCalls)
           .where(eq(toolCalls.taskId, task.id))
@@ -273,6 +288,26 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     const forcedReadTool = !mustRecordGoalProgress && readRequest
       ? nextRequiredReadTool(readRequest, readToolEvidence)
       : undefined;
+    // Once every required read has either succeeded or exhausted its bounded
+    // retries, answer straight from the ledger. No model gets a chance to add a
+    // plausible event, reinterpret a date, ask which account to use, or perform
+    // an unrequested follow-up action.
+    if (readRequest && !mustRecordGoalProgress && !forcedReadTool) {
+      const checked = enforcePersonalReadResponse(
+        readRequest,
+        readToolEvidence.map((row) => ({ ...row, result: row.result })),
+      );
+      rc.window.push({ role: 'assistant', content: checked.text } as ModelMessage);
+      return stageFinalResponse(deps, lease, state, rc.window, {
+        text: checked.text,
+        progress: checked.text.slice(0, 200),
+        terminalStatus: 'done',
+        outcome: 'done',
+        contractBlocked: checked.blocked,
+        contractUnsupportedCount: checked.unsupported.length,
+        contractNotice: checked.blocked || undefined,
+      });
+    }
     // Past the ordinary budget, only the owed bookkeeping turn may run.
     if (state.step >= task.maxSteps && !mustRecordGoalProgress) break;
     // Rebuild the system prompt after each tool turn. Once an external result
@@ -389,6 +424,32 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         ],
         finishReason: 'tool-calls',
       };
+    } else if (forcedReadTool && readRequest) {
+      const input = buildReadToolInput(readRequest, forcedReadTool, readToolEvidence);
+      if (!input) {
+        const text = readRoutingFailure(readRequest, forcedReadTool);
+        rc.window.push({ role: 'assistant', content: text } as ModelMessage);
+        return stageFinalResponse(deps, lease, state, rc.window, {
+          text,
+          progress: text.slice(0, 200),
+          terminalStatus: 'failed',
+          outcome: 'failed',
+        });
+      }
+      stepResult = {
+        ok: true,
+        modelId: 'runtime/private-read-router',
+        degraded: false,
+        text: '',
+        toolCalls: [
+          {
+            toolCallId: `runtime-private-read-${task.id}-${state.step + 1}`,
+            toolName: forcedReadTool,
+            input,
+          },
+        ],
+        finishReason: 'tool-calls',
+      };
     } else {
       stepResult = await router.step(role, {
         taskId: task.id,
@@ -397,16 +458,13 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         tools: toolSet as never,
         toolChoice: forcedArtifact
           ? { type: 'tool', toolName: forcedArtifact.toolName }
-          : forcedReadTool
-            ? { type: 'tool', toolName: forcedReadTool }
-            : mustAct
-              ? 'required'
-              : undefined,
+          : mustAct
+            ? 'required'
+            : undefined,
         // The primary chat model has intermittently timed out when a named
-        // artifact/read tool is mandatory. Use the role's configured
+        // artifact tool is mandatory. Use the role's configured
         // tool-capable fallback where appropriate.
-        forceFallback:
-          useForcedToolFallback && Boolean(forcedArtifact || forcedReadTool),
+        forceFallback: useForcedToolFallback && Boolean(forcedArtifact),
         critical,
       });
       if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
@@ -460,45 +518,6 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       }
     }
 
-    // Private-account questions have an exact source sequence. A generic
-    // required-tool choice is not strong enough: providers sometimes emit
-    // prose or a different tool, which would reopen the hallucination path.
-    if (
-      stepResult.ok &&
-      forcedReadTool &&
-      !stepResult.toolCalls.some((toolCall) => toolCall.toolName === forcedReadTool)
-    ) {
-      console.warn('retrying missing required private-read tool call', {
-        taskId: task.id,
-        requiredTool: forcedReadTool,
-      });
-      state.mustActRetries += 1;
-      stepResult = await router.step(role, {
-        taskId: task.id,
-        system: `${system}\n\nCall ${forcedReadTool} now. Do not answer, clarify, or call a different tool first.`,
-        messages: rc.window,
-        tools: toolSet as never,
-        toolChoice: { type: 'tool', toolName: forcedReadTool },
-        forceFallback: useForcedToolFallback,
-        critical,
-      });
-      if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
-
-      if (
-        stepResult.ok &&
-        !stepResult.toolCalls.some((toolCall) => toolCall.toolName === forcedReadTool)
-      ) {
-        const text = readRoutingFailure(readRequest as PersonalReadRequest, forcedReadTool);
-        rc.window.push({ role: 'assistant', content: text } as ModelMessage);
-        return stageFinalResponse(deps, lease, state, rc.window, {
-          text,
-          progress: text.slice(0, 200),
-          terminalStatus: 'failed',
-          outcome: 'failed',
-        });
-      }
-    }
-
     // Approval cards and codes are runtime records, never prose generated by
     // the model. If it mimics an earlier approval notice without a tool call,
     // give it one constrained chance to emit the real gated action instead of
@@ -527,8 +546,8 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     // A 'required' tool choice is advisory for some providers. If a step we forced
     // to act still returned no tool call, give it one constrained retry on the
     // tool-capable fallback before letting it fall through to prose — otherwise a
-    // forwarded/planned action silently no-ops. (Forced artifacts and private
-    // reads have dedicated retries; goal progress bypasses the model entirely.)
+    // forwarded/planned action silently no-ops. (Forced artifacts have a
+    // dedicated retry; private reads and goal progress bypass the model.)
     if (
       stepResult.ok &&
       mustAct &&
@@ -932,6 +951,37 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       },
       artifactIntent,
     );
+  }
+
+  // A small task budget can end a private lookup before every source/thread is
+  // read. Return the ledger-backed partial answer and explicit coverage gaps;
+  // never replace it with generic progress prose or ask the owner to choose a
+  // provider. Goal sessions retain their stricter progress-persistence path.
+  if (readRequest && !isUnattendedGoalSession(task)) {
+    const readToolEvidence = await db
+      .select({
+        toolName: toolCalls.toolName,
+        status: toolCalls.status,
+        args: toolCalls.args,
+        result: toolCalls.result,
+        error: toolCalls.error,
+      })
+      .from(toolCalls)
+      .where(eq(toolCalls.taskId, task.id));
+    const checked = enforcePersonalReadResponse(
+      readRequest,
+      readToolEvidence.map((row) => ({ ...row, result: row.result })),
+    );
+    rc.window.push({ role: 'assistant', content: checked.text } as ModelMessage);
+    return stageFinalResponse(deps, lease, state, rc.window, {
+      text: checked.text,
+      progress: checked.text.slice(0, 200),
+      terminalStatus: 'done',
+      outcome: 'done',
+      contractBlocked: checked.blocked,
+      contractUnsupportedCount: checked.unsupported.length,
+      contractNotice: checked.blocked || undefined,
+    });
   }
 
   // max steps exhausted

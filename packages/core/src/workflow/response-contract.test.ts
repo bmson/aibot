@@ -466,6 +466,94 @@ describe('response execution contract', () => {
     expect(result.text).toContain('gmail.send');
   });
 
+  it('blocks a claimed saved Gmail draft without a create-draft result', () => {
+    for (const text of [
+      'I saved the reply draft in Gmail.',
+      'I created a Gmail draft.',
+      'I drafted the reply in Gmail.',
+      'The Gmail draft is ready.',
+      'The draft is now in Gmail.',
+      "You'll find the draft in the Gmail drafts folder.",
+    ]) {
+      const result = enforceResponseContract(text, []);
+      expect(result.blocked, text).toBe(true);
+      expect(result.unsupported, text).toContain('email_draft');
+    }
+  });
+
+  it('allows a saved Gmail draft only when this task created it', () => {
+    const text = 'I saved the reply draft in Gmail.';
+    expect(
+      enforceResponseContract(text, [
+        {
+          toolName: 'gmail.create_draft',
+          status: 'succeeded',
+          result: { draftId: 'draft-1' },
+        },
+      ]),
+    ).toMatchObject({ blocked: false, text });
+
+    const stale = enforceResponseContract(text, [
+      {
+        toolName: 'gmail.create_draft',
+        status: 'succeeded',
+        result: { draftId: 'old-draft' },
+        fromCurrentTask: false,
+      },
+    ]);
+    expect(stale.blocked).toBe(true);
+    expect(stale.unsupported).toContain('email_draft');
+  });
+
+  it.each([
+    'Here is a draft email you can edit before sending.',
+    'I drafted the email below; nothing was saved to Gmail.',
+    'These messages were already marked as important when I found them.',
+  ])('does not mistake in-chat or descriptive email text for an external action: %s', (text) => {
+    expect(enforceResponseContract(text, [])).toMatchObject({ blocked: false, text });
+  });
+
+  it.each([
+    'I archived the three messages.',
+    "I've marked those emails as read.",
+    'The threads were labeled Important.',
+    'Archived 10 emails from the inbox.',
+  ])('blocks a claimed inbox mutation without gmail.modify: %s', (text) => {
+    const result = enforceResponseContract(text, []);
+    expect(result.blocked).toBe(true);
+    expect(result.unsupported).toContain('inbox_write');
+  });
+
+  it('allows a verified inbox mutation', () => {
+    const text = "I've marked those emails as read.";
+    expect(
+      enforceResponseContract(text, [
+        {
+          toolName: 'gmail.modify',
+          status: 'succeeded',
+          result: { id: 'thread-1', removedLabels: ['UNREAD'] },
+        },
+      ]),
+    ).toMatchObject({ blocked: false, text });
+  });
+
+  it('does not accept empty Gmail success rows as proof of a draft or inbox change', () => {
+    const emptyDraft = enforceResponseContract('I created a Gmail draft.', [
+      { toolName: 'gmail.create_draft', status: 'succeeded', result: {} },
+    ]);
+    expect(emptyDraft).toMatchObject({ blocked: true, unsupported: ['email_draft'] });
+    expect(emptyDraft.text).not.toContain('Gmail draft was created');
+    expect(
+      enforceResponseContract('I archived the messages.', [
+        {
+          toolName: 'gmail.modify',
+          status: 'succeeded',
+          result: { addedLabels: [], removedLabels: [] },
+        },
+      ]),
+    ).toMatchObject({ blocked: true, unsupported: ['inbox_write'] });
+  });
+
   describe('read claims', () => {
     // The prod incident: a tool-less draft narrated a calendar check that
     // never ran and reported the calendar empty of flights.
@@ -507,6 +595,56 @@ describe('response execution contract', () => {
           },
         ]),
       ).toMatchObject({ blocked: false, text: calendarCheck });
+    });
+
+    it('does not let a calendar write masquerade as a calendar read', () => {
+      const result = enforceResponseContract(calendarCheck, [
+        {
+          toolName: 'calendar.create_event',
+          status: 'succeeded',
+          result: { eventId: 'created-1' },
+        },
+      ]);
+      expect(result.blocked).toBe(true);
+      expect(result.unsupported).toContain('calendar_read');
+    });
+
+    it('does not let sending mail masquerade as searching the inbox', () => {
+      const result = enforceResponseContract('I searched your inbox and found no Clay email.', [
+        {
+          toolName: 'gmail.send',
+          status: 'succeeded',
+          result: { messageId: 'sent-1' },
+        },
+      ]);
+      expect(result.blocked).toBe(true);
+      expect(result.unsupported).toContain('inbox_read');
+    });
+
+    it('does not accept empty success rows as proof that a private source was read', () => {
+      expect(
+        enforceResponseContract(calendarCheck, [
+          { toolName: 'calendar.list_events', status: 'succeeded', result: {} },
+        ]),
+      ).toMatchObject({ blocked: true, unsupported: ['calendar_read'] });
+      expect(
+        enforceResponseContract('I searched your inbox.', [
+          { toolName: 'gmail.search', status: 'succeeded', result: {} },
+        ]),
+      ).toMatchObject({ blocked: true, unsupported: ['inbox_read'] });
+    });
+
+    it('does not misclassify a verified inbox search as unrelated web research', () => {
+      const text = 'I searched your inbox.';
+      expect(
+        enforceResponseContract(text, [
+          {
+            toolName: 'gmail.search',
+            status: 'succeeded',
+            result: { results: [] },
+          },
+        ]),
+      ).toMatchObject({ blocked: false, unsupported: [], text });
     });
 
     it('does not let a prior-turn read authorise a fresh check claim', () => {
@@ -699,6 +837,169 @@ describe('response execution contract', () => {
       expect(result.text).toMatch(/matching Gmail thread/i);
     });
 
+    it('does not let a generic list-events read satisfy a named event search', () => {
+      const result = enforceResponseContract(
+        'The Clay interview is Monday.',
+        [
+          {
+            toolName: 'calendar.list_events',
+            status: 'succeeded',
+            args: { query: 'clay' },
+            result: {
+              complete: true,
+              calendarsSearched: ['Assistant'],
+              events: [{ eventId: 'event-1', summary: 'Clay interview' }],
+            },
+          },
+        ],
+        {
+          readRequest: {
+            kind: 'calendar',
+            queryTerms: ['clay'],
+            firstToolName: 'calendar.search_events',
+            requiresThreadRead: false,
+          },
+        },
+      );
+      expect(result.blocked).toBe(true);
+      expect(result.unsupported).toContain('calendar_read');
+    });
+
+    it('requires each of the first matching Gmail threads before reporting details', () => {
+      const readRequest = {
+        kind: 'calendar_email' as const,
+        queryTerms: ['clay'],
+        firstToolName: 'calendar.search_events' as const,
+        requiresThreadRead: true,
+      };
+      const result = enforceResponseContract(
+        'The interview is Monday at 9:30 AM.',
+        [
+          {
+            toolName: 'calendar.search_events',
+            status: 'succeeded',
+            args: { query: 'clay' },
+            result: { complete: true, calendarsSearched: ['Assistant'], events: [] },
+          },
+          {
+            toolName: 'gmail.search',
+            status: 'succeeded',
+            args: { query: 'clay' },
+            result: {
+              complete: true,
+              mailboxSearched: 'assistant@example.com',
+              results: [
+                { threadId: 'thread-1', subject: 'Clay intro' },
+                { threadId: 'thread-2', subject: 'Clay interview details' },
+              ],
+            },
+          },
+          {
+            toolName: 'gmail.read_thread',
+            status: 'succeeded',
+            args: { threadId: 'thread-1' },
+            result: { messages: [{ subject: 'Clay intro', text: 'Intro call completed.' }] },
+          },
+        ],
+        { readRequest },
+      );
+
+      expect(result.blocked).toBe(true);
+      expect(result.text).toContain('Clay intro');
+      expect(result.text).toMatch(/1 matching Gmail thread/i);
+      expect(result.text).not.toContain('Monday at 9:30 AM');
+    });
+
+    it('renders returned calendar times in the configured owner timezone', () => {
+      const result = enforceResponseContract(
+        'The event is at 3 PM.',
+        [
+          {
+            toolName: 'calendar.list_events',
+            status: 'succeeded',
+            args: {
+              timeMin: '2026-08-17T07:00:00.000Z',
+              timeMax: '2026-08-18T07:00:00.000Z',
+            },
+            result: {
+              complete: true,
+              calendarsSearched: ['Family'],
+              events: [
+                {
+                  eventId: 'event-1',
+                  calendar: 'Family',
+                  summary: 'School prep',
+                  start: '2026-08-17T22:00:00.000Z',
+                  end: '2026-08-17T23:30:00.000Z',
+                },
+              ],
+            },
+          },
+        ],
+        {
+          readRequest: {
+            kind: 'calendar',
+            queryTerms: [],
+            firstToolName: 'calendar.list_events',
+            requiresThreadRead: false,
+            timeZone: 'America/Los_Angeles',
+            timeWindow: {
+              label: 'monday',
+              timeMin: '2026-08-17T07:00:00.000Z',
+              timeMax: '2026-08-18T07:00:00.000Z',
+            },
+          },
+        },
+      );
+      expect(result.text).toContain('Monday, August 17, 2026 at 3:00 PM PDT');
+      expect(result.text).not.toContain('The event is at 3 PM.');
+    });
+
+    it('renders all-day end dates using Google Calendar exclusive-end semantics', () => {
+      const result = enforceResponseContract(
+        'School holiday is August 17.',
+        [
+          {
+            toolName: 'calendar.list_events',
+            status: 'succeeded',
+            args: {
+              timeMin: '2026-08-17T07:00:00.000Z',
+              timeMax: '2026-08-18T07:00:00.000Z',
+            },
+            result: {
+              complete: true,
+              calendarsSearched: ['Family'],
+              events: [
+                {
+                  eventId: 'holiday-1',
+                  calendar: 'Family',
+                  summary: 'School holiday',
+                  start: '2026-08-17',
+                  end: '2026-08-18',
+                },
+              ],
+            },
+          },
+        ],
+        {
+          readRequest: {
+            kind: 'calendar',
+            queryTerms: [],
+            firstToolName: 'calendar.list_events',
+            requiresThreadRead: false,
+            timeZone: 'America/Los_Angeles',
+            timeWindow: {
+              label: 'monday',
+              timeMin: '2026-08-17T07:00:00.000Z',
+              timeMax: '2026-08-18T07:00:00.000Z',
+            },
+          },
+        },
+      );
+      expect(result.text).toContain('School holiday — Monday, August 17, 2026');
+      expect(result.text).not.toContain('Tuesday, August 18');
+    });
+
     it('treats an empty all-source search as a factual result', () => {
       const text = 'I found no Clay interview in the calendars or Gmail.';
       const readRequest = {
@@ -764,6 +1065,89 @@ describe('response execution contract', () => {
       );
       expect(result.blocked).toBe(false);
       expect(result.text).not.toContain('free after');
+    });
+
+    it('renders availability only from the exact all-calendar free/busy result', () => {
+      const readRequest = {
+        kind: 'calendar' as const,
+        queryTerms: [],
+        firstToolName: 'calendar.availability' as const,
+        requiresThreadRead: false,
+        timeZone: 'America/Los_Angeles',
+        timeWindow: {
+          label: 'monday',
+          timeMin: '2026-08-17T07:00:00.000Z',
+          timeMax: '2026-08-18T07:00:00.000Z',
+        },
+      };
+      const result = enforceResponseContract(
+        'You are free all morning.',
+        [
+          {
+            toolName: 'calendar.availability',
+            status: 'succeeded',
+            args: {
+              timeMin: '2026-08-17T07:00:00.000Z',
+              timeMax: '2026-08-18T07:00:00.000Z',
+            },
+            result: {
+              complete: true,
+              calendarsChecked: ['Assistant', 'Family'],
+              busy: [
+                {
+                  calendar: 'Family',
+                  start: '2026-08-17T16:30:00.000Z',
+                  end: '2026-08-17T17:00:00.000Z',
+                },
+              ],
+            },
+          },
+        ],
+        { readRequest },
+      );
+      expect(result).toMatchObject({ blocked: false, unsupported: [] });
+      expect(result.text).toContain('Busy (Family)');
+      expect(result.text).toContain('Monday, August 17, 2026 at 9:30 AM PDT');
+      expect(result.text).toContain('Open according to the checked calendars');
+      expect(result.text).not.toContain('free all morning');
+    });
+
+    it('reports partial availability instead of inferring that missing calendars are free', () => {
+      const readRequest = {
+        kind: 'calendar' as const,
+        queryTerms: [],
+        firstToolName: 'calendar.availability' as const,
+        requiresThreadRead: false,
+        timeWindow: {
+          label: 'monday',
+          timeMin: '2026-08-17T07:00:00.000Z',
+          timeMax: '2026-08-18T07:00:00.000Z',
+        },
+      };
+      const result = enforceResponseContract(
+        'No conflicts.',
+        [
+          {
+            toolName: 'calendar.availability',
+            status: 'succeeded',
+            args: {
+              timeMin: '2026-08-17T07:00:00.000Z',
+              timeMax: '2026-08-18T07:00:00.000Z',
+            },
+            result: {
+              complete: false,
+              calendarsChecked: ['Assistant'],
+              unavailable: ['Work'],
+              busy: [],
+            },
+          },
+        ],
+        { readRequest },
+      );
+      expect(result.text).toContain('returned no busy blocks');
+      expect(result.text).toContain('coverage was incomplete; unavailable: Work');
+      expect(result.text).not.toContain('Open according to the checked calendars');
+      expect(result.text).not.toContain('No conflicts');
     });
   });
 });

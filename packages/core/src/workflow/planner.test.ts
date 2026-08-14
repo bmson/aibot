@@ -77,6 +77,9 @@ describe('plannerSystem channel/taint awareness (D10)', () => {
     const prompt = plannerSystem(agent, task('email_triage'), false);
     expect(prompt).toMatch(/recipient email address/i);
     expect(prompt).toMatch(/executor must never guess/i);
+    expect(prompt).toMatch(/Search those sources first/i);
+    expect(prompt).toMatch(/only when no available source can determine/i);
+    expect(PLANNER_VERSION).toBeGreaterThanOrEqual(7);
   });
 
   it('tells the planner to search configured accounts instead of asking which one', () => {
@@ -105,6 +108,19 @@ describe('personal read plan normalization', () => {
     expect(plan.missingInfo).toEqual([]);
     expect(plan.steps.join(' ')).toMatch(/calendar/i);
     expect(plan.steps.join(' ')).toMatch(/Gmail/i);
+  });
+
+  it('normalizes availability questions to an all-calendar free/busy check', () => {
+    const request = detectPersonalReadRequest([
+      { role: 'user', content: 'When am I free on Monday?' },
+    ]);
+    const plan = normalizePersonalReadPlan(
+      { action: 'clarify', reasoning: 'Missing calendar', steps: [], missingInfo: [] },
+      request,
+    );
+    expect(plan).toMatchObject({ action: 'workflow', missingInfo: [] });
+    expect(plan.steps.join(' ')).toMatch(/free\/busy.*every accessible calendar/i);
+    expect(PLANNER_VERSION).toBeGreaterThanOrEqual(8);
   });
 
   it('builds the read plan without asking a model to clarify', async () => {

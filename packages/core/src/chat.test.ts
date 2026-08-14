@@ -67,6 +67,14 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(prompt).toMatch(/As an AI/); // named as a phrase to avoid
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(13);
   });
+
+  it('searches for missing facts and keeps calendar questions read-only (v21)', () => {
+    const prompt = buildSystemPrompt(agent, {});
+    expect(prompt).toMatch(/search the relevant available sources first/i);
+    expect(prompt).toMatch(/question about when or what is on the calendar is read-only/i);
+    expect(prompt).toMatch(/never create, update, or duplicate an event while answering it/i);
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(21);
+  });
 });
 
 describe('message cursors', () => {

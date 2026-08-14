@@ -16,8 +16,11 @@ import { detectPersonalReadRequest, type PersonalReadRequest } from './read-inte
  * name, exact date/time, link) is absent — never let the executor guess it.
  * v6: a calendar/email lookup never clarifies which account or asks the owner
  * for the fact being searched; it is normalized to an executable workflow.
+ * v7: missing facts trigger source discovery before clarification whenever an
+ * available tool can resolve them.
+ * v8: availability questions normalize to the all-calendar free/busy read.
  */
-export const PLANNER_VERSION = 6;
+export const PLANNER_VERSION = 8;
 
 // Widened from 6000: the tighter window dropped the owner's earlier answers out
 // of planner context on longer threads, making it re-derive 'clarify'. This is
@@ -80,7 +83,7 @@ export function plannerSystem(agent: AgentRow, task: TaskRow, tainted: boolean):
     "- 'schedule': a one-off or recurring future action",
     "- 'clarify': you cannot act without more information from the owner — list missingInfo",
     'Never ask for something the owner already answered earlier in the context, and never re-ask a question you already asked. Re-read the conversation for the answer before choosing clarify.',
-    "Prefer acting on a reasonable default for reversible, internal choices. But choose clarify (and list missingInfo) when the request needs a specific outward-facing fact you do not have — a recipient email address, a person's exact name, a precise date/time, or a link — and it is not in the context, memory, or contacts. The executor must never guess these, so surface the gap here.",
+    "Prefer acting on a reasonable default for reversible, internal choices. A missing fact is not automatically a reason to question the owner: choose 'workflow' when memory, contacts, Gmail, calendars, workspace files, or the public web can resolve it. Search those sources first. Choose 'clarify' only when no available source can determine the fact unambiguously (for example, the owner never supplied the desired time for a new meeting, or two contacts remain equally plausible). The executor must never guess an unresolved recipient, identity, date/time, or link.",
     "A request to LOOK UP the owner's schedule, an appointment/interview, or email is different: the missing date, time, provider, calendar, or account is the fact to search for, not information to request from the owner. Choose 'workflow', search the assistant's configured Gmail plus every calendar it can read, and report only successful tool results. Never ask which calendar, Google/Outlook provider, inbox, or account to use. No match is a valid factual result.",
     'Keep steps short and concrete. Do not invent goals.',
     // A "keep doing X as you go" request has no executable step *now*, so
@@ -97,15 +100,17 @@ export function plannerSystem(agent: AgentRow, task: TaskRow, tainted: boolean):
 export function normalizePersonalReadPlan(plan: Plan, request: PersonalReadRequest | null): Plan {
   if (!request) return plan;
   const steps =
-    request.kind === 'calendar'
-      ? ['Read every accessible calendar and report only returned events']
-      : request.kind === 'email'
-        ? ['Search the assistant Gmail account and read any needed matching thread']
-        : [
-            'Search every accessible calendar for the named item',
-            'Search the assistant Gmail account and read a matching thread when present',
-            'Answer using only facts returned by those reads',
-          ];
+    request.firstToolName === 'calendar.availability'
+      ? ['Check free/busy across every accessible calendar and report only returned blocks']
+      : request.kind === 'calendar'
+        ? ['Read every accessible calendar and report only returned events']
+        : request.kind === 'email'
+          ? ['Search the assistant Gmail account and read any needed matching thread']
+          : [
+              'Search every accessible calendar for the named item',
+              'Search the assistant Gmail account and read a matching thread when present',
+              'Answer using only facts returned by those reads',
+            ];
   return {
     ...plan,
     action: 'workflow',

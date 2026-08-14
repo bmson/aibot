@@ -1,4 +1,7 @@
-import type { PersonalReadRequest } from './read-intent.js';
+import {
+  gmailThreadIdsToRead,
+  type PersonalReadRequest,
+} from './read-intent.js';
 
 /**
  * The model writes prose, but the task/tool ledger is the authority for what
@@ -25,6 +28,8 @@ type ActionKind =
   | 'spreadsheet'
   | 'presentation'
   | 'outbound'
+  | 'email_draft'
+  | 'inbox_write'
   | 'application'
   | 'calendar'
   | 'calendar_read'
@@ -142,6 +147,16 @@ const emptyCalendarClaim =
   /\b(?:no|none|nothing|zero)\b[^.\n]{0,40}\b(?:on|in)\s+(?:your|the|my|either|any)\b[^.\n]{0,30}\b(?:calendar|schedule|agenda)\b|\byour (?:calendar|schedule) (?:is|looks|appears) (?:clear|empty|free|wide open)\b/i;
 const emptyInboxClaim =
   /\b(?:no|none|nothing|zero)\b[^.\n]{0,40}\bin\s+(?:your|the|my)\b[^.\n]{0,30}\b(?:inbox|mailbox|e-?mail)\b|\byour inbox (?:is|looks|appears) (?:clear|empty)\b/i;
+const INBOX_WRITE_ACTIONS =
+  'archived|unarchived|flagged|unflagged|starred|unstarred|labeled|labelled|marked|moved';
+const INBOX_WRITE_OBJECTS = 'e-?mails?|messages?|threads?|inbox|it|them';
+const INBOX_WRITE_NAMED_OBJECTS = 'e-?mails?|messages?|threads?|inbox';
+const inboxWriteClaim = new RegExp(
+  String.raw`${FIRST_PERSON_PREFIX}(?!(?:not|never)\b)(?:${INBOX_WRITE_ACTIONS})\b[^.\n]{0,70}\b(?:${INBOX_WRITE_OBJECTS})\b|(?:^|[.!?]\s+)(?:${INBOX_WRITE_ACTIONS})\b[^.\n]{0,70}\b(?:${INBOX_WRITE_NAMED_OBJECTS})\b|\b(?:${INBOX_WRITE_NAMED_OBJECTS})\b[^.\n]{0,40}\b(?:has|have|was|were)\s+(?:been\s+)?(?:archived|unarchived|flagged|unflagged|starred|unstarred|labeled|labelled|marked|moved)\b`,
+  'im',
+);
+const savedEmailDraftClaim =
+  /\b(?:saved|created|added)\b[^.\n]{0,70}\b(?:(?:gmail|drafts? folder)\b[^.\n]{0,30}\bdraft|draft\b[^.\n]{0,30}\b(?:gmail|drafts? folder))\b|\bdrafted\b[^.\n]{0,50}\b(?:e-?mail|message|reply)\b[^.\n]{0,20}\bin\s+(?:gmail|the drafts? folder)\b|\b(?:gmail\s+draft|draft\s+in\s+(?:gmail|the drafts? folder))\b[^.\n]{0,30}\b(?:saved|created|ready)\b|\bdraft\b[^.\n]{0,30}\b(?:is|was)\s+(?!not\b)(?:now\s+)?in\s+(?:gmail|the drafts? folder)\b|\b(?:find|see)\b[^.\n]{0,40}\bdraft\b[^.\n]{0,30}\bin\s+(?:gmail|the\s+(?:gmail\s+)?drafts?\s+folder)\b/i;
 
 /**
  * Approval rows and short codes are created only by the dispatcher. A model
@@ -219,6 +234,8 @@ function browserApplicationConfirmed(evidence: ActionEvidence): boolean {
  */
 const CURRENT_TASK_ONLY: ReadonlySet<ActionKind> = new Set([
   'outbound',
+  'email_draft',
+  'inbox_write',
   'application',
   'calendar',
   // "I saved that to memory" is a claim about THIS turn — an earlier save
@@ -255,6 +272,24 @@ function supports(kind: ActionKind, evidence: ActionEvidence[], currentTaskOnly 
       return names.some((name) => /^slides\.(?:create|append)$/.test(name));
     case 'outbound':
       return names.some((name) => /^(gmail\.send|sms\.send|email\.send)$/.test(name));
+    case 'email_draft':
+      return usable.some((item) => {
+        const draftId = record(item.result)?.draftId;
+        return (
+          item.toolName === 'gmail.create_draft' &&
+          typeof draftId === 'string' &&
+          draftId.length > 0
+        );
+      });
+    case 'inbox_write':
+      return usable.some((item) => {
+        if (item.toolName !== 'gmail.modify') return false;
+        const result = record(item.result);
+        return (
+          (Array.isArray(result?.addedLabels) && result.addedLabels.length > 0) ||
+          (Array.isArray(result?.removedLabels) && result.removedLabels.length > 0)
+        );
+      });
     // A browser run is not a submission receipt. Until there is a dedicated
     // application tool with an explicit confirmation result, never claim an
     // application was submitted.
@@ -265,13 +300,26 @@ function supports(kind: ActionKind, evidence: ActionEvidence[], currentTaskOnly 
       );
     case 'calendar':
       return names.some((name) => /^calendar\.(create|update|cancel|delete)/.test(name));
-    // Any tool in the family proves the surface was opened — "I checked your
-    // calendar for conflicts and booked it" backed by calendar.create_event
-    // must not read as a fabricated check.
+    // A write proves only that a write happened. It does not prove the assistant
+    // inspected every calendar or knew what else was scheduled.
     case 'calendar_read':
-      return names.some((name) => /^calendar\./.test(name));
+      return usable.some((item) => {
+        const result = record(item.result);
+        if (!result) return false;
+        if (item.toolName === 'calendar.list_calendars') return Array.isArray(result.calendars);
+        if (item.toolName === 'calendar.availability') return Array.isArray(result.busy);
+        return (
+          /^calendar\.(?:list_events|search_events)$/.test(item.toolName) &&
+          Array.isArray(result.events)
+        );
+      });
     case 'inbox_read':
-      return names.some((name) => /^gmail\./.test(name));
+      return usable.some((item) => {
+        const result = record(item.result);
+        return item.toolName === 'gmail.search'
+          ? Array.isArray(result?.results)
+          : item.toolName === 'gmail.read_thread' && Array.isArray(result?.messages);
+      });
     case 'research':
       return names.some((name) => name === 'web.fetch' || name === 'browser.execute');
     case 'background':
@@ -402,6 +450,8 @@ function claimedKinds(text: string): ActionKind[] {
   ) {
     kinds.add('outbound');
   }
+  if (savedEmailDraftClaim.test(text)) kinds.add('email_draft');
+  if (inboxWriteClaim.test(text)) kinds.add('inbox_write');
   if (
     completedActionClaim(
       text,
@@ -445,7 +495,9 @@ function claimedKinds(text: string): ActionKind[] {
       'researched|fetched|browsed|searched|found|identified|collected|located|reviewed|analyzed|analysed|listed|logged',
       'researched|fetched|browsed|searched|found|identified|collected|located|reviewed|analyzed|analysed|listed|logged|ready|complete|completed',
     ) ||
-    firstPersonCompletedAction(text, 'researched|fetched|browsed|searched') ||
+    (firstPersonCompletedAction(text, 'researched|fetched|browsed|searched') &&
+      !kinds.has('calendar_read') &&
+      !kinds.has('inbox_read')) ||
     progressClaim.test(text) ||
     statusNarrative.test(text) ||
     countedTracker.test(text)
@@ -495,6 +547,8 @@ const UNSUPPORTED_LABEL: Record<ActionKind, string> = {
   spreadsheet: 'the requested spreadsheet or tracker action',
   presentation: 'the requested presentation action',
   outbound: 'the requested outbound message',
+  email_draft: 'the claimed saved email draft',
+  inbox_write: 'the claimed inbox change',
   application: 'the application submission',
   calendar: 'the requested calendar action',
   calendar_read: 'the claimed calendar check',
@@ -517,6 +571,8 @@ function toolKind(name: string): ActionKind | undefined {
   if (/^sheets\.(?:create|append_rows|write_rows)$/.test(name)) return 'spreadsheet';
   if (/^slides\.(?:create|append)$/.test(name)) return 'presentation';
   if (/^(gmail\.send|sms\.send|email\.send)$/.test(name)) return 'outbound';
+  if (name === 'gmail.create_draft') return 'email_draft';
+  if (name === 'gmail.modify') return 'inbox_write';
   if (name === 'application.submit') return 'application';
   if (/^calendar\.(create|update|cancel|delete)/.test(name)) return 'calendar';
   if (/^calendar\.(?:list_calendars|list_events|search_events|availability)$/.test(name)) {
@@ -546,6 +602,8 @@ function describeTool(name: string): string | undefined {
   }
   if (/^slides\.(?:create|append)$/.test(name)) return 'the Google Slides action completed';
   if (name === 'gmail.send') return 'the email was sent';
+  if (name === 'gmail.create_draft') return 'the Gmail draft was created';
+  if (name === 'gmail.modify') return 'the inbox change completed';
   if (name === 'sms.send' || name === 'email.send') return 'the message was sent';
   if (/^calendar\.(create|update|cancel|delete)/.test(name)) return 'the calendar action completed';
   if (/^calendar\.(?:list_calendars|list_events|search_events|availability)$/.test(name)) {
@@ -582,7 +640,7 @@ function verifiedActionDescriptions(
     if (!successful(item)) continue;
     const when = item.fromCurrentTask === false ? ' earlier in this conversation' : '';
     const kind = toolKind(item.toolName);
-    if (kind !== undefined && citable(kind, item)) {
+    if (kind !== undefined && citable(kind, item) && supports(kind, [item])) {
       const described = describeTool(item.toolName);
       if (described) descriptions.add(`${described}${when}`);
     }
@@ -700,6 +758,7 @@ export function enforceUrlProvenance(
 }
 
 const CALENDAR_EVENT_READS = new Set(['calendar.list_events', 'calendar.search_events']);
+const CALENDAR_PRIVATE_READS = new Set([...CALENDAR_EVENT_READS, 'calendar.availability']);
 
 function currentSuccessfulEvidence(evidence: ActionEvidence[]): ActionEvidence[] {
   return evidence.filter((item) => item.fromCurrentTask !== false && successful(item));
@@ -726,16 +785,41 @@ function queryCovers(row: ActionEvidence, terms: string[]): boolean {
   return terms.every((term) => lower.includes(term.toLowerCase()));
 }
 
+function gmailQueryCovers(row: ActionEvidence, request: PersonalReadRequest): boolean {
+  const query = record(row.args)?.query;
+  if (typeof query !== 'string') return false;
+  if (request.mailQuery) return query.trim().toLowerCase() === request.mailQuery.toLowerCase();
+  return queryCovers(row, request.queryTerms);
+}
+
 function matchingCalendarRows(
   request: PersonalReadRequest,
   current: ActionEvidence[],
 ): ActionEvidence[] {
   return current.filter((row) => {
-    if (!CALENDAR_EVENT_READS.has(row.toolName) || !queryCovers(row, request.queryTerms)) {
+    if (
+      row.toolName !== request.firstToolName ||
+      !CALENDAR_PRIVATE_READS.has(row.toolName) ||
+      !queryCovers(row, request.queryTerms)
+    ) {
       return false;
     }
-    const calendarIds = record(row.args)?.calendarIds;
+    const args = record(row.args);
+    if (
+      request.timeWindow &&
+      (args?.timeMin !== request.timeWindow.timeMin || args?.timeMax !== request.timeWindow.timeMax)
+    ) {
+      return false;
+    }
+    const calendarIds = args?.calendarIds;
     const result = record(row.result);
+    if (row.toolName === 'calendar.availability') {
+      return (
+        Array.isArray(result?.busy) &&
+        Array.isArray(result.calendarsChecked) &&
+        typeof result.complete === 'boolean'
+      );
+    }
     return (
       (!Array.isArray(calendarIds) || calendarIds.length === 0) &&
       Array.isArray(result?.events) &&
@@ -750,7 +834,7 @@ function matchingGmailSearchRows(
   current: ActionEvidence[],
 ): ActionEvidence[] {
   return current.filter((row) => {
-    if (row.toolName !== 'gmail.search' || !queryCovers(row, request.queryTerms)) return false;
+    if (row.toolName !== 'gmail.search' || !gmailQueryCovers(row, request)) return false;
     const result = record(row.result);
     return (
       Array.isArray(result?.results) &&
@@ -791,6 +875,13 @@ function requiredReadGaps(
   const gmailSearches = matchingGmailSearchRows(request, current);
   const gmailHits = gmailSearches.flatMap((row) => resultItems(row, 'results'));
   const gmailThreads = matchingGmailThreadRows(gmailSearches, current);
+  const expectedThreadIds = gmailThreadIdsToRead(gmailSearches);
+  const readThreadIds = new Set(
+    gmailThreads
+      .map((row) => record(row.args)?.threadId)
+      .filter((value): value is string => typeof value === 'string'),
+  );
+  const missingThreadIds = expectedThreadIds.filter((id) => !readThreadIds.has(id));
   const labels: string[] = [];
   const unsupported: ActionKind[] = [];
 
@@ -801,8 +892,10 @@ function requiredReadGaps(
   if (request.kind !== 'calendar' && gmailSearches.length === 0) {
     labels.push('a successful Gmail search using the requested terms');
     unsupported.push('inbox_read');
-  } else if (request.requiresThreadRead && gmailHits.length > 0 && gmailThreads.length === 0) {
-    labels.push('a successful read of a matching Gmail thread');
+  } else if (request.requiresThreadRead && gmailHits.length > 0 && missingThreadIds.length > 0) {
+    labels.push(
+      `successful reads of ${missingThreadIds.length} matching Gmail ${missingThreadIds.length === 1 ? 'thread' : 'threads'}`,
+    );
     unsupported.push('inbox_read');
   }
   return { labels, unsupported: [...new Set(unsupported)] };
@@ -816,6 +909,97 @@ function stringField(item: Record<string, unknown>, key: string): string {
 function rawStringField(item: Record<string, unknown>, key: string): string {
   const value = item[key];
   return typeof value === 'string' ? value.trim().slice(0, 8_000) : '';
+}
+
+function uniqueRecords(
+  items: Record<string, unknown>[],
+  key: (item: Record<string, unknown>) => string,
+): Record<string, unknown>[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const value = key(item);
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+}
+
+function calendarTime(value: string, timeZone?: string): string {
+  if (!value) return value;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const date = new Date(`${value}T12:00:00.000Z`);
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'UTC',
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    }).format(date);
+  }
+  if (!timeZone) return value;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    }).format(date);
+  } catch {
+    return value;
+  }
+}
+
+function calendarFreeIntervals(
+  slots: Record<string, unknown>[],
+  window: NonNullable<PersonalReadRequest['timeWindow']>,
+): Array<{ start: string; end: string }> {
+  const windowStart = Date.parse(window.timeMin);
+  const windowEnd = Date.parse(window.timeMax);
+  if (!Number.isFinite(windowStart) || !Number.isFinite(windowEnd) || windowEnd <= windowStart) {
+    return [];
+  }
+  const merged: Array<{ start: number; end: number }> = [];
+  const intervals = slots
+    .map((slot) => ({
+      start: Math.max(windowStart, Date.parse(stringField(slot, 'start'))),
+      end: Math.min(windowEnd, Date.parse(stringField(slot, 'end'))),
+    }))
+    .filter(
+      (slot) => Number.isFinite(slot.start) && Number.isFinite(slot.end) && slot.end > slot.start,
+    )
+    .sort((a, b) => a.start - b.start);
+  for (const interval of intervals) {
+    const previous = merged[merged.length - 1];
+    if (previous && interval.start <= previous.end) {
+      previous.end = Math.max(previous.end, interval.end);
+    } else {
+      merged.push({ ...interval });
+    }
+  }
+  const free: Array<{ start: string; end: string }> = [];
+  let cursor = windowStart;
+  for (const interval of merged) {
+    if (interval.start > cursor) {
+      free.push({
+        start: new Date(cursor).toISOString(),
+        end: new Date(interval.start).toISOString(),
+      });
+    }
+    cursor = Math.max(cursor, interval.end);
+  }
+  if (cursor < windowEnd) {
+    free.push({
+      start: new Date(cursor).toISOString(),
+      end: new Date(windowEnd).toISOString(),
+    });
+  }
+  return free;
 }
 
 function emailExcerpt(text: string, terms: string[]): string {
@@ -834,6 +1018,16 @@ function emailExcerpt(text: string, terms: string[]): string {
   return (relevant.length > 0 ? relevant : sentences).slice(0, 3).join(' ').slice(0, 700);
 }
 
+function literalLinks(value: string): string[] {
+  return [
+    ...new Set(
+      (value.match(/https?:\/\/[^\s<>'"`]+/gi) ?? []).map((url) =>
+        url.replace(/[.,;:!?)\]]+$/, ''),
+      ),
+    ),
+  ].slice(0, 5);
+}
+
 /**
  * Calendar/email answers are rendered from the tool ledger instead of model
  * prose. This is intentionally less flexible: a deterministic list of literal
@@ -841,70 +1035,193 @@ function emailExcerpt(text: string, terms: string[]): string {
  */
 function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvidence[]): string {
   const current = currentSuccessfulEvidence(evidence);
-  const lines = ['Here’s what I found in the connected sources:'];
+  const lines = [
+    request.verification
+      ? 'I rechecked the earlier claim. These source results are the only facts I can verify:'
+      : 'Here’s what I found in the connected sources:',
+  ];
 
   if (request.kind !== 'email') {
     const calendarRows = matchingCalendarRows(request, current);
-    const events = calendarRows.flatMap((row) => resultItems(row, 'events'));
-    const calendars = new Set<string>();
-    const ranges = new Set<string>();
-    const unavailable: string[] = [];
-    let complete = calendarRows.length > 0;
-    for (const row of calendarRows) {
-      const result = record(row.result);
-      const args = record(row.args);
-      if (result?.complete === false) complete = false;
-      const timeMin = typeof args?.timeMin === 'string' ? args.timeMin : '';
-      const timeMax = typeof args?.timeMax === 'string' ? args.timeMax : '';
-      if (timeMin && timeMax) ranges.add(`${timeMin} to ${timeMax}`);
-      const searched = result?.calendarsSearched;
-      if (Array.isArray(searched)) {
-        for (const value of searched) if (typeof value === 'string') calendars.add(value);
-      }
-      const missing = result?.unavailable;
-      if (Array.isArray(missing)) {
-        for (const value of missing) {
-          const item = record(value);
-          const name = item ? stringField(item, 'calendar') : '';
-          if (name) unavailable.push(name);
+    if (request.firstToolName === 'calendar.availability') {
+      const busy = uniqueRecords(
+        calendarRows.flatMap((row) => resultItems(row, 'busy')),
+        (slot) =>
+          [
+            stringField(slot, 'calendar'),
+            stringField(slot, 'start'),
+            stringField(slot, 'end'),
+          ].join('|'),
+      );
+      const calendars = new Set<string>();
+      const unavailable = new Set<string>();
+      let complete = calendarRows.length > 0;
+      for (const row of calendarRows) {
+        const result = record(row.result);
+        if (result?.complete === false) complete = false;
+        if (Array.isArray(result?.calendarsChecked)) {
+          for (const value of result.calendarsChecked) {
+            if (typeof value === 'string') calendars.add(value);
+          }
+        }
+        if (Array.isArray(result?.unavailable)) {
+          for (const value of result.unavailable) {
+            if (typeof value === 'string') unavailable.add(value);
+          }
         }
       }
-    }
-    for (const range of ranges) lines.push(`- Calendar range searched: ${range}`);
-    if (events.length === 0) {
-      lines.push(
-        calendarRows.length > 0
-          ? `- Calendar search returned no matching events${calendars.size > 0 ? ` across ${[...calendars].join(', ')}` : ''}.`
-          : '- Calendar: no successful event read.',
-      );
-    } else {
-      for (const event of events.slice(0, 20)) {
-        const summary = stringField(event, 'summary') || '(untitled event)';
-        const start = stringField(event, 'start');
-        const end = stringField(event, 'end');
-        const location = stringField(event, 'location');
-        const calendar = stringField(event, 'calendar');
-        const attendees = event.attendees;
-        const attendeeText = Array.isArray(attendees)
-          ? attendees.filter((value): value is string => typeof value === 'string').join(', ')
-          : '';
+      if (request.timeWindow) {
         lines.push(
-          `- Calendar: ${summary}${start ? ` — ${start}${end ? ` to ${end}` : ''}` : ''}${location ? ` — ${location}` : ''}${attendeeText ? ` — attendees: ${attendeeText}` : ''}${calendar ? ` (${calendar})` : ''}`,
+          `- Availability range checked: ${request.timeWindow.label} (${request.timeWindow.timeMin} to ${request.timeWindow.timeMax})`,
         );
       }
-    }
-    if (!complete || unavailable.length > 0) {
-      lines.push(
-        `- Calendar coverage was incomplete${unavailable.length > 0 ? `; unavailable: ${[...new Set(unavailable)].join(', ')}` : ''}.`,
+      if (busy.length === 0) {
+        lines.push(
+          calendarRows.length > 0
+            ? `- Calendar availability returned no busy blocks${calendars.size > 0 ? ` across ${[...calendars].join(', ')}` : ''}.`
+            : '- Calendar: no successful availability read.',
+        );
+      } else {
+        for (const slot of busy.slice(0, 50)) {
+          const start = calendarTime(stringField(slot, 'start'), request.timeZone);
+          const end = calendarTime(stringField(slot, 'end'), request.timeZone);
+          const calendar = stringField(slot, 'calendar');
+          lines.push(
+            `- Busy${calendar ? ` (${calendar})` : ''}: ${start || '(start not returned)'}${end ? ` to ${end}` : ''}`,
+          );
+        }
+      }
+      if (complete && request.timeWindow) {
+        for (const free of calendarFreeIntervals(busy, request.timeWindow)) {
+          lines.push(
+            `- Open according to the checked calendars: ${calendarTime(free.start, request.timeZone)} to ${calendarTime(free.end, request.timeZone)}`,
+          );
+        }
+      }
+      if (!complete || unavailable.size > 0) {
+        lines.push(
+          `- Calendar availability coverage was incomplete${unavailable.size > 0 ? `; unavailable: ${[...unavailable].join(', ')}` : ''}.`,
+        );
+      }
+    } else {
+      const events = uniqueRecords(
+        calendarRows.flatMap((row) => resultItems(row, 'events')),
+        (event) =>
+          [
+            stringField(event, 'calendarId'),
+            stringField(event, 'eventId'),
+            stringField(event, 'start'),
+            stringField(event, 'summary'),
+          ].join('|'),
       );
+      const calendars = new Set<string>();
+      const ranges = new Set<string>();
+      const unavailable: string[] = [];
+      let complete = calendarRows.length > 0;
+      for (const row of calendarRows) {
+        const result = record(row.result);
+        const args = record(row.args);
+        if (result?.complete === false) complete = false;
+        const timeMin = typeof args?.timeMin === 'string' ? args.timeMin : '';
+        const timeMax = typeof args?.timeMax === 'string' ? args.timeMax : '';
+        if (timeMin && timeMax) ranges.add(`${timeMin} to ${timeMax}`);
+        const searched = result?.calendarsSearched;
+        if (Array.isArray(searched)) {
+          for (const value of searched) if (typeof value === 'string') calendars.add(value);
+        }
+        const missing = result?.unavailable;
+        if (Array.isArray(missing)) {
+          for (const value of missing) {
+            const item = record(value);
+            const name = item ? stringField(item, 'calendar') : '';
+            if (name) unavailable.push(name);
+          }
+        }
+      }
+      if (request.timeWindow) {
+        lines.push(
+          `- Calendar range searched: ${request.timeWindow.label} (${request.timeWindow.timeMin} to ${request.timeWindow.timeMax})`,
+        );
+      } else {
+        for (const range of ranges) lines.push(`- Calendar range searched: ${range}`);
+      }
+      if (events.length === 0) {
+        lines.push(
+          calendarRows.length > 0
+            ? `- Calendar search returned no matching events${calendars.size > 0 ? ` across ${[...calendars].join(', ')}` : ''}.`
+            : '- Calendar: no successful event read.',
+        );
+      } else {
+        for (const event of events.slice(0, 20)) {
+          const summary = stringField(event, 'summary') || '(untitled event)';
+          const rawStart = stringField(event, 'start');
+          const rawEnd = stringField(event, 'end');
+          const start = calendarTime(rawStart, request.timeZone);
+          let end = calendarTime(rawEnd, request.timeZone);
+          if (
+            /^\d{4}-\d{2}-\d{2}$/.test(rawStart) &&
+            /^\d{4}-\d{2}-\d{2}$/.test(rawEnd)
+          ) {
+            const inclusiveEnd = new Date(`${rawEnd}T12:00:00.000Z`);
+            inclusiveEnd.setUTCDate(inclusiveEnd.getUTCDate() - 1);
+            const inclusive = inclusiveEnd.toISOString().slice(0, 10);
+            end = inclusive === rawStart ? '' : calendarTime(inclusive, request.timeZone);
+          }
+          const location = stringField(event, 'location');
+          const calendar = stringField(event, 'calendar');
+          const organizer = stringField(event, 'organizer');
+          const attendees = event.attendees;
+          const attendeeText = Array.isArray(attendees)
+            ? attendees.filter((value): value is string => typeof value === 'string').join(', ')
+            : '';
+          const eventLinks = Array.isArray(event.links)
+            ? event.links
+                .map(record)
+                .filter((link): link is Record<string, unknown> => Boolean(link))
+                .map((link) => {
+                  const url = stringField(link, 'url');
+                  const label = stringField(link, 'label') || 'Event link';
+                  return url ? `[${label}](${url})` : '';
+                })
+                .filter(Boolean)
+                .join(', ')
+            : '';
+          lines.push(
+            `- Calendar: ${summary}${start ? ` — ${start}${end ? ` to ${end}` : ''}` : ''}${location ? ` — ${location}` : ''}${organizer ? ` — organizer: ${organizer}` : ''}${attendeeText ? ` — attendees: ${attendeeText}` : ''}${eventLinks ? ` — ${eventLinks}` : ''}${calendar ? ` (${calendar})` : ''}`,
+          );
+        }
+      }
+      if (!complete || unavailable.length > 0) {
+        lines.push(
+          `- Calendar coverage was incomplete${unavailable.length > 0 ? `; unavailable: ${[...new Set(unavailable)].join(', ')}` : ''}.`,
+        );
+      }
     }
   }
 
   if (request.kind !== 'calendar') {
     const searches = matchingGmailSearchRows(request, current);
-    const results = searches.flatMap((row) => resultItems(row, 'results'));
+    const results = uniqueRecords(
+      searches.flatMap((row) => resultItems(row, 'results')),
+      (message) =>
+        [
+          stringField(message, 'messageId'),
+          stringField(message, 'threadId'),
+          stringField(message, 'date'),
+          stringField(message, 'subject'),
+        ].join('|'),
+    );
     const threadRows = matchingGmailThreadRows(searches, current);
-    const threadMessages = threadRows.flatMap((row) => resultItems(row, 'messages'));
+    const threadMessages = uniqueRecords(
+      threadRows.flatMap((row) => resultItems(row, 'messages')),
+      (message) =>
+        [
+          stringField(message, 'messageId'),
+          stringField(message, 'date'),
+          stringField(message, 'subject'),
+          rawStringField(message, 'text').slice(0, 120),
+        ].join('|'),
+    );
     const queries = new Set(
       searches.map((row) => stringField(record(row.args) ?? {}, 'query')).filter(Boolean),
     );
@@ -939,9 +1256,11 @@ function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvid
       const subject = stringField(message, 'subject') || '(no subject)';
       const from = stringField(message, 'from');
       const date = stringField(message, 'date');
-      const excerpt = emailExcerpt(rawStringField(message, 'text'), request.queryTerms);
+      const rawText = rawStringField(message, 'text');
+      const excerpt = emailExcerpt(rawText, request.queryTerms);
+      const links = literalLinks(rawText);
       lines.push(
-        `- Gmail thread: “${subject}”${from ? ` — from ${from}` : ''}${date ? ` — ${date}` : ''}${excerpt ? ` — ${excerpt}` : ''}`,
+        `- Gmail thread: “${subject}”${from ? ` — from ${from}` : ''}${date ? ` — ${date}` : ''}${excerpt ? ` — ${excerpt}` : ''}${links.length > 0 ? ` — links: ${links.join(', ')}` : ''}`,
       );
     }
     if (searches.some((row) => record(row.result)?.complete === false)) {
@@ -961,17 +1280,17 @@ function missingReadResponse(labels: string[], evidence: ActionEvidence[]): stri
     .join(' ');
 }
 
-function enforcePersonalReadGrounding(
+export function enforcePersonalReadResponse(
+  request: PersonalReadRequest,
   evidence: ActionEvidence[],
-  opts?: ResponseContractOptions,
-): ResponseContractResult | undefined {
-  const request = opts?.readRequest;
-  if (!request) return undefined;
-
+): ResponseContractResult {
   const gaps = requiredReadGaps(request, evidence);
   if (gaps.labels.length > 0) {
+    const verified = currentSuccessfulEvidence(evidence).length
+      ? `${verifiedReadResponse(request, evidence)}\n\n`
+      : '';
     return {
-      text: missingReadResponse(gaps.labels, evidence),
+      text: `${verified}${missingReadResponse(gaps.labels, evidence)}`,
       blocked: true,
       unsupported: gaps.unsupported,
     };
@@ -982,6 +1301,15 @@ function enforcePersonalReadGrounding(
     blocked: false,
     unsupported: [],
   };
+}
+
+function enforcePersonalReadGrounding(
+  evidence: ActionEvidence[],
+  opts?: ResponseContractOptions,
+): ResponseContractResult | undefined {
+  return opts?.readRequest
+    ? enforcePersonalReadResponse(opts.readRequest, evidence)
+    : undefined;
 }
 
 /** Replace unsupported action claims with a deterministic, evidence-based reply. */

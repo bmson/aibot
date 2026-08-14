@@ -31,10 +31,23 @@ interface CalendarEntry {
 interface RawEvent {
   id: string;
   summary?: string;
+  description?: string;
   location?: string;
+  htmlLink?: string;
+  hangoutLink?: string;
+  organizer?: { email?: string; displayName?: string };
+  conferenceData?: {
+    entryPoints?: Array<{ entryPointType?: string; uri?: string; label?: string }>;
+  };
   start?: { dateTime?: string; date?: string };
   end?: { dateTime?: string; date?: string };
   attendees?: Array<{ email: string; responseStatus?: string }>;
+}
+
+function urlsIn(text: string): string[] {
+  return (text.match(/https?:\/\/[^\s<>'"`]+/gi) ?? []).map((url) =>
+    url.replace(/[.,;:!?)\]]+$/, ''),
+  );
 }
 
 function register<S extends z.ZodType, Out>(
@@ -79,6 +92,18 @@ function startedAt(event: { start: string }): number {
 }
 
 function normalizeEvent(raw: RawEvent, calendar: CalendarEntry) {
+  const links: Array<{ type: string; label: string; url: string }> = [];
+  const addLink = (type: string, label: string, url?: string) => {
+    if (!url || !/^https?:\/\//i.test(url) || links.some((link) => link.url === url)) return;
+    links.push({ type, label, url });
+  };
+  addLink('calendar', 'Open in Google Calendar', raw.htmlLink);
+  addLink('video', 'Video meeting', raw.hangoutLink);
+  for (const entry of raw.conferenceData?.entryPoints ?? []) {
+    addLink(entry.entryPointType ?? 'conference', entry.label ?? 'Conference link', entry.uri);
+  }
+  for (const url of urlsIn(raw.description ?? '')) addLink('description', 'Event link', url);
+
   return {
     eventId: raw.id,
     // Which calendar this came from — without it a merged list can't say
@@ -89,7 +114,13 @@ function normalizeEvent(raw: RawEvent, calendar: CalendarEntry) {
     location: raw.location ?? '',
     start: raw.start?.dateTime ?? raw.start?.date ?? '',
     end: raw.end?.dateTime ?? raw.end?.date ?? '',
+    organizer: raw.organizer?.email
+      ? raw.organizer.displayName
+        ? `${raw.organizer.displayName} <${raw.organizer.email}>`
+        : raw.organizer.email
+      : '',
     attendees: (raw.attendees ?? []).map((a) => `${a.email} (${a.responseStatus ?? '?'})`),
+    links,
   };
 }
 
@@ -200,7 +231,11 @@ export function registerCalendarTools(
         // Ask about every calendar this account can see, not just the bot's own
         // and the owner's address: a busy block on a shared "Work" calendar is
         // exactly as blocking as one on the owner's primary.
-        const available = await fetchCalendars(deps.client).catch(() => [] as CalendarEntry[]);
+        let calendarRosterComplete = true;
+        const available = await fetchCalendars(deps.client).catch(() => {
+          calendarRosterComplete = false;
+          return [] as CalendarEntry[];
+        });
         const ids = new Set<string>([deps.botEmail, deps.ownerEmail]);
         for (const calendar of available) ids.add(calendar.id);
         const items = [...ids].slice(0, MAX_FREEBUSY_ITEMS).map((id) => ({ id }));
@@ -226,23 +261,33 @@ export function registerCalendarTools(
         for (const { id } of items) {
           const entry = calendars[id];
           const label = nameFor.get(id) ?? id;
-          if (entry?.errors !== undefined) {
+          if (!entry || (Array.isArray(entry.errors) && entry.errors.length > 0)) {
             unavailable.push(label);
             continue;
           }
-          for (const slot of entry?.busy ?? []) busy.push({ ...slot, calendar: label });
+          for (const slot of entry.busy ?? []) busy.push({ ...slot, calendar: label });
         }
         busy.sort((a, b) => startedAt(a) - startedAt(b));
+
+        const complete =
+          calendarRosterComplete && ids.size === items.length && unavailable.length === 0;
+        const coverageNotes: string[] = [];
+        if (!calendarRosterComplete) {
+          coverageNotes.push('The readable calendar list could not be loaded.');
+        }
+        if (ids.size > items.length) {
+          coverageNotes.push(`Checked the first ${items.length} of ${ids.size} calendars.`);
+        }
+        if (unavailable.length > 0) {
+          coverageNotes.push('Some calendars did not return free/busy data.');
+        }
 
         return {
           busy,
           calendarsChecked: items.map(({ id }) => nameFor.get(id) ?? id),
-          ...(unavailable.length > 0
-            ? {
-                unavailable,
-                note: 'These calendars have not shared free/busy with the assistant.',
-              }
-            : {}),
+          complete,
+          ...(unavailable.length > 0 ? { unavailable } : {}),
+          ...(coverageNotes.length > 0 ? { note: coverageNotes.join(' ') } : {}),
         };
       },
     },
@@ -286,7 +331,7 @@ export function registerCalendarTools(
     {
       name: 'calendar.list_events',
       description:
-        'List events in a time range across every calendar the assistant can read: its own plus all shared calendars. This is the default for "what is happening Monday" and "what\'s on my calendar". Do not ask which calendar or provider; omit calendarIds to read them all. The result states whether coverage was complete.',
+        'List events in a time range across every calendar the assistant can read: its own plus all shared calendars. This is the default for "what is happening Monday" and "what\'s on my calendar". Do not ask which calendar or provider; omit calendarIds to read them all. Results include literal organizer, attendee, location, and event/meeting links when Google returned them, plus whether coverage was complete.',
       inputSchema: z.object({
         timeMin: z.string().datetime({ offset: true }),
         timeMax: z.string().datetime({ offset: true }),
@@ -378,7 +423,7 @@ export function registerCalendarTools(
     {
       name: 'calendar.search_events',
       description:
-        'Search by keyword (attendee, title, or location) across every calendar the assistant can read: its own plus all shared calendars. Do not ask which calendar or provider; omit calendarIds to search them all. Says which calendar each hit is on, whether coverage was complete, and returns ISO 8601 times with offsets.',
+        'Search by keyword (attendee, title, location, or description) across every calendar the assistant can read: its own plus all shared calendars. Do not ask which calendar or provider; omit calendarIds to search them all. Results include literal organizer, attendee, location, and event/meeting links when Google returned them, plus calendar identity, coverage, and ISO 8601 times.',
       inputSchema: z.object({
         query: z.string().min(1).max(200),
         timeMin: z.string().datetime({ offset: true }).optional(),
