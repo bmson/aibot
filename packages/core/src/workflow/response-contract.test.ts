@@ -673,19 +673,28 @@ describe('response execution contract', () => {
       }
     });
 
-    it('replaces the reported fabricated Linear event with literal calendar evidence', () => {
+    it('replaces fabricated timed events with the literal returned all-day event', () => {
       const draft = [
-        'Looking at Monday, August 17, 2026:',
+        'Let me check your calendar for upcoming events. One moment.',
         '',
-        '**Coffee Chat with Linear Team**',
-        '9:30 AM - 10:00 AM (PDT)',
-        'Virtual (Zoom link in calendar description)',
+        '**(Confirmation: This is a live lookup—not an assumption or cached data.)**',
         '',
+        '*(Running tool: calendar.list_events for the next 7 days...)*',
+        '',
+        'Stand by for verified results.',
+        '',
+        '**Update**:',
+        '',
+        'Here’s what’s on your calendar for **Monday, August 17, 2026**:',
+        '',
+        '**Confirmed Events:**',
         '**Freyja’s Back-to-School Prep**',
         '3:00 PM - 4:30 PM (PDT)',
         'Location: Home',
         '',
-        'Open time slots: 7:00 AM - 9:30 AM and after 4:30 PM.',
+        '**Open Time Slots:**',
+        '**Morning:** Free (7:00 AM - 3:00 PM)',
+        '**Evening:** Free (after 4:30 PM)',
       ].join('\n');
       const result = enforceResponseContract(
         draft,
@@ -702,12 +711,11 @@ describe('response execution contract', () => {
               calendarsSearched: ['Assistant', 'Family'],
               events: [
                 {
-                  eventId: 'evt-freyja',
+                  eventId: 'evt-first-day',
                   calendar: 'Family',
-                  summary: 'Freyja’s Back-to-School Prep',
-                  location: 'Home',
-                  start: '2026-08-17T15:00:00-07:00',
-                  end: '2026-08-17T16:30:00-07:00',
+                  summary: 'FIRST DAY OF SCHOOL',
+                  start: '2026-08-17',
+                  end: '2026-08-18',
                 },
               ],
             },
@@ -723,9 +731,12 @@ describe('response execution contract', () => {
         },
       );
       expect(result).toMatchObject({ blocked: false, unsupported: [] });
-      expect(result.text).toContain('Freyja’s Back-to-School Prep');
-      expect(result.text).not.toContain('Linear');
-      expect(result.text).not.toContain('Open time slots');
+      expect(result.text).toContain('FIRST DAY OF SCHOOL — Monday, August 17, 2026 — All day');
+      expect(result.text).not.toContain('Freyja');
+      expect(result.text).not.toContain('3:00 PM');
+      expect(result.text).not.toContain('Home');
+      expect(result.text).not.toContain('Open Time Slots');
+      expect(result.text).not.toContain('Stand by');
     });
 
     it('requires both calendar and Gmail before answering a named interview lookup', () => {
@@ -996,7 +1007,7 @@ describe('response execution contract', () => {
           },
         },
       );
-      expect(result.text).toContain('School holiday — Monday, August 17, 2026');
+      expect(result.text).toContain('School holiday — Monday, August 17, 2026 — All day');
       expect(result.text).not.toContain('Tuesday, August 18');
     });
 

@@ -11,7 +11,6 @@ import './globals.css';
 import './motion-system.css';
 import './chrome.css';
 import './conversation.css';
-import './navigation.css';
 import './navigation-mobile.css';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });

@@ -96,6 +96,40 @@ describe('calendar.list_events', () => {
     expect(requested).not.toContain('primary');
   });
 
+  it('preserves Google all-day events as date-only entries', async () => {
+    const api = apiFor({
+      'owner@example.com': [
+        {
+          id: 'first-day',
+          summary: 'FIRST DAY OF SCHOOL',
+          start: { date: '2026-08-17' },
+          end: { date: '2026-08-18' },
+        },
+      ],
+    });
+    const result = (await toolsWith(api)
+      .get('calendar.list_events')
+      ?.tool.execute(
+        {
+          timeMin: '2026-08-17T00:00:00-07:00',
+          timeMax: '2026-08-18T00:00:00-07:00',
+          maxResults: 20,
+        },
+        {} as never,
+      )) as {
+      events: Array<{ summary: string; start: string; end: string; allDay: boolean }>;
+    };
+
+    expect(result.events).toContainEqual(
+      expect.objectContaining({
+        summary: 'FIRST DAY OF SCHOOL',
+        start: '2026-08-17',
+        end: '2026-08-18',
+        allDay: true,
+      }),
+    );
+  });
+
   it('still answers when one calendar fails, and names the one it could not read', async () => {
     const api = apiFor({
       'owner@example.com': [event('o1', 'Dentist', '2026-07-24T09:00:00Z')],

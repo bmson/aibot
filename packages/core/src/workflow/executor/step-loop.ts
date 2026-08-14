@@ -39,10 +39,7 @@ import {
   type PersonalReadRequest,
   type ReadToolEvidence,
 } from '../read-intent.js';
-import {
-  enforcePersonalReadResponse,
-  isSimulatedApprovalNotice,
-} from '../response-contract.js';
+import { enforcePersonalReadResponse, isSimulatedApprovalNotice } from '../response-contract.js';
 import {
   budgetResumeAt,
   channelContext,
@@ -148,9 +145,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   const useForcedToolFallback = role !== 'reason';
   const privilegedTask = task.trust === 'owner' || task.trust === 'assistant';
   const ownerCard =
-    privilegedTask && !readRequest && !state.untrustedContext
-      ? await getOwnerCard(db)
-      : undefined;
+    privilegedTask && !readRequest && !state.untrustedContext ? await getOwnerCard(db) : undefined;
 
   // Ambient "right now" context (Phase 25): the fused location + weather block
   // (falls back to location-only when the snapshot is stale). Owner-private and
@@ -291,9 +286,10 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
           .from(toolCalls)
           .where(eq(toolCalls.taskId, task.id))
       : [];
-    const forcedReadTool = !mustRecordGoalProgress && readRequest
-      ? nextRequiredReadTool(readRequest, readToolEvidence)
-      : undefined;
+    const forcedReadTool =
+      !mustRecordGoalProgress && readRequest
+        ? nextRequiredReadTool(readRequest, readToolEvidence)
+        : undefined;
     // Once every required read has either succeeded or exhausted its bounded
     // retries, answer straight from the ledger. No model gets a chance to add a
     // plausible event, reinterpret a date, ask which account to use, or perform

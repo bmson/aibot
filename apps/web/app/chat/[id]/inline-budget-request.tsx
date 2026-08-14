@@ -65,7 +65,7 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
   // Same card language as pending approvals: an amber-banded object the
   // assistant placed in the conversation, waiting on the owner.
   return (
-    <section className="min-w-0 max-w-3xl overflow-hidden rounded-xl bg-raised shadow-[0_1px_2px_rgb(23_25_35/0.05)] ring-1 ring-amber-300/80 dark:ring-amber-700/70">
+    <section className="min-w-0 max-w-3xl overflow-hidden rounded-xl bg-raised ring-1 ring-amber-300/80 dark:ring-amber-700/70">
       <div className="flex items-center gap-1.5 border-b border-amber-200/70 bg-amber-50/80 px-4 py-2.5 dark:border-amber-900/60 dark:bg-amber-950/40">
         <CircleDollarSign
           className="size-3.5 shrink-0 text-amber-800 dark:text-amber-300"

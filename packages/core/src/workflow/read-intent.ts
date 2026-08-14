@@ -645,22 +645,20 @@ export function detectPersonalReadRequest(
   // Named appointments are commonly confirmed in email before (or instead of)
   // appearing on a calendar. Search both configured sources without asking the
   // owner which provider/account contains the answer.
-  const kind: PersonalReadKind =
-    availability
-      ? 'calendar'
-      : namedSchedule || (calendar && email)
-        ? 'calendar_email'
-        : email
-          ? 'email'
-          : 'calendar';
-  const firstToolName =
-    availability
-      ? 'calendar.availability'
-      : kind === 'email'
-        ? 'gmail.search'
-        : kind === 'calendar_email' || terms.length > 0
-          ? 'calendar.search_events'
-          : 'calendar.list_events';
+  const kind: PersonalReadKind = availability
+    ? 'calendar'
+    : namedSchedule || (calendar && email)
+      ? 'calendar_email'
+      : email
+        ? 'email'
+        : 'calendar';
+  const firstToolName = availability
+    ? 'calendar.availability'
+    : kind === 'email'
+      ? 'gmail.search'
+      : kind === 'calendar_email' || terms.length > 0
+        ? 'calendar.search_events'
+        : 'calendar.list_events';
 
   const request: PersonalReadRequest = {
     kind,
@@ -669,8 +667,7 @@ export function detectPersonalReadRequest(
     requiresThreadRead:
       kind === 'calendar_email' ||
       (kind === 'email' &&
-        (verification ||
-          /\b(?:when|where|what time|details?|what does|what did)\b/i.test(latest))),
+        (verification || /\b(?:when|where|what time|details?|what does|what did)\b/i.test(latest))),
   };
   if (kind !== 'email') {
     request.timeWindow = resolveTimeWindow(

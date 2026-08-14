@@ -332,7 +332,7 @@ function ProminenceControl({
               onClick={() => onSelect(option.level)}
               className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-2xs font-medium motion-safe:transition-colors ${focusRing} ${
                 active
-                  ? 'bg-raised text-strong shadow-sm'
+                  ? 'bg-raised text-strong ring-1 ring-edge'
                   : 'text-muted hover:text-strong disabled:hover:text-muted'
               }`}
             >

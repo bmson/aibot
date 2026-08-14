@@ -68,7 +68,7 @@ export function MemoryOrganizer({
 
   return (
     <div className={`${cardShellClass} relative`}>
-      {/* Accent only — the violet/sky rainbow was the one strip in the app
+      {/* Accent only — the former multicolor strip was the one place in the app
           speaking colors outside the shared vocabulary. */}
       <div
         className={`h-1 origin-left bg-gradient-to-r from-accent to-accent-hover ${

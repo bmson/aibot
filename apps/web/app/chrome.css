@@ -6,17 +6,15 @@
  */
 
 :root {
-  --ambient-accent: color-mix(in srgb, var(--accent, currentColor) 7%, transparent);
-  --ambient-ink: rgb(23 25 35 / 0.035);
+  --ambient-accent: color-mix(in srgb, var(--accent, currentColor) 2%, transparent);
+  --ambient-ink: rgb(23 32 34 / 0.025);
   --surface-highlight: rgb(255 255 255 / 0.62);
-  --surface-shadow: rgb(23 25 35 / 0.12);
 }
 
 .dark {
-  --ambient-accent: color-mix(in srgb, var(--accent, currentColor) 9%, transparent);
-  --ambient-ink: rgb(255 255 255 / 0.025);
+  --ambient-accent: color-mix(in srgb, var(--accent, currentColor) 3%, transparent);
+  --ambient-ink: rgb(255 255 255 / 0.018);
   --surface-highlight: rgb(255 255 255 / 0.08);
-  --surface-shadow: rgb(0 0 0 / 0.38);
 }
 
 /* A quiet atmospheric layer keeps large empty canvases from feeling flat. */
@@ -55,12 +53,8 @@ main .scroll-subtle:not(nav) {
   background:
     linear-gradient(180deg, var(--surface-highlight), transparent 34%),
     color-mix(in srgb, var(--raised, Canvas) 94%, transparent);
-  box-shadow:
-    0 1px 0 var(--surface-highlight) inset,
-    0 14px 42px var(--surface-shadow),
-    0 3px 10px rgb(23 25 35 / 0.06);
+  box-shadow: var(--shadow-soft);
   transition:
-    transform var(--motion-medium) var(--motion-enter),
     box-shadow var(--motion-medium) var(--motion-enter),
     border-color var(--motion-fast) ease;
 }
@@ -83,14 +77,12 @@ main .scroll-subtle:not(nav) {
 [data-testid="chat-composer-surface"]:focus-within {
   border-color: color-mix(in srgb, var(--accent, currentColor) 26%, transparent);
   box-shadow:
-    0 1px 0 var(--surface-highlight) inset,
-    0 20px 58px color-mix(in srgb, var(--accent, currentColor) 12%, var(--surface-shadow)),
-    0 4px 12px rgb(23 25 35 / 0.07);
-  transform: translateY(-1px);
+    inset 0 0 0 2px color-mix(in srgb, var(--accent, currentColor) 26%, transparent),
+    var(--shadow-soft);
 }
 
 [data-testid="chat-composer-surface"]:focus-within::after {
-  opacity: 0.78;
+  opacity: 0;
 }
 
 [data-testid="chat-composer-surface"] textarea {
@@ -122,42 +114,24 @@ section[aria-label="Choose response model"] {
   background:
     linear-gradient(180deg, var(--surface-highlight), transparent 22%),
     color-mix(in srgb, var(--raised, Canvas) 96%, transparent);
-  box-shadow:
-    0 1px 0 var(--surface-highlight) inset,
-    0 20px 60px var(--surface-shadow);
+  box-shadow: var(--shadow-overlay);
   backdrop-filter: blur(22px) saturate(1.15);
 }
 
 section[aria-label="Commands"] [role="option"],
 section[aria-label="Choose response model"] [role="option"] {
-  transition:
-    background-color var(--motion-fast) ease,
-    transform var(--motion-fast) var(--motion-enter);
-}
-
-section[aria-label="Commands"] [role="option"]:hover,
-section[aria-label="Choose response model"] [role="option"]:hover {
-  transform: translateX(2px);
+  transition: background-color var(--motion-fast) ease;
 }
 
 /* Message controls stay quiet until the message becomes the user's focus. */
 .group\/msg {
-  transition:
-    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
-    filter 180ms ease;
-}
-
-.group\/msg:hover {
-  transform: translateY(-1px);
+  transition: filter 180ms ease;
 }
 
 .group\/msg [aria-label*="message" i],
 .group\/msg [data-message-actions] {
   opacity: 0.44;
-  transform: translateY(2px);
-  transition:
-    opacity var(--motion-fast) ease,
-    transform var(--motion-fast) var(--motion-enter);
+  transition: opacity var(--motion-fast) ease;
 }
 
 .group\/msg:hover [aria-label*="message" i],
@@ -165,27 +139,19 @@ section[aria-label="Choose response model"] [role="option"]:hover {
 .group\/msg:hover [data-message-actions],
 .group\/msg:focus-within [data-message-actions] {
   opacity: 1;
-  transform: translateY(0);
 }
 
 /* Pills and transient controls use the same material language as the composer. */
 button[aria-label="Jump to latest"] {
   border: 1px solid color-mix(in srgb, currentColor 8%, transparent);
   background: color-mix(in srgb, var(--raised, Canvas) 88%, transparent);
-  box-shadow:
-    0 1px 0 var(--surface-highlight) inset,
-    0 10px 30px var(--surface-shadow);
+  box-shadow: var(--shadow-soft);
   backdrop-filter: blur(18px) saturate(1.15);
-  transition:
-    transform var(--motion-fast) var(--motion-enter),
-    box-shadow var(--motion-fast) ease;
+  transition: box-shadow var(--motion-fast) ease;
 }
 
 button[aria-label="Jump to latest"]:hover {
-  box-shadow:
-    0 1px 0 var(--surface-highlight) inset,
-    0 14px 38px var(--surface-shadow);
-  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
 }
 
 /* Selection uses the product accent without overpowering text contrast. */
@@ -202,14 +168,6 @@ button[aria-label="Jump to latest"]:hover {
   .group\/msg [aria-label*="message" i],
   .group\/msg [data-message-actions],
   button[aria-label="Jump to latest"] {
-    transition: none !important;
-  }
-
-  [data-testid="chat-composer-surface"]:focus-within,
-  section[aria-label="Commands"] [role="option"]:hover,
-  section[aria-label="Choose response model"] [role="option"]:hover,
-  .group\/msg:hover,
-  button[aria-label="Jump to latest"]:hover {
-    transform: none;
+    transition: none;
   }
 }

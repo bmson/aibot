@@ -119,6 +119,7 @@ function normalizeEvent(raw: RawEvent, calendar: CalendarEntry) {
         ? `${raw.organizer.displayName} <${raw.organizer.email}>`
         : raw.organizer.email
       : '',
+    allDay: Boolean(raw.start?.date && !raw.start.dateTime),
     attendees: (raw.attendees ?? []).map((a) => `${a.email} (${a.responseStatus ?? '?'})`),
     links,
   };

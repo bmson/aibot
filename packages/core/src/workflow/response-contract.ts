@@ -1,7 +1,4 @@
-import {
-  gmailThreadIdsToRead,
-  type PersonalReadRequest,
-} from './read-intent.js';
+import { gmailThreadIdsToRead, type PersonalReadRequest } from './read-intent.js';
 
 /**
  * The model writes prose, but the task/tool ledger is the authority for what
@@ -1156,12 +1153,12 @@ function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvid
           const summary = stringField(event, 'summary') || '(untitled event)';
           const rawStart = stringField(event, 'start');
           const rawEnd = stringField(event, 'end');
+          const dateOnly =
+            /^\d{4}-\d{2}-\d{2}$/.test(rawStart) && /^\d{4}-\d{2}-\d{2}$/.test(rawEnd);
+          const allDay = event.allDay === true || dateOnly;
           const start = calendarTime(rawStart, request.timeZone);
           let end = calendarTime(rawEnd, request.timeZone);
-          if (
-            /^\d{4}-\d{2}-\d{2}$/.test(rawStart) &&
-            /^\d{4}-\d{2}-\d{2}$/.test(rawEnd)
-          ) {
+          if (dateOnly) {
             const inclusiveEnd = new Date(`${rawEnd}T12:00:00.000Z`);
             inclusiveEnd.setUTCDate(inclusiveEnd.getUTCDate() - 1);
             const inclusive = inclusiveEnd.toISOString().slice(0, 10);
@@ -1187,7 +1184,7 @@ function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvid
                 .join(', ')
             : '';
           lines.push(
-            `- Calendar: ${summary}${start ? ` — ${start}${end ? ` to ${end}` : ''}` : ''}${location ? ` — ${location}` : ''}${organizer ? ` — organizer: ${organizer}` : ''}${attendeeText ? ` — attendees: ${attendeeText}` : ''}${eventLinks ? ` — ${eventLinks}` : ''}${calendar ? ` (${calendar})` : ''}`,
+            `- Calendar: ${summary}${start ? ` — ${start}${end ? ` to ${end}` : ''}` : ''}${allDay ? ' — All day' : ''}${location ? ` — ${location}` : ''}${organizer ? ` — organizer: ${organizer}` : ''}${attendeeText ? ` — attendees: ${attendeeText}` : ''}${eventLinks ? ` — ${eventLinks}` : ''}${calendar ? ` (${calendar})` : ''}`,
           );
         }
       }
@@ -1307,9 +1304,7 @@ function enforcePersonalReadGrounding(
   evidence: ActionEvidence[],
   opts?: ResponseContractOptions,
 ): ResponseContractResult | undefined {
-  return opts?.readRequest
-    ? enforcePersonalReadResponse(opts.readRequest, evidence)
-    : undefined;
+  return opts?.readRequest ? enforcePersonalReadResponse(opts.readRequest, evidence) : undefined;
 }
 
 /** Replace unsupported action claims with a deterministic, evidence-based reply. */
