@@ -39,6 +39,24 @@ describe('detectPersonalReadRequest', () => {
     });
   });
 
+  it('ignores task-envelope metadata and reads only its payload text', () => {
+    const envelope = (text: string) =>
+      `Task trigger (adhoc):\n\`\`\`json\n${JSON.stringify({
+        source: 'chat',
+        trust: 'owner',
+        payload: { text },
+      })}\n\`\`\``;
+
+    expect(
+      detectPersonalReadRequest([{ role: 'user', content: envelope('What is our wifi password?') }]),
+    ).toBeNull();
+    expect(
+      detectPersonalReadRequest([
+        { role: 'user', content: envelope('When is my Clay interview?') },
+      ]),
+    ).toMatchObject({ kind: 'calendar_email', queryTerms: ['clay'] });
+  });
+
   it('searches both calendar and Gmail for a named interview', () => {
     expect(detectPersonalReadRequest(turn('When is my Clay interview?'))).toEqual({
       kind: 'calendar_email',

@@ -462,6 +462,32 @@ function messageText(message: ReadIntentMessage | undefined): string {
   return contentText(message.content ?? message.parts);
 }
 
+/**
+ * Ad-hoc tasks without a conversation are seeded with a serialized trigger.
+ * Inspect only its owner-authored instruction: metadata such as
+ * `"source":"chat"` must never be mistaken for a calendar "chat".
+ */
+function readIntentText(message: ReadIntentMessage | undefined): string {
+  const text = messageText(message).trim();
+  if (!/^(?:External )?Task trigger \([^)]+\):/i.test(text)) return text;
+
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end < start) return '';
+  try {
+    const trigger = JSON.parse(text.slice(start, end + 1)) as {
+      payload?: { text?: unknown; instruction?: unknown };
+    };
+    if (typeof trigger.payload?.text === 'string') return trigger.payload.text.trim();
+    if (typeof trigger.payload?.instruction === 'string') {
+      return trigger.payload.instruction.trim();
+    }
+  } catch {
+    // A malformed runtime envelope is metadata, not a safe lookup instruction.
+  }
+  return '';
+}
+
 function queryTerms(text: string): string[] {
   const words = (value: string) =>
     value
@@ -554,7 +580,7 @@ export function detectPersonalReadRequest(
     }
   }
   if (latestIndex === -1) return null;
-  const latest = messageText(messages[latestIndex]).trim();
+  const latest = readIntentText(messages[latestIndex]);
   if (
     !latest ||
     /^\s*i\s+(?:read|checked|reviewed|looked|searched|scanned|opened)\b/i.test(latest) ||

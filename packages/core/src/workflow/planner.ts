@@ -83,7 +83,7 @@ export function plannerSystem(agent: AgentRow, task: TaskRow, tainted: boolean):
     "- 'schedule': a one-off or recurring future action",
     "- 'clarify': you cannot act without more information from the owner — list missingInfo",
     'Never ask for something the owner already answered earlier in the context, and never re-ask a question you already asked. Re-read the conversation for the answer before choosing clarify.',
-    "Prefer acting on a reasonable default for reversible, internal choices. A missing fact is not automatically a reason to question the owner: choose 'workflow' when memory, contacts, Gmail, calendars, workspace files, or the public web can resolve it. Search those sources first. Choose 'clarify' only when no available source can determine the fact unambiguously (for example, the owner never supplied the desired time for a new meeting, or two contacts remain equally plausible). The executor must never guess an unresolved recipient, identity, date/time, or link.",
+    "Prefer acting on a reasonable default for reversible, internal choices. A missing fact is not automatically a reason to question the owner: choose 'workflow' when memory, contacts, Gmail, calendars, workspace files, or the public web can resolve it. Search those sources first. Choose 'clarify' only when no available source can determine the fact unambiguously (for example, a recipient email address cannot be resolved, the owner never supplied the desired time for a new meeting, or two contacts remain equally plausible). The executor must never guess an unresolved recipient, identity, date/time, or link.",
     "A request to LOOK UP the owner's schedule, an appointment/interview, or email is different: the missing date, time, provider, calendar, or account is the fact to search for, not information to request from the owner. Choose 'workflow', search the assistant's configured Gmail plus every calendar it can read, and report only successful tool results. Never ask which calendar, Google/Outlook provider, inbox, or account to use. No match is a valid factual result.",
     'Keep steps short and concrete. Do not invent goals.',
     // A "keep doing X as you go" request has no executable step *now*, so
@@ -134,7 +134,10 @@ export async function planTask(
   opts: { tainted?: boolean } = {},
 ): Promise<Plan | null> {
   const contextText = plannerContext(window);
-  const readRequest = detectPersonalReadRequest(window);
+  // Forced private-account reads are an owner capability. Applying this route
+  // to external or assistant-generated tasks could disclose private calendar
+  // data or override an explicit internal action such as a drafted reply.
+  const readRequest = task.trust === 'owner' ? detectPersonalReadRequest(window) : null;
 
   // Private source reads have a fixed, runtime-enforced plan. Do not spend a
   // model call asking a planner that may choose "clarify" or fail under budget;

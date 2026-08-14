@@ -123,10 +123,16 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // Relative dates belong to the owner's request, not the worker attempt. A
   // crash/retry tomorrow must not silently move "Monday" to a different week.
   const readReferenceAt = task.createdAt;
-  const readRequest = detectPersonalReadRequest(rc.window, {
-    now: readReferenceAt,
-    timeZone: agent.timezone,
-  });
+  // Private calendar/mail forcing belongs only to direct owner requests. Never
+  // let third-party text or an assistant-generated child task trigger a search
+  // of the owner's accounts or override its explicit action plan.
+  const readRequest =
+    task.trust === 'owner'
+      ? detectPersonalReadRequest(rc.window, {
+          now: readReferenceAt,
+          timeZone: agent.timezone,
+        })
+      : null;
   // Route action requests to the reasoning model (see roleForTask): a goal
   // session, a mission, an email to triage, or a chat/SMS turn the planner
   // routed to real work all drive tools on the strong model. The draft model

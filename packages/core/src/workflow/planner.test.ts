@@ -135,7 +135,7 @@ describe('personal read plan normalization', () => {
         db: { update } as never,
         router: { object } as unknown as ModelRouter,
       },
-      { id: 'task-read', type: 'chat_turn' } as TaskRow,
+      { id: 'task-read', type: 'chat_turn', trust: 'owner' } as TaskRow,
       { name: 'AI Bot' } as AgentRow,
       [{ role: 'user', content: 'When is my Clay interview?' }] as ModelMessage[],
     );
