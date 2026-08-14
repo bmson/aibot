@@ -28,6 +28,17 @@ describe('detectPersonalReadRequest', () => {
     });
   });
 
+  it('reads text from AI SDK UI message parts', () => {
+    expect(
+      detectPersonalReadRequest([
+        { role: 'user', parts: [{ type: 'text', text: 'What is happening on Monday?' }] },
+      ]),
+    ).toMatchObject({
+      kind: 'calendar',
+      firstToolName: 'calendar.list_events',
+    });
+  });
+
   it('searches both calendar and Gmail for a named interview', () => {
     expect(detectPersonalReadRequest(turn('When is my Clay interview?'))).toEqual({
       kind: 'calendar_email',

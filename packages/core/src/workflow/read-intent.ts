@@ -42,7 +42,9 @@ export interface PersonalReadDetectionOptions {
 
 export interface ReadIntentMessage {
   role: string;
-  content: unknown;
+  /** Core model messages store text in content; AI SDK UI messages use parts. */
+  content?: unknown;
+  parts?: unknown;
 }
 
 export interface ReadToolEvidence {
@@ -455,6 +457,11 @@ function contentText(content: unknown): string {
   return '';
 }
 
+function messageText(message: ReadIntentMessage | undefined): string {
+  if (!message) return '';
+  return contentText(message.content ?? message.parts);
+}
+
 function queryTerms(text: string): string[] {
   const words = (value: string) =>
     value
@@ -472,13 +479,11 @@ function queryTerms(text: string): string[] {
           !SCHEDULED_THING.test(word),
       );
 
-  const nounMatches = [...text.matchAll(new RegExp(SCHEDULED_THING.source, 'gi'))].filter(
-    (match): match is RegExpMatchArray & { 1: string; index: number } =>
-      Boolean(match[1] && match.index !== undefined),
-  );
+  const nounMatches = [...text.matchAll(new RegExp(SCHEDULED_THING.source, 'gi'))];
   const firstNoun = nounMatches[0];
-  if (!firstNoun) return [];
+  if (!firstNoun?.[1] || firstNoun.index === undefined) return [];
   for (const nounMatch of nounMatches) {
+    if (!nounMatch[1] || nounMatch.index === undefined) continue;
     const after = text.slice(
       nounMatch.index + nounMatch[0].length,
       nounMatch.index + nounMatch[0].length + 120,
@@ -549,7 +554,7 @@ export function detectPersonalReadRequest(
     }
   }
   if (latestIndex === -1) return null;
-  const latest = contentText(messages[latestIndex]?.content).trim();
+  const latest = messageText(messages[latestIndex]).trim();
   if (
     !latest ||
     /^\s*i\s+(?:read|checked|reviewed|looked|searched|scanned|opened)\b/i.test(latest) ||
@@ -561,7 +566,7 @@ export function detectPersonalReadRequest(
 
   const recentContext = messages
     .slice(Math.max(0, latestIndex - 4), latestIndex)
-    .map((message) => contentText(message.content))
+    .map(messageText)
     .join('\n');
   const verification = VERIFY.test(latest);
   // A terse correction such as "was that made up?" carries no subject of its
