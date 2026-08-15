@@ -1156,9 +1156,15 @@ export function ChatClient({
               }}
               placeholder="Ask anything… type / for commands"
               rows={1}
-              className="block max-h-40 min-h-12 w-full min-w-0 resize-none border-0 bg-transparent px-4 pt-3 pb-2 text-base outline-none placeholder:text-muted/70 sm:text-sm"
+              className="block max-h-40 min-h-11 w-full min-w-0 resize-none border-0 bg-transparent px-4 pt-3.5 pb-1 text-base leading-6 outline-none placeholder:text-muted/70 sm:text-sm"
             />
-            <div className="flex min-w-0 items-center justify-end gap-2 border-t border-edge/70 px-2 py-2">
+            {/* No rule between the field and its controls. A full-bleed border
+                ran straight into the card's corner arc, which cut it off at an
+                angle and made one object look like two stacked ones. Without it
+                the card reads as a single well with the controls resting in it,
+                and the round send button agrees with the corners instead of
+                fighting them. */}
+            <div className="chat-composer-controls flex min-w-0 items-center justify-end gap-2 px-2.5 pb-2.5">
               <button
                 type="button"
                 onClick={() => {
@@ -1177,7 +1183,7 @@ export function ChatClient({
                     : `Response model: ${selectedModelLabel}. Tap to change.`
                 }
                 title="Switch response model"
-                className={`hidden h-10 shrink-0 items-center gap-1.5 rounded-[var(--radius-shell-inset-8)] px-3 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong sm:inline-flex ${focusRing}`}
+                className={`hidden h-10 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong sm:inline-flex ${focusRing}`}
               >
                 <Sparkles className="size-3.5 shrink-0" aria-hidden="true" />
                 <span className="max-w-[14ch] truncate">{selectedModelLabel}</span>
@@ -1187,7 +1193,7 @@ export function ChatClient({
                   type="button"
                   onClick={() => stop()}
                   title="Stop generating"
-                  className={`inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-shell-inset-8)] border border-edge bg-raised text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
+                  className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-edge bg-raised text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
                 >
                   <Square className="size-3 fill-current" aria-hidden="true" />
                   <span className="sr-only">Stop</span>
@@ -1200,7 +1206,7 @@ export function ChatClient({
                   type="submit"
                   disabled={!canSend}
                   aria-label={asyncTurn ? 'Working on your request' : 'Send'}
-                  className={`inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-shell-inset-8)] motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
+                  className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
                     canSend
                       ? 'bg-accent text-white hover:bg-accent-hover'
                       : 'cursor-not-allowed bg-sunken text-muted'
