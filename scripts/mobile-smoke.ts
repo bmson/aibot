@@ -432,10 +432,8 @@ try {
     const message = page.getByRole('combobox', { name: 'Message' });
     const send = page.getByRole('button', { name: 'Send' });
     const composerSurface = page.getByTestId('chat-composer-surface');
-    const autonomyMode = page.getByTestId('chat-autonomy-mode');
     await targetSize(message, 'chat message field');
     await targetSize(send, 'chat send button');
-    await targetSize(autonomyMode, 'chat autonomy mode');
     assert(
       (await page.getByRole('link', { name: 'All chats', exact: true }).count()) === 0,
       'All chats still occupies the chat header',
@@ -445,9 +443,22 @@ try {
       'Model still occupies the chat header',
     );
     assert(
-      (await composerSurface.locator('[data-testid="chat-autonomy-mode"]').count()) === 1,
-      'autonomy mode is not integrated into the composer surface',
+      (await composerSurface.locator('[data-testid="chat-autonomy-mode"]').count()) === 0,
+      'autonomy still holds a permanent seat in the composer',
     );
+    // The composer is one row — send, field, and (from sm up) the model name.
+    // A second row of controls is the height regression this guards against.
+    // Compared by overlap rather than by shared top: the row is bottom-aligned,
+    // so a 40px button and a taller field legitimately start at different ys.
+    const composerIsOneRow = await composerSurface.evaluate((surface) => {
+      const boxes = [...surface.children]
+        .map((child) => child.getBoundingClientRect())
+        .filter((box) => box.height > 0);
+      return boxes.every((box) =>
+        boxes.every((other) => box.top < other.bottom && other.top < box.bottom),
+      );
+    });
+    assert(composerIsOneRow, 'composer controls are not on a single row');
     await message.focus();
     const focusVisual = await composerSurface.evaluate((surface) => {
       const wrapper = surface.parentElement;
@@ -468,6 +479,19 @@ try {
       focusVisual.wrapperShadow === 'none' && focusVisual.wrapperTransform === 'none',
       `chat composer has a second outer focus treatment: ${JSON.stringify(focusVisual)}`,
     );
+    // Autonomy is a slash command now. Picking it arms the turn, hands the
+    // composer back empty, and says so in a notice above the field.
+    await message.fill('/auto');
+    const commandList = page.getByRole('listbox', { name: 'Commands' });
+    await commandList.waitFor();
+    await commandList.getByRole('option').first().click();
+    const autonomyNotice = page.getByTestId('chat-autonomy-mode');
+    await autonomyNotice.waitFor({ state: 'visible' });
+    await targetSize(autonomyNotice, 'autonomy cancel control');
+    assert((await message.inputValue()) === '', '/auto left its token in the composer');
+    await autonomyNotice.click();
+    await autonomyNotice.waitFor({ state: 'detached' });
+
     await message.fill('/model');
     assert((await message.getAttribute('aria-expanded')) === 'true', 'model picker is not exposed');
     const modelList = page.getByRole('listbox', { name: 'Response model' });
@@ -553,6 +577,8 @@ try {
         'root opens the primary chat',
         'activity feed and filters',
         'single rounded composer focus treatment',
+        'single-row composer with no standing autonomy control',
+        'slash-command autonomy (/auto) arms and cancels',
         'draft-safe model switching',
       ],
     }),

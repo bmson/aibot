@@ -75,6 +75,11 @@ const SLASH_COMMANDS = [
     hint: 'Switch which model answers this chat',
     icon: Sparkles,
   },
+  {
+    command: '/auto',
+    hint: 'Act without asking for this turn',
+    icon: Zap,
+  },
 ] as const;
 
 export function ChatClient({
@@ -362,6 +367,15 @@ export function ChatClient({
 
   const completeCommand = (command: string) => {
     modelPickerDraftRef.current = null;
+    // /auto is an action, not a prefix: it has no palette of its own to hand
+    // off to, so it applies on the spot and gives the composer back empty
+    // rather than leaving a token the reader has to clear before typing.
+    if (command === '/auto') {
+      setAutonomous((value) => !value);
+      setInput('');
+      textareaRef.current?.focus();
+      return;
+    }
     setInput(command);
     textareaRef.current?.focus();
   };
@@ -736,7 +750,7 @@ export function ChatClient({
                           <div className="group/msg min-w-0 max-w-[88%] sm:max-w-[min(76%,42rem)]">
                             <RecallNote sources={recallSources} />
                             <div
-                              className={`min-w-0 max-w-full rounded-2xl rounded-bl-md bg-raised px-4 py-3 text-base text-strong ring-1 ring-edge/60 ${
+                              className={`min-w-0 max-w-full rounded-2xl rounded-bl-md bg-raised px-4 py-3 text-sm text-strong ring-1 ring-edge/60 ${
                                 streamingCaret ? 'chat-caret' : ''
                               }`}
                             >
@@ -752,9 +766,12 @@ export function ChatClient({
                         ) : (
                           // Both speakers read at the same size — a smaller user
                           // bubble made your own words look like a footnote.
+                          // That size is the one the event cards already use, so
+                          // speech and system notices sit on one typographic
+                          // scale instead of two.
                           <div
                             title={date ? date.toLocaleString() : undefined}
-                            className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover px-4 py-3 text-base leading-6 text-white sm:max-w-[min(76%,42rem)]"
+                            className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover px-4 py-3 text-sm leading-6 text-white sm:max-w-[min(76%,42rem)]"
                           >
                             {visibleTextParts.map((part, index) => (
                               <p
@@ -879,6 +896,25 @@ export function ChatClient({
           </div>
         ) : null}
         <div className="pointer-events-none absolute inset-x-0 bottom-full z-20 min-w-0">
+          {/* Autonomy is a per-turn choice, so it no longer holds a permanent
+              seat in the composer — /auto sets it and this says so until the
+              turn goes out. Out of flow, so arming it never resizes the field. */}
+          {autonomous ? (
+            <div className="pointer-events-auto mb-2 flex min-w-0 items-center gap-2 rounded-[var(--radius-shell)] bg-amber-100 px-3 py-1.5 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-300">
+              <Zap className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">Acting without asking this turn</span>
+              <button
+                data-testid="chat-autonomy-mode"
+                type="button"
+                onClick={() => setAutonomous(false)}
+                aria-label="Ask before acting again"
+                title="Sensitive steps including unknown recipients and logged-in browsing still ask, and budget caps still apply."
+                className={`shrink-0 rounded-[var(--radius-shell-inset-8)] px-2 font-medium underline underline-offset-2 hover:no-underline ${focusRing}`}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : null}
           {error ? (
             <div
               role="alert"
@@ -1029,10 +1065,46 @@ export function ChatClient({
           ) : null}
         </div>
         <div className="pointer-events-auto relative min-w-0">
+          {/* One row: send, then the field, then the model name where there is
+              room for it. The controls used to sit on a rule beneath the field,
+              which cost the composer a second row of height on the screen that
+              can least afford it. `items-end` keeps the buttons on the last
+              line as the field grows upward. */}
           <div
             data-testid="chat-composer-surface"
-            className="min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised/90 backdrop-blur-xl motion-safe:transition-shadow"
+            className="flex min-w-0 items-end gap-1.5 overflow-hidden rounded-[var(--radius-shell)] bg-raised/90 p-1.5 backdrop-blur-xl motion-safe:transition-shadow"
           >
+            {status === 'submitted' || status === 'streaming' ? (
+              <button
+                type="button"
+                onClick={() => stop()}
+                title="Stop generating"
+                className={`inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-shell-inset-8)] border border-edge bg-raised text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
+              >
+                <Square className="size-3 fill-current" aria-hidden="true" />
+                <span className="sr-only">Stop</span>
+              </button>
+            ) : (
+              // Readiness is a state change, not a dimmed copy of the live
+              // button: with nothing to send it sits back as a quiet tonal
+              // control, then fills with accent once you have typed.
+              <button
+                type="submit"
+                disabled={!canSend}
+                aria-label={asyncTurn ? 'Working on your request' : 'Send'}
+                className={`inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-shell-inset-8)] motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
+                  canSend
+                    ? 'bg-accent text-white hover:bg-accent-hover'
+                    : 'cursor-not-allowed bg-sunken text-muted'
+                }`}
+              >
+                {asyncTurn ? (
+                  <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+                ) : (
+                  <ArrowUp className="size-4" aria-hidden="true" />
+                )}
+              </button>
+            )}
             <textarea
               ref={textareaRef}
               role="combobox"
@@ -1116,92 +1188,31 @@ export function ChatClient({
               }}
               placeholder="Ask anything… type / for commands"
               rows={1}
-              className="block max-h-40 min-h-12 w-full min-w-0 resize-none border-0 bg-transparent px-4 pt-3 pb-2 text-base outline-none placeholder:text-muted/70 sm:text-sm"
+              className="block max-h-40 min-h-10 w-full min-w-0 flex-1 resize-none self-center border-0 bg-transparent px-2 py-2 text-base leading-6 outline-none placeholder:text-muted/70 sm:text-sm"
             />
-            <div className="flex min-w-0 items-center justify-between gap-2 border-t border-edge/70 px-2 py-2">
-              <button
-                data-testid="chat-autonomy-mode"
-                type="button"
-                aria-pressed={autonomous}
-                aria-label={
-                  autonomous
-                    ? 'Act without asking for this turn. Tap to ask first.'
-                    : 'Ask before acting. Tap to act without asking for this turn.'
+            <button
+              type="button"
+              onClick={() => {
+                if (modelCommandOpen) {
+                  closeModelPicker();
+                  return;
                 }
-                onClick={() => setAutonomous((value) => !value)}
-                title="For this turn only, routine actions can proceed without individual approval. Sensitive steps and budget caps still require permission."
-                // Pressing deepens the fill and draws a ring in place. Nudging
-                // the button down a pixel read as the control slipping.
-                className={`inline-flex h-10 min-w-0 items-center gap-1.5 rounded-[var(--radius-shell-inset-8)] px-3 text-xs font-medium ring-1 ring-transparent motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
-                  autonomous
-                    ? 'bg-amber-100 text-amber-900 active:bg-amber-200 active:ring-amber-500/50 dark:bg-amber-950 dark:text-amber-300 dark:active:bg-amber-900 dark:active:ring-amber-400/40'
-                    : 'bg-sunken text-muted hover:text-strong active:bg-edge active:text-strong active:ring-edge'
-                }`}
-              >
-                <Zap className="size-3.5 shrink-0" aria-hidden="true" />
-                <span className="truncate">{autonomous ? 'Act this turn' : 'Ask first'}</span>
-                <span className="sr-only">
-                  . Sensitive steps including unknown recipients and logged-in browsing still ask,
-                  and budget caps still apply.
-                </span>
-              </button>
-              <div className="flex shrink-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (modelCommandOpen) {
-                      closeModelPicker();
-                      return;
-                    }
-                    modelPickerDraftRef.current = input;
-                    setModelError(null);
-                    setInput('/model');
-                    textareaRef.current?.focus();
-                  }}
-                  aria-label={
-                    modelCommandOpen
-                      ? 'Close response model picker'
-                      : `Response model: ${selectedModelLabel}. Tap to change.`
-                  }
-                  title="Switch response model"
-                  className={`hidden h-10 items-center gap-1.5 rounded-[var(--radius-shell-inset-8)] px-3 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong sm:inline-flex ${focusRing}`}
-                >
-                  <Sparkles className="size-3.5 shrink-0" aria-hidden="true" />
-                  <span className="max-w-[14ch] truncate">{selectedModelLabel}</span>
-                </button>
-                {status === 'submitted' || status === 'streaming' ? (
-                  <button
-                    type="button"
-                    onClick={() => stop()}
-                    title="Stop generating"
-                    className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-[var(--radius-shell-inset-8)] border border-edge bg-raised px-4 text-sm font-medium text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
-                  >
-                    <Square className="size-3 fill-current" aria-hidden="true" />
-                    Stop
-                  </button>
-                ) : (
-                  // Readiness is a state change, not a dimmed copy of the live
-                  // button: with nothing to send it sits back as a quiet tonal
-                  // control, then fills with accent once you have typed.
-                  <button
-                    type="submit"
-                    disabled={!canSend}
-                    aria-label={asyncTurn ? 'Working on your request' : 'Send'}
-                    className={`inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-shell-inset-8)] motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
-                      canSend
-                        ? 'bg-accent text-white hover:bg-accent-hover'
-                        : 'cursor-not-allowed bg-sunken text-muted'
-                    }`}
-                  >
-                    {asyncTurn ? (
-                      <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-                    ) : (
-                      <ArrowUp className="size-4" aria-hidden="true" />
-                    )}
-                  </button>
-                )}
-              </div>
-            </div>
+                modelPickerDraftRef.current = input;
+                setModelError(null);
+                setInput('/model');
+                textareaRef.current?.focus();
+              }}
+              aria-label={
+                modelCommandOpen
+                  ? 'Close response model picker'
+                  : `Response model: ${selectedModelLabel}. Tap to change.`
+              }
+              title="Switch response model"
+              className={`hidden h-10 shrink-0 items-center gap-1.5 self-end rounded-[var(--radius-shell-inset-8)] px-3 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong sm:inline-flex ${focusRing}`}
+            >
+              <Sparkles className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="max-w-[14ch] truncate">{selectedModelLabel}</span>
+            </button>
           </div>
           <span aria-live="polite" className="sr-only">
             {modelCommandOpen && modelOptions[modelHighlight]
