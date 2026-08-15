@@ -155,9 +155,15 @@ export const cardInteractiveClass =
  * Timeline event cards (chat): approvals, budget asks, system checks. A
  * wrapped, outlined object distinct from speech bubbles — process moments
  * should read as things the assistant placed in the conversation, not prose.
+ *
+ * The outline is a border, not a ring. A ring is an outset shadow, so on a
+ * phone — where these cards run the full width of the column — its left and
+ * right pixel fell outside the chat log's box and was clipped away by that
+ * scroller's overflow-x, leaving the card open-sided. A border is inside the
+ * box, so it survives at any width.
  */
 export const eventCardClass =
-  'min-w-0 max-w-full overflow-hidden rounded-xl bg-raised ring-1 ring-edge/70';
+  'min-w-0 max-w-full overflow-hidden rounded-xl border border-edge/70 bg-raised';
 
 /** The shared grid recipe, so pages stop inventing their own breakpoints. */
 export const cardGridClass = 'grid min-w-0 items-stretch gap-4 lg:grid-cols-2';
