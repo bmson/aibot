@@ -5,12 +5,17 @@
 :root {
   --mobile-menu-edge: color-mix(in srgb, currentColor 9%, transparent);
   --mobile-menu-hover: color-mix(in srgb, var(--surface-sunken) 68%, transparent);
-  --ios-status-scrim: rgb(12 27 29 / 0.7);
+  /* The status veil is frosted canvas, not ink: the blur is what separates the
+     clock from the conversation sliding beneath it. A fixed dark wash reads as a
+     black bar ruled across the top of a light app, so this tracks --surface and
+     flips with the theme. */
+  --ios-status-scrim: color-mix(in srgb, var(--surface) 80%, transparent);
 }
 
 .dark {
   --mobile-menu-edge: color-mix(in srgb, currentColor 15%, transparent);
   --mobile-menu-hover: color-mix(in srgb, var(--surface-sunken) 82%, transparent);
+  --ios-status-scrim: color-mix(in srgb, var(--surface) 74%, transparent);
 }
 
 .nav-mobile-menu-trigger {
@@ -332,8 +337,24 @@
 
   /* Chat owns an inner scroller, so extend that scroller to the physical top.
      Its existing opening padding keeps the first message clear at rest, while
-     older messages can travel behind the clock and notch. */
+     older messages can travel behind the clock and notch.
+
+     The height has to move with that offset. `h-[calc(100dvh-1rem)]` reserves a
+     browser tab's breathing room under the composer, but an installed app has
+     no browser chrome to breathe against: pulling the column up to the physical
+     top while it still measured a rem short left the composer floating that far
+     above the home indicator instead of resting on it. Installed, the column is
+     exactly the screen, and `.mobile-safe-bottom` alone clears the indicator.
+
+     `lvh`, not `dvh`. Once the keyboard has been raised and dismissed in a
+     home-screen app, WebKit leaves the dynamic viewport stuck one top inset
+     short of the screen (874 -> 812 on an iPhone 17 Pro) and never restores it;
+     a dvh-sized column silently shrinks with it and carries the composer ~60px
+     up the screen, where it stays for the rest of the session. There is no
+     retractable browser chrome to track here, so the large viewport is both the
+     stable measurement and the semantically correct one. */
   .chat-viewport {
+    height: calc(100lvh - var(--app-chrome, 0px));
     margin-top: calc(-1.25rem - env(safe-area-inset-top));
   }
 
@@ -341,13 +362,18 @@
     padding-top: calc(1.75rem + env(safe-area-inset-top));
   }
 
+  /* The veil covers the status area and stops there. It used to run 0.7rem past
+     the inset, which put its fading edge across the menu trigger's rim and
+     notification badge — the button read as though it were being blurred along
+     with the conversation. The trigger opens 0.75rem below the same inset, so
+     ending on the inset leaves it fully clear. */
   body::after {
     position: fixed;
     z-index: 35;
     inset: 0 0 auto;
-    height: calc(env(safe-area-inset-top) + 0.7rem);
+    height: env(safe-area-inset-top);
     pointer-events: none;
-    background: linear-gradient(to bottom, var(--ios-status-scrim) 0 72%, transparent);
+    background: linear-gradient(to bottom, var(--ios-status-scrim) 0 62%, transparent);
     content: "";
     -webkit-backdrop-filter: blur(18px) saturate(1.15);
     backdrop-filter: blur(18px) saturate(1.15);
