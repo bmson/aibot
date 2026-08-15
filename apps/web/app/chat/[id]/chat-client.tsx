@@ -1154,9 +1154,9 @@ export function ChatClient({
                   formRef.current?.requestSubmit();
                 }
               }}
-              placeholder="Ask anything… type / for commands"
+              placeholder="Ask anything…"
               rows={1}
-              className="block max-h-40 min-h-11 w-full min-w-0 resize-none border-0 bg-transparent px-4 pt-3.5 pb-1 text-base leading-6 outline-none placeholder:text-muted/70 sm:text-sm"
+              className="block max-h-40 min-h-11 w-full min-w-0 resize-none border-0 bg-transparent px-5 pt-4 text-base leading-6 outline-none placeholder:text-muted/70 sm:text-sm"
             />
             {/* No rule between the field and its controls. A full-bleed border
                 ran straight into the card's corner arc, which cut it off at an
@@ -1164,7 +1164,7 @@ export function ChatClient({
                 the card reads as a single well with the controls resting in it,
                 and the round send button agrees with the corners instead of
                 fighting them. */}
-            <div className="chat-composer-controls flex min-w-0 items-center justify-end gap-2 px-2.5 pb-2.5">
+            <div className="chat-composer-controls flex min-w-0 items-center justify-end gap-2 px-5 pb-4">
               <button
                 type="button"
                 onClick={() => {

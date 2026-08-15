@@ -414,12 +414,11 @@
   .chat-composer-controls {
     --composer-safe-inset: max(0px, calc(max(0.5rem, env(safe-area-inset-bottom)) - 1rem));
 
-    /* The controls carry that clearance, not the card, and carry the same
-       amount on the inline axis. Padding only the card's bottom cleared the
-       indicator but left the send button 11px from the right edge and 29px
-       from the bottom one — riding high in a corner it was supposed to sit
-       centred in. Equal insets put it back on the arc's diagonal. */
-    padding-inline: calc(0.625rem + var(--composer-safe-inset));
-    padding-bottom: calc(0.625rem + var(--composer-safe-inset));
+    /* The controls carry that clearance rather than the card, so the send
+       button keeps the same inset from the card's bottom edge as the field's
+       text keeps from its left one. Adding the clearance on top of that inset
+       instead of absorbing it is what left the button adrift in the corner. */
+    padding-inline: max(1.25rem, var(--composer-safe-inset));
+    padding-bottom: max(1.25rem, var(--composer-safe-inset));
   }
 }
