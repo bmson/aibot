@@ -446,19 +446,13 @@ try {
       (await composerSurface.locator('[data-testid="chat-autonomy-mode"]').count()) === 0,
       'autonomy still holds a permanent seat in the composer',
     );
-    // The composer is one row — send, field, and (from sm up) the model name.
-    // A second row of controls is the height regression this guards against.
-    // Compared by overlap rather than by shared top: the row is bottom-aligned,
-    // so a 40px button and a taller field legitimately start at different ys.
-    const composerIsOneRow = await composerSurface.evaluate((surface) => {
-      const boxes = [...surface.children]
-        .map((child) => child.getBoundingClientRect())
-        .filter((box) => box.height > 0);
-      return boxes.every((box) =>
-        boxes.every((other) => box.top < other.bottom && other.top < box.bottom),
-      );
+    // The field owns its own full-width row and the controls sit beneath it.
+    const sendBelowField = await composerSurface.evaluate((surface) => {
+      const field = surface.querySelector('textarea')?.getBoundingClientRect();
+      const send = surface.querySelector('button[type="submit"]')?.getBoundingClientRect();
+      return Boolean(field && send && send.top >= field.bottom - 1);
     });
-    assert(composerIsOneRow, 'composer controls are not on a single row');
+    assert(sendBelowField, 'send is not on its own row beneath the message field');
     await message.focus();
     const focusVisual = await composerSurface.evaluate((surface) => {
       const wrapper = surface.parentElement;
@@ -577,7 +571,7 @@ try {
         'root opens the primary chat',
         'activity feed and filters',
         'single rounded composer focus treatment',
-        'single-row composer with no standing autonomy control',
+        'composer controls beneath the field, no standing autonomy control',
         'slash-command autonomy (/auto) arms and cancels',
         'draft-safe model switching',
       ],
