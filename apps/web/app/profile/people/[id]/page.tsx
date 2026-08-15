@@ -90,10 +90,10 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
               Unverified
             </Badge>
           ) : (
-            <span className="text-2xs font-medium text-muted">Known contact</span>
+            <span className="text-xs font-medium text-muted">Known contact</span>
           )}
         </div>
-        <p className="mt-1 max-w-[62ch] text-[13px] leading-5 text-muted">
+        <p className="mt-1 max-w-[62ch] text-sm leading-5 text-muted">
           How the assistant recognises this person. Adding a relationship marks them as known, so
           their content is no longer treated as unverified.
         </p>

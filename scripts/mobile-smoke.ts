@@ -42,6 +42,101 @@ async function targetSize(locator: Locator, label: string) {
   );
 }
 
+async function assertMenuBackdrop(page: Page, label: string) {
+  const metrics = await page.locator('.nav-mobile-menu-scrim').evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return {
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      left: rect.left,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      backgroundColor: style.backgroundColor,
+      backdropFilter: style.backdropFilter,
+    };
+  });
+  assert(
+    metrics.left <= 0.5 &&
+      metrics.top <= 0.5 &&
+      metrics.right >= metrics.viewportWidth - 0.5 &&
+      metrics.bottom >= metrics.viewportHeight - 0.5,
+    `${label} menu backdrop does not cover the viewport: ${JSON.stringify(metrics)}`,
+  );
+  assert(
+    metrics.backgroundColor !== 'rgba(0, 0, 0, 0)' && metrics.backdropFilter !== 'none',
+    `${label} menu backdrop has no visual treatment: ${JSON.stringify(metrics)}`,
+  );
+}
+
+async function assertStandaloneScreenRadius(page: Page) {
+  // Chromium DevTools cannot emulate display-mode: standalone. Inspect the
+  // browser-parsed CSSOM instead, which still proves the production stylesheet
+  // contains a valid standalone rule and preserves the component radius token.
+  const metrics = await page.evaluate(() => {
+    let deviceFormula = '';
+    let canvasRadius = '';
+    let canvasClip = '';
+    const pending = [...document.styleSheets].map((sheet) => ({
+      rules: sheet.cssRules,
+      standalone: false,
+    }));
+
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (!current) break;
+      for (const rule of current.rules) {
+        const isStandaloneRule =
+          rule instanceof CSSMediaRule && rule.conditionText.includes('display-mode: standalone');
+        const insideStandalone = current.standalone || isStandaloneRule;
+
+        if (insideStandalone && rule instanceof CSSStyleRule) {
+          if (rule.selectorText === ':root') {
+            deviceFormula = rule.style.getPropertyValue('--device-screen-radius').trim();
+          }
+          if (
+            rule.selectorText.includes('body') &&
+            rule.selectorText.includes('.nav-mobile-menu-dialog')
+          ) {
+            canvasRadius = rule.style.borderRadius;
+            canvasClip = rule.style.clipPath;
+          }
+        }
+
+        if ('cssRules' in rule) {
+          pending.push({
+            rules: (rule as CSSGroupingRule).cssRules,
+            standalone: insideStandalone,
+          });
+        }
+      }
+    }
+    const root = getComputedStyle(document.documentElement);
+    return {
+      deviceFormula,
+      canvasRadius,
+      canvasClip,
+      defaultDeviceRadius: root.getPropertyValue('--device-screen-radius').trim(),
+      componentRadius: root.getPropertyValue('--radius-shell').trim(),
+    };
+  });
+  assert(
+    metrics.deviceFormula.includes('safe-area-inset-top') &&
+      metrics.deviceFormula.includes('safe-area-inset-left'),
+    `standalone radius is not derived from device safe areas: ${JSON.stringify(metrics)}`,
+  );
+  assert(
+    metrics.canvasRadius === 'var(--device-screen-radius)' &&
+      metrics.canvasClip.includes('var(--device-screen-radius)'),
+    `standalone canvas and backdrop do not share the device radius: ${JSON.stringify(metrics)}`,
+  );
+  assert(
+    metrics.defaultDeviceRadius === '0px' && metrics.componentRadius === '1rem',
+    `device radius leaked into component geometry: ${JSON.stringify(metrics)}`,
+  );
+}
+
 async function assertResponsiveContract(page: Page, label: string, mobile: boolean) {
   const metrics = await page.evaluate(() => {
     const root = document.documentElement;
@@ -199,7 +294,63 @@ try {
     new URL(page.url()).pathname === '/chat',
     `Root did not open the primary chat: ${page.url()}`,
   );
-  assert(await page.getByRole('combobox', { name: 'Message' }).isVisible(), 'Chat is not ready');
+  const installContract = await page.evaluate(async () => {
+    const manifestHref = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')?.href;
+    const manifest = manifestHref
+      ? ((await (await fetch(manifestHref)).json()) as {
+          display?: string;
+          start_url?: string;
+          scope?: string;
+          icons?: Array<{ sizes?: string; purpose?: string }>;
+        })
+      : null;
+    return {
+      viewport: document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.content ?? null,
+      mobileCapable:
+        document.querySelector<HTMLMetaElement>('meta[name="mobile-web-app-capable"]')?.content ??
+        null,
+      appleCapable:
+        document.querySelector<HTMLMetaElement>('meta[name="apple-mobile-web-app-capable"]')
+          ?.content ?? null,
+      statusBar:
+        document.querySelector<HTMLMetaElement>(
+          'meta[name="apple-mobile-web-app-status-bar-style"]',
+        )?.content ?? null,
+      appleIcon: document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]')?.href,
+      themeColors: [...document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')].map(
+        ({ content, media }) => ({ content, media }),
+      ),
+      manifest,
+    };
+  });
+  assert(
+    installContract.viewport?.includes('viewport-fit=cover') &&
+      installContract.viewport.includes('maximum-scale=1') &&
+      installContract.viewport.includes('user-scalable=no'),
+    `iOS viewport contract is incomplete: ${installContract.viewport}`,
+  );
+  assert(
+    installContract.mobileCapable === 'yes' && installContract.appleCapable === 'yes',
+    `standalone capability metadata is incomplete: ${JSON.stringify(installContract)}`,
+  );
+  assert(
+    installContract.statusBar === 'black-translucent',
+    `iOS status bar is not edge-to-edge: ${installContract.statusBar}`,
+  );
+  assert(installContract.appleIcon?.endsWith('/apple-icon.png'), 'Apple touch icon is missing');
+  assert(installContract.themeColors.length === 2, 'light/dark browser theme colors are missing');
+  assert(
+    installContract.manifest?.display === 'standalone' &&
+      installContract.manifest.start_url === '/chat' &&
+      installContract.manifest.scope === '/' &&
+      installContract.manifest.icons?.some(({ sizes }) => sizes === '192x192') &&
+      installContract.manifest.icons.some(({ sizes }) => sizes === '512x512') &&
+      installContract.manifest.icons.some(({ purpose }) => purpose === 'maskable'),
+    `web app manifest is incomplete: ${JSON.stringify(installContract.manifest)}`,
+  );
+  await assertStandaloneScreenRadius(page);
+  const primaryMessageField = page.getByRole('combobox', { name: 'Message' });
+  await primaryMessageField.waitFor({ state: 'visible' });
   const menuTrigger = page.getByRole('button', {
     name: 'Open navigation menu',
   });
@@ -207,6 +358,7 @@ try {
   await menuTrigger.click();
   const bloom = page.locator('#mobile-nav[role="dialog"]');
   await bloom.waitFor({ state: 'visible' });
+  await assertMenuBackdrop(page, 'mobile');
   assert((await bloom.getAttribute('aria-modal')) === 'true', 'mobile bloom is not modal');
   assert(
     (await bloom.getAttribute('aria-labelledby')) === 'mobile-nav-title',
@@ -256,7 +408,10 @@ try {
     name: 'Close navigation menu',
   });
   await targetSize(closeButton, 'mobile navigation close button');
-  await closeButton.click();
+  // The scrim now covers the entire viewport and sits underneath the panel.
+  // Click an exposed corner rather than its geometric center, which is behind
+  // the nearly full-width phone panel by design.
+  await closeButton.click({ position: { x: 1, y: 1 } });
   await bloom.waitFor({ state: 'detached' });
   assert(
     (await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))) ===
@@ -358,6 +513,11 @@ try {
       (await page.locator('.nav-launcher').count()) === 0,
       `${viewport.label} shell still rendered the retired left navigation launcher`,
     );
+    await navigationTriggers.click();
+    await page.locator('#mobile-nav[role="dialog"]').waitFor({ state: 'visible' });
+    await assertMenuBackdrop(page, viewport.label);
+    await page.locator('.nav-mobile-menu-trigger').click();
+    await page.locator('#mobile-nav[role="dialog"]').waitFor({ state: 'detached' });
   }
 
   if (fixture) {
@@ -384,8 +544,11 @@ try {
         'no horizontal overflow',
         '44px mobile targets',
         '16px mobile fields',
+        'iOS standalone metadata and install icons',
+        'device-mapped standalone screen radius',
         'bloom focus trap',
         'primary and secondary bloom destinations',
+        'full-viewport menu backdrop',
         'one right-side navigation trigger at every viewport',
         'root opens the primary chat',
         'activity feed and filters',

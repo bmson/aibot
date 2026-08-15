@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <title>Assistant</title>
+  <!-- Full-bleed, opaque artwork lets iOS apply its own icon mask cleanly and
+       also satisfies the PWA maskable-icon safe-area contract. -->
+  <rect width="1024" height="1024" fill="#21666e"/>
+  <path
+    fill="#ffffff"
+    d="M512 192c28.8 152 72 243.2 134.4 281.6C707.2 512 790.4 512 832 512c-41.6 0-124.8 0-185.6 38.4C584 588.8 540.8 680 512 832c-28.8-152-72-243.2-134.4-281.6C316.8 512 233.6 512 192 512c41.6 0 124.8 0 185.6-38.4C440 435.2 483.2 344 512 192z"
+  />
+  <circle cx="752" cy="256" r="56" fill="#ffffff" opacity="0.85"/>
+</svg>

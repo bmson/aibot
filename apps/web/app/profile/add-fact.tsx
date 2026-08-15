@@ -92,7 +92,7 @@ export function AddFact({
             <option value="1">Minor</option>
           </select>
         </label>
-        <label className="mobile-touch-target flex items-center gap-2 text-[13px] font-medium text-muted">
+        <label className="mobile-touch-target flex items-center gap-2 text-sm font-medium text-muted">
           {/* Tick colour comes from the global accent-color token (globals.css). */}
           <input name="pinned" type="checkbox" className="size-4" />
           Keep in profile summary

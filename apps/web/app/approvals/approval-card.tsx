@@ -144,13 +144,13 @@ export function ApprovalCard({
       </div>
 
       {approval.expired ? (
-        <p className="border-t border-edge bg-sunken/55 px-4 py-3 text-[13px] font-medium text-muted sm:px-5">
+        <p className="border-t border-edge bg-sunken/55 px-4 py-3 text-sm font-medium text-muted sm:px-5">
           This request has expired. Open its activity if you still want the assistant to try again.
         </p>
       ) : editing ? (
         <form action={editAction} className="border-t border-edge bg-sunken/45 p-4 sm:p-5">
           <input type="hidden" name="approvalId" value={approval.id} />
-          <label htmlFor={`approval-payload-${approval.id}`} className="text-[13px] font-medium">
+          <label htmlFor={`approval-payload-${approval.id}`} className="text-sm font-medium">
             Edit the exact request
           </label>
           <p className="mt-1 text-xs text-muted">

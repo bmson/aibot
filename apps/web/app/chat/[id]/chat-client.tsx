@@ -521,7 +521,7 @@ export function ChatClient({
     // above), not this container: prose that runs to 1000px is tiring, and
     // pinning the user's bubbles that far right would make a two-way
     // exchange read as two columns regardless of how wide the column is.
-    <div className="relative mx-auto -my-5 flex h-[calc(100dvh-1rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-7 lg:h-[calc(100dvh-var(--app-chrome,0px))] lg:max-w-4xl 2xl:max-w-[56rem]">
+    <div className="chat-viewport relative mx-auto -my-5 flex h-[calc(100dvh-1rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-7 lg:h-[calc(100dvh-var(--app-chrome,0px))] lg:max-w-4xl 2xl:max-w-[56rem]">
       {/* The primary thread is the whole surface — it needs no title. Side and
           goal chats keep a slim header so you know which one you're in. */}
       {!isPrimary ? (
@@ -564,7 +564,7 @@ export function ChatClient({
       {initialNotice ? (
         <div
           role="alert"
-          className="mt-3 border-l-2 border-amber-400 py-1 pl-4 text-[13px] leading-5 text-amber-900 dark:border-amber-700 dark:text-amber-100"
+          className="mt-3 border-l-2 border-amber-400 py-1 pl-4 text-sm leading-5 text-amber-900 dark:border-amber-700 dark:text-amber-100"
         >
           {initialNotice}
         </div>
@@ -594,7 +594,7 @@ export function ChatClient({
               <span className="inline-flex size-12 items-center justify-center rounded-2xl bg-sunken text-accent">
                 <Sparkles className="size-5" aria-hidden="true" />
               </span>
-              <p className="mt-4 font-display text-[1.75rem] leading-9 font-semibold tracking-[-0.04em] text-balance text-strong">
+              <p className="mt-4 font-display text-2xl leading-8 font-semibold tracking-[-0.025em] text-balance text-strong">
                 What should we move forward?
               </p>
               {/* A small hand-drawn stroke that sketches itself in under the
@@ -609,7 +609,7 @@ export function ChatClient({
                   className="[stroke-dasharray:160] [stroke-dashoffset:160] motion-safe:animate-[draw-in_700ms_ease-out_250ms_forwards] motion-reduce:[stroke-dashoffset:0]"
                 />
               </svg>
-              <p className="mt-2 max-w-md text-[15px] leading-6 text-pretty text-muted">
+              <p className="mt-2 max-w-md text-base leading-6 text-pretty text-muted">
                 Start with an outcome. {agentName} can research, plan, draft, schedule, and keep
                 following up when the work takes time.
               </p>
@@ -644,7 +644,7 @@ export function ChatClient({
                       className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left ring-1 ring-edge/60 motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-colors hover:bg-sunken/30 disabled:opacity-60 ${focusRing}`}
                     >
                       <SuggestionIcon className="size-4 text-accent" aria-hidden="true" />
-                      <span className="mt-3 text-[13px] font-medium text-strong">
+                      <span className="mt-3 text-sm font-medium text-strong">
                         {suggestion.label}
                       </span>
                     </button>
@@ -736,7 +736,7 @@ export function ChatClient({
                           <div className="group/msg min-w-0 max-w-[88%] sm:max-w-[min(76%,42rem)]">
                             <RecallNote sources={recallSources} />
                             <div
-                              className={`min-w-0 max-w-full rounded-2xl rounded-bl-md bg-raised px-4 py-3 text-[15px] text-strong ring-1 ring-edge/60 ${
+                              className={`min-w-0 max-w-full rounded-2xl rounded-bl-md bg-raised px-4 py-3 text-base text-strong ring-1 ring-edge/60 ${
                                 streamingCaret ? 'chat-caret' : ''
                               }`}
                             >
@@ -754,7 +754,7 @@ export function ChatClient({
                           // bubble made your own words look like a footnote.
                           <div
                             title={date ? date.toLocaleString() : undefined}
-                            className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover px-4 py-3 text-[15px] leading-6 text-white sm:max-w-[min(76%,42rem)]"
+                            className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover px-4 py-3 text-base leading-6 text-white sm:max-w-[min(76%,42rem)]"
                           >
                             {visibleTextParts.map((part, index) => (
                               <p
@@ -775,7 +775,7 @@ export function ChatClient({
                     {showTime && date ? (
                       <p
                         title={date.toLocaleString()}
-                        className={`text-2xs text-muted ${
+                        className={`text-xs text-muted ${
                           message.role === 'user' ? 'self-end' : 'self-start'
                         }`}
                       >
@@ -915,8 +915,8 @@ export function ChatClient({
               className="pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
             >
               <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-2.5">
-                <p className="text-[13px] font-semibold text-strong">Commands</p>
-                <span className="hidden shrink-0 text-2xs text-muted sm:block">
+                <p className="text-sm font-semibold text-strong">Commands</p>
+                <span className="hidden shrink-0 text-xs text-muted sm:block">
                   ↑↓ choose · Enter complete · Esc dismiss
                 </span>
               </div>
@@ -941,10 +941,10 @@ export function ChatClient({
                         <EntryIcon className="size-3.5" aria-hidden="true" />
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate font-mono text-[13px] font-medium">
+                        <span className="block truncate font-mono text-sm font-medium">
                           {entry.command}
                         </span>
-                        <span className="block truncate text-2xs text-muted">{entry.hint}</span>
+                        <span className="block truncate text-xs text-muted">{entry.hint}</span>
                       </span>
                     </button>
                   );
@@ -959,16 +959,16 @@ export function ChatClient({
             >
               <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-3">
                 <div className="min-w-0">
-                  <p className="text-[13px] font-semibold text-strong">Response model</p>
-                  <p className="truncate text-2xs text-muted">Currently {selectedModelLabel}</p>
+                  <p className="text-sm font-semibold text-strong">Response model</p>
+                  <p className="truncate text-xs text-muted">Currently {selectedModelLabel}</p>
                 </div>
                 {isSwitching ? (
-                  <span className="inline-flex shrink-0 items-center gap-1.5 text-2xs text-muted">
+                  <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted">
                     <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
                     Switching…
                   </span>
                 ) : (
-                  <span className="hidden shrink-0 text-2xs text-muted sm:block">
+                  <span className="hidden shrink-0 text-xs text-muted sm:block">
                     ↑↓ choose · Enter select · Esc close
                   </span>
                 )}
@@ -1008,16 +1008,14 @@ export function ChatClient({
                           }`}
                         />
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[13px] font-medium">
-                            {model.label}
-                          </span>
-                          <span className="block truncate text-2xs text-muted">{model.detail}</span>
+                          <span className="block truncate text-sm font-medium">{model.label}</span>
+                          <span className="block truncate text-xs text-muted">{model.detail}</span>
                         </span>
                       </button>
                     );
                   })
                 ) : (
-                  <p className="px-3 py-4 text-center text-[13px] text-muted">
+                  <p className="px-3 py-4 text-center text-sm text-muted">
                     No models match “{modelQuery}”
                   </p>
                 )}
@@ -1213,7 +1211,7 @@ export function ChatClient({
                 : ''}
           </span>
           {fallbackNote ? (
-            <p className="px-1 pt-1.5 text-right text-2xs text-muted">{fallbackNote}</p>
+            <p className="px-1 pt-1.5 text-right text-xs text-muted">{fallbackNote}</p>
           ) : null}
         </div>
       </form>

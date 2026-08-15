@@ -24,7 +24,7 @@ export function MergeControl({
     <span className="flex flex-wrap items-center gap-1.5">
       {suggested ? (
         <span
-          className="rounded-full bg-amber-100 px-1.5 py-0.5 text-2xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+          className="rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
           title={`Possible duplicate: ${suggested.reason}`}
         >
           possible duplicate

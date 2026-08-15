@@ -18,6 +18,10 @@
   --content-muted: #667477;
   --accent: #21666e; /* Deep teal */
   --accent-hover: #194f56;
+  /* A rectangular browser tab has no app-owned outer curve. Installed mobile
+     mode replaces this with a value derived from the device safe area; it is
+     intentionally separate from component radii. */
+  --device-screen-radius: 0px;
   --radius-shell: 1rem;
   --radius-shell-inset-6: 0.625rem;
   --radius-shell-inset-8: 0.5rem;
@@ -54,14 +58,20 @@
 }
 
 @theme {
-  /* next/font wires these CSS vars; fall back to the system stack. */
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  /* The interface speaks in the platform's own typeface: SF on Apple devices,
+     Segoe on Windows, and the native UI face everywhere else. Display is an
+     alias rather than a third brand font, so hierarchy comes from scale,
+     spacing, and weight instead of switching voices.
+
+     The working scale is intentionally small: xs (metadata), sm (UI), base
+     (reading), lg (section title), 2xl (content title), 3xl (page title). */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI Variable",
+    "Segoe UI", system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
-  /* Display face (titles/brand/greeting only). Revert = point at --font-inter. */
-  --font-display: var(--font-bricolage), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  /* One step below text-xs (12px) — replaces the scattered text-[10px]/[11px]. */
-  --text-2xs: 0.6875rem;
-  --text-2xs--line-height: 1rem;
+  --font-display:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI Variable",
+    "Segoe UI", system-ui, sans-serif;
 }
 
 /* `inline` keeps the generated utilities pointing at the var() itself, so the
@@ -154,7 +164,7 @@ details[open] > .disclosure::before {
   color: #78350f;
   /* Mono, like every other count in the app (CountBadge et al) — figures are
      data, and the mono face is the app's voice for structure and data. */
-  font: 550 0.6875rem/1 var(--font-geist-mono), ui-monospace, 'SF Mono', Menlo, monospace;
+  font: 550 0.75rem/1 var(--font-geist-mono), ui-monospace, 'SF Mono', Menlo, monospace;
 }
 .nav-jelly-button {
   position: relative;
@@ -276,6 +286,28 @@ body {
   overflow-x: clip;
 }
 
+html {
+  /* Keep iOS from enlarging type after rotation and allow one-finger panning
+     without exposing the document pinch gesture. The viewport metadata is the
+     primary zoom lock; this also covers WebKit builds that relax that flag. */
+  -webkit-text-size-adjust: 100%;
+  touch-action: pan-x pan-y;
+}
+
+body {
+  font-kerning: normal;
+  font-optical-sizing: auto;
+}
+
+/* Browser-default bold is 700, which is too abrupt inside conversational
+   prose. Six hundred preserves emphasis without changing the color or rhythm
+   of a line; controls and headings continue to choose their own explicit
+   medium/semibold weight. */
+strong,
+b {
+  font-weight: 600;
+}
+
 .scroll-subtle {
   overscroll-behavior: contain;
 }
@@ -297,6 +329,15 @@ input,
 select,
 textarea {
   touch-action: manipulation;
+}
+
+/* App chrome behaves like native controls on long press; conversation text and
+   links deliberately remain selectable and keep their useful context menus. */
+button,
+summary,
+label {
+  -webkit-touch-callout: none;
+  user-select: none;
 }
 
 /* ── Page gutters ─────────────────────────────────────────────────────────────

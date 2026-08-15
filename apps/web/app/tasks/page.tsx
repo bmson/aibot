@@ -176,7 +176,7 @@ export default async function TasksPage({
         <div className="mt-8 flex flex-col gap-8">
           {groups.map((group) => (
             <section key={group.day}>
-              <h2 className="mb-3 font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
+              <h2 className="mb-3 font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
                 {group.label}
               </h2>
               <div className={cardShellClass}>
@@ -216,7 +216,7 @@ export default async function TasksPage({
                           </Link>
                           <StatusChip status={shownStatus} />
                         </div>
-                        <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-muted">
+                        <p className="mt-1 line-clamp-2 text-sm leading-5 text-muted">
                           {truncate(stripMarkdown(task.progress), 180) || 'No update recorded yet.'}
                         </p>
                         <MetaLine

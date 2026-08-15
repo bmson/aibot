@@ -88,7 +88,7 @@ export function ApprovalRow({
           {part.summary}
         </p>
         <span
-          className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sunken px-2 py-1 font-mono text-2xs font-medium text-muted"
+          className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sunken px-2 py-1 font-mono text-xs font-medium text-muted"
           title="Reference code used for this same request in chat, notifications, and activity."
         >
           Ref {part.shortCode}
@@ -97,13 +97,13 @@ export function ApprovalRow({
       </div>
       {part.details && part.details.length > 0 ? (
         <details open={detailsOpenByDefault} className="mt-2 border-y border-edge py-2.5">
-          <summary className="disclosure flex items-center gap-2 cursor-pointer font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase select-none">
+          <summary className="disclosure flex items-center gap-2 cursor-pointer font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase select-none">
             Exact details
           </summary>
           <dl className="mt-2 flex max-h-64 flex-col gap-2 overscroll-contain overflow-y-auto">
             {part.details.map((detail, index) => (
               <div key={`${detail.label}-${index.toString()}`}>
-                <dt className="text-2xs font-medium text-muted">{detail.label}</dt>
+                <dt className="text-xs font-medium text-muted">{detail.label}</dt>
                 <dd className="mt-0.5 text-xs break-words whitespace-pre-wrap text-strong [overflow-wrap:anywhere]">
                   {detail.value}
                 </dd>

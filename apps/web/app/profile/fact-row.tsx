@@ -97,7 +97,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
   return (
     <article className={cardShellClass}>
       <div className="grid min-w-0 gap-3 p-4">
-        <p className="min-w-0 break-words text-[14px] leading-6 text-strong [overflow-wrap:anywhere]">
+        <p className="min-w-0 break-words text-sm leading-6 text-strong [overflow-wrap:anywhere]">
           {fact.content}
         </p>
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -134,12 +134,12 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
             </Badge>
           ) : null}
           {fact.validityLabel ? (
-            <span className="text-2xs text-muted">{fact.validityLabel}</span>
+            <span className="text-xs text-muted">{fact.validityLabel}</span>
           ) : null}
           {fact.sourceTaskId ? (
             <Link
               href={`/tasks/${fact.sourceTaskId}`}
-              className="text-2xs font-medium text-muted underline hover:text-strong"
+              className="text-xs font-medium text-muted underline hover:text-strong"
             >
               View source
             </Link>
@@ -311,7 +311,7 @@ function ProminenceControl({
 
   return (
     <div className="flex min-w-0 items-center gap-1.5">
-      <span className="text-2xs font-medium text-muted">In conversations</span>
+      <span className="text-xs font-medium text-muted">In conversations</span>
       {/* biome-ignore lint/a11y/useSemanticElements: a toolbar-style segmented
           control, not a form fieldset; each option is an aria-pressed button. */}
       <div
@@ -330,7 +330,7 @@ function ProminenceControl({
               aria-pressed={active}
               title={option.hint}
               onClick={() => onSelect(option.level)}
-              className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-2xs font-medium motion-safe:transition-colors ${focusRing} ${
+              className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium motion-safe:transition-colors ${focusRing} ${
                 active
                   ? 'bg-raised text-strong ring-1 ring-edge'
                   : 'text-muted hover:text-strong disabled:hover:text-muted'

@@ -87,7 +87,7 @@ export function DayDivider({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-4 pt-7 pb-3 [div:first-child>&]:pt-1">
       <span aria-hidden="true" className="h-px flex-1 bg-gradient-to-r from-transparent to-edge" />
-      <span className="rounded-full bg-sunken/80 px-2.5 py-1 font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
+      <span className="rounded-full bg-sunken/80 px-2.5 py-1 font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
         {label}
       </span>
       <span aria-hidden="true" className="h-px flex-1 bg-gradient-to-l from-transparent to-edge" />
@@ -141,7 +141,7 @@ export function MessageActions({ text, date }: { text: string; date: Date | null
         type="button"
         onClick={() => void copy()}
         title={state === 'failed' ? 'Your browser blocked clipboard access' : 'Copy this reply'}
-        className={`inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-2xs font-medium motion-safe:transition-colors ${focusRing} ${
+        className={`inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium motion-safe:transition-colors ${focusRing} ${
           state === 'failed'
             ? 'text-red-600 dark:text-red-400'
             : state === 'copied'
@@ -157,7 +157,7 @@ export function MessageActions({ text, date }: { text: string; date: Date | null
         {state === 'copied' ? 'Copied' : state === 'failed' ? 'Could not copy' : 'Copy'}
       </button>
       {date ? (
-        <span title={date.toLocaleString()} className="text-2xs text-muted">
+        <span title={date.toLocaleString()} className="text-xs text-muted">
           {timeLabel(date)}
         </span>
       ) : null}
@@ -184,7 +184,7 @@ export function PresenceRow({
     <div role="status" aria-live="polite" className="flex w-full min-w-0 items-start gap-2.5">
       <PresenceOrb />
       <div className="min-w-0 flex-1">
-        <span className="block text-[13px] leading-5 text-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--content-muted),var(--content-strong),var(--content-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent">
+        <span className="block text-sm leading-5 text-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--content-muted),var(--content-strong),var(--content-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent">
           {label}
         </span>
         {activity.length > 0 ? (
@@ -211,19 +211,19 @@ export function ContractNotice({ text }: { text: string }) {
         <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-sunken text-muted">
           <ShieldCheck className="size-3.5" aria-hidden="true" />
         </span>
-        <p className="font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
+        <p className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
           System check
         </p>
       </div>
       <div className="px-4 py-3">
-        <p className="break-words text-[13px] leading-5 text-muted [overflow-wrap:anywhere]">
-          {text}
-        </p>
+        <div className="break-words text-sm text-muted [overflow-wrap:anywhere]">
+          <MessageMarkdown text={text} />
+        </div>
         <details className="mt-2">
-          <summary className="disclosure flex items-center gap-2 cursor-pointer text-2xs text-muted select-none">
+          <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs text-muted select-none">
             Why am I seeing this?
           </summary>
-          <p className="mt-1 max-w-prose text-2xs leading-4 text-muted">
+          <p className="mt-1 max-w-prose text-xs leading-4 text-muted">
             The assistant only reports actions backed by a completed tool result. This notice
             replaced a reply that claimed more than the evidence supported — nothing was sent or
             changed outside this chat.
@@ -271,12 +271,12 @@ export function AssistantUpdate({ text, sources }: { text: string; sources: Reca
           >
             <Icon className="size-3.5" aria-hidden="true" />
           </span>
-          <p className={`font-mono text-2xs font-medium tracking-[0.08em] uppercase ${tone.label}`}>
+          <p className={`font-mono text-xs font-medium tracking-[0.08em] uppercase ${tone.label}`}>
             {label}
           </p>
         </div>
         <RecallNote sources={sources} />
-        <div className="break-words text-[14px] leading-6 text-strong [overflow-wrap:anywhere]">
+        <div className="break-words text-sm leading-6 text-strong [overflow-wrap:anywhere]">
           <MessageMarkdown text={text} />
         </div>
       </div>
@@ -296,7 +296,7 @@ function ActivityTrail({
       className="min-w-0 max-w-full rounded-xl bg-sunken/50 px-4 py-3 ring-1 ring-edge/50"
       aria-label="Work trail"
     >
-      <p className="mb-2 font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
+      <p className="mb-2 font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
         Work trail
       </p>
       <ol className="space-y-2">
@@ -323,10 +323,10 @@ function ActivityTrail({
                 aria-hidden="true"
               />
             )}
-            <span className="min-w-0 flex-1 break-words text-[13px] text-strong [overflow-wrap:anywhere]">
+            <span className="min-w-0 flex-1 break-words text-sm text-strong [overflow-wrap:anywhere]">
               {toolLabel(item.toolName)}
             </span>
-            <span className="shrink-0 text-2xs text-muted">
+            <span className="shrink-0 text-xs text-muted">
               {item.status === 'succeeded'
                 ? 'Done'
                 : item.status === 'awaiting_approval'
@@ -371,7 +371,7 @@ function friendlyRecallDate(isoDay: string): string {
 export function RecallNote({ sources }: { sources: RecallSource[] }) {
   if (sources.length === 0) return null;
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-2xs text-muted">
+    <div className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted">
       <History className="size-3 shrink-0" aria-hidden="true" />
       <span className="font-medium">Drawing on</span>
       {sources.map((source, index) => (
