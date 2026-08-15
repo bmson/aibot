@@ -379,7 +379,29 @@
     backdrop-filter: blur(18px) saturate(1.15);
   }
 
+  /* The composer settles into the device's bottom corners instead of floating
+     clear of them. It takes the same 1rem inset from the bottom edge that
+     .page-gutter already gives it at the sides, which is what lets one radius —
+     the screen's, less that inset — hold the gap even the whole way around the
+     corner. Concentric only works from equal insets: at 1rem in and 34px up the
+     card could echo the curve but never track it.
+
+     The home indicator is still cleared, by the same distance as before; the
+     clearance just moves inside the card, where it reads as the controls
+     sitting off the bottom rather than as canvas stranded beneath the card. The
+     card itself is inert (the form is pointer-events-none), so the strip now
+     covering the indicator takes no taps away from the system gesture. Card top
+     is unmoved: the bottom edge drops by exactly what the padding adds. */
   .mobile-safe-bottom {
-    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+    padding-bottom: 1rem;
+  }
+
+  [data-testid="chat-composer-surface"] {
+    /* max() keeps the component radius on any installed device whose safe area
+       implies no meaningful corner, where the derived value would go negative
+       and drop the declaration to square corners. */
+    border-end-start-radius: max(var(--radius-shell), calc(var(--device-screen-radius) - 1rem));
+    border-end-end-radius: max(var(--radius-shell), calc(var(--device-screen-radius) - 1rem));
+    padding-bottom: max(0px, calc(max(0.5rem, env(safe-area-inset-bottom)) - 1rem));
   }
 }
