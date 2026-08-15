@@ -19,7 +19,7 @@ export const focusRing =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
 
 const btnBase = `mobile-touch-target inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap font-medium motion-safe:transition-[background-color,border-color,color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
-const btnMd = 'h-9 rounded-lg px-3.5 text-[13px]';
+const btnMd = 'h-9 rounded-lg px-3.5 text-sm';
 const btnXs = 'h-8 rounded-lg px-3 text-xs';
 
 const btnVariants = {
@@ -40,7 +40,7 @@ const btnVariants = {
  * that only light up under the pointer. Not built on btnBase: its
  * justify-center would win the stylesheet-order fight against justify-start.
  */
-const menuItem = `mobile-touch-target inline-flex h-9 w-full items-center gap-2 rounded-lg px-3 text-left text-[13px] font-medium whitespace-nowrap motion-safe:transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
+const menuItem = `mobile-touch-target inline-flex h-9 w-full items-center gap-2 rounded-lg px-3 text-left text-sm font-medium whitespace-nowrap motion-safe:transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
 const menuVariants = {
   menu: `${menuItem} text-strong hover:bg-sunken active:bg-sunken/80`,
   menuDanger: `${menuItem} text-red-700 hover:bg-red-50 active:bg-red-100 dark:text-red-400 dark:hover:bg-red-950/40 dark:active:bg-red-950/70`,
@@ -69,17 +69,16 @@ export const btnSm = {
 /**
  * The app's structural voice: every micro-label that names a *part of the
  * interface* rather than saying something (eyebrow headings, group labels,
- * uppercase badges, the keys in fact grids) is set in the mono face, small
- * and letterspaced. Content speaks in Inter and titles in the display face;
- * structure gets its own third voice instead of being a smaller, bolder
- * imitation of the content. Colour stays with the caller — most compose this
- * with text-muted, a few with a status colour.
+ * uppercase badges, the keys in fact grids) is set in the mono face and
+ * letterspaced. Content and titles use the platform system face; mono is kept
+ * only where the text is genuinely structural or data-like. Colour stays with
+ * the caller — most compose this with text-muted, a few with a status colour.
  */
-export const microLabelClass = 'font-mono text-2xs font-medium tracking-[0.08em] uppercase';
+export const microLabelClass = 'font-mono text-xs font-medium tracking-[0.08em] uppercase';
 
 /** Neutral count-pill as a raw class string, for spans that can't use <CountBadge>. */
 export const countBadgeClass =
-  'rounded-full bg-sunken px-1.5 py-0.5 font-mono text-2xs font-medium text-muted whitespace-nowrap';
+  'rounded-full bg-sunken px-1.5 py-0.5 font-mono text-xs font-medium text-muted whitespace-nowrap';
 
 /** A loading placeholder block — used by route-level loading.tsx skeletons.
  *  A light sheen sweeps across it while motion is allowed; reduced-motion
@@ -110,7 +109,7 @@ export const selectClass = `${inputClass} cursor-pointer appearance-none bg-[ima
 export const textareaClass =
   'rounded-lg border border-edge bg-raised px-3 py-2.5 text-base text-strong outline-none resize-none [field-sizing:content] min-h-20 max-h-80 placeholder:text-muted/70 motion-safe:transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/20 sm:text-sm';
 
-export const labelClass = 'text-[13px] font-medium text-muted';
+export const labelClass = 'text-sm font-medium text-muted';
 
 /**
  * Native file input, with its ::file-selector-button dressed to match the
@@ -120,7 +119,7 @@ export const labelClass = 'text-[13px] font-medium text-muted';
  * rather than replaced with a JS-driven imitation.
  */
 export const fileInputClass =
-  'min-w-0 max-w-full text-[13px] text-muted file:mr-3 file:h-9 file:cursor-pointer file:rounded-lg file:border file:border-edge file:bg-raised file:px-3.5 file:text-[13px] file:font-medium file:text-strong motion-safe:file:transition-colors hover:file:bg-sunken active:file:bg-sunken/80';
+  'min-w-0 max-w-full text-sm text-muted file:mr-3 file:h-9 file:cursor-pointer file:rounded-lg file:border file:border-edge file:bg-raised file:px-3.5 file:text-sm file:font-medium file:text-strong motion-safe:file:transition-colors hover:file:bg-sunken active:file:bg-sunken/80';
 
 /**
  * Cards use one shared information architecture:
@@ -180,7 +179,7 @@ export function BackLink({ href, children }: { href: string; children: ReactNode
   return (
     <Link
       href={href}
-      className={`mobile-touch-target mb-5 inline-flex items-center gap-1.5 rounded-md text-[13px] font-medium text-muted motion-safe:transition-colors hover:text-strong ${focusRing}`}
+      className={`mobile-touch-target mb-5 inline-flex items-center gap-1.5 rounded-md text-sm font-medium text-muted motion-safe:transition-colors hover:text-strong ${focusRing}`}
     >
       <ArrowLeft className="size-3.5 shrink-0" aria-hidden="true" />
       {children}
@@ -212,10 +211,10 @@ export function PageHeader({
   return (
     <header>
       <div className="flex min-w-0 items-start justify-between gap-3">
-        {/* The one heading that speaks at full volume — a size up from where
-            it was, since section headings below it dropped to micro-labels
-            and the title now carries the page's whole typographic weight. */}
-        <h1 className="min-w-0 font-display text-[2rem] leading-10 font-semibold tracking-[-0.04em] text-balance text-strong sm:text-[2.375rem] sm:leading-[2.75rem]">
+        {/* One stable page-title size on every viewport. The system display face
+            already adapts optically, so it does not need a second mobile/desktop
+            size or display-font-specific tracking. */}
+        <h1 className="min-w-0 font-display text-3xl leading-9 font-semibold tracking-[-0.025em] text-balance text-strong">
           {title}
         </h1>
         {actions ? (
@@ -225,7 +224,7 @@ export function PageHeader({
         ) : null}
       </div>
       {intro ? (
-        <p className="mt-2 max-w-[68ch] text-[15px] leading-6 text-pretty text-muted">{intro}</p>
+        <p className="mt-2 max-w-[68ch] text-base leading-6 text-pretty text-muted">{intro}</p>
       ) : null}
     </header>
   );
@@ -287,7 +286,7 @@ export function InfoItem({
   return (
     <div className={`min-w-0 bg-sunken/65 px-3 py-2.5 ${className}`}>
       <dt className={`${microLabelClass} text-muted`}>{label}</dt>
-      <dd className="mt-0.5 min-w-0 break-words text-[13px] leading-5 font-medium text-strong tabular-nums [overflow-wrap:anywhere]">
+      <dd className="mt-0.5 min-w-0 break-words text-sm leading-5 font-medium text-strong tabular-nums [overflow-wrap:anywhere]">
         {children}
       </dd>
     </div>
@@ -355,9 +354,9 @@ export function Badge({
   // Uppercase pills join the mono micro-label voice — a status label is
   // structure, not prose (weight comes from the shared font-medium below).
   const sizeClass = uppercase
-    ? 'px-2 py-0.5 font-mono text-2xs tracking-[0.08em] uppercase'
+    ? 'px-2 py-0.5 font-mono text-xs tracking-[0.08em] uppercase'
     : size === 'xs'
-      ? 'px-1.5 py-0.5 text-2xs'
+      ? 'px-1.5 py-0.5 text-xs'
       : 'px-2 py-0.5 text-xs';
   return (
     <span
@@ -389,7 +388,7 @@ export function CountBadge({
 }) {
   return (
     <span
-      className={`rounded-full px-1.5 py-0.5 font-mono text-2xs font-medium whitespace-nowrap ${badgeTones[tone]}`}
+      className={`rounded-full px-1.5 py-0.5 font-mono text-xs font-medium whitespace-nowrap ${badgeTones[tone]}`}
     >
       {children}
     </span>
@@ -486,7 +485,7 @@ export function EmptyState({
           {icon}
         </span>
       ) : null}
-      <p className="max-w-[68ch] text-[15px] leading-6 text-pretty text-muted">{children}</p>
+      <p className="max-w-[68ch] text-base leading-6 text-pretty text-muted">{children}</p>
       {action}
     </div>
   );

@@ -5,6 +5,7 @@
 :root {
   --mobile-menu-edge: color-mix(in srgb, currentColor 9%, transparent);
   --mobile-menu-hover: color-mix(in srgb, var(--surface-sunken) 68%, transparent);
+  --ios-status-scrim: rgb(12 27 29 / 0.7);
 }
 
 .dark {
@@ -58,7 +59,7 @@
   background: #f59e0b;
   color: #451a03;
   font:
-    700 0.58rem / 1 var(--font-geist-mono),
+    600 0.75rem / 1 var(--font-geist-mono),
     ui-monospace,
     monospace;
 }
@@ -79,11 +80,16 @@
 
 .nav-mobile-menu-scrim {
   position: absolute;
-  inset: 0 min(17.75rem, calc(100vw - 2.25rem)) 0 0;
+  /* The panel sits one stacking level above this button, so the scrim can and
+     should cover the entire viewport. Reserving a panel-width strip here left
+     everything below the short panel completely sharp, creating the hard
+     vertical clipping edge visible on long conversations. */
+  inset: 0;
   border: 0;
   background: rgb(9 10 16 / 0.08);
   opacity: 0;
   cursor: default;
+  -webkit-backdrop-filter: blur(1.5px);
   backdrop-filter: blur(1.5px);
 }
 
@@ -184,8 +190,8 @@
 .nav-mobile-menu-row strong {
   overflow: hidden;
   color: var(--content-strong);
-  font-size: 0.9rem;
-  font-weight: 650;
+  font-size: 0.875rem;
+  font-weight: 600;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -228,8 +234,8 @@
   background: transparent;
   color: var(--content-muted);
   cursor: pointer;
-  font-size: 0.78rem;
-  font-weight: 650;
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
 .nav-mobile-menu-back:hover,
@@ -279,15 +285,6 @@
 }
 
 @media (max-width: 1023px) {
-  /* Keep the invisible outside-tap target and dialog semantics, but remove the
-     visual scrim entirely. The menu panel itself remains above chat content. */
-  .nav-mobile-menu-scrim,
-  .nav-mobile-menu-dialog[data-open="true"] .nav-mobile-menu-scrim {
-    background: transparent;
-    opacity: 1;
-    backdrop-filter: none;
-  }
-
   /* Mobile Safari already reserves space for its browser chrome. Do not add an
      extra gap beneath the composer in a normal browser tab. */
   .mobile-safe-bottom {
@@ -298,6 +295,64 @@
 /* Installed/home-screen mode reaches the physical bottom edge, so preserve the
    hardware safe area there. */
 @media (max-width: 1023px) and (display-mode: standalone) {
+  :root {
+    /* CSS exposes the safe rectangle but not the hardware corner radius. The
+       largest inset follows the curved edge in both portrait and landscape;
+       four pixels account for the gap between that safe rectangle and the
+       actual glass curve (55px on an iPhone 15 Pro's 59px top inset). */
+    --device-screen-radius: max(
+      0px,
+      calc(
+        max(
+          env(safe-area-inset-top),
+          env(safe-area-inset-right),
+          env(safe-area-inset-bottom),
+          env(safe-area-inset-left)
+        ) -
+        0.25rem
+      )
+    );
+  }
+
+  /* Keep every viewport-owned layer on the same curve as the device. This
+     includes fixed overlays and the ambient canvas, but not cards or controls. */
+  body,
+  .nav-mobile-menu-dialog {
+    border-radius: var(--device-screen-radius);
+    -webkit-clip-path: inset(0 round var(--device-screen-radius));
+    clip-path: inset(0 round var(--device-screen-radius));
+  }
+
+  /* Regular pages begin below the iOS status area. As they scroll, their
+     content passes underneath the fixed translucent veil below, matching a
+     native large-title/navigation-bar collapse instead of hitting a hard edge. */
+  .app-main {
+    padding-top: calc(1.25rem + env(safe-area-inset-top));
+  }
+
+  /* Chat owns an inner scroller, so extend that scroller to the physical top.
+     Its existing opening padding keeps the first message clear at rest, while
+     older messages can travel behind the clock and notch. */
+  .chat-viewport {
+    margin-top: calc(-1.25rem - env(safe-area-inset-top));
+  }
+
+  .chat-viewport > header {
+    padding-top: calc(1.75rem + env(safe-area-inset-top));
+  }
+
+  body::after {
+    position: fixed;
+    z-index: 35;
+    inset: 0 0 auto;
+    height: calc(env(safe-area-inset-top) + 0.7rem);
+    pointer-events: none;
+    background: linear-gradient(to bottom, var(--ios-status-scrim) 0 72%, transparent);
+    content: "";
+    -webkit-backdrop-filter: blur(18px) saturate(1.15);
+    backdrop-filter: blur(18px) saturate(1.15);
+  }
+
   .mobile-safe-bottom {
     padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
   }

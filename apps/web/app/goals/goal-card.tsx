@@ -101,13 +101,13 @@ function LatestUpdate({ goal }: { goal: GoalView }) {
   }, []);
 
   if (!goal.progress) {
-    return <p className="min-w-0 text-[14px] leading-6 text-muted">Nothing reported yet.</p>;
+    return <p className="min-w-0 text-sm leading-6 text-muted">Nothing reported yet.</p>;
   }
   return (
     <div className="min-w-0">
       <p
         ref={textRef}
-        className={`text-[14px] leading-6 text-strong ${expanded ? '' : 'line-clamp-3'}`}
+        className={`text-sm leading-6 text-strong ${expanded ? '' : 'line-clamp-3'}`}
       >
         {goal.progress}
       </p>
@@ -219,7 +219,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
                 cards read a half-step louder than every other card. */}
             <h3 className={cardTitleClass}>{goal.title}</h3>
             {goal.description ? (
-              <p className="mt-1 text-[13px] leading-5 text-muted">{goal.description}</p>
+              <p className="mt-1 text-sm leading-5 text-muted">{goal.description}</p>
             ) : null}
           </div>
           <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
@@ -257,12 +257,12 @@ export function GoalCard({ goal }: { goal: GoalView }) {
               aria-hidden="true"
               className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
             />
-            <p className="min-w-0 text-[13px] leading-5 font-medium text-amber-800 dark:text-amber-300">
+            <p className="min-w-0 text-sm leading-5 font-medium text-amber-800 dark:text-amber-300">
               {goal.blockedLabel}
             </p>
           </div>
         ) : goal.nextAction ? (
-          <p className="flex min-w-0 gap-2 text-[14px] leading-6">
+          <p className="flex min-w-0 gap-2 text-sm leading-6">
             <CornerDownRight aria-hidden="true" className="mt-1 size-3.5 shrink-0 text-accent" />
             <span className="min-w-0 text-strong">
               <span className="font-medium text-accent">Up next</span> — {goal.nextAction}
@@ -321,7 +321,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
                 {editing ? 'Close editor' : 'Edit goal'}
               </button>
               {goal.taintedOrigin ? (
-                <p className="px-3 py-1 text-2xs leading-4 text-muted">
+                <p className="px-3 py-1 text-xs leading-4 text-muted">
                   Autonomy is unavailable — this goal came from outside content, so every action
                   asks you first.
                 </p>

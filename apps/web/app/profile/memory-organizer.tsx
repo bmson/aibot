@@ -94,13 +94,13 @@ export function MemoryOrganizer({
               )}
             </span>
             <div className="min-w-0">
-              <p className="text-[13px] font-medium text-accent">Memory desk</p>
+              <p className="text-sm font-medium text-accent">Memory desk</p>
               <h2 className="mt-0.5 text-lg font-semibold tracking-[-0.025em]">
                 {remaining === 0
                   ? 'Everything has had a first pass'
                   : `${remaining} waiting for a pass`}
               </h2>
-              <p className="mt-1 max-w-xl text-[13px] leading-5 text-muted">
+              <p className="mt-1 max-w-xl text-sm leading-5 text-muted">
                 {statusText ??
                   'Organization checks saved facts in batches, clears repetition, and keeps your wording protected.'}
               </p>

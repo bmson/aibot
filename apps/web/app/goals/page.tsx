@@ -212,7 +212,7 @@ export default async function GoalsPage({
       />
 
       {activeCards.length > 0 ? (
-        <p className="mt-3 text-[13px] leading-5 text-muted">
+        <p className="mt-3 text-sm leading-5 text-muted">
           {blockedCount > 0 ? (
             <>
               <span className="font-medium text-amber-700 dark:text-amber-400">

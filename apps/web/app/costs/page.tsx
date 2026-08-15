@@ -68,7 +68,7 @@ export default async function CostsPage() {
         ).map((p) => (
           <div key={p.label} className={`${cardShellClass} p-4`}>
             <div className="flex items-baseline justify-between gap-3">
-              <p className="text-[13px] font-semibold text-strong">{p.label}</p>
+              <p className="text-sm font-semibold text-strong">{p.label}</p>
               <p className="font-display text-2xl font-semibold tracking-[-0.04em] tabular-nums">
                 {formatUsd(p.spent.toFixed(4))}
               </p>

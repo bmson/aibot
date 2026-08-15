@@ -178,7 +178,7 @@ export default async function MemoryLibraryPage({
 
       {state === 'in-use' ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-2xs font-medium text-muted">Show</span>
+          <span className="text-xs font-medium text-muted">Show</span>
           {FILTERS.map((item) => (
             <Link
               key={item}
@@ -197,7 +197,7 @@ export default async function MemoryLibraryPage({
       ) : null}
 
       <div className="mt-6 flex items-baseline justify-between gap-3 border-b border-edge pb-3">
-        <p className="text-[13px] font-medium">
+        <p className="text-sm font-medium">
           {total.toLocaleString()} memor{total === 1 ? 'y' : 'ies'}
           {query ? ` matching “${query}”` : ''}
         </p>
@@ -210,8 +210,8 @@ export default async function MemoryLibraryPage({
 
       {rows.length === 0 ? (
         <div className="py-16 text-center">
-          <p className="text-[15px] font-medium">Nothing here right now</p>
-          <p className="mt-1 text-[13px] text-muted">
+          <p className="text-base font-medium">Nothing here right now</p>
+          <p className="mt-1 text-sm text-muted">
             {query ? 'Try a broader search.' : 'This memory view is clear.'}
           </p>
         </div>

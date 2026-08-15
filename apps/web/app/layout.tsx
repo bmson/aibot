@@ -1,7 +1,7 @@
 import { loadConfig } from '@assistant/config';
 import { hiddenModuleNavHrefs } from '@assistant/modules/meta';
 import type { Metadata, Viewport } from 'next';
-import { Bricolage_Grotesque, Inter, JetBrains_Mono } from 'next/font/google';
+import { JetBrains_Mono } from 'next/font/google';
 import Script from 'next/script';
 import type { CSSProperties, ReactNode } from 'react';
 import { auth, authMode } from '@/auth';
@@ -13,15 +13,7 @@ import './chrome.css';
 import './conversation.css';
 import './navigation-mobile.css';
 
-const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
 const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });
-// Display face for titles only — body/UI text stays Inter. One variable to
-// revert (--font-display in globals).
-const display = Bricolage_Grotesque({
-  subsets: ['latin'],
-  variable: '--font-bricolage',
-  display: 'swap',
-});
 
 // Sets the .dark class from localStorage or OS preference BEFORE first paint, so
 // there is no light→dark flash and OS-dark users still default to dark.
@@ -32,18 +24,50 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: { default: name, template: `%s · ${name}` },
     description: `${name} — your personal AI assistant`,
+    applicationName: name,
+    manifest: '/manifest.webmanifest',
+    appleWebApp: {
+      capable: true,
+      title: name,
+      // The translucent style is what lets the app canvas continue beneath the
+      // clock, Dynamic Island, and notch in an iOS home-screen installation.
+      statusBarStyle: 'black-translucent',
+    },
+    // Keep iOS from inventing tappable phone/address links inside assistant
+    // responses. Real links rendered by Markdown are unaffected.
+    formatDetection: {
+      telephone: false,
+      date: false,
+      address: false,
+      email: false,
+      url: false,
+    },
+    icons: {
+      icon: [{ url: '/icon.svg', type: 'image/svg+xml' }],
+      apple: [{ url: '/apple-icon.png', sizes: '180x180', type: 'image/png' }],
+    },
+    // Next emits the standards-track mobile-web-app-capable tag for
+    // `appleWebApp`; this legacy Apple spelling is still useful on older iOS.
+    other: { 'apple-mobile-web-app-capable': 'yes' },
   };
 }
 
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
   // Lets the layout reach the physical edges of a notched phone, which is what
   // makes env(safe-area-inset-*) report real values. Without it those insets are
   // always 0 and `.mobile-safe-bottom` — which exists precisely to keep the chat
   // composer off the home indicator — silently does nothing. Every edge that can
   // now reach hardware pads itself from the insets (see `.page-gutter`).
   viewportFit: 'cover',
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#f5f7f7' },
+    { media: '(prefers-color-scheme: dark)', color: '#151a1b' },
+  ],
+  colorScheme: 'light dark',
 };
 
 // The shell badge counts and session lookup are per-request — never prerender.
@@ -113,11 +137,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   const { pendingApprovals, needsAttention: needsAttentionCount } = dashboard;
 
   return (
-    <html
-      lang="en"
-      className={`${inter.variable} ${mono.variable} ${display.variable}`}
-      suppressHydrationWarning
-    >
+    <html lang="en" className={mono.variable} suppressHydrationWarning>
       <head>
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: static no-flash theme script */}
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
@@ -146,7 +166,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             memoryReviewCount={memoryHealth.awaitingReview}
             needsAttentionCount={needsAttentionCount}
           />
-          <main className="page-gutter min-w-0 flex-1 py-5 lg:py-7">{children}</main>
+          <main className="app-main page-gutter min-w-0 flex-1 py-5 lg:py-7">{children}</main>
         </div>
       </body>
     </html>

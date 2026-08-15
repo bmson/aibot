@@ -115,7 +115,7 @@ export function SourceCard({ view }: { view: SourceView }) {
         {view.quarantinedNow > 0 ? (
           <div className="grid gap-3 rounded-xl bg-amber-50 px-3 py-3 dark:bg-amber-950/25 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
             <div>
-              <p className="text-[13px] font-semibold text-amber-900 dark:text-amber-200">
+              <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
                 Review what this import learned
               </p>
               <p className="mt-0.5 text-xs leading-5 text-amber-800 dark:text-amber-300">

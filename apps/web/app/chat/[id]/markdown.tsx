@@ -21,37 +21,62 @@ const components: Components = {
       {children}
     </a>
   ),
-  p: ({ node: _node, ...props }) => <p {...props} className="my-2 first:mt-0 last:mb-0" />,
-  ul: ({ node: _node, ...props }) => (
+  p: ({ node: _node, className, ...props }) => (
+    <p {...props} className={`my-2 first:mt-0 last:mb-0 ${className ?? ''}`} />
+  ),
+  ul: ({ node: _node, className, ...props }) => (
     <ul
       {...props}
-      className="my-2.5 list-disc space-y-1 pl-5 marker:text-accent first:mt-0 last:mb-0"
+      className={`my-2.5 list-disc space-y-1 pl-5 marker:text-accent first:mt-0 last:mb-0 [&.contains-task-list]:list-none [&.contains-task-list]:pl-0 ${className ?? ''}`}
     />
   ),
-  ol: ({ node: _node, ...props }) => (
+  ol: ({ node: _node, className, ...props }) => (
     <ol
       {...props}
-      className="my-2.5 list-decimal space-y-1 pl-5 marker:font-medium marker:text-muted first:mt-0 last:mb-0"
+      className={`my-2.5 list-decimal space-y-1 pl-5 marker:font-normal marker:text-muted first:mt-0 last:mb-0 ${className ?? ''}`}
     />
   ),
-  li: ({ node: _node, ...props }) => <li {...props} className="pl-0.5" />,
-  h1: ({ node: _node, ...props }) => (
-    <h1
+  li: ({ node: _node, className, ...props }) => (
+    <li
       {...props}
-      className="mt-6 mb-2 font-display text-xl font-semibold tracking-[-0.025em] first:mt-0"
+      className={`pl-0.5 [&.task-list-item]:list-none [&.task-list-item]:pl-0 [&>p]:my-0 ${className ?? ''}`}
     />
+  ),
+  input: ({ node: _node, className, type, ...props }) => (
+    <input
+      {...props}
+      type={type}
+      className={`${
+        type === 'checkbox' ? 'mr-2 size-4 align-[-0.15em] accent-accent disabled:opacity-100' : ''
+      } ${className ?? ''}`}
+    />
+  ),
+  strong: ({ node: _node, className, ...props }) => (
+    <strong {...props} className={`font-semibold ${className ?? ''}`} />
+  ),
+  em: ({ node: _node, className, ...props }) => (
+    <em {...props} className={`italic ${className ?? ''}`} />
+  ),
+  del: ({ node: _node, className, ...props }) => (
+    <del {...props} className={`decoration-muted/70 ${className ?? ''}`} />
+  ),
+  h1: ({ node: _node, ...props }) => (
+    <h1 {...props} className="mt-6 mb-2 text-lg leading-6 font-semibold first:mt-0" />
   ),
   h2: ({ node: _node, ...props }) => (
-    <h2
-      {...props}
-      className="mt-5 mb-2 border-b border-edge pb-1.5 text-[15px] font-semibold tracking-[-0.01em] first:mt-0"
-    />
+    <h2 {...props} className="mt-5 mb-1.5 text-base leading-6 font-semibold first:mt-0" />
   ),
   h3: ({ node: _node, ...props }) => (
-    <h3 {...props} className="mt-4 mb-1.5 text-[14px] font-semibold first:mt-0" />
+    <h3 {...props} className="mt-4 mb-1.5 text-base leading-6 font-medium first:mt-0" />
   ),
   h4: ({ node: _node, ...props }) => (
-    <h4 {...props} className="mt-2 mb-1 text-sm font-semibold first:mt-0" />
+    <h4 {...props} className="mt-4 mb-1 text-base leading-6 font-medium first:mt-0" />
+  ),
+  h5: ({ node: _node, ...props }) => (
+    <h5 {...props} className="mt-4 mb-1 text-base leading-6 font-medium first:mt-0" />
+  ),
+  h6: ({ node: _node, ...props }) => (
+    <h6 {...props} className="mt-4 mb-1 text-base leading-6 font-medium text-muted first:mt-0" />
   ),
   blockquote: ({ node: _node, ...props }) => (
     <blockquote {...props} className="my-3 border-l-2 border-accent/50 py-0.5 pl-3 text-muted" />
@@ -59,10 +84,10 @@ const components: Components = {
   hr: ({ node: _node, ...props }) => <hr {...props} className="my-3 border-edge" />,
   // react-markdown v10 has no `inline` flag: `code` gets inline styling, and
   // `pre` (block code wrapper) resets it on its child so blocks stay flat.
-  code: ({ node: _node, ...props }) => (
+  code: ({ node: _node, className, ...props }) => (
     <code
       {...props}
-      className="break-words rounded bg-sunken px-1 py-0.5 font-mono text-[0.85em] [overflow-wrap:anywhere]"
+      className={`break-words rounded bg-sunken px-1 py-0.5 font-mono text-[0.85em] [overflow-wrap:anywhere] ${className ?? ''}`}
     />
   ),
   pre: ({ node: _node, ...props }) => (
@@ -73,7 +98,7 @@ const components: Components = {
   ),
   table: ({ node: _node, children, ...props }) => (
     <div className="my-3 max-w-full overscroll-x-contain overflow-x-auto rounded-xl border border-edge first:mt-0 last:mb-0">
-      <table {...props} className="w-full border-collapse text-[13px]">
+      <table {...props} className="w-full border-collapse text-sm">
         {children}
       </table>
     </div>
@@ -81,7 +106,7 @@ const components: Components = {
   th: ({ node: _node, ...props }) => (
     <th
       {...props}
-      className="border-b border-edge bg-sunken/70 px-3 py-2 text-left font-semibold break-words [overflow-wrap:anywhere]"
+      className="border-b border-edge bg-sunken/70 px-3 py-2 text-left font-medium break-words [overflow-wrap:anywhere]"
     />
   ),
   td: ({ node: _node, ...props }) => (
@@ -95,7 +120,7 @@ const components: Components = {
 /** Assistant-message markdown (GFM: tables, strikethrough, task lists, autolinks). */
 export function MessageMarkdown({ text }: { text: string }) {
   return (
-    <div className="min-w-0 max-w-full break-words leading-[1.7] [overflow-wrap:anywhere]">
+    <div className="min-w-0 max-w-full break-words leading-relaxed [overflow-wrap:anywhere]">
       <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
         {text}
       </ReactMarkdown>

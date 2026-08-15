@@ -64,11 +64,11 @@ export function AnomalyCard({ anomaly }: { anomaly: AnomalyView }) {
               {kindLabels[anomaly.kind] ?? anomaly.kind}
             </Badge>
             <h3 className={`mt-2 truncate ${cardTitleClass}`}>{toolLabel(anomaly.toolName)}</h3>
-            <p className="mt-0.5 truncate font-mono text-2xs text-muted">{anomaly.toolName}</p>
+            <p className="mt-0.5 truncate font-mono text-xs text-muted">{anomaly.toolName}</p>
           </div>
           <span className="shrink-0 text-xs text-muted">{anomaly.createdLabel}</span>
         </div>
-        <p className="text-[14px] leading-6 text-strong">{anomaly.detail}</p>
+        <p className="text-sm leading-6 text-strong">{anomaly.detail}</p>
         <MetaLine
           className="tabular-nums"
           segments={[

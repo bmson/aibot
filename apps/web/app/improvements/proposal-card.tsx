@@ -61,18 +61,18 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
         <div className="grid min-w-0 gap-3 sm:grid-cols-2">
           {proposal.rationale ? (
             <section className="min-w-0">
-              <h4 className="font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
+              <h4 className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
                 Why this came up
               </h4>
-              <p className="mt-1 text-[13px] leading-5 text-strong">{proposal.rationale}</p>
+              <p className="mt-1 text-sm leading-5 text-strong">{proposal.rationale}</p>
             </section>
           ) : null}
           {proposal.suggestion ? (
             <section className="min-w-0 rounded-xl bg-sunken/65 px-3 py-2.5">
-              <h4 className="font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
+              <h4 className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
                 Proposed change
               </h4>
-              <p className="mt-1 text-[13px] leading-5 text-strong">{proposal.suggestion}</p>
+              <p className="mt-1 text-sm leading-5 text-strong">{proposal.suggestion}</p>
             </section>
           ) : null}
         </div>

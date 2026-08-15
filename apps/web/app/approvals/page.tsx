@@ -32,7 +32,7 @@ export default async function ApprovalsPage() {
 
       <section className="mt-8">
         <SectionHeading title="Waiting for you" count={pending.length} />
-        <p className="mt-1 text-[13px] leading-5 text-muted">
+        <p className="mt-1 text-sm leading-5 text-muted">
           Each card shows the real-world effect first. Policy and raw payload details stay available
           when you need them.
         </p>
@@ -59,7 +59,7 @@ export default async function ApprovalsPage() {
       </section>
 
       <details className="group mt-6 rounded-2xl bg-sunken/55 p-5">
-        <summary className="disclosure flex cursor-pointer items-center gap-2 text-[15px] font-semibold">
+        <summary className="disclosure flex cursor-pointer items-center gap-2 text-base font-semibold">
           Recently resolved
           <span className="ml-auto text-xs font-normal text-muted group-open:hidden">
             {resolved.length} recent
@@ -77,7 +77,7 @@ export default async function ApprovalsPage() {
               return (
                 <div key={approval.id} className="py-3 first:pt-0 last:pb-0">
                   <div className="flex items-start justify-between gap-3">
-                    <p className="min-w-0 text-[13px] leading-5">{approval.summary}</p>
+                    <p className="min-w-0 text-sm leading-5">{approval.summary}</p>
                     <span className="flex shrink-0 items-center gap-2">
                       <span className="rounded bg-raised px-1.5 py-0.5 font-mono text-xs text-muted">
                         {approval.shortCode}

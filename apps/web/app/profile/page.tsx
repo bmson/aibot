@@ -118,7 +118,7 @@ export default async function ProfilePage() {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold tracking-[-0.025em]">Your memory library</h2>
-            <p className="mt-1 text-[13px] leading-5 text-muted">
+            <p className="mt-1 text-sm leading-5 text-muted">
               Everything the assistant has learned, with controls to verify, correct, feature, or
               forget each fact.
             </p>
@@ -141,7 +141,7 @@ export default async function ProfilePage() {
                 {memoryHealth.totalUsable.toLocaleString()}
               </span>
             </div>
-            <p className="mt-4 text-[13px] font-semibold">In use by the assistant</p>
+            <p className="mt-4 text-sm font-semibold">In use by the assistant</p>
             <p className="mt-1 text-xs leading-5 text-muted">
               Active facts that can be recalled in conversations
               {memoryHealth.ownerConfirmed > 0
@@ -181,7 +181,7 @@ export default async function ProfilePage() {
                 {memoryHealth.awaitingReview.toLocaleString()}
               </span>
             </div>
-            <p className="mt-4 text-[13px] font-semibold">
+            <p className="mt-4 text-sm font-semibold">
               {memoryHealth.awaitingReview > 0 ? 'Waiting on you' : 'Nothing to review'}
             </p>
             <p className="mt-1 text-xs leading-5 text-muted">
@@ -215,7 +215,7 @@ export default async function ProfilePage() {
       {/* Quarantine review — the inbox; the only section that needs attention */}
       {quarantined.length > 0 ? (
         <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/65 p-5 dark:border-amber-900 dark:bg-amber-950/20">
-          <h2 className="flex items-center gap-2 text-[15px] font-semibold">
+          <h2 className="flex items-center gap-2 text-base font-semibold">
             <ShieldQuestion
               className="size-4 text-amber-700 dark:text-amber-300"
               aria-hidden="true"
@@ -246,7 +246,7 @@ export default async function ProfilePage() {
             </span>
           </summary>
           {card?.content ? (
-            <div className="mt-4 max-h-52 overscroll-contain overflow-y-auto rounded-xl bg-sunken/60 p-4 text-[13px] leading-6 whitespace-pre-wrap text-strong">
+            <div className="mt-4 max-h-52 overscroll-contain overflow-y-auto rounded-xl bg-sunken/60 p-4 text-sm leading-6 whitespace-pre-wrap text-strong">
               {card.content}
             </div>
           ) : (
@@ -293,12 +293,12 @@ export default async function ProfilePage() {
                 return (
                   <details key={group.domain} className="rounded-xl bg-sunken/55 p-3.5">
                     <summary className={summaryClass}>
-                      <span className="font-mono text-2xs font-medium tracking-[0.08em] text-muted uppercase">
+                      <span className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
                         {group.domain}
                       </span>
                       <span className={countBadge}>{group.facts.length}</span>
                       {pinnedInDomain > 0 ? (
-                        <span className="text-2xs font-medium text-accent">
+                        <span className="text-xs font-medium text-accent">
                           {pinnedInDomain} pinned
                         </span>
                       ) : null}
@@ -376,7 +376,7 @@ export default async function ProfilePage() {
                       Unverified
                     </Badge>
                   ) : (
-                    <span className="text-2xs font-medium text-muted">Known contact</span>
+                    <span className="text-xs font-medium text-muted">Known contact</span>
                   )}
                 </div>
               </Link>

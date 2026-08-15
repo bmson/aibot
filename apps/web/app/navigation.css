@@ -126,8 +126,8 @@
 
 .nav-launcher-copy span {
   color: var(--content-muted);
-  font-size: 0.625rem;
-  font-weight: 650;
+  font-size: 0.75rem;
+  font-weight: 600;
   letter-spacing: 0.1em;
   line-height: 1;
   text-transform: uppercase;
@@ -137,7 +137,7 @@
   overflow: hidden;
   margin-top: 0.25rem;
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: -0.015em;
   line-height: 1;
   text-overflow: ellipsis;
@@ -282,7 +282,7 @@
 
 .nav-palette-context strong {
   color: var(--content-strong);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .nav-palette-scroll {
@@ -375,8 +375,8 @@
   padding: 0.25rem 0.5rem;
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
-  font-size: 0.625rem;
-  font-weight: 700;
+  font-size: 0.75rem;
+  font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -400,15 +400,15 @@
 }
 
 .nav-destination-title {
-  font-family: var(--font-bricolage), var(--font-inter), sans-serif;
+  font-family: var(--font-sans);
   font-size: 1rem;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: -0.025em;
 }
 
 .nav-destination-description {
   color: var(--content-muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.35;
 }
 
@@ -471,13 +471,13 @@
 
 .nav-system-disclosure > summary strong {
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .nav-system-disclosure > summary span span {
   margin-top: 0.15rem;
   color: var(--content-muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .nav-system-arrow {

@@ -96,7 +96,7 @@ export function VoiceSamplesPanel({
         >
           <input type="hidden" name="voice" value="1" />
           <div className="min-w-0">
-            <p className="text-[13px] font-semibold text-strong">Add sent messages</p>
+            <p className="text-sm font-semibold text-strong">Add sent messages</p>
             <div className="mt-2 flex min-w-0 flex-wrap items-center gap-3">
               <input
                 type="file"

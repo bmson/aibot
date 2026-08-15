@@ -54,7 +54,7 @@ function SettingRow({
           {title}
           {badges}
         </p>
-        <p className="mt-1 min-w-0 text-[13px] leading-5 text-muted" title={detailTitle}>
+        <p className="mt-1 min-w-0 text-sm leading-5 text-muted" title={detailTitle}>
           {detail}
         </p>
       </div>
@@ -173,11 +173,11 @@ export default async function SettingsPage() {
         >
           <span className="min-w-0">
             <span className={`block ${cardTitleClass}`}>Usage and limits</span>
-            <span className="mt-1 block text-[13px] leading-5 text-muted">
+            <span className="mt-1 block text-sm leading-5 text-muted">
               Today’s spend, the monthly total, and the caps that pause work.
             </span>
           </span>
-          <span className="inline-flex shrink-0 items-center gap-1 text-[13px] font-medium text-accent">
+          <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-accent">
             Open costs
             <ArrowRight className="size-3.5" aria-hidden="true" />
           </span>
