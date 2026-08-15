@@ -397,11 +397,16 @@
   }
 
   [data-testid="chat-composer-surface"] {
-    /* max() keeps the component radius on any installed device whose safe area
+    /* One radius on all four corners, not just the two meeting the device
+       curve: the card is short enough that a tight top over a wide bottom read
+       as a mistake rather than as nesting. Where the pair on a side exceeds the
+       card's height the browser scales both down together, so the top and
+       bottom stay equal to each other whatever the field grows to.
+
+       max() keeps the component radius on any installed device whose safe area
        implies no meaningful corner, where the derived value would go negative
        and drop the declaration to square corners. */
-    border-end-start-radius: max(var(--radius-shell), calc(var(--device-screen-radius) - 1rem));
-    border-end-end-radius: max(var(--radius-shell), calc(var(--device-screen-radius) - 1rem));
+    border-radius: max(var(--radius-shell), calc(var(--device-screen-radius) - 1rem));
     padding-bottom: max(0px, calc(max(0.5rem, env(safe-area-inset-bottom)) - 1rem));
   }
 }
