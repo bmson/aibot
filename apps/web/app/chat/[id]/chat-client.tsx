@@ -126,8 +126,6 @@ export function ChatClient({
   const autonomousRef = useRef(false);
   autonomousRef.current = autonomous;
   const resetAutonomyAfterSubmitRef = useRef(false);
-  /** The model button temporarily replaces the composer; keep its real draft safe. */
-  const modelPickerDraftRef = useRef<string | null>(null);
   /** A failed send can put the exact text back into the composer without guesswork. */
   const [lastSubmittedText, setLastSubmittedText] = useState('');
   const formRef = useRef<HTMLFormElement>(null);
@@ -366,7 +364,6 @@ export function ChatClient({
   const safeCommandHighlight = Math.min(commandHighlight, Math.max(0, commandMatches.length - 1));
 
   const completeCommand = (command: string) => {
-    modelPickerDraftRef.current = null;
     // /auto is an action, not a prefix: it has no palette of its own to hand
     // off to, so it applies on the spot and gives the composer back empty
     // rather than leaving a token the reader has to clear before typing.
@@ -464,7 +461,6 @@ export function ChatClient({
     setUnseenCount(0);
     setLastSubmittedText(text);
     if (clearComposer) setInput('');
-    modelPickerDraftRef.current = null;
     setFallbackNote(null);
     setModelError(null);
     setLiveRecall(null);
@@ -483,10 +479,10 @@ export function ChatClient({
   };
 
   const closeModelPicker = () => {
-    const draft = modelPickerDraftRef.current;
-    modelPickerDraftRef.current = null;
+    // You reach the picker by typing "/model" over whatever was in the
+    // composer, so there is no draft of yours left to put back.
     setModelError(null);
-    setInput(draft ?? '');
+    setInput('');
     window.requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
@@ -1065,13 +1061,12 @@ export function ChatClient({
           ) : null}
         </div>
         <div className="pointer-events-auto relative min-w-0">
-          {/* The field takes the full width and the controls sit on their own
-              rule beneath it. A single row that put send beside the field was
-              more compact but read worse: the field lost the width, and the
-              button crowded the text it belonged to. */}
+          {/* One row: the field, then send. `items-end` keeps the button on the
+              last line as the field grows upward, and the card's own padding is
+              the only inset either of them needs. */}
           <div
             data-testid="chat-composer-surface"
-            className="min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised/90 backdrop-blur-xl motion-safe:transition-shadow"
+            className="flex min-w-0 items-end gap-2 overflow-hidden rounded-[var(--radius-shell)] bg-raised/90 p-2 backdrop-blur-xl motion-safe:transition-shadow"
           >
             <textarea
               ref={textareaRef}
@@ -1156,7 +1151,7 @@ export function ChatClient({
               }}
               placeholder="Ask anything…"
               rows={1}
-              className="block max-h-40 min-h-11 w-full min-w-0 resize-none border-0 bg-transparent px-5 pt-4 text-base leading-6 outline-none placeholder:text-muted/70 sm:text-sm"
+              className="block max-h-40 min-h-11 w-full min-w-0 flex-1 resize-none self-center border-0 bg-transparent px-2 py-2 text-base leading-6 outline-none placeholder:text-muted/70 sm:text-sm"
             />
             {/* No rule between the field and its controls. A full-bleed border
                 ran straight into the card's corner arc, which cut it off at an
@@ -1164,62 +1159,37 @@ export function ChatClient({
                 the card reads as a single well with the controls resting in it,
                 and the round send button agrees with the corners instead of
                 fighting them. */}
-            <div className="chat-composer-controls flex min-w-0 items-center justify-end gap-2 px-5 pb-4">
+            {status === 'submitted' || status === 'streaming' ? (
               <button
                 type="button"
-                onClick={() => {
-                  if (modelCommandOpen) {
-                    closeModelPicker();
-                    return;
-                  }
-                  modelPickerDraftRef.current = input;
-                  setModelError(null);
-                  setInput('/model');
-                  textareaRef.current?.focus();
-                }}
-                aria-label={
-                  modelCommandOpen
-                    ? 'Close response model picker'
-                    : `Response model: ${selectedModelLabel}. Tap to change.`
-                }
-                title="Switch response model"
-                className={`hidden h-10 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium text-muted motion-safe:transition-colors hover:bg-sunken hover:text-strong sm:inline-flex ${focusRing}`}
+                onClick={() => stop()}
+                title="Stop generating"
+                className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-edge bg-raised text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
               >
-                <Sparkles className="size-3.5 shrink-0" aria-hidden="true" />
-                <span className="max-w-[14ch] truncate">{selectedModelLabel}</span>
+                <Square className="size-3 fill-current" aria-hidden="true" />
+                <span className="sr-only">Stop</span>
               </button>
-              {status === 'submitted' || status === 'streaming' ? (
-                <button
-                  type="button"
-                  onClick={() => stop()}
-                  title="Stop generating"
-                  className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-edge bg-raised text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
-                >
-                  <Square className="size-3 fill-current" aria-hidden="true" />
-                  <span className="sr-only">Stop</span>
-                </button>
-              ) : (
-                // Readiness is a state change, not a dimmed copy of the live
-                // button: with nothing to send it sits back as a quiet tonal
-                // control, then fills with accent once you have typed.
-                <button
-                  type="submit"
-                  disabled={!canSend}
-                  aria-label={asyncTurn ? 'Working on your request' : 'Send'}
-                  className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
-                    canSend
-                      ? 'bg-accent text-white hover:bg-accent-hover'
-                      : 'cursor-not-allowed bg-sunken text-muted'
-                  }`}
-                >
-                  {asyncTurn ? (
-                    <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-                  ) : (
-                    <ArrowUp className="size-4" aria-hidden="true" />
-                  )}
-                </button>
-              )}
-            </div>
+            ) : (
+              // Readiness is a state change, not a dimmed copy of the live
+              // button: with nothing to send it sits back as a quiet tonal
+              // control, then fills with accent once you have typed.
+              <button
+                type="submit"
+                disabled={!canSend}
+                aria-label={asyncTurn ? 'Working on your request' : 'Send'}
+                className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
+                  canSend
+                    ? 'bg-accent text-white hover:bg-accent-hover'
+                    : 'cursor-not-allowed bg-sunken text-muted'
+                }`}
+              >
+                {asyncTurn ? (
+                  <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+                ) : (
+                  <ArrowUp className="size-4" aria-hidden="true" />
+                )}
+              </button>
+            )}
           </div>
           <span aria-live="polite" className="sr-only">
             {modelCommandOpen && modelOptions[modelHighlight]

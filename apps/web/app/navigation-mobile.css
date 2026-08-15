@@ -407,18 +407,13 @@
        implies no meaningful corner, where the derived value would go negative
        and drop the declaration to square corners. */
     border-radius: max(var(--radius-shell), calc(var(--device-screen-radius) - 1rem));
-  }
 
-  /* How far the card reaches past the home indicator's safe line, and so how
-     much clearance its controls owe it from the inside. */
-  .chat-composer-controls {
-    --composer-safe-inset: max(0px, calc(max(0.5rem, env(safe-area-inset-bottom)) - 1rem));
-
-    /* The controls carry that clearance rather than the card, so the send
-       button keeps the same inset from the card's bottom edge as the field's
-       text keeps from its left one. Adding the clearance on top of that inset
-       instead of absorbing it is what left the button adrift in the corner. */
-    padding-inline: max(1.25rem, var(--composer-safe-inset));
-    padding-bottom: max(1.25rem, var(--composer-safe-inset));
+    /* Installed, the card is a capsule with a 44px button in it, so an even
+       inset all round is also the concentric one: the button's centre lands on
+       the capsule end's arc centre and the gap around it stays constant. That
+       inset absorbs the home-indicator clearance — how far the card reaches
+       past the indicator's safe line — rather than stacking on top of it, which
+       is what previously left the button adrift in the corner. */
+    padding: max(1rem, max(0px, calc(max(0.5rem, env(safe-area-inset-bottom)) - 1rem)));
   }
 }

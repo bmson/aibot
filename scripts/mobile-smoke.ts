@@ -446,13 +446,23 @@ try {
       (await composerSurface.locator('[data-testid="chat-autonomy-mode"]').count()) === 0,
       'autonomy still holds a permanent seat in the composer',
     );
-    // The field owns its own full-width row and the controls sit beneath it.
-    const sendBelowField = await composerSurface.evaluate((surface) => {
+    // One row: the field, then send on its right. No model chip — /model owns
+    // that now — so a second control in this row is a regression.
+    const composerRow = await composerSurface.evaluate((surface) => {
       const field = surface.querySelector('textarea')?.getBoundingClientRect();
       const send = surface.querySelector('button[type="submit"]')?.getBoundingClientRect();
-      return Boolean(field && send && send.top >= field.bottom - 1);
+      return {
+        sameRow: Boolean(field && send && field.top < send.bottom && send.top < field.bottom),
+        sendOnRight: Boolean(field && send && send.left >= field.right - 1),
+        buttons: surface.querySelectorAll('button').length,
+      };
     });
-    assert(sendBelowField, 'send is not on its own row beneath the message field');
+    assert(composerRow.sameRow, 'send is not on the same row as the message field');
+    assert(composerRow.sendOnRight, 'send is not to the right of the message field');
+    assert(
+      composerRow.buttons === 1,
+      `composer carries ${composerRow.buttons} controls, expected 1`,
+    );
     await message.focus();
     const focusVisual = await composerSurface.evaluate((surface) => {
       const wrapper = surface.parentElement;
@@ -539,17 +549,21 @@ try {
   }
 
   if (fixture) {
+    // The desktop composer is the phone's: one row, one control. /model is the
+    // only way in to the picker, so there is no draft to keep safe through it.
     await page.setViewportSize({ width: 1440, height: 900 });
     await openRoute(page, `/chat/${fixture.id}`, false);
     const message = page.getByRole('combobox', { name: 'Message' });
-    const draft = 'Keep this draft while I choose a model';
-    await message.fill(draft);
-    await page.getByRole('button', { name: /^Response model:/ }).click();
+    assert(
+      (await page.getByRole('button', { name: /^Response model:/ }).count()) === 0,
+      'the composer still carries a model control',
+    );
+    await message.fill('/model');
     const modelList = page.getByRole('listbox', { name: 'Response model' });
     await modelList.waitFor();
     await modelList.getByRole('option').first().click();
     await modelList.waitFor({ state: 'detached' });
-    assert((await message.inputValue()) === draft, 'choosing a model discarded the chat draft');
+    assert((await message.inputValue()) === '', 'the picker left its token in the composer');
   }
 
   assert(errors.length === 0, `browser errors were reported: ${errors.join(' | ')}`);
@@ -571,9 +585,9 @@ try {
         'root opens the primary chat',
         'activity feed and filters',
         'single rounded composer focus treatment',
-        'composer controls beneath the field, no standing autonomy control',
+        'one-row composer carrying only send, at every viewport',
         'slash-command autonomy (/auto) arms and cancels',
-        'draft-safe model switching',
+        'slash-command model switching (/model)',
       ],
     }),
   );
