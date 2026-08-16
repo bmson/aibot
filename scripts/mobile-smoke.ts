@@ -55,7 +55,12 @@ async function assertNoMenuChrome(page: Page, label: string) {
 
 async function assertBackLink(page: Page, label: string, expectedHref: string) {
   const back = page.locator(`main a[href="${expectedHref}"]`).first();
-  assert(await back.isVisible(), `${label} has no visible back link to ${expectedHref}`);
+  // Wait rather than sample. A palette pick is a client-side navigation, so the
+  // URL changes a render before the destination has any content — an immediate
+  // isVisible() reads the outgoing page and fails on a slow runner.
+  await back.waitFor({ state: 'visible' }).catch(() => {
+    throw new Error(`${label} has no visible back link to ${expectedHref}`);
+  });
   await targetSize(back, `${label} back link`);
 }
 
@@ -359,11 +364,13 @@ try {
   await targetSize(approvalsOption, 'slash-command destination');
   await approvalsOption.click();
   await page.waitForURL(`${baseUrl}/approvals`);
+  // With no menu anywhere, the back link is the whole way out of a subpage —
+  // and waiting for it is also what proves the destination has actually
+  // rendered, so the two checks below measure the new page and not the old one.
+  await assertBackLink(page, '/approvals', '/chat');
   await assertResponsiveContract(page, '/approvals via "/"', true);
   await assertNoMenuChrome(page, '/approvals');
 
-  // With no menu anywhere, the back link is the whole way out of a subpage.
-  await assertBackLink(page, '/approvals', '/chat');
   await page.locator('main a[href="/chat"]').first().click();
   await page.waitForURL(`${baseUrl}/chat`);
   await page
@@ -376,10 +383,11 @@ try {
   // Typing narrows on the command or on an alias, so /tasks still finds
   // Activity even though the destination is spelled /activity.
   await page.getByRole('combobox', { name: 'Message' }).fill('/tasks');
-  await commandPalette.waitFor();
+  // Wait for the option the alias should resolve to before counting, so the
+  // count reads a settled palette rather than whatever it was mid-filter.
+  await commandPalette.getByRole('option', { name: /^\/activity/ }).waitFor({ state: 'visible' });
   assert(
-    (await commandPalette.getByRole('option').count()) === 1 &&
-      (await commandPalette.getByRole('option', { name: /^\/activity/ }).isVisible()),
+    (await commandPalette.getByRole('option').count()) === 1,
     'aliases do not narrow the "/" palette to the destination they name',
   );
   await page.keyboard.press('Escape');
