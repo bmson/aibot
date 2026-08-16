@@ -28,6 +28,7 @@ export default async function AnomaliesPage() {
   return (
     <PageShell size="reading">
       <PageHeader
+        back={{ href: '/chat', label: 'Chat' }}
         title="Anomalies"
         intro="Unusual approval-policy activity the nightly scan flagged — a policy auto-executing far above its baseline, an outward action overnight, or a burst. Suspend a policy to make its actions wait for your approval, or dismiss a false positive."
       />

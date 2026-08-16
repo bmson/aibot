@@ -44,6 +44,7 @@ export default async function DocumentsPage() {
   return (
     <PageShell size="reading">
       <PageHeader
+        back={{ href: '/chat', label: 'Chat' }}
         title="Documents"
         intro="Upload files — PDFs, notes, exports — and I'll read them so you can ask about their contents in chat. Attachments from people you know are filed here automatically. Text and PDFs are read right away; scans and office files wait for the document processor."
         actions={

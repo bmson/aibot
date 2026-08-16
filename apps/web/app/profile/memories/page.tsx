@@ -11,7 +11,6 @@ import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import {
-  BackLink,
   btn,
   inputClass,
   PageHeader,
@@ -135,8 +134,11 @@ export default async function MemoryLibraryPage({
 
   return (
     <PageShell size="reading">
-      <BackLink href="/profile">Memory overview</BackLink>
-      <PageHeader title={stateCopy[state].title} intro={intro} />
+      <PageHeader
+        back={{ href: '/profile', label: 'Memory overview' }}
+        title={stateCopy[state].title}
+        intro={intro}
+      />
 
       <div className="mt-6 grid min-w-0 gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
         <nav className={segmentedControlClass} aria-label="Memory state">

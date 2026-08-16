@@ -8,16 +8,21 @@ import {
   CalendarDays,
   Inbox,
   Loader2,
+  LogOut,
+  type LucideIcon,
   Route,
   Sparkles,
   Square,
   Zap,
 } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { signOutAction } from '@/app/actions';
+import { destinationIcon, formatBadgeCount, useNavCommands } from '@/app/nav-commands';
 import { cancelTask } from '@/app/tasks/actions';
 import { hasContractNoticePart, isApprovalProseNotice, isContractNotice } from '@/lib/chat-notices';
-import { btnSm, focusRing } from '@/lib/ui';
+import { BackLink, btnSm, CountBadge, focusRing, microLabelClass } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
 import { ApprovalGroup } from './approval-group';
@@ -65,22 +70,55 @@ interface ChatClientProps {
 const ASYNC_ACK_TEXT = 'Got it — I’m working on this now. I’ll post the result here.';
 
 /**
- * Composer slash commands. Typing "/" lists them so nobody has to know the
- * vocabulary up front; picking one completes it into the composer, where the
- * command's own palette (e.g. /model) takes over.
+ * One entry in the "/" palette. Composer commands act on this chat; navigation
+ * entries leave for another surface. The palette is the app's only menu, so
+ * both kinds have to live in one list you can type at.
  */
-const SLASH_COMMANDS = [
+type SlashEntry = {
+  command: string;
+  hint: string;
+  icon: LucideIcon;
+  /** Other spellings that match while typing. */
+  aliases: string[];
+} & ({ kind: 'command' } | { kind: 'destination'; href: string; label: string; count: number });
+
+/**
+ * Commands that stay in the composer. Picking one either completes it into the
+ * field, where the command's own palette (/model) takes over, or applies on the
+ * spot (/auto, /signout) and hands the composer back empty.
+ */
+const COMPOSER_COMMANDS: SlashEntry[] = [
   {
+    kind: 'command',
     command: '/model',
     hint: 'Switch which model answers this chat',
     icon: Sparkles,
+    aliases: [],
   },
   {
+    kind: 'command',
     command: '/auto',
     hint: 'Act without asking for this turn',
     icon: Zap,
+    aliases: ['autonomous'],
   },
-] as const;
+];
+
+const SIGN_OUT_COMMAND: SlashEntry = {
+  kind: 'command',
+  command: '/signout',
+  hint: 'End this session',
+  icon: LogOut,
+  aliases: ['logout'],
+};
+
+/** A bare "/" lists everything; typing narrows on the command or an alias. */
+function matchesToken(entry: SlashEntry, token: string): boolean {
+  return (
+    entry.command.slice(1).startsWith(token) ||
+    entry.aliases.some((alias) => alias.startsWith(token))
+  );
+}
 
 export function ChatClient({
   conversationId,
@@ -97,6 +135,8 @@ export function ChatClient({
   initialNotice,
   initialInput,
 }: ChatClientProps) {
+  const router = useRouter();
+  const { destinations, signedIn } = useNavCommands();
   const [input, setInput] = useState(initialInput ?? '');
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   const [isSwitching, startTransition] = useTransition();
@@ -345,16 +385,40 @@ export function ChatClient({
       ? 'Auto'
       : (models.find((model) => model.id === selectedModel)?.label ?? selectedModel);
 
-  // The "/" affordance: a bare slash token lists the available commands, so
-  // nobody has to already know "/model". Once the token completes into a real
-  // command, that command's own palette takes over (modelCommandOpen above).
+  // The "/" affordance: a bare slash token lists everything the composer can
+  // do and everywhere the app can go, so nobody has to already know "/model" or
+  // hunt for a menu. Once the token completes into a real command, that
+  // command's own palette takes over (modelCommandOpen above).
+  //
+  // Composer commands sort ahead of destinations, and the two render as
+  // separate groups — but they share one flat match list, so the arrow keys
+  // walk the whole palette without knowing the groups exist.
+  const slashEntries = useMemo<SlashEntry[]>(
+    () => [
+      ...COMPOSER_COMMANDS,
+      ...(signedIn ? [SIGN_OUT_COMMAND] : []),
+      ...destinations.map(
+        (destination): SlashEntry => ({
+          kind: 'destination',
+          command: destination.command,
+          hint: destination.hint,
+          icon: destinationIcon(destination.href),
+          aliases: destination.aliases,
+          href: destination.href,
+          label: destination.label,
+          count: destination.count,
+        }),
+      ),
+    ],
+    [destinations, signedIn],
+  );
   const slashToken =
     /^\/\S*$/.test(commandInput) && !modelCommandOpen ? commandInput.slice(1).toLowerCase() : null;
   const commandMatches =
-    slashToken !== null
-      ? SLASH_COMMANDS.filter((entry) => entry.command.slice(1).startsWith(slashToken))
-      : [];
+    slashToken !== null ? slashEntries.filter((entry) => matchesToken(entry, slashToken)) : [];
   const commandPaletteOpen = commandMatches.length > 0;
+  const composerMatches = commandMatches.filter((entry) => entry.kind === 'command');
+  const destinationMatches = commandMatches.filter((entry) => entry.kind === 'destination');
   /** There is something to send, and nothing in the way of sending it. */
   const canSend =
     !busy && input.trim() !== '' && !modelCommandOpen && !commandPaletteOpen && !isSwitching;
@@ -363,19 +427,92 @@ export function ChatClient({
   // on every keystroke, so an out-of-range cursor just snaps to the end.
   const safeCommandHighlight = Math.min(commandHighlight, Math.max(0, commandMatches.length - 1));
 
-  const completeCommand = (command: string) => {
-    // /auto is an action, not a prefix: it has no palette of its own to hand
-    // off to, so it applies on the spot and gives the composer back empty
-    // rather than leaving a token the reader has to clear before typing.
-    if (command === '/auto') {
+  const runCommand = (entry: SlashEntry) => {
+    // A destination leaves the chat, so the token goes with it — coming back to
+    // a composer still holding "/settings" would read as an unsent draft.
+    if (entry.kind === 'destination') {
+      setInput('');
+      router.push(entry.href);
+      return;
+    }
+    // /auto and /signout are actions, not prefixes: they have no palette of
+    // their own to hand off to, so they apply on the spot and give the composer
+    // back empty rather than leaving a token the reader has to clear.
+    if (entry.command === '/auto') {
       setAutonomous((value) => !value);
       setInput('');
       textareaRef.current?.focus();
       return;
     }
-    setInput(command);
+    if (entry.command === '/signout') {
+      setInput('');
+      void signOutAction();
+      return;
+    }
+    setInput(entry.command);
     textareaRef.current?.focus();
   };
+
+  // Every row reads the same way — the token you typed, then what it does —
+  // so a destination is not a different kind of object from a command, just a
+  // command that happens to leave. The badge is the only extra a row can carry.
+  const renderCommandOption = (entry: SlashEntry, index: number) => {
+    const highlighted = index === safeCommandHighlight;
+    const EntryIcon = entry.icon;
+    const count = entry.kind === 'destination' ? entry.count : 0;
+    return (
+      <button
+        key={entry.command}
+        id={`command-option-${index}`}
+        type="button"
+        role="option"
+        aria-selected={highlighted}
+        aria-label={`${entry.command}, ${entry.hint}${
+          count > 0 ? `, ${count} waiting for you` : ''
+        }`}
+        onMouseMove={() => setCommandHighlight(index)}
+        onClick={() => runCommand(entry)}
+        className={`mobile-touch-target flex min-h-11 w-full min-w-0 items-center gap-3 rounded-[var(--radius-shell-inset-6)] px-3 py-2 text-left motion-safe:transition-colors ${focusRing} ${
+          highlighted ? 'bg-sunken text-strong' : 'text-strong hover:bg-sunken'
+        }`}
+      >
+        <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+          <EntryIcon className="size-3.5" aria-hidden="true" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-mono text-sm font-medium">{entry.command}</span>
+          <span className="block truncate text-xs text-muted">{entry.hint}</span>
+        </span>
+        {count > 0 ? (
+          <span aria-hidden="true">
+            <CountBadge tone="amber">{formatBadgeCount(count)}</CountBadge>
+          </span>
+        ) : null}
+      </button>
+    );
+  };
+
+  // A heading only earns its space when there is something to tell apart, so
+  // the labels appear once a filter still leaves both kinds of entry standing.
+  const showGroupLabels = composerMatches.length > 0 && destinationMatches.length > 0;
+
+  const renderCommandGroup = (label: string, entries: SlashEntry[], offset: number) => (
+    // A `group` inside a `listbox` is the ARIA pattern for exactly this; the
+    // semantic element the rule wants (`fieldset`) is form markup and would be
+    // invalid as a listbox child.
+    // biome-ignore lint/a11y/useSemanticElements: listbox sections are ARIA groups
+    <div role="group" aria-label={label}>
+      {showGroupLabels ? (
+        <p
+          aria-hidden="true"
+          className={`px-3 pt-2.5 pb-1 first:pt-1 ${microLabelClass} text-muted`}
+        >
+          {label}
+        </p>
+      ) : null}
+      {entries.map((entry, index) => renderCommandOption(entry, offset + index))}
+    </div>
+  );
 
   // Opening the palette (or refiltering it) lands the cursor on the current
   // model, or the top match when it's filtered out.
@@ -385,11 +522,19 @@ export function ChatClient({
     setModelHighlight(selectedIndex >= 0 ? selectedIndex : 0);
   }, [modelCommandOpen, modelOptions, selectedModel]);
 
-  // Keep the highlighted option in view as the arrows walk the list.
+  // Keep the highlighted option in view as the arrows walk the list. Both
+  // palettes scroll now — the "/" list carries every destination in the app.
   useEffect(() => {
     if (!modelCommandOpen) return;
     document.getElementById(`model-option-${modelHighlight}`)?.scrollIntoView({ block: 'nearest' });
   }, [modelCommandOpen, modelHighlight]);
+
+  useEffect(() => {
+    if (!commandPaletteOpen) return;
+    document
+      .getElementById(`command-option-${safeCommandHighlight}`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [commandPaletteOpen, safeCommandHighlight]);
 
   useEffect(() => {
     if (!stickToBottomRef.current) return;
@@ -535,40 +680,46 @@ export function ChatClient({
       {/* The primary thread is the whole surface — it needs no title. Side and
           goal chats keep a slim header so you know which one you're in. */}
       {!isPrimary ? (
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-edge pt-7 pb-3 lg:pt-10">
-          <div className="min-w-0">
-            <h1
-              className="truncate font-display text-lg font-semibold tracking-[-0.03em]"
-              title={displayTitle}
-            >
-              {displayTitle}
-            </h1>
-            {goalTitle ? (
-              <p className="mt-0.5 truncate text-xs text-muted">Working toward: {goalTitle}</p>
-            ) : null}
-            {archived ? (
-              <p className="mt-0.5 text-xs text-muted">
-                Archived — sending a message restores this chat.
-              </p>
-            ) : null}
-          </div>
-          {archived || canArchive ? (
-            <div className="flex min-w-0 items-center gap-2">
+        // A side thread is a subpage like any other: it gets back to its parent
+        // list, which gets back to the main thread. The "/" palette only exists
+        // in the composer below, so this is the way out that is always visible.
+        <header className="border-b border-edge pt-7 pb-3 lg:pt-10">
+          <BackLink href="/chat/all">All chats</BackLink>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h1
+                className="truncate font-display text-lg font-semibold tracking-[-0.03em]"
+                title={displayTitle}
+              >
+                {displayTitle}
+              </h1>
+              {goalTitle ? (
+                <p className="mt-0.5 truncate text-xs text-muted">Working toward: {goalTitle}</p>
+              ) : null}
               {archived ? (
-                <form action={restoreConversation.bind(null, conversationId)}>
-                  <SubmitButton variant="outline" pendingLabel="Restoring…">
-                    Restore
-                  </SubmitButton>
-                </form>
-              ) : canArchive ? (
-                <form action={archiveConversation.bind(null, conversationId)}>
-                  <SubmitButton variant="outline" pendingLabel="Archiving…">
-                    Archive
-                  </SubmitButton>
-                </form>
+                <p className="mt-0.5 text-xs text-muted">
+                  Archived — sending a message restores this chat.
+                </p>
               ) : null}
             </div>
-          ) : null}
+            {archived || canArchive ? (
+              <div className="flex min-w-0 items-center gap-2">
+                {archived ? (
+                  <form action={restoreConversation.bind(null, conversationId)}>
+                    <SubmitButton variant="outline" pendingLabel="Restoring…">
+                      Restore
+                    </SubmitButton>
+                  </form>
+                ) : canArchive ? (
+                  <form action={archiveConversation.bind(null, conversationId)}>
+                    <SubmitButton variant="outline" pendingLabel="Archiving…">
+                      Archive
+                    </SubmitButton>
+                  </form>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </header>
       ) : null}
       {initialNotice ? (
@@ -949,38 +1100,24 @@ export function ChatClient({
               <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-2.5">
                 <p className="text-sm font-semibold text-strong">Commands</p>
                 <span className="hidden shrink-0 text-xs text-muted sm:block">
-                  ↑↓ choose · Enter complete · Esc dismiss
+                  ↑↓ choose · Enter open · Esc dismiss
                 </span>
               </div>
-              <div id="command-listbox" role="listbox" aria-label="Commands" className="p-1.5">
-                {commandMatches.map((entry, index) => {
-                  const highlighted = index === safeCommandHighlight;
-                  const EntryIcon = entry.icon;
-                  return (
-                    <button
-                      key={entry.command}
-                      id={`command-option-${index}`}
-                      type="button"
-                      role="option"
-                      aria-selected={highlighted}
-                      onMouseMove={() => setCommandHighlight(index)}
-                      onClick={() => completeCommand(entry.command)}
-                      className={`mobile-touch-target flex min-h-11 w-full min-w-0 items-center gap-3 rounded-[var(--radius-shell-inset-6)] px-3 py-2 text-left motion-safe:transition-colors ${focusRing} ${
-                        highlighted ? 'bg-sunken text-strong' : 'text-strong hover:bg-sunken'
-                      }`}
-                    >
-                      <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
-                        <EntryIcon className="size-3.5" aria-hidden="true" />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-mono text-sm font-medium">
-                          {entry.command}
-                        </span>
-                        <span className="block truncate text-xs text-muted">{entry.hint}</span>
-                      </span>
-                    </button>
-                  );
-                })}
+              {/* One flat listbox in two labelled groups. The arrow keys index
+                  `commandMatches`, so the destination rows continue the
+                  composer rows' numbering rather than restarting at zero. */}
+              <div
+                id="command-listbox"
+                role="listbox"
+                aria-label="Commands"
+                className="max-h-72 overscroll-contain overflow-y-auto p-1.5"
+              >
+                {composerMatches.length > 0
+                  ? renderCommandGroup('This chat', composerMatches, 0)
+                  : null}
+                {destinationMatches.length > 0
+                  ? renderCommandGroup('Go to', destinationMatches, composerMatches.length)
+                  : null}
               </div>
             </section>
           ) : null}
@@ -1137,7 +1274,7 @@ export function ChatClient({
                   ) {
                     event.preventDefault();
                     const choice = commandMatches[safeCommandHighlight];
-                    if (choice) completeCommand(choice.command);
+                    if (choice) runCommand(choice);
                   } else if (event.key === 'Escape') {
                     event.preventDefault();
                     setInput('');

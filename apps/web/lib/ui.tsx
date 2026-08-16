@@ -202,20 +202,28 @@ export function BackLink({ href, children }: { href: string; children: ReactNode
  * its own line under the paragraph, left-aligned and orphaned. Titles are short,
  * so keeping the action beside the title fits at every width and lets the intro
  * run the full measure beneath both.
+ *
+ * `back` is not optional in spirit. The app has no navigation chrome — you get
+ * anywhere by typing "/" in the chat composer — so a page that does not name
+ * its parent here is a page with no way out. Detail pages point at their list;
+ * everything else points at the chat.
  */
 export function PageHeader({
   title,
   intro,
   actions,
+  back,
 }: {
   title: string;
   intro?: ReactNode;
   actions?: ReactNode;
+  back?: { href: string; label: string };
 }) {
   // text-balance/text-pretty stop a wrapped title or intro from stranding a
   // single word on its own last line.
   return (
     <header>
+      {back ? <BackLink href={back.href}>{back.label}</BackLink> : null}
       <div className="flex min-w-0 items-start justify-between gap-3">
         {/* One stable page-title size on every viewport. The system display face
             already adapts optically, so it does not need a second mobile/desktop

@@ -6,12 +6,12 @@ import Script from 'next/script';
 import type { CSSProperties, ReactNode } from 'react';
 import { auth, authMode } from '@/auth';
 import { getAgentIdentity, getApplication } from '@/lib/server';
-import { AppNav } from './app-nav';
+import { NavCommandsProvider, type NavDestination } from './nav-commands';
 import './globals.css';
 import './motion-system.css';
 import './chrome.css';
 import './conversation.css';
-import './navigation-mobile.css';
+import './mobile-shell.css';
 
 const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });
 
@@ -73,23 +73,108 @@ export const viewport: Viewport = {
 // The shell badge counts and session lookup are per-request — never prerender.
 export const dynamic = 'force-dynamic';
 
-// IA (owner-approved): five primary destinations, a small Manage group, and a
-// collapsed System group for the self-monitoring pages. Routes that left the
-// navigation stay alive and linked from their parent surface — /chat/all from
-// the chat header, /import from the Documents page.
-const navItems = [
-  { href: '/chat', label: 'Chat' },
-  { href: '/approvals', label: 'Approvals' },
-  { href: '/tasks', label: 'Activity' },
-  { href: '/goals', label: 'Goals' },
-  { href: '/profile', label: 'Memory' },
-  { href: '/documents', label: 'Documents', utility: true },
-  { href: '/skills', label: 'Skills', utility: true },
-  { href: '/settings', label: 'Settings', utility: true },
-  { href: '/costs', label: 'Costs', system: true },
-  { href: '/anomalies', label: 'Anomalies', system: true },
-  { href: '/improvements', label: 'Improvements', system: true },
+// IA (owner-approved): the chat composer's "/" palette is the whole navigation.
+// A flat, typed, searchable list needs no primary/utility/system grouping — the
+// two tiers only ever existed to keep a menu panel short. Routes with a real
+// parent stay off this list and are linked from it: /import from Documents,
+// /tasks/<id> from Activity, /profile/... from Memory.
+const navItems: Array<Omit<NavDestination, 'count'>> = [
+  {
+    href: '/chat',
+    label: 'Chat',
+    command: '/chat',
+    hint: 'Your main thread with the assistant',
+    aliases: ['home'],
+  },
+  {
+    href: '/chat/all',
+    label: 'All chats',
+    command: '/chats',
+    hint: 'Every conversation, active and archived',
+    aliases: ['history', 'conversations'],
+  },
+  {
+    href: '/approvals',
+    label: 'Approvals',
+    command: '/approvals',
+    hint: 'Actions waiting on your decision',
+    aliases: [],
+  },
+  {
+    href: '/tasks',
+    label: 'Activity',
+    command: '/activity',
+    hint: 'What the assistant is working on',
+    aliases: ['tasks'],
+  },
+  {
+    href: '/goals',
+    label: 'Goals',
+    command: '/goals',
+    hint: 'Outcomes you are working toward',
+    aliases: [],
+  },
+  {
+    href: '/profile',
+    label: 'Memory',
+    command: '/memory',
+    hint: 'What the assistant knows about you',
+    aliases: ['profile', 'people'],
+  },
+  {
+    href: '/documents',
+    label: 'Documents',
+    command: '/documents',
+    hint: 'Files the assistant can read',
+    aliases: ['files'],
+  },
+  {
+    href: '/skills',
+    label: 'Skills',
+    command: '/skills',
+    hint: 'What the assistant has learned to do',
+    aliases: [],
+  },
+  {
+    href: '/settings',
+    label: 'Settings',
+    command: '/settings',
+    hint: 'Identity, models, and behaviour',
+    aliases: [],
+  },
+  {
+    href: '/costs',
+    label: 'Costs',
+    command: '/costs',
+    hint: 'What the assistant is spending',
+    aliases: ['spend', 'budget'],
+  },
+  {
+    href: '/anomalies',
+    label: 'Anomalies',
+    command: '/anomalies',
+    hint: 'Things that did not look right',
+    aliases: [],
+  },
+  {
+    href: '/improvements',
+    label: 'Improvements',
+    command: '/improvements',
+    hint: 'Changes the assistant is proposing',
+    aliases: [],
+  },
 ];
+
+/** The one place a destination's badge count comes from. */
+function badgeCountFor(
+  href: string,
+  counts: { pendingApprovals: number; memoryReview: number; needsAttention: number },
+): number {
+  if (href === '/approvals') return counts.pendingApprovals;
+  if (href === '/profile') return counts.memoryReview;
+  if (href === '/tasks') return counts.needsAttention;
+  return 0;
+}
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const config = loadConfig();
@@ -134,7 +219,15 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     })(),
   ]);
   const { dashboard, memoryHealth } = shell;
-  const { pendingApprovals, needsAttention: needsAttentionCount } = dashboard;
+  const counts = {
+    pendingApprovals: dashboard.pendingApprovals,
+    memoryReview: memoryHealth.awaitingReview,
+    needsAttention: dashboard.needsAttention,
+  };
+  const destinations = visibleNavItems.map((item) => ({
+    ...item,
+    count: badgeCountFor(item.href, counts),
+  }));
 
   return (
     <html lang="en" className={mono.variable} suppressHydrationWarning>
@@ -158,16 +251,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             dev mode — auth disabled
           </div>
         ) : null}
-        <div className="flex flex-1 flex-col lg:flex-row">
-          <AppNav
-            navItems={visibleNavItems}
-            pendingApprovals={pendingApprovals}
-            signedIn={!!session?.user}
-            memoryReviewCount={memoryHealth.awaitingReview}
-            needsAttentionCount={needsAttentionCount}
-          />
+        {/* No navigation chrome in the shell — the destinations ride down to the
+            chat composer's "/" palette, and every other surface carries a back
+            link. `main` is the whole app column. */}
+        <NavCommandsProvider destinations={destinations} signedIn={!!session?.user}>
           <main className="app-main page-gutter min-w-0 flex-1 py-5 lg:py-7">{children}</main>
-        </div>
+        </NavCommandsProvider>
       </body>
     </html>
   );

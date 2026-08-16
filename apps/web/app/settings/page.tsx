@@ -76,6 +76,7 @@ export default async function SettingsPage() {
   return (
     <PageShell size="reading" className="flex flex-col gap-10">
       <PageHeader
+        back={{ href: '/chat', label: 'Chat' }}
         title="Settings"
         intro="Identity, the jobs the assistant runs on its own, spending, and the approvals it can handle without asking."
       />

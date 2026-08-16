@@ -48,6 +48,9 @@ export default async function ChatListPage({
           wherever the long "Archive inactive chats" label happened to leave a
           gap, which on a phone was its own ragged third line. */}
       <PageHeader
+        back={
+          archived ? { href: '/chat/all', label: 'All chats' } : { href: '/chat', label: 'Chat' }
+        }
         title={archived ? 'Archived chats' : 'All chats'}
         intro={
           archived

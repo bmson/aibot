@@ -30,6 +30,7 @@ export default async function SkillsPage() {
   return (
     <PageShell size="reading">
       <PageHeader
+        back={{ href: '/chat', label: 'Chat' }}
         title="Skills"
         intro="Procedures the assistant has learned from experience, plus any you add yourself. They're read as advice before the assistant plans — never run automatically — and every action they suggest still follows the normal approval rules."
       />

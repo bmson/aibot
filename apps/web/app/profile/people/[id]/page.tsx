@@ -9,7 +9,6 @@ import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import {
-  BackLink,
   Badge,
   EmptyState,
   labelClass,
@@ -72,8 +71,8 @@ export default async function PersonProfilePage({ params }: { params: Promise<{ 
 
   return (
     <PageShell size="reading">
-      <BackLink href="/profile">Memory overview</BackLink>
       <PageHeader
+        back={{ href: '/profile', label: 'Memory overview' }}
         title={contact.name}
         intro="Review the facts the assistant associates with this person. Update the identity or relationship when needed; changes take effect in future conversations."
       />

@@ -26,6 +26,7 @@ export default async function ApprovalsPage() {
     <PageShell size="reading">
       <AutoRefresh />
       <PageHeader
+        back={{ href: '/chat', label: 'Chat' }}
         title="Approvals"
         intro="Review and approve or reject actions the assistant wants to take on your behalf."
       />
