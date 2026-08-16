@@ -178,6 +178,7 @@ export default async function GoalsPage({
   return (
     <PageShell size="reading">
       <PageHeader
+        back={archived ? { href: '/goals', label: 'Goals' } : { href: '/chat', label: 'Chat' }}
         title={archived ? 'Archived goals' : 'Goals'}
         intro={
           archived

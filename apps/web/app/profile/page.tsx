@@ -110,6 +110,7 @@ export default async function ProfilePage() {
     <PageShell size="reading">
       {organizerActive ? <AutoRefresh intervalMs={5_000} /> : null}
       <PageHeader
+        back={{ href: '/chat', label: 'Chat' }}
         title="What I remember"
         intro={`See what shapes the assistant’s understanding of ${owner?.name ?? 'you'}, what still needs care, and what stays available for recall.`}
       />

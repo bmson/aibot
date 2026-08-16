@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { agents, conversations, createDb, type Db, messages } from '@assistant/db';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { type Browser, type BrowserContext, chromium, type Locator, type Page } from 'playwright';
 
 // localhost, not 127.0.0.1: Next 16's dev-origin protection only allows the
@@ -15,6 +15,7 @@ const databaseUrl =
 const testedRoutes = [
   '/',
   '/chat',
+  '/chat/all',
   '/approvals',
   '/goals',
   '/tasks',
@@ -42,32 +43,25 @@ async function targetSize(locator: Locator, label: string) {
   );
 }
 
-async function assertMenuBackdrop(page: Page, label: string) {
-  const metrics = await page.locator('.nav-mobile-menu-scrim').evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    const style = getComputedStyle(element);
-    return {
-      top: rect.top,
-      right: rect.right,
-      bottom: rect.bottom,
-      left: rect.left,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
-      backgroundColor: style.backgroundColor,
-      backdropFilter: style.backdropFilter,
-    };
+/**
+ * Navigation lives in the composer's "/" palette and nowhere else. No page may
+ * grow a menu control back, and every page that is not the main thread has to
+ * offer a visible way home.
+ */
+async function assertNoMenuChrome(page: Page, label: string) {
+  const triggers = await page.getByRole('button', { name: /navigation menu/i }).count();
+  assert(triggers === 0, `${label} still renders a navigation menu trigger`);
+}
+
+async function assertBackLink(page: Page, label: string, expectedHref: string) {
+  const back = page.locator(`main a[href="${expectedHref}"]`).first();
+  // Wait rather than sample. A palette pick is a client-side navigation, so the
+  // URL changes a render before the destination has any content — an immediate
+  // isVisible() reads the outgoing page and fails on a slow runner.
+  await back.waitFor({ state: 'visible' }).catch(() => {
+    throw new Error(`${label} has no visible back link to ${expectedHref}`);
   });
-  assert(
-    metrics.left <= 0.5 &&
-      metrics.top <= 0.5 &&
-      metrics.right >= metrics.viewportWidth - 0.5 &&
-      metrics.bottom >= metrics.viewportHeight - 0.5,
-    `${label} menu backdrop does not cover the viewport: ${JSON.stringify(metrics)}`,
-  );
-  assert(
-    metrics.backgroundColor !== 'rgba(0, 0, 0, 0)' && metrics.backdropFilter !== 'none',
-    `${label} menu backdrop has no visual treatment: ${JSON.stringify(metrics)}`,
-  );
+  await targetSize(back, `${label} back link`);
 }
 
 async function assertStandaloneScreenRadius(page: Page) {
@@ -95,10 +89,7 @@ async function assertStandaloneScreenRadius(page: Page) {
           if (rule.selectorText === ':root') {
             deviceFormula = rule.style.getPropertyValue('--device-screen-radius').trim();
           }
-          if (
-            rule.selectorText.includes('body') &&
-            rule.selectorText.includes('.nav-mobile-menu-dialog')
-          ) {
+          if (rule.selectorText === 'body') {
             canvasRadius = rule.style.borderRadius;
             canvasClip = rule.style.clipPath;
           }
@@ -129,7 +120,7 @@ async function assertStandaloneScreenRadius(page: Page) {
   assert(
     metrics.canvasRadius === 'var(--device-screen-radius)' &&
       metrics.canvasClip.includes('var(--device-screen-radius)'),
-    `standalone canvas and backdrop do not share the device radius: ${JSON.stringify(metrics)}`,
+    `standalone canvas does not take the device radius: ${JSON.stringify(metrics)}`,
   );
   assert(
     metrics.defaultDeviceRadius === '0px' && metrics.componentRadius === '1rem',
@@ -222,6 +213,22 @@ async function createConversationFixture(): Promise<{ db: Db; id: string } | und
   const db = createDb(databaseUrl);
   const [agent] = await db.select({ id: agents.id }).from(agents).limit(1);
   assert(agent, 'mobile smoke requires the seeded assistant agent');
+  // This fixture stands for a *side* thread — a titled chat with a header and a
+  // back link — which it only is if a main thread already exists. Opening /chat
+  // promotes the most recently updated chat conversation when none is marked
+  // primary, and on the empty database CI builds that would be this fixture:
+  // it would render as the main thread, which correctly has neither. A
+  // developer's populated database already has a primary and never noticed.
+  const [primary] = await db
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(and(eq(conversations.agentId, agent.id), eq(conversations.isPrimary, true)))
+    .limit(1);
+  if (!primary) {
+    await db
+      .insert(conversations)
+      .values({ agentId: agent.id, channel: 'chat', trust: 'owner', isPrimary: true });
+  }
   const [conversation] = await db
     .insert(conversations)
     .values({
@@ -351,75 +358,69 @@ try {
   await assertStandaloneScreenRadius(page);
   const primaryMessageField = page.getByRole('combobox', { name: 'Message' });
   await primaryMessageField.waitFor({ state: 'visible' });
-  const menuTrigger = page.getByRole('button', {
-    name: 'Open navigation menu',
-  });
-  await targetSize(menuTrigger, 'mobile navigation trigger');
-  await menuTrigger.click();
-  const bloom = page.locator('#mobile-nav[role="dialog"]');
-  await bloom.waitFor({ state: 'visible' });
-  await assertMenuBackdrop(page, 'mobile');
-  assert((await bloom.getAttribute('aria-modal')) === 'true', 'mobile bloom is not modal');
-  assert(
-    (await bloom.getAttribute('aria-labelledby')) === 'mobile-nav-title',
-    'mobile bloom is not labelled',
-  );
-  assert(
-    (await page.evaluate(() => document.body.style.overflow)) === 'hidden',
-    'opening the mobile bloom did not lock background scrolling',
-  );
-  assert(
-    (await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))) ===
-      'Close navigation menu',
-    'opening the mobile bloom did not move focus to its close control',
-  );
-  await targetSize(bloom.getByRole('link', { name: 'Chat' }), 'primary bloom destination');
-  const moreButton = bloom.getByRole('button', { name: 'More' });
-  await targetSize(moreButton, 'mobile bloom more control');
-  await moreButton.click();
-  const settingsLink = bloom.getByRole('link', { name: 'Settings' });
-  await settingsLink.waitFor({ state: 'visible' });
-  await targetSize(settingsLink, 'secondary bloom destination');
-  await settingsLink.focus();
-  await page.keyboard.press('Tab');
-  assert(
-    await page.evaluate(() =>
-      Boolean(document.querySelector('#mobile-nav')?.contains(document.activeElement)),
-    ),
-    'Tab escaped the mobile navigation dialog',
-  );
-  await page.evaluate(() => {
-    const focusable = [
-      ...(document
-        .querySelector('#mobile-nav')
-        ?.querySelectorAll<HTMLElement>(
-          'a[href]:not([aria-hidden="true"]), button:not([disabled]):not([aria-hidden="true"])',
-        ) ?? []),
-    ].filter((element) => element.checkVisibility());
-    focusable[focusable.length - 1]?.focus();
-  });
-  await page.keyboard.press('Tab');
-  assert(
-    (await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))) ===
-      'Close navigation menu',
-    'Tab from the last bloom control did not wrap to the close control',
-  );
-  const closeButton = bloom.getByRole('button', {
-    name: 'Close navigation menu',
-  });
-  await targetSize(closeButton, 'mobile navigation close button');
-  // The scrim now covers the entire viewport and sits underneath the panel.
-  // Click an exposed corner rather than its geometric center, which is behind
-  // the nearly full-width phone panel by design.
-  await closeButton.click({ position: { x: 1, y: 1 } });
-  await bloom.waitFor({ state: 'detached' });
-  assert(
-    (await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))) ===
-      'Open navigation menu',
-    'closing the mobile bloom did not restore focus to its trigger',
-  );
+  await assertNoMenuChrome(page, 'mobile chat');
 
-  for (const route of testedRoutes.slice(1)) await openRoute(page, route);
+  // Navigation is the "/" palette. A bare slash lists both what the composer
+  // can do and everywhere the app can go, grouped, with the badge counts the
+  // retired menu trigger used to carry.
+  await primaryMessageField.fill('/');
+  const commandPalette = page.getByRole('listbox', { name: 'Commands' });
+  await commandPalette.waitFor();
+  assert(
+    (await primaryMessageField.getAttribute('aria-expanded')) === 'true',
+    'the "/" palette is not exposed to assistive technology',
+  );
+  for (const group of ['This chat', 'Go to']) {
+    assert(
+      await commandPalette.getByRole('group', { name: group }).isVisible(),
+      `the "/" palette is missing its "${group}" group`,
+    );
+  }
+  const approvalsOption = commandPalette.getByRole('option', { name: /^\/approvals/ });
+  await targetSize(approvalsOption, 'slash-command destination');
+  await approvalsOption.click();
+  await page.waitForURL(`${baseUrl}/approvals`);
+  // With no menu anywhere, the back link is the whole way out of a subpage —
+  // and waiting for it is also what proves the destination has actually
+  // rendered, so the two checks below measure the new page and not the old one.
+  await assertBackLink(page, '/approvals', '/chat');
+  await assertResponsiveContract(page, '/approvals via "/"', true);
+  await assertNoMenuChrome(page, '/approvals');
+
+  await page.locator('main a[href="/chat"]').first().click();
+  await page.waitForURL(`${baseUrl}/chat`);
+  await page
+    .getByRole('combobox', { name: 'Message' })
+    .waitFor({ state: 'visible' })
+    .catch(() => {
+      throw new Error('the back link did not return to the chat');
+    });
+
+  // Typing narrows on the command or on an alias, so /tasks still finds
+  // Activity even though the destination is spelled /activity.
+  await page.getByRole('combobox', { name: 'Message' }).fill('/tasks');
+  // Wait for the option the alias should resolve to before counting, so the
+  // count reads a settled palette rather than whatever it was mid-filter.
+  await commandPalette.getByRole('option', { name: /^\/activity/ }).waitFor({ state: 'visible' });
+  assert(
+    (await commandPalette.getByRole('option').count()) === 1,
+    'aliases do not narrow the "/" palette to the destination they name',
+  );
+  await page.keyboard.press('Escape');
+
+  for (const route of testedRoutes.slice(1)) {
+    await openRoute(page, route);
+    await assertNoMenuChrome(page, route);
+  }
+  for (const [route, parent] of [
+    ['/approvals', '/chat'],
+    ['/settings', '/chat'],
+    ['/profile/memories', '/profile'],
+    ['/import', '/documents'],
+  ] as const) {
+    await openRoute(page, route);
+    await assertBackLink(page, route, parent);
+  }
   await openRoute(page, '/tasks');
   assert((await page.locator('main table').count()) === 0, 'Activity regressed to a table');
   assert(
@@ -434,10 +435,9 @@ try {
     const composerSurface = page.getByTestId('chat-composer-surface');
     await targetSize(message, 'chat message field');
     await targetSize(send, 'chat send button');
-    assert(
-      (await page.getByRole('link', { name: 'All chats', exact: true }).count()) === 0,
-      'All chats still occupies the chat header',
-    );
+    // A side thread is a subpage, so "All chats" is its back link now — one
+    // quiet row above the title, not an action competing with it.
+    await assertBackLink(page, `/chat/${fixture.id}`, '/chat/all');
     assert(
       (await page.getByRole('button', { name: 'Model', exact: true }).count()) === 0,
       'Model still occupies the chat header',
@@ -525,27 +525,12 @@ try {
       (await page.locator('main').count()) === 1,
       `${viewport.label} shell did not render exactly one main region`,
     );
-    const navigationTriggers = page.getByRole('button', { name: 'Open navigation menu' });
-    assert(
-      (await navigationTriggers.count()) === 1,
-      `${viewport.label} shell did not render exactly one navigation trigger`,
-    );
-    await targetSize(navigationTriggers, `${viewport.label} navigation trigger`);
-    const navigationTriggerBox = await navigationTriggers.boundingBox();
-    assert(
-      navigationTriggerBox &&
-        navigationTriggerBox.x + navigationTriggerBox.width / 2 > viewport.width / 2,
-      `${viewport.label} navigation trigger is not on the right`,
-    );
+    // The palette replaces the menu at every width, not just on a phone.
+    await assertNoMenuChrome(page, viewport.label);
     assert(
       (await page.locator('.nav-launcher').count()) === 0,
       `${viewport.label} shell still rendered the retired left navigation launcher`,
     );
-    await navigationTriggers.click();
-    await page.locator('#mobile-nav[role="dialog"]').waitFor({ state: 'visible' });
-    await assertMenuBackdrop(page, viewport.label);
-    await page.locator('.nav-mobile-menu-trigger').click();
-    await page.locator('#mobile-nav[role="dialog"]').waitFor({ state: 'detached' });
   }
 
   if (fixture) {
@@ -578,10 +563,10 @@ try {
         '16px mobile fields',
         'iOS standalone metadata and install icons',
         'device-mapped standalone screen radius',
-        'bloom focus trap',
-        'primary and secondary bloom destinations',
-        'full-viewport menu backdrop',
-        'one right-side navigation trigger at every viewport',
+        'no navigation menu chrome at any viewport',
+        'slash-command navigation, grouped and badged',
+        'slash-command aliases (/tasks finds Activity)',
+        'a back link out of every subpage',
         'root opens the primary chat',
         'activity feed and filters',
         'single rounded composer focus treatment',

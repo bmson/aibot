@@ -1,0 +1,156 @@
+/* Mobile and installed-app shell: how the canvas meets the physical edges of a
+   phone. There is no navigation chrome to place any more — the "/" palette in
+   the chat composer is the whole menu — so what is left here is the geometry a
+   home-screen installation needs: the device corner radius, the status-area
+   veil the conversation scrolls under, and the composer's seat above the home
+   indicator. */
+
+:root {
+  /* The status veil is frosted canvas, not ink: the blur is what separates the
+     clock from the conversation sliding beneath it. A fixed dark wash reads as a
+     black bar ruled across the top of a light app, so this tracks --surface and
+     flips with the theme.
+
+     Kept deliberately light. At a higher opacity the veil stopped reading as
+     glass and started reading as a lid: text hit it and disappeared, rather
+     than travelling under it and thinning out. Legibility of the clock comes
+     from the blur far more than from the wash. */
+  --ios-status-scrim: color-mix(in srgb, var(--surface) 58%, transparent);
+}
+
+.dark {
+  --ios-status-scrim: color-mix(in srgb, var(--surface) 52%, transparent);
+}
+
+@media (max-width: 1023px) {
+  /* Mobile Safari already reserves space for its browser chrome. Do not add an
+     extra gap beneath the composer in a normal browser tab. */
+  .mobile-safe-bottom {
+    padding-bottom: 0;
+  }
+}
+
+/* Installed/home-screen mode reaches the physical bottom edge, so preserve the
+   hardware safe area there. */
+@media (max-width: 1023px) and (display-mode: standalone) {
+  :root {
+    /* CSS exposes the safe rectangle but not the hardware corner radius. The
+       largest inset follows the curved edge in both portrait and landscape;
+       four pixels account for the gap between that safe rectangle and the
+       actual glass curve (55px on an iPhone 15 Pro's 59px top inset). */
+    --device-screen-radius: max(
+      0px,
+      calc(
+        max(
+          env(safe-area-inset-top),
+          env(safe-area-inset-right),
+          env(safe-area-inset-bottom),
+          env(safe-area-inset-left)
+        ) -
+        0.25rem
+      )
+    );
+  }
+
+  /* Keep the viewport-owned canvas on the same curve as the device. This is the
+     page itself and the ambient layer behind it, not cards or controls. */
+  body {
+    border-radius: var(--device-screen-radius);
+    -webkit-clip-path: inset(0 round var(--device-screen-radius));
+    clip-path: inset(0 round var(--device-screen-radius));
+  }
+
+  /* Regular pages begin below the iOS status area. As they scroll, their
+     content passes underneath the fixed translucent veil below, matching a
+     native large-title/navigation-bar collapse instead of hitting a hard edge. */
+  .app-main {
+    padding-top: calc(1.25rem + env(safe-area-inset-top));
+  }
+
+  /* Chat owns an inner scroller, so extend that scroller to the physical top.
+     Its existing opening padding keeps the first message clear at rest, while
+     older messages can travel behind the clock and notch.
+
+     The height has to move with that offset. `h-[calc(100dvh-1rem)]` reserves a
+     browser tab's breathing room under the composer, but an installed app has
+     no browser chrome to breathe against: pulling the column up to the physical
+     top while it still measured a rem short left the composer floating that far
+     above the home indicator instead of resting on it. Installed, the column is
+     exactly the screen, and `.mobile-safe-bottom` alone clears the indicator.
+
+     `lvh`, not `dvh`. Once the keyboard has been raised and dismissed in a
+     home-screen app, WebKit leaves the dynamic viewport stuck one top inset
+     short of the screen (874 -> 812 on an iPhone 17 Pro) and never restores it;
+     a dvh-sized column silently shrinks with it and carries the composer ~60px
+     up the screen, where it stays for the rest of the session. There is no
+     retractable browser chrome to track here, so the large viewport is both the
+     stable measurement and the semantically correct one. */
+  .chat-viewport {
+    height: calc(100lvh - var(--app-chrome, 0px));
+    margin-top: calc(-1.25rem - env(safe-area-inset-top));
+  }
+
+  .chat-viewport > header {
+    padding-top: calc(1.75rem + env(safe-area-inset-top));
+  }
+
+  /* The veil covers the status area and stops there.
+
+     Text should thin out as it passes under the clock, not vanish at a line.
+     Two things control that. The wash is light enough (see --ios-status-scrim)
+     that a line of text stays faintly legible behind it rather than being
+     painted over. And the gradient spends most of the veil's height fading:
+     holding the full wash for only the top third leaves a long, soft ramp down
+     to the open canvas, so nothing crosses a visible edge. The blur is the
+     other half of the separation, and is now light enough that a word is still
+     a word underneath it. */
+  body::after {
+    position: fixed;
+    z-index: 35;
+    inset: 0 0 auto;
+    height: env(safe-area-inset-top);
+    pointer-events: none;
+    background: linear-gradient(to bottom, var(--ios-status-scrim) 0 32%, transparent);
+    content: "";
+    -webkit-backdrop-filter: blur(10px) saturate(1.08);
+    backdrop-filter: blur(10px) saturate(1.08);
+  }
+
+  /* The composer settles into the device's bottom corners instead of floating
+     clear of them. It takes the same 1rem inset from the bottom edge that
+     .page-gutter already gives it at the sides, which is what lets one radius —
+     the screen's, less that inset — hold the gap even the whole way around the
+     corner. Concentric only works from equal insets: at 1rem in and 34px up the
+     card could echo the curve but never track it.
+
+     The home indicator is still cleared, by the same distance as before; the
+     clearance just moves inside the card, where it reads as the controls
+     sitting off the bottom rather than as canvas stranded beneath the card. The
+     card itself is inert (the form is pointer-events-none), so the strip now
+     covering the indicator takes no taps away from the system gesture. Card top
+     is unmoved: the bottom edge drops by exactly what the padding adds. */
+  .mobile-safe-bottom {
+    padding-bottom: 1rem;
+  }
+
+  [data-testid="chat-composer-surface"] {
+    /* One radius on all four corners, not just the two meeting the device
+       curve: the card is short enough that a tight top over a wide bottom read
+       as a mistake rather than as nesting. Where the pair on a side exceeds the
+       card's height the browser scales both down together, so the top and
+       bottom stay equal to each other whatever the field grows to.
+
+       max() keeps the component radius on any installed device whose safe area
+       implies no meaningful corner, where the derived value would go negative
+       and drop the declaration to square corners. */
+    border-radius: max(var(--radius-shell), calc(var(--device-screen-radius) - 1rem));
+
+    /* Installed, the card is a capsule with a 44px button in it, so an even
+       inset all round is also the concentric one: the button's centre lands on
+       the capsule end's arc centre and the gap around it stays constant. That
+       inset absorbs the home-indicator clearance — how far the card reaches
+       past the indicator's safe line — rather than stacking on top of it, which
+       is what previously left the button adrift in the corner. */
+    padding: max(1rem, max(0px, calc(max(0.5rem, env(safe-area-inset-bottom)) - 1rem)));
+  }
+}

@@ -104,6 +104,7 @@ export default async function TasksPage({
     <PageShell size="reading">
       {archived ? null : <AutoRefresh />}
       <PageHeader
+        back={archived ? { href: '/tasks', label: 'Activity' } : { href: '/chat', label: 'Chat' }}
         title={archived ? 'Archived activity' : 'Activity'}
         intro={
           archived

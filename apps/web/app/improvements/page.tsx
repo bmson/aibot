@@ -30,6 +30,7 @@ export default async function ImprovementsPage() {
   return (
     <PageShell size="reading">
       <PageHeader
+        back={{ href: '/chat', label: 'Chat' }}
         title="Improvements"
         intro="Changes the assistant proposes for itself after reviewing its own failures, retries, and costs — a model swap, a suggested rule, or an observation. Nothing is applied automatically: approve what helps, dismiss the rest."
       />

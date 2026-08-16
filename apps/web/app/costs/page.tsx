@@ -43,6 +43,7 @@ export default async function CostsPage() {
   return (
     <PageShell size="reading">
       <PageHeader
+        back={{ href: '/chat', label: 'Chat' }}
         title="Costs"
         intro="See what the assistant has spent and set limits that keep costs under control."
       />

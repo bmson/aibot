@@ -34,6 +34,7 @@ export default async function ImportPage() {
   return (
     <PageShell size="reading">
       <PageHeader
+        back={{ href: '/documents', label: 'Documents' }}
         title="Backstory import"
         intro="Add email archives, chat exports, or notes to help the assistant understand your history. You can review anything it learns about other people before it is remembered."
       />
