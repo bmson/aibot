@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { agents, conversations, createDb, type Db, messages } from '@assistant/db';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { type Browser, type BrowserContext, chromium, type Locator, type Page } from 'playwright';
 
 // localhost, not 127.0.0.1: Next 16's dev-origin protection only allows the
@@ -213,6 +213,22 @@ async function createConversationFixture(): Promise<{ db: Db; id: string } | und
   const db = createDb(databaseUrl);
   const [agent] = await db.select({ id: agents.id }).from(agents).limit(1);
   assert(agent, 'mobile smoke requires the seeded assistant agent');
+  // This fixture stands for a *side* thread — a titled chat with a header and a
+  // back link — which it only is if a main thread already exists. Opening /chat
+  // promotes the most recently updated chat conversation when none is marked
+  // primary, and on the empty database CI builds that would be this fixture:
+  // it would render as the main thread, which correctly has neither. A
+  // developer's populated database already has a primary and never noticed.
+  const [primary] = await db
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(and(eq(conversations.agentId, agent.id), eq(conversations.isPrimary, true)))
+    .limit(1);
+  if (!primary) {
+    await db
+      .insert(conversations)
+      .values({ agentId: agent.id, channel: 'chat', trust: 'owner', isPrimary: true });
+  }
   const [conversation] = await db
     .insert(conversations)
     .values({
