@@ -11,7 +11,7 @@ import {
 import { and, eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
-import { markApprovalsNotified, renotifyStalledApprovals } from './approvals.js';
+import { deliveredChannels, markApprovalsNotified, renotifyStalledApprovals } from './approvals.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -166,6 +166,57 @@ describe('renotifyStalledApprovals (integration)', () => {
       .from(messages)
       .where(eq(messages.conversationId, fixture.conversationId));
     expect(rows).toHaveLength(0);
+  });
+
+  it('repairs a missing conversation card without re-pinging an already-notified owner', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const fixture = await insertSilentParkedApproval(10);
+    // The executor's owner ping landed; its conversation write was the half
+    // that failed. Before the per-leg stamp this row was recorded as fully
+    // notified, so the sweep skipped it and the card never appeared in chat —
+    // not on the next poll, and not on any reload.
+    await markApprovalsNotified(db, [fixture.approvalId], ['owner']);
+
+    const pinged: string[] = [];
+    const swept = await renotifyStalledApprovals(db, async (_task, notices) => {
+      for (const notice of notices) pinged.push(notice.shortCode);
+    });
+
+    expect(swept).toBeGreaterThanOrEqual(1);
+    // One approval must not text the owner twice.
+    expect(pinged).not.toContain(fixture.shortCode);
+    // The card the chat was missing now exists, with its actionable part.
+    const rows = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, fixture.conversationId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.text).toContain(fixture.shortCode);
+    expect(JSON.stringify(rows[0]?.parts)).toContain(fixture.approvalId);
+
+    // Both legs stamped, so the next sweep leaves it alone — one card, not a
+    // pile that grows every five minutes.
+    const [row] = await db.select().from(approvals).where(eq(approvals.id, fixture.approvalId));
+    expect(row?.notifiedChannels).toEqual(['owner', 'conversation']);
+    await renotifyStalledApprovals(db, async () => {});
+    const after = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, fixture.conversationId));
+    expect(after).toHaveLength(1);
+  });
+
+  it('a stamp with no delivered leg leaves the approval for the next sweep', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const fixture = await insertSilentParkedApproval(10);
+    // Both legs failed — recording that as "notified" would retire the backstop.
+    await markApprovalsNotified(
+      db,
+      [fixture.approvalId],
+      deliveredChannels({ ownerNotified: false, conversationNotified: false }),
+    );
+    const [row] = await db.select().from(approvals).where(eq(approvals.id, fixture.approvalId));
+    expect(row?.notifiedChannels).toEqual([]);
   });
 
   it('markApprovalsNotified only stamps pending approvals', async (ctx) => {

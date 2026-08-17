@@ -11,7 +11,7 @@ import { getOwnerCard } from '../../memory/consolidation.js';
 import { recallRelevantContext, recentWindowStart } from '../../memory/recall.js';
 import { bumpSkillUse, recallSkills, renderSkillsBlock } from '../../memory/skills.js';
 import type { StepCallOutcome } from '../../model-router/router.js';
-import { markApprovalsNotified } from '../approvals.js';
+import { deliveredChannels, markApprovalsNotified } from '../approvals.js';
 import {
   artifactRoutingFailure,
   artifactToolUnavailable,
@@ -860,19 +860,16 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       if (pendingApprovals.length > 0) {
         const parked = await parkForApproval(db, lease, state, pendingApprovals);
         if (!parked) return LOST_LEASE;
-        let ownerNotified = false;
-        if (deps.notifyApproval && approvalNotices.length > 0) {
-          ownerNotified = await deps
-            .notifyApproval(task, approvalNotices)
-            .then(() => true)
-            .catch((err) => {
-              console.error('approval notification failed', err);
-              return false;
-            });
-        }
         // The conversation must not go silent while parked — tell the owner
         // exactly what is waiting and where to approve it.
-        await postConversationNotice(
+        //
+        // This lands BEFORE the owner ping on purpose. parkForApproval above
+        // already publishes waiting_approval, and notifyApproval is a
+        // sequential run of outbound SMS calls (one per approval). Pinging
+        // first left the chat poller able to observe "waiting for approval"
+        // for seconds while the card naming what was waiting did not exist
+        // yet — it stopped polling and the card only appeared on a reload.
+        const conversationNotified = await postConversationNotice(
           db,
           task,
           [
@@ -887,10 +884,20 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
             summary: notice.summary,
           })),
         );
+        let ownerNotified = false;
+        if (deps.notifyApproval && approvalNotices.length > 0) {
+          ownerNotified = await deps
+            .notifyApproval(task, approvalNotices)
+            .then(() => true)
+            .catch((err) => {
+              console.error('approval notification failed', err);
+              return false;
+            });
+        }
         await markApprovalsNotified(
           db,
           approvalNotices.map((notice) => notice.approvalId),
-          ownerNotified ? ['owner', 'conversation'] : ['conversation'],
+          deliveredChannels({ ownerNotified, conversationNotified }),
         );
         return {
           outcome: 'parked',
