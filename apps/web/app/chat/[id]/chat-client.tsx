@@ -28,6 +28,7 @@ import { archiveConversation, changeConversationModel, restoreConversation } fro
 import { ApprovalGroup } from './approval-group';
 import type { InlineApprovalPart } from './inline-approval';
 import { InlineBudgetRequest, type InlineBudgetRequestPart } from './inline-budget-request';
+import { type InlineSuggestionPart, SuggestionCard } from './inline-suggestion';
 import { MessageMarkdown } from './markdown';
 import {
   AssistantUpdate,
@@ -920,13 +921,19 @@ export function ChatClient({
             <div className="mt-auto flex min-w-0 flex-col">
               {messages.map((message, messageIndex) => {
                 const parts = message.parts as Array<
-                  UIMessage['parts'][number] | InlineApprovalPart | InlineBudgetRequestPart
+                  | UIMessage['parts'][number]
+                  | InlineApprovalPart
+                  | InlineBudgetRequestPart
+                  | InlineSuggestionPart
                 >;
                 const approvalParts = parts.filter(
                   (part): part is InlineApprovalPart => part.type === 'approval',
                 );
                 const budgetParts = parts.filter(
                   (part): part is InlineBudgetRequestPart => part.type === 'budget-request',
+                );
+                const suggestionParts = parts.filter(
+                  (part): part is InlineSuggestionPart => part.type === 'suggestion',
                 );
                 const textParts = parts.filter(
                   (part): part is Extract<UIMessage['parts'][number], { type: 'text' }> =>
@@ -1039,6 +1046,7 @@ export function ChatClient({
                     {budgetParts.map((part) => (
                       <InlineBudgetRequest key={part.taskId} part={part} />
                     ))}
+                    <SuggestionCard parts={suggestionParts} />
                     {showTime && date ? (
                       <p
                         title={date.toLocaleString()}

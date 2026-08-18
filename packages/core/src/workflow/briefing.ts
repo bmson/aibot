@@ -5,6 +5,7 @@ import { getAgent, postOwnerNotice } from '../chat.js';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
 import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
+import { createSuggestion } from './suggestions.js';
 
 /**
  * The standing briefing (anticipation layer, phase 2): one digest of what
@@ -41,6 +42,48 @@ interface UpcomingDate {
   iso: string;
   what: string;
   from: string;
+  category: string;
+  sourceRef: string;
+}
+
+/**
+ * Categories where a stated date is an obligation the owner keeps, so putting
+ * it on their calendar is the obvious next step and worth asking about. A
+ * marketing "sale ends Friday" is a date too, which is exactly why this is a
+ * whitelist rather than "anything with a timestamp".
+ */
+const CALENDARABLE: ReadonlySet<string> = new Set(['travel', 'appointment', 'commitment']);
+/** A date that costs money is better served by a reminder ahead of it. */
+const PAYABLE: ReadonlySet<string> = new Set(['financial']);
+
+/**
+ * Turn an upcoming date into a proposal, or nothing.
+ *
+ * Deterministic on purpose. The proposal is the sentence the owner taps "yes"
+ * on, so it has to say exactly what will happen — and a model asked to phrase
+ * it freely is a model that can propose something the mail never said. The
+ * shape comes from the category; the content comes from the row.
+ */
+function proposalFor(entry: UpcomingDate): { summary: string; action: string } | null {
+  const when = entry.iso.slice(0, 16).replace('T', ' ');
+  if (CALENDARABLE.has(entry.category)) {
+    return {
+      summary: `${entry.what} on ${when}, from ${entry.from} — add it to your calendar?`,
+      action:
+        `Create a calendar event on the owner's own calendar with no attendees for: ${entry.what}. ` +
+        `It starts at ${entry.iso}. This came from an email from ${entry.from}. ` +
+        'Check the calendar first and do nothing if the event is already there.',
+    };
+  }
+  if (PAYABLE.has(entry.category)) {
+    return {
+      summary: `${entry.what} due ${when}, from ${entry.from} — want a reminder beforehand?`,
+      action:
+        `Set a reminder two days before ${entry.iso} about: ${entry.what}. ` +
+        `This came from an email from ${entry.from}.`,
+    };
+  }
+  return null;
 }
 
 export interface BriefingResult {
@@ -50,6 +93,7 @@ export interface BriefingResult {
   needsAttention: number;
   pendingApprovals: number;
   upcoming: number;
+  suggested: number;
 }
 
 /**
@@ -58,21 +102,33 @@ export interface BriefingResult {
  * unparseable one is dropped rather than shown as "Invalid Date".
  */
 function upcomingFrom(
-  rows: ReadonlyArray<{ fromEmail: string; dates: unknown }>,
+  rows: ReadonlyArray<{
+    fromEmail: string;
+    dates: unknown;
+    category: string;
+    channelMessageId: string;
+  }>,
   now: Date,
 ): UpcomingDate[] {
   const horizon = new Date(now.getTime() + 14 * 24 * 3600 * 1000);
   const found: UpcomingDate[] = [];
   for (const row of rows) {
     if (!Array.isArray(row.dates)) continue;
-    for (const entry of row.dates) {
+    for (const [index, entry] of row.dates.entries()) {
       const iso = (entry as { iso?: unknown })?.iso;
       const what = (entry as { what?: unknown })?.what;
       if (typeof iso !== 'string' || typeof what !== 'string') continue;
       const when = new Date(iso);
       if (Number.isNaN(when.getTime())) continue;
       if (when < now || when > horizon) continue;
-      found.push({ iso, what, from: row.fromEmail });
+      found.push({
+        iso,
+        what,
+        from: row.fromEmail,
+        category: row.category,
+        // Stable across briefing runs, so the same date is proposed once.
+        sourceRef: `${row.channelMessageId}:${index}`,
+      });
     }
   }
   return found.sort((a, b) => a.iso.localeCompare(b.iso)).slice(0, MAX_UPCOMING);
@@ -95,6 +151,7 @@ export async function runBriefing(
       needsAttention: 0,
       pendingApprovals: 0,
       upcoming: 0,
+      suggested: 0,
     };
 
     const [mail, attention, pending] = await Promise.all([
@@ -106,6 +163,7 @@ export async function runBriefing(
           importance: emailIngest.importance,
           reason: emailIngest.reason,
           dates: emailIngest.dates,
+          channelMessageId: emailIngest.channelMessageId,
         })
         .from(emailIngest)
         .where(and(eq(emailIngest.agentId, agent.id), gte(emailIngest.createdAt, since)))
@@ -209,10 +267,37 @@ export async function runBriefing(
     const body = composed?.ok ? composed.object.text.trim() : lines.join('\n');
     if (!body) return result;
 
+    // Propose the obvious next step for each upcoming date, as an inert row the
+    // owner can accept. Created BEFORE the message so the parts can carry real
+    // ids; a proposal the producer already made returns null and is skipped, so
+    // a daily briefing never re-asks a question that was already answered.
+    const parts: unknown[] = [];
+    for (const entry of upcoming) {
+      const proposal = proposalFor(entry);
+      if (!proposal) continue;
+      const created = await createSuggestion(db, {
+        agentId: agent.id,
+        summary: proposal.summary,
+        proposedAction: proposal.action,
+        sourceRef: entry.sourceRef,
+        origin: 'briefing',
+        now,
+      });
+      if (!created) continue;
+      parts.push({
+        type: 'suggestion',
+        suggestionId: created.id,
+        summary: created.summary,
+        proposedAction: created.proposedAction,
+      });
+      result.suggested += 1;
+    }
+
     await postOwnerNotice(db, {
       agentId: agent.id,
       text: body,
       ...(opts.taskId ? { taskId: opts.taskId } : {}),
+      extraParts: parts,
     });
     result.delivered = true;
     return result;
@@ -224,7 +309,7 @@ export function briefingSummary(result: BriefingResult): string {
   if (!result.delivered) return 'briefing: nothing to report';
   return (
     `briefing: delivered — ${result.highlights} mail highlight(s) of ${result.mailScanned}, ` +
-    `${result.upcoming} upcoming date(s), ${result.needsAttention} needing attention, ` +
-    `${result.pendingApprovals} awaiting approval`
+    `${result.upcoming} upcoming date(s), ${result.suggested} suggestion(s), ` +
+    `${result.needsAttention} needing attention, ${result.pendingApprovals} awaiting approval`
   );
 }

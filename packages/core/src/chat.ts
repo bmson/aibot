@@ -340,8 +340,8 @@ export async function mirrorGoalUpdateToPrimary(
  */
 export async function postOwnerNotice(
   db: Db,
-  input: { agentId: string; text: string; taskId?: string },
-): Promise<void> {
+  input: { agentId: string; text: string; taskId?: string; extraParts?: readonly unknown[] },
+): Promise<{ conversationId: string }> {
   const primary = await findPrimaryConversation(db, input.agentId);
   const conversationId =
     primary?.id ?? (await getOrCreateNotificationsConversation(db, input.agentId));
@@ -350,9 +350,13 @@ export async function postOwnerNotice(
     ...(input.taskId ? { taskId: input.taskId } : {}),
     role: 'assistant',
     origin: 'assistant',
-    parts: [{ type: 'text', text: input.text }],
+    // Extra parts ride with the text so an interactive card (a suggestion the
+    // owner can accept) lands in the same message as the prose explaining it,
+    // rather than as a second, context-free bubble.
+    parts: [{ type: 'text', text: input.text }, ...(input.extraParts ?? [])],
     text: input.text,
   });
+  return { conversationId };
 }
 
 /** The existing primary chat thread, or null — never creates one (for background writers). */

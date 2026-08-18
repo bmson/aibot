@@ -7,7 +7,16 @@ import {
   listMessages,
   setConversationModel,
 } from '@assistant/core/chat';
-import { approvals, conversations, type Db, goals, models, tasks, toolCalls } from '@assistant/db';
+import {
+  approvals,
+  conversations,
+  type Db,
+  goals,
+  models,
+  suggestions,
+  tasks,
+  toolCalls,
+} from '@assistant/db';
 import type { UIMessage } from 'ai';
 import { and, count, desc, eq, inArray, isNotNull, isNull, lt, notInArray, sql } from 'drizzle-orm';
 
@@ -57,6 +66,15 @@ function isBudgetRequestPart(part: unknown): part is BudgetRequestPart {
   );
 }
 
+function isSuggestionPart(part: unknown): part is { type: 'suggestion'; suggestionId: string } {
+  return (
+    Boolean(part) &&
+    typeof part === 'object' &&
+    (part as { type?: unknown }).type === 'suggestion' &&
+    typeof (part as { suggestionId?: unknown }).suggestionId === 'string'
+  );
+}
+
 function detailLabel(key: string): string {
   const words = key
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -95,9 +113,16 @@ export async function hydrateChatApprovals(
       ),
     ),
   ];
-  if (!approvalIds.length && !budgetTaskIds.length) return messages;
+  const suggestionIds = [
+    ...new Set(
+      messages.flatMap((message) =>
+        (message.parts as unknown[]).filter(isSuggestionPart).map((part) => part.suggestionId),
+      ),
+    ),
+  ];
+  if (!approvalIds.length && !budgetTaskIds.length && !suggestionIds.length) return messages;
 
-  const [approvalRows, budgetTasks] = await Promise.all([
+  const [approvalRows, budgetTasks, suggestionRows] = await Promise.all([
     approvalIds.length
       ? db
           .select({
@@ -115,7 +140,19 @@ export async function hydrateChatApprovals(
           .from(tasks)
           .where(inArray(tasks.id, budgetTaskIds))
       : [],
+    suggestionIds.length
+      ? db
+          .select({
+            id: suggestions.id,
+            status: suggestions.status,
+            expiresAt: suggestions.expiresAt,
+            acceptedTaskId: suggestions.acceptedTaskId,
+          })
+          .from(suggestions)
+          .where(inArray(suggestions.id, suggestionIds))
+      : [],
   ]);
+  const suggestionById = new Map(suggestionRows.map((row) => [row.id, row]));
   const approvalById = new Map(approvalRows.map((row) => [row.id, row]));
   const taskById = new Map(budgetTasks.map((task) => [task.id, task]));
   return messages.map((message) => ({
@@ -133,6 +170,18 @@ export async function hydrateChatApprovals(
                 ? 'pending'
                 : 'missing';
         return { ...part, status };
+      }
+      if (isSuggestionPart(part)) {
+        const suggestion = suggestionById.get(part.suggestionId);
+        if (!suggestion) return { ...part, status: 'missing' };
+        // A suggestion nobody answered goes quiet on its own, so an elapsed
+        // deadline reads as expired rather than as a live question.
+        const status =
+          (suggestion.status === 'pending' || suggestion.status === 'snoozed') &&
+          suggestion.expiresAt <= now
+            ? 'expired'
+            : suggestion.status;
+        return { ...part, status, acceptedTaskId: suggestion.acceptedTaskId ?? undefined };
       }
       if (!isApprovalPart(part)) return part;
       const approval = approvalById.get(part.approvalId);
