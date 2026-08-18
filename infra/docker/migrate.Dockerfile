@@ -1,4 +1,4 @@
-FROM node:22-slim
+FROM node:26-slim
 ENV NODE_ENV=development
 ENV ASSISTANT_REPO_ROOT=/app
 WORKDIR /app

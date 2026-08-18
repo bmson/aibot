@@ -1,6 +1,6 @@
 # The Workspace browser job (Cloud Run Job). Credential-free: no DB URL, no
 # API keys — only PROFILE_ENC_KEY (Secret Manager) and per-run BROWSER_JOB_INPUT.
-FROM node:22-slim
+FROM node:26-slim
 WORKDIR /app
 
 RUN corepack enable

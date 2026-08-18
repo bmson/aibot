@@ -1,4 +1,4 @@
-FROM node:22-slim AS build
+FROM node:26-slim AS build
 WORKDIR /src
 RUN corepack enable
 
@@ -22,7 +22,7 @@ COPY packages ./packages
 COPY apps/agent ./apps/agent
 RUN pnpm --filter @assistant/agent build
 
-FROM node:22-slim AS runtime
+FROM node:26-slim AS runtime
 ENV NODE_ENV=production
 ENV ASSISTANT_REPO_ROOT=/app
 WORKDIR /app

@@ -2,7 +2,7 @@
 # no DB URL, no API keys — only the per-run DOCUMENT_JOB_INPUT env. Reads a
 # document's bytes from the Workspace, extracts plain text (office parsing plus
 # OCR for images and scanned PDFs), writes the text back, and calls home.
-FROM node:22-slim
+FROM node:26-slim
 WORKDIR /app
 
 # tesseract (OCR) + poppler (pdftoppm rasterizes scanned PDFs page-by-page).

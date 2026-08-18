@@ -3,7 +3,7 @@
 # model-authored JavaScript (node) or Python (python3) in an ephemeral
 # container. Network isolation is enforced at the Cloud Run level (no egress
 # connector), not inside the image.
-FROM node:22-slim
+FROM node:26-slim
 WORKDIR /app
 
 RUN corepack enable \

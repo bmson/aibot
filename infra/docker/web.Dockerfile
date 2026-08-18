@@ -1,4 +1,4 @@
-FROM node:22-slim AS build
+FROM node:26-slim AS build
 WORKDIR /src
 RUN corepack enable
 
@@ -21,7 +21,7 @@ ARG GIT_SHA=unknown
 ENV BUILD_SHA=${GIT_SHA}
 RUN pnpm --filter @assistant/web build
 
-FROM node:22-slim AS runtime
+FROM node:26-slim AS runtime
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=8080
