@@ -49,6 +49,54 @@ export function messageDate(message: UIMessage): Date | null {
   return null;
 }
 
+/**
+ * Chronological order for the rendered log. The thread poll can deliver a late
+ * write from an earlier task after a turn the reader already sent, so the log
+ * is sorted rather than appended — the day dividers compare adjacent messages,
+ * and an out-of-order arrival mislabels them too. Messages the client made
+ * itself carry no persisted timestamp and sort last, which is where an
+ * in-flight turn belongs anyway.
+ */
+export function bySendTime(a: UIMessage, b: UIMessage): number {
+  const left = messageDate(a)?.getTime() ?? Number.POSITIVE_INFINITY;
+  const right = messageDate(b)?.getTime() ?? Number.POSITIVE_INFINITY;
+  if (left !== right) return left - right;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Drop the client's provisional copies once their durable twins arrive.
+ *
+ * The optimistic user turn, the "working on it" acknowledgement, and a reply
+ * still streaming are all created locally with client-side ids; the server
+ * persists them under different ones. Without this the thread poll renders
+ * each of them a second time. User turns match on their exact text — the
+ * client sent it, so it is reliable, and one match is consumed per incoming
+ * message so asking the same question twice still shows twice. Replies cannot
+ * be matched on text (the response contract may rewrite one), so a local reply
+ * gives way as soon as the server has sent a reply of its own.
+ */
+export function dropProvisional(
+  merged: UIMessage[],
+  incoming: UIMessage[],
+  serverIds: Set<string>,
+): UIMessage[] {
+  const unmatchedUserText = incoming
+    .filter((message) => message.role === 'user')
+    .map((message) => messageText(message).trim());
+  const serverReplied = incoming.some((message) => message.role === 'assistant');
+  return merged.filter((message) => {
+    if (serverIds.has(message.id)) return true;
+    if (message.role === 'user') {
+      const at = unmatchedUserText.indexOf(messageText(message).trim());
+      if (at === -1) return true;
+      unmatchedUserText.splice(at, 1);
+      return false;
+    }
+    return message.role === 'assistant' ? !serverReplied : true;
+  });
+}
+
 // Chat renders times in the browser's timezone — it's a live surface the owner
 // is looking at right now, unlike the server-rendered dashboards which use the
 // agent timezone. Labels are gated behind `mounted` to avoid SSR/client drift.

@@ -385,6 +385,11 @@ export async function getChatConversationView(
         metadata: { createdAt: row.createdAt.toISOString() },
       })),
   );
+  // Where the open page should resume polling from. Without this the client
+  // has no cursor until it sends a turn, so anything the assistant posted on
+  // its own — a schedule, a watch, an approval resuming — stayed invisible
+  // until the page was loaded again.
+  const newest = messageRows.at(-1);
   return {
     conversation,
     agentName: agent.name || 'Assistant',
@@ -392,6 +397,7 @@ export async function getChatConversationView(
     models: enabledModels,
     goalTitle: linkedGoal?.title,
     canArchive: !conversation.isPrimary && Number(activeTasks[0]?.value ?? 0) === 0,
+    cursor: newest ? encodeMessageCursor(newest) : null,
     asyncTurn:
       requestedTask && requestedCursor && input.cursor
         ? { taskId: requestedTask.id, cursor: input.cursor }
@@ -399,15 +405,45 @@ export async function getChatConversationView(
   };
 }
 
-export async function getChatTaskStatus(
+/**
+ * Everything the open chat has not seen yet, from one cursor forward.
+ *
+ * `taskId` is optional because the chat log is not only fed by the turn you
+ * just sent: schedules, missions, watches, attention notices and inbound
+ * email/SMS all persist into the conversation with no task the page knows
+ * about, and the executor keeps writing after a parked task resumes. Polling
+ * only for a known task is what made those land invisibly until a reload.
+ * With a task, the caller also gets its status and live tool activity.
+ */
+export async function getChatUpdates(
   db: Db,
-  input: { conversationId: string; taskId: string; cursor?: string; pageSize?: number },
+  input: { conversationId: string; taskId?: string; cursor?: string; pageSize?: number },
 ) {
-  const [task] = await db
-    .select({ status: tasks.status, conversationId: tasks.conversationId })
-    .from(tasks)
-    .where(eq(tasks.id, input.taskId));
-  if (!task || task.conversationId !== input.conversationId) return null;
+  let taskStatus: string | null = null;
+  if (input.taskId) {
+    const [task] = await db
+      .select({ status: tasks.status, conversationId: tasks.conversationId })
+      .from(tasks)
+      .where(eq(tasks.id, input.taskId));
+    if (!task || task.conversationId !== input.conversationId) return null;
+    taskStatus = task.status;
+  } else {
+    // The task lookup above is what proved the caller may read this thread.
+    // Without one, check the conversation itself rather than trusting an id
+    // from the query string.
+    const agent = await getAgent(db);
+    const [conversation] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.id, input.conversationId),
+          eq(conversations.agentId, agent.id),
+          eq(conversations.channel, 'chat'),
+        ),
+      );
+    if (!conversation) return null;
+  }
   const cursor = decodeMessageCursor(input.cursor);
   const pageSize = input.pageSize ?? 50;
   const rows = await listMessages(db, input.conversationId, {
@@ -429,15 +465,21 @@ export async function getChatTaskStatus(
   );
   const last = page.at(-1);
   const nextCursor = last ? encodeMessageCursor(last) : cursor ? encodeMessageCursor(cursor) : null;
-  const activity = SETTLED_TASK_STATUSES.has(task.status)
-    ? []
-    : (
-        await db
-          .select({ toolName: toolCalls.toolName, status: toolCalls.status, step: toolCalls.step })
-          .from(toolCalls)
-          .where(eq(toolCalls.taskId, input.taskId))
-          .orderBy(desc(toolCalls.createdAt))
-          .limit(3)
-      ).reverse();
-  return { taskStatus: task.status, messages, nextCursor, hasMore, activity };
+  const taskId = input.taskId;
+  const activity =
+    taskId && taskStatus && !SETTLED_TASK_STATUSES.has(taskStatus)
+      ? (
+          await db
+            .select({
+              toolName: toolCalls.toolName,
+              status: toolCalls.status,
+              step: toolCalls.step,
+            })
+            .from(toolCalls)
+            .where(eq(toolCalls.taskId, taskId))
+            .orderBy(desc(toolCalls.createdAt))
+            .limit(3)
+        ).reverse()
+      : [];
+  return { taskStatus, messages, nextCursor, hasMore, activity };
 }
