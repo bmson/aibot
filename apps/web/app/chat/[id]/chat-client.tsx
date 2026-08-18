@@ -69,6 +69,26 @@ interface ChatClientProps {
 
 const ASYNC_ACK_TEXT = 'Got it — I’m working on this now. I’ll post the result here.';
 
+/** Task statuses that mean "parked on the owner", not "finished". */
+const PARKED_TASK_STATUSES = new Set(['waiting_approval', 'waiting_budget', 'needs_attention']);
+
+/**
+ * A task publishes a parked status before the card explaining the park is
+ * persisted. The executor now writes that card ahead of its outbound owner
+ * ping, so the gap is a single insert — but a poll can still land inside it,
+ * and stopping there is what left approvals invisible until a reload. Give a
+ * parked task this many extra polls to produce a card before settling, so a
+ * park that legitimately has no card (plain needs_attention prose) still ends.
+ */
+const PARK_GRACE_TICKS = 4;
+
+/** An approval or budget card — the thing a parked task is waiting on. */
+function hasDecisionPart(message: UIMessage): boolean {
+  return (message.parts as Array<{ type?: string }>).some(
+    (part) => part?.type === 'approval' || part?.type === 'budget-request',
+  );
+}
+
 /**
  * One entry in the "/" palette. Composer commands act on this chat; navigation
  * entries leave for another surface. The palette is the app's only menu, so
@@ -257,6 +277,10 @@ export function ChatClient({
     let cancelled = false;
     let cursor = asyncTurn.cursor;
     let sawAssistant = false;
+    /** An approval or budget card for this turn actually reached the client. */
+    let sawDecision = false;
+    /** Extra polls left to a parked task before we stop listening for its card. */
+    let parkGraceTicks = PARK_GRACE_TICKS;
 
     const mergeMessages = (incoming: UIMessage[]) => {
       if (incoming.length === 0) return;
@@ -317,19 +341,20 @@ export function ChatClient({
           setActivity(data.activity ?? []);
           mergeMessages(data.messages);
           sawAssistant ||= data.messages.some((message) => message.role === 'assistant');
+          sawDecision ||= data.messages.some(hasDecisionPart);
           if (data.nextCursor) cursor = data.nextCursor;
           if (data.hasMore) {
             if (!cancelled) window.setTimeout(tick, 0);
             return;
           }
-          if (
-            (data.taskStatus === 'done' ||
-              data.taskStatus === 'waiting_approval' ||
-              data.taskStatus === 'waiting_budget' ||
-              data.taskStatus === 'needs_attention') &&
-            sawAssistant
-          ) {
-            return settle(null);
+          if (data.taskStatus === 'done' && sawAssistant) return settle(null);
+          if (PARKED_TASK_STATUSES.has(data.taskStatus) && sawAssistant) {
+            // Stop as soon as the card the park is waiting on is here. Without
+            // one, keep polling for a bounded grace: the status can be observed
+            // in the moment between the park commit and the card's insert, and
+            // settling there loses the card until the page is reloaded.
+            if (sawDecision || parkGraceTicks <= 0) return settle(null);
+            parkGraceTicks -= 1;
           }
           if (data.taskStatus === 'failed' || data.taskStatus === 'cancelled') {
             return settle(

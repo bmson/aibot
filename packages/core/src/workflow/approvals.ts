@@ -131,17 +131,39 @@ export async function resolveApproval(
 }
 
 /**
- * Record that the park notices for these approvals reached the owner. An
- * approval whose notified_channels is still empty after a grace period was
- * parked by a worker that crashed between the park commit and the notices —
- * renotifyStalledApprovals() re-emits those.
+ * Which delivery legs of a park notice actually landed. Only a leg that
+ * succeeded may be stamped: renotifyStalledApprovals() repairs whatever is
+ * missing, so recording a conversation write that in fact failed retires the
+ * backstop and strands the approval with no card in the chat — invisible to
+ * the owner until the 24h expiry, and unrecoverable by a page reload.
+ */
+export function deliveredChannels(input: {
+  ownerNotified: boolean;
+  conversationNotified: boolean;
+}): string[] {
+  return [
+    ...(input.ownerNotified ? ['owner'] : []),
+    ...(input.conversationNotified ? ['conversation'] : []),
+  ];
+}
+
+/**
+ * Record which park notices for these approvals actually reached the owner. An
+ * approval still missing the 'conversation' leg after a grace period was parked
+ * by a worker that crashed — or whose conversation write failed — between the
+ * park commit and the notices; renotifyStalledApprovals() re-emits those.
+ *
+ * Callers pass the full set they know landed (see deliveredChannels): this
+ * replaces the column rather than appending to it, so a partial stamp must
+ * never drop a leg an earlier attempt already delivered.
  */
 export async function markApprovalsNotified(
   db: Db,
   approvalIds: string[],
   channels: string[],
 ): Promise<void> {
-  if (approvalIds.length === 0) return;
+  // No leg landed — leave the row untouched so the sweep still selects it.
+  if (approvalIds.length === 0 || channels.length === 0) return;
   await db
     .update(approvals)
     .set({ notifiedChannels: channels })
@@ -172,7 +194,10 @@ export async function renotifyStalledApprovals(
     .where(
       and(
         eq(approvals.status, 'pending'),
-        sql`cardinality(${approvals.notifiedChannels}) = 0`,
+        // Missing the conversation leg, not merely un-notified: an approval
+        // whose owner ping landed but whose chat card did not is exactly the
+        // row this sweep has to repair, and it carries a non-empty array.
+        sql`NOT ('conversation' = ANY(${approvals.notifiedChannels}))`,
         lte(approvals.requestedAt, sql`now() - make_interval(mins => ${olderThanMinutes})`),
         eq(tasks.status, 'waiting_approval'),
       ),
@@ -193,8 +218,15 @@ export async function renotifyStalledApprovals(
   let renotified = 0;
   for (const { task, notices } of byTask.values()) {
     try {
-      let ownerNotified = false;
-      if (notifyApproval) {
+      // Repair only the legs actually missing. A row reaches this sweep having
+      // already texted the owner whenever the conversation write was the half
+      // that failed — re-sending would bill and buzz them twice for one
+      // approval, so the owner ping is skipped once it is stamped.
+      const ownerAlreadyNotified = notices.every((approval) =>
+        approval.notifiedChannels.includes('owner'),
+      );
+      let ownerNotified = ownerAlreadyNotified;
+      if (notifyApproval && !ownerAlreadyNotified) {
         await notifyApproval(
           task,
           notices.map((approval) => ({
@@ -229,10 +261,14 @@ export async function renotifyStalledApprovals(
           text,
         });
       }
+      // Reaching here means every leg attempted above succeeded — a throw from
+      // either one skips the stamp and leaves the row for the next sweep. A
+      // task with no conversation owes no card, so its conversation leg counts
+      // as settled rather than re-selecting the row on every future sweep.
       await markApprovalsNotified(
         db,
         notices.map((approval) => approval.id),
-        ownerNotified ? ['owner', 'conversation'] : ['conversation'],
+        deliveredChannels({ ownerNotified, conversationNotified: true }),
       );
       renotified += notices.length;
     } catch (err) {
