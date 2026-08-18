@@ -9,8 +9,21 @@ Design for the assistant acting *before* it is asked. Two capabilities, one shar
 
 Status: **Phase 1 shipped** — notify-tier email watchers (the `watches`/`watch_fires` tables, the
 `watch.create`/`watch.list`/`watch.cancel` tools, the `matchEmailWatches` pass on the inbound-mail
-hook, and the expiry reaper). Phases 2–4 remain proposed. This document is the source of truth for
-the design. It deliberately reuses the two pieces of machinery that already exist for exactly this
+hook, and the expiry reaper). **Phase 2 partly shipped**: the briefing exists as the
+`briefing.compose` code job (`packages/core/src/workflow/briefing.ts`), on a daily schedule and
+self-silencing on a quiet day. The `suggestions` table and the `suggest` tier remain proposed, so a
+briefing today reports and does not propose. Phases 3–4 are otherwise unchanged. This document is
+the source of truth for the design.
+
+> **One deliberate deviation from the invariant below.** Forwarded-mail ingest
+> (`EMAIL_INGEST_MODE=forwarded`) lets an email-triggered task create a calendar event with **zero
+> attendees** without an approval, via a predicate form of the `ownerVisibleOnly` flag
+> (`packages/tools/src/google/calendar.ts`). Such a write sends no invitation, reaches no third
+> party, and is trivially reversible — the same reasoning that already exempts `owner.notify` — but
+> it is nonetheless untrusted content causing a write, so it is recorded here rather than left to be
+> discovered in a diff. It is confined to that one argument shape: the moment an attendee is present,
+> `sendUpdates=all` mails them and the call is gated like any other outward action. Extending it to
+> anything with a third-party sink is a redesign, not an increment. It deliberately reuses the two pieces of machinery that already exist for exactly this
 shape of work — the application-confirmation *watch* and the goal-automation *schedule* — and copies
 their security discipline verbatim rather than inventing a new one.
 
@@ -167,6 +180,17 @@ approvals table with a `suggested` flag — rejected; it muddies the "an approva
 call" meaning that the executor and SMS `YES A7` flow rely on.)
 
 ### The briefing
+
+> **Status: built.** `runBriefing` (`packages/core/src/workflow/briefing.ts`) runs as the
+> `briefing.compose` code job on the seeded `daily-briefing` schedule. Deltas from the design below:
+> its inputs are the `email_ingest` ledger (what arrived and how the importance pass scored it),
+> upcoming dates lifted from those rows, `needs_attention` tasks, and pending approvals — calendar
+> conflicts, mission/goal deltas, watcher hits and suggestions are not wired in yet. Voice rewrite is
+> not applied; the composer writes in the assistant's voice directly. It is seeded **enabled** rather
+> than off, which is safe precisely because of the no-fabricated-urgency rule below: with nothing to
+> report it delivers nothing, and while mail ingest is off there is nothing to report at all. The
+> "composed under a reduced registry" guarantee is obtained more strongly than designed — a code job
+> holds no tools whatsoever.
 
 A per-agent standing **schedule** whose `taskTemplate.job = 'briefing.compose'` — a new
 `CodeJobName` (`memory/jobs.ts:29`). It reuses everything: idempotent firing
