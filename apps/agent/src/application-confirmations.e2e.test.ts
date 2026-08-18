@@ -278,7 +278,13 @@ afterAll(async () => {
         ),
       );
     }
-    if (taskIds.length > 0) await db.delete(tasks).where(inArray(tasks.id, taskIds));
+    if (taskIds.length > 0) {
+      // Owner notices land in the primary/Notifications thread, which is not in
+      // conversationIds, so deleting by conversation alone leaves a message
+      // still referencing these tasks.
+      await db.delete(messages).where(inArray(messages.taskId, taskIds));
+      await db.delete(tasks).where(inArray(tasks.id, taskIds));
+    }
     if (conversationIds.length > 0) {
       await db.delete(conversations).where(inArray(conversations.id, conversationIds));
     }

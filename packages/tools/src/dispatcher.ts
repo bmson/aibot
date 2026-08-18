@@ -1,4 +1,5 @@
 import { createHash, randomInt } from 'node:crypto';
+import { outboundEmailAllowed } from '@assistant/config';
 import {
   activeAutonomyGrant,
   autonomyFloorBlocks,
@@ -26,7 +27,12 @@ import { isAmbiguousGoogleMutationError } from './google/client.js';
 import { matchPolicies } from './policies.js';
 import type { ToolRegistry } from './registry.js';
 import { isAmbiguousTwilioDeliveryError } from './twilio/client.js';
-import type { RegisteredTool, RiskTier, ToolContext } from './types.js';
+import {
+  ownerVisibleOnlyFor,
+  type RegisteredTool,
+  type RiskTier,
+  type ToolContext,
+} from './types.js';
 
 export interface DispatchInput {
   task: TaskRow;
@@ -508,6 +514,25 @@ export class ToolDispatcher {
       }
     }
 
+    // Outbound domain allowlist. Mirrors a restriction the mail provider itself
+    // enforces (a bot account blocked from mailing outside its own org), so a
+    // send outside it cannot succeed no matter who approves it. Rejected here
+    // rather than gated: queuing an approval card for mail that will bounce
+    // teaches the owner to approve things that never happen, and it must not be
+    // overridable by a policy allow rule or an autonomy grant, both of which are
+    // evaluated below.
+    const blockedRecipients = (
+      RECIPIENT_TOOLS.has(input.toolName) ? recipientsFrom(input.toolName, args).emails : []
+    ).filter((email) => !outboundEmailAllowed(email));
+    if (blockedRecipients.length > 0) {
+      return {
+        kind: 'rejected',
+        reason:
+          `cannot send to ${blockedRecipients.join(', ')}: outside the domains this assistant ` +
+          'is permitted to email (EMAIL_OUTBOUND_DOMAINS)',
+      };
+    }
+
     // Policy match (templates only; unknown templates fail closed)
     const policyMatch = await matchPolicies(this.db, {
       agentId: input.task.agentId,
@@ -551,7 +576,9 @@ export class ToolDispatcher {
       // A tool whose only sink is the owner's own dashboard cannot exfiltrate or
       // reach a third party, so it stays autonomous under taint (D6). Every
       // other capability that could disclose data or act outward is gated.
-      registered.flags.ownerVisibleOnly !== true &&
+      // Evaluated per call, because for some tools the property depends on the
+      // arguments — an event with attendees mails them, one without does not.
+      !ownerVisibleOnlyFor(registered.flags, args) &&
       (tool.acceptsUntrustedInput === false ||
         registered.flags.writesMemory === true ||
         registered.flags.networkEgress === true ||

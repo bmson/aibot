@@ -1,6 +1,11 @@
 import path from 'node:path';
 import { type Config, loadConfig, repoRoot } from '@assistant/config';
-import { type DocumentProcessorConfig, ModelRouter } from '@assistant/core';
+import {
+  type DocumentProcessorConfig,
+  getAgent,
+  ModelRouter,
+  postOwnerNotice,
+} from '@assistant/core';
 import { createDb, type Db } from '@assistant/db';
 import {
   browserModule,
@@ -10,6 +15,7 @@ import {
   installModules,
   type ModuleMeta,
   type ModuleServices,
+  type OwnerNotifier,
   type SmsChannelDeps,
   smsModule,
 } from '@assistant/modules';
@@ -64,6 +70,56 @@ export function smsDeps(deps: AgentDeps): SmsChannelDeps {
   };
 }
 
+/**
+ * The owner notifier the platform always has.
+ *
+ * `OwnerNotifier` is a port that channel MODULES provide, and SMS is the only
+ * module that implements it — so without Twilio installed, every notice the
+ * platform generates went to `noopOwnerNotifier` and vanished. The dashboard is
+ * core platform rather than an optional capability, so it belongs here in the
+ * composition root rather than behind a module.
+ *
+ * Composed with (not substituted for) whatever modules provide: a notice should
+ * reach the owner's chat AND their phone when both exist. Each leg is
+ * best-effort and independent, so a Twilio outage cannot swallow the dashboard
+ * copy, and vice versa.
+ */
+function dashboardOwnerNotifier(deps: AgentDeps): OwnerNotifier {
+  const post = async (text: string, taskId?: string) => {
+    const agent = await getAgent(deps.db);
+    await postOwnerNotice(deps.db, { agentId: agent.id, text, ...(taskId ? { taskId } : {}) });
+  };
+  return {
+    notifyOwner: async ({ text, taskId }) => {
+      await post(text, taskId);
+    },
+    // Approval cards are already posted into the originating conversation by the
+    // executor; this is the out-of-band nudge for an owner who is not looking at
+    // that thread, so it names the codes without repeating the full card.
+    notifyApprovals: async (pending) => {
+      if (pending.length === 0) return;
+      const lines = pending.map((approval) => `${approval.shortCode}: ${approval.summary}`);
+      await post(
+        `${pending.length === 1 ? 'Something needs' : `${pending.length} things need`} your approval:\n${lines.join('\n')}`,
+        pending[0]?.taskId,
+      );
+    },
+  };
+}
+
+/** Fan a notice out to every notifier, so one failing channel cannot silence the rest. */
+function composeOwnerNotifiers(notifiers: readonly OwnerNotifier[]): OwnerNotifier {
+  const each = async (run: (notifier: OwnerNotifier) => Promise<void>) => {
+    for (const notifier of notifiers) {
+      await run(notifier).catch((err) => console.error('owner notification failed', err));
+    }
+  };
+  return {
+    notifyOwner: (input) => each((notifier) => notifier.notifyOwner(input)),
+    notifyApprovals: (approvals) => each((notifier) => notifier.notifyApprovals(approvals)),
+  };
+}
+
 /** The invocation-time services module hooks receive. */
 export function agentServices(deps: AgentDeps): ModuleServices {
   return {
@@ -73,7 +129,10 @@ export function agentServices(deps: AgentDeps): ModuleServices {
     registry: deps.registry,
     dispatcher: deps.dispatcher,
     workspace: deps.workspace,
-    ownerNotifier: deps.modules.ownerNotifier,
+    ownerNotifier: composeOwnerNotifiers([
+      dashboardOwnerNotifier(deps),
+      deps.modules.ownerNotifier,
+    ]),
     emailObservers: deps.modules.emailObservers,
   };
 }

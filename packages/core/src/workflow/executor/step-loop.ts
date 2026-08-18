@@ -5,6 +5,7 @@ import { hashCallbackToken } from '../../browse.js';
 import { buildSystemPrompt, PROMPT_VERSION } from '../../chat.js';
 import { isJobPending } from '../../code-exec.js';
 import { loadConfig } from '../../config.js';
+import { isForwardedIngest } from '../../email-provenance.js';
 import type { Plan, TaskState, Trust } from '../../events.js';
 import { getAmbientBlock } from '../../memory/ambient.js';
 import { getOwnerCard } from '../../memory/consolidation.js';
@@ -123,8 +124,12 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // Private calendar/mail forcing belongs only to direct owner requests. Never
   // let third-party text or an assistant-generated child task trigger a search
   // of the owner's accounts or override its explicit action plan.
+  // Forwarded ingest is owner-trust but its window holds a third party's email,
+  // so it is exactly the "third-party text" this rule excludes: without the
+  // guard, a crafted message reading like "what's on my calendar tomorrow?"
+  // would force a search of the owner's own accounts and override the plan.
   const readRequest =
-    task.trust === 'owner'
+    task.trust === 'owner' && !isForwardedIngest(task)
       ? detectPersonalReadRequest(rc.window, {
           now: readReferenceAt,
           timeZone: agent.timezone,

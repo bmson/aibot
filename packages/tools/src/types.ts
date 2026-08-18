@@ -118,15 +118,38 @@ export interface ToolFlags {
    */
   autonomyFloor?: boolean;
   /**
-   * The tool's ONLY sink is the owner's own dashboard/conversation — it cannot
-   * reach a third party or the network. Such a tool stays autonomous even under
-   * taint: gating a message the owner sends to themselves behind the owner's own
-   * approval is pure friction (they would have to approve being told something),
-   * and it conveys no capability the model's normal reply text does not already
-   * have. Use with extreme care — set it ONLY when the recipient is hardwired to
-   * the owner and no argument can redirect it.
+   * The tool's ONLY sink is the owner's own dashboard/conversation/calendar — it
+   * cannot reach a third party or the network. Such a tool stays autonomous even
+   * under taint: gating a message the owner sends to themselves behind the
+   * owner's own approval is pure friction (they would have to approve being told
+   * something), and it conveys no capability the model's normal reply text does
+   * not already have. Use with extreme care — set it ONLY when the recipient is
+   * hardwired to the owner and no argument can redirect it.
+   *
+   * A predicate form exists for tools where that property holds for SOME calls
+   * and not others — `calendar.create_event` sends invitations when it has
+   * attendees and is inert when it does not. It is evaluated per call against
+   * the validated arguments, mirroring how `risk` is already allowed to vary.
+   * A predicate must be conservative: it may only return true when the
+   * arguments themselves prove nothing leaves the owner's own account. If it
+   * throws, the dispatcher treats the call as NOT owner-visible.
    */
-  ownerVisibleOnly?: boolean;
+  ownerVisibleOnly?: boolean | ((args: unknown) => boolean);
+}
+
+/**
+ * Resolve `ownerVisibleOnly` for one call. Fails closed: an argument shape the
+ * predicate cannot evaluate is treated as reaching beyond the owner, so a bug
+ * here costs an approval card rather than an unapproved outward action.
+ */
+export function ownerVisibleOnlyFor(flags: ToolFlags, args: unknown): boolean {
+  const flag = flags.ownerVisibleOnly;
+  if (typeof flag !== 'function') return flag === true;
+  try {
+    return flag(args) === true;
+  } catch {
+    return false;
+  }
 }
 
 export type RegisteredTool = { tool: AssistantTool; flags: ToolFlags };

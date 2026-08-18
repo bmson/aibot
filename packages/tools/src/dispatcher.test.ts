@@ -1,3 +1,4 @@
+import { resetConfigForTest } from '@assistant/config';
 import {
   agents,
   approvalPolicies,
@@ -1133,6 +1134,156 @@ describe('ToolDispatcher (integration)', () => {
     });
     expect(ping.kind).toBe('executed');
     expect(outward.kind).toBe('awaiting_approval');
+  });
+
+  it('rejects a send outside the allowed outbound domains, rather than gating it', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // Mirrors a restriction the mail provider itself enforces. Queuing an
+    // approval card for mail that will bounce trains the owner to approve
+    // things that never happen, so this is a rejection and not a gate — and it
+    // must not be overridable by approval, policy, or an autonomy grant.
+    const previous = process.env.EMAIL_OUTBOUND_DOMAINS;
+    process.env.EMAIL_OUTBOUND_DOMAINS = 'bmson.com';
+    resetConfigForTest();
+    try {
+      const registry = new ToolRegistry().register(
+        makeTool('gmail.send', { inputSchema: z.object({ to: z.array(z.string()) }) }),
+        { outwardFacing: true },
+      );
+      const dispatcher = new ToolDispatcher(db, registry);
+      const task = await makeTask('owner');
+
+      const outside = await dispatcher.dispatch({
+        task,
+        step: 1,
+        toolName: 'gmail.send',
+        args: { to: ['stranger@example.com'] },
+        ctx: ctxFor(task),
+        provenance,
+      });
+      expect(outside.kind).toBe('rejected');
+      expect(outside.kind === 'rejected' && outside.reason).toContain('EMAIL_OUTBOUND_DOMAINS');
+
+      const inside = await dispatcher.dispatch({
+        task,
+        step: 2,
+        toolName: 'gmail.send',
+        args: { to: ['bmson@bmson.com'] },
+        ctx: ctxFor(task),
+        provenance,
+      });
+      expect(inside.kind).not.toBe('rejected');
+
+      // A subdomain is not implied: the point is to mirror the provider rule
+      // exactly rather than guess at its intent.
+      const subdomain = await dispatcher.dispatch({
+        task,
+        step: 3,
+        toolName: 'gmail.send',
+        args: { to: ['x@mail.bmson.com'] },
+        ctx: ctxFor(task),
+        provenance,
+      });
+      expect(subdomain.kind).toBe('rejected');
+    } finally {
+      if (previous === undefined) delete process.env.EMAIL_OUTBOUND_DOMAINS;
+      else process.env.EMAIL_OUTBOUND_DOMAINS = previous;
+      resetConfigForTest();
+    }
+  });
+
+  it('places no domain restriction when none is configured', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const previous = process.env.EMAIL_OUTBOUND_DOMAINS;
+    delete process.env.EMAIL_OUTBOUND_DOMAINS;
+    resetConfigForTest();
+    try {
+      const registry = new ToolRegistry().register(
+        makeTool('gmail.send', { inputSchema: z.object({ to: z.array(z.string()) }) }),
+        { outwardFacing: true },
+      );
+      const dispatcher = new ToolDispatcher(db, registry);
+      const task = await makeTask('owner');
+      const outcome = await dispatcher.dispatch({
+        task,
+        step: 1,
+        toolName: 'gmail.send',
+        args: { to: ['anyone@example.com'] },
+        ctx: ctxFor(task),
+        provenance,
+      });
+      // An empty list means unrestricted, never "deny everything" — an
+      // installation that never sets this must keep working.
+      expect(outcome.kind).not.toBe('rejected');
+    } finally {
+      if (previous !== undefined) process.env.EMAIL_OUTBOUND_DOMAINS = previous;
+      resetConfigForTest();
+    }
+  });
+
+  it('a zero-attendee calendar event stays autonomous under taint; attendees park it', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // Writing to the owner's own calendar with no attendees sends no invitation
+    // and tells nobody — owner-visible in the same sense owner.notify is, so a
+    // date lifted out of forwarded mail lands without an approval tap. Add an
+    // attendee and sendUpdates=all mails them, so it is gated like any send.
+    const registry = new ToolRegistry().register(
+      makeTool('test.cal', { acceptsUntrustedInput: false }),
+      {
+        outwardFacing: true,
+        ownerVisibleOnly: (args) =>
+          ((args as { attendees?: string[] }).attendees?.length ?? 0) === 0,
+      },
+    );
+    const dispatcher = new ToolDispatcher(db, registry);
+    const task = await makeTask('owner');
+    const tainted = { ...ctxFor(task), tainted: true };
+
+    const solo = await dispatcher.dispatch({
+      task,
+      step: 1,
+      toolName: 'test.cal',
+      args: { value: 'dentist', attendees: [] },
+      ctx: tainted,
+      provenance,
+    });
+    const withGuests = await dispatcher.dispatch({
+      task,
+      step: 2,
+      toolName: 'test.cal',
+      args: { value: 'dinner', attendees: ['someone@example.com'] },
+      ctx: tainted,
+      provenance,
+    });
+
+    expect(solo.kind).toBe('executed');
+    expect(withGuests.kind).toBe('awaiting_approval');
+  });
+
+  it('a throwing ownerVisibleOnly predicate fails closed', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const registry = new ToolRegistry().register(
+      makeTool('test.cal-broken', { acceptsUntrustedInput: false }),
+      {
+        outwardFacing: true,
+        ownerVisibleOnly: () => {
+          throw new Error('predicate bug');
+        },
+      },
+    );
+    const dispatcher = new ToolDispatcher(db, registry);
+    const task = await makeTask('owner');
+    const outcome = await dispatcher.dispatch({
+      task,
+      step: 1,
+      toolName: 'test.cal-broken',
+      args: { value: 'x' },
+      ctx: { ...ctxFor(task), tainted: true },
+      provenance,
+    });
+    // A bug in the predicate must cost an approval card, never an unapproved
+    // outward action.
+    expect(outcome.kind).toBe('awaiting_approval');
   });
 
   it('a scheduled child of a tainted session carries taintedOrigin (S1)', async (ctx) => {

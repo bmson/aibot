@@ -416,7 +416,30 @@ export function registerCalendarTools(
         };
       },
     },
-    { outwardFacing: true },
+    {
+      outwardFacing: true,
+      /**
+       * An event with NO attendees is written to the owner's own calendar and
+       * nothing else happens: no invitation is addressed, no third party is told,
+       * nothing leaves the account. That makes it owner-visible in exactly the
+       * sense `owner.notify` is — the same reasoning, applied to the calendar
+       * instead of the dashboard — so it stays autonomous when untrusted content
+       * is in the session. The moment there is an attendee, `sendUpdates=all`
+       * mails them, and the call is gated like any other outward action.
+       *
+       * This is a deliberate, narrow widening of the anticipation-layer rule
+       * that untrusted content may inform the owner but never author an outward
+       * action (docs/anticipation-layer.md): it lets forwarded mail put a date on
+       * the owner's calendar without an approval tap. It is confined to this one
+       * argument shape on purpose — extending it to anything with a third-party
+       * sink would be a redesign, not an increment.
+       *
+       * `outwardFacing` stays set: it is what keeps the tool out of an untrusted
+       * sender's registry entirely, which is a separate protection from this one.
+       */
+      ownerVisibleOnly: (args) =>
+        ((args as z.infer<typeof createSchema>).attendees?.length ?? 0) === 0,
+    },
   );
 
   register(

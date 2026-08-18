@@ -323,6 +323,38 @@ export async function mirrorGoalUpdateToPrimary(
   });
 }
 
+/**
+ * Put a notice in front of the owner on the dashboard.
+ *
+ * The `OwnerNotifier` port is provided by channel MODULES, and the only one that
+ * implements it is SMS — so on an installation without Twilio every
+ * deterministic notice the platform generates was being handed to a no-op and
+ * silently discarded. The dashboard is not an optional capability, so it should
+ * never have depended on one; this is the sink that always exists.
+ *
+ * Posts into the owner's primary thread — the one continuous conversation —
+ * falling back to the assistant-owned Notifications thread before a primary
+ * exists, which is the same fallback `owner.notify` already uses. Never creates
+ * a primary thread: a background writer must not decide which conversation
+ * becomes the owner's main one.
+ */
+export async function postOwnerNotice(
+  db: Db,
+  input: { agentId: string; text: string; taskId?: string },
+): Promise<void> {
+  const primary = await findPrimaryConversation(db, input.agentId);
+  const conversationId =
+    primary?.id ?? (await getOrCreateNotificationsConversation(db, input.agentId));
+  await persistMessage(db, {
+    conversationId,
+    ...(input.taskId ? { taskId: input.taskId } : {}),
+    role: 'assistant',
+    origin: 'assistant',
+    parts: [{ type: 'text', text: input.text }],
+    text: input.text,
+  });
+}
+
 /** The existing primary chat thread, or null — never creates one (for background writers). */
 export async function findPrimaryConversation(
   db: Db,

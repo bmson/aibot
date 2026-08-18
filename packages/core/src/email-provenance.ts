@@ -48,3 +48,23 @@ export function quotesExternalContent(input: { subject?: string; body?: string }
   if (FORWARD_SUBJECT.test(subject)) return true;
   return QUOTE_MARKERS.some((pattern) => pattern.test(body));
 }
+
+/**
+ * Did this task come from the owner's forwarded-mail pipe?
+ *
+ * Such a task runs at OWNER trust — the owner's forwarding rule is what asked
+ * for the work — but its `from` address is a THIRD PARTY, not the owner. Every
+ * path that treats owner trust as "reply to whoever sent this" must therefore
+ * check here first, or it will mail the assistant's output to a stranger.
+ *
+ * This flag is a readable signal, NOT the safety boundary: it is absent on a
+ * corrupted payload, and absent reads as "ordinary mail", which is the
+ * permissive direction for a caller using it to suppress a send. The actual
+ * boundary is `deliverEmailFinal`'s positive check that the recipient is an
+ * owner address, plus the outbound domain allowlist. Keep all three.
+ */
+export function isForwardedIngest(task: { trigger?: unknown } | null | undefined): boolean {
+  const payload = (task?.trigger as { payload?: { ingest?: { forwarded?: unknown } } } | null)
+    ?.payload;
+  return payload?.ingest?.forwarded === true;
+}
