@@ -1,13 +1,14 @@
 import { getAgent } from '@assistant/core';
 import {
   channelBindings,
+  contacts,
   conversations,
   createDb,
   type Db,
   type TaskRow,
   tasks,
 } from '@assistant/db';
-import { inArray } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { deliverEmailFinal, type EmailChannelDeps } from './email-channel.js';
 
@@ -23,6 +24,16 @@ let emailConvId: string;
 let chatConvId: string;
 const createdConversationIds: string[] = [];
 const createdTaskIds: string[] = [];
+const createdContactIds: string[] = [];
+let ownerEmailRestore: { id: string; emails: string[] } | undefined;
+/**
+ * Auto-reply now requires the recipient to be a real owner address, so the
+ * fixture has to own the one it replies to. In production that holds by
+ * construction — an email task only reaches owner trust when `classifySender`
+ * matched the sender against an owner contact — but a hand-built TaskRow can
+ * assert any trust it likes, which is exactly what the check exists to catch.
+ */
+const OWNER_ADDRESS = 'bmson@bmson.com';
 
 /** Captures Gmail sends instead of performing them; serves Message-ID metadata reads. */
 function makeDeps(): { deps: EmailChannelDeps; sent: Array<{ url: string; body: string }> } {
@@ -85,9 +96,42 @@ beforeAll(async () => {
   emailConvId = (emailConv as NonNullable<typeof emailConv>).id;
   chatConvId = (chatConv as NonNullable<typeof chatConv>).id;
   createdConversationIds.push(emailConvId, chatConvId);
+
+  const [existingOwner] = await db
+    .select({ id: contacts.id, emails: contacts.emails })
+    .from(contacts)
+    .where(eq(contacts.trust, 'owner'))
+    .limit(1);
+  if (existingOwner) {
+    // Lend the seeded owner this test's address rather than adding a second
+    // owner row, and remember the original list so afterAll can put it back —
+    // these suites share one database.
+    if (!existingOwner.emails.includes(OWNER_ADDRESS)) {
+      ownerEmailRestore = { id: existingOwner.id, emails: existingOwner.emails };
+      await db
+        .update(contacts)
+        .set({ emails: [...existingOwner.emails, OWNER_ADDRESS] })
+        .where(eq(contacts.id, existingOwner.id));
+    }
+  } else {
+    const [created] = await db
+      .insert(contacts)
+      .values({ name: 'Test Owner', emails: [OWNER_ADDRESS], trust: 'owner' })
+      .returning();
+    if (created) createdContactIds.push(created.id);
+  }
 });
 
 afterAll(async () => {
+  if (dbUp && ownerEmailRestore) {
+    await db
+      .update(contacts)
+      .set({ emails: ownerEmailRestore.emails })
+      .where(eq(contacts.id, ownerEmailRestore.id));
+  }
+  if (dbUp && createdContactIds.length) {
+    await db.delete(contacts).where(inArray(contacts.id, createdContactIds));
+  }
   if (dbUp && createdTaskIds.length) {
     await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
   }
@@ -127,6 +171,51 @@ describe('deliverEmailFinal', () => {
       deps,
       emailTask({ trust: 'unknown' }),
       'should not send',
+    );
+    expect(delivered).toBe(false);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('never auto-replies to a forwarded-ingest task, even at owner trust', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { deps, sent } = makeDeps();
+    // The shape forwarded ingest produces: owner trust (the owner's forwarding
+    // rule asked for the work) but a third-party `from`. Replying here would
+    // mail the assistant's output to a stranger.
+    const delivered = await deliverEmailFinal(
+      deps,
+      emailTask({
+        trigger: {
+          source: 'email',
+          payload: {
+            threadId: 'thread-1',
+            messageId: 'msg-1',
+            from: 'newsletter@example.com',
+            subject: 'Your statement is ready',
+            ingest: { forwarded: true, contentTrust: 'unknown' },
+          },
+        } as TaskRow['trigger'],
+      }),
+      'should never be sent',
+    );
+    expect(delivered).toBe(false);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('refuses to auto-reply to an address the owner does not own', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { deps, sent } = makeDeps();
+    // Owner trust alone must not be enough: the recipient itself is checked, so
+    // a task that claims owner trust with a stranger's `from` sends nothing.
+    const delivered = await deliverEmailFinal(
+      deps,
+      emailTask({
+        trigger: {
+          source: 'email',
+          payload: { threadId: 'thread-1', from: 'stranger@example.com', subject: 'Hello' },
+        } as TaskRow['trigger'],
+      }),
+      'should never be sent',
     );
     expect(delivered).toBe(false);
     expect(sent).toHaveLength(0);

@@ -1,5 +1,6 @@
 import type { TaskRow } from '@assistant/db';
 import { nextDailyReset, nextMonthlyReset } from '../../cost.js';
+import { isForwardedIngest } from '../../email-provenance.js';
 import { activeAutonomyGrant } from '../autonomy.js';
 
 /**
@@ -54,11 +55,31 @@ export function channelContext(task: TaskRow): string {
     case 'email_triage': {
       const from = typeof payload.from === 'string' ? payload.from : 'the sender';
       const subject = typeof payload.subject === 'string' ? payload.subject : '';
+      // Forwarded ingest: the owner routed their whole inbox here to be READ.
+      // The task runs at owner trust, but the sender is a third party and the
+      // owner is not in this thread — so there is nobody to reply to, and the
+      // deliverable is what the owner learns and what gets filed, not prose.
+      if (isForwardedIngest(task)) {
+        return [
+          `\nThis is a message from the owner's forwarded mail: ${from}${subject ? ` (subject: "${subject}")` : ''}.`,
+          'The owner forwards their inbox to you so you can keep track of it. They are NOT in this thread and the sender is not writing to you — nothing you write is sent to anyone.',
+          "Do the useful work now, with tools: put dated commitments on the calendar (calendar.create_event, no attendees — it is the owner's own calendar), file details worth keeping (workspace.write, docs.append), and tell the owner what matters with owner.notify.",
+          'Call owner.notify ONLY when this genuinely deserves their attention — something is due, something changed, something needs a decision, or something looks wrong. Routine mail needs no ping; it is already stored and searchable.',
+          'Never reply to the sender, and never draft a reply unless the owner has asked for one.',
+          'Your final text is a note to the owner, not an email: no greeting, no sign-off.',
+        ].join('\n');
+      }
       return [
         `\nThis task was triggered by an email from ${from}${subject ? ` (subject: "${subject}")` : ''}.`,
         task.trust === 'owner'
           ? 'When you finish with a text answer, it is AUTOMATICALLY emailed back to the sender on the same thread — write your final message as that email reply (a short greeting, the substance, and a brief sign-off as yourself), and complete any needed tool actions (calendar, lookups) BEFORE finishing. Email renders simple Markdown as rich text, so you may use **bold**, bullet lists, and [labelled links](https://…); do not paste bare URLs mid-sentence.'
-          : 'The sender is not the owner: nothing is auto-sent. If a reply is warranted, use gmail.create_draft (or gmail.send, which needs owner approval).',
+          : // gmail.create_draft is privateWrite and gmail.send is outwardFacing,
+            // so `toolsForTask` strips both from an external-sender registry —
+            // naming them here pointed the model at tools it cannot see. The
+            // reply path that actually exists is the deterministic D9 child
+            // (maybeEnqueueKnownSenderReply), which proposes the answer for
+            // owner approval after this task finishes.
+            'The sender is not the owner: nothing you write is sent to anyone. Answer as if writing the reply the owner would send, and the runtime will offer it to them for approval.',
       ].join('\n');
     }
     case 'sms_turn':

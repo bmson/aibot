@@ -159,6 +159,40 @@ const ConfigSchema = z.object({
    * The google module is an additional hard gate.
    */
   GMAIL_SYNC_ENABLED: z.enum(['true', 'false']).optional(),
+  /**
+   * What the assistant's mailbox IS.
+   *
+   * `direct` (the historical behaviour): people write to the assistant, and the
+   * sender of a message is the party directing it. Sender trust therefore
+   * decides what the resulting task may do.
+   *
+   * `forwarded`: the mailbox is a pipe the owner points their own mail into, so
+   * the OWNER is the party directing the assistant and the sender is only
+   * content. Ingest tasks run at owner trust *and* tainted — the direction and
+   * the provenance are tracked separately (see `payload.ingest` in email-sync).
+   * Nothing is ever auto-replied in this mode.
+   */
+  EMAIL_INGEST_MODE: z.enum(['direct', 'forwarded']).default('direct'),
+  /**
+   * How interesting a forwarded message must be (1-5) before it earns a full
+   * triage task. Below it the message is still stored, indexed and remembered —
+   * it just does not interrupt the owner or spend reasoning budget.
+   */
+  EMAIL_INGEST_IMPORTANCE_THRESHOLD: z.coerce.number().int().min(1).max(5).default(3),
+  /**
+   * Daily ceiling on deep triage tasks from forwarded mail. Owner-trust tasks
+   * bypass the external-sender flood backstop (`underExternalTaskLimit`), so
+   * ingest needs its own brake or one busy day can exhaust the month's budget.
+   */
+  EMAIL_INGEST_MAX_TRIAGE_PER_DAY: z.coerce.number().int().min(0).max(1000).default(40),
+  /**
+   * Recipient domains the assistant may send mail to, comma-separated and
+   * empty-means-unrestricted. This mirrors a restriction enforced at the mail
+   * provider: without it the assistant queues approval cards for sends the
+   * provider will bounce, which trains the owner to approve things that never
+   * happen. Enforced as a hard rejection, never as an approval.
+   */
+  EMAIL_OUTBOUND_DOMAINS: z.string().default(''),
   SEARCH_PROVIDER: z.enum(['none', 'brave', 'tavily', 'serper']).default('none'),
   SEARCH_API_KEY: z.string().default(''),
   GITHUB_TOKEN: z.string().default(''),
@@ -218,6 +252,30 @@ export function validateProdConfig(config: Config = loadConfig()): string[] {
     problems.push('WORKSPACE_BUCKET is required when FILES_DRIVER=gcs');
   }
   return problems;
+}
+
+/**
+ * The recipient domains the assistant may send to, lowercased. An empty list
+ * means unrestricted — callers must treat it that way rather than as "deny
+ * everything", so an installation that never sets this keeps working.
+ */
+export function outboundEmailDomains(config: Config = loadConfig()): readonly string[] {
+  return config.EMAIL_OUTBOUND_DOMAINS.split(',')
+    .map((domain) => domain.trim().toLowerCase().replace(/^@/, ''))
+    .filter(Boolean);
+}
+
+/**
+ * May the assistant send mail to this address? Unrestricted when no domains are
+ * configured. Subdomains do NOT inherit: `EMAIL_OUTBOUND_DOMAINS=example.com`
+ * permits `a@example.com` and not `a@mail.example.com`, because the point is to
+ * mirror a provider-side rule exactly rather than to guess at its intent.
+ */
+export function outboundEmailAllowed(address: string, config: Config = loadConfig()): boolean {
+  const domains = outboundEmailDomains(config);
+  if (domains.length === 0) return true;
+  const domain = address.trim().toLowerCase().split('@').pop() ?? '';
+  return domain.length > 0 && domains.includes(domain);
 }
 
 /** Test seam — clears the process-level config cache. */

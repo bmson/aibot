@@ -1046,6 +1046,64 @@ export const gmailSyncState = pgTable('gmail_sync_state', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * The verdict on one ingested message: what it was about, how much it mattered,
+ * and whether that earned a triage task.
+ *
+ * This exists because in `forwarded` ingest mode nothing is dropped any more —
+ * the pipeline stores everything and *decides* rather than filtering. That
+ * decision has to be durable for three reasons: the digest reports on it, the
+ * memory extraction job walks it (rather than sampling conversations, which
+ * badly under-samples a real inbox), and re-delivery must not re-score or
+ * re-enqueue. `channelMessageId` carries the same `gmail:<id>` value used as the
+ * task's `externalEventId`, so the unique index is the idempotency fence.
+ */
+export const emailIngest = pgTable(
+  'email_ingest',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    conversationId: uuid('conversation_id').references(() => conversations.id),
+    /** `gmail:<messageId>` — matches tasks.external_event_id for the triage task. */
+    channelMessageId: text('channel_message_id').notNull(),
+    fromEmail: text('from_email').notNull(),
+    subject: text('subject').notNull().default(''),
+    /**
+     * Trust derived from the SENDER, kept separate from the task's trust (which
+     * in forwarded mode is the OWNER, who directed the ingest). This is the axis
+     * memory quarantine and importance scoring read.
+     */
+    contentTrust: text('content_trust').notNull().default('unknown'),
+    /** Receiver-authenticated (aligned SPF/DKIM/DMARC). Forwarding often breaks SPF. */
+    authenticated: boolean('authenticated').notNull().default(false),
+    category: text('category').notNull().default('other'),
+    importance: smallint('importance').notNull().default(1),
+    actionable: boolean('actionable').notNull().default(false),
+    /** One short sentence explaining the score, shown in the digest. */
+    reason: text('reason').notNull().default(''),
+    /** Dates the scorer found: [{ iso, what }] — the raw material for occasions. */
+    dates: jsonb('dates').notNull().default([]),
+    /** A triage task was enqueued (i.e. the score cleared the threshold). */
+    triaged: boolean('triaged').notNull().default(false),
+    /** Set once memory extraction has walked this row. */
+    extractedAt: timestamp('extracted_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('email_ingest_message_idx').on(t.channelMessageId),
+    index('email_ingest_agent_created_idx').on(t.agentId, t.createdAt),
+    // The extraction job's scan: un-extracted rows, oldest first.
+    index('email_ingest_extract_idx').on(t.extractedAt, t.createdAt),
+    check('email_ingest_importance_check', sql`${t.importance} BETWEEN 1 AND 5`),
+    check(
+      'email_ingest_content_trust_check',
+      sql`${t.contentTrust} IN ('owner','known','unknown')`,
+    ),
+  ],
+);
+
 export const schedules = pgTable(
   'schedules',
   {
@@ -1472,6 +1530,7 @@ export type ModelRow = typeof models.$inferSelect;
 export type ModelRoleRow = typeof modelRoles.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;
 export type ScheduleRow = typeof schedules.$inferSelect;
+export type EmailIngestRow = typeof emailIngest.$inferSelect;
 export type WatchRow = typeof watches.$inferSelect;
 export type WatchFireRow = typeof watchFires.$inferSelect;
 export type CanaryRunRow = typeof canaryRuns.$inferSelect;

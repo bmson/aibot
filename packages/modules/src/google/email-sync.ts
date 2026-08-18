@@ -16,6 +16,7 @@ import {
   contacts,
   conversations,
   type Db,
+  emailIngest,
   gmailSyncState,
   messages as storedMessages,
   tasks,
@@ -29,10 +30,12 @@ import {
 } from '@assistant/tools';
 import type { GoogleClient } from '@assistant/tools/modules/google';
 import type { WorkspaceStore } from '@assistant/tools/workspace';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, gte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { InboundEmailEvent, OwnerNotifier } from '../platform.js';
 import { processApplicationConfirmation } from './application-confirmations.js';
+import { scoreEmailImportance } from './email-importance.js';
+import { emailIngestForwarded } from './meta.js';
 
 /**
  * What mail sync consumes. The client comes from the module's own create()
@@ -337,6 +340,60 @@ async function classifySender(
 }
 
 /**
+ * Sender trust for forwarded ingest, with nothing dropped.
+ *
+ * `classifySender` answers two questions at once — who is this, and is it worth
+ * bothering with — and drops the message when the second answer is no. In
+ * forwarded mode only the first question belongs here: the owner pointed their
+ * whole inbox at the assistant, so "worth bothering with" is the importance
+ * scorer's job, and it needs the message to still exist to score it.
+ *
+ * An unauthenticated sender is downgraded to `unknown` rather than dropped.
+ * Forwarding breaks SPF by construction (the forwarding host is not in the
+ * original sender's SPF record), so dropping on failed authentication would
+ * silently discard a large share of genuinely forwarded mail. The trust value
+ * still carries the verdict onward, and every outward action stays gated.
+ *
+ * Deliberately model-free: forwarded mode pays for one importance call per
+ * message, and adding an automated/human call on top would double that for an
+ * answer the importance score already subsumes.
+ */
+function ingestContentTrust(
+  contactTrustByEmail: ContactTrustByEmail,
+  fromEmail: string,
+  authenticated: boolean,
+): Trust {
+  if (!authenticated) return 'unknown';
+  return contactTrustByEmail.get(fromEmail) ?? 'unknown';
+}
+
+/**
+ * Have we already spent today's allowance of deep triage tasks?
+ *
+ * The platform's flood backstop (`underExternalTaskLimit`) counts only
+ * `known`/`unknown` root tasks, because those are what a third party can create
+ * by sending mail. Ingest tasks run at OWNER trust — the owner's forwarding rule
+ * is what created them — so they slip past it entirely. Without this brake a
+ * single busy day, or one sender looping, could burn a month of model budget.
+ *
+ * Counted over a rolling 24 hours rather than a calendar day so a burst at
+ * midnight cannot spend two days' allowance in two minutes.
+ */
+async function underIngestTriageLimit(db: Db, limit: number): Promise<boolean> {
+  if (limit <= 0) return false;
+  const [row] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(emailIngest)
+    .where(
+      and(
+        eq(emailIngest.triaged, true),
+        gte(emailIngest.createdAt, sql`now() - '1 day'::interval`),
+      ),
+    );
+  return Number(row?.n ?? 0) < limit;
+}
+
+/**
  * Dropping mail that claims a trusted identity is the signal that the domain's
  * SPF/DKIM/DMARC records are wrong — the failure mode this exists to surface.
  * The From value is spoofable, so anyone can provoke this: the notice is
@@ -439,6 +496,223 @@ async function fileMessageAttachments(
   }
 }
 
+interface ForwardedIngestInput {
+  agentId: string;
+  message: GmailMessage;
+  from: string;
+  subject: string;
+  text: string;
+  rfcMessageId: string;
+  authenticated: boolean;
+  contactTrustByEmail: ContactTrustByEmail;
+  channelMessageId: string;
+}
+
+/**
+ * Handle one message in forwarded-ingest mode: keep everything, score it, and
+ * spend a triage task only on what earned one.
+ *
+ * The trust split is the whole point of this function. The task is enqueued at
+ * OWNER trust because the owner's standing forwarding rule is what asked for
+ * this work — that is what gives it access to the owner's own calendar, files,
+ * memory and notifications, none of which a `known`/`unknown` task can reach
+ * (`ToolRegistry.toolsForTask` strips them). It is simultaneously marked as
+ * quoting external content, which forces `shouldTaintContext` to taint the
+ * session, so every outward-facing, network, or memory-writing call still needs
+ * the owner to approve it. Direction and authorship are different axes, and the
+ * sender only ever decides the second one.
+ */
+async function processForwardedIngest(
+  deps: EmailSyncDeps,
+  input: ForwardedIngestInput,
+): Promise<'triaged' | 'skipped'> {
+  const { agentId, message: msg, from, subject, text, channelMessageId } = input;
+  const threshold = deps.config.EMAIL_INGEST_IMPORTANCE_THRESHOLD;
+
+  const [recorded] = await deps.db
+    .select({
+      id: emailIngest.id,
+      conversationId: emailIngest.conversationId,
+      importance: emailIngest.importance,
+      category: emailIngest.category,
+      contentTrust: emailIngest.contentTrust,
+      triaged: emailIngest.triaged,
+    })
+    .from(emailIngest)
+    .where(eq(emailIngest.channelMessageId, channelMessageId))
+    .limit(1);
+
+  // A Gmail history replay re-delivers messages we have already scored. Never
+  // pay to score one twice; only finish the work that a crash left undone.
+  if (recorded) {
+    if (recorded.triaged || recorded.importance < threshold || !recorded.conversationId) {
+      return 'skipped';
+    }
+    const enqueued = await enqueueIngestTriage(deps, {
+      ...input,
+      conversationId: recorded.conversationId,
+      contentTrust: recorded.contentTrust as Trust,
+      importance: recorded.importance,
+      category: recorded.category,
+      ingestId: recorded.id,
+    });
+    return enqueued ? 'triaged' : 'skipped';
+  }
+
+  const contentTrust = ingestContentTrust(input.contactTrustByEmail, from, input.authenticated);
+  const score = await scoreEmailImportance(deps.router, {
+    from,
+    subject,
+    body: text,
+    ...(msg.payload ? { payload: msg.payload } : {}),
+    contentTrust,
+    authenticated: input.authenticated,
+  });
+
+  // The conversation still carries the SENDER's trust: it is what memory
+  // extraction reads to decide quarantine, and a stranger's claims must not
+  // become owner-trust facts just because the owner forwarded the message.
+  const conversationId = await conversationForThread(
+    deps,
+    agentId,
+    msg.threadId,
+    contentTrust,
+    subject,
+  );
+  const persisted = await persistMessage(deps.db, {
+    conversationId,
+    role: 'user',
+    origin:
+      contentTrust === 'owner' ? 'owner' : contentTrust === 'known' ? 'known_contact' : 'unknown',
+    parts: [{ type: 'text', text }],
+    text: `From: ${from}\nSubject: ${subject}\n\n${text}`,
+    channelMessageId,
+  });
+  if (!persisted) return 'skipped'; // another instance won the idempotency race
+
+  const [ingested] = await deps.db
+    .insert(emailIngest)
+    .values({
+      agentId,
+      conversationId,
+      channelMessageId,
+      fromEmail: from,
+      subject: subject.slice(0, 500),
+      contentTrust,
+      authenticated: input.authenticated,
+      category: score.category,
+      importance: score.importance,
+      actionable: score.actionable,
+      reason: score.reason.slice(0, 300),
+      dates: score.dates,
+    })
+    .onConflictDoNothing({ target: emailIngest.channelMessageId })
+    .returning({ id: emailIngest.id });
+  if (!ingested) return 'skipped'; // concurrent instance recorded it first
+
+  // Learn the owner's voice only from their own verified, non-forwarded prose.
+  if (contentTrust === 'owner' && !quotesExternalContent({ subject, body: text })) {
+    await captureOwnerWritingSample(deps.db, deps.router, {
+      text,
+      register: 'email_casual',
+      context: 'inbound-email',
+    }).catch((err) => console.error('voice sampling failed', err));
+  }
+
+  // File attachments from everything except bulk marketing, so the owner's mail
+  // becomes a searchable document archive. Dedupe is by content hash, so a
+  // replay re-files nothing.
+  if (score.importance > 1) {
+    await fileMessageAttachments(deps, { agentId, message: msg, trust: contentTrust }).catch(
+      (err) => console.error('attachment filing failed', err),
+    );
+  }
+
+  if (score.importance < threshold) {
+    console.log(
+      `email-sync: ingested ${from} ("${subject.slice(0, 40)}") at importance ${score.importance} — stored without triage`,
+    );
+    return 'skipped';
+  }
+
+  const enqueued = await enqueueIngestTriage(deps, {
+    ...input,
+    conversationId,
+    contentTrust,
+    importance: score.importance,
+    category: score.category,
+    ingestId: ingested.id,
+  });
+  return enqueued ? 'triaged' : 'skipped';
+}
+
+/**
+ * Enqueue the deep triage task for an ingested message, subject to the daily
+ * ceiling. Returns whether a task was created.
+ */
+async function enqueueIngestTriage(
+  deps: EmailSyncDeps,
+  input: ForwardedIngestInput & {
+    conversationId: string;
+    contentTrust: Trust;
+    importance: number;
+    category: string;
+    ingestId: string;
+  },
+): Promise<boolean> {
+  if (!(await underIngestTriageLimit(deps.db, deps.config.EMAIL_INGEST_MAX_TRIAGE_PER_DAY))) {
+    console.warn(
+      `email-sync: daily ingest triage ceiling reached; storing ${input.from} without triage`,
+    );
+    return false;
+  }
+
+  const { created } = await enqueueTask(deps.db, {
+    type: 'email_triage',
+    maxSteps: 16,
+    // 16 steps on the reason role does not fit the default $0.50 cap: the soft
+    // fallback threshold trips around step 6 and the hard cap around step 10,
+    // leaving the tail unrunnable. This is a ceiling, not typical spend.
+    budgetUsdLimit: '1.20',
+    event: {
+      source: 'email',
+      externalEventId: input.channelMessageId,
+      agentId: input.agentId,
+      conversationId: input.conversationId,
+      // The OWNER directed this ingest; see processForwardedIngest.
+      trust: 'owner',
+      payload: {
+        threadId: input.message.threadId,
+        messageId: input.message.id,
+        rfcMessageId: input.rfcMessageId,
+        from: input.from,
+        subject: input.subject,
+        // Always true for ingest: the body is a third party's words arriving
+        // through the owner's pipe, so the session must run tainted.
+        quotesExternalContent: true,
+        ingest: {
+          forwarded: true,
+          contentTrust: input.contentTrust,
+          authenticated: input.authenticated,
+          importance: input.importance,
+          category: input.category,
+        },
+      },
+    },
+  });
+
+  if (created) {
+    await deps.db
+      .update(emailIngest)
+      .set({ triaged: true, updatedAt: new Date() })
+      .where(eq(emailIngest.id, input.ingestId));
+    console.log(
+      `email-sync: triaging ${input.from} ("${input.subject.slice(0, 40)}") — ${input.category}, importance ${input.importance}`,
+    );
+  }
+  return created;
+}
+
 export async function processMessage(
   deps: EmailSyncDeps,
   agentId: string,
@@ -501,6 +775,20 @@ export async function processMessage(
   await deps
     .observeInboundEmail({ agentId, messageId: msg.id, from, subject, body: text, authenticated })
     .catch((err) => console.error('inbound email observer failed', err));
+
+  if (emailIngestForwarded(deps.config)) {
+    return processForwardedIngest(deps, {
+      agentId,
+      message: msg,
+      from,
+      subject,
+      text,
+      rfcMessageId,
+      authenticated,
+      contactTrustByEmail,
+      channelMessageId,
+    });
+  }
 
   // Recover the narrow crash window after message persistence but before task
   // creation without paying for sender classification again.
@@ -613,6 +901,12 @@ export async function processMessage(
       // Email triage now reasons with tools (roleForTask → reason); give it the
       // same step headroom as a goal session so a browse-and-reply can complete.
       maxSteps: 16,
+      // Must match the step headroom above: at the default $0.50 cap the soft
+      // fallback threshold trips around step 6 and the hard cap around step 10,
+      // so the last third of a 16-step task could never run. This is a per-task
+      // ceiling rather than typical spend, and the daily/monthly caps still
+      // bound the total.
+      budgetUsdLimit: '1.20',
       event: {
         source: 'email',
         externalEventId: `gmail:${msg.id}`,

@@ -18,7 +18,7 @@ Run `pnpm config:check` after any change.
 | `browser` | Planned web interaction and browser execution | `PROFILE_ENC_KEY` only for a saved profile | Playwright locally or a Cloud Run Job |
 | `code` | Sandboxed code execution | none | local child process or a Cloud Run Job |
 | `documents` | Office/PDF ingestion pipeline | none | document processor locally or a Cloud Run Job |
-| `google` | Gmail, Calendar, Drive, Docs, Sheets, Slides, job confirmations | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `BOT_GOOGLE_REFRESH_TOKEN` | Gmail Pub/Sub and Scheduler in production |
+| `google` | Gmail, Calendar, Drive, Docs, Sheets, Slides, job confirmations, forwarded-mail ingest | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `BOT_GOOGLE_REFRESH_TOKEN`; `EMAIL_INGEST_MODE` for forwarded-mail ingest, with `EMAIL_INGEST_IMPORTANCE_THRESHOLD`, `EMAIL_INGEST_MAX_TRIAGE_PER_DAY` and `EMAIL_OUTBOUND_DOMAINS` | Gmail Pub/Sub and Scheduler in production |
 | `reminders` | Reminder create/list/cancel tools | none | none |
 | `search` | Link-returning web search | `SEARCH_PROVIDER`, `SEARCH_API_KEY` | provider API |
 | `sms` | Twilio owner channel and approval replies | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`; plus `OWNER_PHONE` for the owner channel | Twilio webhook |

@@ -8,6 +8,7 @@ import {
   PROMPT_VERSION,
   persistMessage,
 } from '../../chat.js';
+import { isForwardedIngest } from '../../email-provenance.js';
 import type { PendingFinal, TaskState } from '../../events.js';
 import type { RecallSource } from '../../memory/recall.js';
 import { recordSkillOutcome } from '../../memory/skills.js';
@@ -383,6 +384,11 @@ export async function maybeEnqueueKnownSenderReply(
 ): Promise<void> {
   const conversationId = task.conversationId;
   if (task.type !== 'email_triage' || task.trust !== 'known' || !conversationId) return;
+  // Forwarded ingest is never a conversation with the sender: the owner routed
+  // their mail here to be read, not to have the assistant answer it on their
+  // behalf. Proposing a reply would put an approval card in front of the owner
+  // for a message they never asked to answer.
+  if (isForwardedIngest(task)) return;
   const reply = draft.trim();
   if (!reply) return;
 
