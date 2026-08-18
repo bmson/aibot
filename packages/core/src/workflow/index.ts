@@ -16,3 +16,4 @@ export * from './planner.js';
 export * from './response-contract.js';
 export * from './schedules.js';
 export * from './self-maintenance.js';
+export * from './suggestions.js';

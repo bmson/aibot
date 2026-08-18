@@ -1104,6 +1104,59 @@ export const emailIngest = pgTable(
   ],
 );
 
+/**
+ * "I noticed X — want me to Y?"
+ *
+ * Approvals and needs-attention could not carry this. An approval attaches to a
+ * tool call that is already queued and frozen, so it cannot represent work that
+ * does not exist yet; needs-attention is a terminal status with nothing on the
+ * other side of it. A suggestion is the missing middle: inert text until the
+ * owner promotes it, and promotion enqueues an ordinary task that runs the
+ * whole normal pipeline — so a suggestion never authored an outward action, it
+ * only ever asked.
+ *
+ * That is what keeps the anticipation layer's invariant intact while letting
+ * untrusted content *propose*: the proposal is a sentence, and the owner is the
+ * one who turns it into work.
+ */
+export const suggestions = pgTable(
+  'suggestions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    /** Where it was surfaced, so accepting can continue in the same thread. */
+    conversationId: uuid('conversation_id').references(() => conversations.id),
+    /** What was noticed, in the owner's terms. */
+    summary: text('summary').notNull(),
+    /** The planner seed run verbatim on acceptance — never a frozen tool call. */
+    proposedAction: text('proposed_action').notNull(),
+    /** What produced it: 'briefing' today, a `suggest`-tier watch later. */
+    origin: text('origin').notNull().default('briefing'),
+    /**
+     * What it was noticed from (e.g. `gmail:<id>:calendar`). Unique per agent,
+     * so re-running the producer re-proposes nothing the owner already saw —
+     * or already dismissed.
+     */
+    sourceRef: text('source_ref').notNull(),
+    status: text('status').notNull().default('pending'),
+    /** The task acceptance created, for tracing the proposal to its work. */
+    acceptedTaskId: uuid('accepted_task_id').references((): AnyPgColumn => tasks.id),
+    snoozedUntil: timestamp('snoozed_until', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('suggestions_source_idx').on(t.agentId, t.sourceRef),
+    index('suggestions_status_idx').on(t.agentId, t.status, t.expiresAt),
+    check(
+      'suggestions_status_check',
+      sql`${t.status} IN ('pending','accepted','dismissed','snoozed','expired')`,
+    ),
+  ],
+);
+
 export const schedules = pgTable(
   'schedules',
   {
@@ -1531,6 +1584,7 @@ export type ModelRoleRow = typeof modelRoles.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;
 export type ScheduleRow = typeof schedules.$inferSelect;
 export type EmailIngestRow = typeof emailIngest.$inferSelect;
+export type SuggestionRow = typeof suggestions.$inferSelect;
 export type WatchRow = typeof watches.$inferSelect;
 export type WatchFireRow = typeof watchFires.$inferSelect;
 export type CanaryRunRow = typeof canaryRuns.$inferSelect;

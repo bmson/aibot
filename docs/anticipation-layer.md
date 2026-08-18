@@ -11,9 +11,11 @@ Status: **Phase 1 shipped** — notify-tier email watchers (the `watches`/`watch
 `watch.create`/`watch.list`/`watch.cancel` tools, the `matchEmailWatches` pass on the inbound-mail
 hook, and the expiry reaper). **Phase 2 partly shipped**: the briefing exists as the
 `briefing.compose` code job (`packages/core/src/workflow/briefing.ts`), on a daily schedule and
-self-silencing on a quiet day. The `suggestions` table and the `suggest` tier remain proposed, so a
-briefing today reports and does not propose. Phases 3–4 are otherwise unchanged. This document is
-the source of truth for the design.
+self-silencing on a quiet day, and the **`suggestions` table and surface are built** — the briefing
+proposes, and accepting creates ordinary approval-gated work. The `suggest` TIER of watchers (a
+model drafting a suggestion from a watch hit) remains proposed; today's producer is the briefing,
+and its proposals are deterministic rather than model-authored. Phases 3–4 are otherwise unchanged.
+This document is the source of truth for the design.
 
 > **One deliberate deviation from the invariant below.** Forwarded-mail ingest
 > (`EMAIL_INGEST_MODE=forwarded`) lets an email-triggered task create a calendar event with **zero
@@ -167,6 +169,22 @@ change.
   `sessionInstruction` framing, `missions.ts:94`). Output is a **suggestion**, not an action.
 
 ### The suggestion surface
+
+> **Status: built.** `packages/core/src/workflow/suggestions.ts` plus the `suggestions` table,
+> surfaced as an inline card in chat (`apps/web/app/chat/[id]/inline-suggestion.tsx`) with
+> accept/dismiss. Shape as designed, with `origin` and `source_ref` added: `source_ref` is unique
+> per agent, so a producer that runs on a schedule re-proposes nothing the owner already answered —
+> without it a daily briefing would re-ask the same question every morning.
+>
+> Accepting enqueues an owner-trust `adhoc` task carrying the proposal as its instruction, exactly
+> as designed — and stamped `taintedOrigin`, because the proposal was written from a third party's
+> email. Without that the accepted child would start clean and its outward calls would run
+> unapproved, which is the laundering hole `task.schedule` already closes. So accepting buys one
+> decision, not an exemption: an event on the owner's own calendar goes through, and anything
+> reaching a person still stops for approval.
+>
+> Not built: snooze is implemented in core but has no button yet, and there is no standalone
+> dashboard page — suggestions live where they are raised.
 
 `suggest`-tier watchers and the briefing both need to say "I noticed X — want me to Y?" and have
 "Yes" *create* the work. Approvals don't fit (they attach to an already-queued tool call); needs
