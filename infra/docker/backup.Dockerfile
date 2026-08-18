@@ -1,4 +1,4 @@
-FROM postgres:17
+FROM postgres:18
 # gosu exists for the stock postgres entrypoint's root→postgres privilege drop.
 # This image never runs that entrypoint (its own ENTRYPOINT runs as USER
 # postgres), so the binary is dead weight — and as a static Go executable it
