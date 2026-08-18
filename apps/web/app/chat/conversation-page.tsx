@@ -38,6 +38,7 @@ export async function renderChatConversation(id: string, query: ChatPageQuery) {
       initialNotice={chatNoticeMessage(query.notice)}
       initialInput={typeof query.ask === 'string' ? query.ask.slice(0, 500) : undefined}
       initialAsyncTurn={view.asyncTurn}
+      initialCursor={view.cursor}
     />
   );
 }

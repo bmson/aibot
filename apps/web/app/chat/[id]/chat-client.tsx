@@ -31,10 +31,12 @@ import { InlineBudgetRequest, type InlineBudgetRequestPart } from './inline-budg
 import { MessageMarkdown } from './markdown';
 import {
   AssistantUpdate,
+  bySendTime,
   ContractNotice,
   DayDivider,
   dayLabel,
   decodeRecallHeader,
+  dropProvisional,
   errorText,
   MessageActions,
   messageDate,
@@ -58,6 +60,8 @@ interface ChatClientProps {
   goalTitle?: string;
   /** A task created by the goal form before this page opened. */
   initialAsyncTurn?: { taskId: string; cursor: string };
+  /** Where the idle thread poll resumes from — the newest message at render. */
+  initialCursor?: string | null;
   archived: boolean;
   /** The one forever thread at /chat — it needs no title header of its own. */
   isPrimary: boolean;
@@ -66,8 +70,6 @@ interface ChatClientProps {
   /** Pre-fills the composer (e.g. an "ask about this document" deep-link). */
   initialInput?: string;
 }
-
-const ASYNC_ACK_TEXT = 'Got it — I’m working on this now. I’ll post the result here.';
 
 /** Task statuses that mean "parked on the owner", not "finished". */
 const PARKED_TASK_STATUSES = new Set(['waiting_approval', 'waiting_budget', 'needs_attention']);
@@ -88,6 +90,12 @@ function hasDecisionPart(message: UIMessage): boolean {
     (part) => part?.type === 'approval' || part?.type === 'budget-request',
   );
 }
+
+/** Poll cadence while a task is running, versus the open thread sitting idle. */
+const ACTIVE_POLL_MS = 2_500;
+const IDLE_POLL_MS = 12_000;
+/** How long to keep claiming live progress for one turn before saying so. */
+const TURN_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * One entry in the "/" palette. Composer commands act on this chat; navigation
@@ -149,6 +157,7 @@ export function ChatClient({
   modelOverride,
   goalTitle,
   initialAsyncTurn,
+  initialCursor,
   archived,
   isPrimary,
   canArchive,
@@ -202,6 +211,32 @@ export function ChatClient({
   const initialMessageIdsRef = useRef<Set<string> | null>(null);
   initialMessageIdsRef.current ??= new Set(initialMessages.map((message) => message.id));
 
+  /**
+   * How far the thread poll has read. This is deliberately a ref and not state:
+   * it has to survive a turn settling, and re-running the poll effect on every
+   * change would restart the loop mid-conversation.
+   */
+  const cursorRef = useRef<string | null>(initialCursor ?? null);
+  /**
+   * Ids the server has actually sent us. A message the client made itself — an
+   * optimistic user turn, a reply still streaming — is not in here, which is
+   * how the merge tells its own provisional copies from durable ones.
+   */
+  const serverIdsRef = useRef<Set<string>>(new Set(initialMessages.map((message) => message.id)));
+  /** Read inside the poll loop, which must not re-subscribe when these change. */
+  const asyncTurnRef = useRef<{ taskId: string; cursor: string } | null>(initialAsyncTurn ?? null);
+  const statusRef = useRef<string>('ready');
+  /** Per-turn settle bookkeeping, reset when a new task takes over. */
+  const turnRef = useRef<{
+    taskId: string;
+    startedAt: number;
+    sawAssistant: boolean;
+    sawDecision: boolean;
+    graceTicks: number;
+  } | null>(null);
+  /** Lets a fresh turn wake the poll instead of waiting out an idle interval. */
+  const pokePollRef = useRef<(() => void) | null>(null);
+
   const transport = useMemo(
     () =>
       new DefaultChatTransport({
@@ -246,6 +281,9 @@ export function ChatClient({
     messages: initialMessages,
     transport,
   });
+  // The poll loop reads both of these without re-subscribing on every change.
+  statusRef.current = status;
+  asyncTurnRef.current = asyncTurn;
 
   // Timestamps and day dividers use the browser timezone, so they render only
   // after mount — the server-rendered HTML must not bake in the server's zone.
@@ -268,22 +306,25 @@ export function ChatClient({
     }
   }, [status]);
 
-  // Action turns run in the executor (tools, approvals) — poll the thread
-  // until the task settles, then replace the local ack with the real answer.
+  // One poll for the whole thread, for as long as the page is open.
+  //
+  // It used to start when a turn was handed to the executor and stop when that
+  // task settled, which meant the log only ever updated itself during a turn
+  // you had just sent. Everything else — the executor resuming after you
+  // approve, a schedule or watch posting, inbound mail mirrored into chat —
+  // landed in the database with nobody listening and appeared only on the next
+  // page load. The cursor now outlives any single task: settling a turn ends
+  // the turn's presence UI, not the listening.
   useEffect(() => {
-    if (!asyncTurn) return;
-    const startedAt = Date.now();
-    const TIMEOUT_MS = 5 * 60 * 1000;
     let cancelled = false;
-    let cursor = asyncTurn.cursor;
-    let sawAssistant = false;
-    /** An approval or budget card for this turn actually reached the client. */
-    let sawDecision = false;
-    /** Extra polls left to a parked task before we stop listening for its card. */
-    let parkGraceTicks = PARK_GRACE_TICKS;
+    let timer = 0;
 
     const mergeMessages = (incoming: UIMessage[]) => {
       if (incoming.length === 0) return;
+      for (const message of incoming) serverIdsRef.current.add(message.id);
+      // Never reconcile while a stream is live — that would delete the reply
+      // being typed out before its persisted twin exists.
+      const streaming = statusRef.current === 'streaming' || statusRef.current === 'submitted';
       setMessages((current) => {
         const merged = [...current];
         const indexes = new Map(merged.map((message, index) => [message.id, index]));
@@ -296,17 +337,13 @@ export function ChatClient({
             merged[index] = message;
           }
         }
-        // The route sends a short acknowledgement while an action task starts.
-        // Once the durable assistant reply arrives, remove that temporary copy
-        // so a simple request still reads as one coherent conversation.
-        const hasDurableReply = incoming.some(
-          (message) => message.role === 'assistant' && messageText(message) !== ASYNC_ACK_TEXT,
-        );
-        return hasDurableReply
-          ? merged.filter(
-              (message) => message.role !== 'assistant' || messageText(message) !== ASYNC_ACK_TEXT,
-            )
-          : merged;
+        const reconciled = streaming
+          ? merged
+          : dropProvisional(merged, incoming, serverIdsRef.current);
+        // A late write from an earlier task can land after a turn the reader
+        // already sent, so sort rather than append: the day dividers compare
+        // adjacent messages, and out-of-order arrivals mislabel them too.
+        return reconciled.sort(bySendTime);
       });
     };
 
@@ -315,67 +352,108 @@ export function ChatClient({
       setAsyncNote(note);
       setAsyncTurn(null);
       setActivity([]);
+      turnRef.current = null;
     };
 
     const tick = async () => {
       if (cancelled) return;
+      const turn = asyncTurnRef.current;
+      // Nothing to catch up on while the tab is hidden, and a background tab
+      // polling forever is the kind of thing that shows up on a phone battery.
+      if (document.visibilityState !== 'visible') return schedule(turn);
+      // Per-turn settle state, reset whenever a new task takes over.
+      if (turn && turnRef.current?.taskId !== turn.taskId) {
+        turnRef.current = {
+          taskId: turn.taskId,
+          startedAt: Date.now(),
+          sawAssistant: false,
+          sawDecision: false,
+          graceTicks: PARK_GRACE_TICKS,
+        };
+      }
+      const turnState = turn ? turnRef.current : null;
       try {
-        const query = new URLSearchParams({
-          conversationId,
-          taskId: asyncTurn.taskId,
-          cursor,
-        });
+        const query = new URLSearchParams({ conversationId });
+        if (turn) query.set('taskId', turn.taskId);
+        if (cursorRef.current) query.set('cursor', cursorRef.current);
         const res = await fetch(`/api/chat/status?${query.toString()}`);
         if (res.ok) {
           const data = (await res.json()) as {
-            taskStatus: string;
+            taskStatus: string | null;
             messages: UIMessage[];
             nextCursor: string | null;
             hasMore: boolean;
-            activity?: Array<{
-              toolName: string;
-              status: string;
-              step: number;
-            }>;
+            activity?: Array<{ toolName: string; status: string; step: number }>;
           };
-          setActivity(data.activity ?? []);
+          if (turn) setActivity(data.activity ?? []);
           mergeMessages(data.messages);
-          sawAssistant ||= data.messages.some((message) => message.role === 'assistant');
-          sawDecision ||= data.messages.some(hasDecisionPart);
-          if (data.nextCursor) cursor = data.nextCursor;
+          if (data.nextCursor) cursorRef.current = data.nextCursor;
           if (data.hasMore) {
-            if (!cancelled) window.setTimeout(tick, 0);
+            if (!cancelled) timer = window.setTimeout(tick, 0);
             return;
           }
-          if (data.taskStatus === 'done' && sawAssistant) return settle(null);
-          if (PARKED_TASK_STATUSES.has(data.taskStatus) && sawAssistant) {
-            // Stop as soon as the card the park is waiting on is here. Without
-            // one, keep polling for a bounded grace: the status can be observed
-            // in the moment between the park commit and the card's insert, and
-            // settling there loses the card until the page is reloaded.
-            if (sawDecision || parkGraceTicks <= 0) return settle(null);
-            parkGraceTicks -= 1;
-          }
-          if (data.taskStatus === 'failed' || data.taskStatus === 'cancelled') {
-            return settle(
-              `The task ${data.taskStatus === 'cancelled' ? 'was cancelled' : 'ended unsuccessfully'}.`,
+          if (turnState && data.taskStatus) {
+            turnState.sawAssistant ||= data.messages.some(
+              (message) => message.role === 'assistant',
             );
+            turnState.sawDecision ||= data.messages.some(hasDecisionPart);
+            if (data.taskStatus === 'done' && turnState.sawAssistant) return settle(null);
+            if (PARKED_TASK_STATUSES.has(data.taskStatus) && turnState.sawAssistant) {
+              // Stop as soon as the card the park is waiting on is here.
+              // Without one, keep polling for a bounded grace: the status can
+              // be observed in the moment between the park commit and the
+              // card's insert, and settling there loses the card.
+              if (turnState.sawDecision || turnState.graceTicks <= 0) return settle(null);
+              turnState.graceTicks -= 1;
+            }
+            if (data.taskStatus === 'failed' || data.taskStatus === 'cancelled') {
+              return settle(
+                `The task ${data.taskStatus === 'cancelled' ? 'was cancelled' : 'ended unsuccessfully'}.`,
+              );
+            }
           }
         }
       } catch {
-        // transient poll failure — keep trying until the timeout
+        // transient poll failure — the next tick tries again
       }
-      if (Date.now() - startedAt > TIMEOUT_MS) {
-        return settle('Still working. The result will appear here when it finishes.');
+      // Give up on *waiting* for a long turn, not on the thread: the presence
+      // row stops claiming live progress while the poll keeps running, so the
+      // answer still lands on its own whenever the executor finishes.
+      if (turnState && Date.now() - turnState.startedAt > TURN_TIMEOUT_MS) {
+        settle('Still working. The result will appear here when it finishes.');
+        return schedule(null);
       }
-      if (!cancelled) window.setTimeout(tick, 2500);
+      schedule(asyncTurnRef.current);
     };
 
+    const schedule = (turn: { taskId: string } | null) => {
+      if (cancelled) return;
+      timer = window.setTimeout(tick, turn ? ACTIVE_POLL_MS : IDLE_POLL_MS);
+    };
+
+    // Coming back to the tab should feel current immediately, not one idle
+    // interval later.
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || cancelled) return;
+      window.clearTimeout(timer);
+      void tick();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    pokePollRef.current = onVisible;
     void tick();
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+      pokePollRef.current = null;
     };
-  }, [asyncTurn, conversationId, setMessages]);
+  }, [conversationId, setMessages]);
+
+  // Sending a turn must not wait out an idle interval before the poll notices
+  // the new task — re-tick as soon as one is handed over.
+  useEffect(() => {
+    if (asyncTurn) pokePollRef.current?.();
+  }, [asyncTurn]);
 
   const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
   const displayTitle = title === 'Untitled' ? 'New conversation' : title;

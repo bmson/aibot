@@ -10,7 +10,7 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
-import { and, asc, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import type { RecallSource } from './memory/recall.js';
 import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
 import type { ActionEvidence } from './workflow/response-contract.js';
@@ -416,6 +416,14 @@ export async function listMessages(
             gt(messages.createdAt, after.createdAt),
             and(eq(messages.createdAt, after.createdAt), gt(messages.id, after.id)),
           ),
+          // created_at is timestamptz (microseconds) but reaches us as a JS
+          // Date (milliseconds), so a cursor encoded from a row is slightly
+          // BEFORE that row and the tuple comparison above matches it again.
+          // Excluding it by id keeps the comparison on the (conversation_id,
+          // created_at) index while making the cursor properly exclusive —
+          // otherwise the thread poll re-delivers its newest message on every
+          // tick, forever, and never counts a page correctly.
+          ne(messages.id, after.id),
         ),
       )
       .orderBy(asc(messages.createdAt), asc(messages.id))
