@@ -3,6 +3,7 @@ import { toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { and, eq } from 'drizzle-orm';
 import { hashCallbackToken } from '../../browse.js';
+import { isForwardedIngest } from '../../email-provenance.js';
 import type { TaskState, Trust } from '../../events.js';
 import type { ProposedToolCall } from '../../model-router/router.js';
 import { checkpointTask, type TaskLease } from '../machine.js';
@@ -35,7 +36,7 @@ const isPlausiblePhone = (normalized: string) => {
  * tasks — the inbound message body. A stranger mentioning victim@example.com
  * in their email must not make sending to that address card-free.
  */
-function harvestKnownAddresses(
+export function harvestKnownAddresses(
   state: TaskState,
   trigger: TaskLease['trigger'],
   trust: Trust,
@@ -49,7 +50,13 @@ function harvestKnownAddresses(
       if (isPlausiblePhone(normalized)) phones.add(normalized);
     }
   };
-  if (trust === 'owner' || trust === 'assistant') {
+  // Forwarded ingest is owner-TRUST but not owner-AUTHORED: the `role: 'user'`
+  // message in the window is a third party's email body, arriving through the
+  // owner's forwarding rule. Scanning it here would whitelist every address a
+  // stranger chose to mention — the precise bypass the note above rules out for
+  // external-trust tasks. The routing metadata below is still harvested, exactly
+  // as it is for any other third-party mail.
+  if ((trust === 'owner' || trust === 'assistant') && !isForwardedIngest({ trigger })) {
     for (const message of state.contextWindow ?? []) {
       if ((message as { role?: unknown }).role !== 'user') continue;
       const content = (message as { content?: unknown }).content;
