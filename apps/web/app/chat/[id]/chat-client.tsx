@@ -21,7 +21,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } 
 import { signOutAction } from '@/app/actions';
 import { destinationIcon, formatBadgeCount, useNavCommands } from '@/app/nav-commands';
 import { cancelTask } from '@/app/tasks/actions';
-import { hasContractNoticePart, isApprovalProseNotice, isContractNotice } from '@/lib/chat-notices';
+import {
+  isAsyncAcknowledgement,
+  isContractNotice,
+  isDecisionProseNotice,
+  noticeKindOf,
+} from '@/lib/chat-notices';
 import { BackLink, btnSm, CountBadge, focusRing, microLabelClass } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
@@ -32,20 +37,21 @@ import { type InlineSuggestionPart, SuggestionCard } from './inline-suggestion';
 import { MessageMarkdown } from './markdown';
 import {
   AssistantUpdate,
-  bySendTime,
-  ContractNotice,
   DayDivider,
   dayLabel,
   decodeRecallHeader,
-  dropProvisional,
   errorText,
   MessageActions,
   messageDate,
   messageText,
+  NoticeCard,
+  orderChatLog,
   PresenceRow,
   RecallNote,
   type RecallSource,
   recallSourcesOf,
+  retireProvisionalReplies,
+  retireProvisionalUserTurns,
   sameDay,
   timeLabel,
 } from './message-view';
@@ -55,6 +61,14 @@ interface ChatClientProps {
   title: string;
   /** The assistant's display name — the chat header shows who you're talking to. */
   agentName: string;
+  /**
+   * The zone every date in the log is formatted in. Server and client use the
+   * same one so day dividers and times are in the first paint rather than
+   * appearing after hydration and pushing the log down.
+   */
+  agentTimezone: string;
+  /** The server's clock at render, so "Today" means the same on both sides. */
+  renderedAt: string;
   initialMessages: UIMessage[];
   models: { id: string; label: string }[];
   modelOverride: string | null;
@@ -90,6 +104,33 @@ function hasDecisionPart(message: UIMessage): boolean {
   return (message.parts as Array<{ type?: string }>).some(
     (part) => part?.type === 'approval' || part?.type === 'budget-request',
   );
+}
+
+/** How many on-screen decision cards one poll re-reads (matches the route). */
+const MAX_REFRESH_IDS = 10;
+
+/**
+ * Messages whose decision is still open. Their live status lives in another
+ * table, so a card answered on the Approvals page would otherwise keep offering
+ * Approve/Decline here until a reload — the log saying something that is no
+ * longer true.
+ */
+function unresolvedDecisionIds(log: UIMessage[]): string[] {
+  const ids: string[] = [];
+  // Newest first: a thread can hold more open cards than one poll may carry,
+  // and the ones the reader is looking at are the recent ones.
+  for (let index = log.length - 1; index >= 0 && ids.length < MAX_REFRESH_IDS; index -= 1) {
+    const message = log[index] as UIMessage;
+    const open = (message.parts as Array<{ type?: string; status?: string }>).some(
+      (part) =>
+        (part?.type === 'approval' ||
+          part?.type === 'budget-request' ||
+          part?.type === 'suggestion') &&
+        (part.status === undefined || part.status === 'pending' || part.status === 'snoozed'),
+    );
+    if (open) ids.push(message.id);
+  }
+  return ids;
 }
 
 /** Poll cadence while a task is running, versus the open thread sitting idle. */
@@ -153,6 +194,8 @@ export function ChatClient({
   conversationId,
   title,
   agentName,
+  agentTimezone,
+  renderedAt,
   initialMessages,
   models,
   modelOverride,
@@ -211,6 +254,13 @@ export function ChatClient({
   /** Messages present at mount render static; only genuinely new ones animate in. */
   const initialMessageIdsRef = useRef<Set<string> | null>(null);
   initialMessageIdsRef.current ??= new Set(initialMessages.map((message) => message.id));
+  /**
+   * Where each message came into the log. Only the client's own messages need
+   * it — they carry no send time to sort on — but it is assigned to every id so
+   * a message's place in the sequence is fixed the first time it is seen and
+   * never recomputed. See orderChatLog.
+   */
+  const arrivalOrderRef = useRef<Map<string, number>>(new Map());
 
   /**
    * How far the thread poll has read. This is deliberately a ref and not state:
@@ -227,6 +277,8 @@ export function ChatClient({
   /** Read inside the poll loop, which must not re-subscribe when these change. */
   const asyncTurnRef = useRef<{ taskId: string; cursor: string } | null>(initialAsyncTurn ?? null);
   const statusRef = useRef<string>('ready');
+  /** Lets the poll name the decision cards on screen without re-subscribing. */
+  const logRef = useRef<UIMessage[]>(initialMessages);
   /** Per-turn settle bookkeeping, reset when a new task takes over. */
   const turnRef = useRef<{
     taskId: string;
@@ -282,16 +334,30 @@ export function ChatClient({
     messages: initialMessages,
     transport,
   });
-  // The poll loop reads both of these without re-subscribing on every change.
+  // The poll loop reads these without re-subscribing on every change.
   statusRef.current = status;
   asyncTurnRef.current = asyncTurn;
 
-  // Timestamps and day dividers use the browser timezone, so they render only
-  // after mount — the server-rendered HTML must not bake in the server's zone.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  /**
+   * The log as it is read: ordered once, in one place, from the merged set.
+   *
+   * The acknowledgement the chat route streams back for an action turn is
+   * dropped here. It is never persisted, so it can never meet a durable twin —
+   * left in, it would sit pinned below every message that lands after it. The
+   * presence row underneath says the same thing while the work is running.
+   */
+  const log = useMemo(
+    () =>
+      orderChatLog(
+        messages.filter(
+          (message) =>
+            serverIdsRef.current.has(message.id) || !isAsyncAcknowledgement(messageText(message)),
+        ),
+        arrivalOrderRef.current,
+      ),
+    [messages],
+  );
+  logRef.current = log;
 
   useEffect(() => {
     setSelectedModel(modelOverride);
@@ -320,16 +386,22 @@ export function ChatClient({
     let cancelled = false;
     let timer = 0;
 
-    const mergeMessages = (incoming: UIMessage[]) => {
-      if (incoming.length === 0) return;
-      for (const message of incoming) serverIdsRef.current.add(message.id);
-      // Never reconcile while a stream is live — that would delete the reply
-      // being typed out before its persisted twin exists.
+    // Merge durable rows into the log by id, then retire the client's own
+    // provisional copies of them. Ordering is NOT decided here — orderChatLog
+    // derives it from the merged set on every render, so this and useChat's own
+    // appends cannot disagree about where a message goes.
+    const mergeMessages = (incoming: UIMessage[], refreshed: UIMessage[]) => {
+      const arriving = [...incoming, ...refreshed];
+      for (const message of arriving) serverIdsRef.current.add(message.id);
+      // A reply still streaming has no persisted twin yet, so leave replies
+      // alone until it finishes. Reconciling the user's own turn is always safe
+      // — it only ever removes a duplicate of something already on screen, and
+      // that duplicate was visible for the whole stream before.
       const streaming = statusRef.current === 'streaming' || statusRef.current === 'submitted';
       setMessages((current) => {
         const merged = [...current];
         const indexes = new Map(merged.map((message, index) => [message.id, index]));
-        for (const message of incoming) {
+        for (const message of arriving) {
           const index = indexes.get(message.id);
           if (index === undefined) {
             indexes.set(message.id, merged.length);
@@ -338,13 +410,13 @@ export function ChatClient({
             merged[index] = message;
           }
         }
-        const reconciled = streaming
-          ? merged
-          : dropProvisional(merged, incoming, serverIdsRef.current);
-        // A late write from an earlier task can land after a turn the reader
-        // already sent, so sort rather than append: the day dividers compare
-        // adjacent messages, and out-of-order arrivals mislabel them too.
-        return reconciled.sort(bySendTime);
+        let reconciled = retireProvisionalUserTurns(merged, serverIdsRef.current);
+        if (!streaming) reconciled = retireProvisionalReplies(reconciled, serverIdsRef.current);
+        // Reconciliation reads the whole log rather than one page, so an idle
+        // tick can still finish what a tick during a stream could not. Hand
+        // back the same array when nothing moved so React skips the re-render.
+        const changed = arriving.length > 0 || reconciled.length !== merged.length;
+        return changed ? reconciled : current;
       });
     };
 
@@ -377,19 +449,31 @@ export function ChatClient({
         const query = new URLSearchParams({ conversationId });
         if (turn) query.set('taskId', turn.taskId);
         if (cursorRef.current) query.set('cursor', cursorRef.current);
+        const refreshIds = unresolvedDecisionIds(logRef.current);
+        if (refreshIds.length > 0) query.set('refresh', refreshIds.join(','));
         const res = await fetch(`/api/chat/status?${query.toString()}`);
         if (res.ok) {
           const data = (await res.json()) as {
             taskStatus: string | null;
             messages: UIMessage[];
+            refreshed?: UIMessage[];
             nextCursor: string | null;
             hasMore: boolean;
             activity?: Array<{ toolName: string; status: string; step: number }>;
           };
           if (turn) setActivity(data.activity ?? []);
-          mergeMessages(data.messages);
+          // `refreshed` is deliberately kept out of the settle checks below: a
+          // re-read of a card already on screen is not this turn producing an
+          // answer.
+          mergeMessages(data.messages, data.refreshed ?? []);
+          // The cursor deliberately lags behind rows too fresh to be safely
+          // remembered (see CURSOR_SETTLE_MS in the application service), so a
+          // tick can legitimately end where it began. Only chase the next page
+          // when the cursor actually moved — otherwise this loop would re-ask
+          // for the same page with no delay between tries.
+          const advanced = Boolean(data.nextCursor) && data.nextCursor !== cursorRef.current;
           if (data.nextCursor) cursorRef.current = data.nextCursor;
-          if (data.hasMore) {
+          if (data.hasMore && advanced) {
             if (!cancelled) timer = window.setTimeout(tick, 0);
             return;
           }
@@ -456,6 +540,9 @@ export function ChatClient({
     if (asyncTurn) pokePollRef.current?.();
   }, [asyncTurn]);
 
+  // One instant for every relative day label, taken from the server's clock, so
+  // the markup the browser hydrates matches the markup it was sent.
+  const renderedNow = useMemo(() => new Date(renderedAt), [renderedAt]);
   const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
   const displayTitle = title === 'Untitled' ? 'New conversation' : title;
   const notificationMode = displayTitle.toLowerCase() === 'notifications';
@@ -652,18 +739,15 @@ export function ChatClient({
   // A message or streamed text landed while the reader was scrolled up — keep
   // the jump pill meaningful even when the message count itself did not grow.
   useEffect(() => {
-    const addedMessages = Math.max(0, messages.length - previousMessageCountRef.current);
-    const transcriptLength = messages.reduce(
-      (total, message) => total + messageText(message).length,
-      0,
-    );
+    const addedMessages = Math.max(0, log.length - previousMessageCountRef.current);
+    const transcriptLength = log.reduce((total, message) => total + messageText(message).length, 0);
     const streamedTextGrew = transcriptLength > previousTranscriptLengthRef.current;
     if (!stickToBottomRef.current && (addedMessages > 0 || streamedTextGrew)) {
       setUnseenCount((count) => (addedMessages > 0 ? count + addedMessages : Math.max(count, 1)));
     }
-    previousMessageCountRef.current = messages.length;
+    previousMessageCountRef.current = log.length;
     previousTranscriptLengthRef.current = transcriptLength;
-  }, [messages]);
+  }, [log]);
 
   // The composer floats over the conversation, so nothing in the log can rely
   // on it taking layout space. Measure the form and feed that height back two
@@ -854,7 +938,7 @@ export function ChatClient({
             `my-auto` on the opening screen) does that, while a thread long
             enough to overflow simply scrolls as before. */}
         <div className="flex min-h-full min-w-0 flex-col">
-          {messages.length === 0 ? (
+          {log.length === 0 ? (
             <div className="mx-auto flex max-w-xl flex-col items-center text-center my-auto">
               <span className="inline-flex size-12 items-center justify-center rounded-2xl bg-sunken text-accent">
                 <Sparkles className="size-5" aria-hidden="true" />
@@ -919,7 +1003,7 @@ export function ChatClient({
             </div>
           ) : (
             <div className="mt-auto flex min-w-0 flex-col">
-              {messages.map((message, messageIndex) => {
+              {log.map((message, messageIndex) => {
                 const parts = message.parts as Array<
                   | UIMessage['parts'][number]
                   | InlineApprovalPart
@@ -939,38 +1023,44 @@ export function ChatClient({
                   (part): part is Extract<UIMessage['parts'][number], { type: 'text' }> =>
                     part.type === 'text',
                 );
-                // The grouped card repeats the executor's prose approval list —
-                // hide the duplicate text, never the persisted message itself.
+                // The card repeats the executor's own prose about the same
+                // decision — hide the duplicate text, never the persisted
+                // message itself.
                 const visibleTextParts =
-                  approvalParts.length > 0
-                    ? textParts.filter((part) => !isApprovalProseNotice(part.text))
+                  approvalParts.length > 0 || budgetParts.length > 0
+                    ? textParts.filter((part) => !isDecisionProseNotice(part.text))
                     : textParts;
                 const fullText = visibleTextParts
                   .map((part) => part.text)
                   .join('')
                   .trim();
-                const isNotice =
+                // A card the assistant placed answers for itself, so a notice
+                // marker on the same message never overrides it. `isContractNotice`
+                // still matches by prose for messages persisted before the
+                // structured marker existed.
+                const noticeKind =
                   message.role === 'assistant' &&
                   approvalParts.length === 0 &&
                   budgetParts.length === 0 &&
-                  fullText !== '' &&
-                  (hasContractNoticePart(parts) || isContractNotice(fullText));
+                  fullText !== ''
+                    ? (noticeKindOf(parts) ??
+                      (isContractNotice(fullText) ? 'response-contract' : null))
+                    : null;
                 const date = messageDate(message);
                 const previousDate =
-                  messageIndex > 0 ? messageDate(messages[messageIndex - 1] as UIMessage) : null;
+                  messageIndex > 0 ? messageDate(log[messageIndex - 1] as UIMessage) : null;
                 const showDivider =
-                  mounted &&
                   date !== null &&
-                  (previousDate === null || !sameDay(previousDate, date));
+                  (previousDate === null || !sameDay(previousDate, date, agentTimezone));
                 // A chat is one continuous discussion — per-message clock times
                 // are noise there, and the day dividers already carry the "when".
                 // Proactive updates are the exception: those arrive at a time
                 // that is part of the message, so Notifications keeps them.
-                const showTime = mounted && date !== null && notificationMode;
+                const showTime = date !== null && notificationMode;
                 const recallSources = recallSourcesOf(message);
-                const hasText = visibleTextParts.length > 0 && !isNotice;
+                const hasText = visibleTextParts.length > 0 && noticeKind === null;
                 const isNewMessage = !initialMessageIdsRef.current?.has(message.id);
-                const previousMessage = messageIndex > 0 ? messages[messageIndex - 1] : undefined;
+                const previousMessage = messageIndex > 0 ? log[messageIndex - 1] : undefined;
                 // A "run" is a streak of turns from the same speaker. Handing
                 // over gets a clear break; a follow-on from the same speaker
                 // tucks in close, so a run reads as one continuous thought.
@@ -979,7 +1069,7 @@ export function ChatClient({
                 const streamingCaret =
                   status === 'streaming' &&
                   message.role === 'assistant' &&
-                  messageIndex === messages.length - 1;
+                  messageIndex === log.length - 1;
                 return (
                   <div
                     key={message.id}
@@ -987,9 +1077,11 @@ export function ChatClient({
                       isNewMessage ? 'motion-safe:animate-[message-in_220ms_ease-out]' : ''
                     }`}
                   >
-                    {showDivider && date ? <DayDivider label={dayLabel(date, new Date())} /> : null}
-                    {isNotice ? (
-                      <ContractNotice text={fullText} />
+                    {showDivider && date ? (
+                      <DayDivider label={dayLabel(date, renderedNow, agentTimezone)} />
+                    ) : null}
+                    {noticeKind !== null ? (
+                      <NoticeCard kind={noticeKind} text={fullText} />
                     ) : notificationMode && message.role === 'assistant' && hasText ? (
                       <AssistantUpdate text={fullText} sources={recallSources} />
                     ) : hasText ? (
@@ -1018,7 +1110,7 @@ export function ChatClient({
                                 />
                               ))}
                             </div>
-                            <MessageActions text={fullText} date={date} />
+                            <MessageActions text={fullText} date={date} timeZone={agentTimezone} />
                           </div>
                         ) : (
                           // Both speakers read at the same size — a smaller user
@@ -1054,7 +1146,7 @@ export function ChatClient({
                           message.role === 'user' ? 'self-end' : 'self-start'
                         }`}
                       >
-                        {timeLabel(date)}
+                        {timeLabel(date, agentTimezone)}
                       </p>
                     ) : null}
                   </div>
@@ -1137,7 +1229,7 @@ export function ChatClient({
           aria-hidden="true"
           className="pointer-events-none absolute inset-x-0 -top-16 bottom-0 bg-gradient-to-t from-surface from-35% via-surface/85 to-transparent"
         />
-        {!atBottom && messages.length > 0 && !error && !commandPaletteOpen && !modelCommandOpen ? (
+        {!atBottom && log.length > 0 && !error && !commandPaletteOpen && !modelCommandOpen ? (
           <div className="pointer-events-none absolute inset-x-0 -top-14 z-10 flex justify-center">
             <button
               type="button"

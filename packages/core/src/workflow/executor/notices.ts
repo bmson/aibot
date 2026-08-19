@@ -7,6 +7,38 @@ import { GOAL_BLOCKED_PREFIX } from '../schedules.js';
 import type { ExecutorDeps } from './types.js';
 
 /**
+ * Kinds of notice the chat renders as a card rather than as assistant prose.
+ * `parked` is "I stopped and will resume on my own"; `needs-attention` is "I
+ * stopped and cannot continue without you". Both are things the owner has to
+ * read and act on, so neither should look like conversation.
+ */
+export type NoticeKind = 'parked' | 'needs-attention';
+
+/**
+ * Add the structured marker that makes the chat render a notice as a card
+ * rather than as assistant prose. Same shape assistantMessageParts already uses
+ * for the response-contract notice (packages/core/src/chat.ts); `parts` is
+ * jsonb, so this is additive — messages written before the marker existed carry
+ * none and keep rendering as prose. The web app matches these kinds in
+ * apps/web/lib/chat-notices.ts.
+ *
+ * A message that already carries something which speaks for itself is left
+ * alone: another notice kind the caller chose, or a decision part (an approval,
+ * a spending request) whose own card already says what is waiting. Two markers
+ * on one message would leave the interface picking which to believe.
+ */
+const SELF_DESCRIBING = new Set(['notice', 'approval', 'budget-request', 'suggestion']);
+
+export function noticeParts(kind: NoticeKind, extraParts: unknown[] = []): unknown[] {
+  const speaksForItself = extraParts.some((part) => {
+    if (!part || typeof part !== 'object') return false;
+    const type = (part as { type?: unknown }).type;
+    return typeof type === 'string' && SELF_DESCRIBING.has(type);
+  });
+  return speaksForItself ? extraParts : [...extraParts, { type: 'notice', notice: kind }];
+}
+
+/**
  * Parked/paused tasks with a conversation must say so in the thread, not go
  * silent. Returns whether a row was actually persisted so callers can tell
  * whether the owner has any chance of seeing this (used by the re-notify sweep).
@@ -46,7 +78,15 @@ export async function notifyOwnerAndConversation(
   text: string,
   extraParts: unknown[] = [],
 ): Promise<{ conversationNotified: boolean; ownerNotified: boolean }> {
-  const conversationNotified = await postConversationNotice(deps.db, task, text, extraParts);
+  // Every caller of this is an event the owner has to resolve — a permanent
+  // failure, a budget stall, a blocked goal — so the chat gets the marker that
+  // renders it as a waiting-on-you card instead of another assistant reply.
+  const conversationNotified = await postConversationNotice(
+    deps.db,
+    task,
+    text,
+    noticeParts('needs-attention', extraParts),
+  );
   let ownerNotified = false;
   if (deps.notifyOwner) {
     ownerNotified = await deps

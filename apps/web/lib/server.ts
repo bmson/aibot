@@ -179,6 +179,7 @@ function createApplication() {
       taskId?: string;
       cursor?: string;
       pageSize?: number;
+      refreshIds?: string[];
     }) => getChatUpdates(db, input),
     isValidChatCursor,
     handleChatTurn: (request: Request) =>

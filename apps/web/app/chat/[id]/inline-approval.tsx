@@ -1,9 +1,9 @@
 'use client';
 
 import type { InlineApprovalDetail, InlineApprovalStatus } from '@assistant/application/chat';
-import { Check, CircleCheck, CircleHelp, CircleX, Clock, LoaderCircle, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Check, CircleHelp, LoaderCircle, X } from 'lucide-react';
 import { btnSm } from '@/lib/ui';
+import { DecisionActions, DecisionReceipt, useArmedConfirm } from './decision-card';
 
 export interface InlineApprovalPart {
   type: 'approval';
@@ -20,7 +20,7 @@ export type RowResolution = 'approved' | 'denied' | undefined;
 /**
  * One approval inside an <ApprovalGroup>. Presentational: the group owns all
  * server calls and resolution state so per-row buttons stay coherent. Pending
- * rows carry actions; settled rows collapse to a receipt.
+ * rows carry actions; settled rows collapse to the shared receipt.
  */
 export function ApprovalRow({
   part,
@@ -40,44 +40,38 @@ export function ApprovalRow({
   onResolve: (approvalId: string, decision: 'approved' | 'denied') => void;
 }) {
   const status: InlineApprovalStatus = resolution ?? part.status ?? 'pending';
-  const [approvalArmed, setApprovalArmed] = useState(false);
-
-  useEffect(() => {
-    if (!approvalArmed) return;
-    const timer = window.setTimeout(() => setApprovalArmed(false), 3000);
-    return () => window.clearTimeout(timer);
-  }, [approvalArmed]);
+  const [approvalArmed, setApprovalArmed] = useArmedConfirm();
 
   if (status !== 'pending') {
+    // Answered here a moment ago, rather than read back from the row: say so,
+    // and say the work is moving again.
     const justNow = resolution !== undefined;
-    const icon =
-      status === 'approved' ? (
-        <CircleCheck className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-      ) : status === 'denied' ? (
-        <CircleX className="size-3.5 shrink-0 text-red-500 dark:text-red-400" />
-      ) : (
-        <Clock className="size-3.5 shrink-0 text-muted" />
-      );
-    const word =
-      status === 'approved'
-        ? justNow
-          ? 'Approved — resuming'
-          : 'Approved'
-        : status === 'denied'
-          ? 'Declined'
-          : status === 'expired'
-            ? 'Expired'
-            : 'No longer available';
     return (
-      <p
-        role={justNow ? 'status' : undefined}
-        className="flex min-w-0 items-center gap-1.5 py-0.5 text-xs text-muted"
+      <DecisionReceipt
+        outcome={
+          status === 'approved'
+            ? 'accepted'
+            : status === 'denied'
+              ? 'declined'
+              : status === 'expired'
+                ? 'lapsed'
+                : 'dismissed'
+        }
+        summary={part.summary}
+        verdict={
+          status === 'approved'
+            ? justNow
+              ? 'Approved — resuming'
+              : 'Approved'
+            : status === 'denied'
+              ? 'Declined'
+              : status === 'expired'
+                ? 'Expired'
+                : 'No longer available'
+        }
         title={`${part.shortCode} · ${part.summary}`}
-      >
-        {icon}
-        <span className="min-w-0 truncate">{part.summary}</span>
-        <span className="shrink-0 font-medium text-muted">· {word}</span>
-      </p>
+        live={justNow}
+      />
     );
   }
 
@@ -112,7 +106,7 @@ export function ApprovalRow({
           </dl>
         </details>
       ) : null}
-      <div className="mt-2 flex flex-wrap items-center gap-2">
+      <DecisionActions>
         <button
           type="button"
           disabled={disabled}
@@ -150,7 +144,7 @@ export function ApprovalRow({
           )}
           {busy && busyDecision === 'denied' ? 'Declining…' : 'Decline'}
         </button>
-      </div>
+      </DecisionActions>
     </div>
   );
 }

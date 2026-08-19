@@ -11,6 +11,7 @@ import { isKnownSenderReplyTask } from './executor/context-helpers.js';
 import { finalizePendingResponse } from './executor/finalize.js';
 import { unreadSharedDocumentIntent } from './executor/intent.js';
 import {
+  noticeParts,
   notifyAttention,
   postConversationNotice,
   taskBudgetPermissionRequest,
@@ -125,6 +126,7 @@ export async function executeTask(deps: ExecutorDeps, taskId: string): Promise<E
           db,
           task,
           `I'm pausing here — ${err.message}. This resumes automatically when the budget resets.`,
+          noticeParts('parked'),
         );
         return { outcome: 'parked', detail: err.message.slice(0, 500) };
       }

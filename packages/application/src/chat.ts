@@ -5,6 +5,7 @@ import {
   getAgent,
   listConversations,
   listMessages,
+  listMessagesByIds,
   setConversationModel,
 } from '@assistant/core/chat';
 import {
@@ -27,6 +28,28 @@ const SETTLED_TASK_STATUSES = new Set([
   'waiting_approval',
 ]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * How far behind the present the poll cursor is allowed to advance.
+ *
+ * `messages.created_at` defaults to Postgres `now()`, which is TRANSACTION
+ * START time, while the cursor can only advance over rows that have already
+ * committed. A transaction that starts early and commits late — finishTask
+ * wraps the terminal transition and the assistant reply together — therefore
+ * lands a row whose timestamp is BEHIND a cursor the poll already moved past,
+ * and the keyset comparison in listMessages will never return it again. The
+ * message exists in the database and appears mid-log on the next page load:
+ * exactly the "it vanished, then came back in the wrong place" report.
+ *
+ * So the cursor deliberately lags: rows are delivered the moment they are
+ * visible, but the cursor only advances over rows old enough that nothing can
+ * still commit behind them. Anything newer is re-delivered on the next tick
+ * and the client's id-keyed merge absorbs the repeat.
+ */
+const CURSOR_SETTLE_MS = 15_000;
+
+/** Cap on how many on-screen decision cards one poll may re-read. */
+const MAX_REFRESH_IDS = 10;
 
 export type InlineApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'missing';
 export interface InlineApprovalDetail {
@@ -91,6 +114,21 @@ function detailValue(value: unknown): string {
     return value.map(String).join(', ') || '(none)';
   }
   return JSON.stringify(value, null, 2) ?? String(value);
+}
+
+/**
+ * Persisted rows as the chat client reads them. `createdAt` travels on metadata
+ * because it is what orders the rendered log — see orderChatLog in the web app.
+ */
+function toUiMessages(rows: Awaited<ReturnType<typeof listMessages>>): UIMessage[] {
+  return rows
+    .filter((row) => row.role === 'user' || row.role === 'assistant')
+    .map((row) => ({
+      id: row.id,
+      role: row.role as 'user' | 'assistant',
+      parts: row.parts as UIMessage['parts'],
+      metadata: { createdAt: row.createdAt.toISOString() },
+    }));
 }
 
 /** Attach live approval and budget state to persisted custom message parts. */
@@ -369,7 +407,7 @@ export function isValidChatCursor(value: string): boolean {
 export async function getChatConversationView(
   db: Db,
   conversationId: string,
-  input: { taskId?: string; cursor?: string },
+  input: { taskId?: string; cursor?: string; now?: Date },
 ) {
   const agent = await getAgent(db);
   const [conversation] = await db
@@ -423,30 +461,29 @@ export async function getChatConversationView(
       )
       .orderBy(models.label),
   ]);
-  const messages = await hydrateChatApprovals(
-    db,
-    messageRows
-      .filter((row) => row.role === 'user' || row.role === 'assistant')
-      .map((row) => ({
-        id: row.id,
-        role: row.role as 'user' | 'assistant',
-        parts: row.parts as UIMessage['parts'],
-        metadata: { createdAt: row.createdAt.toISOString() },
-      })),
-  );
-  // Where the open page should resume polling from. Without this the client
-  // has no cursor until it sends a turn, so anything the assistant posted on
-  // its own — a schedule, a watch, an approval resuming — stayed invisible
-  // until the page was loaded again.
-  const newest = messageRows.at(-1);
+  const messages = await hydrateChatApprovals(db, toUiMessages(messageRows));
   return {
     conversation,
     agentName: agent.name || 'Assistant',
+    // Chat formats day dividers and times in this zone on BOTH sides, so the
+    // server-rendered log and the hydrated one agree and nothing shifts once
+    // the client takes over.
+    agentTimezone: agent.timezone,
     messages,
     models: enabledModels,
     goalTitle: linkedGoal?.title,
     canArchive: !conversation.isPrimary && Number(activeTasks[0]?.value ?? 0) === 0,
-    cursor: newest ? encodeMessageCursor(newest) : null,
+    // Where the open page resumes polling from. Without it the client has no
+    // cursor until it sends a turn, so anything the assistant posted on its own
+    // — a schedule, a watch, an approval resuming — stayed invisible until the
+    // page was loaded again.
+    //
+    // Seeded under the same settle rule the poll advances by, because a render
+    // is a poll like any other: a cursor planted on a row written moments ago
+    // sits in front of whatever is still committing behind it, and the open
+    // page never sees those at all. A chat whose every message is that fresh
+    // starts with no cursor and picks one up on its first tick.
+    cursor: advanceCursor(messageRows, undefined, false, input.now ?? new Date()),
     asyncTurn:
       requestedTask && requestedCursor && input.cursor
         ? { taskId: requestedTask.id, cursor: input.cursor }
@@ -463,10 +500,23 @@ export async function getChatConversationView(
  * about, and the executor keeps writing after a parked task resumes. Polling
  * only for a known task is what made those land invisibly until a reload.
  * With a task, the caller also gets its status and live tool activity.
+ *
+ * `refreshIds` names rows the caller is already showing and wants re-read —
+ * decision cards whose live status may have changed elsewhere. They come back
+ * in `refreshed`, deliberately NOT in `messages`: `messages` is what the client
+ * uses to decide a turn has produced its answer, and a re-read of an old row is
+ * not new output.
  */
 export async function getChatUpdates(
   db: Db,
-  input: { conversationId: string; taskId?: string; cursor?: string; pageSize?: number },
+  input: {
+    conversationId: string;
+    taskId?: string;
+    cursor?: string;
+    pageSize?: number;
+    refreshIds?: string[];
+    now?: Date;
+  },
 ) {
   let taskStatus: string | null = null;
   if (input.taskId) {
@@ -501,19 +551,15 @@ export async function getChatUpdates(
   });
   const hasMore = Boolean(cursor && rows.length > pageSize);
   const page = rows.slice(0, pageSize);
-  const messages = await hydrateChatApprovals(
+  const messages = await hydrateChatApprovals(db, toUiMessages(page));
+  const refreshIds = (input.refreshIds ?? [])
+    .filter((id) => UUID_RE.test(id))
+    .slice(0, MAX_REFRESH_IDS);
+  const refreshed = await hydrateChatApprovals(
     db,
-    page
-      .filter((row) => row.role === 'user' || row.role === 'assistant')
-      .map((row) => ({
-        id: row.id,
-        role: row.role as 'user' | 'assistant',
-        parts: row.parts as UIMessage['parts'],
-        metadata: { createdAt: row.createdAt.toISOString() },
-      })),
+    toUiMessages(await listMessagesByIds(db, input.conversationId, refreshIds)),
   );
-  const last = page.at(-1);
-  const nextCursor = last ? encodeMessageCursor(last) : cursor ? encodeMessageCursor(cursor) : null;
+  const nextCursor = advanceCursor(page, cursor, hasMore, input.now ?? new Date());
   const taskId = input.taskId;
   const activity =
     taskId && taskStatus && !SETTLED_TASK_STATUSES.has(taskStatus)
@@ -530,5 +576,30 @@ export async function getChatUpdates(
             .limit(3)
         ).reverse()
       : [];
-  return { taskStatus, messages, nextCursor, hasMore, activity };
+  return { taskStatus, messages, refreshed, nextCursor, hasMore, activity };
+}
+
+/**
+ * How far the poll may remember having read. Never past a row young enough
+ * that a slower transaction could still commit behind it (CURSOR_SETTLE_MS
+ * above explains why that happens), and never backwards — the client loops
+ * immediately while `hasMore` is set, so a cursor that could retreat would
+ * spin. A full page means a real backlog, whose rows are old by definition, so
+ * that case advances to the tail as before.
+ */
+function advanceCursor(
+  page: Awaited<ReturnType<typeof listMessages>>,
+  cursor: { createdAt: Date; id: string } | undefined,
+  hasMore: boolean,
+  now: Date,
+): string | null {
+  const fallback = cursor ? encodeMessageCursor(cursor) : null;
+  if (page.length === 0) return fallback;
+  if (hasMore) return encodeMessageCursor(page[page.length - 1] as (typeof page)[number]);
+  const settledBefore = now.getTime() - CURSOR_SETTLE_MS;
+  for (let index = page.length - 1; index >= 0; index -= 1) {
+    const row = page[index] as (typeof page)[number];
+    if (row.createdAt.getTime() <= settledBefore) return encodeMessageCursor(row);
+  }
+  return fallback;
 }

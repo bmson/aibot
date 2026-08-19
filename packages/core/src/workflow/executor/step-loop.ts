@@ -54,6 +54,7 @@ import {
   stopForUnsavedGoalProgress,
 } from './finalize.js';
 import {
+  noticeParts,
   notifyAttention,
   notifyOwnerAndConversation,
   postConversationNotice,
@@ -616,6 +617,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
           db,
           task,
           `I'm pausing here — ${stepResult.decision.reason}. This resumes automatically when the budget resets; you can also raise the caps on the Costs page.`,
+          noticeParts('parked'),
         );
         return { outcome: 'parked', detail: stepResult.decision.reason };
       }
@@ -816,6 +818,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
             db,
             task,
             `I'm pausing here — this action doesn't fit the remaining budget (${outcome.reason}). The task resumes automatically when the budget resets; you can also raise the caps on the Costs page.`,
+            noticeParts('parked'),
           );
           return { outcome: 'parked', detail: outcome.reason };
         } else if (outcome.kind === 'awaiting_approval') {

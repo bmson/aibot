@@ -10,7 +10,7 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
-import { and, asc, desc, eq, gt, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import type { RecallSource } from './memory/recall.js';
 import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
 import type { ActionEvidence } from './workflow/response-contract.js';
@@ -443,6 +443,22 @@ export async function listMessages(
     .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(limit);
   return rows.reverse();
+}
+
+/**
+ * Re-read named rows of one conversation. The open chat uses this to refresh
+ * decision cards it is already showing — an approval resolved on the Approvals
+ * page must stop offering Approve/Decline here without waiting for a reload.
+ * Scoped to the conversation, so an id arriving from a query string can only
+ * ever reach messages the caller was already reading.
+ */
+export async function listMessagesByIds(db: Db, conversationId: string, ids: string[]) {
+  if (ids.length === 0) return [];
+  return db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.conversationId, conversationId), inArray(messages.id, ids)))
+    .orderBy(asc(messages.createdAt), asc(messages.id));
 }
 
 export async function persistMessage(
