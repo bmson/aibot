@@ -73,9 +73,28 @@ describe('resolveCompanionUniforms', () => {
     expect(signatures.size).toBe(FACE_STATES.length);
   });
 
-  it('spreads iris dilation widely so expressions read at a glance', () => {
+  it('swings the eyelids across the full expressive range', () => {
+    const tilts = FACE_STATES.map((state) => EXPRESSION_POSES[state].lidTilt);
+    // The lid angle is the face's main instrument, so it has to reach both
+    // ways: inner corners lifted (curious, wistful) and driven down (stern).
+    expect(Math.min(...tilts)).toBeLessThan(-0.3);
+    expect(Math.max(...tilts)).toBeGreaterThan(0.3);
+
+    const rises = FACE_STATES.map((state) => EXPRESSION_POSES[state].lidRise);
+    expect(Math.max(...rises) - Math.min(...rises)).toBeGreaterThan(0.5);
+
     const openness = FACE_STATES.map((state) => EXPRESSION_POSES[state].openness);
-    expect(Math.max(...openness) - Math.min(...openness)).toBeGreaterThan(0.6);
+    expect(Math.max(...openness) - Math.min(...openness)).toBeGreaterThan(0.45);
+  });
+
+  it('never lets the lids cross, which would erase the eye', () => {
+    // Mirrors the shader: the bottom lid only eats into what the top lid left.
+    for (const state of FACE_STATES) {
+      const { openness, lidRise } = EXPRESSION_POSES[state];
+      const topEdge = 2 * openness - 1;
+      const botEdge = -1 + lidRise * (topEdge + 1) * 0.82;
+      expect(botEdge).toBeLessThan(topEdge);
+    }
   });
 
   it('falls back to the resting pose for an unknown expression', () => {
@@ -132,6 +151,12 @@ describe('resolveCompanionUniforms', () => {
           expect(u.energy).toBeLessThanOrEqual(1);
           expect(u.warmth).toBeGreaterThanOrEqual(-1);
           expect(u.warmth).toBeLessThanOrEqual(1);
+          expect(u.lidTilt).toBeGreaterThanOrEqual(-1);
+          expect(u.lidTilt).toBeLessThanOrEqual(1);
+          expect(u.lidRise).toBeGreaterThanOrEqual(0);
+          expect(u.lidRise).toBeLessThanOrEqual(1);
+          expect(u.pupil).toBeGreaterThanOrEqual(0);
+          expect(u.pupil).toBeLessThanOrEqual(1);
           expect(u.bob).toBeGreaterThanOrEqual(0);
           expect(u.bob).toBeLessThanOrEqual(1);
           for (const channel of u.color) {

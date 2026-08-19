@@ -114,6 +114,9 @@ export function CompanionPresence({ presence }: { presence: Presence }) {
       color: uniform('uColor'),
       dark: uniform('uDark'),
       openness: uniform('uOpenness'),
+      lidTilt: uniform('uLidTilt'),
+      lidRise: uniform('uLidRise'),
+      pupil: uniform('uPupil'),
       energy: uniform('uEnergy'),
       warmth: uniform('uWarmth'),
       gaze: uniform('uGaze'),
@@ -170,6 +173,9 @@ export function CompanionPresence({ presence }: { presence: Presence }) {
       gl.uniform3f(locations.color, shown.color[0], shown.color[1], shown.color[2]);
       gl.uniform1f(locations.dark, isDark() ? 1 : 0);
       gl.uniform1f(locations.openness, shown.openness);
+      gl.uniform1f(locations.lidTilt, shown.lidTilt);
+      gl.uniform1f(locations.lidRise, shown.lidRise);
+      gl.uniform1f(locations.pupil, shown.pupil);
       gl.uniform1f(locations.energy, shown.energy);
       gl.uniform1f(locations.warmth, shown.warmth);
       gl.uniform2f(locations.gaze, shown.gazeX, shown.gazeY);
@@ -196,6 +202,9 @@ export function CompanionPresence({ presence }: { presence: Presence }) {
       resize();
 
       shown.openness = approach(shown.openness, target.openness, EASE_RATE, dt);
+      shown.lidTilt = approach(shown.lidTilt, target.lidTilt, EASE_RATE, dt);
+      shown.lidRise = approach(shown.lidRise, target.lidRise, EASE_RATE, dt);
+      shown.pupil = approach(shown.pupil, target.pupil, EASE_RATE, dt);
       shown.energy = approach(shown.energy, target.energy, EASE_RATE, dt);
       shown.warmth = approach(shown.warmth, target.warmth, EASE_RATE, dt);
       shown.bob = approach(shown.bob, target.bob, EASE_RATE, dt);
