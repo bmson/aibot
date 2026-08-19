@@ -328,6 +328,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         skills: !state.untrustedContext ? skillsBlock : undefined,
         ambient: !state.untrustedContext ? ambientBlock : undefined,
         tainted: state.untrustedContext,
+        // Only the dashboard gets the companion persona and cue vocabulary;
+        // email/SMS/goal sessions must never learn the tags exist.
+        channel: task.type === 'chat_turn' ? 'dashboard-chat' : undefined,
         now: runStartedAt,
       }),
       channelContext(task),

@@ -75,6 +75,32 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(prompt).toMatch(/never create, update, or duplicate an event while answering it/i);
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(21);
   });
+
+  it('gates the companion persona and cue vocabulary to the dashboard channel (v22)', () => {
+    const dashboard = buildSystemPrompt(agent, { channel: 'dashboard-chat' });
+    expect(dashboard).toContain('Dashboard companion');
+    expect(dashboard).toContain('Pixar robot');
+    expect(dashboard).toContain('[face: <state>]');
+    expect(dashboard).toContain('warm_smile');
+    expect(dashboard).toContain('[theme: <name>]');
+    expect(dashboard).toContain('[action_chips: "Label" | "Label"]');
+    expect(dashboard).toMatch(/Email and SMS keep the professional voice/);
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(22);
+  });
+
+  it('keeps every other channel free of the cue vocabulary', () => {
+    const now = new Date('2026-08-19T17:00:00Z');
+    for (const extras of [{ now }, { now, tainted: true }] as const) {
+      const prompt = buildSystemPrompt(agent, extras);
+      expect(prompt).not.toContain('[face:');
+      expect(prompt).not.toContain('[theme:');
+      expect(prompt).not.toContain('action_chips');
+      expect(prompt).not.toContain('Dashboard companion');
+    }
+    // Byte-stability sentinel: adding the channel gate changed nothing for
+    // channel-less callers beyond what v21 already produced.
+    expect(buildSystemPrompt(agent, { now })).toBe(buildSystemPrompt(agent, { now }));
+  });
 });
 
 describe('message cursors', () => {

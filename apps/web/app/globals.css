@@ -614,3 +614,256 @@ a {
     animation: caret-blink 1s steps(1) infinite;
   }
 }
+
+/* ── Companion robot face (robot-face.tsx) ────────────────────────────────────
+   Expressions are keyed off data-face-state and are pure attribute/opacity/
+   transform swaps, so every state change is visible even with animations off.
+   The flourishes — idle blink, wink, nod, pop — live behind the reduced-motion
+   query at the bottom. Colors come from the theme tokens, so dark mode and the
+   [theme:] chat tints reach the face without face-specific overrides. */
+.rf {
+  display: block;
+}
+.rf .rf-shell {
+  fill: var(--surface-sunken);
+  stroke: var(--accent);
+  stroke-opacity: 0.45;
+  stroke-width: 1.5;
+}
+.rf .rf-visor {
+  fill: var(--accent);
+  opacity: 0.08;
+}
+.rf .rf-antenna {
+  fill: var(--accent);
+}
+.rf .rf-antenna-stem {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  opacity: 0.7;
+}
+.rf .rf-eye-dot {
+  fill: var(--accent);
+}
+.rf .rf-eye-arc {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  opacity: 0;
+}
+.rf .rf-mouth {
+  fill: none;
+  stroke: var(--content-strong);
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0;
+  transition: opacity var(--motion-fast) ease;
+}
+.rf .rf-mouth-open {
+  fill: var(--content-strong);
+  stroke: none;
+}
+.rf .rf-mouth-soft {
+  opacity: 0.8;
+}
+/* Pose transforms interpolate between expressions; fill-box keeps the origin
+   on the shape itself rather than the whole canvas. */
+.rf .rf-head,
+.rf .rf-eyes,
+.rf .rf-eye-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform var(--motion-medium) var(--motion-move);
+}
+
+.rf[data-face-state="warm_smile"] .rf-mouth-soft,
+.rf[data-face-state="happy_squint"] .rf-mouth-soft,
+.rf[data-face-state="thoughtful_tilt"] .rf-mouth-soft,
+.rf[data-face-state="wide_excited"] .rf-mouth-soft,
+.rf[data-face-state="gentle_nod"] .rf-mouth-soft,
+.rf[data-face-state="focused"] .rf-mouth-soft {
+  opacity: 0;
+}
+.rf[data-face-state="warm_smile"] .rf-mouth-smile,
+.rf[data-face-state="happy_squint"] .rf-mouth-smile,
+.rf[data-face-state="gentle_nod"] .rf-mouth-smile {
+  opacity: 0.85;
+}
+.rf[data-face-state="warm_smile"] .rf-eyes {
+  transform: translateY(0.6px);
+}
+.rf[data-face-state="happy_squint"] .rf-eye-dot {
+  opacity: 0;
+}
+.rf[data-face-state="happy_squint"] .rf-eye-arc {
+  opacity: 1;
+}
+.rf[data-face-state="curious_blink"] .rf-eye-r .rf-eye-dot {
+  transform: scaleY(0.3);
+}
+.rf[data-face-state="curious_blink"] .rf-eyes {
+  transform: translateY(-0.5px);
+}
+.rf[data-face-state="thoughtful_tilt"] .rf-head {
+  transform: rotate(-6deg);
+}
+.rf[data-face-state="thoughtful_tilt"] .rf-eyes {
+  transform: translate(-1px, -1.5px);
+}
+.rf[data-face-state="thoughtful_tilt"] .rf-mouth-flat {
+  opacity: 0.8;
+}
+.rf[data-face-state="wide_excited"] .rf-eye-dot {
+  transform: scale(1.25);
+}
+.rf[data-face-state="wide_excited"] .rf-mouth-open {
+  opacity: 0.85;
+}
+.rf[data-face-state="focused"] .rf-eye-dot {
+  transform: scaleY(0.5);
+}
+.rf[data-face-state="focused"] .rf-mouth-small {
+  opacity: 0.8;
+}
+
+/* Idle blink: eyes stay open ~94% of the cycle; the right eye trails a beat. */
+@keyframes face-blink {
+  0%,
+  91%,
+  100% {
+    transform: scaleY(1);
+  }
+  94.5% {
+    transform: scaleY(0.12);
+  }
+}
+@keyframes face-double-blink {
+  0%,
+  60%,
+  100% {
+    transform: scaleY(1);
+  }
+  15%,
+  45% {
+    transform: scaleY(0.15);
+  }
+  30% {
+    transform: scaleY(1);
+  }
+}
+@keyframes face-nod {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(1.8px);
+  }
+  65% {
+    transform: translateY(-0.6px);
+  }
+}
+@keyframes face-pop {
+  from {
+    transform: scale(0.85);
+  }
+  60% {
+    transform: scale(1.06);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+@keyframes face-visor-glow {
+  0%,
+  100% {
+    opacity: 0.08;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .rf[data-face-state="neutral"] .rf-eye-dot,
+  .rf[data-face-state="warm_smile"] .rf-eye-dot,
+  .rf[data-face-state="gentle_nod"] .rf-eye-dot {
+    animation: face-blink 4.6s ease-in-out infinite;
+  }
+  .rf .rf-eye-r .rf-eye-dot {
+    animation-delay: 70ms;
+  }
+  .rf[data-face-state="curious_blink"] .rf-eye-l .rf-eye-dot {
+    animation: face-double-blink 900ms ease-in-out both;
+  }
+  .rf[data-face-state="wide_excited"] {
+    animation: face-pop 360ms var(--motion-enter);
+  }
+  .rf[data-face-state="gentle_nod"] .rf-head {
+    animation: face-nod 1.3s ease-in-out 2;
+  }
+  .rf[data-busy] .rf-visor {
+    animation: face-visor-glow 2.2s ease-in-out infinite;
+  }
+}
+
+/* ── Companion chat themes ────────────────────────────────────────────────────
+   A [theme: ...] cue re-tints the accent pair inside the chat viewport only —
+   the face, bubbles, chips, and focus rings all read var(--accent), so one
+   scoped override recolors them together while the rest of the app (and the
+   base surface/content tokens, i.e. text contrast) stays put. Values are
+   tuned per scheme: darker inks on the light canvas, lifted tints on charcoal. */
+.chat-viewport[data-chat-theme="warm_amber"] {
+  --accent: #9a6206;
+  --accent-hover: #7d4f05;
+}
+.dark .chat-viewport[data-chat-theme="warm_amber"] {
+  --accent: #dfa960;
+  --accent-hover: #eabf80;
+}
+.chat-viewport[data-chat-theme="soft_rose"] {
+  --accent: #a84a72;
+  --accent-hover: #8d3b5e;
+}
+.dark .chat-viewport[data-chat-theme="soft_rose"] {
+  --accent: #e39cba;
+  --accent-hover: #edb8cd;
+}
+.chat-viewport[data-chat-theme="cool_sky"] {
+  --accent: #0f69a5;
+  --accent-hover: #0b5486;
+}
+.dark .chat-viewport[data-chat-theme="cool_sky"] {
+  --accent: #7cc3ea;
+  --accent-hover: #9cd2f0;
+}
+/* A faint wash from the top so the mood registers beyond the accent details. */
+.chat-viewport[data-chat-theme] {
+  background: radial-gradient(
+    120% 55% at 50% 0%,
+    color-mix(in oklab, var(--accent) 7%, transparent),
+    transparent 72%
+  );
+}
+
+/* Registered so a theme-cue change glides instead of snapping. The transition
+   is scoped to the chat viewport; everything else still swaps instantly. */
+@property --accent {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #21666e;
+}
+@property --accent-hover {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #194f56;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chat-viewport {
+    transition:
+      --accent 600ms ease,
+      --accent-hover 600ms ease;
+  }
+}
