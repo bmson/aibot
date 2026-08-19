@@ -2,9 +2,16 @@
 
 import { ArrowUpRight, CircleDollarSign, LoaderCircle } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useState, useTransition } from 'react';
+import { useState, useTransition } from 'react';
 import { cancelTask, raiseTaskBudgetAndRetry } from '@/app/tasks/actions';
-import { btn } from '@/lib/ui';
+import { btnSm } from '@/lib/ui';
+import {
+  DecisionActions,
+  DecisionCard,
+  DecisionReceipt,
+  DecisionReceipts,
+  useArmedConfirm,
+} from './decision-card';
 
 export type InlineBudgetRequestStatus = 'pending' | 'approved' | 'denied' | 'missing';
 
@@ -21,15 +28,9 @@ export interface InlineBudgetRequestPart {
 export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart }) {
   const [resolution, setResolution] = useState<'approved' | 'denied' | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [approvalArmed, setApprovalArmed] = useState(false);
+  const [approvalArmed, setApprovalArmed] = useArmedConfirm();
   const [pending, startTransition] = useTransition();
   const status = resolution ?? part.status ?? 'pending';
-
-  useEffect(() => {
-    if (!approvalArmed) return;
-    const timer = window.setTimeout(() => setApprovalArmed(false), 3000);
-    return () => window.clearTimeout(timer);
-  }, [approvalArmed]);
 
   const approve = () => {
     if (!approvalArmed) {
@@ -62,20 +63,37 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
     });
   };
 
-  // Same card language as pending approvals: an amber-banded object the
-  // assistant placed in the conversation, waiting on the owner.
-  return (
-    <section className="min-w-0 max-w-3xl overflow-hidden rounded-xl bg-raised ring-1 ring-amber-300/80 dark:ring-amber-700/70">
-      <div className="flex items-center gap-1.5 border-b border-amber-200/70 bg-amber-50/80 px-4 py-2.5 dark:border-amber-900/60 dark:bg-amber-950/40">
-        <CircleDollarSign
-          className="size-3.5 shrink-0 text-amber-800 dark:text-amber-300"
-          aria-hidden="true"
+  const summary = `Raise this task’s cap to $${part.proposedBudgetUsd.toFixed(2)}`;
+
+  // Once answered this collapses like every other decision. It used to keep its
+  // amber card forever, so a spending question you settled days ago went on
+  // shouting for attention next to one that genuinely wanted it.
+  if (status !== 'pending') {
+    return (
+      <DecisionReceipts>
+        <DecisionReceipt
+          outcome={
+            status === 'approved' ? 'accepted' : status === 'denied' ? 'dismissed' : 'lapsed'
+          }
+          summary={summary}
+          verdict={
+            status === 'approved'
+              ? resolution
+                ? 'Approved — resuming'
+                : 'Approved'
+              : status === 'denied'
+                ? 'Stopped — task cancelled'
+                : 'No longer available'
+          }
+          live={resolution !== null}
         />
-        <p className="font-mono text-xs font-medium tracking-[0.08em] text-amber-800 uppercase dark:text-amber-300">
-          Spending permission needed
-        </p>
-      </div>
-      <div className="min-w-0 break-words px-4 py-3 text-strong [overflow-wrap:anywhere]">
+      </DecisionReceipts>
+    );
+  }
+
+  return (
+    <DecisionCard tone="waiting" icon={CircleDollarSign} label="Spending permission needed">
+      <div className="min-w-0 break-words text-strong [overflow-wrap:anywhere]">
         <p className="text-sm font-medium">
           Raise this task’s cap from ${part.currentBudgetUsd.toFixed(2)} to $
           {part.proposedBudgetUsd.toFixed(2)}?
@@ -83,51 +101,36 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
         <p className="mt-1 text-xs text-muted">
           ${part.spentUsd.toFixed(4)} has been spent. Approval applies only to this task.
         </p>
-        {status === 'approved' ? (
-          <p
-            role="status"
-            className="mt-2 text-xs font-medium text-emerald-700 dark:text-emerald-300"
+        <DecisionActions>
+          <button type="button" disabled={pending} onClick={approve} className={btnSm.success}>
+            {pending ? (
+              <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
+            ) : null}
+            {pending
+              ? 'Working…'
+              : approvalArmed
+                ? `Confirm $${part.proposedBudgetUsd.toFixed(2)}`
+                : `Approve $${part.proposedBudgetUsd.toFixed(2)}`}
+          </button>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={decline}
+            className={btnSm.dangerOutline}
           >
-            Approved — work is resuming.
-          </p>
-        ) : status === 'denied' ? (
-          <p role="status" className="mt-2 text-xs font-medium text-muted">
-            Stopped — the task was cancelled.
-          </p>
-        ) : status === 'missing' ? (
-          <p className="mt-2 text-xs text-muted">This request is no longer available.</p>
-        ) : (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button type="button" disabled={pending} onClick={approve} className={btn.success}>
-              {pending ? (
-                <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-              ) : null}
-              {pending
-                ? 'Working…'
-                : approvalArmed
-                  ? `Confirm $${part.proposedBudgetUsd.toFixed(2)}`
-                  : `Approve $${part.proposedBudgetUsd.toFixed(2)}`}
-            </button>
-            <button
-              type="button"
-              disabled={pending}
-              onClick={decline}
-              className={btn.dangerOutline}
-            >
-              Stop task
-            </button>
-            <Link href={`/tasks/${part.taskId}`} className={btn.outline}>
-              Review task
-              <ArrowUpRight className="size-3.5" aria-hidden="true" />
-            </Link>
-          </div>
-        )}
+            Stop task
+          </button>
+          <Link href={`/tasks/${part.taskId}`} className={btnSm.outline}>
+            Review task
+            <ArrowUpRight className="size-3" aria-hidden="true" />
+          </Link>
+        </DecisionActions>
         {error ? (
           <p role="alert" className="mt-2 text-xs text-red-700 dark:text-red-300">
             {error}
           </p>
         ) : null}
       </div>
-    </section>
+    </DecisionCard>
   );
 }

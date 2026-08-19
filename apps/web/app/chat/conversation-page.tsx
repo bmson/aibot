@@ -28,6 +28,8 @@ export async function renderChatConversation(id: string, query: ChatPageQuery) {
       conversationId={conversation.id}
       title={conversation.title || 'Untitled'}
       agentName={view.agentName}
+      agentTimezone={view.agentTimezone}
+      renderedAt={new Date().toISOString()}
       initialMessages={view.messages}
       models={view.models}
       modelOverride={conversation.modelOverride}

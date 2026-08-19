@@ -103,6 +103,11 @@ const NeedsActionSchema = z.object({
  * for every AI SDK client version, which surfaced as a generic "request failed"
  * after an otherwise successful submission. Send one explicit acknowledgement;
  * the client replaces the temporary state with the durable task reply it polls.
+ *
+ * This text is never persisted, so the chat log recognises and drops it rather
+ * than leaving a message with no send time pinned below everything that lands
+ * afterwards — isAsyncAcknowledgement in apps/web/lib/chat-notices.ts matches
+ * its opening, so keep the two in step.
  */
 function acceptedStreamResponse(taskId: string, headers: Record<string, string>): Response {
   const stream = createUIMessageStream({

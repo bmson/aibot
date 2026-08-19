@@ -15,14 +15,18 @@ import {
   Hand,
   History,
   Loader2,
+  type LucideIcon,
   MoonStar,
+  PauseCircle,
   ShieldCheck,
   Sparkles,
   TriangleAlert,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { eventCardClass, focusRing } from '@/lib/ui';
+import type { NoticeKind } from '@/lib/chat-notices';
+import { focusRing } from '@/lib/ui';
 import { toolLabel } from '@/lib/views';
+import { DecisionCard, type DecisionTone } from './decision-card';
 import { MessageMarkdown } from './markdown';
 
 export interface RecallSource {
@@ -50,78 +54,137 @@ export function messageDate(message: UIMessage): Date | null {
 }
 
 /**
- * Chronological order for the rendered log. The thread poll can deliver a late
- * write from an earlier task after a turn the reader already sent, so the log
- * is sorted rather than appended — the day dividers compare adjacent messages,
- * and an out-of-order arrival mislabels them too. Messages the client made
- * itself carry no persisted timestamp and sort last, which is where an
- * in-flight turn belongs anyway.
- */
-export function bySendTime(a: UIMessage, b: UIMessage): number {
-  const left = messageDate(a)?.getTime() ?? Number.POSITIVE_INFINITY;
-  const right = messageDate(b)?.getTime() ?? Number.POSITIVE_INFINITY;
-  if (left !== right) return left - right;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
-
-/**
- * Drop the client's provisional copies once their durable twins arrive.
+ * Chronological order for the rendered log, and the only place order is
+ * decided. Everything else — the poll's merge, useChat's own appends — just
+ * puts messages in the set; this puts them in sequence.
  *
- * The optimistic user turn, the "working on it" acknowledgement, and a reply
- * still streaming are all created locally with client-side ids; the server
- * persists them under different ones. Without this the thread poll renders
- * each of them a second time. User turns match on their exact text — the
- * client sent it, so it is reliable, and one match is consumed per incoming
- * message so asking the same question twice still shows twice. Replies cannot
- * be matched on text (the response contract may rewrite one), so a local reply
- * gives way as soon as the server has sent a reply of its own.
+ * Persisted messages sort by their send time and tie-break on id, exactly as
+ * the server ordered them (listMessages: `created_at, id`). Anything the client
+ * made itself has no send time yet and no server order to agree with, so it
+ * sorts after everything durable, in the order it appeared here. That last part
+ * is the fix for a real reversal: the optimistic user turn and the reply
+ * streaming in response to it were both undated, so the tie-break ran on two
+ * randomly generated ids and the answer could render above the question.
+ *
+ * `arrivalOrder` is mutated to assign a number to each id on first sight. It
+ * only ever grows, so an id's place in the sequence never changes.
  */
-export function dropProvisional(
-  merged: UIMessage[],
-  incoming: UIMessage[],
-  serverIds: Set<string>,
+export function orderChatLog(
+  messages: UIMessage[],
+  arrivalOrder: Map<string, number>,
 ): UIMessage[] {
-  const unmatchedUserText = incoming
-    .filter((message) => message.role === 'user')
-    .map((message) => messageText(message).trim());
-  const serverReplied = incoming.some((message) => message.role === 'assistant');
-  return merged.filter((message) => {
-    if (serverIds.has(message.id)) return true;
-    if (message.role === 'user') {
-      const at = unmatchedUserText.indexOf(messageText(message).trim());
-      if (at === -1) return true;
-      unmatchedUserText.splice(at, 1);
-      return false;
-    }
-    return message.role === 'assistant' ? !serverReplied : true;
+  for (const message of messages) {
+    if (!arrivalOrder.has(message.id)) arrivalOrder.set(message.id, arrivalOrder.size);
+  }
+  return [...messages].sort((a, b) => {
+    const left = messageDate(a)?.getTime() ?? Number.POSITIVE_INFINITY;
+    const right = messageDate(b)?.getTime() ?? Number.POSITIVE_INFINITY;
+    if (left !== right) return left - right;
+    if (Number.isFinite(left)) return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    return (arrivalOrder.get(a.id) ?? 0) - (arrivalOrder.get(b.id) ?? 0);
   });
 }
 
-// Chat renders times in the browser's timezone — it's a live surface the owner
-// is looking at right now, unlike the server-rendered dashboards which use the
-// agent timezone. Labels are gated behind `mounted` to avoid SSR/client drift.
-export function sameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
+/** A message the client made itself — the server has never sent us this id. */
+function isProvisional(message: UIMessage, serverIds: Set<string>): boolean {
+  return !serverIds.has(message.id);
 }
 
-export function dayLabel(date: Date, now: Date): string {
-  if (sameDay(date, now)) return 'Today';
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  if (sameDay(date, yesterday)) return 'Yesterday';
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+/**
+ * Retire the optimistic user turn once its persisted twin is in the log.
+ *
+ * The client sent the text, so matching on it is reliable, and one durable
+ * message retires exactly one local copy — asking the same question twice still
+ * shows twice. Safe to run mid-stream: it only ever removes a duplicate of
+ * something already on screen.
+ */
+export function retireProvisionalUserTurns(log: UIMessage[], serverIds: Set<string>): UIMessage[] {
+  const durable: string[] = [];
+  for (const message of log) {
+    if (message.role === 'user' && !isProvisional(message, serverIds)) {
+      durable.push(messageText(message).trim());
+    }
+  }
+  if (durable.length === 0) return log;
+  return log.filter((message) => {
+    if (message.role !== 'user' || !isProvisional(message, serverIds)) return true;
+    const at = durable.indexOf(messageText(message).trim());
+    if (at === -1) return true;
+    durable.splice(at, 1);
+    return false;
+  });
+}
+
+/**
+ * Retire a locally streamed reply once its persisted twin is in the log.
+ *
+ * This used to retire every local reply as soon as ANY durable assistant
+ * message arrived, which meant a scheduled brief, a watch firing, or inbound
+ * mail mirrored into chat would delete a reply the client was still holding —
+ * a message visibly disappearing for no reason the reader could see. The text
+ * of a streamed reply and its persisted twin are identical by construction
+ * (chat-turn.ts persists exactly what it streamed, correction included), so
+ * matching on text names the right one instead of the nearest one.
+ *
+ * Matching runs against the whole log rather than one poll page, so a twin that
+ * landed while the stream was still live is still reconciled on a later tick.
+ */
+export function retireProvisionalReplies(log: UIMessage[], serverIds: Set<string>): UIMessage[] {
+  const durable: string[] = [];
+  for (const message of log) {
+    if (message.role === 'assistant' && !isProvisional(message, serverIds)) {
+      durable.push(messageText(message).trim());
+    }
+  }
+  if (durable.length === 0) return log;
+  return log.filter((message) => {
+    if (message.role !== 'assistant' || !isProvisional(message, serverIds)) return true;
+    const at = durable.indexOf(messageText(message).trim());
+    if (at === -1) return true;
+    durable.splice(at, 1);
+    return false;
+  });
+}
+
+/*
+ * Dates render in the agent's configured timezone, on the server and in the
+ * browser alike. They used to be gated behind a `mounted` flag so the browser's
+ * own zone could be used safely — which meant every day divider and timestamp
+ * was missing from the first paint and appeared a frame later, pushing the
+ * whole log down as it did. One zone on both sides makes the first paint the
+ * final one.
+ */
+function dayKey(date: Date, timeZone: string): string {
+  // en-CA gives an ISO-shaped YYYY-MM-DD, so day keys compare as strings and
+  // the year is the first four characters.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
   }).format(date);
 }
 
-export function timeLabel(date: Date): string {
+export function sameDay(a: Date, b: Date, timeZone: string): boolean {
+  return dayKey(a, timeZone) === dayKey(b, timeZone);
+}
+
+export function dayLabel(date: Date, now: Date, timeZone: string): string {
+  const key = dayKey(date, timeZone);
+  const today = dayKey(now, timeZone);
+  if (key === today) return 'Today';
+  if (key === dayKey(new Date(now.getTime() - 24 * 60 * 60 * 1000), timeZone)) return 'Yesterday';
   return new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    month: 'short',
+    day: 'numeric',
+    ...(key.slice(0, 4) === today.slice(0, 4) ? {} : { year: 'numeric' }),
+  }).format(date);
+}
+
+export function timeLabel(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone,
     hour: 'numeric',
     minute: '2-digit',
   }).format(date);
@@ -161,7 +224,15 @@ function PresenceOrb() {
  * Copy a reply, and the time it landed — revealed on hover where hover exists.
  * Touch devices keep the compact row visible so copy is discoverable there too.
  */
-export function MessageActions({ text, date }: { text: string; date: Date | null }) {
+export function MessageActions({
+  text,
+  date,
+  timeZone,
+}: {
+  text: string;
+  date: Date | null;
+  timeZone: string;
+}) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
 
   useEffect(() => {
@@ -206,7 +277,7 @@ export function MessageActions({ text, date }: { text: string; date: Date | null
       </button>
       {date ? (
         <span title={date.toLocaleString()} className="text-xs text-muted">
-          {timeLabel(date)}
+          {timeLabel(date, timeZone)}
         </span>
       ) : null}
     </div>
@@ -246,27 +317,30 @@ export function PresenceRow({
 }
 
 /**
- * Core's response contract blanked an unverifiable reply and substituted this
- * deterministic copy — render it as a system notice, not assistant prose, so
- * honesty enforcement stops reading like the assistant talking strangely.
+ * Everything the runtime says ABOUT the work rather than in reply to you: the
+ * honesty check replacing an unverifiable draft, a task parking itself until a
+ * budget resets, a task that cannot continue without the owner. Each is a
+ * statement of state, so each gets the same card the decisions get — never
+ * assistant prose, which is what made "I'm pausing here…" read as small talk.
  */
-export function ContractNotice({ text }: { text: string }) {
-  // Narrower than a reply: it's an aside about the conversation, so it should
-  // not span the full column like the assistant's own speech.
+const NOTICE_PRESENTATION = {
+  'response-contract': { tone: 'system', icon: ShieldCheck, label: 'System check' },
+  parked: { tone: 'system', icon: PauseCircle, label: 'Paused — resumes on its own' },
+  'needs-attention': { tone: 'waiting', icon: TriangleAlert, label: 'Needs you' },
+} as const satisfies Record<NoticeKind, { tone: DecisionTone; icon: LucideIcon; label: string }>;
+
+export function NoticeCard({ kind, text }: { kind: NoticeKind; text: string }) {
+  const { tone, icon, label } = NOTICE_PRESENTATION[kind];
   return (
-    <div className={`${eventCardClass} max-w-xl`}>
-      <div className="flex items-center gap-2.5 border-b border-edge/60 bg-sunken/40 px-4 py-2">
-        <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-sunken text-muted">
-          <ShieldCheck className="size-3.5" aria-hidden="true" />
-        </span>
-        <p className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
-          System check
-        </p>
+    <DecisionCard tone={tone} icon={icon} label={label}>
+      <div
+        className={`break-words text-sm leading-6 [overflow-wrap:anywhere] ${
+          kind === 'response-contract' ? 'text-muted' : 'text-strong'
+        }`}
+      >
+        <MessageMarkdown text={text} />
       </div>
-      <div className="px-4 py-3">
-        <div className="break-words text-sm text-muted [overflow-wrap:anywhere]">
-          <MessageMarkdown text={text} />
-        </div>
+      {kind === 'response-contract' ? (
         <details className="mt-2">
           <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs text-muted select-none">
             Why am I seeing this?
@@ -277,8 +351,8 @@ export function ContractNotice({ text }: { text: string }) {
             changed outside this chat.
           </p>
         </details>
-      </div>
-    </div>
+      ) : null}
+    </DecisionCard>
   );
 }
 
@@ -290,45 +364,16 @@ export function ContractNotice({ text }: { text: string }) {
 export function AssistantUpdate({ text, sources }: { text: string; sources: RecallSource[] }) {
   const attention = /(?:⚠️|anomaly|waiting for you|needs? (?:your )?attention)/i.test(text);
   const reflection = /(?:🌙|while you slept|reflected)/i.test(text);
-  const Icon = attention ? TriangleAlert : reflection ? MoonStar : Sparkles;
+  const tone: DecisionTone = attention ? 'waiting' : reflection ? 'quiet' : 'info';
+  const icon = attention ? TriangleAlert : reflection ? MoonStar : Sparkles;
   const label = attention ? 'Needs attention' : reflection ? 'Quiet update' : 'Update';
-  const tone = attention
-    ? {
-        edge: 'border-l-amber-400 dark:border-l-amber-600',
-        chip: 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300',
-        label: 'text-amber-700 dark:text-amber-300',
-      }
-    : reflection
-      ? {
-          edge: 'border-l-sky-400 dark:border-l-sky-600',
-          chip: 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300',
-          label: 'text-sky-700 dark:text-sky-300',
-        }
-      : {
-          edge: 'border-l-accent/70',
-          chip: 'bg-accent/10 text-accent',
-          label: 'text-accent',
-        };
-
   return (
-    <section className={`${eventCardClass} border-l-[3px] ${tone.edge}`}>
-      <div className="min-w-0 px-4 py-3">
-        <div className="mb-2 flex items-center gap-2.5">
-          <span
-            className={`inline-flex size-6 shrink-0 items-center justify-center rounded-md ${tone.chip}`}
-          >
-            <Icon className="size-3.5" aria-hidden="true" />
-          </span>
-          <p className={`font-mono text-xs font-medium tracking-[0.08em] uppercase ${tone.label}`}>
-            {label}
-          </p>
-        </div>
-        <RecallNote sources={sources} />
-        <div className="break-words text-sm leading-6 text-strong [overflow-wrap:anywhere]">
-          <MessageMarkdown text={text} />
-        </div>
+    <DecisionCard tone={tone} icon={icon} label={label}>
+      <RecallNote sources={sources} />
+      <div className="break-words text-sm leading-6 text-strong [overflow-wrap:anywhere]">
+        <MessageMarkdown text={text} />
       </div>
-    </section>
+    </DecisionCard>
   );
 }
 

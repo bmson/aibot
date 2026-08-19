@@ -29,6 +29,7 @@ import { PLANNER_VERSION, planTask } from '../planner.js';
 import { isUnattendedGoalSession } from './context-helpers.js';
 import { maybeEnqueueKnownSenderReply, stageFinalResponse } from './finalize.js';
 import {
+  noticeParts,
   notifyOwnerAndConversation,
   postConversationNotice,
   recordGoalBlocked,
@@ -268,6 +269,7 @@ export async function resumePendingApprovals(rc: RunContext): Promise<ExecuteRes
             db,
             task,
             `I'm pausing here — the approved action doesn't fit the remaining budget (${outcome.reason}). It resumes automatically when the budget resets.`,
+            noticeParts('parked'),
           );
           return { outcome: 'parked', detail: outcome.reason };
         }

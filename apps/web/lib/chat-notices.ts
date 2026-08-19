@@ -39,24 +39,59 @@ export function isContractNotice(text: string): boolean {
   return trimmed.startsWith('I did not create a real approval request, so nothing is waiting');
 }
 
-/** Structured marker written by core when the response contract replaced a draft. */
-export function hasContractNoticePart(parts: unknown[]): boolean {
-  return parts.some(
-    (part) =>
-      Boolean(part) &&
-      typeof part === 'object' &&
-      (part as { type?: unknown }).type === 'notice' &&
-      (part as { notice?: unknown }).notice === 'response-contract',
-  );
+/**
+ * Kinds of structured `notice` part core writes alongside the prose:
+ * `response-contract` when honesty enforcement replaced a draft
+ * (packages/core/src/chat.ts), and `parked` / `needs-attention` when a task
+ * stopped and said so in the thread
+ * (packages/core/src/workflow/executor/notices.ts). Each one is a statement
+ * about the work rather than a reply, so the chat renders it as a card.
+ *
+ * Messages written before a marker existed carry none and keep rendering as
+ * prose — nothing rewrites the past.
+ */
+export type NoticeKind = 'response-contract' | 'parked' | 'needs-attention';
+
+const NOTICE_KINDS = new Set<string>(['response-contract', 'parked', 'needs-attention']);
+
+export function noticeKindOf(parts: unknown[]): NoticeKind | null {
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    if ((part as { type?: unknown }).type !== 'notice') continue;
+    const notice = (part as { notice?: unknown }).notice;
+    if (typeof notice === 'string' && NOTICE_KINDS.has(notice)) return notice as NoticeKind;
+  }
+  return null;
 }
 
 /**
- * The executor posts a prose list of the same approvals that arrive as
- * structured `approval` parts (step-loop.ts / approvals.ts in core). When those
- * parts are present the grouped card carries the exact same information, so the
- * duplicated prose is suppressed in the chat render. The persisted text is
- * untouched — core's isSimulatedApprovalNotice depends on it.
+ * The placeholder the chat route streams back when a turn was handed to the
+ * executor (acceptedStreamResponse in packages/application/src/chat-turn.ts —
+ * keep the two in step). It exists only to give the AI SDK a valid completed
+ * message and is never persisted, so it can never meet a durable twin: left in
+ * the log it would sit below every message that lands after it. The presence
+ * row says the same thing, better, so the log drops it.
  */
-export function isApprovalProseNotice(text: string): boolean {
-  return text.trim().startsWith('This needs your approval before I act:');
+export function isAsyncAcknowledgement(text: string): boolean {
+  return text.trim().startsWith('Got it — I’m working on this now.');
+}
+
+/**
+ * The executor writes each decision twice: once as prose, and once as the
+ * structured part the card is built from (step-loop.ts and notices.ts in core).
+ * Where the card carries the same information — and better — the duplicated
+ * prose is suppressed in the chat render, so a decision reads as one object
+ * rather than a paragraph followed by a restatement of itself. Only the render
+ * is affected; the persisted text is untouched, and core's
+ * isSimulatedApprovalNotice depends on it.
+ *
+ * Matched on their stable openings, because historical messages persist the
+ * exact strings forever — update alongside any core copy change.
+ */
+export function isDecisionProseNotice(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    trimmed.startsWith('This needs your approval before I act:') ||
+    trimmed.startsWith('I need your permission to raise this task’s spending limit')
+  );
 }
