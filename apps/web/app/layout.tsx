@@ -6,6 +6,7 @@ import Script from 'next/script';
 import type { CSSProperties, ReactNode } from 'react';
 import { auth, authMode } from '@/auth';
 import { getAgentIdentity, getApplication } from '@/lib/server';
+import { CompanionPresence } from './companion-presence';
 import { NavCommandsProvider, type NavDestination } from './nav-commands';
 import './globals.css';
 import './motion-system.css';
@@ -254,8 +255,14 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         {/* No navigation chrome in the shell — the destinations ride down to the
             chat composer's "/" palette, and every other surface carries a back
             link. `main` is the whole app column. */}
+        {/* The companion is the app, not something inside it: this is its body,
+            a click-through field behind every page that breathes with the
+            shell's presence and reacts to the chat's cues. */}
+        <CompanionPresence presence={dashboard.presence} />
         <NavCommandsProvider destinations={destinations} signedIn={!!session?.user}>
-          <main className="app-main page-gutter min-w-0 flex-1 py-5 lg:py-7">{children}</main>
+          <main className="app-main page-gutter relative z-10 min-w-0 flex-1 py-5 lg:py-7">
+            {children}
+          </main>
         </NavCommandsProvider>
       </body>
     </html>
