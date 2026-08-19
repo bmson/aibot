@@ -23,13 +23,12 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import type { FaceState } from '@/lib/chat-cues';
+
 import type { NoticeKind } from '@/lib/chat-notices';
 import { focusRing } from '@/lib/ui';
 import { toolLabel } from '@/lib/views';
 import { DecisionCard, type DecisionTone } from './decision-card';
 import { MessageMarkdown } from './markdown';
-import { RobotFace } from './robot-face';
 
 export interface RecallSource {
   date: string;
@@ -209,21 +208,36 @@ export function DayDivider({ label }: { label: string }) {
 }
 
 /**
- * The assistant's presence, embodied: the companion robot face that replaced
- * the old presence orb. It sits at the tail of the log in every state — idle
- * it just breathes (and blinks, motion allowed), busy it pairs with the
- * shimmer label below — and its expression follows the [face:] cues the
- * replies stream in (see lib/chat-cues.ts and robot-face.tsx).
+ * What the assistant is busy doing, in words.
+ *
+ * The companion itself is no longer in the log — it is the whole screen now
+ * (app/companion-presence.tsx), and the chat publishes its cues to that layer
+ * rather than drawing a face here. What stays behind is the plain-language
+ * status this row always carried: a live region a screen reader can announce
+ * and a sighted reader can scan, which an ambient field cannot replace.
  */
-export type CompanionPhase = 'idle' | 'thinking' | 'starting' | 'working' | 'streaming';
-
-const COMPANION_LABELS: Record<CompanionPhase, string | null> = {
-  idle: null,
-  streaming: null,
-  thinking: 'Thinking…',
-  starting: 'Starting the work…',
-  working: 'Working…',
-};
+export function PresenceRow({
+  phase,
+  activity,
+}: {
+  phase: 'thinking' | 'starting' | 'working';
+  activity: Array<{ toolName: string; status: string; step: number }>;
+}) {
+  const label =
+    phase === 'thinking' ? 'Thinking…' : phase === 'starting' ? 'Starting the work…' : 'Working…';
+  return (
+    <div role="status" aria-live="polite" className="flex w-full min-w-0 flex-col">
+      <span className="block text-sm leading-5 text-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--content-muted),var(--content-strong),var(--content-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent">
+        {label}
+      </span>
+      {activity.length > 0 ? (
+        <div className="mt-2.5">
+          <ActivityTrail activity={activity} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * Copy a reply, and the time it landed — revealed on hover where hover exists.
@@ -285,50 +299,6 @@ export function MessageActions({
           {timeLabel(date, timeZone)}
         </span>
       ) : null}
-    </div>
-  );
-}
-
-/**
- * One companion row for every assistant state — resting, the pre-stream think,
- * the async hand-off, and live tool work — so they read as one character
- * instead of three different indicators. Busy phases keep the shimmering
- * status label (plain muted text for reduced motion); idle and streaming show
- * only the face, whose expression the caller derives from the log's cues.
- */
-export function CompanionRow({
-  face,
-  phase,
-  activity,
-}: {
-  face: FaceState;
-  phase: CompanionPhase;
-  activity: Array<{ toolName: string; status: string; step: number }>;
-}) {
-  const label = COMPANION_LABELS[phase];
-  // The face works (visor glow) while the runtime does; while a reply streams,
-  // the arriving cues own the expression instead.
-  const busy = phase === 'thinking' || phase === 'starting' || phase === 'working';
-  return (
-    <div
-      role={label ? 'status' : undefined}
-      aria-live={label ? 'polite' : undefined}
-      aria-hidden={label ? undefined : true}
-      className="flex w-full min-w-0 items-start gap-2.5"
-    >
-      <RobotFace state={face} busy={busy} className="-mt-1 size-8 shrink-0" />
-      <div className="min-w-0 flex-1 pt-1">
-        {label ? (
-          <span className="block text-sm leading-5 text-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--content-muted),var(--content-strong),var(--content-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent">
-            {label}
-          </span>
-        ) : null}
-        {activity.length > 0 ? (
-          <div className="mt-2.5">
-            <ActivityTrail activity={activity} />
-          </div>
-        ) : null}
-      </div>
     </div>
   );
 }
