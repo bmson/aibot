@@ -10,6 +10,7 @@ import {
   listMessages,
   persistMessage,
 } from '@assistant/core/chat';
+import { createCueScanner, stripCueTags } from '@assistant/core/chat-cues';
 import { getAmbientBlock } from '@assistant/core/memory/ambient';
 import { getOwnerCard } from '@assistant/core/memory/consolidation';
 import { type RecallSource, recallRelevantContext } from '@assistant/core/memory/recall';
@@ -27,6 +28,7 @@ import {
 } from 'ai';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { pumpWithCues, type StreamChunk } from './chat-cue-stream.js';
 import { CORRECTION, guardDraft } from './chat-guard.js';
 import { looksLikeActionRequest } from './chat-triage.js';
 
@@ -391,13 +393,19 @@ export async function handleChatTurn(
           // "right now" block (location + weather) is available — "where am I?"
           // and "should I go for a run?" answer without a mid-task tool call.
           ambient: await getAmbientBlock(db, agent.id),
+          channel: 'dashboard-chat',
         }),
         '',
         'This turn is conversational: just answer. You have no tools in this turn, so if the user is actually asking you to take an action, say plainly that you cannot do it in this reply and ask them to restate it as a direct request. Otherwise do not mention tools, capabilities, or this instruction at all — no postscripts.',
       ].join('\n'),
       messages: await convertToModelMessages(modelHistory),
       onComplete: async (text) => {
-        const guarded = guardDraft(text, toolEvidence, { readRequest });
+        // Strip the companion cue tags BEFORE the guard, for the same reason
+        // the pump strips them below: the contract's prose matchers must see
+        // clean text, and the persisted reply must be byte-identical to the
+        // streamed one (retireProvisionalReplies dedupes on exact text).
+        const stripped = stripCueTags(text);
+        const guarded = guardDraft(stripped.text, toolEvidence, { readRequest });
         if (guarded.corrected) {
           console.warn('tool-less chat draft claimed unperformed work', {
             taskId: task.id,
@@ -407,6 +415,7 @@ export async function handleChatTurn(
           status: 'done',
           responseText: guarded.text,
           recall: recallSources,
+          cues: stripped.cues,
         });
       },
       onError: async (error) => {
@@ -445,12 +454,17 @@ export async function handleChatTurn(
       // Pump the model stream by hand (not writer.merge, whose pump can race a
       // direct write) and hold the finish part back, so the correction — when
       // needed — still lands inside the message, not after the client saw it end.
+      // The pump also strips companion cue tags from the text deltas and
+      // re-emits them as data-* parts, so the face reacts mid-stream while the
+      // streamed text stays byte-identical to what onComplete persists.
       const parts = okOutcome.toUIMessageStream({ sendFinish: false });
-      for await (const part of parts) {
-        writer.write(part as Parameters<typeof writer.write>[0]);
-      }
+      await pumpWithCues(
+        parts as unknown as AsyncIterable<StreamChunk>,
+        (chunk) => writer.write(chunk as Parameters<typeof writer.write>[0]),
+        createCueScanner(),
+      );
       const draft = await okOutcome.text;
-      if (guardDraft(draft, toolEvidence, { readRequest }).corrected) {
+      if (guardDraft(stripCueTags(draft).text, toolEvidence, { readRequest }).corrected) {
         const partId = `contract-${task.id}`;
         writer.write({ type: 'text-start', id: partId });
         writer.write({ type: 'text-delta', id: partId, delta: CORRECTION });

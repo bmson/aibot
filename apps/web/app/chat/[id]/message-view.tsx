@@ -23,11 +23,13 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import type { FaceState } from '@/lib/chat-cues';
 import type { NoticeKind } from '@/lib/chat-notices';
 import { focusRing } from '@/lib/ui';
 import { toolLabel } from '@/lib/views';
 import { DecisionCard, type DecisionTone } from './decision-card';
 import { MessageMarkdown } from './markdown';
+import { RobotFace } from './robot-face';
 
 export interface RecallSource {
   date: string;
@@ -207,18 +209,21 @@ export function DayDivider({ label }: { label: string }) {
 }
 
 /**
- * The assistant's "I'm here" signal, now that the message stream carries no
- * avatar: a small accent orb drawing breath inside an expanding halo. Still for
- * reduced motion — the label beside it already says what's happening.
+ * The assistant's presence, embodied: the companion robot face that replaced
+ * the old presence orb. It sits at the tail of the log in every state — idle
+ * it just breathes (and blinks, motion allowed), busy it pairs with the
+ * shimmer label below — and its expression follows the [face:] cues the
+ * replies stream in (see lib/chat-cues.ts and robot-face.tsx).
  */
-function PresenceOrb() {
-  return (
-    <span aria-hidden="true" className="relative mt-1.5 inline-flex size-2 shrink-0">
-      <span className="absolute inset-0 rounded-full bg-accent motion-safe:animate-[orb-halo_2s_ease-out_infinite]" />
-      <span className="relative inline-flex size-2 rounded-full bg-accent motion-safe:animate-[orb-breathe_2s_ease-in-out_infinite]" />
-    </span>
-  );
-}
+export type CompanionPhase = 'idle' | 'thinking' | 'starting' | 'working' | 'streaming';
+
+const COMPANION_LABELS: Record<CompanionPhase, string | null> = {
+  idle: null,
+  streaming: null,
+  thinking: 'Thinking…',
+  starting: 'Starting the work…',
+  working: 'Working…',
+};
 
 /**
  * Copy a reply, and the time it landed — revealed on hover where hover exists.
@@ -285,27 +290,39 @@ export function MessageActions({
 }
 
 /**
- * One presence row for every "assistant is busy" state — the pre-stream think,
- * the async hand-off, and live tool work — so they read as one voice instead of
- * three different indicators. The label shimmers while motion is allowed;
- * reduced-motion readers get plain muted text.
+ * One companion row for every assistant state — resting, the pre-stream think,
+ * the async hand-off, and live tool work — so they read as one character
+ * instead of three different indicators. Busy phases keep the shimmering
+ * status label (plain muted text for reduced motion); idle and streaming show
+ * only the face, whose expression the caller derives from the log's cues.
  */
-export function PresenceRow({
+export function CompanionRow({
+  face,
   phase,
   activity,
 }: {
-  phase: 'thinking' | 'starting' | 'working';
+  face: FaceState;
+  phase: CompanionPhase;
   activity: Array<{ toolName: string; status: string; step: number }>;
 }) {
-  const label =
-    phase === 'thinking' ? 'Thinking…' : phase === 'starting' ? 'Starting the work…' : 'Working…';
+  const label = COMPANION_LABELS[phase];
+  // The face works (visor glow) while the runtime does; while a reply streams,
+  // the arriving cues own the expression instead.
+  const busy = phase === 'thinking' || phase === 'starting' || phase === 'working';
   return (
-    <div role="status" aria-live="polite" className="flex w-full min-w-0 items-start gap-2.5">
-      <PresenceOrb />
-      <div className="min-w-0 flex-1">
-        <span className="block text-sm leading-5 text-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--content-muted),var(--content-strong),var(--content-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent">
-          {label}
-        </span>
+    <div
+      role={label ? 'status' : undefined}
+      aria-live={label ? 'polite' : undefined}
+      aria-hidden={label ? undefined : true}
+      className="flex w-full min-w-0 items-start gap-2.5"
+    >
+      <RobotFace state={face} busy={busy} className="-mt-1 size-8 shrink-0" />
+      <div className="min-w-0 flex-1 pt-1">
+        {label ? (
+          <span className="block text-sm leading-5 text-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--content-muted),var(--content-strong),var(--content-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent">
+            {label}
+          </span>
+        ) : null}
         {activity.length > 0 ? (
           <div className="mt-2.5">
             <ActivityTrail activity={activity} />

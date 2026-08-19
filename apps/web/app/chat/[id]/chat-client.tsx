@@ -21,6 +21,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } 
 import { signOutAction } from '@/app/actions';
 import { destinationIcon, formatBadgeCount, useNavCommands } from '@/app/nav-commands';
 import { cancelTask } from '@/app/tasks/actions';
+import { chipsOf, latestFace, latestTheme } from '@/lib/chat-cues';
 import {
   isAsyncAcknowledgement,
   isContractNotice,
@@ -30,6 +31,7 @@ import {
 import { BackLink, btnSm, CountBadge, focusRing, microLabelClass } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
+import { ActionChips } from './action-chips';
 import { ApprovalGroup } from './approval-group';
 import type { InlineApprovalPart } from './inline-approval';
 import { InlineBudgetRequest, type InlineBudgetRequestPart } from './inline-budget-request';
@@ -37,6 +39,7 @@ import { type InlineSuggestionPart, SuggestionCard } from './inline-suggestion';
 import { MessageMarkdown } from './markdown';
 import {
   AssistantUpdate,
+  CompanionRow,
   DayDivider,
   dayLabel,
   decodeRecallHeader,
@@ -46,7 +49,6 @@ import {
   messageText,
   NoticeCard,
   orderChatLog,
-  PresenceRow,
   RecallNote,
   type RecallSource,
   recallSourcesOf,
@@ -55,6 +57,7 @@ import {
   sameDay,
   timeLabel,
 } from './message-view';
+import { RobotFace } from './robot-face';
 
 interface ChatClientProps {
   conversationId: string;
@@ -544,6 +547,17 @@ export function ChatClient({
   // the markup the browser hydrates matches the markup it was sent.
   const renderedNow = useMemo(() => new Date(renderedAt), [renderedAt]);
   const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
+
+  // The companion's expression: deliberate states while it waits or works,
+  // otherwise the newest [face:] cue in the log — which updates mid-stream as
+  // cue parts land on the streaming reply. The [theme:] cue re-tints the chat
+  // surface the same way (globals.css scopes the override to .chat-viewport).
+  const companionFace = useMemo(() => {
+    if (status === 'submitted') return 'thoughtful_tilt' as const;
+    if (asyncTurn) return 'focused' as const;
+    return latestFace(log);
+  }, [status, asyncTurn, log]);
+  const chatTheme = useMemo(() => latestTheme(log), [log]);
   const displayTitle = title === 'Untitled' ? 'New conversation' : title;
   const notificationMode = displayTitle.toLowerCase() === 'notifications';
   const commandInput = input.trimStart();
@@ -864,7 +878,10 @@ export function ChatClient({
     // above), not this container: prose that runs to 1000px is tiring, and
     // pinning the user's bubbles that far right would make a two-way
     // exchange read as two columns regardless of how wide the column is.
-    <div className="chat-viewport relative mx-auto -my-5 flex h-[calc(100dvh-1rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-7 lg:h-[calc(100dvh-var(--app-chrome,0px))] lg:max-w-4xl 2xl:max-w-[56rem]">
+    <div
+      data-chat-theme={chatTheme !== 'default' ? chatTheme : undefined}
+      className="chat-viewport relative mx-auto -my-5 flex h-[calc(100dvh-1rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-7 lg:h-[calc(100dvh-var(--app-chrome,0px))] lg:max-w-4xl 2xl:max-w-[56rem]"
+    >
       {/* The primary thread is the whole surface — it needs no title. Side and
           goal chats keep a slim header so you know which one you're in. */}
       {!isPrimary ? (
@@ -940,9 +957,9 @@ export function ChatClient({
         <div className="flex min-h-full min-w-0 flex-col">
           {log.length === 0 ? (
             <div className="mx-auto flex max-w-xl flex-col items-center text-center my-auto">
-              <span className="inline-flex size-12 items-center justify-center rounded-2xl bg-sunken text-accent">
-                <Sparkles className="size-5" aria-hidden="true" />
-              </span>
+              {/* The companion greets an empty thread wide-eyed — the same face
+                  that lives at the tail of the log once the conversation starts. */}
+              <RobotFace state="wide_excited" className="size-14" />
               <p className="mt-4 font-display text-2xl leading-8 font-semibold tracking-[-0.025em] text-balance text-strong">
                 What should we move forward?
               </p>
@@ -1139,6 +1156,13 @@ export function ChatClient({
                       <InlineBudgetRequest key={part.taskId} part={part} />
                     ))}
                     <SuggestionCard parts={suggestionParts} />
+                    {message.role === 'assistant' && noticeKind === null ? (
+                      <ActionChips
+                        labels={chipsOf(message)}
+                        active={messageIndex === log.length - 1 && !busy}
+                        onSend={(label) => sendTurn(label, false)}
+                      />
+                    ) : null}
                     {showTime && date ? (
                       <p
                         title={date.toLocaleString()}
@@ -1152,17 +1176,29 @@ export function ChatClient({
                   </div>
                 );
               })}
-              {status === 'submitted' ? (
-                <div className="mt-6">
-                  <PresenceRow phase="thinking" activity={[]} />
-                </div>
-              ) : asyncTurn ? (
-                <div className="mt-6">
-                  <PresenceRow
-                    phase={activity.length > 0 ? 'working' : 'starting'}
-                    activity={activity}
-                  />
-                  <div className="mt-3 flex flex-wrap items-center gap-2 pl-[18px]">
+              {/* The companion is persistent: idle it just sits (and blinks) at
+                  the tail of the log wearing the newest [face:] cue; busy
+                  phases add the status label and activity trail it always had. */}
+              <div className="mt-6">
+                <CompanionRow
+                  face={companionFace}
+                  phase={
+                    status === 'submitted'
+                      ? 'thinking'
+                      : status === 'streaming'
+                        ? 'streaming'
+                        : asyncTurn
+                          ? activity.length > 0
+                            ? 'working'
+                            : 'starting'
+                          : 'idle'
+                  }
+                  activity={asyncTurn ? activity : []}
+                />
+              </div>
+              {asyncTurn ? (
+                <div className="mt-3">
+                  <div className="flex flex-wrap items-center gap-2 pl-[42px]">
                     <Link href={`/tasks/${asyncTurn.taskId}`} className={btnSm.outline}>
                       View activity
                     </Link>
@@ -1183,7 +1219,7 @@ export function ChatClient({
                   {asyncActionError ? (
                     <p
                       role="alert"
-                      className="mt-2 pl-[18px] text-xs text-red-700 dark:text-red-300"
+                      className="mt-2 pl-[42px] text-xs text-red-700 dark:text-red-300"
                     >
                       {asyncActionError}
                     </p>
