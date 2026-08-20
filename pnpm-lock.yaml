@@ -145,8 +145,8 @@ importers:
         specifier: ^7.0.66
         version: 7.0.66(zod@4.4.3)
       lucide-react:
-        specifier: ^0.469.0
-        version: 0.469.0(react@19.2.8)
+        specifier: ^1.31.0
+        version: 1.31.0(react@19.2.8)
       next:
         specifier: ^16.3.1
         version: 16.3.1(@opentelemetry/api@1.9.1)(@types/node@26.2.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -2190,8 +2190,8 @@ packages:
   lop@0.4.2:
     resolution: {integrity: sha512-RefILVDQ4DKoRZsJ4Pj22TxE3omDO47yFpkIBoDKzkqPRISs5U1cnAdg/5583YPkWPaLIYHOKRMQSvjFsO26cw==}
 
-  lucide-react@0.469.0:
-    resolution: {integrity: sha512-28vvUnnKQ/dBwiCQtwJw7QauYnE7yd2Cyp4tTTJpvglX4EMpbflcdBgrgToX2j71B3YvugK/NH3BGUk+E/p/Fw==}
+  lucide-react@1.31.0:
+    resolution: {integrity: sha512-G8u2eEtoHUnUa9f8lbvqDhCiORMnYLdUEo06EEG9MQvHQrInKcX3Pa2TH39MM5qyzRcWETxB0+aOwAPI1g1kEg==}
     peerDependencies:
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
@@ -4225,7 +4225,7 @@ snapshots:
       option: 0.2.4
       underscore: 1.13.8
 
-  lucide-react@0.469.0(react@19.2.8):
+  lucide-react@1.31.0(react@19.2.8):
     dependencies:
       react: 19.2.8
 
