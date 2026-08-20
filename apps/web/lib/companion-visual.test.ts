@@ -6,6 +6,8 @@ import {
   resetCompanionState,
   setCompanionState,
   subscribeCompanion,
+  subscribeCompanionWake,
+  wakeCompanion,
 } from './companion-bus';
 import { EXPRESSION_POSES, moodColor, resolveCompanionUniforms } from './companion-visual';
 
@@ -59,6 +61,48 @@ describe('companion bus', () => {
     setCompanionState({ activity: 'speaking' });
     setCompanionState({ presence: 'attention' });
     expect(getCompanionState()).toMatchObject({ activity: 'speaking', presence: 'attention' });
+  });
+});
+
+describe('companion wake channel', () => {
+  it('pulses every subscriber on each wake', () => {
+    const seen: number[] = [];
+    subscribeCompanionWake((count) => seen.push(count));
+    wakeCompanion();
+    wakeCompanion();
+    expect(seen).toEqual([1, 2]);
+  });
+
+  it('repeats for an identical moment, unlike a state patch', () => {
+    // Two replies in a row are two things worth looking up for, even though
+    // nothing about what the companion is feeling changed between them.
+    const states: CompanionState[] = [];
+    const wakes: number[] = [];
+    subscribeCompanion((state) => states.push(state));
+    subscribeCompanionWake((count) => wakes.push(count));
+    setCompanionState({ expression: 'warm_smile' });
+    wakeCompanion();
+    setCompanionState({ expression: 'warm_smile' });
+    wakeCompanion();
+    // One state change (the second patch is a no-op), but two wakes.
+    expect(states).toHaveLength(2);
+    expect(wakes).toHaveLength(2);
+  });
+
+  it('never replays a past wake to a new subscriber', () => {
+    wakeCompanion();
+    const seen: number[] = [];
+    subscribeCompanionWake((count) => seen.push(count));
+    expect(seen).toEqual([]);
+  });
+
+  it('stops pulsing after unsubscribe', () => {
+    const seen: number[] = [];
+    const off = subscribeCompanionWake((count) => seen.push(count));
+    wakeCompanion();
+    off();
+    wakeCompanion();
+    expect(seen).toEqual([1]);
   });
 });
 

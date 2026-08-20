@@ -79,7 +79,12 @@ export function DecisionCard({
 }) {
   const styles = TONES[tone];
   return (
-    <section className={`${CARD_WIDTH} overflow-hidden rounded-xl border bg-raised ${styles.edge}`}>
+    // `paper` is what tells the chat's green stage to hand this card back the
+    // page's own ink and accent — see conversation.css. Everything the
+    // assistant PLACES in the log is paper; only its speech is stage-side.
+    <section
+      className={`paper ${CARD_WIDTH} overflow-hidden rounded-xl border bg-raised ${styles.edge}`}
+    >
       <div
         className={`flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5 ${styles.band}`}
       >
@@ -149,7 +154,7 @@ export function DecisionReceipt({
 /** Where settled receipts live once a card has nothing left to ask. */
 export function DecisionReceipts({ children }: { children: ReactNode }) {
   return (
-    <div className={`${CARD_WIDTH} rounded-xl border border-edge/50 bg-sunken/45 px-4 py-2`}>
+    <div className={`paper ${CARD_WIDTH} rounded-xl border border-edge/50 bg-raised px-4 py-2`}>
       {children}
     </div>
   );

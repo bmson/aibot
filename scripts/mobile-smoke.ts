@@ -470,6 +470,10 @@ try {
         radius: Number.parseFloat(getComputedStyle(surface).borderRadius),
         outlineStyle: getComputedStyle(surface).outlineStyle,
         surfaceTransform: getComputedStyle(surface).transform,
+        // Both halves matter. A pseudo-element with no `content` generates no
+        // box at all, and then `opacity` resolves to its initial 1 — reading
+        // opacity alone would call "there is no glow layer" a glow.
+        focusGlowContent: getComputedStyle(surface, '::after').content,
         focusGlowOpacity: getComputedStyle(surface, '::after').opacity,
         wrapperShadow: wrapper ? getComputedStyle(wrapper).boxShadow : 'missing',
         wrapperTransform: wrapper ? getComputedStyle(wrapper).transform : 'missing',
@@ -478,7 +482,11 @@ try {
     assert(focusVisual.radius > 0, 'chat composer focus surface is not rounded');
     assert(focusVisual.outlineStyle === 'none', 'chat composer has a second focus outline');
     assert(focusVisual.surfaceTransform === 'none', 'chat composer moves while focused');
-    assert(focusVisual.focusGlowOpacity === '0', 'chat composer has a second focus glow');
+    // No second glow: either the layer paints nothing, or there is no layer.
+    assert(
+      focusVisual.focusGlowContent === 'none' || focusVisual.focusGlowOpacity === '0',
+      `chat composer has a second focus glow: ${JSON.stringify(focusVisual)}`,
+    );
     assert(
       focusVisual.wrapperShadow === 'none' && focusVisual.wrapperTransform === 'none',
       `chat composer has a second outer focus treatment: ${JSON.stringify(focusVisual)}`,

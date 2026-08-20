@@ -1,18 +1,64 @@
 /* Conversation (chat) styling
  *
- * Keeps the chat visually quiet while improving hierarchy, rhythm, and tactile
- * feedback. Selectors intentionally build on the existing semantic structure so
- * behavior and accessibility remain unchanged.
+ * The chat is the companion's own room. Where every other page sits on the
+ * quiet green paper, the chat sits on the stage — the saturated green the
+ * creature in the notch lives in — and the two voices are cut from materials
+ * that say who is speaking without a label: the assistant speaks in --ink, the
+ * same body the notch housing is made of, and the owner speaks in paper.
+ *
+ * Selectors intentionally build on the existing semantic structure so behavior
+ * and accessibility remain unchanged.
  */
 
 :root {
   --conversation-hairline: color-mix(in srgb, currentColor 7%, transparent);
   --conversation-hover: color-mix(in srgb, currentColor 3%, transparent);
+  /* Hairlines and wells ON the stage. currentColor there is near-white, so
+     these are deliberately separate from the two above, which are for ink on
+     paper (cards inside the chat still use those). */
+  --stage-hairline: rgb(255 255 255 / 0.14);
+  --stage-well: rgb(255 255 255 / 0.1);
 }
 
 .dark {
   --conversation-hairline: color-mix(in srgb, currentColor 10%, transparent);
   --conversation-hover: color-mix(in srgb, currentColor 4.5%, transparent);
+  --stage-hairline: rgb(255 255 255 / 0.1);
+  --stage-well: rgb(255 255 255 / 0.07);
+}
+
+/* The stage itself: painted to the physical edges of the window rather than to
+   the chat column, so the conversation reads as taking place somewhere instead
+   of inside a panel. Fixed, so it does not scroll with the log; z-index -1
+   keeps it behind the column but still inside `main`'s stacking context, which
+   is what stops it covering the page's ambient wash. */
+.chat-viewport::before {
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  background: var(--stage);
+  content: "";
+}
+
+/* Text and rules sitting DIRECTLY on the stage read in the stage's own ink,
+   and the accent re-points at a tint that survives on green — chips, links,
+   and focus rings inside the chat all read var(--accent). */
+.chat-viewport {
+  --accent: #9fe7c0;
+  --accent-hover: #b8efd1;
+  color: var(--stage-strong);
+}
+
+/* …and anything that is still PAPER inside the chat — an approval, a budget
+   request, a notice card, a palette — puts both back, because ink that reads
+   on the stage is invisible on white. Carried by a class rather than by
+   matching on surface utilities, so a card cannot lose it by restyling.
+   A [theme:] cue deliberately does not reach in here: the cue tints the stage
+   and its chips, while decisions stay in the app's own neutral voice. */
+.chat-viewport .paper {
+  --accent: var(--accent-paper);
+  --accent-hover: var(--accent-paper-hover);
+  color: var(--content-strong);
 }
 
 /* The opening state should read as an invitation, not a mini dashboard. */
@@ -20,17 +66,21 @@
   padding-inline: clamp(0.5rem, 4vw, 2rem);
 }
 
+/* The greeting's mark echoes the companion's housing: same ink, same soft
+   square, so the first thing on an empty screen is recognisably its face. */
 .scroll-subtle .my-auto > span:first-child {
   position: relative;
-  background: var(--surface-sunken);
-  box-shadow: var(--shadow-soft);
+  border-radius: 1.25rem;
+  background: var(--ink);
+  color: var(--stage-strong);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
 }
 
 .scroll-subtle .my-auto > span:first-child::after {
   position: absolute;
   inset: -0.45rem;
-  border: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
-  border-radius: 1.1rem;
+  border: 1px solid var(--stage-hairline);
+  border-radius: 1.6rem;
   content: "";
   opacity: 0.7;
 }
@@ -38,38 +88,40 @@
 .scroll-subtle .my-auto > .grid {
   gap: 0;
   overflow: hidden;
-  border: 1px solid var(--conversation-hairline);
-  border-radius: 1rem;
-  background: color-mix(in srgb, var(--surface-raised) 82%, transparent);
-  box-shadow: var(--shadow-soft);
+  border: 1px solid var(--stage-hairline);
+  border-radius: 1.25rem;
+  background: var(--stage-well);
+  box-shadow: none;
+  backdrop-filter: blur(12px);
 }
 
 .scroll-subtle .my-auto > .grid > button {
   min-height: 4.5rem;
   border-radius: 0;
   background: transparent;
+  color: var(--stage-strong);
   box-shadow: none;
   transition: background-color 150ms ease;
 }
 
 .scroll-subtle .my-auto > .grid > button + button {
-  border-top: 1px solid var(--conversation-hairline);
+  border-top: 1px solid var(--stage-hairline);
 }
 
 .scroll-subtle .my-auto > .grid > button:hover {
-  background: var(--conversation-hover);
+  background: rgb(255 255 255 / 0.09);
   transform: none;
   box-shadow: none;
 }
 
 .scroll-subtle .my-auto > .grid > button:active {
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  background: rgb(255 255 255 / 0.14);
 }
 
 @media (min-width: 640px) {
   .scroll-subtle .my-auto > .grid > button + button {
     border-top: 0;
-    border-left: 1px solid var(--conversation-hairline);
+    border-left: 1px solid var(--stage-hairline);
   }
 }
 
@@ -86,48 +138,85 @@
   margin-left: 0.125rem;
 }
 
-/* The composer should feel composed even before focus, then quietly wake up. */
+/* ── The two voices ───────────────────────────────────────────────────────────
+   Both bubbles carry one tail corner, on the side they are spoken from, which
+   is the only asymmetry either of them needs. */
+.bubble-assistant {
+  background: var(--ink);
+  color: var(--stage-strong);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.16);
+}
+
+.bubble-owner {
+  background: var(--bubble-owner);
+  color: var(--bubble-owner-ink);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.12);
+}
+
+/* Links, code, and rules inside an ink bubble need the bubble's own palette —
+   the page's edge and sunken tokens are invisible against it. */
+.bubble-assistant :is(code, pre) {
+  background: rgb(255 255 255 / 0.1);
+  color: inherit;
+}
+
+.bubble-assistant :is(hr, td, th) {
+  border-color: var(--stage-hairline);
+}
+
+.bubble-assistant blockquote {
+  border-color: rgb(255 255 255 / 0.32);
+  color: var(--stage-muted);
+}
+
+.bubble-assistant table {
+  border-color: var(--stage-hairline);
+}
+
+.bubble-assistant :is(th) {
+  background: rgb(255 255 255 / 0.06);
+}
+
+.bubble-assistant li::marker {
+  color: var(--stage-muted);
+}
+
+/* ── The composer ─────────────────────────────────────────────────────────────
+   On the stage the composer is not a white card sitting on green — it is a
+   well cut into the stage, with the send button as the one bright object in
+   it. The palettes above it stay paper, because those are lists to read. */
 [data-testid="chat-composer-surface"] {
   position: relative;
-  border-color: var(--conversation-hairline);
-  background:
-    linear-gradient(180deg, rgb(255 255 255 / 0.28), transparent 32%),
-    color-mix(in srgb, var(--surface-raised) 94%, transparent);
+  border: 1px solid var(--stage-hairline);
+  background: var(--stage-well);
+  box-shadow: none;
   backdrop-filter: blur(20px) saturate(1.08);
+  transition:
+    border-color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease;
 }
 
-.dark [data-testid="chat-composer-surface"] {
-  background:
-    linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent 32%),
-    color-mix(in srgb, var(--surface-raised) 94%, transparent);
-}
-
-/* Keep the focus ring inside the rounded composer. WebKit can square off
-   an outer spread shadow when backdrop-filter is active; the inset ring follows
-   the composer's clipped border radius reliably. */
 [data-testid="chat-composer-surface"]:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+  border-color: rgb(255 255 255 / 0.34);
+  background: rgb(255 255 255 / 0.15);
   outline: none;
-  box-shadow:
-    inset 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent),
-    var(--shadow-soft);
+  box-shadow: none;
   transform: none;
 }
 
-[data-testid="chat-composer-surface"]:focus-within::after {
-  opacity: 0;
-}
-
 [data-testid="chat-composer-surface"]:hover:not(:focus-within) {
-  border-color: color-mix(in srgb, var(--accent) 12%, var(--conversation-hairline));
-  box-shadow: var(--shadow-soft);
+  border-color: rgb(255 255 255 / 0.22);
+  box-shadow: none;
 }
 
 [data-testid="chat-composer-surface"] textarea {
+  color: var(--stage-strong);
+  caret-color: var(--stage-strong);
   letter-spacing: -0.008em;
 }
 
 [data-testid="chat-composer-surface"] textarea::placeholder {
+  color: var(--stage-muted);
   letter-spacing: -0.006em;
 }
 

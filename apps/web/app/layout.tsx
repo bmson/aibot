@@ -6,13 +6,14 @@ import Script from 'next/script';
 import type { CSSProperties, ReactNode } from 'react';
 import { auth, authMode } from '@/auth';
 import { getAgentIdentity, getApplication } from '@/lib/server';
-import { CompanionPresence } from './companion-presence';
 import { NavCommandsProvider, type NavDestination } from './nav-commands';
+import { NotchCompanion } from './notch-companion';
 import './globals.css';
 import './motion-system.css';
 import './chrome.css';
 import './conversation.css';
 import './mobile-shell.css';
+import './notch.css';
 
 const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });
 
@@ -65,8 +66,8 @@ export const viewport: Viewport = {
   // now reach hardware pads itself from the insets (see `.page-gutter`).
   viewportFit: 'cover',
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#f5f7f7' },
-    { media: '(prefers-color-scheme: dark)', color: '#151a1b' },
+    { media: '(prefers-color-scheme: light)', color: '#eef5f0' },
+    { media: '(prefers-color-scheme: dark)', color: '#121a15' },
   ],
   colorScheme: 'light dark',
 };
@@ -255,10 +256,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         {/* No navigation chrome in the shell — the destinations ride down to the
             chat composer's "/" palette, and every other surface carries a back
             link. `main` is the whole app column. */}
-        {/* The companion is the app, not something inside it: this is its body,
-            a click-through field behind every page that breathes with the
-            shell's presence and reacts to the chat's cues. */}
-        <CompanionPresence presence={dashboard.presence} />
+        {/* The companion lives in the notch: a pair of eyes in a dark housing
+            at the top of every page, tucked away until a message moves or the
+            shell's presence says work is happening. */}
+        <NotchCompanion presence={dashboard.presence} />
         <NavCommandsProvider destinations={destinations} signedIn={!!session?.user}>
           <main className="app-main page-gutter relative z-10 min-w-0 flex-1 py-5 lg:py-7">
             {children}

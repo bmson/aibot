@@ -84,8 +84,37 @@ export function subscribeCompanion(listener: Listener): () => void {
   };
 }
 
+/*
+ * The wake channel: a transient pulse, separate from state. State says what the
+ * companion is feeling and doing; a wake says "something just moved — show
+ * yourself". The chat pulses it when a message goes out or lands, and the notch
+ * peeks for a moment on each pulse even when the state itself did not change
+ * (two replies in a row are both worth looking up for).
+ */
+type WakeListener = (count: number) => void;
+
+let wakeCount = 0;
+const wakeListeners = new Set<WakeListener>();
+
+/** A message was sent or arrived — ask the companion to show itself briefly. */
+export function wakeCompanion(): number {
+  wakeCount += 1;
+  for (const listener of wakeListeners) listener(wakeCount);
+  return wakeCount;
+}
+
+/** Unlike state, a wake is a moment: new subscribers do NOT get a replay. */
+export function subscribeCompanionWake(listener: WakeListener): () => void {
+  wakeListeners.add(listener);
+  return () => {
+    wakeListeners.delete(listener);
+  };
+}
+
 /** Test-only: drop every subscriber and return to the resting state. */
 export function resetCompanionState(): void {
   current = INITIAL_COMPANION_STATE;
   listeners.clear();
+  wakeCount = 0;
+  wakeListeners.clear();
 }
