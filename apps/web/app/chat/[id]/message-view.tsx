@@ -194,15 +194,21 @@ export function timeLabel(date: Date, timeZone: string): string {
 export function DayDivider({ label }: { label: string }) {
   // Generous vertical air: dividers are chapter breaks, not rules on a form.
   // The hairlines fade toward the edges so the floating chip carries the date.
-  // The chip is tonal rather than raised — a date is a quiet waypoint, and an
-  // outlined, shadowed pill competed with the cards the assistant actually places.
+  // Everything here sits directly on the chat's stage, so the rules and the
+  // chip are cut from the stage's own light rather than the page's ink tokens.
   return (
     <div className="flex items-center gap-4 pt-7 pb-3 [div:first-child>&]:pt-1">
-      <span aria-hidden="true" className="h-px flex-1 bg-gradient-to-r from-transparent to-edge" />
-      <span className="rounded-full bg-sunken/80 px-2.5 py-1 font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
+      <span
+        aria-hidden="true"
+        className="h-px flex-1 bg-gradient-to-r from-transparent to-white/20"
+      />
+      <span className="rounded-full bg-white/12 px-2.5 py-1 font-mono text-xs font-medium tracking-[0.08em] text-stage-muted uppercase">
         {label}
       </span>
-      <span aria-hidden="true" className="h-px flex-1 bg-gradient-to-l from-transparent to-edge" />
+      <span
+        aria-hidden="true"
+        className="h-px flex-1 bg-gradient-to-l from-transparent to-white/20"
+      />
     </div>
   );
 }
@@ -210,11 +216,11 @@ export function DayDivider({ label }: { label: string }) {
 /**
  * What the assistant is busy doing, in words.
  *
- * The companion itself is no longer in the log — it is the whole screen now
- * (app/companion-presence.tsx), and the chat publishes its cues to that layer
+ * The companion itself is no longer in the log — it lives in the notch now
+ * (app/notch-companion.tsx), and the chat publishes its cues to that layer
  * rather than drawing a face here. What stays behind is the plain-language
  * status this row always carried: a live region a screen reader can announce
- * and a sighted reader can scan, which an ambient field cannot replace.
+ * and a sighted reader can scan, which a pair of eyes cannot replace.
  */
 export function PresenceRow({
   phase,
@@ -227,7 +233,7 @@ export function PresenceRow({
     phase === 'thinking' ? 'Thinking…' : phase === 'starting' ? 'Starting the work…' : 'Working…';
   return (
     <div role="status" aria-live="polite" className="flex w-full min-w-0 flex-col">
-      <span className="block text-sm leading-5 text-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--content-muted),var(--content-strong),var(--content-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent">
+      <span className="block text-sm leading-5 text-stage-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--stage-muted),var(--stage-strong),var(--stage-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent">
         {label}
       </span>
       {activity.length > 0 ? (
@@ -281,10 +287,10 @@ export function MessageActions({
         title={state === 'failed' ? 'Your browser blocked clipboard access' : 'Copy this reply'}
         className={`inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium motion-safe:transition-colors ${focusRing} ${
           state === 'failed'
-            ? 'text-red-600 dark:text-red-400'
+            ? 'text-red-300'
             : state === 'copied'
-              ? 'text-emerald-600 dark:text-emerald-400'
-              : 'text-muted hover:bg-sunken hover:text-strong'
+              ? 'text-emerald-300'
+              : 'text-stage-muted hover:bg-white/10 hover:text-stage-strong'
         }`}
       >
         {state === 'copied' ? (
@@ -295,7 +301,7 @@ export function MessageActions({
         {state === 'copied' ? 'Copied' : state === 'failed' ? 'Could not copy' : 'Copy'}
       </button>
       {date ? (
-        <span title={date.toLocaleString()} className="text-xs text-muted">
+        <span title={date.toLocaleString()} className="text-xs text-stage-muted">
           {timeLabel(date, timeZone)}
         </span>
       ) : null}
@@ -372,11 +378,12 @@ function ActivityTrail({
 }) {
   if (activity.length === 0) return null;
   return (
+    // On the stage, not on paper: a well cut into the green rather than a card.
     <section
-      className="min-w-0 max-w-full rounded-xl bg-sunken/50 px-4 py-3 ring-1 ring-edge/50"
+      className="min-w-0 max-w-full rounded-xl border border-white/12 bg-white/8 px-4 py-3"
       aria-label="Work trail"
     >
-      <p className="mb-2 font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
+      <p className="mb-2 font-mono text-xs font-medium tracking-[0.08em] text-stage-muted uppercase">
         Work trail
       </p>
       <ol className="space-y-2">
@@ -403,10 +410,10 @@ function ActivityTrail({
                 aria-hidden="true"
               />
             )}
-            <span className="min-w-0 flex-1 break-words text-sm text-strong [overflow-wrap:anywhere]">
+            <span className="min-w-0 flex-1 break-words text-sm [overflow-wrap:anywhere]">
               {toolLabel(item.toolName)}
             </span>
-            <span className="shrink-0 text-xs text-muted">
+            <span className="shrink-0 text-xs text-stage-muted">
               {item.status === 'succeeded'
                 ? 'Done'
                 : item.status === 'awaiting_approval'
@@ -451,7 +458,10 @@ function friendlyRecallDate(isoDay: string): string {
 export function RecallNote({ sources }: { sources: RecallSource[] }) {
   if (sources.length === 0) return null;
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted">
+    // Muted by opacity rather than by token: this note appears both on the
+    // chat's stage and inside a paper update card, and has to recede against
+    // whichever ink it inherits.
+    <div className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs opacity-70">
       <History className="size-3 shrink-0" aria-hidden="true" />
       <span className="font-medium">Drawing on</span>
       {sources.map((source, index) => (

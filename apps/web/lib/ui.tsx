@@ -29,7 +29,7 @@ const btnVariants = {
     'border border-red-300 text-red-700 hover:bg-red-50 active:bg-red-100 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40 dark:active:bg-red-950/70',
   // Flat: the accent plane is the emphasis. The old hover glow read as a
   // sticker hovering over the page rather than a control set into it.
-  primary: 'bg-accent text-white hover:bg-accent-hover',
+  primary: 'bg-accent text-on-accent hover:bg-accent-hover',
   danger: 'bg-red-600 text-white hover:bg-red-700 active:bg-red-800',
   success: 'bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800',
 } as const;

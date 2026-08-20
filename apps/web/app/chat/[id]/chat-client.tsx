@@ -28,7 +28,7 @@ import {
   isDecisionProseNotice,
   noticeKindOf,
 } from '@/lib/chat-notices';
-import { type CompanionActivity, setCompanionState } from '@/lib/companion-bus';
+import { type CompanionActivity, setCompanionState, wakeCompanion } from '@/lib/companion-bus';
 import { BackLink, btnSm, CountBadge, focusRing, microLabelClass } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
@@ -585,6 +585,23 @@ export function ChatClient({
       setCompanionState({ expression: 'neutral', mood: 'default', activity: 'idle' });
     };
   }, []);
+
+  // Ask the companion to lean out of the notch whenever a message LANDS — a
+  // reply finishing, an update arriving on its own while you were reading
+  // something else. Sending is pulsed from sendTurn, where the intent is.
+  //
+  // This counts assistant turns rather than watching the newest one's text,
+  // which would fire on every streamed token. The first render only records
+  // what is already there: opening a thread is not a message arriving.
+  const assistantCount = useMemo(
+    () => log.reduce((total, message) => total + (message.role === 'assistant' ? 1 : 0), 0),
+    [log],
+  );
+  const seenAssistantCountRef = useRef(assistantCount);
+  useEffect(() => {
+    if (assistantCount > seenAssistantCountRef.current) wakeCompanion();
+    seenAssistantCountRef.current = assistantCount;
+  }, [assistantCount]);
   const displayTitle = title === 'Untitled' ? 'New conversation' : title;
   const notificationMode = displayTitle.toLowerCase() === 'notifications';
   const commandInput = input.trimStart();
@@ -833,6 +850,9 @@ export function ChatClient({
     stickToBottomRef.current = true;
     setAtBottom(true);
     setUnseenCount(0);
+    // The companion looks up as the message goes out, before any status has
+    // changed — that immediacy is the whole point of it living in the notch.
+    wakeCompanion();
     setLastSubmittedText(text);
     if (clearComposer) setInput('');
     setFallbackNote(null);
@@ -915,7 +935,7 @@ export function ChatClient({
         // A side thread is a subpage like any other: it gets back to its parent
         // list, which gets back to the main thread. The "/" palette only exists
         // in the composer below, so this is the way out that is always visible.
-        <header className="border-b border-edge pt-7 pb-3 lg:pt-10">
+        <header className="border-b border-white/15 pt-7 pb-3 lg:pt-10">
           <BackLink href="/chat/all">All chats</BackLink>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
@@ -926,10 +946,12 @@ export function ChatClient({
                 {displayTitle}
               </h1>
               {goalTitle ? (
-                <p className="mt-0.5 truncate text-xs text-muted">Working toward: {goalTitle}</p>
+                <p className="mt-0.5 truncate text-xs text-stage-muted">
+                  Working toward: {goalTitle}
+                </p>
               ) : null}
               {archived ? (
-                <p className="mt-0.5 text-xs text-muted">
+                <p className="mt-0.5 text-xs text-stage-muted">
                   Archived — sending a message restores this chat.
                 </p>
               ) : null}
@@ -957,7 +979,7 @@ export function ChatClient({
       {initialNotice ? (
         <div
           role="alert"
-          className="mt-3 border-l-2 border-amber-400 py-1 pl-4 text-sm leading-5 text-amber-900 dark:border-amber-700 dark:text-amber-100"
+          className="paper mt-3 rounded-xl border border-amber-300/80 bg-amber-50 px-4 py-2.5 text-sm leading-5 text-amber-900 dark:border-amber-800/70 dark:bg-amber-950/60 dark:text-amber-100"
         >
           {initialNotice}
         </div>
@@ -984,10 +1006,10 @@ export function ChatClient({
         <div className="flex min-h-full min-w-0 flex-col">
           {log.length === 0 ? (
             <div className="mx-auto flex max-w-xl flex-col items-center text-center my-auto">
-              <span className="inline-flex size-12 items-center justify-center rounded-2xl bg-sunken text-accent">
+              <span className="inline-flex size-14 items-center justify-center rounded-2xl">
                 <Sparkles className="size-5" aria-hidden="true" />
               </span>
-              <p className="mt-4 font-display text-2xl leading-8 font-semibold tracking-[-0.025em] text-balance text-strong">
+              <p className="mt-5 font-display text-2xl leading-8 font-semibold tracking-[-0.025em] text-balance">
                 What should we move forward?
               </p>
               {/* A small hand-drawn stroke that sketches itself in under the
@@ -995,14 +1017,14 @@ export function ChatClient({
               <svg aria-hidden="true" viewBox="0 0 140 10" fill="none" className="mt-2 h-2.5 w-36">
                 <path
                   d="M3 7 C 28 3, 55 8.5, 82 5 S 125 3.5, 137 5.5"
-                  stroke="var(--accent)"
-                  strokeOpacity="0.65"
+                  stroke="currentColor"
+                  strokeOpacity="0.45"
                   strokeWidth="2.5"
                   strokeLinecap="round"
                   className="[stroke-dasharray:160] [stroke-dashoffset:160] motion-safe:animate-[draw-in_700ms_ease-out_250ms_forwards] motion-reduce:[stroke-dashoffset:0]"
                 />
               </svg>
-              <p className="mt-2 max-w-md text-base leading-6 text-pretty text-muted">
+              <p className="mt-2 max-w-md text-base leading-6 text-pretty text-stage-muted">
                 Start with an outcome. {agentName} can research, plan, draft, schedule, and keep
                 following up when the work takes time.
               </p>
@@ -1034,12 +1056,10 @@ export function ChatClient({
                         sendTurn(suggestion.text, false);
                       }}
                       style={{ animationDelay: `${index * 60}ms` }}
-                      className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left ring-1 ring-edge/60 motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-colors hover:bg-sunken/30 disabled:opacity-60 ${focusRing}`}
+                      className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between p-3 text-left motion-safe:animate-[presence-arrive_320ms_ease-out_both] disabled:opacity-60 ${focusRing}`}
                     >
-                      <SuggestionIcon className="size-4 text-accent" aria-hidden="true" />
-                      <span className="mt-3 text-sm font-medium text-strong">
-                        {suggestion.label}
-                      </span>
+                      <SuggestionIcon className="size-4 opacity-70" aria-hidden="true" />
+                      <span className="mt-3 text-sm font-medium">{suggestion.label}</span>
                     </button>
                   );
                 })}
@@ -1135,15 +1155,16 @@ export function ChatClient({
                         }
                       >
                         {message.role === 'assistant' ? (
-                          // A neutral bubble distinct from the user's accent
-                          // gradient — it reads as the bot's voice while
-                          // keeping the raised-card treatment meaning one
-                          // thing only: an object the assistant placed in the
-                          // thread (an approval, a budget ask, a work trail).
+                          // The assistant speaks in the same ink its body is
+                          // made of, so the voice in the log and the face in
+                          // the notch are recognisably one creature. The
+                          // raised-card treatment is left to mean one thing
+                          // only: an object the assistant placed in the thread
+                          // (an approval, a budget ask, a work trail).
                           <div className="group/msg min-w-0 max-w-[88%] sm:max-w-[min(76%,42rem)]">
                             <RecallNote sources={recallSources} />
                             <div
-                              className={`min-w-0 max-w-full rounded-2xl rounded-bl-md bg-raised px-4 py-3 text-sm text-strong ring-1 ring-edge/60 ${
+                              className={`bubble-assistant min-w-0 max-w-full rounded-[1.375rem] rounded-bl-md px-4 py-3 text-sm leading-6 ${
                                 streamingCaret ? 'chat-caret' : ''
                               }`}
                             >
@@ -1161,10 +1182,12 @@ export function ChatClient({
                           // bubble made your own words look like a footnote.
                           // That size is the one the event cards already use, so
                           // speech and system notices sit on one typographic
-                          // scale instead of two.
+                          // scale instead of two. Paper against the assistant's
+                          // ink: the two voices are told apart by material, not
+                          // just by which side of the column they sit on.
                           <div
                             title={date ? date.toLocaleString() : undefined}
-                            className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover px-4 py-3 text-sm leading-6 text-white sm:max-w-[min(76%,42rem)]"
+                            className="bubble-owner min-w-0 max-w-[88%] rounded-[1.375rem] rounded-br-md px-4 py-3 text-sm leading-6 sm:max-w-[min(76%,42rem)]"
                           >
                             {visibleTextParts.map((part, index) => (
                               <p
@@ -1193,7 +1216,7 @@ export function ChatClient({
                     {showTime && date ? (
                       <p
                         title={date.toLocaleString()}
-                        className={`text-xs text-muted ${
+                        className={`text-xs text-stage-muted ${
                           message.role === 'user' ? 'self-end' : 'self-start'
                         }`}
                       >
@@ -1234,14 +1257,14 @@ export function ChatClient({
                     </button>
                   </div>
                   {asyncActionError ? (
-                    <p role="alert" className="mt-2 text-xs text-red-700 dark:text-red-300">
+                    <p role="alert" className="mt-2 text-xs text-red-200">
                       {asyncActionError}
                     </p>
                   ) : null}
                 </div>
               ) : null}
               {asyncNote ? (
-                <p role="status" className="mt-3 text-xs text-muted">
+                <p role="status" className="mt-3 text-xs text-stage-muted">
                   {asyncNote}{' '}
                   <Link href="/tasks" className="font-medium underline underline-offset-2">
                     Open Activity
@@ -1277,7 +1300,7 @@ export function ChatClient({
             scroll a little, sliding the "full height" log out of place. */}
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 -top-16 bottom-0 bg-gradient-to-t from-surface from-35% via-surface/85 to-transparent"
+          className="pointer-events-none absolute inset-x-0 -top-16 bottom-0 bg-gradient-to-t from-stage from-35% via-stage/85 to-transparent"
         />
         {!atBottom && log.length > 0 && !error && !commandPaletteOpen && !modelCommandOpen ? (
           <div className="pointer-events-none absolute inset-x-0 -top-14 z-10 flex justify-center">
@@ -1285,7 +1308,7 @@ export function ChatClient({
               type="button"
               onClick={jumpToLatest}
               aria-label="Jump to latest"
-              className={`pointer-events-auto mobile-touch-target inline-flex h-9 items-center gap-1.5 rounded-full bg-raised px-3.5 text-xs font-medium text-strong ring-1 ring-edge motion-safe:animate-[pop-in_140ms_ease-out] ${focusRing}`}
+              className={`pointer-events-auto mobile-touch-target inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium motion-safe:animate-[pop-in_140ms_ease-out] ${focusRing}`}
             >
               <ArrowDown className="size-3.5" aria-hidden="true" />
               Jump to latest
@@ -1348,7 +1371,7 @@ export function ChatClient({
           {commandPaletteOpen ? (
             <section
               aria-label="Commands"
-              className="pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
+              className="paper pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
             >
               <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-2.5">
                 <p className="text-sm font-semibold text-strong">Commands</p>
@@ -1377,7 +1400,7 @@ export function ChatClient({
           {modelCommandOpen ? (
             <section
               aria-label="Choose response model"
-              className="pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
+              className="paper pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
             >
               <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-3">
                 <div className="min-w-0">
@@ -1541,7 +1564,7 @@ export function ChatClient({
               }}
               placeholder="Ask anything…"
               rows={1}
-              className="block max-h-40 min-h-11 w-full min-w-0 flex-1 resize-none self-center border-0 bg-transparent px-2 py-2 text-base leading-6 outline-none placeholder:text-muted/70 sm:text-sm"
+              className="block max-h-40 min-h-11 w-full min-w-0 flex-1 resize-none self-center border-0 bg-transparent px-2 py-2 text-base leading-6 outline-none sm:text-sm"
             />
             {/* No rule between the field and its controls. A full-bleed border
                 ran straight into the card's corner arc, which cut it off at an
@@ -1554,23 +1577,24 @@ export function ChatClient({
                 type="button"
                 onClick={() => stop()}
                 title="Stop generating"
-                className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-edge bg-raised text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
+                className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-white/25 bg-white/15 text-stage-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-white/25 ${focusRing}`}
               >
                 <Square className="size-3 fill-current" aria-hidden="true" />
                 <span className="sr-only">Stop</span>
               </button>
             ) : (
               // Readiness is a state change, not a dimmed copy of the live
-              // button: with nothing to send it sits back as a quiet tonal
-              // control, then fills with accent once you have typed.
+              // button: with nothing to send it sits back into the composer's
+              // own well, then lifts to solid white — the one bright object on
+              // the stage — once you have typed.
               <button
                 type="submit"
                 disabled={!canSend}
                 aria-label={asyncTurn ? 'Working on your request' : 'Send'}
-                className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
+                className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full motion-safe:transition-[background-color,color] ${focusRing} ${
                   canSend
-                    ? 'bg-accent text-white hover:bg-accent-hover'
-                    : 'cursor-not-allowed bg-sunken text-muted'
+                    ? 'bg-white text-stage hover:bg-white/90'
+                    : 'cursor-not-allowed bg-white/12 text-stage-muted'
                 }`}
               >
                 {asyncTurn ? (
@@ -1589,7 +1613,7 @@ export function ChatClient({
                 : ''}
           </span>
           {fallbackNote ? (
-            <p className="px-1 pt-1.5 text-right text-xs text-muted">{fallbackNote}</p>
+            <p className="px-1 pt-1.5 text-right text-xs text-stage-muted">{fallbackNote}</p>
           ) : null}
         </div>
       </form>

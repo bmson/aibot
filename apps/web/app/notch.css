@@ -1,0 +1,169 @@
+/* The companion's notch (notch-companion.tsx)
+ *
+ * A dark housing hung from the top center of the screen, holding a pair of
+ * expressive white eyes. The component publishes the pose as custom properties
+ * (--eye-open, --eye-tilt, --eye-rise, --gaze-x/y, --bob, --energy,
+ * --notch-glow) and toggles data-peek / data-blink; everything about how the
+ * face moves lives here, so reduced motion is one media query away from a
+ * still face.
+ *
+ * On an installed notched phone the housing pads itself below the hardware
+ * cutout (safe-area-inset-top) and simply reads as the notch grown a little.
+ * Everywhere else it is the app's own little island. Tucked, only a slim lip
+ * stays on screen — the promise that something lives up there.
+ *
+ * Base rules first, every transition and animation last, so the motion block
+ * can be lifted out whole without leaving the face itself behind.
+ */
+
+.notch-companion {
+  --notch-lip: 0.625rem;
+  position: fixed;
+  z-index: 40;
+  top: 0;
+  left: 50%;
+  display: flex;
+  width: clamp(7.75rem, 29vw, 10.25rem);
+  justify-content: center;
+  padding: calc(env(safe-area-inset-top, 0px) + 0.625rem) 1rem 0.8rem;
+  border-radius: 0 0 1.625rem 1.625rem;
+  background: var(--ink);
+  /* The hairline is what keeps the housing legible on the dark canvas. */
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.07),
+    0 12px 32px rgb(0 0 0 / 0.28);
+  pointer-events: none;
+  translate: -50% 0;
+  transform: translateY(calc(-100% + var(--notch-lip)));
+}
+
+.notch-companion[data-peek="true"] {
+  transform: translateY(0);
+}
+
+.notch-face {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* The mood's afterglow behind the eyes — the [theme:] cue, kept faint. */
+.notch-glow {
+  position: absolute;
+  inset: -0.6rem -1.4rem;
+  background: radial-gradient(
+    62% 74% at 50% 58%,
+    color-mix(in srgb, var(--notch-glow) 34%, transparent),
+    transparent 72%
+  );
+  opacity: calc(0.25 + var(--energy) * 0.55);
+}
+
+.notch-eyes {
+  position: relative;
+  display: flex;
+  gap: 1rem;
+  /* Where it is looking. gaze-y is +up in pose space, -y in CSS. The travel
+     is small in absolute terms but has to be a visible fraction of an eye —
+     at a couple of pixels a wandering gaze just reads as misalignment. */
+  translate: calc(var(--gaze-x) * 0.5rem) calc(var(--gaze-y) * -0.35rem);
+}
+
+/* One eye: a white capsule that opens and shuts by changing its own height,
+   with a housing-colored disc rising into it from below for the smile.
+ *
+ * Openness is the eye's HEIGHT rather than a lid sliding down over it, and
+ * that is the whole trick. A flat lid gives the white a straight top edge,
+ * and a straight top over a curved bottom reads as two horns rather than as
+ * a squint. Letting the capsule shrink keeps its top a rounded arc at every
+ * openness, so the white always has two curved edges. */
+.notch-eye {
+  --eye-width: 1.35rem;
+  position: relative;
+  width: var(--eye-width);
+  /* Never fully shuts from pose data alone (poses floor around 0.46); the
+     blink is what closes the eye. */
+  height: calc(0.55rem + var(--eye-open) * 0.95rem);
+  overflow: hidden;
+  border-radius: 999px;
+  background: #fbfdfb;
+  /* Negative tilt lifts the inner corners (curious); positive drives them
+     down (determined). The eyes mirror each other. This is the face's main
+     instrument, so it swings hard: on a shape this round a timid angle is
+     indistinguishable from none. */
+  rotate: calc(var(--eye-tilt) * 34deg);
+}
+
+.notch-eye[data-side="right"] {
+  rotate: calc(var(--eye-tilt) * -34deg);
+}
+
+/* The smile. A circle exactly as wide as the eye, which is what makes this
+   work: the capsule's top is an arc of radius half the eye's width, so a disc
+   of the same radius rises with matching curvature and the white it leaves is
+   an even band — a crescent that follows the eye's own curve into `⌒` rather
+   than pinching the middle. A wider ellipse flattens off and eats the centre;
+   a narrower one eats the edges. */
+.notch-eye-cheek {
+  position: absolute;
+  top: calc(100% - var(--eye-rise) * 90%);
+  left: 0;
+  width: var(--eye-width);
+  height: var(--eye-width);
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+.notch-companion[data-blink="true"] .notch-eye {
+  scale: 1 0.1;
+}
+
+@keyframes notch-bob {
+  0%,
+  100% {
+    transform: translateY(calc(var(--bob) * -0.08rem));
+  }
+  50% {
+    transform: translateY(calc(var(--bob) * 0.14rem + var(--energy) * 0.04rem));
+  }
+}
+
+/* Everything below is motion; without it the housing and the face snap between
+   states, which is the correct reduced-motion read. */
+@media (prefers-reduced-motion: no-preference) {
+  .notch-companion {
+    /* Leaving is calmer than arriving. */
+    transition: transform 400ms cubic-bezier(0.5, 0, 0.65, 1);
+  }
+
+  .notch-companion[data-peek="true"] {
+    /* The pop: a touch of overshoot, like looking up too eagerly. */
+    transition: transform 560ms cubic-bezier(0.3, 1.35, 0.4, 1);
+  }
+
+  /* A slow breathing bob, deeper and quicker the more energetic the state.
+     Custom properties resolve inside keyframes at apply time, so one set of
+     frames serves every pose. */
+  .notch-companion[data-peek="true"] .notch-face {
+    animation: notch-bob calc(3.4s - var(--energy) * 1.4s) ease-in-out infinite;
+  }
+
+  .notch-glow {
+    transition: opacity 600ms ease;
+  }
+
+  .notch-eyes {
+    transition: translate 600ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .notch-eye {
+    transition:
+      height 420ms cubic-bezier(0.22, 1, 0.36, 1),
+      rotate 420ms cubic-bezier(0.22, 1, 0.36, 1),
+      scale 90ms ease-in;
+  }
+
+  .notch-eye-cheek {
+    transition: top 420ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+}
