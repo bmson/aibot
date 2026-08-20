@@ -95,18 +95,37 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
   const Glyph = TONE_GLYPH[shown?.tone ?? 'working'];
 
   /*
-   * Announced politely as well as drawn: for a background task this is the only
-   * place some of these steps are named, and a status that exists only as a
-   * shape at the top of the screen is not available to a screen reader. The
-   * chat's PresenceRow covers the open turn; this covers everything else.
+   * One fixed overlay owning both layers, with the island LAST.
+   *
+   * The veil used to be `body::after` at z-35 against the island's z-50, and on
+   * iOS the veil painted over the island anyway — through two separate
+   * attempted fixes, because the ordering rested on how one engine composited a
+   * pseudo-element against a fixed sibling. It rests on nothing of the sort now:
+   * both are children here, the island is second, and a later sibling paints on
+   * top. There is no z-index between them to lose.
+   *
+   * The shape is aria-hidden and the announcement is a sibling of it, never a
+   * descendant: toggling aria-hidden on an ancestor of a live region is a good
+   * way to have the region silently stop announcing. The live region is always
+   * mounted and only its text changes, which is what screen readers expect.
+   * That announcement matters — for background work this is the only place some
+   * of these steps are ever named.
    */
   return (
-    <div className="notch-island" data-open={open} data-tone={shown?.tone ?? 'working'}>
-      <div className="notch-island-body">
-        <span className="notch-island-glyph" aria-hidden="true">
-          <Glyph className="size-3.5" />
-        </span>
-        <span className="notch-island-label">{shown?.label ?? ''}</span>
+    <div className="status-overlay">
+      <span className="status-veil" aria-hidden="true" />
+      <div
+        className="notch-island"
+        data-open={open}
+        data-tone={shown?.tone ?? 'working'}
+        aria-hidden="true"
+      >
+        <div className="notch-island-body">
+          <span className="notch-island-glyph">
+            <Glyph className="size-3.5" />
+          </span>
+          <span className="notch-island-label">{shown?.label ?? ''}</span>
+        </div>
       </div>
       <span role="status" aria-live="polite" className="sr-only">
         {shown ? `${shown.label}${shown.tone === 'failed' ? ' — failed' : ''}` : ''}

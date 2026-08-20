@@ -96,26 +96,6 @@
     padding-top: calc(1.75rem + env(safe-area-inset-top));
   }
 
-  /* The veil covers the status area and stops there.
-
-     Text should thin out as it passes under the clock, not vanish at a line.
-     Two things control that. The wash is light enough (see --ios-status-scrim)
-     that a line of text stays faintly legible behind it rather than being
-     painted over. And the gradient spends most of the veil's height fading:
-     holding the full wash for only the top third leaves a long, soft ramp down
-     to the open canvas, so nothing crosses a visible edge. The blur is the
-     other half of the separation, and is now light enough that a word is still
-     a word underneath it. */
-  body::after {
-    position: fixed;
-    z-index: 35;
-    inset: 0 0 auto;
-    height: env(safe-area-inset-top);
-    pointer-events: none;
-    background: linear-gradient(to bottom, var(--status-ground) 0 52%, transparent);
-    content: "";
-  }
-
   /* The composer settles into the device's bottom corners instead of floating
      clear of them. It takes the same 1rem inset from the bottom edge that
      .page-gutter already gives it at the sides, which is what lets one radius —
