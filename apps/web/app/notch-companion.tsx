@@ -69,6 +69,13 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
 
   useEffect(() => {
     if (live) {
+      const current = shownRef.current;
+      // Dependency identity should already be stable, but this component sits
+      // at the root of every page and must be defensive. A value guard keeps a
+      // rebuilt-but-equivalent thought from ever turning this effect into a
+      // setState/render loop (React production error #185).
+      if (current?.label === live.label && current.tone === live.tone) return;
+      shownRef.current = live;
       setShown(live);
       return;
     }
@@ -85,21 +92,12 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
   const Glyph = TONE_GLYPH[shown?.tone ?? 'working'];
 
   /*
-   * One fixed overlay owns the tint, the lower glass, and a crown that holds
-   * the island between two side panes of glass.
-   *
-   * Ordering these by DOM position or z-index has been tried four times and has
-   * never been what kept the island clear of the band — the full account is in
-   * notch.css. What keeps it clear now is that the band's blur lives on its own
-   * layers, `.status-veil-glass` and `.status-crown-glass`, which never overlap
-   * the island. The first starts below it while it is open; the latter two sit
-   * to its left and right. The grid sizes those side panes from the island's
-   * real animated width, so even a long status label remains outside the blur.
-   *
-   * That is what `data-open` is doing on the overlay as well as on the shape.
-   * The glass is a preceding sibling of the island, so it cannot select on the
-   * island's own state; the state is lifted to their common parent, and the
-   * glass reads it from there.
+   * One fixed overlay owns the tint, a low blur below the island, and the
+   * island itself. There is deliberately no filtered layer beside or beneath
+   * the black shape: iOS WebKit can sample a whole filter surface before grid
+   * clipping, so even geometrically disjoint side panes softened the label on
+   * a physical phone. The only blur is not mounted at all while the shape is
+   * open; notch.css documents that boundary.
    *
    * The tint (`.status-veil`) remains a separate, unfiltered layer. Do not give
    * it a backdrop filter.
@@ -114,9 +112,12 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
   return (
     <div className="status-overlay" data-open={open}>
       <span className="status-veil" aria-hidden="true" />
-      <span className="status-veil-glass" aria-hidden="true" />
+      {/* Do not leave even a geometrically separated filter surface mounted
+          while the Island is open. Installed iOS Web Apps composite that
+          surface differently from a browser tab and can sample the label into
+          it before clipping. Absence from the tree is the reliable boundary. */}
+      {open ? null : <span className="status-veil-glass" aria-hidden="true" />}
       <div className="status-crown" aria-hidden="true">
-        <span className="status-crown-glass" />
         <div className="notch-island" data-open={open} data-tone={shown?.tone ?? 'working'}>
           <div className="notch-island-body">
             <span className="notch-island-glyph">
@@ -125,7 +126,6 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
             <span className="notch-island-label">{shown?.label ?? ''}</span>
           </div>
         </div>
-        <span className="status-crown-glass" />
       </div>
       <span role="status" aria-live="polite" className="sr-only">
         {shown ? `${shown.label}${shown.tone === 'failed' ? ' — failed' : ''}` : ''}
