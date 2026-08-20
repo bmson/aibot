@@ -21,16 +21,21 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } 
 import { signOutAction } from '@/app/actions';
 import { destinationIcon, formatBadgeCount, useNavCommands } from '@/app/nav-commands';
 import { cancelTask } from '@/app/tasks/actions';
-import { chipsOf, latestFace, latestTheme } from '@/lib/chat-cues';
+import { chipsOf, latestTheme } from '@/lib/chat-cues';
 import {
   isAsyncAcknowledgement,
   isContractNotice,
   isDecisionProseNotice,
   noticeKindOf,
 } from '@/lib/chat-notices';
-import { type CompanionActivity, setCompanionState, wakeCompanion } from '@/lib/companion-bus';
+import {
+  type CompanionActivity,
+  type CompanionThought,
+  setCompanionState,
+} from '@/lib/companion-bus';
 import { BackLink, CountBadge, focusRing, microLabelClass } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
+import { toolLabel } from '@/lib/views';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
 import { ActionChips } from './action-chips';
 import { ApprovalGroup } from './approval-group';
@@ -548,15 +553,6 @@ export function ChatClient({
   const renderedNow = useMemo(() => new Date(renderedAt), [renderedAt]);
   const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
 
-  // What this conversation tells the companion about itself. The expression is
-  // the newest [face:] cue in the log — which moves mid-stream, as cue parts
-  // land on the streaming reply — except while it is deliberately waiting or
-  // working, where the state of the turn outranks the last thing it felt.
-  const companionExpression = useMemo(() => {
-    if (status === 'submitted') return 'thoughtful_tilt' as const;
-    if (asyncTurn) return 'focused' as const;
-    return latestFace(log);
-  }, [status, asyncTurn, log]);
   const chatTheme = useMemo(() => latestTheme(log), [log]);
   const companionActivity: CompanionActivity =
     status === 'submitted'
@@ -567,41 +563,45 @@ export function ChatClient({
           ? 'working'
           : 'listening';
 
-  // Hand it all to the presence layer that renders the companion behind the
-  // whole app. The bus drops no-op patches, so this runs on every render
-  // without restarting the animation it is already easing toward.
-  useEffect(() => {
-    setCompanionState({
-      expression: companionExpression,
-      mood: chatTheme,
-      activity: companionActivity,
-    });
-  }, [companionExpression, chatTheme, companionActivity]);
+  /*
+   * What the island says the model is doing — its inner monologue, one line at
+   * a time.
+   *
+   * The newest tool step wins while a task is running, because that is the
+   * thing actually happening; the two turn-level states cover the gap before
+   * any tool has reported. Labels come from toolLabel, the same source the work
+   * trail reads, so the island and the log never describe one step two ways.
+   */
+  const latestStep = activity.length > 0 ? activity[activity.length - 1] : undefined;
+  const thought = useMemo<CompanionThought | null>(() => {
+    if (status === 'submitted') return { label: 'Thinking', tone: 'thinking' };
+    if (status === 'streaming') return { label: 'Replying', tone: 'working' };
+    if (!asyncTurn) return null;
+    if (!latestStep) return { label: 'Starting the work', tone: 'working' };
+    const label = toolLabel(latestStep.toolName);
+    if (latestStep.status === 'failed' || latestStep.status === 'denied') {
+      return { label, tone: 'failed' };
+    }
+    if (latestStep.status === 'awaiting_approval') return { label, tone: 'waiting' };
+    if (latestStep.status === 'succeeded') return { label, tone: 'done' };
+    return { label, tone: 'working' };
+  }, [status, asyncTurn, latestStep]);
 
-  // A chat left open should not keep claiming the companion once you navigate
+  // Hand it to the island at the top of the screen. The bus compares thoughts
+  // by value and drops no-op patches, so this runs on every render without
+  // restarting the animation it is already playing.
+  useEffect(() => {
+    setCompanionState({ activity: companionActivity, thought });
+  }, [companionActivity, thought]);
+
+  // A chat left open should not keep claiming the island once you navigate
   // away; the shell's own presence takes back over.
   useEffect(() => {
     return () => {
-      setCompanionState({ expression: 'neutral', mood: 'default', activity: 'idle' });
+      setCompanionState({ activity: 'idle', thought: null });
     };
   }, []);
 
-  // Ask the companion to lean out of the notch whenever a message LANDS — a
-  // reply finishing, an update arriving on its own while you were reading
-  // something else. Sending is pulsed from sendTurn, where the intent is.
-  //
-  // This counts assistant turns rather than watching the newest one's text,
-  // which would fire on every streamed token. The first render only records
-  // what is already there: opening a thread is not a message arriving.
-  const assistantCount = useMemo(
-    () => log.reduce((total, message) => total + (message.role === 'assistant' ? 1 : 0), 0),
-    [log],
-  );
-  const seenAssistantCountRef = useRef(assistantCount);
-  useEffect(() => {
-    if (assistantCount > seenAssistantCountRef.current) wakeCompanion();
-    seenAssistantCountRef.current = assistantCount;
-  }, [assistantCount]);
   const displayTitle = title === 'Untitled' ? 'New conversation' : title;
   const notificationMode = displayTitle.toLowerCase() === 'notifications';
   const commandInput = input.trimStart();
@@ -850,9 +850,6 @@ export function ChatClient({
     stickToBottomRef.current = true;
     setAtBottom(true);
     setUnseenCount(0);
-    // The companion looks up as the message goes out, before any status has
-    // changed — that immediacy is the whole point of it living in the notch.
-    wakeCompanion();
     setLastSubmittedText(text);
     if (clearComposer) setInput('');
     setFallbackNote(null);

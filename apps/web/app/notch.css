@@ -1,175 +1,161 @@
-/* The companion's notch (notch-companion.tsx)
+/* The Dynamic Island extension (notch-companion.tsx)
  *
- * A dark housing hung from the top center of the screen, holding a pair of
- * expressive white eyes. The component publishes the pose as custom properties
- * (--eye-open, --eye-tilt, --eye-rise, --gaze-x/y, --bob, --energy,
- * --notch-glow) and toggles data-peek / data-blink; everything about how the
- * face moves lives here, so reduced motion is one media query away from a
- * still face.
+ * The shape starts at the very top of the screen and grows DOWN out of the
+ * hardware island. Three things make it read as one object with the phone
+ * rather than a panel floating under it:
  *
- * On an installed notched phone the housing pads itself below the hardware
- * cutout (safe-area-inset-top) and simply reads as the notch grown a little.
- * Everywhere else it is the app's own little island. Tucked, only a slim lip
- * stays on screen — the promise that something lives up there.
+ *   Black, not the app's ink. The hardware island is the display switched off,
+ *   and anything short of true black shows up as a seam against it.
  *
- * Base rules first, every transition and animation last, so the motion block
- * can be lifted out whole without leaving the face itself behind.
+ *   It starts at y=0 and is at least as wide as the island, so its top is
+ *   hidden underneath the real one — there is no upper edge to notice. Only
+ *   the bottom edge and its corners are ever seen, which is how the system's
+ *   own expanded island behaves.
+ *
+ *   The status inset is padding, not offset. Content begins below
+ *   safe-area-inset-top, so the label clears the clock while the black behind
+ *   it runs all the way up into the island.
+ *
+ * Closed, it collapses to the island's own footprint and disappears into it.
+ *
+ * Base rules first, motion last, so the motion block can be lifted out whole.
  */
 
-.notch-companion {
-  --notch-lip: 0.625rem;
+.notch-island {
+  /* The hardware island on current iPhones is ~126pt across; matching that when
+     closed is what lets this shape vanish into the real one. */
+  --island-width: 7.9rem;
+  --island-radius: 1.375rem;
   position: fixed;
-  /* Above the iOS status veil (z-35, mobile-shell.css), which is the one thing
-     that can reach this far up the screen. The veil carries a backdrop-filter,
-     and WebKit will composite such a layer over siblings that paint after it —
-     which washed the housing out and left the eyes looking like they were
-     under the frosting rather than in front of it. Clearing it by a margin
-     rather than by one leaves no room for that argument. */
+  /* Above the status veil (z-35, mobile-shell.css). The veil is a plain colour
+     ramp rather than a backdrop-filter precisely so this can sit over it — see
+     the note there. */
   z-index: 50;
   top: 0;
   left: 50%;
   display: flex;
-  width: clamp(7.75rem, 29vw, 10.25rem);
+  /* Narrow enough to stay an island. Past this a long label stops reading as a
+     capsule hanging off the top and starts reading as a banner across it, so
+     the label ellipsizes instead. */
+  max-width: min(17rem, calc(100vw - 4rem));
   justify-content: center;
-  padding: calc(env(safe-area-inset-top, 0px) + 0.625rem) 1rem 0.8rem;
-  border-radius: 0 0 1.625rem 1.625rem;
-  background: var(--ink);
-  /* The hairline is what keeps the housing legible on the dark canvas. */
-  box-shadow:
-    inset 0 0 0 1px rgb(255 255 255 / 0.07),
-    0 12px 32px rgb(0 0 0 / 0.28);
+  overflow: hidden;
+  /* The bottom corners are the only ones anybody sees. */
+  border-radius: 0 0 var(--island-radius) var(--island-radius);
+  /* True black, so the seam with the hardware island does not exist. */
+  background: #000;
+  color: #f4f7f5;
   pointer-events: none;
   translate: -50% 0;
-  transform: translateY(calc(-100% + var(--notch-lip)));
 }
 
-.notch-companion[data-peek="true"] {
-  transform: translateY(0);
+/* Closed: no height at all, so nothing hangs below the hardware island.
+   Collapsing to the status inset instead left a black tab protruding past the
+   real island — bigger than it, with its own visible corners, which is the one
+   thing that breaks the illusion. From zero the shape grows downward out from
+   under the island, which is exactly how the system's own expansion reads. */
+.notch-island:not([data-open="true"]) {
+  width: var(--island-width);
+  height: 0;
 }
 
-.notch-face {
-  position: relative;
+.notch-island[data-open="true"] {
+  width: max-content;
+  min-width: var(--island-width);
+  /* Stated rather than left to the content, because the growing-downward motion
+     is the whole effect and `height: auto` only animates where
+     interpolate-size is supported — which WebKit is not. The value is the
+     status inset plus this row: 0.125 top + 1.1 line + 0.7 bottom. */
+  height: calc(env(safe-area-inset-top, 0px) + 1.925rem);
+  /* The inset is the top padding: black runs up under the real island while the
+     label sits clear of the clock. */
+  padding: calc(env(safe-area-inset-top, 0px) + 0.125rem) 1rem 0.7rem;
+}
+
+.notch-island-body {
   display: flex;
+  min-width: 0;
   align-items: center;
+  gap: 0.5rem;
 }
 
-/* The mood's afterglow behind the eyes — the [theme:] cue, kept faint. */
-.notch-glow {
-  position: absolute;
-  inset: -0.6rem -1.4rem;
-  background: radial-gradient(
-    62% 74% at 50% 58%,
-    color-mix(in srgb, var(--notch-glow) 34%, transparent),
-    transparent 72%
-  );
-  opacity: calc(0.25 + var(--energy) * 0.55);
+.notch-island-glyph {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
 }
 
-.notch-eyes {
-  position: relative;
-  display: flex;
-  gap: 1rem;
-  /* Where it is looking. gaze-y is +up in pose space, -y in CSS. The travel
-     is small in absolute terms but has to be a visible fraction of an eye —
-     at a couple of pixels a wandering gaze just reads as misalignment. */
-  translate: calc(var(--gaze-x) * 0.5rem) calc(var(--gaze-y) * -0.35rem);
-}
-
-/* One eye: a white capsule that opens and shuts by changing its own height,
-   with a housing-colored disc rising into it from below for the smile.
- *
- * Openness is the eye's HEIGHT rather than a lid sliding down over it, and
- * that is the whole trick. A flat lid gives the white a straight top edge,
- * and a straight top over a curved bottom reads as two horns rather than as
- * a squint. Letting the capsule shrink keeps its top a rounded arc at every
- * openness, so the white always has two curved edges. */
-.notch-eye {
-  --eye-width: 1.35rem;
-  position: relative;
-  width: var(--eye-width);
-  /* Never fully shuts from pose data alone (poses floor around 0.46); the
-     blink is what closes the eye. */
-  height: calc(0.55rem + var(--eye-open) * 0.95rem);
+.notch-island-label {
+  min-width: 0;
   overflow: hidden;
-  border-radius: 999px;
-  background: #fbfdfb;
-  /* Negative tilt lifts the inner corners (curious); positive drives them
-     down (determined). The eyes mirror each other. This is the face's main
-     instrument, so it swings hard: on a shape this round a timid angle is
-     indistinguishable from none. */
-  rotate: calc(var(--eye-tilt) * 34deg);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.1rem;
+  letter-spacing: -0.006em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.notch-eye[data-side="right"] {
-  rotate: calc(var(--eye-tilt) * -34deg);
+/* Closed, the content must not merely be invisible — it must not hold the shape
+   open, so it leaves layout entirely. */
+.notch-island:not([data-open="true"]) .notch-island-body {
+  display: none;
 }
 
-/* The smile. A circle exactly as wide as the eye, which is what makes this
-   work: the capsule's top is an arc of radius half the eye's width, so a disc
-   of the same radius rises with matching curvature and the white it leaves is
-   an even band — a crescent that follows the eye's own curve into `⌒` rather
-   than pinching the middle. A wider ellipse flattens off and eats the centre;
-   a narrower one eats the edges. */
-.notch-eye-cheek {
-  position: absolute;
-  top: calc(100% - var(--eye-rise) * 90%);
-  left: 0;
-  width: var(--eye-width);
-  height: var(--eye-width);
-  border-radius: 50%;
-  background: var(--ink);
+/* Tone is carried by the glyph alone. The label stays white: colouring the
+   words too made a failure read as an error banner rather than as one step of
+   the work that did not land. */
+.notch-island[data-tone="working"] .notch-island-glyph,
+.notch-island[data-tone="thinking"] .notch-island-glyph {
+  color: rgb(255 255 255 / 0.72);
 }
 
-.notch-companion[data-blink="true"] .notch-eye {
-  scale: 1 0.1;
+.notch-island[data-tone="done"] .notch-island-glyph {
+  color: #6ee7b7;
 }
 
-@keyframes notch-bob {
-  0%,
-  100% {
-    transform: translateY(calc(var(--bob) * -0.08rem));
-  }
-  50% {
-    transform: translateY(calc(var(--bob) * 0.14rem + var(--energy) * 0.04rem));
+.notch-island[data-tone="waiting"] .notch-island-glyph {
+  color: #fcd34d;
+}
+
+.notch-island[data-tone="failed"] .notch-island-glyph {
+  color: #fca5a5;
+}
+
+@keyframes notch-island-spin {
+  to {
+    rotate: 360deg;
   }
 }
 
-/* Everything below is motion; without it the housing and the face snap between
-   states, which is the correct reduced-motion read. */
+@keyframes notch-island-arrive {
+  from {
+    opacity: 0;
+    translate: 0 -0.25rem;
+  }
+  to {
+    opacity: 1;
+    translate: none;
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
-  .notch-companion {
-    /* Leaving is calmer than arriving. */
-    transition: transform 400ms cubic-bezier(0.5, 0, 0.65, 1);
-  }
-
-  .notch-companion[data-peek="true"] {
-    /* The pop: a touch of overshoot, like looking up too eagerly. */
-    transition: transform 560ms cubic-bezier(0.3, 1.35, 0.4, 1);
-  }
-
-  /* A slow breathing bob, deeper and quicker the more energetic the state.
-     Custom properties resolve inside keyframes at apply time, so one set of
-     frames serves every pose. */
-  .notch-companion[data-peek="true"] .notch-face {
-    animation: notch-bob calc(3.4s - var(--energy) * 1.4s) ease-in-out infinite;
-  }
-
-  .notch-glow {
-    transition: opacity 600ms ease;
-  }
-
-  .notch-eyes {
-    transition: translate 600ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  .notch-eye {
+  /* Width and height together are what make it grow out of the island rather
+     than appear beneath it. */
+  .notch-island {
     transition:
-      height 420ms cubic-bezier(0.22, 1, 0.36, 1),
-      rotate 420ms cubic-bezier(0.22, 1, 0.36, 1),
-      scale 90ms ease-in;
+      width 380ms cubic-bezier(0.22, 1, 0.36, 1),
+      height 380ms cubic-bezier(0.22, 1, 0.36, 1),
+      padding 380ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  .notch-eye-cheek {
-    transition: top 420ms cubic-bezier(0.22, 1, 0.36, 1);
+  .notch-island-body {
+    animation: notch-island-arrive 260ms ease-out both;
+  }
+
+  /* Only the working spinner turns; a settled state should be still. */
+  .notch-island[data-tone="working"] .notch-island-glyph {
+    animation: notch-island-spin 900ms linear infinite;
   }
 }

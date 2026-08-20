@@ -1,18 +1,16 @@
-import type { FaceState, ThemeName } from './chat-cues';
-
 /*
- * The companion's live state, shared between whatever is driving it (the chat
- * client, the shell's server-rendered presence) and the full-viewport presence
- * layer that renders it.
+ * What the assistant is doing right now, shared between whatever is driving it
+ * (the chat client, the shell's server-rendered presence) and the island at the
+ * top of the screen that reports it.
  *
  * A module-level store rather than a window CustomEvent: both sides are in the
  * same client bundle, so they share this module instance, and keeping the DOM
  * out of it means the store is SSR-safe and unit-testable without a browser.
- * Subscribers get the current value on subscribe, so a presence layer that
- * mounts after the chat has already published a cue is never left stale.
+ * Subscribers get the current value on subscribe, so an island that mounts
+ * after the chat has already published a thought is never left stale.
  */
 
-/** What the companion is doing — sets its baseline energy, apart from mood. */
+/** What this tab's conversation has it doing — sets the island's baseline. */
 export type CompanionActivity =
   | 'idle'
   | 'listening'
@@ -25,26 +23,40 @@ export type CompanionActivity =
  * The shell's app-wide baseline, straight from the server (AssistantPresence):
  * work running anywhere, or something waiting on the owner. Kept separate from
  * `activity` so the chat's live, transient states and the background baseline
- * never overwrite each other — the renderer takes whichever is stronger.
+ * never overwrite each other — the island takes whichever is more demanding.
  */
 export type CompanionPresence = 'idle' | 'working' | 'attention';
 
+/**
+ * How a thought is going. The island reads this for its glyph and colour, so
+ * the difference between "still working" and "that failed" is visible without
+ * reading the label.
+ */
+export type ThoughtTone = 'thinking' | 'working' | 'waiting' | 'done' | 'failed';
+
+/**
+ * One line of the assistant's inner monologue: what it is doing, right now, in
+ * the same words the work trail uses ("Searching email"). Null when it is not
+ * doing anything — which is what closes the island.
+ */
+export interface CompanionThought {
+  label: string;
+  tone: ThoughtTone;
+}
+
 export interface CompanionState {
-  /** The newest [face:] cue — what the companion is feeling. */
-  expression: FaceState;
-  /** The newest [theme:] cue — the color it is feeling it in. */
-  mood: ThemeName;
-  /** What this tab's conversation has it doing right now. */
+  /** What this tab's conversation has it doing. */
   activity: CompanionActivity;
   /** What the rest of the system has it doing. */
   presence: CompanionPresence;
+  /** The step it is on, or null when there is nothing to report. */
+  thought: CompanionThought | null;
 }
 
 export const INITIAL_COMPANION_STATE: CompanionState = {
-  expression: 'neutral',
-  mood: 'default',
   activity: 'idle',
   presence: 'idle',
+  thought: null,
 };
 
 type Listener = (state: CompanionState) => void;
@@ -56,18 +68,23 @@ export function getCompanionState(): CompanionState {
   return current;
 }
 
+/** Thoughts are compared by value: a re-render that rebuilds the same one is not news. */
+function sameThought(a: CompanionThought | null, b: CompanionThought | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.label === b.label && a.tone === b.tone;
+}
+
 /**
  * Publish a partial change. A patch that changes nothing is dropped without
- * notifying, so a re-render that recomputes the same cue cannot restart the
- * presence layer's easing.
+ * notifying, so a re-render that recomputes the same state cannot restart the
+ * island's animation.
  */
 export function setCompanionState(patch: Partial<CompanionState>): CompanionState {
   const next: CompanionState = { ...current, ...patch };
   if (
-    next.expression === current.expression &&
-    next.mood === current.mood &&
     next.activity === current.activity &&
-    next.presence === current.presence
+    next.presence === current.presence &&
+    sameThought(next.thought, current.thought)
   ) {
     return current;
   }
@@ -84,37 +101,8 @@ export function subscribeCompanion(listener: Listener): () => void {
   };
 }
 
-/*
- * The wake channel: a transient pulse, separate from state. State says what the
- * companion is feeling and doing; a wake says "something just moved — show
- * yourself". The chat pulses it when a message goes out or lands, and the notch
- * peeks for a moment on each pulse even when the state itself did not change
- * (two replies in a row are both worth looking up for).
- */
-type WakeListener = (count: number) => void;
-
-let wakeCount = 0;
-const wakeListeners = new Set<WakeListener>();
-
-/** A message was sent or arrived — ask the companion to show itself briefly. */
-export function wakeCompanion(): number {
-  wakeCount += 1;
-  for (const listener of wakeListeners) listener(wakeCount);
-  return wakeCount;
-}
-
-/** Unlike state, a wake is a moment: new subscribers do NOT get a replay. */
-export function subscribeCompanionWake(listener: WakeListener): () => void {
-  wakeListeners.add(listener);
-  return () => {
-    wakeListeners.delete(listener);
-  };
-}
-
 /** Test-only: drop every subscriber and return to the resting state. */
 export function resetCompanionState(): void {
   current = INITIAL_COMPANION_STATE;
   listeners.clear();
-  wakeCount = 0;
-  wakeListeners.clear();
 }

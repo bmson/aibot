@@ -6,24 +6,22 @@
    indicator. */
 
 :root {
-  /* The status veil is frosted canvas, not ink: the blur is what separates the
-     clock from the conversation sliding beneath it. A fixed dark wash reads as a
-     black bar ruled across the top of a light app, so this tracks --surface and
-     flips with the theme.
+  /* The ground the status veil ramps out of: whatever the page is actually
+     standing on. The chat re-points it at its own green (conversation.css).
 
-     Kept deliberately light. At a higher opacity the veil stopped reading as
-     glass and started reading as a lid: text hit it and disappeared, rather
-     than travelling under it and thinning out. Legibility of the clock comes
-     from the blur far more than from the wash.
+     This used to be a light wash over a backdrop-filter, with the blur doing
+     most of the separating. The blur had to go. WebKit composites a
+     backdrop-filter layer in a way that can place it over siblings painted
+     after it, which left the Dynamic Island extension — z-50, against this
+     veil's z-35 — frosted and washed out on the exact device the veil exists
+     for. Chromium orders it correctly, so it was invisible anywhere but a real
+     phone.
 
-     The chat re-mixes this from its own green ground (conversation.css) —
-     canvas means whatever the page is actually standing on, and on the chat
-     that is the stage, not the paper. */
-  --ios-status-scrim: color-mix(in srgb, var(--surface) 58%, transparent);
-}
-
-.dark {
-  --ios-status-scrim: color-mix(in srgb, var(--surface) 52%, transparent);
+     A plain colour ramp carries no such hazard and separates the clock at
+     least as well: the top of the band is the ground at full strength, so the
+     clock sits on solid canvas rather than on blurred text, and content still
+     thins out as it travels up underneath. */
+  --status-ground: var(--surface);
 }
 
 @media (max-width: 1023px) {
@@ -114,10 +112,8 @@
     inset: 0 0 auto;
     height: env(safe-area-inset-top);
     pointer-events: none;
-    background: linear-gradient(to bottom, var(--ios-status-scrim) 0 32%, transparent);
+    background: linear-gradient(to bottom, var(--status-ground) 0 52%, transparent);
     content: "";
-    -webkit-backdrop-filter: blur(10px) saturate(1.08);
-    backdrop-filter: blur(10px) saturate(1.08);
   }
 
   /* The composer settles into the device's bottom corners instead of floating

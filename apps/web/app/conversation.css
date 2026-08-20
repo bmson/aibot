@@ -44,14 +44,8 @@
  * a stage with it, and this keeps that fact in the stylesheet next to
  * everything else about the stage. */
 body:has(.chat-viewport) {
-  --ios-status-scrim: color-mix(in srgb, var(--stage) 58%, transparent);
+  --status-ground: var(--stage);
   background: var(--stage);
-}
-
-/* The same lighter wash the dark theme uses everywhere else (mobile-shell.css):
-   on a dark ground the veil needs less of it to separate the clock. */
-.dark body:has(.chat-viewport) {
-  --ios-status-scrim: color-mix(in srgb, var(--stage) 52%, transparent);
 }
 
 /* Text and rules sitting DIRECTLY on the stage read in the stage's own ink,
