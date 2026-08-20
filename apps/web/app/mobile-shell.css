@@ -14,7 +14,11 @@
      Kept deliberately light. At a higher opacity the veil stopped reading as
      glass and started reading as a lid: text hit it and disappeared, rather
      than travelling under it and thinning out. Legibility of the clock comes
-     from the blur far more than from the wash. */
+     from the blur far more than from the wash.
+
+     The chat re-mixes this from its own green ground (conversation.css) —
+     canvas means whatever the page is actually standing on, and on the chat
+     that is the stage, not the paper. */
   --ios-status-scrim: color-mix(in srgb, var(--surface) 58%, transparent);
 }
 
