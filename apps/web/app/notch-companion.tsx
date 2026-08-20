@@ -7,6 +7,7 @@ import {
   type CompanionThought,
   getCompanionState,
   type CompanionPresence as Presence,
+  presenceThought,
   setCompanionState,
   subscribeCompanion,
   type ThoughtTone,
@@ -42,17 +43,6 @@ const TONE_GLYPH: Record<ThoughtTone, typeof Loader2> = {
   done: Check,
   failed: TriangleAlert,
 };
-
-/**
- * What the shell says when the chat has nothing to report. Background work and
- * anything parked on the owner still deserve the island — that is the point of
- * a status that outlives whichever tab you happen to be looking at.
- */
-function presenceThought(presence: Presence): CompanionThought | null {
-  if (presence === 'working') return { label: 'Working in the background', tone: 'working' };
-  if (presence === 'attention') return { label: 'Needs you', tone: 'waiting' };
-  return null;
-}
 
 export function NotchCompanion({ presence }: { presence: Presence }) {
   // Publish the server's baseline. Its own effect so a navigation that changes

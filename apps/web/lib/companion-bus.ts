@@ -59,6 +59,28 @@ export const INITIAL_COMPANION_STATE: CompanionState = {
   thought: null,
 };
 
+/**
+ * What the shell says when the chat has nothing to report. Background work and
+ * anything parked on the owner still deserve the island — that is the point of
+ * a status that outlives whichever tab you happen to be looking at.
+ *
+ * The two thoughts are module constants, not object literals built per call.
+ * The island derives an effect dependency from this, and a fresh object every
+ * render made that effect fire every render, set state every fire, and render
+ * again — an unbounded loop that ran on every page for as long as the shell's
+ * presence was anything but idle, until the renderer stopped responding.
+ * sameThought below compares by value, but React compares dependencies by
+ * identity, so identity is what has to hold still here.
+ */
+const WORKING_THOUGHT: CompanionThought = { label: 'Working in the background', tone: 'working' };
+const ATTENTION_THOUGHT: CompanionThought = { label: 'Needs you', tone: 'waiting' };
+
+export function presenceThought(presence: CompanionPresence): CompanionThought | null {
+  if (presence === 'working') return WORKING_THOUGHT;
+  if (presence === 'attention') return ATTENTION_THOUGHT;
+  return null;
+}
+
 type Listener = (state: CompanionState) => void;
 
 let current: CompanionState = INITIAL_COMPANION_STATE;
