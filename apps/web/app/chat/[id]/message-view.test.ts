@@ -6,6 +6,7 @@ import {
   retireProvisionalReplies,
   retireProvisionalUserTurns,
   sameDay,
+  stampLabel,
   timeLabel,
 } from './message-view';
 
@@ -164,6 +165,16 @@ describe('date labels', () => {
     const the18thInReykjavik = new Date('2026-08-18T09:00:00.000Z');
     expect(sameDay(at, the18thInReykjavik, 'Atlantic/Reykjavik')).toBe(true);
     expect(sameDay(at, the18thInReykjavik, 'America/Los_Angeles')).toBe(false);
+  });
+
+  it('names the day in the stamp only when the message is not from today', () => {
+    // The common case is a chat you are having now, and a day label on every
+    // line of it would be noise — that is the whole reason the dividers went.
+    expect(stampLabel(new Date('2026-08-19T20:30:00.000Z'), now, 'Atlantic/Reykjavik')).toBe(
+      '8:30 PM',
+    );
+    expect(stampLabel(at, now, 'Atlantic/Reykjavik')).toBe('Yesterday · 2:30 AM');
+    expect(stampLabel(at, now, 'America/Los_Angeles')).toBe('Aug 17 · 7:30 PM');
   });
 
   it('names an older day, adding the year only when it is not this one', () => {

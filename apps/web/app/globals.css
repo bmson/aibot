@@ -13,9 +13,8 @@
    Two grounds share the family. Regular pages sit on the quiet green paper
    (--surface); the chat sits on the stage (--stage) — the saturated green the
    companion's world is painted in — with its own text pair, because ink that
-   reads on paper does not read on the stage. The companion's housing and the
-   assistant's speech bubbles share --ink, so the creature in the notch and the
-   voice in the log are visibly one body. */
+   reads on paper does not read on the stage. --ink is the companion's housing:
+   the notch it lives in and the mark it opens an empty chat with. */
 :root {
   --surface: #eef5f0; /* Canvas — green paper */
   --surface-raised: #ffffff; /* Panel */
@@ -34,15 +33,28 @@
      white because the accent is dark in one scheme and light in the other —
      white on the light one is barely 2:1. */
   --on-accent: #ffffff;
-  --ink: #131d17; /* The companion's body: notch housing, assistant bubbles */
+  --ink: #131d17; /* The companion's housing: the notch, the opening mark */
   --stage: #2b8253; /* The chat's canvas */
   --stage-strong: #f4faf5; /* Ink for text sitting directly on the stage */
   --stage-muted: rgb(234 246 238 / 0.72);
-  /* The owner's voice. Its own token rather than --surface-raised: the two
-     happen to coincide on the light canvas, but a bubble has to stay legible
-     against the stage, which is a different job from a panel on the page. */
-  --bubble-owner: #ffffff;
-  --bubble-owner-ink: var(--content-strong);
+  /* The sheet the assistant speaks on: white paper laid on the stage.
+   *
+     Deliberately NOT overridden for dark — a page token follows the room's
+     lighting, and this does not. It is one physical material in both schemes,
+     which is why everything printed on it (ink, rules, code wells, links)
+     carries its own fixed value here too: inside that bubble the paper tokens
+     are re-pointed at these, so a link or a table rule cannot come out in the
+     dark scheme's colours on a white ground. See `.bubble-assistant`.
+   *
+     The owner's own voice needs no material: it is a hairline drawn on the
+     stage, in the stage's own ink. */
+  --bubble-paper: #ffffff;
+  --bubble-paper-ink: #15201a;
+  --bubble-paper-muted: #5e7266;
+  --bubble-paper-edge: #d3e1d7;
+  --bubble-paper-sunken: #e6efe9;
+  --bubble-paper-accent: #217a4b;
+  --bubble-paper-accent-hover: #1a613c;
   /* A rectangular browser tab has no app-owned outer curve. Installed mobile
      mode replaces this with a value derived from the device safe area; it is
      intentionally separate from component radii. */
@@ -86,10 +98,6 @@
   --stage: #1b3626; /* Deep pine */
   --stage-strong: #f0f7f1;
   --stage-muted: rgb(240 247 241 / 0.66);
-  /* Paper, dimmed for a dark room — still unmistakably the lighter material,
-     because that contrast IS how the two voices are told apart. */
-  --bubble-owner: #dae7de;
-  --bubble-owner-ink: #101b14;
   --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.16), 0 6px 18px rgb(0 0 0 / 0.12);
   --shadow-overlay: 0 2px 6px rgb(0 0 0 / 0.2), 0 12px 30px rgb(0 0 0 / 0.18);
   color-scheme: dark;

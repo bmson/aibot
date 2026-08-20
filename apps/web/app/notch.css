@@ -26,12 +26,20 @@
 /* One overlay owning both layers at the top of the screen: the status veil, and
    the island in front of it.
  *
-   The veil was `body::after` at z-35 against the island's z-50, and on iOS it
-   painted over the island regardless — through two separate attempted fixes,
-   because the ordering depended on how one engine composited a pseudo-element
-   against a fixed sibling. It does not depend on that any more. Both layers are
-   children here, the island is second, and a later sibling paints on top. There
-   is no z-index between them to lose.
+   The veil paints the whole band and the island paints over it. That ordering
+   is stated three ways at once, because it has been got wrong before: the two
+   are siblings in one stacking context, the island is second in the DOM, and
+   the two carry explicit z-indexes. An engine has nothing left to decide.
+
+   A previous attempt cut a hole in the veil around the island instead, on the
+   theory that layers which never overlap cannot be ordered wrongly. Mask
+   gradients are elliptical and the island is a rounded rect, so the hole had
+   to be drawn wide enough to clear its corners — which left a crescent of
+   unveiled screen poking out either side of the hardware pill, with the
+   conversation legible through it. A shape that has to be too big to fit is
+   the wrong tool; ordering two opaque rectangles is not hard.
+
+   `--island-top` lives here so that both children can read it.
 
    Zero height, so it never intercepts anything: the two children place
    themselves against the top edge and are free to overflow it. */
@@ -42,27 +50,6 @@
   right: 0;
   left: 0;
   height: 0;
-  pointer-events: none;
-}
-
-/* The status area the conversation scrolls up under. A plain ramp out of the
-   page's own ground: solid where the clock sits, gone by the bottom, so text
-   thins out rather than crossing a visible edge. In a browser tab the inset is
-   0 and this is simply not there. */
-.status-veil {
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  height: env(safe-area-inset-top, 0px);
-  background: linear-gradient(to bottom, var(--status-ground) 0 52%, transparent);
-}
-
-.notch-island {
-  /* The hardware pill on current iPhones is ~126pt across and ~37pt tall, with
-     fully rounded ends — so a ~18pt radius is the one that matches it. */
-  --island-width: 7.9rem;
-  --island-radius: 1.15rem;
   /* How far the pill floats below the top edge.
    *
    * There is no env() for this, and it differs by hardware: a Dynamic Island
@@ -72,7 +59,71 @@
    * on the latter, which beats sniffing the device — and a browser tab, with
    * no inset, lands at 0 as well. */
   --island-top: clamp(0px, calc((env(safe-area-inset-top, 0px) - 51px) * 2), 0.6875rem);
+  pointer-events: none;
+}
+
+/* The status area the conversation scrolls up under: frosted glass over the
+   page's own ground, opaque enough where the clock sits to hold it, and gone
+   below. Text does not vanish into a colour on its way up — it goes soft and
+   then goes — which is the same thing the phone's own chrome does to whatever
+   passes under it. In a browser tab, and in an installed app on an iOS that
+   keeps its content below the status bar, the inset is 0, every length here
+   collapses with it, and this is simply not there.
+ *
+   It is the composer's scrim (conversation.css) turned upside down, and
+   deliberately so: one surface should not fade two different ways at its two
+   ends. Same proportions — near-full strength for the first 35%, then all the
+   way out — and the same generous length, ~2.8x the inset, which is what makes
+   it read as a fade rather than as a band with an edge on it.
+ *
+   The tint is FLAT and the fade is a mask, rather than the tint itself being a
+   gradient. A backdrop-filter is not affected by how transparent the colour
+   painted over it is: tint alone would leave the blur at full strength right up
+   to a hard line at the bottom of the band. The mask fades the element — glass
+   and tint together — so the blur ramps out with the colour.
+ *
+   Two details in that mask:
+ *
+   Its stops are eased rather than linear, so the band arrives flat at both ends
+   instead of turning a corner at each.
+ *
+   It is a very wide ellipse rather than a straight line, easing up by about
+   three percent at the far corners where the screen's own glass curves away.
+   Only about three: glass is lighter than the stage it sits on, so where the
+   band stops IS visible, and an arc deep enough to notice draws its own shape
+   across the top of the screen. What the curve is for is taking the edge off
+   the corners, not making a dome.
+ *
+   90%, not 100%: a fully opaque cap would erase the top of the band, and the
+   point of glass is that something is visibly behind it. */
+.status-veil {
   position: absolute;
+  z-index: 0;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: calc(env(safe-area-inset-top, 0px) * 2.8);
+  background: color-mix(in srgb, var(--status-ground) 90%, transparent);
+  backdrop-filter: blur(16px) saturate(1.1);
+  mask-image: radial-gradient(
+    200% 100% at 50% 0%,
+    #000 0 35%,
+    rgb(0 0 0 / 0.85) 50%,
+    rgb(0 0 0 / 0.62) 62%,
+    rgb(0 0 0 / 0.38) 74%,
+    rgb(0 0 0 / 0.18) 85%,
+    rgb(0 0 0 / 0.05) 93%,
+    transparent 100%
+  );
+}
+
+.notch-island {
+  /* The hardware pill on current iPhones is ~126pt across and ~37pt tall, with
+     fully rounded ends — so a ~18pt radius is the one that matches it. */
+  --island-width: 7.9rem;
+  --island-radius: 1.15rem;
+  position: absolute;
+  z-index: 1;
   top: var(--island-top);
   left: 50%;
   display: flex;

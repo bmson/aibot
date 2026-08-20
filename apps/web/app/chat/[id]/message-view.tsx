@@ -9,12 +9,8 @@
 import type { UIMessage } from 'ai';
 import {
   Check,
-  CircleCheck,
-  CircleX,
   Copy,
-  Hand,
   History,
-  Loader2,
   type LucideIcon,
   MoonStar,
   PauseCircle,
@@ -26,7 +22,6 @@ import { useEffect, useState } from 'react';
 
 import type { NoticeKind } from '@/lib/chat-notices';
 import { focusRing } from '@/lib/ui';
-import { toolLabel } from '@/lib/views';
 import { DecisionCard, type DecisionTone } from './decision-card';
 import { MessageMarkdown } from './markdown';
 
@@ -150,10 +145,9 @@ export function retireProvisionalReplies(log: UIMessage[], serverIds: Set<string
 /*
  * Dates render in the agent's configured timezone, on the server and in the
  * browser alike. They used to be gated behind a `mounted` flag so the browser's
- * own zone could be used safely — which meant every day divider and timestamp
- * was missing from the first paint and appeared a frame later, pushing the
- * whole log down as it did. One zone on both sides makes the first paint the
- * final one.
+ * own zone could be used safely — which meant every timestamp was missing from
+ * the first paint and appeared a frame later, pushing the whole log down as it
+ * did. One zone on both sides makes the first paint the final one.
  */
 function dayKey(date: Date, timeZone: string): string {
   // en-CA gives an ISO-shaped YYYY-MM-DD, so day keys compare as strings and
@@ -191,58 +185,19 @@ export function timeLabel(date: Date, timeZone: string): string {
   }).format(date);
 }
 
-export function DayDivider({ label }: { label: string }) {
-  // Generous vertical air: dividers are chapter breaks, not rules on a form.
-  // The hairlines fade toward the edges so the floating chip carries the date.
-  // Everything here sits directly on the chat's stage, so the rules and the
-  // chip are cut from the stage's own light rather than the page's ink tokens.
-  return (
-    <div className="flex items-center gap-4 pt-7 pb-3 [div:first-child>&]:pt-1">
-      <span
-        aria-hidden="true"
-        className="h-px flex-1 bg-gradient-to-r from-transparent to-white/20"
-      />
-      <span className="rounded-full bg-white/12 px-2.5 py-1 font-mono text-xs font-medium tracking-[0.08em] text-stage-muted uppercase">
-        {label}
-      </span>
-      <span
-        aria-hidden="true"
-        className="h-px flex-1 bg-gradient-to-l from-transparent to-white/20"
-      />
-    </div>
-  );
-}
-
 /**
- * What the assistant is busy doing, in words.
+ * When a message landed, as the footer states it.
  *
- * The companion itself is no longer in the log — it lives in the notch now
- * (app/notch-companion.tsx), and the chat publishes its cues to that layer
- * rather than drawing a face here. What stays behind is the plain-language
- * status this row always carried: a live region a screen reader can announce
- * and a sighted reader can scan, which a pair of eyes cannot replace.
+ * A day only earns a mention when it is not the one you are in: inside today —
+ * which is nearly always, for a chat you are having — this is a clock time and
+ * nothing else. Older messages carry their day in the same line rather than
+ * behind a divider above them, so the "when" travels with the message instead
+ * of with its position in the log.
  */
-export function PresenceRow({
-  phase,
-  activity,
-}: {
-  phase: 'thinking' | 'starting' | 'working';
-  activity: Array<{ toolName: string; status: string; step: number }>;
-}) {
-  const label =
-    phase === 'thinking' ? 'Thinking…' : phase === 'starting' ? 'Starting the work…' : 'Working…';
-  return (
-    <div role="status" aria-live="polite" className="flex w-full min-w-0 flex-col">
-      <span className="block text-sm leading-5 text-stage-muted motion-safe:animate-[shimmer-text_2.2s_linear_infinite] motion-safe:bg-[linear-gradient(90deg,var(--stage-muted),var(--stage-strong),var(--stage-muted))] motion-safe:bg-[length:200%_100%] motion-safe:bg-clip-text motion-safe:text-transparent">
-        {label}
-      </span>
-      {activity.length > 0 ? (
-        <div className="mt-2.5">
-          <ActivityTrail activity={activity} />
-        </div>
-      ) : null}
-    </div>
-  );
+export function stampLabel(date: Date, now: Date, timeZone: string): string {
+  const time = timeLabel(date, timeZone);
+  if (sameDay(date, now, timeZone)) return time;
+  return `${dayLabel(date, now, timeZone)} · ${time}`;
 }
 
 /**
@@ -252,10 +207,12 @@ export function PresenceRow({
 export function MessageActions({
   text,
   date,
+  now,
   timeZone,
 }: {
   text: string;
   date: Date | null;
+  now: Date;
   timeZone: string;
 }) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
@@ -302,7 +259,7 @@ export function MessageActions({
       </button>
       {date ? (
         <span title={date.toLocaleString()} className="text-xs text-stage-muted">
-          {timeLabel(date, timeZone)}
+          {stampLabel(date, now, timeZone)}
         </span>
       ) : null}
     </div>
@@ -367,61 +324,6 @@ export function AssistantUpdate({ text, sources }: { text: string; sources: Reca
         <MessageMarkdown text={text} />
       </div>
     </DecisionCard>
-  );
-}
-
-/** Live tool activity as a small work trail — events are not chat bubbles. */
-function ActivityTrail({
-  activity,
-}: {
-  activity: Array<{ toolName: string; status: string; step: number }>;
-}) {
-  if (activity.length === 0) return null;
-  return (
-    // On the stage, not on paper: a well cut into the green rather than a card.
-    <section
-      className="min-w-0 max-w-full rounded-xl border border-white/12 bg-white/8 px-4 py-3"
-      aria-label="Work trail"
-    >
-      <p className="mb-2 font-mono text-xs font-medium tracking-[0.08em] text-stage-muted uppercase">
-        Work trail
-      </p>
-      <ol className="space-y-2">
-        {activity.map((item) => (
-          <li key={`${item.step}-${item.toolName}`} className="flex min-w-0 items-center gap-2.5">
-            {/* These sit on the stage, where the app's mid-tone status colours
-                sink into the green. Ordinary progress reads in the stage's own
-                white; the two states that mean something went wrong or is
-                waiting keep their hue, lifted to a tint that survives here —
-                losing that distinction would cost more than the contrast. */}
-            {item.status === 'succeeded' ? (
-              <CircleCheck className="size-3.5 shrink-0 text-stage-strong" aria-hidden="true" />
-            ) : item.status === 'failed' || item.status === 'denied' ? (
-              <CircleX className="size-3.5 shrink-0 text-red-300" aria-hidden="true" />
-            ) : item.status === 'awaiting_approval' ? (
-              <Hand className="size-3.5 shrink-0 text-amber-200" aria-hidden="true" />
-            ) : (
-              <Loader2
-                className="size-3.5 shrink-0 text-stage-strong motion-safe:animate-spin"
-                aria-hidden="true"
-              />
-            )}
-            <span className="min-w-0 flex-1 break-words text-sm [overflow-wrap:anywhere]">
-              {toolLabel(item.toolName)}
-            </span>
-            <span className="shrink-0 text-xs text-stage-muted">
-              {item.status === 'succeeded'
-                ? 'Done'
-                : item.status === 'awaiting_approval'
-                  ? 'Waiting for you'
-                  : item.status === 'failed' || item.status === 'denied'
-                    ? 'Stopped'
-                    : 'Working'}
-            </span>
-          </li>
-        ))}
-      </ol>
-    </section>
   );
 }
 

@@ -45,8 +45,6 @@ import { type InlineSuggestionPart, SuggestionCard } from './inline-suggestion';
 import { MessageMarkdown } from './markdown';
 import {
   AssistantUpdate,
-  DayDivider,
-  dayLabel,
   decodeRecallHeader,
   errorText,
   MessageActions,
@@ -54,14 +52,12 @@ import {
   messageText,
   NoticeCard,
   orderChatLog,
-  PresenceRow,
   RecallNote,
   type RecallSource,
   recallSourcesOf,
   retireProvisionalReplies,
   retireProvisionalUserTurns,
-  sameDay,
-  timeLabel,
+  stampLabel,
 } from './message-view';
 
 interface ChatClientProps {
@@ -1108,15 +1104,11 @@ export function ChatClient({
                       (isContractNotice(fullText) ? 'response-contract' : null))
                     : null;
                 const date = messageDate(message);
-                const previousDate =
-                  messageIndex > 0 ? messageDate(log[messageIndex - 1] as UIMessage) : null;
-                const showDivider =
-                  date !== null &&
-                  (previousDate === null || !sameDay(previousDate, date, agentTimezone));
                 // A chat is one continuous discussion — per-message clock times
-                // are noise there, and the day dividers already carry the "when".
-                // Proactive updates are the exception: those arrive at a time
-                // that is part of the message, so Notifications keeps them.
+                // are noise there, and the reply's own footer carries the "when"
+                // for anyone who wants it. Proactive updates are the exception:
+                // those arrive at a time that is part of the message, so
+                // Notifications keeps them.
                 const showTime = date !== null && notificationMode;
                 const recallSources = recallSourcesOf(message);
                 const hasText = visibleTextParts.length > 0 && noticeKind === null;
@@ -1125,8 +1117,7 @@ export function ChatClient({
                 // A "run" is a streak of turns from the same speaker. Handing
                 // over gets a clear break; a follow-on from the same speaker
                 // tucks in close, so a run reads as one continuous thought.
-                const startsRun =
-                  !previousMessage || previousMessage.role !== message.role || showDivider;
+                const startsRun = !previousMessage || previousMessage.role !== message.role;
                 const streamingCaret =
                   status === 'streaming' &&
                   message.role === 'assistant' &&
@@ -1138,9 +1129,6 @@ export function ChatClient({
                       isNewMessage ? 'motion-safe:animate-[message-in_220ms_ease-out]' : ''
                     }`}
                   >
-                    {showDivider && date ? (
-                      <DayDivider label={dayLabel(date, renderedNow, agentTimezone)} />
-                    ) : null}
                     {noticeKind !== null ? (
                       <NoticeCard kind={noticeKind} text={fullText} />
                     ) : notificationMode && message.role === 'assistant' && hasText ? (
@@ -1152,16 +1140,16 @@ export function ChatClient({
                         }
                       >
                         {message.role === 'assistant' ? (
-                          // The assistant speaks in the same ink its body is
-                          // made of, so the voice in the log and the face in
-                          // the notch are recognisably one creature. The
-                          // raised-card treatment is left to mean one thing
-                          // only: an object the assistant placed in the thread
-                          // (an approval, a budget ask, a work trail).
+                          // The assistant speaks on paper: a white sheet laid
+                          // on the stage, which is the one opaque material in
+                          // the thread and so reads as the thing that was
+                          // brought to you. The raised-card treatment stays
+                          // reserved for objects it places in the thread (an
+                          // approval, a budget ask).
                           <div className="group/msg min-w-0 max-w-[88%] sm:max-w-[min(76%,42rem)]">
                             <RecallNote sources={recallSources} />
                             <div
-                              className={`bubble-assistant min-w-0 max-w-full rounded-[1.375rem] rounded-bl-md px-4 py-3 text-sm leading-6 ${
+                              className={`bubble-assistant min-w-0 max-w-full rounded-[1.375rem] px-4 py-3 text-sm leading-6 ${
                                 streamingCaret ? 'chat-caret' : ''
                               }`}
                             >
@@ -1172,19 +1160,26 @@ export function ChatClient({
                                 />
                               ))}
                             </div>
-                            <MessageActions text={fullText} date={date} timeZone={agentTimezone} />
+                            <MessageActions
+                              text={fullText}
+                              date={date}
+                              now={renderedNow}
+                              timeZone={agentTimezone}
+                            />
                           </div>
                         ) : (
                           // Both speakers read at the same size — a smaller user
                           // bubble made your own words look like a footnote.
                           // That size is the one the event cards already use, so
                           // speech and system notices sit on one typographic
-                          // scale instead of two. Paper against the assistant's
-                          // ink: the two voices are told apart by material, not
-                          // just by which side of the column they sit on.
+                          // scale instead of two. Your voice takes no material
+                          // at all: an outline on the stage against the
+                          // assistant's sheet of paper, so the two are told
+                          // apart by what they are made of and not only by
+                          // which side of the column they sit on.
                           <div
                             title={date ? date.toLocaleString() : undefined}
-                            className="bubble-owner min-w-0 max-w-[88%] rounded-[1.375rem] rounded-br-md px-4 py-3 text-sm leading-6 sm:max-w-[min(76%,42rem)]"
+                            className="bubble-owner min-w-0 max-w-[88%] rounded-[1.375rem] px-4 py-3 text-sm leading-6 sm:max-w-[min(76%,42rem)]"
                           >
                             {visibleTextParts.map((part, index) => (
                               <p
@@ -1217,36 +1212,28 @@ export function ChatClient({
                           message.role === 'user' ? 'self-end' : 'self-start'
                         }`}
                       >
-                        {timeLabel(date, agentTimezone)}
+                        {stampLabel(date, renderedNow, agentTimezone)}
                       </p>
                     ) : null}
                   </div>
                 );
               })}
-              {/* The companion itself is the screen now; what stays in the log
-                  is the plain status the reader (and a screen reader) needs. */}
-              {status === 'submitted' ? (
-                <div className="mt-6">
-                  <PresenceRow phase="thinking" activity={[]} />
-                </div>
-              ) : asyncTurn ? (
-                <div className="mt-6">
-                  <PresenceRow
-                    phase={activity.length > 0 ? 'working' : 'starting'}
-                    activity={activity}
-                  />
-                  {/* No buttons ride along under the work trail any more.
-                      Stopping is the composer's spinner (that is the control
-                      the eye is already on while work runs), and Activity is a
-                      destination the "/" palette already reaches — a link here
-                      was a second way to the same place, in the one spot where
-                      the reader is watching something happen. */}
-                  {asyncActionError ? (
-                    <p role="alert" className="mt-2 text-xs text-red-200">
-                      {asyncActionError}
-                    </p>
-                  ) : null}
-                </div>
+              {/* Nothing transient is written here any more.
+               *
+               * "Thinking…", "Working…" and the live work trail all used to
+               * land in the log, and every one of them was a line that existed
+               * for a few seconds and then meant nothing — pushing the reply
+               * you were waiting for up the screen as it went. The island at
+               * the top of the screen reports all of it now, in the place the
+               * phone already uses for "something is happening", and announces
+               * it to a screen reader from there (notch-companion.tsx). What
+               * is left in the log is what stays true after the work ends.
+               *
+               * An error is one of those things, so it still lands here. */}
+              {asyncTurn && asyncActionError ? (
+                <p role="alert" className="mt-6 text-xs text-red-200">
+                  {asyncActionError}
+                </p>
               ) : null}
               {asyncNote ? (
                 <p role="status" className="mt-3 text-xs text-stage-muted">
@@ -1270,6 +1257,33 @@ export function ChatClient({
           the space it would otherwise take from the log. Everything transient
           (errors, palettes) sits in an out-of-flow stack above it, so opening
           the "/" palette never resizes the conversation. */}
+      {/* Out of the composer's form on purpose, even though it is positioned
+          against it. Out here the pill shares the log's own context, so what it
+          frosts is the conversation itself — inside, it sat above the veil and
+          could only ever pick up the veil's own output. The composer's measured
+          height is what keeps it in the same place either way. */}
+      {!atBottom && log.length > 0 && !error && !commandPaletteOpen && !modelCommandOpen ? (
+        <div
+          // `composerHeight` is the whole form's box, padding and safe-area
+          // clearance included, so this is the same 1.25rem gap above the card
+          // that the old `-top-14` inside the form worked out to.
+          style={{ bottom: `calc(${composerHeight}px + 1.25rem)` }}
+          className="pointer-events-none absolute inset-x-0 z-30 flex justify-center"
+        >
+          <button
+            type="button"
+            onClick={jumpToLatest}
+            aria-label="Jump to latest"
+            className={`pointer-events-auto mobile-touch-target inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium motion-safe:animate-[pop-in_140ms_ease-out] ${focusRing}`}
+          >
+            <ArrowDown className="size-3.5" aria-hidden="true" />
+            Jump to latest
+            {unseenCount > 0 ? (
+              <span aria-hidden="true" className="size-1.5 rounded-full bg-accent" />
+            ) : null}
+          </button>
+        </div>
+      ) : null}
       <form
         ref={formRef}
         onSubmit={(event) => {
@@ -1291,22 +1305,6 @@ export function ChatClient({
           aria-hidden="true"
           className="composer-veil pointer-events-none absolute inset-x-0 -top-16 bottom-0"
         />
-        {!atBottom && log.length > 0 && !error && !commandPaletteOpen && !modelCommandOpen ? (
-          <div className="pointer-events-none absolute inset-x-0 -top-14 z-10 flex justify-center">
-            <button
-              type="button"
-              onClick={jumpToLatest}
-              aria-label="Jump to latest"
-              className={`pointer-events-auto mobile-touch-target inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium motion-safe:animate-[pop-in_140ms_ease-out] ${focusRing}`}
-            >
-              <ArrowDown className="size-3.5" aria-hidden="true" />
-              Jump to latest
-              {unseenCount > 0 ? (
-                <span aria-hidden="true" className="size-1.5 rounded-full bg-accent" />
-              ) : null}
-            </button>
-          </div>
-        ) : null}
         <div className="pointer-events-none absolute inset-x-0 bottom-full z-20 min-w-0">
           {/* Autonomy is a per-turn choice, so it no longer holds a permanent
               seat in the composer — /auto sets it and this says so until the
