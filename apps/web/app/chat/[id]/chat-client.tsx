@@ -29,7 +29,7 @@ import {
   noticeKindOf,
 } from '@/lib/chat-notices';
 import { type CompanionActivity, setCompanionState, wakeCompanion } from '@/lib/companion-bus';
-import { BackLink, btnSm, CountBadge, focusRing, microLabelClass } from '@/lib/ui';
+import { BackLink, CountBadge, focusRing, microLabelClass } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
 import { ActionChips } from './action-chips';
@@ -1238,24 +1238,12 @@ export function ChatClient({
                     phase={activity.length > 0 ? 'working' : 'starting'}
                     activity={activity}
                   />
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <Link href={`/tasks/${asyncTurn.taskId}`} className={btnSm.outline}>
-                      View activity
-                    </Link>
-                    <button
-                      type="button"
-                      disabled={isCancellingAsync}
-                      onClick={cancelAsyncTurn}
-                      className={btnSm.dangerOutline}
-                    >
-                      {isCancellingAsync ? (
-                        <Loader2 className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
-                      ) : (
-                        <Square className="size-3.5 fill-current" aria-hidden="true" />
-                      )}
-                      {isCancellingAsync ? 'Stopping…' : 'Stop task'}
-                    </button>
-                  </div>
+                  {/* No buttons ride along under the work trail any more.
+                      Stopping is the composer's spinner (that is the control
+                      the eye is already on while work runs), and Activity is a
+                      destination the "/" palette already reaches — a link here
+                      was a second way to the same place, in the one spot where
+                      the reader is watching something happen. */}
                   {asyncActionError ? (
                     <p role="alert" className="mt-2 text-xs text-red-200">
                       {asyncActionError}
@@ -1582,6 +1570,32 @@ export function ChatClient({
                 <Square className="size-3 fill-current" aria-hidden="true" />
                 <span className="sr-only">Stop</span>
               </button>
+            ) : asyncTurn ? (
+              // The spinner IS the stop control. It used to be an inert badge
+              // saying "busy" while the button that could actually stop the
+              // work sat further up the log — so the one thing on screen that
+              // represents the running task was the one thing you could not
+              // press. Same position, same spinner, now it does the obvious.
+              <button
+                type="button"
+                disabled={isCancellingAsync}
+                onClick={cancelAsyncTurn}
+                title="Stop this task"
+                aria-label={isCancellingAsync ? 'Stopping the task' : 'Stop this task'}
+                className={`group/stop inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-white/25 bg-white/15 text-stage-strong motion-safe:transition-colors hover:bg-white/25 disabled:cursor-not-allowed ${focusRing}`}
+              >
+                {/* The square only replaces the spinner under a pointer that
+                    can hover; on a touch screen the spinner stays put and the
+                    tap does the stopping. */}
+                <Loader2
+                  className="size-4 motion-safe:animate-spin group-hover/stop:hidden"
+                  aria-hidden="true"
+                />
+                <Square
+                  className="hidden size-3 fill-current group-hover/stop:block"
+                  aria-hidden="true"
+                />
+              </button>
             ) : (
               // Readiness is a state change, not a dimmed copy of the live
               // button: with nothing to send it sits back into the composer's
@@ -1590,18 +1604,14 @@ export function ChatClient({
               <button
                 type="submit"
                 disabled={!canSend}
-                aria-label={asyncTurn ? 'Working on your request' : 'Send'}
+                aria-label="Send"
                 className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full motion-safe:transition-[background-color,color] ${focusRing} ${
                   canSend
                     ? 'bg-white text-stage hover:bg-white/90'
                     : 'cursor-not-allowed bg-white/12 text-stage-muted'
                 }`}
               >
-                {asyncTurn ? (
-                  <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-                ) : (
-                  <ArrowUp className="size-4" aria-hidden="true" />
-                )}
+                <ArrowUp className="size-4" aria-hidden="true" />
               </button>
             )}
           </div>

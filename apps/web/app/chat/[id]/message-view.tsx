@@ -389,24 +389,20 @@ function ActivityTrail({
       <ol className="space-y-2">
         {activity.map((item) => (
           <li key={`${item.step}-${item.toolName}`} className="flex min-w-0 items-center gap-2.5">
+            {/* These sit on the stage, where the app's mid-tone status colours
+                sink into the green. Ordinary progress reads in the stage's own
+                white; the two states that mean something went wrong or is
+                waiting keep their hue, lifted to a tint that survives here —
+                losing that distinction would cost more than the contrast. */}
             {item.status === 'succeeded' ? (
-              <CircleCheck
-                className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
-                aria-hidden="true"
-              />
+              <CircleCheck className="size-3.5 shrink-0 text-stage-strong" aria-hidden="true" />
             ) : item.status === 'failed' || item.status === 'denied' ? (
-              <CircleX
-                className="size-3.5 shrink-0 text-red-500 dark:text-red-400"
-                aria-hidden="true"
-              />
+              <CircleX className="size-3.5 shrink-0 text-red-300" aria-hidden="true" />
             ) : item.status === 'awaiting_approval' ? (
-              <Hand
-                className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
-                aria-hidden="true"
-              />
+              <Hand className="size-3.5 shrink-0 text-amber-200" aria-hidden="true" />
             ) : (
               <Loader2
-                className="size-3.5 shrink-0 text-accent motion-safe:animate-spin"
+                className="size-3.5 shrink-0 text-stage-strong motion-safe:animate-spin"
                 aria-hidden="true"
               />
             )}

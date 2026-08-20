@@ -19,7 +19,13 @@
 .notch-companion {
   --notch-lip: 0.625rem;
   position: fixed;
-  z-index: 40;
+  /* Above the iOS status veil (z-35, mobile-shell.css), which is the one thing
+     that can reach this far up the screen. The veil carries a backdrop-filter,
+     and WebKit will composite such a layer over siblings that paint after it —
+     which washed the housing out and left the eyes looking like they were
+     under the frosting rather than in front of it. Clearing it by a margin
+     rather than by one leaves no room for that argument. */
+  z-index: 50;
   top: 0;
   left: 50%;
   display: flex;

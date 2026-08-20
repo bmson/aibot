@@ -27,17 +27,31 @@
   --stage-well: rgb(255 255 255 / 0.07);
 }
 
-/* The stage itself: painted to the physical edges of the window rather than to
-   the chat column, so the conversation reads as taking place somewhere instead
-   of inside a panel. Fixed, so it does not scroll with the log; z-index -1
-   keeps it behind the column but still inside `main`'s stacking context, which
-   is what stops it covering the page's ambient wash. */
-.chat-viewport::before {
-  position: fixed;
-  z-index: -1;
-  inset: 0;
+/* The stage itself, painted on the DOCUMENT rather than as a layer inside the
+   page — the conversation reads as taking place somewhere, not inside a panel.
+ *
+ * This used to be a `position: fixed` layer on the chat column, which is not
+ * the same thing and left green missing wherever the fixed layer did not
+ * reach. Two places it showed: the iOS status veil is generated on `body` and
+ * mixed its wash from --surface, so a white band sat across the top of a green
+ * app; and when the keyboard opens, the visual viewport shrinks under the
+ * fixed layer, so the strip behind the keyboard fell back to the page's paper.
+ * Colouring the element that owns the whole canvas fixes both at the source,
+ * and the veil below inherits the right wash because it is body's own
+ * pseudo-element.
+ *
+ * `:has()` rather than a route class: the chat is the only surface that brings
+ * a stage with it, and this keeps that fact in the stylesheet next to
+ * everything else about the stage. */
+body:has(.chat-viewport) {
+  --ios-status-scrim: color-mix(in srgb, var(--stage) 58%, transparent);
   background: var(--stage);
-  content: "";
+}
+
+/* The same lighter wash the dark theme uses everywhere else (mobile-shell.css):
+   on a dark ground the veil needs less of it to separate the clock. */
+.dark body:has(.chat-viewport) {
+  --ios-status-scrim: color-mix(in srgb, var(--stage) 52%, transparent);
 }
 
 /* Text and rules sitting DIRECTLY on the stage read in the stage's own ink,
