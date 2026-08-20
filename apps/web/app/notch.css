@@ -29,7 +29,17 @@
    The veil paints the whole band and the island paints over it. That ordering
    is stated three ways at once, because it has been got wrong before: the two
    are siblings in one stacking context, the island is second in the DOM, and
-   the two carry explicit z-indexes. An engine has nothing left to decide.
+   the two carry explicit z-indexes.
+
+   None of which was ever the problem. All three were already true on the build
+   where the island came up frosted and green on device, because the argument
+   was never about paint order — it was about compositing, which happens after
+   paint order has been agreed. `backdrop-filter` forces WebKit to give the veil
+   a layer of its own, and a sibling with nothing to promote it gets drawn into
+   the layer beneath — which is the veil's backdrop, so the island was not just
+   covered by the glass, it was blurred and tinted through it along with the
+   conversation. The island's `translate3d` is the line that settles it; the
+   full note is on that rule.
 
    A previous attempt cut a hole in the veil around the island instead, on the
    theory that layers which never overlap cannot be ordered wrongly. Mask
@@ -140,7 +150,26 @@
   background: #000;
   color: #f4f7f5;
   pointer-events: none;
-  translate: -50% 0;
+  /* Centred with a 3D translate, and the third axis is the whole point.
+   *
+   * A layer carrying `backdrop-filter` has to be composited — WebKit cannot
+   * sample a backdrop it has not separated out — so the veil is always on a
+   * layer of its own. This shape has no such requirement, so WebKit is free to
+   * draw it into the layer underneath instead, and it does: the island lands in
+   * the veil's backdrop, comes back blurred and tinted, and no amount of
+   * z-index or DOM order moves it, because both were already correct. Overlap
+   * testing is supposed to promote it and does not, for backdrop-filter layers.
+   *
+   * A 3D operation is an unconditional compositing trigger, so `translate3d`
+   * with a zero z gives it a layer of its own — and composited layers ARE
+   * ordered by z-index. The centring is unchanged; the z is a promotion the
+   * engine cannot decline.
+   *
+   * It is one `transform` rather than the individual `translate` property
+   * because a 2D translate promotes nothing. Centring and promotion have to be
+   * the same declaration: split into two, the half that is not visibly doing
+   * anything is the half a later tidy-up removes. */
+  transform: translate3d(-50%, 0, 0);
 }
 
 /* Closed: no height at all, so nothing hangs below the hardware island.
