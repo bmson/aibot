@@ -329,6 +329,26 @@ const scheduleSeed = [
     cron: '0 22 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'memory.extract' },
   },
+  // Forwarded mail is read into memory from its own ledger rather than by the
+  // conversation sampling above, which sees at most 12 threads a night — a few
+  // percent of a real inbox. Runs every four hours so the day's dates are
+  // recallable while they still matter, not the following morning, and drains a
+  // backlog across runs. Idle and free when no mail is being ingested.
+  {
+    name: 'email-extraction',
+    cron: '20 */4 * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.35', job: 'email.extract' },
+  },
+  // The standing briefing (anticipation layer, phase 2): one digest a day of
+  // what arrived, what is coming up, and what has stopped waiting for the
+  // owner. Self-silencing — it delivers nothing on a quiet day, which is what
+  // makes it safe to have on by default, and it costs nothing at all while mail
+  // ingest is off because there is no mail to report on.
+  {
+    name: 'daily-briefing',
+    cron: '45 7 * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'briefing.compose' },
+  },
   {
     name: 'memory-consolidation',
     cron: '30 22 * * *',

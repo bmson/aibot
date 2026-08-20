@@ -41,7 +41,10 @@ const nextConfig: NextConfig = {
     // nonces needs per-request middleware — revisit if the threat model grows.
     const contentSecurityPolicy = [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' https://jelly-ui.com",
+      // Next's dev server serves webpack's eval-based module wrappers and React
+      // Refresh; without 'unsafe-eval' in development no client JS runs at all,
+      // so the page never hydrates. Production keeps the tighter policy.
+      `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === 'development' ? " 'unsafe-eval'" : ''} https://jelly-ui.com`,
       "style-src 'self' 'unsafe-inline' https://jelly-ui.com",
       "img-src 'self' data: blob:",
       "font-src 'self' data:",

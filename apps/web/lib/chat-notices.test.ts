@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   chatNoticeMessage,
-  hasContractNoticePart,
-  isApprovalProseNotice,
+  isAsyncAcknowledgement,
   isContractNotice,
+  isDecisionProseNotice,
+  noticeKindOf,
 } from './chat-notices.js';
 
 describe('chat notices', () => {
@@ -75,25 +76,53 @@ describe('isContractNotice', () => {
   });
 });
 
-describe('hasContractNoticePart', () => {
-  it('detects the structured marker and ignores other parts', () => {
+describe('noticeKindOf', () => {
+  it('names the structured marker and ignores other parts', () => {
     expect(
-      hasContractNoticePart([
+      noticeKindOf([
         { type: 'text', text: 'x' },
         { type: 'notice', notice: 'response-contract' },
       ]),
-    ).toBe(true);
-    expect(hasContractNoticePart([{ type: 'text', text: 'x' }, { type: 'recall' }])).toBe(false);
+    ).toBe('response-contract');
+    expect(noticeKindOf([{ type: 'notice', notice: 'parked' }])).toBe('parked');
+    expect(noticeKindOf([{ type: 'notice', notice: 'needs-attention' }])).toBe('needs-attention');
+    expect(noticeKindOf([{ type: 'text', text: 'x' }, { type: 'recall' }])).toBeNull();
+  });
+
+  it('ignores a kind it does not know, so an unrecognised marker stays prose', () => {
+    expect(noticeKindOf([{ type: 'notice', notice: 'something-newer' }])).toBeNull();
+    expect(noticeKindOf([null, 'text', { type: 'notice' }])).toBeNull();
   });
 });
 
-describe('isApprovalProseNotice', () => {
+describe('isAsyncAcknowledgement', () => {
+  it('matches the placeholder the chat route streams for an action turn', () => {
+    // Verbatim from acceptedStreamResponse in packages/application/src/chat-turn.ts.
+    expect(
+      isAsyncAcknowledgement('Got it — I’m working on this now. I’ll post the result here.'),
+    ).toBe(true);
+    expect(isAsyncAcknowledgement('Got it. Your flight is booked.')).toBe(false);
+  });
+});
+
+describe('isDecisionProseNotice', () => {
   it('matches the executor approval list opener', () => {
     expect(
-      isApprovalProseNotice(
+      isDecisionProseNotice(
         'This needs your approval before I act:\n\n- [A19CG] Fetch the public web page https://linear.app/careers',
       ),
     ).toBe(true);
-    expect(isApprovalProseNotice('Here is the plan for your approval:')).toBe(false);
+    expect(isDecisionProseNotice('Here is the plan for your approval:')).toBe(false);
+  });
+
+  it('matches the runtime budget request, whose card says the same thing better', () => {
+    // Verbatim opening from taskBudgetPermissionRequest in
+    // packages/core/src/workflow/executor/notices.ts.
+    expect(
+      isDecisionProseNotice(
+        'I need your permission to raise this task’s spending limit from $0.50 to $1.00 so I can finish.',
+      ),
+    ).toBe(true);
+    expect(isDecisionProseNotice('I raised the limit as you asked.')).toBe(false);
   });
 });

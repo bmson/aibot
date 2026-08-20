@@ -21,17 +21,30 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } 
 import { signOutAction } from '@/app/actions';
 import { destinationIcon, formatBadgeCount, useNavCommands } from '@/app/nav-commands';
 import { cancelTask } from '@/app/tasks/actions';
-import { hasContractNoticePart, isApprovalProseNotice, isContractNotice } from '@/lib/chat-notices';
-import { BackLink, btnSm, CountBadge, focusRing, microLabelClass } from '@/lib/ui';
+import { chipsOf, latestTheme } from '@/lib/chat-cues';
+import {
+  isAsyncAcknowledgement,
+  isContractNotice,
+  isDecisionProseNotice,
+  noticeKindOf,
+} from '@/lib/chat-notices';
+import {
+  type CompanionActivity,
+  type CompanionThought,
+  setCompanionState,
+} from '@/lib/companion-bus';
+import { BackLink, CountBadge, focusRing, microLabelClass } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
+import { toolLabel } from '@/lib/views';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
+import { ActionChips } from './action-chips';
 import { ApprovalGroup } from './approval-group';
 import type { InlineApprovalPart } from './inline-approval';
 import { InlineBudgetRequest, type InlineBudgetRequestPart } from './inline-budget-request';
+import { type InlineSuggestionPart, SuggestionCard } from './inline-suggestion';
 import { MessageMarkdown } from './markdown';
 import {
   AssistantUpdate,
-  ContractNotice,
   DayDivider,
   dayLabel,
   decodeRecallHeader,
@@ -39,10 +52,14 @@ import {
   MessageActions,
   messageDate,
   messageText,
+  NoticeCard,
+  orderChatLog,
   PresenceRow,
   RecallNote,
   type RecallSource,
   recallSourcesOf,
+  retireProvisionalReplies,
+  retireProvisionalUserTurns,
   sameDay,
   timeLabel,
 } from './message-view';
@@ -52,12 +69,22 @@ interface ChatClientProps {
   title: string;
   /** The assistant's display name — the chat header shows who you're talking to. */
   agentName: string;
+  /**
+   * The zone every date in the log is formatted in. Server and client use the
+   * same one so day dividers and times are in the first paint rather than
+   * appearing after hydration and pushing the log down.
+   */
+  agentTimezone: string;
+  /** The server's clock at render, so "Today" means the same on both sides. */
+  renderedAt: string;
   initialMessages: UIMessage[];
   models: { id: string; label: string }[];
   modelOverride: string | null;
   goalTitle?: string;
   /** A task created by the goal form before this page opened. */
   initialAsyncTurn?: { taskId: string; cursor: string };
+  /** Where the idle thread poll resumes from — the newest message at render. */
+  initialCursor?: string | null;
   archived: boolean;
   /** The one forever thread at /chat — it needs no title header of its own. */
   isPrimary: boolean;
@@ -67,7 +94,58 @@ interface ChatClientProps {
   initialInput?: string;
 }
 
-const ASYNC_ACK_TEXT = 'Got it — I’m working on this now. I’ll post the result here.';
+/** Task statuses that mean "parked on the owner", not "finished". */
+const PARKED_TASK_STATUSES = new Set(['waiting_approval', 'waiting_budget', 'needs_attention']);
+
+/**
+ * A task publishes a parked status before the card explaining the park is
+ * persisted. The executor now writes that card ahead of its outbound owner
+ * ping, so the gap is a single insert — but a poll can still land inside it,
+ * and stopping there is what left approvals invisible until a reload. Give a
+ * parked task this many extra polls to produce a card before settling, so a
+ * park that legitimately has no card (plain needs_attention prose) still ends.
+ */
+const PARK_GRACE_TICKS = 4;
+
+/** An approval or budget card — the thing a parked task is waiting on. */
+function hasDecisionPart(message: UIMessage): boolean {
+  return (message.parts as Array<{ type?: string }>).some(
+    (part) => part?.type === 'approval' || part?.type === 'budget-request',
+  );
+}
+
+/** How many on-screen decision cards one poll re-reads (matches the route). */
+const MAX_REFRESH_IDS = 10;
+
+/**
+ * Messages whose decision is still open. Their live status lives in another
+ * table, so a card answered on the Approvals page would otherwise keep offering
+ * Approve/Decline here until a reload — the log saying something that is no
+ * longer true.
+ */
+function unresolvedDecisionIds(log: UIMessage[]): string[] {
+  const ids: string[] = [];
+  // Newest first: a thread can hold more open cards than one poll may carry,
+  // and the ones the reader is looking at are the recent ones.
+  for (let index = log.length - 1; index >= 0 && ids.length < MAX_REFRESH_IDS; index -= 1) {
+    const message = log[index] as UIMessage;
+    const open = (message.parts as Array<{ type?: string; status?: string }>).some(
+      (part) =>
+        (part?.type === 'approval' ||
+          part?.type === 'budget-request' ||
+          part?.type === 'suggestion') &&
+        (part.status === undefined || part.status === 'pending' || part.status === 'snoozed'),
+    );
+    if (open) ids.push(message.id);
+  }
+  return ids;
+}
+
+/** Poll cadence while a task is running, versus the open thread sitting idle. */
+const ACTIVE_POLL_MS = 2_500;
+const IDLE_POLL_MS = 12_000;
+/** How long to keep claiming live progress for one turn before saying so. */
+const TURN_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * One entry in the "/" palette. Composer commands act on this chat; navigation
@@ -124,11 +202,14 @@ export function ChatClient({
   conversationId,
   title,
   agentName,
+  agentTimezone,
+  renderedAt,
   initialMessages,
   models,
   modelOverride,
   goalTitle,
   initialAsyncTurn,
+  initialCursor,
   archived,
   isPrimary,
   canArchive,
@@ -181,6 +262,41 @@ export function ChatClient({
   /** Messages present at mount render static; only genuinely new ones animate in. */
   const initialMessageIdsRef = useRef<Set<string> | null>(null);
   initialMessageIdsRef.current ??= new Set(initialMessages.map((message) => message.id));
+  /**
+   * Where each message came into the log. Only the client's own messages need
+   * it — they carry no send time to sort on — but it is assigned to every id so
+   * a message's place in the sequence is fixed the first time it is seen and
+   * never recomputed. See orderChatLog.
+   */
+  const arrivalOrderRef = useRef<Map<string, number>>(new Map());
+
+  /**
+   * How far the thread poll has read. This is deliberately a ref and not state:
+   * it has to survive a turn settling, and re-running the poll effect on every
+   * change would restart the loop mid-conversation.
+   */
+  const cursorRef = useRef<string | null>(initialCursor ?? null);
+  /**
+   * Ids the server has actually sent us. A message the client made itself — an
+   * optimistic user turn, a reply still streaming — is not in here, which is
+   * how the merge tells its own provisional copies from durable ones.
+   */
+  const serverIdsRef = useRef<Set<string>>(new Set(initialMessages.map((message) => message.id)));
+  /** Read inside the poll loop, which must not re-subscribe when these change. */
+  const asyncTurnRef = useRef<{ taskId: string; cursor: string } | null>(initialAsyncTurn ?? null);
+  const statusRef = useRef<string>('ready');
+  /** Lets the poll name the decision cards on screen without re-subscribing. */
+  const logRef = useRef<UIMessage[]>(initialMessages);
+  /** Per-turn settle bookkeeping, reset when a new task takes over. */
+  const turnRef = useRef<{
+    taskId: string;
+    startedAt: number;
+    sawAssistant: boolean;
+    sawDecision: boolean;
+    graceTicks: number;
+  } | null>(null);
+  /** Lets a fresh turn wake the poll instead of waiting out an idle interval. */
+  const pokePollRef = useRef<(() => void) | null>(null);
 
   const transport = useMemo(
     () =>
@@ -226,13 +342,30 @@ export function ChatClient({
     messages: initialMessages,
     transport,
   });
+  // The poll loop reads these without re-subscribing on every change.
+  statusRef.current = status;
+  asyncTurnRef.current = asyncTurn;
 
-  // Timestamps and day dividers use the browser timezone, so they render only
-  // after mount — the server-rendered HTML must not bake in the server's zone.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  /**
+   * The log as it is read: ordered once, in one place, from the merged set.
+   *
+   * The acknowledgement the chat route streams back for an action turn is
+   * dropped here. It is never persisted, so it can never meet a durable twin —
+   * left in, it would sit pinned below every message that lands after it. The
+   * presence row underneath says the same thing while the work is running.
+   */
+  const log = useMemo(
+    () =>
+      orderChatLog(
+        messages.filter(
+          (message) =>
+            serverIdsRef.current.has(message.id) || !isAsyncAcknowledgement(messageText(message)),
+        ),
+        arrivalOrderRef.current,
+      ),
+    [messages],
+  );
+  logRef.current = log;
 
   useEffect(() => {
     setSelectedModel(modelOverride);
@@ -248,22 +381,35 @@ export function ChatClient({
     }
   }, [status]);
 
-  // Action turns run in the executor (tools, approvals) — poll the thread
-  // until the task settles, then replace the local ack with the real answer.
+  // One poll for the whole thread, for as long as the page is open.
+  //
+  // It used to start when a turn was handed to the executor and stop when that
+  // task settled, which meant the log only ever updated itself during a turn
+  // you had just sent. Everything else — the executor resuming after you
+  // approve, a schedule or watch posting, inbound mail mirrored into chat —
+  // landed in the database with nobody listening and appeared only on the next
+  // page load. The cursor now outlives any single task: settling a turn ends
+  // the turn's presence UI, not the listening.
   useEffect(() => {
-    if (!asyncTurn) return;
-    const startedAt = Date.now();
-    const TIMEOUT_MS = 5 * 60 * 1000;
     let cancelled = false;
-    let cursor = asyncTurn.cursor;
-    let sawAssistant = false;
+    let timer = 0;
 
-    const mergeMessages = (incoming: UIMessage[]) => {
-      if (incoming.length === 0) return;
+    // Merge durable rows into the log by id, then retire the client's own
+    // provisional copies of them. Ordering is NOT decided here — orderChatLog
+    // derives it from the merged set on every render, so this and useChat's own
+    // appends cannot disagree about where a message goes.
+    const mergeMessages = (incoming: UIMessage[], refreshed: UIMessage[]) => {
+      const arriving = [...incoming, ...refreshed];
+      for (const message of arriving) serverIdsRef.current.add(message.id);
+      // A reply still streaming has no persisted twin yet, so leave replies
+      // alone until it finishes. Reconciling the user's own turn is always safe
+      // — it only ever removes a duplicate of something already on screen, and
+      // that duplicate was visible for the whole stream before.
+      const streaming = statusRef.current === 'streaming' || statusRef.current === 'submitted';
       setMessages((current) => {
         const merged = [...current];
         const indexes = new Map(merged.map((message, index) => [message.id, index]));
-        for (const message of incoming) {
+        for (const message of arriving) {
           const index = indexes.get(message.id);
           if (index === undefined) {
             indexes.set(message.id, merged.length);
@@ -272,17 +418,13 @@ export function ChatClient({
             merged[index] = message;
           }
         }
-        // The route sends a short acknowledgement while an action task starts.
-        // Once the durable assistant reply arrives, remove that temporary copy
-        // so a simple request still reads as one coherent conversation.
-        const hasDurableReply = incoming.some(
-          (message) => message.role === 'assistant' && messageText(message) !== ASYNC_ACK_TEXT,
-        );
-        return hasDurableReply
-          ? merged.filter(
-              (message) => message.role !== 'assistant' || messageText(message) !== ASYNC_ACK_TEXT,
-            )
-          : merged;
+        let reconciled = retireProvisionalUserTurns(merged, serverIdsRef.current);
+        if (!streaming) reconciled = retireProvisionalReplies(reconciled, serverIdsRef.current);
+        // Reconciliation reads the whole log rather than one page, so an idle
+        // tick can still finish what a tick during a stream could not. Hand
+        // back the same array when nothing moved so React skips the re-render.
+        const changed = arriving.length > 0 || reconciled.length !== merged.length;
+        return changed ? reconciled : current;
       });
     };
 
@@ -291,68 +433,175 @@ export function ChatClient({
       setAsyncNote(note);
       setAsyncTurn(null);
       setActivity([]);
+      turnRef.current = null;
     };
 
     const tick = async () => {
       if (cancelled) return;
+      const turn = asyncTurnRef.current;
+      // Nothing to catch up on while the tab is hidden, and a background tab
+      // polling forever is the kind of thing that shows up on a phone battery.
+      if (document.visibilityState !== 'visible') return schedule(turn);
+      // Per-turn settle state, reset whenever a new task takes over.
+      if (turn && turnRef.current?.taskId !== turn.taskId) {
+        turnRef.current = {
+          taskId: turn.taskId,
+          startedAt: Date.now(),
+          sawAssistant: false,
+          sawDecision: false,
+          graceTicks: PARK_GRACE_TICKS,
+        };
+      }
+      const turnState = turn ? turnRef.current : null;
       try {
-        const query = new URLSearchParams({
-          conversationId,
-          taskId: asyncTurn.taskId,
-          cursor,
-        });
+        const query = new URLSearchParams({ conversationId });
+        if (turn) query.set('taskId', turn.taskId);
+        if (cursorRef.current) query.set('cursor', cursorRef.current);
+        const refreshIds = unresolvedDecisionIds(logRef.current);
+        if (refreshIds.length > 0) query.set('refresh', refreshIds.join(','));
         const res = await fetch(`/api/chat/status?${query.toString()}`);
         if (res.ok) {
           const data = (await res.json()) as {
-            taskStatus: string;
+            taskStatus: string | null;
             messages: UIMessage[];
+            refreshed?: UIMessage[];
             nextCursor: string | null;
             hasMore: boolean;
-            activity?: Array<{
-              toolName: string;
-              status: string;
-              step: number;
-            }>;
+            activity?: Array<{ toolName: string; status: string; step: number }>;
           };
-          setActivity(data.activity ?? []);
-          mergeMessages(data.messages);
-          sawAssistant ||= data.messages.some((message) => message.role === 'assistant');
-          if (data.nextCursor) cursor = data.nextCursor;
-          if (data.hasMore) {
-            if (!cancelled) window.setTimeout(tick, 0);
+          if (turn) setActivity(data.activity ?? []);
+          // `refreshed` is deliberately kept out of the settle checks below: a
+          // re-read of a card already on screen is not this turn producing an
+          // answer.
+          mergeMessages(data.messages, data.refreshed ?? []);
+          // The cursor deliberately lags behind rows too fresh to be safely
+          // remembered (see CURSOR_SETTLE_MS in the application service), so a
+          // tick can legitimately end where it began. Only chase the next page
+          // when the cursor actually moved — otherwise this loop would re-ask
+          // for the same page with no delay between tries.
+          const advanced = Boolean(data.nextCursor) && data.nextCursor !== cursorRef.current;
+          if (data.nextCursor) cursorRef.current = data.nextCursor;
+          if (data.hasMore && advanced) {
+            if (!cancelled) timer = window.setTimeout(tick, 0);
             return;
           }
-          if (
-            (data.taskStatus === 'done' ||
-              data.taskStatus === 'waiting_approval' ||
-              data.taskStatus === 'waiting_budget' ||
-              data.taskStatus === 'needs_attention') &&
-            sawAssistant
-          ) {
-            return settle(null);
-          }
-          if (data.taskStatus === 'failed' || data.taskStatus === 'cancelled') {
-            return settle(
-              `The task ${data.taskStatus === 'cancelled' ? 'was cancelled' : 'ended unsuccessfully'}.`,
+          if (turnState && data.taskStatus) {
+            turnState.sawAssistant ||= data.messages.some(
+              (message) => message.role === 'assistant',
             );
+            turnState.sawDecision ||= data.messages.some(hasDecisionPart);
+            if (data.taskStatus === 'done' && turnState.sawAssistant) return settle(null);
+            if (PARKED_TASK_STATUSES.has(data.taskStatus) && turnState.sawAssistant) {
+              // Stop as soon as the card the park is waiting on is here.
+              // Without one, keep polling for a bounded grace: the status can
+              // be observed in the moment between the park commit and the
+              // card's insert, and settling there loses the card.
+              if (turnState.sawDecision || turnState.graceTicks <= 0) return settle(null);
+              turnState.graceTicks -= 1;
+            }
+            if (data.taskStatus === 'failed' || data.taskStatus === 'cancelled') {
+              return settle(
+                `The task ${data.taskStatus === 'cancelled' ? 'was cancelled' : 'ended unsuccessfully'}.`,
+              );
+            }
           }
         }
       } catch {
-        // transient poll failure — keep trying until the timeout
+        // transient poll failure — the next tick tries again
       }
-      if (Date.now() - startedAt > TIMEOUT_MS) {
-        return settle('Still working. The result will appear here when it finishes.');
+      // Give up on *waiting* for a long turn, not on the thread: the presence
+      // row stops claiming live progress while the poll keeps running, so the
+      // answer still lands on its own whenever the executor finishes.
+      if (turnState && Date.now() - turnState.startedAt > TURN_TIMEOUT_MS) {
+        settle('Still working. The result will appear here when it finishes.');
+        return schedule(null);
       }
-      if (!cancelled) window.setTimeout(tick, 2500);
+      schedule(asyncTurnRef.current);
     };
 
+    const schedule = (turn: { taskId: string } | null) => {
+      if (cancelled) return;
+      timer = window.setTimeout(tick, turn ? ACTIVE_POLL_MS : IDLE_POLL_MS);
+    };
+
+    // Coming back to the tab should feel current immediately, not one idle
+    // interval later.
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || cancelled) return;
+      window.clearTimeout(timer);
+      void tick();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    pokePollRef.current = onVisible;
     void tick();
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+      pokePollRef.current = null;
     };
-  }, [asyncTurn, conversationId, setMessages]);
+  }, [conversationId, setMessages]);
 
+  // Sending a turn must not wait out an idle interval before the poll notices
+  // the new task — re-tick as soon as one is handed over.
+  useEffect(() => {
+    if (asyncTurn) pokePollRef.current?.();
+  }, [asyncTurn]);
+
+  // One instant for every relative day label, taken from the server's clock, so
+  // the markup the browser hydrates matches the markup it was sent.
+  const renderedNow = useMemo(() => new Date(renderedAt), [renderedAt]);
   const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
+
+  const chatTheme = useMemo(() => latestTheme(log), [log]);
+  const companionActivity: CompanionActivity =
+    status === 'submitted'
+      ? 'thinking'
+      : status === 'streaming'
+        ? 'speaking'
+        : asyncTurn
+          ? 'working'
+          : 'listening';
+
+  /*
+   * What the island says the model is doing — its inner monologue, one line at
+   * a time.
+   *
+   * The newest tool step wins while a task is running, because that is the
+   * thing actually happening; the two turn-level states cover the gap before
+   * any tool has reported. Labels come from toolLabel, the same source the work
+   * trail reads, so the island and the log never describe one step two ways.
+   */
+  const latestStep = activity.length > 0 ? activity[activity.length - 1] : undefined;
+  const thought = useMemo<CompanionThought | null>(() => {
+    if (status === 'submitted') return { label: 'Thinking', tone: 'thinking' };
+    if (status === 'streaming') return { label: 'Replying', tone: 'working' };
+    if (!asyncTurn) return null;
+    if (!latestStep) return { label: 'Starting the work', tone: 'working' };
+    const label = toolLabel(latestStep.toolName);
+    if (latestStep.status === 'failed' || latestStep.status === 'denied') {
+      return { label, tone: 'failed' };
+    }
+    if (latestStep.status === 'awaiting_approval') return { label, tone: 'waiting' };
+    if (latestStep.status === 'succeeded') return { label, tone: 'done' };
+    return { label, tone: 'working' };
+  }, [status, asyncTurn, latestStep]);
+
+  // Hand it to the island at the top of the screen. The bus compares thoughts
+  // by value and drops no-op patches, so this runs on every render without
+  // restarting the animation it is already playing.
+  useEffect(() => {
+    setCompanionState({ activity: companionActivity, thought });
+  }, [companionActivity, thought]);
+
+  // A chat left open should not keep claiming the island once you navigate
+  // away; the shell's own presence takes back over.
+  useEffect(() => {
+    return () => {
+      setCompanionState({ activity: 'idle', thought: null });
+    };
+  }, []);
+
   const displayTitle = title === 'Untitled' ? 'New conversation' : title;
   const notificationMode = displayTitle.toLowerCase() === 'notifications';
   const commandInput = input.trimStart();
@@ -548,18 +797,15 @@ export function ChatClient({
   // A message or streamed text landed while the reader was scrolled up — keep
   // the jump pill meaningful even when the message count itself did not grow.
   useEffect(() => {
-    const addedMessages = Math.max(0, messages.length - previousMessageCountRef.current);
-    const transcriptLength = messages.reduce(
-      (total, message) => total + messageText(message).length,
-      0,
-    );
+    const addedMessages = Math.max(0, log.length - previousMessageCountRef.current);
+    const transcriptLength = log.reduce((total, message) => total + messageText(message).length, 0);
     const streamedTextGrew = transcriptLength > previousTranscriptLengthRef.current;
     if (!stickToBottomRef.current && (addedMessages > 0 || streamedTextGrew)) {
       setUnseenCount((count) => (addedMessages > 0 ? count + addedMessages : Math.max(count, 1)));
     }
-    previousMessageCountRef.current = messages.length;
+    previousMessageCountRef.current = log.length;
     previousTranscriptLengthRef.current = transcriptLength;
-  }, [messages]);
+  }, [log]);
 
   // The composer floats over the conversation, so nothing in the log can rely
   // on it taking layout space. Measure the form and feed that height back two
@@ -676,14 +922,17 @@ export function ChatClient({
     // above), not this container: prose that runs to 1000px is tiring, and
     // pinning the user's bubbles that far right would make a two-way
     // exchange read as two columns regardless of how wide the column is.
-    <div className="chat-viewport relative mx-auto -my-5 flex h-[calc(100dvh-1rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-7 lg:h-[calc(100dvh-var(--app-chrome,0px))] lg:max-w-4xl 2xl:max-w-[56rem]">
+    <div
+      data-chat-theme={chatTheme !== 'default' ? chatTheme : undefined}
+      className="chat-viewport relative mx-auto -my-5 flex h-[calc(100dvh-1rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-7 lg:h-[calc(100dvh-var(--app-chrome,0px))] lg:max-w-4xl 2xl:max-w-[56rem]"
+    >
       {/* The primary thread is the whole surface — it needs no title. Side and
           goal chats keep a slim header so you know which one you're in. */}
       {!isPrimary ? (
         // A side thread is a subpage like any other: it gets back to its parent
         // list, which gets back to the main thread. The "/" palette only exists
         // in the composer below, so this is the way out that is always visible.
-        <header className="border-b border-edge pt-7 pb-3 lg:pt-10">
+        <header className="border-b border-white/15 pt-7 pb-3 lg:pt-10">
           <BackLink href="/chat/all">All chats</BackLink>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
@@ -694,10 +943,12 @@ export function ChatClient({
                 {displayTitle}
               </h1>
               {goalTitle ? (
-                <p className="mt-0.5 truncate text-xs text-muted">Working toward: {goalTitle}</p>
+                <p className="mt-0.5 truncate text-xs text-stage-muted">
+                  Working toward: {goalTitle}
+                </p>
               ) : null}
               {archived ? (
-                <p className="mt-0.5 text-xs text-muted">
+                <p className="mt-0.5 text-xs text-stage-muted">
                   Archived — sending a message restores this chat.
                 </p>
               ) : null}
@@ -725,7 +976,7 @@ export function ChatClient({
       {initialNotice ? (
         <div
           role="alert"
-          className="mt-3 border-l-2 border-amber-400 py-1 pl-4 text-sm leading-5 text-amber-900 dark:border-amber-700 dark:text-amber-100"
+          className="paper mt-3 rounded-xl border border-amber-300/80 bg-amber-50 px-4 py-2.5 text-sm leading-5 text-amber-900 dark:border-amber-800/70 dark:bg-amber-950/60 dark:text-amber-100"
         >
           {initialNotice}
         </div>
@@ -750,12 +1001,12 @@ export function ChatClient({
             `my-auto` on the opening screen) does that, while a thread long
             enough to overflow simply scrolls as before. */}
         <div className="flex min-h-full min-w-0 flex-col">
-          {messages.length === 0 ? (
+          {log.length === 0 ? (
             <div className="mx-auto flex max-w-xl flex-col items-center text-center my-auto">
-              <span className="inline-flex size-12 items-center justify-center rounded-2xl bg-sunken text-accent">
+              <span className="inline-flex size-14 items-center justify-center rounded-2xl">
                 <Sparkles className="size-5" aria-hidden="true" />
               </span>
-              <p className="mt-4 font-display text-2xl leading-8 font-semibold tracking-[-0.025em] text-balance text-strong">
+              <p className="mt-5 font-display text-2xl leading-8 font-semibold tracking-[-0.025em] text-balance">
                 What should we move forward?
               </p>
               {/* A small hand-drawn stroke that sketches itself in under the
@@ -763,14 +1014,14 @@ export function ChatClient({
               <svg aria-hidden="true" viewBox="0 0 140 10" fill="none" className="mt-2 h-2.5 w-36">
                 <path
                   d="M3 7 C 28 3, 55 8.5, 82 5 S 125 3.5, 137 5.5"
-                  stroke="var(--accent)"
-                  strokeOpacity="0.65"
+                  stroke="currentColor"
+                  strokeOpacity="0.45"
                   strokeWidth="2.5"
                   strokeLinecap="round"
                   className="[stroke-dasharray:160] [stroke-dashoffset:160] motion-safe:animate-[draw-in_700ms_ease-out_250ms_forwards] motion-reduce:[stroke-dashoffset:0]"
                 />
               </svg>
-              <p className="mt-2 max-w-md text-base leading-6 text-pretty text-muted">
+              <p className="mt-2 max-w-md text-base leading-6 text-pretty text-stage-muted">
                 Start with an outcome. {agentName} can research, plan, draft, schedule, and keep
                 following up when the work takes time.
               </p>
@@ -802,12 +1053,10 @@ export function ChatClient({
                         sendTurn(suggestion.text, false);
                       }}
                       style={{ animationDelay: `${index * 60}ms` }}
-                      className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between rounded-2xl bg-raised p-3 text-left ring-1 ring-edge/60 motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-colors hover:bg-sunken/30 disabled:opacity-60 ${focusRing}`}
+                      className={`mobile-touch-target flex min-h-20 flex-col items-start justify-between p-3 text-left motion-safe:animate-[presence-arrive_320ms_ease-out_both] disabled:opacity-60 ${focusRing}`}
                     >
-                      <SuggestionIcon className="size-4 text-accent" aria-hidden="true" />
-                      <span className="mt-3 text-sm font-medium text-strong">
-                        {suggestion.label}
-                      </span>
+                      <SuggestionIcon className="size-4 opacity-70" aria-hidden="true" />
+                      <span className="mt-3 text-sm font-medium">{suggestion.label}</span>
                     </button>
                   );
                 })}
@@ -815,9 +1064,12 @@ export function ChatClient({
             </div>
           ) : (
             <div className="mt-auto flex min-w-0 flex-col">
-              {messages.map((message, messageIndex) => {
+              {log.map((message, messageIndex) => {
                 const parts = message.parts as Array<
-                  UIMessage['parts'][number] | InlineApprovalPart | InlineBudgetRequestPart
+                  | UIMessage['parts'][number]
+                  | InlineApprovalPart
+                  | InlineBudgetRequestPart
+                  | InlineSuggestionPart
                 >;
                 const approvalParts = parts.filter(
                   (part): part is InlineApprovalPart => part.type === 'approval',
@@ -825,42 +1077,51 @@ export function ChatClient({
                 const budgetParts = parts.filter(
                   (part): part is InlineBudgetRequestPart => part.type === 'budget-request',
                 );
+                const suggestionParts = parts.filter(
+                  (part): part is InlineSuggestionPart => part.type === 'suggestion',
+                );
                 const textParts = parts.filter(
                   (part): part is Extract<UIMessage['parts'][number], { type: 'text' }> =>
                     part.type === 'text',
                 );
-                // The grouped card repeats the executor's prose approval list —
-                // hide the duplicate text, never the persisted message itself.
+                // The card repeats the executor's own prose about the same
+                // decision — hide the duplicate text, never the persisted
+                // message itself.
                 const visibleTextParts =
-                  approvalParts.length > 0
-                    ? textParts.filter((part) => !isApprovalProseNotice(part.text))
+                  approvalParts.length > 0 || budgetParts.length > 0
+                    ? textParts.filter((part) => !isDecisionProseNotice(part.text))
                     : textParts;
                 const fullText = visibleTextParts
                   .map((part) => part.text)
                   .join('')
                   .trim();
-                const isNotice =
+                // A card the assistant placed answers for itself, so a notice
+                // marker on the same message never overrides it. `isContractNotice`
+                // still matches by prose for messages persisted before the
+                // structured marker existed.
+                const noticeKind =
                   message.role === 'assistant' &&
                   approvalParts.length === 0 &&
                   budgetParts.length === 0 &&
-                  fullText !== '' &&
-                  (hasContractNoticePart(parts) || isContractNotice(fullText));
+                  fullText !== ''
+                    ? (noticeKindOf(parts) ??
+                      (isContractNotice(fullText) ? 'response-contract' : null))
+                    : null;
                 const date = messageDate(message);
                 const previousDate =
-                  messageIndex > 0 ? messageDate(messages[messageIndex - 1] as UIMessage) : null;
+                  messageIndex > 0 ? messageDate(log[messageIndex - 1] as UIMessage) : null;
                 const showDivider =
-                  mounted &&
                   date !== null &&
-                  (previousDate === null || !sameDay(previousDate, date));
+                  (previousDate === null || !sameDay(previousDate, date, agentTimezone));
                 // A chat is one continuous discussion — per-message clock times
                 // are noise there, and the day dividers already carry the "when".
                 // Proactive updates are the exception: those arrive at a time
                 // that is part of the message, so Notifications keeps them.
-                const showTime = mounted && date !== null && notificationMode;
+                const showTime = date !== null && notificationMode;
                 const recallSources = recallSourcesOf(message);
-                const hasText = visibleTextParts.length > 0 && !isNotice;
+                const hasText = visibleTextParts.length > 0 && noticeKind === null;
                 const isNewMessage = !initialMessageIdsRef.current?.has(message.id);
-                const previousMessage = messageIndex > 0 ? messages[messageIndex - 1] : undefined;
+                const previousMessage = messageIndex > 0 ? log[messageIndex - 1] : undefined;
                 // A "run" is a streak of turns from the same speaker. Handing
                 // over gets a clear break; a follow-on from the same speaker
                 // tucks in close, so a run reads as one continuous thought.
@@ -869,7 +1130,7 @@ export function ChatClient({
                 const streamingCaret =
                   status === 'streaming' &&
                   message.role === 'assistant' &&
-                  messageIndex === messages.length - 1;
+                  messageIndex === log.length - 1;
                 return (
                   <div
                     key={message.id}
@@ -877,9 +1138,11 @@ export function ChatClient({
                       isNewMessage ? 'motion-safe:animate-[message-in_220ms_ease-out]' : ''
                     }`}
                   >
-                    {showDivider && date ? <DayDivider label={dayLabel(date, new Date())} /> : null}
-                    {isNotice ? (
-                      <ContractNotice text={fullText} />
+                    {showDivider && date ? (
+                      <DayDivider label={dayLabel(date, renderedNow, agentTimezone)} />
+                    ) : null}
+                    {noticeKind !== null ? (
+                      <NoticeCard kind={noticeKind} text={fullText} />
                     ) : notificationMode && message.role === 'assistant' && hasText ? (
                       <AssistantUpdate text={fullText} sources={recallSources} />
                     ) : hasText ? (
@@ -889,15 +1152,16 @@ export function ChatClient({
                         }
                       >
                         {message.role === 'assistant' ? (
-                          // A neutral bubble distinct from the user's accent
-                          // gradient — it reads as the bot's voice while
-                          // keeping the raised-card treatment meaning one
-                          // thing only: an object the assistant placed in the
-                          // thread (an approval, a budget ask, a work trail).
+                          // The assistant speaks in the same ink its body is
+                          // made of, so the voice in the log and the face in
+                          // the notch are recognisably one creature. The
+                          // raised-card treatment is left to mean one thing
+                          // only: an object the assistant placed in the thread
+                          // (an approval, a budget ask, a work trail).
                           <div className="group/msg min-w-0 max-w-[88%] sm:max-w-[min(76%,42rem)]">
                             <RecallNote sources={recallSources} />
                             <div
-                              className={`min-w-0 max-w-full rounded-2xl rounded-bl-md bg-raised px-4 py-3 text-sm text-strong ring-1 ring-edge/60 ${
+                              className={`bubble-assistant min-w-0 max-w-full rounded-[1.375rem] rounded-bl-md px-4 py-3 text-sm leading-6 ${
                                 streamingCaret ? 'chat-caret' : ''
                               }`}
                             >
@@ -908,17 +1172,19 @@ export function ChatClient({
                                 />
                               ))}
                             </div>
-                            <MessageActions text={fullText} date={date} />
+                            <MessageActions text={fullText} date={date} timeZone={agentTimezone} />
                           </div>
                         ) : (
                           // Both speakers read at the same size — a smaller user
                           // bubble made your own words look like a footnote.
                           // That size is the one the event cards already use, so
                           // speech and system notices sit on one typographic
-                          // scale instead of two.
+                          // scale instead of two. Paper against the assistant's
+                          // ink: the two voices are told apart by material, not
+                          // just by which side of the column they sit on.
                           <div
                             title={date ? date.toLocaleString() : undefined}
-                            className="min-w-0 max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover px-4 py-3 text-sm leading-6 text-white sm:max-w-[min(76%,42rem)]"
+                            className="bubble-owner min-w-0 max-w-[88%] rounded-[1.375rem] rounded-br-md px-4 py-3 text-sm leading-6 sm:max-w-[min(76%,42rem)]"
                           >
                             {visibleTextParts.map((part, index) => (
                               <p
@@ -936,19 +1202,29 @@ export function ChatClient({
                     {budgetParts.map((part) => (
                       <InlineBudgetRequest key={part.taskId} part={part} />
                     ))}
+                    <SuggestionCard parts={suggestionParts} />
+                    {message.role === 'assistant' && noticeKind === null ? (
+                      <ActionChips
+                        labels={chipsOf(message)}
+                        active={messageIndex === log.length - 1 && !busy}
+                        onSend={(label) => sendTurn(label, false)}
+                      />
+                    ) : null}
                     {showTime && date ? (
                       <p
                         title={date.toLocaleString()}
-                        className={`text-xs text-muted ${
+                        className={`text-xs text-stage-muted ${
                           message.role === 'user' ? 'self-end' : 'self-start'
                         }`}
                       >
-                        {timeLabel(date)}
+                        {timeLabel(date, agentTimezone)}
                       </p>
                     ) : null}
                   </div>
                 );
               })}
+              {/* The companion itself is the screen now; what stays in the log
+                  is the plain status the reader (and a screen reader) needs. */}
               {status === 'submitted' ? (
                 <div className="mt-6">
                   <PresenceRow phase="thinking" activity={[]} />
@@ -959,36 +1235,21 @@ export function ChatClient({
                     phase={activity.length > 0 ? 'working' : 'starting'}
                     activity={activity}
                   />
-                  <div className="mt-3 flex flex-wrap items-center gap-2 pl-[18px]">
-                    <Link href={`/tasks/${asyncTurn.taskId}`} className={btnSm.outline}>
-                      View activity
-                    </Link>
-                    <button
-                      type="button"
-                      disabled={isCancellingAsync}
-                      onClick={cancelAsyncTurn}
-                      className={btnSm.dangerOutline}
-                    >
-                      {isCancellingAsync ? (
-                        <Loader2 className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
-                      ) : (
-                        <Square className="size-3.5 fill-current" aria-hidden="true" />
-                      )}
-                      {isCancellingAsync ? 'Stopping…' : 'Stop task'}
-                    </button>
-                  </div>
+                  {/* No buttons ride along under the work trail any more.
+                      Stopping is the composer's spinner (that is the control
+                      the eye is already on while work runs), and Activity is a
+                      destination the "/" palette already reaches — a link here
+                      was a second way to the same place, in the one spot where
+                      the reader is watching something happen. */}
                   {asyncActionError ? (
-                    <p
-                      role="alert"
-                      className="mt-2 pl-[18px] text-xs text-red-700 dark:text-red-300"
-                    >
+                    <p role="alert" className="mt-2 text-xs text-red-200">
                       {asyncActionError}
                     </p>
                   ) : null}
                 </div>
               ) : null}
               {asyncNote ? (
-                <p role="status" className="mt-3 text-xs text-muted">
+                <p role="status" className="mt-3 text-xs text-stage-muted">
                   {asyncNote}{' '}
                   <Link href="/tasks" className="font-medium underline underline-offset-2">
                     Open Activity
@@ -1018,21 +1279,25 @@ export function ChatClient({
         style={{ marginTop: `-${composerHeight}px` }}
         className="mobile-safe-bottom pointer-events-none sticky bottom-0 z-20 min-w-0 sm:pb-3"
       >
-        {/* The scrim stops at the composer's own bottom edge. It used to hang
-            below it, which cost nothing when the column ended above the fold
-            but now adds its overhang to the document — the whole page would
-            scroll a little, sliding the "full height" log out of place. */}
+        {/* The veil the composer and the jump pill are glass against: it
+            frosts and thins the log on its way under them rather than hiding
+            it behind a band of stage — conversation.css cuts the material.
+
+            It stops at the composer's own bottom edge. It used to hang below
+            it, which cost nothing when the column ended above the fold but now
+            adds its overhang to the document — the whole page would scroll a
+            little, sliding the "full height" log out of place. */}
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 -top-16 bottom-0 bg-gradient-to-t from-surface from-35% via-surface/85 to-transparent"
+          className="composer-veil pointer-events-none absolute inset-x-0 -top-16 bottom-0"
         />
-        {!atBottom && messages.length > 0 && !error && !commandPaletteOpen && !modelCommandOpen ? (
+        {!atBottom && log.length > 0 && !error && !commandPaletteOpen && !modelCommandOpen ? (
           <div className="pointer-events-none absolute inset-x-0 -top-14 z-10 flex justify-center">
             <button
               type="button"
               onClick={jumpToLatest}
               aria-label="Jump to latest"
-              className={`pointer-events-auto mobile-touch-target inline-flex h-9 items-center gap-1.5 rounded-full bg-raised px-3.5 text-xs font-medium text-strong ring-1 ring-edge motion-safe:animate-[pop-in_140ms_ease-out] ${focusRing}`}
+              className={`pointer-events-auto mobile-touch-target inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium motion-safe:animate-[pop-in_140ms_ease-out] ${focusRing}`}
             >
               <ArrowDown className="size-3.5" aria-hidden="true" />
               Jump to latest
@@ -1095,7 +1360,7 @@ export function ChatClient({
           {commandPaletteOpen ? (
             <section
               aria-label="Commands"
-              className="pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
+              className="paper pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
             >
               <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-2.5">
                 <p className="text-sm font-semibold text-strong">Commands</p>
@@ -1124,7 +1389,7 @@ export function ChatClient({
           {modelCommandOpen ? (
             <section
               aria-label="Choose response model"
-              className="pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
+              className="paper pointer-events-auto relative mb-2 min-w-0 overflow-hidden rounded-[var(--radius-shell)] bg-raised ring-1 ring-edge motion-safe:animate-[pop-in_120ms_ease-out]"
             >
               <div className="flex min-w-0 items-center justify-between gap-3 border-b border-edge px-4 py-3">
                 <div className="min-w-0">
@@ -1288,7 +1553,7 @@ export function ChatClient({
               }}
               placeholder="Ask anything…"
               rows={1}
-              className="block max-h-40 min-h-11 w-full min-w-0 flex-1 resize-none self-center border-0 bg-transparent px-2 py-2 text-base leading-6 outline-none placeholder:text-muted/70 sm:text-sm"
+              className="block max-h-40 min-h-11 w-full min-w-0 flex-1 resize-none self-center border-0 bg-transparent px-2 py-2 text-base leading-6 outline-none sm:text-sm"
             />
             {/* No rule between the field and its controls. A full-bleed border
                 ran straight into the card's corner arc, which cut it off at an
@@ -1301,30 +1566,53 @@ export function ChatClient({
                 type="button"
                 onClick={() => stop()}
                 title="Stop generating"
-                className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-edge bg-raised text-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-sunken active:bg-sunken/80 ${focusRing}`}
+                className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-white/25 bg-white/15 text-stage-strong motion-safe:animate-[pop-in_120ms_ease-out] motion-safe:transition-colors hover:bg-white/25 ${focusRing}`}
               >
                 <Square className="size-3 fill-current" aria-hidden="true" />
                 <span className="sr-only">Stop</span>
               </button>
+            ) : asyncTurn ? (
+              // The spinner IS the stop control. It used to be an inert badge
+              // saying "busy" while the button that could actually stop the
+              // work sat further up the log — so the one thing on screen that
+              // represents the running task was the one thing you could not
+              // press. Same position, same spinner, now it does the obvious.
+              <button
+                type="button"
+                disabled={isCancellingAsync}
+                onClick={cancelAsyncTurn}
+                title="Stop this task"
+                aria-label={isCancellingAsync ? 'Stopping the task' : 'Stop this task'}
+                className={`group/stop inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-white/25 bg-white/15 text-stage-strong motion-safe:transition-colors hover:bg-white/25 disabled:cursor-not-allowed ${focusRing}`}
+              >
+                {/* The square only replaces the spinner under a pointer that
+                    can hover; on a touch screen the spinner stays put and the
+                    tap does the stopping. */}
+                <Loader2
+                  className="size-4 motion-safe:animate-spin group-hover/stop:hidden"
+                  aria-hidden="true"
+                />
+                <Square
+                  className="hidden size-3 fill-current group-hover/stop:block"
+                  aria-hidden="true"
+                />
+              </button>
             ) : (
               // Readiness is a state change, not a dimmed copy of the live
-              // button: with nothing to send it sits back as a quiet tonal
-              // control, then fills with accent once you have typed.
+              // button: with nothing to send it sits back into the composer's
+              // own well, then lifts to solid white — the one bright object on
+              // the stage — once you have typed.
               <button
                 type="submit"
                 disabled={!canSend}
-                aria-label={asyncTurn ? 'Working on your request' : 'Send'}
-                className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full motion-safe:transition-[background-color,color,box-shadow] ${focusRing} ${
+                aria-label="Send"
+                className={`inline-flex size-10 shrink-0 items-center justify-center rounded-full motion-safe:transition-[background-color,color] ${focusRing} ${
                   canSend
-                    ? 'bg-accent text-white hover:bg-accent-hover'
-                    : 'cursor-not-allowed bg-sunken text-muted'
+                    ? 'bg-white text-stage hover:bg-white/90'
+                    : 'cursor-not-allowed bg-white/12 text-stage-muted'
                 }`}
               >
-                {asyncTurn ? (
-                  <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-                ) : (
-                  <ArrowUp className="size-4" aria-hidden="true" />
-                )}
+                <ArrowUp className="size-4" aria-hidden="true" />
               </button>
             )}
           </div>
@@ -1336,7 +1624,7 @@ export function ChatClient({
                 : ''}
           </span>
           {fallbackNote ? (
-            <p className="px-1 pt-1.5 text-right text-xs text-muted">{fallbackNote}</p>
+            <p className="px-1 pt-1.5 text-right text-xs text-stage-muted">{fallbackNote}</p>
           ) : null}
         </div>
       </form>

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CueSchema } from './chat-cues.js';
 
 /** Where the assistant's trust in a piece of content or a trigger comes from. */
 export const TrustSchema = z.enum(['owner', 'known', 'unknown', 'assistant']);
@@ -100,6 +101,12 @@ export const PendingFinalSchema = z.object({
    * instead of assistant prose. Additive: old checkpoints parse unchanged.
    */
   contractNotice: z.boolean().optional(),
+  /**
+   * Companion cues stripped out of a dashboard chat_turn's final text
+   * (chat-cues.ts); persisted into the reply's message parts on delivery.
+   * Additive and optional: old checkpoints parse unchanged.
+   */
+  cues: z.array(CueSchema).optional(),
 });
 export type PendingFinal = z.infer<typeof PendingFinalSchema>;
 

@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 /**
@@ -26,7 +27,15 @@ export default defineConfig({
       'apps/agent',
       parallel('packages/config'),
       parallel('packages/setup'),
-      parallel('apps/web'),
+      {
+        ...parallel('apps/web'),
+        // Next resolves "@/..." from the app's tsconfig paths; vitest does not
+        // read those, so without this any web test that imports a component
+        // reaching for @/lib fails to resolve the package rather than the file.
+        resolve: {
+          alias: { '@': fileURLToPath(new URL('./apps/web', import.meta.url)) },
+        },
+      },
       parallel('workers/browser-job'),
       parallel('workers/code-runner'),
       parallel('workers/document-processor'),

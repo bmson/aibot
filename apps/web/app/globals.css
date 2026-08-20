@@ -5,19 +5,44 @@
    before first paint, so OS-dark users still get dark by default. */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Semantic surface/text values. One neutral blue-gray family everywhere; components
-   use the token utilities below (bg-surface, bg-raised, border-edge, text-muted,
+/* Semantic surface/text values. One green family everywhere; components use the
+   token utilities below (bg-surface, bg-raised, border-edge, text-muted,
    text-strong, bg-accent) instead of raw palette classes, so light and dark stay
-   in sync from this one block. */
+   in sync from this one block.
+
+   Two grounds share the family. Regular pages sit on the quiet green paper
+   (--surface); the chat sits on the stage (--stage) — the saturated green the
+   companion's world is painted in — with its own text pair, because ink that
+   reads on paper does not read on the stage. The companion's housing and the
+   assistant's speech bubbles share --ink, so the creature in the notch and the
+   voice in the log are visibly one body. */
 :root {
-  --surface: #f5f7f7; /* Canvas */
+  --surface: #eef5f0; /* Canvas — green paper */
   --surface-raised: #ffffff; /* Panel */
-  --surface-sunken: #edf1f1; /* Tonal wells and receipts */
-  --edge: #dbe2e2;
-  --content-strong: #172022; /* Ink */
-  --content-muted: #667477;
-  --accent: #21666e; /* Deep teal */
-  --accent-hover: #194f56;
+  --surface-sunken: #e3ede6; /* Tonal wells and receipts */
+  --edge: #d3e1d7;
+  --content-strong: #15201a; /* Ink */
+  --content-muted: #5e7266;
+  --accent: #217a4b; /* Deep leaf green */
+  --accent-hover: #1a613c;
+  /* The accent as it must look on paper, kept separately so the chat can
+     re-point --accent at a stage-legible tint while cards inside the chat
+     (which are still paper) put the readable one back. See `.paper`. */
+  --accent-paper: #217a4b;
+  --accent-paper-hover: #1a613c;
+  /* Text and icons sitting ON an accent fill. A token rather than a literal
+     white because the accent is dark in one scheme and light in the other —
+     white on the light one is barely 2:1. */
+  --on-accent: #ffffff;
+  --ink: #131d17; /* The companion's body: notch housing, assistant bubbles */
+  --stage: #2b8253; /* The chat's canvas */
+  --stage-strong: #f4faf5; /* Ink for text sitting directly on the stage */
+  --stage-muted: rgb(234 246 238 / 0.72);
+  /* The owner's voice. Its own token rather than --surface-raised: the two
+     happen to coincide on the light canvas, but a bubble has to stay legible
+     against the stage, which is a different job from a panel on the page. */
+  --bubble-owner: #ffffff;
+  --bubble-owner-ink: var(--content-strong);
   /* A rectangular browser tab has no app-owned outer curve. Installed mobile
      mode replaces this with a value derived from the device safe area; it is
      intentionally separate from component radii. */
@@ -38,23 +63,37 @@
      own glyph (selectClass in lib/ui.tsx). A data URI per theme because a
      background image can't read currentColor; the strokes are the two
      --content-muted values. */
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23667477' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235e7266' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 .dark {
-  /* A soft charcoal, not OLED-black: the conversation is the point, and a
-     true near-black canvas competes with it rather than receding behind it. */
-  --surface: #151a1b; /* Night, softened */
-  --surface-raised: #1c2324;
-  --surface-sunken: #273032;
-  --edge: #394547;
-  --content-strong: #f1f5f4;
-  --content-muted: #9eaaaa;
-  --accent: #72b7bc;
-  --accent-hover: #8bc7cb;
+  /* A soft green-charcoal, not OLED-black: the conversation is the point, and
+     a true near-black canvas competes with it rather than receding behind it. */
+  --surface: #121a15; /* Night in the same forest */
+  --surface-raised: #19241d;
+  --surface-sunken: #243129;
+  --edge: #38473d;
+  --content-strong: #eef5ef;
+  --content-muted: #9cb0a2;
+  --accent: #6fcb9c;
+  --accent-hover: #8bd8b1;
+  --accent-paper: #6fcb9c;
+  --accent-paper-hover: #8bd8b1;
+  --on-accent: #0d1f16;
+  --ink: #0b120e;
+  /* Lifted well clear of --ink. At night all three of the chat's materials are
+     dark, and a stage only a shade off the assistant's bubble makes the voice
+     disappear into the room it is speaking in. */
+  --stage: #1b3626; /* Deep pine */
+  --stage-strong: #f0f7f1;
+  --stage-muted: rgb(240 247 241 / 0.66);
+  /* Paper, dimmed for a dark room — still unmistakably the lighter material,
+     because that contrast IS how the two voices are told apart. */
+  --bubble-owner: #dae7de;
+  --bubble-owner-ink: #101b14;
   --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.16), 0 6px 18px rgb(0 0 0 / 0.12);
   --shadow-overlay: 0 2px 6px rgb(0 0 0 / 0.2), 0 12px 30px rgb(0 0 0 / 0.18);
   color-scheme: dark;
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239eaaaa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239cb0a2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
 @theme {
@@ -85,6 +124,11 @@
   --color-muted: var(--content-muted);
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
+  --color-ink: var(--ink);
+  --color-on-accent: var(--on-accent);
+  --color-stage: var(--stage);
+  --color-stage-strong: var(--stage-strong);
+  --color-stage-muted: var(--stage-muted);
 }
 
 /* Lets the browser interpolate to and from intrinsic keywords, so `height: auto`
@@ -612,5 +656,45 @@ a {
     border-radius: 1px;
     background: var(--accent);
     animation: caret-blink 1s steps(1) infinite;
+  }
+}
+
+/* ── Companion chat themes ────────────────────────────────────────────────────
+   A [theme: ...] cue re-tints the accent pair inside the chat viewport only —
+   chips, focus rings, and links all read var(--accent), so one scoped override
+   recolors them together while the rest of the app (and the base surface and
+   content tokens, i.e. text contrast) stays put. The chat sits on the green
+   stage in both schemes, so every cue value is a light tint that reads on it;
+   raised cards inside the chat restore the base accent (conversation.css). */
+.chat-viewport[data-chat-theme="warm_amber"] {
+  --accent: #fcd390;
+  --accent-hover: #ffe2b2;
+}
+.chat-viewport[data-chat-theme="soft_rose"] {
+  --accent: #f7bcd2;
+  --accent-hover: #fad2e1;
+}
+.chat-viewport[data-chat-theme="cool_sky"] {
+  --accent: #a5daf6;
+  --accent-hover: #c1e6f9;
+}
+
+/* Registered so a theme-cue change glides instead of snapping. The transition
+   is scoped to the chat viewport; everything else still swaps instantly. */
+@property --accent {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #217a4b;
+}
+@property --accent-hover {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #1a613c;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chat-viewport {
+    transition:
+      --accent 600ms ease,
+      --accent-hover 600ms ease;
   }
 }

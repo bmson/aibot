@@ -9,7 +9,7 @@ import { getRate, reconcileReservation } from '../../cost.js';
 import { type Plan, PlanSchema, type TaskState } from '../../events.js';
 import { codeJobName, runCodeJob } from '../../memory/jobs.js';
 import type { ModelRouter, ProposedToolCall } from '../../model-router/router.js';
-import { markApprovalsNotified } from '../approvals.js';
+import { deliveredChannels, markApprovalsNotified } from '../approvals.js';
 import {
   type ArtifactIntent,
   type DocumentReadIntent,
@@ -29,6 +29,7 @@ import { PLANNER_VERSION, planTask } from '../planner.js';
 import { isUnattendedGoalSession } from './context-helpers.js';
 import { maybeEnqueueKnownSenderReply, stageFinalResponse } from './finalize.js';
 import {
+  noticeParts,
   notifyOwnerAndConversation,
   postConversationNotice,
   recordGoalBlocked,
@@ -268,6 +269,7 @@ export async function resumePendingApprovals(rc: RunContext): Promise<ExecuteRes
             db,
             task,
             `I'm pausing here — the approved action doesn't fit the remaining budget (${outcome.reason}). It resumes automatically when the budget resets.`,
+            noticeParts('parked'),
           );
           return { outcome: 'parked', detail: outcome.reason };
         }
@@ -353,6 +355,22 @@ export async function runDirectDocumentRead(rc: RunContext): Promise<ExecuteResu
         },
       ]);
       if (!parked) return LOST_LEASE;
+      // Card first, owner ping second — parkForApproval above already publishes
+      // waiting_approval, so any delay between the two lets the chat poller see
+      // a parked task whose approval card does not exist yet and stop listening.
+      const conversationNotified = await postConversationNotice(
+        db,
+        task,
+        `I need your approval before reading the shared Google Doc: ${outcome.summary}`,
+        [
+          {
+            type: 'approval',
+            approvalId: outcome.approvalId,
+            shortCode: outcome.shortCode,
+            summary: outcome.summary,
+          },
+        ],
+      );
       let ownerNotified = false;
       if (deps.notifyApproval) {
         ownerNotified = await deps
@@ -370,23 +388,10 @@ export async function runDirectDocumentRead(rc: RunContext): Promise<ExecuteResu
             return false;
           });
       }
-      await postConversationNotice(
-        db,
-        task,
-        `I need your approval before reading the shared Google Doc: ${outcome.summary}`,
-        [
-          {
-            type: 'approval',
-            approvalId: outcome.approvalId,
-            shortCode: outcome.shortCode,
-            summary: outcome.summary,
-          },
-        ],
-      );
       await markApprovalsNotified(
         db,
         [outcome.approvalId],
-        ownerNotified ? ['owner', 'conversation'] : ['conversation'],
+        deliveredChannels({ ownerNotified, conversationNotified }),
       );
       return { outcome: 'parked', detail: 'document read awaiting approval' };
     }

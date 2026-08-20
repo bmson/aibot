@@ -29,7 +29,7 @@ const btnVariants = {
     'border border-red-300 text-red-700 hover:bg-red-50 active:bg-red-100 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40 dark:active:bg-red-950/70',
   // Flat: the accent plane is the emphasis. The old hover glow read as a
   // sticker hovering over the page rather than a control set into it.
-  primary: 'bg-accent text-white hover:bg-accent-hover',
+  primary: 'bg-accent text-on-accent hover:bg-accent-hover',
   danger: 'bg-red-600 text-white hover:bg-red-700 active:bg-red-800',
   success: 'bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800',
 } as const;
@@ -150,20 +150,6 @@ export const cardTitleClass =
  *  state without moving or lifting the card away from the page. */
 export const cardInteractiveClass =
   'motion-safe:transition-[background-color,box-shadow] hover:bg-sunken/20 hover:ring-edge';
-
-/**
- * Timeline event cards (chat): approvals, budget asks, system checks. A
- * wrapped, outlined object distinct from speech bubbles — process moments
- * should read as things the assistant placed in the conversation, not prose.
- *
- * The outline is a border, not a ring. A ring is an outset shadow, so on a
- * phone — where these cards run the full width of the column — its left and
- * right pixel fell outside the chat log's box and was clipped away by that
- * scroller's overflow-x, leaving the card open-sided. A border is inside the
- * box, so it survives at any width.
- */
-export const eventCardClass =
-  'min-w-0 max-w-full overflow-hidden rounded-xl border border-edge/70 bg-raised';
 
 /** The shared grid recipe, so pages stop inventing their own breakpoints. */
 export const cardGridClass = 'grid min-w-0 items-stretch gap-4 lg:grid-cols-2';

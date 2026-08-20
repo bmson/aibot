@@ -2,6 +2,7 @@ export * from './ambient.js';
 export * from './consolidation.js';
 export * from './document-processor.js';
 export * from './documents.js';
+export * from './email-extraction.js';
 export * from './extraction.js';
 export * from './health.js';
 export * from './import.js';

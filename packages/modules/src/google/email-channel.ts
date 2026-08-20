@@ -1,6 +1,7 @@
-import { appendSignature, getAgent } from '@assistant/core';
+import { outboundEmailAllowed } from '@assistant/config';
+import { appendSignature, getAgent, isForwardedIngest } from '@assistant/core';
 import type { Db, TaskRow } from '@assistant/db';
-import { channelBindings, conversations, tasks, voiceProfile } from '@assistant/db';
+import { channelBindings, contacts, conversations, tasks, voiceProfile } from '@assistant/db';
 import {
   buildRawEmail,
   type GmailPayload,
@@ -42,6 +43,9 @@ async function resolveEmailThreadTarget(
 ): Promise<EmailThreadTarget | null> {
   const ownPayload = (task.trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
   const asStr = (v: unknown) => (typeof v === 'string' ? v : '');
+  // Forwarded ingest runs at owner trust but its `from` is a third party, so
+  // there is no address here that may be auto-replied to at all.
+  if (isForwardedIngest(task)) return null;
   if (task.type === 'email_triage') {
     const threadId = asStr(ownPayload.threadId);
     const to = asStr(ownPayload.from);
@@ -85,6 +89,9 @@ async function resolveEmailThreadTarget(
     )
     .orderBy(asc(tasks.createdAt))
     .limit(1);
+  // An ingest task is owner-trust with a third-party `from`, so it must never
+  // become the reply target for a later follow-up on the same thread either.
+  if (isForwardedIngest(origin)) return null;
   const originPayload =
     (origin?.trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
   const to = asStr(originPayload.from);
@@ -95,6 +102,25 @@ async function resolveEmailThreadTarget(
     subject: asStr(originPayload.subject),
     rfcMessageId: asStr(originPayload.rfcMessageId),
   };
+}
+
+/**
+ * Is this address one the owner actually owns?
+ *
+ * Read from the contacts table rather than a config value so an owner with
+ * several addresses works, and so the answer follows the same record the rest
+ * of the trust system uses. `trust: 'owner'` is protected — `updateContactIdentity`
+ * and `deleteContact` both refuse to touch owner rows — so this cannot be
+ * widened by anything the model does.
+ */
+async function isOwnerAddress(db: Db, address: string): Promise<boolean> {
+  const normalized = address.trim().toLowerCase();
+  if (!normalized) return false;
+  const rows = await db
+    .select({ emails: contacts.emails })
+    .from(contacts)
+    .where(eq(contacts.trust, 'owner'));
+  return rows.some((row) => row.emails.some((email) => email.trim().toLowerCase() === normalized));
 }
 
 /**
@@ -123,6 +149,25 @@ export async function deliverEmailFinal(
 
   const target = await resolveEmailThreadTarget(deps, task);
   if (!target) return false;
+
+  // Positive confirmation that the auto-reply recipient really is the owner.
+  //
+  // This used to be implied by `task.trust === 'owner'`, because owner trust was
+  // only reachable when the OWNER was the sender. Forwarded ingest breaks that
+  // equivalence — it is owner-directed mail from a third party — so the
+  // invariant is now checked directly instead of inferred. Auto-sending is the
+  // one path here with no approval card in front of it, so it fails closed: an
+  // address that is not a known owner address is never written to.
+  if (!(await isOwnerAddress(deps.db, target.to))) {
+    console.warn(
+      `email-channel: refusing to auto-reply to ${target.to} — not an owner address (task ${task.id})`,
+    );
+    return false;
+  }
+  if (!outboundEmailAllowed(target.to)) {
+    console.warn(`email-channel: refusing to auto-reply to ${target.to} — outside allowed domains`);
+    return false;
+  }
 
   // RFC threading headers so the reply nests in ANY mail client (Gmail
   // threads by threadId, but Apple Mail etc. need In-Reply-To/References).

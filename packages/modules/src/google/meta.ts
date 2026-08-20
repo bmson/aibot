@@ -13,6 +13,10 @@ export const googleMeta = {
     'GMAIL_PUBSUB_TOPIC',
     'GMAIL_PUSH_SERVICE_ACCOUNT',
     'GMAIL_SYNC_ENABLED',
+    'EMAIL_INGEST_MODE',
+    'EMAIL_INGEST_IMPORTANCE_THRESHOLD',
+    'EMAIL_INGEST_MAX_TRIAGE_PER_DAY',
+    'EMAIL_OUTBOUND_DOMAINS',
   ],
   readiness: (config) => {
     const ready = Boolean(
@@ -120,4 +124,18 @@ export function gmailSyncEnabled(config: Config = loadConfig()): boolean {
   if (config.GMAIL_SYNC_ENABLED === 'true') return true;
   if (config.GMAIL_SYNC_ENABLED === 'false') return false;
   return process.env.NODE_ENV === 'production';
+}
+
+/**
+ * Is this mailbox the owner's forwarding pipe rather than an inbox strangers
+ * write to? This single predicate decides that inbound mail is owner-DIRECTED
+ * (so a task may reach the owner's own calendar, files and notifications) while
+ * remaining sender-AUTHORED (so it stays tainted and nothing outward-facing
+ * runs unapproved). It is deliberately a setting rather than a header sniff:
+ * `X-Forwarded-For` and `Delivered-To` are sender-supplied and forgeable, and a
+ * message sent straight to this mailbox carries the attacker's copy at the top,
+ * so no amount of header reading can distinguish the two.
+ */
+export function emailIngestForwarded(config: Config = loadConfig()): boolean {
+  return isModuleEnabled(config, 'google') && config.EMAIL_INGEST_MODE === 'forwarded';
 }

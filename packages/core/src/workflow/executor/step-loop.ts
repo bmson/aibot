@@ -5,13 +5,14 @@ import { hashCallbackToken } from '../../browse.js';
 import { buildSystemPrompt, PROMPT_VERSION } from '../../chat.js';
 import { isJobPending } from '../../code-exec.js';
 import { loadConfig } from '../../config.js';
+import { isForwardedIngest } from '../../email-provenance.js';
 import type { Plan, TaskState, Trust } from '../../events.js';
 import { getAmbientBlock } from '../../memory/ambient.js';
 import { getOwnerCard } from '../../memory/consolidation.js';
 import { recallRelevantContext, recentWindowStart } from '../../memory/recall.js';
 import { bumpSkillUse, recallSkills, renderSkillsBlock } from '../../memory/skills.js';
 import type { StepCallOutcome } from '../../model-router/router.js';
-import { markApprovalsNotified } from '../approvals.js';
+import { deliveredChannels, markApprovalsNotified } from '../approvals.js';
 import {
   artifactRoutingFailure,
   artifactToolUnavailable,
@@ -53,6 +54,7 @@ import {
   stopForUnsavedGoalProgress,
 } from './finalize.js';
 import {
+  noticeParts,
   notifyAttention,
   notifyOwnerAndConversation,
   postConversationNotice,
@@ -123,8 +125,12 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // Private calendar/mail forcing belongs only to direct owner requests. Never
   // let third-party text or an assistant-generated child task trigger a search
   // of the owner's accounts or override its explicit action plan.
+  // Forwarded ingest is owner-trust but its window holds a third party's email,
+  // so it is exactly the "third-party text" this rule excludes: without the
+  // guard, a crafted message reading like "what's on my calendar tomorrow?"
+  // would force a search of the owner's own accounts and override the plan.
   const readRequest =
-    task.trust === 'owner'
+    task.trust === 'owner' && !isForwardedIngest(task)
       ? detectPersonalReadRequest(rc.window, {
           now: readReferenceAt,
           timeZone: agent.timezone,
@@ -322,6 +328,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         skills: !state.untrustedContext ? skillsBlock : undefined,
         ambient: !state.untrustedContext ? ambientBlock : undefined,
         tainted: state.untrustedContext,
+        // Only the dashboard gets the companion persona and cue vocabulary;
+        // email/SMS/goal sessions must never learn the tags exist.
+        channel: task.type === 'chat_turn' ? 'dashboard-chat' : undefined,
         now: runStartedAt,
       }),
       channelContext(task),
@@ -611,6 +620,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
           db,
           task,
           `I'm pausing here — ${stepResult.decision.reason}. This resumes automatically when the budget resets; you can also raise the caps on the Costs page.`,
+          noticeParts('parked'),
         );
         return { outcome: 'parked', detail: stepResult.decision.reason };
       }
@@ -811,6 +821,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
             db,
             task,
             `I'm pausing here — this action doesn't fit the remaining budget (${outcome.reason}). The task resumes automatically when the budget resets; you can also raise the caps on the Costs page.`,
+            noticeParts('parked'),
           );
           return { outcome: 'parked', detail: outcome.reason };
         } else if (outcome.kind === 'awaiting_approval') {
@@ -860,19 +871,16 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       if (pendingApprovals.length > 0) {
         const parked = await parkForApproval(db, lease, state, pendingApprovals);
         if (!parked) return LOST_LEASE;
-        let ownerNotified = false;
-        if (deps.notifyApproval && approvalNotices.length > 0) {
-          ownerNotified = await deps
-            .notifyApproval(task, approvalNotices)
-            .then(() => true)
-            .catch((err) => {
-              console.error('approval notification failed', err);
-              return false;
-            });
-        }
         // The conversation must not go silent while parked — tell the owner
         // exactly what is waiting and where to approve it.
-        await postConversationNotice(
+        //
+        // This lands BEFORE the owner ping on purpose. parkForApproval above
+        // already publishes waiting_approval, and notifyApproval is a
+        // sequential run of outbound SMS calls (one per approval). Pinging
+        // first left the chat poller able to observe "waiting for approval"
+        // for seconds while the card naming what was waiting did not exist
+        // yet — it stopped polling and the card only appeared on a reload.
+        const conversationNotified = await postConversationNotice(
           db,
           task,
           [
@@ -887,10 +895,20 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
             summary: notice.summary,
           })),
         );
+        let ownerNotified = false;
+        if (deps.notifyApproval && approvalNotices.length > 0) {
+          ownerNotified = await deps
+            .notifyApproval(task, approvalNotices)
+            .then(() => true)
+            .catch((err) => {
+              console.error('approval notification failed', err);
+              return false;
+            });
+        }
         await markApprovalsNotified(
           db,
           approvalNotices.map((notice) => notice.approvalId),
-          ownerNotified ? ['owner', 'conversation'] : ['conversation'],
+          deliveredChannels({ ownerNotified, conversationNotified }),
         );
         return {
           outcome: 'parked',

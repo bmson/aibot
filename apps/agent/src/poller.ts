@@ -2,6 +2,7 @@ import {
   backfillMessageEmbeddings,
   emitBudgetNotices,
   expireStaleApprovals,
+  expireStaleSuggestions,
   findDueTasks,
   getAgent,
   purgeAgedHistory,
@@ -45,6 +46,10 @@ export function startPoller(deps: AgentDeps): () => void {
         await runStep('expireStaleApprovals', async () => {
           const woken = await expireStaleApprovals(deps.db);
           if (woken.length) console.log(`sweep: expired approvals woke ${woken.length} task(s)`);
+        });
+        await runStep('expireStaleSuggestions', async () => {
+          const expired = await expireStaleSuggestions(deps.db);
+          if (expired) console.log(`sweep: expired ${expired} unanswered suggestion(s)`);
         });
         await runStep('resumeResolvedApprovalTasks', async () => {
           const resumed = await resumeResolvedApprovalTasks(deps.db);

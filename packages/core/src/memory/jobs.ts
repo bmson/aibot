@@ -1,6 +1,7 @@
 import type { Db, TaskRow } from '@assistant/db';
 import type { ModelRouter } from '../model-router/router.js';
 import { runAnomalyScan } from '../workflow/anomaly.js';
+import { briefingSummary, runBriefing } from '../workflow/briefing.js';
 import { runDream } from '../workflow/dream.js';
 import { runSelfImprove } from '../workflow/improve.js';
 import { runSelfMaintenance } from '../workflow/self-maintenance.js';
@@ -8,6 +9,7 @@ import { refreshAmbientSnapshot } from './ambient.js';
 import { runMemoryConsolidation } from './consolidation.js';
 import { type DocumentProcessorConfig, runDocumentProcessing } from './document-processor.js';
 import { runDocumentExtraction } from './documents.js';
+import { pendingEmailExtractionCount, runEmailIngestExtraction } from './email-extraction.js';
 import { runMemoryExtraction } from './extraction.js';
 import { runImportJob, type WorkspaceReader } from './import.js';
 import { segmentConversations } from './segmentation.js';
@@ -23,6 +25,8 @@ import { runVoiceIngest } from './voice-ingest.js';
  */
 export type CodeJobName =
   | 'memory.extract'
+  | 'email.extract'
+  | 'briefing.compose'
   | 'memory.consolidate'
   | 'chat.segment'
   | 'import.run'
@@ -38,6 +42,8 @@ export type CodeJobName =
 
 const CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.extract',
+  'email.extract',
+  'briefing.compose',
   'memory.consolidate',
   'chat.segment',
   'import.run',
@@ -92,6 +98,24 @@ export async function runCodeJob(
         done: true,
         summary: `extraction: ${r.saved} saved (${r.quarantined} quarantined, ${r.contactsCreated} new people), ${r.duplicates} duplicate, ${r.tombstoned} tombstoned, ${r.occasionsSaved} occasion(s), from ${r.conversationsScanned} conversation(s)`,
       };
+    }
+    case 'email.extract': {
+      await deps.heartbeat?.();
+      const r = await runEmailIngestExtraction(deps, { taskId: task.id });
+      const pending = await pendingEmailExtractionCount(deps.db);
+      return {
+        // A backlog drains across runs rather than in one long job: report it
+        // so a mailbox that is falling behind is visible in the task summary.
+        done: true,
+        summary:
+          `email extraction: ${r.saved} saved (${r.usable} recallable, ${r.quarantined} awaiting review), ` +
+          `${r.duplicates} duplicate, ${r.occasionsSaved} occasion(s), from ${r.rowsVisited} message(s) ` +
+          `(${r.skippedLowImportance} routine), ${pending} still pending`,
+      };
+    }
+    case 'briefing.compose': {
+      await deps.heartbeat?.();
+      return { done: true, summary: briefingSummary(await runBriefing(deps, { taskId: task.id })) };
     }
     case 'memory.consolidate': {
       await deps.heartbeat?.();

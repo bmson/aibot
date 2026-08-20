@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./chat": "./src/chat.ts",
+    "./chat-cues": "./src/chat-cues.ts",
     "./config": "./src/config.ts",
     "./cost": "./src/cost.ts",
     "./events": "./src/events.ts",

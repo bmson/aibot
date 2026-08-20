@@ -1,0 +1,205 @@
+/* The Dynamic Island extension (notch-companion.tsx)
+ *
+ * The island FLOATS. On an iPhone 15 the pill sits about 11pt below the top
+ * edge with wallpaper above and beside it, so a shape running to y=0 is not an
+ * extension of it — it is a black band across the top of the screen with the
+ * pill embedded somewhere in it. This starts at the pill's own top edge
+ * instead, is at least as wide as it, and grows downward: the pill appears to
+ * have stretched, which is what the system's own expansion looks like.
+ *
+ * Three things carry the illusion:
+ *
+ *   Black, not the app's ink. The pill is the display switched off, and
+ *   anything short of true black shows up as a seam against it.
+ *
+ *   Rounded on all four corners, close to the pill's own radius. Every corner
+ *   is against the canvas now, not just the bottom pair.
+ *
+ *   The status inset becomes padding measured from the pill's top, so the label
+ *   clears the clock while the black behind it runs up into the pill.
+ *
+ * Closed, it has no height and there is nothing but the real pill.
+ *
+ * Base rules first, motion last, so the motion block can be lifted out whole.
+ */
+
+/* One overlay owning both layers at the top of the screen: the status veil, and
+   the island in front of it.
+ *
+   The veil was `body::after` at z-35 against the island's z-50, and on iOS it
+   painted over the island regardless — through two separate attempted fixes,
+   because the ordering depended on how one engine composited a pseudo-element
+   against a fixed sibling. It does not depend on that any more. Both layers are
+   children here, the island is second, and a later sibling paints on top. There
+   is no z-index between them to lose.
+
+   Zero height, so it never intercepts anything: the two children place
+   themselves against the top edge and are free to overflow it. */
+.status-overlay {
+  position: fixed;
+  z-index: 40;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* The status area the conversation scrolls up under. A plain ramp out of the
+   page's own ground: solid where the clock sits, gone by the bottom, so text
+   thins out rather than crossing a visible edge. In a browser tab the inset is
+   0 and this is simply not there. */
+.status-veil {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: env(safe-area-inset-top, 0px);
+  background: linear-gradient(to bottom, var(--status-ground) 0 52%, transparent);
+}
+
+.notch-island {
+  /* The hardware pill on current iPhones is ~126pt across and ~37pt tall, with
+     fully rounded ends — so a ~18pt radius is the one that matches it. */
+  --island-width: 7.9rem;
+  --island-radius: 1.15rem;
+  /* How far the pill floats below the top edge.
+   *
+   * There is no env() for this, and it differs by hardware: a Dynamic Island
+   * phone reports a 59pt top inset and floats its pill 11pt down, while the
+   * older flush notch reports ~47-50pt and has no gap to respect at all.
+   * Scaling the difference and clamping resolves to 11pt on the former and 0
+   * on the latter, which beats sniffing the device — and a browser tab, with
+   * no inset, lands at 0 as well. */
+  --island-top: clamp(0px, calc((env(safe-area-inset-top, 0px) - 51px) * 2), 0.6875rem);
+  position: absolute;
+  top: var(--island-top);
+  left: 50%;
+  display: flex;
+  /* Narrow enough to stay an island. Past this a long label stops reading as a
+     capsule hanging off the top and starts reading as a banner across it, so
+     the label ellipsizes instead. */
+  max-width: min(17rem, calc(100vw - 4rem));
+  justify-content: center;
+  overflow: hidden;
+  /* All four: the shape floats clear of the top edge, so every corner sits
+     against the canvas. */
+  border-radius: var(--island-radius);
+  /* True black, so the seam with the hardware island does not exist. */
+  background: #000;
+  color: #f4f7f5;
+  pointer-events: none;
+  translate: -50% 0;
+}
+
+/* Closed: no height at all, so nothing hangs below the hardware island.
+   Collapsing to the status inset instead left a black tab protruding past the
+   real island — bigger than it, with its own visible corners, which is the one
+   thing that breaks the illusion. From zero the shape grows downward out from
+   under the island, which is exactly how the system's own expansion reads. */
+.notch-island:not([data-open="true"]) {
+  width: var(--island-width);
+  height: 0;
+}
+
+.notch-island[data-open="true"] {
+  width: max-content;
+  min-width: var(--island-width);
+  /* Stated rather than left to the content, because the growing-downward motion
+     is the whole effect and `height: auto` only animates where
+     interpolate-size is supported — which WebKit is not.
+   *
+   * Both of these measure from the pill's top rather than the screen's, so the
+   * shape covers exactly the status inset it needs to and no more: the label
+   * lands just under the clock, and the black above it reaches the pill. */
+  height: calc(env(safe-area-inset-top, 0px) - var(--island-top) + 1.925rem);
+  padding: calc(env(safe-area-inset-top, 0px) - var(--island-top) + 0.125rem) 1rem 0.7rem;
+}
+
+.notch-island-body {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.notch-island-glyph {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.notch-island-label {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.1rem;
+  letter-spacing: -0.006em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Closed, the content must not merely be invisible — it must not hold the shape
+   open, so it leaves layout entirely. */
+.notch-island:not([data-open="true"]) .notch-island-body {
+  display: none;
+}
+
+/* Tone is carried by the glyph alone. The label stays white: colouring the
+   words too made a failure read as an error banner rather than as one step of
+   the work that did not land. */
+.notch-island[data-tone="working"] .notch-island-glyph,
+.notch-island[data-tone="thinking"] .notch-island-glyph {
+  color: rgb(255 255 255 / 0.72);
+}
+
+.notch-island[data-tone="done"] .notch-island-glyph {
+  color: #6ee7b7;
+}
+
+.notch-island[data-tone="waiting"] .notch-island-glyph {
+  color: #fcd34d;
+}
+
+.notch-island[data-tone="failed"] .notch-island-glyph {
+  color: #fca5a5;
+}
+
+@keyframes notch-island-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+@keyframes notch-island-arrive {
+  from {
+    opacity: 0;
+    translate: 0 -0.25rem;
+  }
+  to {
+    opacity: 1;
+    translate: none;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Width and height together are what make it grow out of the island rather
+     than appear beneath it. */
+  .notch-island {
+    transition:
+      width 380ms cubic-bezier(0.22, 1, 0.36, 1),
+      height 380ms cubic-bezier(0.22, 1, 0.36, 1),
+      padding 380ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .notch-island-body {
+    animation: notch-island-arrive 260ms ease-out both;
+  }
+
+  /* Only the working spinner turns; a settled state should be still. */
+  .notch-island[data-tone="working"] .notch-island-glyph {
+    animation: notch-island-spin 900ms linear infinite;
+  }
+}

@@ -28,6 +28,8 @@ export async function renderChatConversation(id: string, query: ChatPageQuery) {
       conversationId={conversation.id}
       title={conversation.title || 'Untitled'}
       agentName={view.agentName}
+      agentTimezone={view.agentTimezone}
+      renderedAt={new Date().toISOString()}
       initialMessages={view.messages}
       models={view.models}
       modelOverride={conversation.modelOverride}
@@ -38,6 +40,7 @@ export async function renderChatConversation(id: string, query: ChatPageQuery) {
       initialNotice={chatNoticeMessage(query.notice)}
       initialInput={typeof query.ask === 'string' ? query.ask.slice(0, 500) : undefined}
       initialAsyncTurn={view.asyncTurn}
+      initialCursor={view.cursor}
     />
   );
 }

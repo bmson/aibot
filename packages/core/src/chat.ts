@@ -10,7 +10,8 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
-import { and, asc, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
+import { type Cue, companionPersonaLines, cueMessageParts } from './chat-cues.js';
 import type { RecallSource } from './memory/recall.js';
 import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
 import type { ActionEvidence } from './workflow/response-contract.js';
@@ -24,13 +25,16 @@ import type { ActionEvidence } from './workflow/response-contract.js';
 export function assistantMessageParts(
   text: string,
   recall?: RecallSource[],
-  opts?: { contractNotice?: boolean },
+  opts?: { contractNotice?: boolean; cues?: Cue[] },
 ): unknown[] {
   const parts: unknown[] = [{ type: 'text', text }];
   if (recall && recall.length > 0) parts.push({ type: 'recall', sources: recall });
   // Structured marker (parts are jsonb — no migration): the chat UI styles the
   // message as an honesty-check system notice instead of assistant prose.
   if (opts?.contractNotice) parts.push({ type: 'notice', notice: 'response-contract' });
+  // Companion cues stripped from the reply text; the dashboard reads them to
+  // animate its face, tint the chat surface, and offer quick-reply chips.
+  if (opts?.cues && opts.cues.length > 0) parts.push(...cueMessageParts(opts.cues));
   return parts;
 }
 
@@ -79,10 +83,13 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * use only facts from successful current tool results.
  * v21: resolve missing facts from available sources before asking, and never
  * turn a read-only event question into a calendar write.
+ * v22: dashboard-chat-only companion persona with [face:]/[theme:]/
+ * [action_chips:] cue vocabulary, gated by extras.channel and stripped from
+ * the text before delivery (see chat-cues.ts).
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 21;
+export const PROMPT_VERSION = 22;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is
@@ -96,6 +103,14 @@ export function buildSystemPrompt(
     skills?: string;
     ambient?: string;
     tainted?: boolean;
+    /**
+     * The owner-facing dashboard chat gets the companion persona and its
+     * [face:]/[theme:]/[action_chips:] cue vocabulary (v22). Constant for a
+     * task's whole run, so the byte-stable cacheable prefix holds; absent
+     * (email, SMS, goal sessions) the prompt is unchanged and the cue
+     * vocabulary never enters the channel.
+     */
+    channel?: 'dashboard-chat';
     /**
      * Pin the clock for the whole task run. A fresh timestamp per step made
      * the prompt differ across a minute boundary, defeating provider prompt
@@ -135,6 +150,7 @@ export function buildSystemPrompt(
     '- Cut the filler and AI throat-clearing: no "I hope this helps", "As an AI", "Certainly!", "Let me know if there\'s anything else", "I\'d be happy to". Open with the substance.',
     '- Warm does not mean wordy. Say the useful thing plainly, add a human touch when it fits, and stop. Match the channel register (the channel note below tells you which): SMS is one or two plain sentences; email opens with a short greeting and ends with a brief sign-off as yourself; dashboard chat is conversational and may use light formatting.',
     "- Be genuinely helpful: anticipate the obvious next need, and when you make a judgment call on the owner's behalf, name the assumption in a phrase so he can correct it.",
+    ...(extras.channel === 'dashboard-chat' ? companionPersonaLines() : []),
     ...(extras.tainted
       ? [
           '',
@@ -323,6 +339,42 @@ export async function mirrorGoalUpdateToPrimary(
   });
 }
 
+/**
+ * Put a notice in front of the owner on the dashboard.
+ *
+ * The `OwnerNotifier` port is provided by channel MODULES, and the only one that
+ * implements it is SMS — so on an installation without Twilio every
+ * deterministic notice the platform generates was being handed to a no-op and
+ * silently discarded. The dashboard is not an optional capability, so it should
+ * never have depended on one; this is the sink that always exists.
+ *
+ * Posts into the owner's primary thread — the one continuous conversation —
+ * falling back to the assistant-owned Notifications thread before a primary
+ * exists, which is the same fallback `owner.notify` already uses. Never creates
+ * a primary thread: a background writer must not decide which conversation
+ * becomes the owner's main one.
+ */
+export async function postOwnerNotice(
+  db: Db,
+  input: { agentId: string; text: string; taskId?: string; extraParts?: readonly unknown[] },
+): Promise<{ conversationId: string }> {
+  const primary = await findPrimaryConversation(db, input.agentId);
+  const conversationId =
+    primary?.id ?? (await getOrCreateNotificationsConversation(db, input.agentId));
+  await persistMessage(db, {
+    conversationId,
+    ...(input.taskId ? { taskId: input.taskId } : {}),
+    role: 'assistant',
+    origin: 'assistant',
+    // Extra parts ride with the text so an interactive card (a suggestion the
+    // owner can accept) lands in the same message as the prose explaining it,
+    // rather than as a second, context-free bubble.
+    parts: [{ type: 'text', text: input.text }, ...(input.extraParts ?? [])],
+    text: input.text,
+  });
+  return { conversationId };
+}
+
 /** The existing primary chat thread, or null — never creates one (for background writers). */
 export async function findPrimaryConversation(
   db: Db,
@@ -384,6 +436,14 @@ export async function listMessages(
             gt(messages.createdAt, after.createdAt),
             and(eq(messages.createdAt, after.createdAt), gt(messages.id, after.id)),
           ),
+          // created_at is timestamptz (microseconds) but reaches us as a JS
+          // Date (milliseconds), so a cursor encoded from a row is slightly
+          // BEFORE that row and the tuple comparison above matches it again.
+          // Excluding it by id keeps the comparison on the (conversation_id,
+          // created_at) index while making the cursor properly exclusive —
+          // otherwise the thread poll re-delivers its newest message on every
+          // tick, forever, and never counts a page correctly.
+          ne(messages.id, after.id),
         ),
       )
       .orderBy(asc(messages.createdAt), asc(messages.id))
@@ -399,6 +459,22 @@ export async function listMessages(
     .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(limit);
   return rows.reverse();
+}
+
+/**
+ * Re-read named rows of one conversation. The open chat uses this to refresh
+ * decision cards it is already showing — an approval resolved on the Approvals
+ * page must stop offering Approve/Decline here without waiting for a reload.
+ * Scoped to the conversation, so an id arriving from a query string can only
+ * ever reach messages the caller was already reading.
+ */
+export async function listMessagesByIds(db: Db, conversationId: string, ids: string[]) {
+  if (ids.length === 0) return [];
+  return db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.conversationId, conversationId), inArray(messages.id, ids)))
+    .orderBy(asc(messages.createdAt), asc(messages.id));
 }
 
 export async function persistMessage(
@@ -477,6 +553,7 @@ export async function finishTask(
     progress?: string;
     responseText?: string;
     recall?: RecallSource[];
+    cues?: Cue[];
   },
 ): Promise<boolean> {
   return db.transaction(async (tx) => {
@@ -495,7 +572,9 @@ export async function finishTask(
         taskId: task.id,
         role: 'assistant',
         origin: 'assistant',
-        parts: assistantMessageParts(outcome.responseText, outcome.recall),
+        parts: assistantMessageParts(outcome.responseText, outcome.recall, {
+          cues: outcome.cues,
+        }),
         text: outcome.responseText,
       });
     }

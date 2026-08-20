@@ -5,9 +5,19 @@ import {
   getAgent,
   listConversations,
   listMessages,
+  listMessagesByIds,
   setConversationModel,
 } from '@assistant/core/chat';
-import { approvals, conversations, type Db, goals, models, tasks, toolCalls } from '@assistant/db';
+import {
+  approvals,
+  conversations,
+  type Db,
+  goals,
+  models,
+  suggestions,
+  tasks,
+  toolCalls,
+} from '@assistant/db';
 import type { UIMessage } from 'ai';
 import { and, count, desc, eq, inArray, isNotNull, isNull, lt, notInArray, sql } from 'drizzle-orm';
 
@@ -18,6 +28,28 @@ const SETTLED_TASK_STATUSES = new Set([
   'waiting_approval',
 ]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * How far behind the present the poll cursor is allowed to advance.
+ *
+ * `messages.created_at` defaults to Postgres `now()`, which is TRANSACTION
+ * START time, while the cursor can only advance over rows that have already
+ * committed. A transaction that starts early and commits late — finishTask
+ * wraps the terminal transition and the assistant reply together — therefore
+ * lands a row whose timestamp is BEHIND a cursor the poll already moved past,
+ * and the keyset comparison in listMessages will never return it again. The
+ * message exists in the database and appears mid-log on the next page load:
+ * exactly the "it vanished, then came back in the wrong place" report.
+ *
+ * So the cursor deliberately lags: rows are delivered the moment they are
+ * visible, but the cursor only advances over rows old enough that nothing can
+ * still commit behind them. Anything newer is re-delivered on the next tick
+ * and the client's id-keyed merge absorbs the repeat.
+ */
+const CURSOR_SETTLE_MS = 15_000;
+
+/** Cap on how many on-screen decision cards one poll may re-read. */
+const MAX_REFRESH_IDS = 10;
 
 export type InlineApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'missing';
 export interface InlineApprovalDetail {
@@ -57,6 +89,15 @@ function isBudgetRequestPart(part: unknown): part is BudgetRequestPart {
   );
 }
 
+function isSuggestionPart(part: unknown): part is { type: 'suggestion'; suggestionId: string } {
+  return (
+    Boolean(part) &&
+    typeof part === 'object' &&
+    (part as { type?: unknown }).type === 'suggestion' &&
+    typeof (part as { suggestionId?: unknown }).suggestionId === 'string'
+  );
+}
+
 function detailLabel(key: string): string {
   const words = key
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -73,6 +114,21 @@ function detailValue(value: unknown): string {
     return value.map(String).join(', ') || '(none)';
   }
   return JSON.stringify(value, null, 2) ?? String(value);
+}
+
+/**
+ * Persisted rows as the chat client reads them. `createdAt` travels on metadata
+ * because it is what orders the rendered log — see orderChatLog in the web app.
+ */
+function toUiMessages(rows: Awaited<ReturnType<typeof listMessages>>): UIMessage[] {
+  return rows
+    .filter((row) => row.role === 'user' || row.role === 'assistant')
+    .map((row) => ({
+      id: row.id,
+      role: row.role as 'user' | 'assistant',
+      parts: row.parts as UIMessage['parts'],
+      metadata: { createdAt: row.createdAt.toISOString() },
+    }));
 }
 
 /** Attach live approval and budget state to persisted custom message parts. */
@@ -95,9 +151,16 @@ export async function hydrateChatApprovals(
       ),
     ),
   ];
-  if (!approvalIds.length && !budgetTaskIds.length) return messages;
+  const suggestionIds = [
+    ...new Set(
+      messages.flatMap((message) =>
+        (message.parts as unknown[]).filter(isSuggestionPart).map((part) => part.suggestionId),
+      ),
+    ),
+  ];
+  if (!approvalIds.length && !budgetTaskIds.length && !suggestionIds.length) return messages;
 
-  const [approvalRows, budgetTasks] = await Promise.all([
+  const [approvalRows, budgetTasks, suggestionRows] = await Promise.all([
     approvalIds.length
       ? db
           .select({
@@ -115,7 +178,19 @@ export async function hydrateChatApprovals(
           .from(tasks)
           .where(inArray(tasks.id, budgetTaskIds))
       : [],
+    suggestionIds.length
+      ? db
+          .select({
+            id: suggestions.id,
+            status: suggestions.status,
+            expiresAt: suggestions.expiresAt,
+            acceptedTaskId: suggestions.acceptedTaskId,
+          })
+          .from(suggestions)
+          .where(inArray(suggestions.id, suggestionIds))
+      : [],
   ]);
+  const suggestionById = new Map(suggestionRows.map((row) => [row.id, row]));
   const approvalById = new Map(approvalRows.map((row) => [row.id, row]));
   const taskById = new Map(budgetTasks.map((task) => [task.id, task]));
   return messages.map((message) => ({
@@ -133,6 +208,18 @@ export async function hydrateChatApprovals(
                 ? 'pending'
                 : 'missing';
         return { ...part, status };
+      }
+      if (isSuggestionPart(part)) {
+        const suggestion = suggestionById.get(part.suggestionId);
+        if (!suggestion) return { ...part, status: 'missing' };
+        // A suggestion nobody answered goes quiet on its own, so an elapsed
+        // deadline reads as expired rather than as a live question.
+        const status =
+          (suggestion.status === 'pending' || suggestion.status === 'snoozed') &&
+          suggestion.expiresAt <= now
+            ? 'expired'
+            : suggestion.status;
+        return { ...part, status, acceptedTaskId: suggestion.acceptedTaskId ?? undefined };
       }
       if (!isApprovalPart(part)) return part;
       const approval = approvalById.get(part.approvalId);
@@ -320,7 +407,7 @@ export function isValidChatCursor(value: string): boolean {
 export async function getChatConversationView(
   db: Db,
   conversationId: string,
-  input: { taskId?: string; cursor?: string },
+  input: { taskId?: string; cursor?: string; now?: Date },
 ) {
   const agent = await getAgent(db);
   const [conversation] = await db
@@ -374,24 +461,29 @@ export async function getChatConversationView(
       )
       .orderBy(models.label),
   ]);
-  const messages = await hydrateChatApprovals(
-    db,
-    messageRows
-      .filter((row) => row.role === 'user' || row.role === 'assistant')
-      .map((row) => ({
-        id: row.id,
-        role: row.role as 'user' | 'assistant',
-        parts: row.parts as UIMessage['parts'],
-        metadata: { createdAt: row.createdAt.toISOString() },
-      })),
-  );
+  const messages = await hydrateChatApprovals(db, toUiMessages(messageRows));
   return {
     conversation,
     agentName: agent.name || 'Assistant',
+    // Chat formats day dividers and times in this zone on BOTH sides, so the
+    // server-rendered log and the hydrated one agree and nothing shifts once
+    // the client takes over.
+    agentTimezone: agent.timezone,
     messages,
     models: enabledModels,
     goalTitle: linkedGoal?.title,
     canArchive: !conversation.isPrimary && Number(activeTasks[0]?.value ?? 0) === 0,
+    // Where the open page resumes polling from. Without it the client has no
+    // cursor until it sends a turn, so anything the assistant posted on its own
+    // — a schedule, a watch, an approval resuming — stayed invisible until the
+    // page was loaded again.
+    //
+    // Seeded under the same settle rule the poll advances by, because a render
+    // is a poll like any other: a cursor planted on a row written moments ago
+    // sits in front of whatever is still committing behind it, and the open
+    // page never sees those at all. A chat whose every message is that fresh
+    // starts with no cursor and picks one up on its first tick.
+    cursor: advanceCursor(messageRows, undefined, false, input.now ?? new Date()),
     asyncTurn:
       requestedTask && requestedCursor && input.cursor
         ? { taskId: requestedTask.id, cursor: input.cursor }
@@ -399,15 +491,58 @@ export async function getChatConversationView(
   };
 }
 
-export async function getChatTaskStatus(
+/**
+ * Everything the open chat has not seen yet, from one cursor forward.
+ *
+ * `taskId` is optional because the chat log is not only fed by the turn you
+ * just sent: schedules, missions, watches, attention notices and inbound
+ * email/SMS all persist into the conversation with no task the page knows
+ * about, and the executor keeps writing after a parked task resumes. Polling
+ * only for a known task is what made those land invisibly until a reload.
+ * With a task, the caller also gets its status and live tool activity.
+ *
+ * `refreshIds` names rows the caller is already showing and wants re-read —
+ * decision cards whose live status may have changed elsewhere. They come back
+ * in `refreshed`, deliberately NOT in `messages`: `messages` is what the client
+ * uses to decide a turn has produced its answer, and a re-read of an old row is
+ * not new output.
+ */
+export async function getChatUpdates(
   db: Db,
-  input: { conversationId: string; taskId: string; cursor?: string; pageSize?: number },
+  input: {
+    conversationId: string;
+    taskId?: string;
+    cursor?: string;
+    pageSize?: number;
+    refreshIds?: string[];
+    now?: Date;
+  },
 ) {
-  const [task] = await db
-    .select({ status: tasks.status, conversationId: tasks.conversationId })
-    .from(tasks)
-    .where(eq(tasks.id, input.taskId));
-  if (!task || task.conversationId !== input.conversationId) return null;
+  let taskStatus: string | null = null;
+  if (input.taskId) {
+    const [task] = await db
+      .select({ status: tasks.status, conversationId: tasks.conversationId })
+      .from(tasks)
+      .where(eq(tasks.id, input.taskId));
+    if (!task || task.conversationId !== input.conversationId) return null;
+    taskStatus = task.status;
+  } else {
+    // The task lookup above is what proved the caller may read this thread.
+    // Without one, check the conversation itself rather than trusting an id
+    // from the query string.
+    const agent = await getAgent(db);
+    const [conversation] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.id, input.conversationId),
+          eq(conversations.agentId, agent.id),
+          eq(conversations.channel, 'chat'),
+        ),
+      );
+    if (!conversation) return null;
+  }
   const cursor = decodeMessageCursor(input.cursor);
   const pageSize = input.pageSize ?? 50;
   const rows = await listMessages(db, input.conversationId, {
@@ -416,28 +551,55 @@ export async function getChatTaskStatus(
   });
   const hasMore = Boolean(cursor && rows.length > pageSize);
   const page = rows.slice(0, pageSize);
-  const messages = await hydrateChatApprovals(
+  const messages = await hydrateChatApprovals(db, toUiMessages(page));
+  const refreshIds = (input.refreshIds ?? [])
+    .filter((id) => UUID_RE.test(id))
+    .slice(0, MAX_REFRESH_IDS);
+  const refreshed = await hydrateChatApprovals(
     db,
-    page
-      .filter((row) => row.role === 'user' || row.role === 'assistant')
-      .map((row) => ({
-        id: row.id,
-        role: row.role as 'user' | 'assistant',
-        parts: row.parts as UIMessage['parts'],
-        metadata: { createdAt: row.createdAt.toISOString() },
-      })),
+    toUiMessages(await listMessagesByIds(db, input.conversationId, refreshIds)),
   );
-  const last = page.at(-1);
-  const nextCursor = last ? encodeMessageCursor(last) : cursor ? encodeMessageCursor(cursor) : null;
-  const activity = SETTLED_TASK_STATUSES.has(task.status)
-    ? []
-    : (
-        await db
-          .select({ toolName: toolCalls.toolName, status: toolCalls.status, step: toolCalls.step })
-          .from(toolCalls)
-          .where(eq(toolCalls.taskId, input.taskId))
-          .orderBy(desc(toolCalls.createdAt))
-          .limit(3)
-      ).reverse();
-  return { taskStatus: task.status, messages, nextCursor, hasMore, activity };
+  const nextCursor = advanceCursor(page, cursor, hasMore, input.now ?? new Date());
+  const taskId = input.taskId;
+  const activity =
+    taskId && taskStatus && !SETTLED_TASK_STATUSES.has(taskStatus)
+      ? (
+          await db
+            .select({
+              toolName: toolCalls.toolName,
+              status: toolCalls.status,
+              step: toolCalls.step,
+            })
+            .from(toolCalls)
+            .where(eq(toolCalls.taskId, taskId))
+            .orderBy(desc(toolCalls.createdAt))
+            .limit(3)
+        ).reverse()
+      : [];
+  return { taskStatus, messages, refreshed, nextCursor, hasMore, activity };
+}
+
+/**
+ * How far the poll may remember having read. Never past a row young enough
+ * that a slower transaction could still commit behind it (CURSOR_SETTLE_MS
+ * above explains why that happens), and never backwards — the client loops
+ * immediately while `hasMore` is set, so a cursor that could retreat would
+ * spin. A full page means a real backlog, whose rows are old by definition, so
+ * that case advances to the tail as before.
+ */
+function advanceCursor(
+  page: Awaited<ReturnType<typeof listMessages>>,
+  cursor: { createdAt: Date; id: string } | undefined,
+  hasMore: boolean,
+  now: Date,
+): string | null {
+  const fallback = cursor ? encodeMessageCursor(cursor) : null;
+  if (page.length === 0) return fallback;
+  if (hasMore) return encodeMessageCursor(page[page.length - 1] as (typeof page)[number]);
+  const settledBefore = now.getTime() - CURSOR_SETTLE_MS;
+  for (let index = page.length - 1; index >= 0; index -= 1) {
+    const row = page[index] as (typeof page)[number];
+    if (row.createdAt.getTime() <= settledBefore) return encodeMessageCursor(row);
+  }
+  return fallback;
 }

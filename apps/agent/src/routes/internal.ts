@@ -2,6 +2,7 @@ import { isModuleEnabled, loadConfig } from '@assistant/config';
 import {
   evaluateCanaryHealth,
   expireStaleApprovals,
+  expireStaleSuggestions,
   findDueTasks,
   resumeResolvedApprovalTasks,
 } from '@assistant/core';
@@ -85,6 +86,11 @@ internal.post('/sweep', async (c) => {
     () => expireStaleApprovals(deps.db),
     [] as string[],
   );
+  const expiredSuggestions = await step(
+    'expireStaleSuggestions',
+    () => expireStaleSuggestions(deps.db),
+    0,
+  );
   const resumedApprovalTasks = await step(
     'resumeResolvedApprovalTasks',
     () => resumeResolvedApprovalTasks(deps.db),
@@ -147,6 +153,7 @@ internal.post('/sweep', async (c) => {
   }
   return c.json({
     expiredApprovalsWoke: woken.length,
+    expiredSuggestions,
     resumedApprovalTasks: resumedApprovalTasks.length,
     renotifiedApprovals,
     renotifiedAttention,

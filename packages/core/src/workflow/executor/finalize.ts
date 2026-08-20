@@ -8,6 +8,8 @@ import {
   PROMPT_VERSION,
   persistMessage,
 } from '../../chat.js';
+import { type Cue, stripCueTags } from '../../chat-cues.js';
+import { isForwardedIngest } from '../../email-provenance.js';
 import type { PendingFinal, TaskState } from '../../events.js';
 import type { RecallSource } from '../../memory/recall.js';
 import { recordSkillOutcome } from '../../memory/skills.js';
@@ -89,6 +91,7 @@ async function persistFinalConversationOnce(
   text: string,
   recall?: RecallSource[],
   contractNotice?: boolean,
+  cues?: Cue[],
 ): Promise<boolean> {
   let conversationId = task.conversationId;
   let body = text;
@@ -119,7 +122,7 @@ async function persistFinalConversationOnce(
     taskId: task.id,
     role: 'assistant',
     origin: 'assistant',
-    parts: assistantMessageParts(body, recall, { contractNotice }),
+    parts: assistantMessageParts(body, recall, { contractNotice, cues }),
     text: body,
   });
   return true;
@@ -140,6 +143,7 @@ export async function finalizePendingResponse(
     pending.text,
     recallSources,
     pending.contractNotice,
+    pending.cues,
   );
 
   // Check cancellation/reclaim immediately before the external side effect.
@@ -271,6 +275,13 @@ export async function stageModelFinalResponse(
   pending: PendingFinal,
   expectedArtifact?: ArtifactIntent,
 ): Promise<ExecuteResult> {
+  // Companion cue tags come out for EVERY channel before the contract or any
+  // delivery sees the text. The prompt gates the vocabulary to dashboard chat,
+  // but a leaked tag in an email or SMS final would be robot syntax in front
+  // of a human — stripping here is the defense in depth. The cues themselves
+  // survive only into a dashboard chat_turn's persisted parts, below.
+  const strippedFinal = stripCueTags(pending.text);
+  pending.text = strippedFinal.text;
   const rows = await deps.db
     .select(EVIDENCE_COLUMNS)
     .from(toolCalls)
@@ -319,6 +330,13 @@ export async function stageModelFinalResponse(
   // just this prose-model one — persists its verdict and loop-health counters.
   pending.contractBlocked = checked.blocked;
   pending.contractUnsupportedCount = checked.unsupported.length;
+  // When the contract replaces the draft, its deterministic copy carries no
+  // emotional register — dropping the cues lets the dashboard fall back to its
+  // neutral face instead of grinning through an honesty notice.
+  pending.cues =
+    task.type === 'chat_turn' && !checked.blocked && strippedFinal.cues.length > 0
+      ? strippedFinal.cues
+      : undefined;
   if (checked.blocked) {
     console.warn('blocked unsupported assistant action claim', {
       taskId: task.id,
@@ -383,6 +401,11 @@ export async function maybeEnqueueKnownSenderReply(
 ): Promise<void> {
   const conversationId = task.conversationId;
   if (task.type !== 'email_triage' || task.trust !== 'known' || !conversationId) return;
+  // Forwarded ingest is never a conversation with the sender: the owner routed
+  // their mail here to be read, not to have the assistant answer it on their
+  // behalf. Proposing a reply would put an approval card in front of the owner
+  // for a message they never asked to answer.
+  if (isForwardedIngest(task)) return;
   const reply = draft.trim();
   if (!reply) return;
 

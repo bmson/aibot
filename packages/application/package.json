@@ -17,6 +17,7 @@
     "./profile": "./src/profile.ts",
     "./settings": "./src/settings.ts",
     "./shell": "./src/shell.ts",
+    "./suggestions": "./src/suggestions.ts",
     "./tasks": "./src/tasks.ts"
   },
   "scripts": {

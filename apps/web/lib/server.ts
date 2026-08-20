@@ -20,7 +20,7 @@ import {
   getAssistantIdentity,
   getAssistantTimezone,
   getChatConversationView,
-  getChatTaskStatus,
+  getChatUpdates,
   getDocumentsOverview,
   getImportOverview,
   getPrimaryConversationId,
@@ -174,12 +174,13 @@ function createApplication() {
     listChatHistory: (archived: boolean) => listChatHistory(db, archived),
     getChatConversation: (conversationId: string, input: { taskId?: string; cursor?: string }) =>
       getChatConversationView(db, conversationId, input),
-    getChatTaskStatus: (input: {
+    getChatUpdates: (input: {
       conversationId: string;
-      taskId: string;
+      taskId?: string;
       cursor?: string;
       pageSize?: number;
-    }) => getChatTaskStatus(db, input),
+      refreshIds?: string[];
+    }) => getChatUpdates(db, input),
     isValidChatCursor,
     handleChatTurn: (request: Request) =>
       handleChatTurn(request, { config: loadConfig(), db, router: getRouter() }),

@@ -39,7 +39,16 @@ const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
 const RUN = `Xtest-Application-${Date.now()}`;
 const NOW = new Date('2026-07-18T12:00:00.000Z');
-const FUTURE = new Date(NOW.getTime() + 30 * 24 * 60 * 60_000).toISOString();
+/**
+ * A watch's stored expiry is checked against the real clock, not against NOW —
+ * so deriving this from NOW alone gave every fixture a fixed expiry date, and
+ * the whole file went red on 2026-08-17 with nobody having touched the code:
+ * the watch stopped matching, the message fell through to classifySender, and
+ * the harness has no router to classify it with. Anchor the expiry to whichever
+ * of the logical and real clocks is later, so the watch is unexpired both ways
+ * while NOW stays fixed for the assertions that depend on a stable timestamp.
+ */
+const FUTURE = new Date(Math.max(NOW.getTime(), Date.now()) + 30 * 24 * 60 * 60_000).toISOString();
 
 let db: Db;
 let dbUp = false;
@@ -269,7 +278,13 @@ afterAll(async () => {
         ),
       );
     }
-    if (taskIds.length > 0) await db.delete(tasks).where(inArray(tasks.id, taskIds));
+    if (taskIds.length > 0) {
+      // Owner notices land in the primary/Notifications thread, which is not in
+      // conversationIds, so deleting by conversation alone leaves a message
+      // still referencing these tasks.
+      await db.delete(messages).where(inArray(messages.taskId, taskIds));
+      await db.delete(tasks).where(inArray(tasks.id, taskIds));
+    }
     if (conversationIds.length > 0) {
       await db.delete(conversations).where(inArray(conversations.id, conversationIds));
     }
