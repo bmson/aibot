@@ -27,7 +27,7 @@
     "@assistant/core": "workspace:*",
     "@assistant/config": "workspace:*",
     "@assistant/db": "workspace:*",
-    "ai": "^7.0.29",
+    "ai": "^7.0.66",
     "drizzle-orm": "^0.45.2",
     "zod": "^4.4.3"
   }

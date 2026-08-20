@@ -10,9 +10,9 @@
   "dependencies": {
     "exceljs": "^4.4.0",
     "jszip": "^3.10.1",
-    "mammoth": "^1.9.0"
+    "mammoth": "^1.12.1"
   },
   "devDependencies": {
-    "tsx": "^4.23.1"
+    "tsx": "^4.23.12"
   }
 }
