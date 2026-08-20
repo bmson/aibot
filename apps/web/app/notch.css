@@ -23,8 +23,8 @@
  * Base rules first, motion last, so the motion block can be lifted out whole.
  */
 
-/* One overlay owning the three layers at the top of the screen: the tint, the
-   glass, and the island in front of both.
+/* One overlay owning the layers at the top of the screen: the tint, the glass,
+   and the island in front of all app content.
  *
    ── Why there are two veil layers and not one ────────────────────────────────
  *
@@ -54,9 +54,10 @@
      .status-veil        the tint. Spans the whole band, no filter, so it can
                          cover the island harmlessly — which is exactly the
                          arrangement that already worked in attempt 3.
-     .status-veil-glass  the blur. Never overlaps the island: it spans the whole
-                         band while the island is closed, and retreats below the
-                         island's bottom edge while it is open.
+     .status-veil-glass  the blur below the island. It spans the whole band
+                         while closed, and retreats below the island while open.
+     .status-crown-glass the blur beside the island. Two grid cells follow the
+                         island's animated width, so they never sit beneath it.
  *
    Two layers that do not intersect cannot be ordered wrongly, whatever the
    compositor does with either.
@@ -80,7 +81,9 @@
    against the top edge and are free to overflow it. */
 .status-overlay {
   position: fixed;
-  z-index: 40;
+  /* Higher than every app-owned overlay. Native top-layer UI such as a popover
+     remains the platform's responsibility. */
+  z-index: 100;
   top: 0;
   right: 0;
   left: 0;
@@ -116,26 +119,17 @@
    way out — and the same generous length, ~2.8x the inset, which is what makes
    it read as a fade rather than as a band with an edge on it.
  *
-   The colour is FLAT and the fade is a mask rather than the colour itself being
-   a gradient, so that this layer and the glass below share one profile stated
-   once. Two details in that mask:
+   The eased colour stops carry the whole fade. Keeping this linear and free of
+   decorative arcs makes the band disappear without drawing a second shape
+   across the device's own curved top edge.
  *
-   Its stops are eased rather than linear, so the band arrives flat at both ends
-   instead of turning a corner at each.
- *
-   It is a very wide ellipse rather than a straight line, easing up by about
-   three percent at the far corners where the screen's own glass curves away.
-   Only about three: the band is lighter than the stage it sits on, so where it
-   stops IS visible, and an arc deep enough to notice draws its own shape across
-   the top of the screen. What the curve is for is taking the edge off the
-   corners, not making a dome.
- *
-   90%, not 100%: a fully opaque cap would erase the top of the band, and the
+   92%, not 100%: a fully opaque cap would erase the top of the band, and the
    point is that something stays visibly behind it.
  *
    No `backdrop-filter` on this layer, and nothing may add one. It is the layer
    that covers the island, and a filter here is precisely the bug — see the
-   header. The blur lives on .status-veil-glass, which keeps clear of it. */
+   header. The blur lives on .status-veil-glass and .status-crown-glass, which
+   keep clear of it. */
 .status-veil {
   position: absolute;
   z-index: 0;
@@ -143,15 +137,12 @@
   right: 0;
   left: 0;
   height: var(--status-band);
-  background: color-mix(in srgb, var(--status-ground) 90%, transparent);
-  mask-image: radial-gradient(
-    200% 100% at 50% 0%,
-    #000 0 35%,
-    rgb(0 0 0 / 0.85) 50%,
-    rgb(0 0 0 / 0.62) 62%,
-    rgb(0 0 0 / 0.38) 74%,
-    rgb(0 0 0 / 0.18) 85%,
-    rgb(0 0 0 / 0.05) 93%,
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--status-ground) 92%, transparent) 0%,
+    color-mix(in srgb, var(--status-ground) 90%, transparent) 36%,
+    color-mix(in srgb, var(--status-ground) 72%, transparent) 61%,
+    color-mix(in srgb, var(--status-ground) 34%, transparent) 82%,
     transparent 100%
   );
 }
@@ -196,15 +187,13 @@
   right: 0;
   left: 0;
   height: var(--status-band);
-  backdrop-filter: blur(16px) saturate(1.1);
-  mask-image: radial-gradient(
-    200% 100% at 50% 0%,
-    #000 0 35%,
-    rgb(0 0 0 / 0.85) 50%,
-    rgb(0 0 0 / 0.62) 62%,
-    rgb(0 0 0 / 0.38) 74%,
-    rgb(0 0 0 / 0.18) 85%,
-    rgb(0 0 0 / 0.05) 93%,
+  backdrop-filter: blur(18px) saturate(1.12);
+  mask-image: linear-gradient(
+    to bottom,
+    #000 0 38%,
+    rgb(0 0 0 / 0.78) 56%,
+    rgb(0 0 0 / 0.42) 74%,
+    rgb(0 0 0 / 0.14) 90%,
     transparent 100%
   );
 }
@@ -215,13 +204,47 @@
   mask-image: linear-gradient(
     to bottom,
     transparent 0,
-    rgb(0 0 0 / 0.55) 14%,
-    #000 26%,
-    rgb(0 0 0 / 0.72) 52%,
-    rgb(0 0 0 / 0.4) 70%,
-    rgb(0 0 0 / 0.16) 86%,
+    rgb(0 0 0 / 0.5) 12%,
+    #000 24%,
+    rgb(0 0 0 / 0.76) 52%,
+    rgb(0 0 0 / 0.38) 76%,
+    rgb(0 0 0 / 0.12) 90%,
     transparent 100%
   );
+}
+
+/* When the island is open, these two panes complete the status-area blur to
+   either side of it. The island is the grid's middle column, so the panes and
+   the island are physically disjoint throughout its width animation. A small
+   column gap is extra protection against sub-pixel rasterisation at the seam. */
+.status-crown {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: grid;
+  height: var(--island-bottom);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  column-gap: 0.375rem;
+  pointer-events: none;
+}
+
+.status-crown-glass {
+  z-index: 0;
+  height: 100%;
+  backdrop-filter: blur(18px) saturate(1.12);
+  mask-image: linear-gradient(
+    to bottom,
+    #000 0 58%,
+    rgb(0 0 0 / 0.72) 74%,
+    rgb(0 0 0 / 0.28) 91%,
+    transparent 100%
+  );
+}
+
+.status-overlay:not([data-open="true"]) .status-crown-glass {
+  visibility: hidden;
 }
 
 .notch-island {
@@ -229,10 +252,9 @@
      fully rounded ends — so a ~18pt radius is the one that matches it. */
   --island-width: 7.9rem;
   --island-radius: 1.15rem;
-  position: absolute;
-  z-index: 1;
+  position: relative;
+  z-index: 2;
   top: var(--island-top);
-  left: 50%;
   display: flex;
   /* Narrow enough to stay an island. Past this a long label stops reading as a
      capsule hanging off the top and starts reading as a banner across it, so
@@ -253,7 +275,6 @@
      and the island came back blurred exactly as before, so the promotion is
      gone with the theory. Nothing here holds the island in front any more:
      nothing filtered is over it. */
-  translate: -50% 0;
 }
 
 /* Closed: no height at all, so nothing hangs below the hardware island.

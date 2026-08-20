@@ -153,6 +153,17 @@ async function assertResponsiveContract(page: Page, label: string, mobile: boole
       ) {
         return [];
       }
+      // Quick replies stay visually compact but carry their missing touch area
+      // in an absolutely positioned ::after extension (conversation.css).
+      // Measure that intentional hit box instead of only the painted pill.
+      const touchExtension = element.matches('.chip-quick-reply')
+        ? getComputedStyle(element, '::after')
+        : null;
+      const extendedHeight = touchExtension
+        ? rect.height +
+          Math.max(0, -Number.parseFloat(touchExtension.top)) +
+          Math.max(0, -Number.parseFloat(touchExtension.bottom))
+        : rect.height;
       return [
         {
           tag: element.tagName.toLowerCase(),
@@ -161,7 +172,7 @@ async function assertResponsiveContract(page: Page, label: string, mobile: boole
             .replace(/\s+/g, ' ')
             .slice(0, 80),
           width: Math.round(rect.width),
-          height: Math.round(rect.height),
+          height: Math.round(extendedHeight),
           fontSize: Number.parseFloat(style.fontSize),
           formField: ['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName),
         },
@@ -191,6 +202,101 @@ async function assertResponsiveContract(page: Page, label: string, mobile: boole
     assert(
       zoomingFields.length === 0,
       `${label} has form text below 16px, which triggers iOS focus zoom: ${JSON.stringify(zoomingFields)}`,
+    );
+  }
+}
+
+/**
+ * The status gradient may tint the island but no filtered layer may intersect
+ * it. WebKit samples intersecting backdrop-filter siblings before their visual
+ * z-order is resolved, which is what made the status label look frosted on an
+ * installed iPhone even though the island had the higher z-index.
+ */
+async function assertDynamicIslandLayering(page: Page) {
+  const metrics = await page.evaluate(() => {
+    const overlay = document.querySelector<HTMLElement>('.status-overlay');
+    const veil = document.querySelector<HTMLElement>('.status-veil');
+    const lowerGlass = document.querySelector<HTMLElement>('.status-veil-glass');
+    const island = document.querySelector<HTMLElement>('.notch-island');
+    const crownGlass = [...document.querySelectorAll<HTMLElement>('.status-crown-glass')];
+    const main = document.querySelector<HTMLElement>('main');
+    if (!overlay || !veil || !lowerGlass || !island || crownGlass.length !== 2 || !main) {
+      return null;
+    }
+    const overlayRect = overlay.getBoundingClientRect();
+    const lowerGlassRect = lowerGlass.getBoundingClientRect();
+    const islandRect = island.getBoundingClientRect();
+    return {
+      open: overlay.dataset.open === 'true',
+      overlay: {
+        left: overlayRect.left,
+        right: overlayRect.right,
+        top: overlayRect.top,
+        bottom: overlayRect.bottom,
+        zIndex: getComputedStyle(overlay).zIndex,
+      },
+      mainZ: Number.parseInt(getComputedStyle(main).zIndex, 10),
+      veilFilter: getComputedStyle(veil).backdropFilter,
+      veilBackground: getComputedStyle(veil).backgroundImage,
+      lowerGlass: {
+        left: lowerGlassRect.left,
+        right: lowerGlassRect.right,
+        top: lowerGlassRect.top,
+        bottom: lowerGlassRect.bottom,
+        filter: getComputedStyle(lowerGlass).backdropFilter,
+      },
+      island: {
+        left: islandRect.left,
+        right: islandRect.right,
+        top: islandRect.top,
+        bottom: islandRect.bottom,
+        filter: getComputedStyle(island).backdropFilter,
+      },
+      crownGlass: crownGlass.map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          bottom: rect.bottom,
+          filter: getComputedStyle(element).backdropFilter,
+          visibility: getComputedStyle(element).visibility,
+        };
+      }),
+    };
+  });
+  assert(metrics, 'Dynamic Island layers are incomplete');
+  assert(
+    Number.parseInt(metrics.overlay.zIndex, 10) > metrics.mainZ,
+    `Dynamic Island is not above app content: ${JSON.stringify(metrics)}`,
+  );
+  assert(
+    metrics.veilFilter === 'none' && metrics.island.filter === 'none',
+    `a filtered layer covers the Dynamic Island: ${JSON.stringify(metrics)}`,
+  );
+  assert(
+    metrics.veilBackground.includes('0.92') || metrics.veilBackground.includes('92%'),
+    `status gradient is not 92% opaque at the top: ${metrics.veilBackground}`,
+  );
+  assert(
+    metrics.lowerGlass.filter.includes('blur(') &&
+      metrics.crownGlass.every(({ filter }) => filter.includes('blur(')),
+    `status gradient does not carry complete backdrop blur: ${JSON.stringify(metrics)}`,
+  );
+  if (metrics.open) {
+    const [leftGlass, rightGlass] = metrics.crownGlass;
+    assert(
+      leftGlass &&
+        rightGlass &&
+        metrics.lowerGlass.top >= metrics.island.bottom - 0.5 &&
+        leftGlass.right <= metrics.island.left &&
+        rightGlass.left >= metrics.island.right,
+      `backdrop glass intersects the open Dynamic Island: ${JSON.stringify(metrics)}`,
+    );
+  } else {
+    assert(
+      metrics.crownGlass.every(({ visibility }) => visibility === 'hidden'),
+      `side glass is active while the Dynamic Island is closed: ${JSON.stringify(metrics)}`,
     );
   }
 }
@@ -356,6 +462,7 @@ try {
     `web app manifest is incomplete: ${JSON.stringify(installContract.manifest)}`,
   );
   await assertStandaloneScreenRadius(page);
+  await assertDynamicIslandLayering(page);
   const primaryMessageField = page.getByRole('combobox', { name: 'Message' });
   await primaryMessageField.waitFor({ state: 'visible' });
   await assertNoMenuChrome(page, 'mobile chat');
@@ -571,6 +678,7 @@ try {
         '16px mobile fields',
         'iOS standalone metadata and install icons',
         'device-mapped standalone screen radius',
+        'Dynamic Island above content and physically clear of backdrop blur',
         'no navigation menu chrome at any viewport',
         'slash-command navigation, grouped and badged',
         'slash-command aliases (/tasks finds Activity)',
