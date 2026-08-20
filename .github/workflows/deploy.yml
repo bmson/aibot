@@ -84,7 +84,7 @@ jobs:
         env:
           RESOLVED_SHA: ${{ github.event.workflow_run.head_sha || github.event.inputs.sha || github.sha }}
         run: echo "sha=${RESOLVED_SHA}" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ steps.release.outputs.sha }}
       # modules:plan runs a pnpm script against workspace packages, so this
@@ -163,7 +163,7 @@ jobs:
       # shared node:22-slim OS layer is clean.
       TRIVY_SKIP_DIRS: '**/node_modules'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.plan.outputs.sha }}
       # The stock runner image leaves this job ~14GB of headroom, and exporting
@@ -252,7 +252,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.plan.outputs.sha }}
       # release.sh runs pnpm scripts against workspace packages.
