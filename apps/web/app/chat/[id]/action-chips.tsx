@@ -31,7 +31,7 @@ export function ActionChips({
           disabled={!active}
           onClick={() => onSend(label)}
           style={{ animationDelay: `${index * 50}ms` }}
-          className={`mobile-touch-target inline-flex h-8 items-center rounded-full border border-accent/30 px-3.5 text-xs font-medium text-accent motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-colors hover:bg-accent/10 active:bg-accent/15 disabled:cursor-not-allowed ${focusRing}`}
+          className={`chip-quick-reply inline-flex h-8 items-center rounded-full border border-accent/30 px-3.5 text-xs font-medium text-accent motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-colors hover:bg-accent/10 active:bg-accent/15 disabled:cursor-not-allowed ${focusRing}`}
         >
           {label}
         </button>

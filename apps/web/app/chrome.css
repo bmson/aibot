@@ -102,10 +102,17 @@ section[aria-label="Choose response model"] [role="option"] {
    frosting has faded out — so the log behind it is still sharp, and this blur
    is the only thing that makes it glass. It carries a real lift as well: with
    nothing but blur it read as a smudge on the stage rather than an object
-   floating over it. */
+   floating over it.
+
+   The fill is the STAGE, not white. Whatever the pill is standing on changes
+   as you scroll, and now that a reply is a sheet of white paper, a white-tinted
+   pill drifting over one turns into a near-white lozenge carrying white type.
+   Tinting with the ground it lives on means the glass reads as the same green
+   wherever it happens to be, and its label keeps the contrast it had over an
+   empty stage. */
 button[aria-label="Jump to latest"] {
   border: 1px solid rgb(255 255 255 / 0.24);
-  background: rgb(255 255 255 / 0.13);
+  background: color-mix(in srgb, var(--stage) 72%, transparent);
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
   color: var(--stage-strong);
   backdrop-filter: blur(20px) saturate(1.5);
@@ -113,7 +120,7 @@ button[aria-label="Jump to latest"] {
 }
 
 button[aria-label="Jump to latest"]:hover {
-  background: rgb(255 255 255 / 0.19);
+  background: color-mix(in srgb, var(--stage) 82%, transparent);
 }
 
 /* Selection uses the product accent without overpowering text contrast. */

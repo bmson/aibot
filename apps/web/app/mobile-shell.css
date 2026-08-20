@@ -9,18 +9,17 @@
   /* The ground the status veil ramps out of: whatever the page is actually
      standing on. The chat re-points it at its own green (conversation.css).
 
-     This used to be a light wash over a backdrop-filter, with the blur doing
-     most of the separating. The blur had to go. WebKit composites a
-     backdrop-filter layer in a way that can place it over siblings painted
-     after it, which left the Dynamic Island extension — z-50, against this
-     veil's z-35 — frosted and washed out on the exact device the veil exists
-     for. Chromium orders it correctly, so it was invisible anywhere but a real
-     phone.
+     The band over it is glass: a tint at this colour with a blur behind it, so
+     the conversation goes soft on its way up rather than being painted out.
+     The blur was removed once, on the theory that WebKit was compositing the
+     backdrop-filter layer over the Dynamic Island extension painted after it —
+     that turned out not to be what was wrong (the island was washed on a build
+     that predated the fix), and with the two ordered explicitly the island
+     stays black over a blurred band on device. Worth knowing if it ever comes
+     back frosted: this is the line to suspect first.
 
-     A plain colour ramp carries no such hazard and separates the clock at
-     least as well: the top of the band is the ground at full strength, so the
-     clock sits on solid canvas rather than on blurred text, and content still
-     thins out as it travels up underneath. */
+     The band's shape, and how it and the island stack, are in notch.css — next
+     to the island itself. */
   --status-ground: var(--surface);
 }
 

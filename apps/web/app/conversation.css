@@ -152,46 +152,64 @@ body:has(.chat-viewport) {
 }
 
 /* ── The two voices ───────────────────────────────────────────────────────────
-   Both bubbles carry one tail corner, on the side they are spoken from, which
-   is the only asymmetry either of them needs. */
+   The assistant speaks on paper and you speak on the stage itself. That is the
+   whole distinction: one voice brings a material with it, the other is drawn
+   directly on the green with a hairline and needs none. Both bubbles carry the
+   same radius on all four corners — a tail corner pointed at the speaker, and
+   nothing else on the screen has an asymmetric corner to answer it. */
 .bubble-assistant {
-  background: var(--ink);
-  color: var(--stage-strong);
-  box-shadow: 0 8px 22px rgb(0 0 0 / 0.16);
-}
-
-.bubble-owner {
-  background: var(--bubble-owner);
-  color: var(--bubble-owner-ink);
+  /* The paper's own palette, re-pointed onto the page tokens the markdown
+     renderer uses (bg-sunken, border-edge, text-muted, text-accent). Without
+     this the sheet stays white in the dark scheme while everything printed on
+     it switches to the colours of a dark surface — pale rules and near-white
+     muted text on white. */
+  --content-strong: var(--bubble-paper-ink);
+  --content-muted: var(--bubble-paper-muted);
+  --edge: var(--bubble-paper-edge);
+  --surface-sunken: var(--bubble-paper-sunken);
+  --accent: var(--bubble-paper-accent);
+  --accent-hover: var(--bubble-paper-accent-hover);
+  background: var(--bubble-paper);
+  color: var(--bubble-paper-ink);
   box-shadow: 0 8px 22px rgb(0 0 0 / 0.12);
 }
 
-/* Links, code, and rules inside an ink bubble need the bubble's own palette —
-   the page's edge and sunken tokens are invisible against it. */
-.bubble-assistant :is(code, pre) {
-  background: rgb(255 255 255 / 0.1);
-  color: inherit;
+/* The one thing in a reply that is dark on purpose. Its `dark:` variant follows
+   the room, which is wrong here — the sheet does not. */
+.bubble-assistant pre {
+  background: #10131a;
 }
 
-.bubble-assistant :is(hr, td, th) {
-  border-color: var(--stage-hairline);
+/* Your own voice: no fill at all, so the stage shows through it, and a white
+   hairline to hold the shape. Nothing is layered over the green, which is why
+   this one takes no shadow either — a shadow under a transparent shape is a
+   shadow with nothing casting it. */
+.bubble-owner {
+  border: 1px solid rgb(255 255 255 / 0.25);
+  background: transparent;
+  /* A shade under full strength. Your own words are the half of the thread you
+     already know; letting them sit back a step puts the reply in front without
+     changing the size or the position of anything. */
+  color: color-mix(in srgb, var(--stage-strong) 90%, transparent);
+  box-shadow: none;
 }
 
-.bubble-assistant blockquote {
-  border-color: rgb(255 255 255 / 0.32);
-  color: var(--stage-muted);
+/* Quick-reply chips (action-chips.tsx) sit in a row under a reply and read as
+   offered words rather than as buttons, so they stay the height of their own
+   text — the phone's blanket 44px minimum for `button` turned them into four
+   fat slabs. The finger still gets its 44px: the shortfall is carried by a
+   transparent extension above and below, which costs the row no height because
+   it is out of flow. */
+.chip-quick-reply {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
 }
 
-.bubble-assistant table {
-  border-color: var(--stage-hairline);
-}
-
-.bubble-assistant :is(th) {
-  background: rgb(255 255 255 / 0.06);
-}
-
-.bubble-assistant li::marker {
-  color: var(--stage-muted);
+.chip-quick-reply::after {
+  position: absolute;
+  inset: -0.375rem 0;
+  content: "";
 }
 
 /* ── The veil the composer sits in ────────────────────────────────────────────
@@ -208,10 +226,11 @@ body:has(.chat-viewport) {
    Words stay recognisable as words as they slide under; they just go soft.
 
    The ordering is deliberate. The veil is the composer form's first child and
-   takes `z-index: 0` so the pill (z-10) and the composer itself (z-1) paint
-   above it inside one stacking context — WebKit will float a backdrop-filter
-   layer over siblings that are ahead of it in DOM order alone (the note in
-   mobile-shell.css is the same hazard, met at the top of the screen). */
+   takes `z-index: 0` so the composer itself (z-1) paints above it inside one
+   stacking context, and the jump pill clears both from outside the form —
+   WebKit will float a backdrop-filter layer over siblings that are ahead of it
+   in DOM order alone (the note in mobile-shell.css is the same hazard, met at
+   the top of the screen). */
 .composer-veil {
   z-index: 0;
   background: linear-gradient(
