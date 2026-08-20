@@ -9,6 +9,17 @@ name: Deploy production
 # have nothing to do with the commit (a freshly published advisory failing
 # `pnpm audit`, a new HIGH CVE failing Trivy). Without a manual path the only
 # way to ship a finished web change was an empty commit.
+#
+# ── Shape ────────────────────────────────────────────────────────────────────
+# plan ─▶ image (one parallel job per image) ─▶ release
+#
+# The per-image work — build, scan, SBOM, push, sign — is seven independent
+# pipelines that used to run as `for` loops on a single runner, and that was
+# most of the deploy: 12m20s of a 17m release, against ~3m for the rollout
+# that actually changes production. Nothing about `web` depends on `browser`,
+# so the wall clock is now the slowest single image rather than the sum of all
+# of them. Same images, same scans, same signatures, same rollout — only the
+# scheduling changed.
 on:
   workflow_run:
     workflows: [CI]
@@ -29,8 +40,22 @@ concurrency:
   group: production-deploy
   cancel-in-progress: false
 
+env:
+  GCP_PROJECT: bmson-assistant
+  GCP_REGION: us-west1
+  ARTIFACT_REPOSITORY: assistant
+
 jobs:
-  deploy:
+  # ── plan ───────────────────────────────────────────────────────────────────
+  # Resolves the two things every downstream job has to agree on: which commit
+  # is being released, and which images that release contains. Both are job
+  # outputs so a parallel fan-out cannot end up with jobs disagreeing about
+  # either — the revision that goes live is the revision that was built.
+  #
+  # This job also carries the security guard for the whole workflow. Everything
+  # else `needs:` it, and a skipped dependency skips its dependents, so the
+  # check cannot be bypassed by a job that forgets to repeat it.
+  plan:
     # The workflow_run guard must pin the triggering run to a push of this
     # repository's own main branch. `branches: [main]` alone is not that: it
     # filters on the run's head_branch, which for a pull_request-triggered CI
@@ -45,14 +70,88 @@ jobs:
        github.event.workflow_run.head_repository.full_name == github.repository &&
        github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    environment: production
-    env:
-      # One resolved commit for the whole job: the CI run's head on the
+    outputs:
+      # One resolved commit for the whole release: the CI run's head on the
       # automatic path, the requested (or tip-of-main) commit on the manual one.
       # Everything downstream — checkout, image tags, the /api/health assertion
-      # in release.sh — keys off this single value, so the revision that goes
-      # live is always the revision that was built and verified.
-      RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.event.inputs.sha || github.sha }}
+      # in release.sh — keys off this single value.
+      sha: ${{ steps.release.outputs.sha }}
+      images: ${{ steps.matrix.outputs.entries }}
+      modules: ${{ steps.modules.outputs.modules }}
+    steps:
+      - name: Resolve the release commit
+        id: release
+        env:
+          RESOLVED_SHA: ${{ github.event.workflow_run.head_sha || github.event.inputs.sha || github.sha }}
+        run: echo "sha=${RESOLVED_SHA}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.release.outputs.sha }}
+      # modules:plan runs a pnpm script against workspace packages, so this
+      # runner needs the same toolchain CI uses. The per-image jobs below do
+      # not: everything they build happens inside the Dockerfiles.
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Resolve optional runtime images
+        id: modules
+        env:
+          ASSISTANT_MODULES: ${{ vars.ASSISTANT_MODULES || 'all' }}
+        run: pnpm modules:plan --github-output="$GITHUB_OUTPUT"
+      # The matrix is data, not a list of copy-pasted jobs: an image and the
+      # Dockerfile that builds it, with the optional ones appended only when
+      # their module is enabled. Adding an image here is one line, and it picks
+      # up the scan, the SBOM, and the signature with no further edits.
+      - name: Resolve the release matrix
+        id: matrix
+        env:
+          BUILD_BROWSER: ${{ steps.modules.outputs.browser }}
+          BUILD_CODE: ${{ steps.modules.outputs.code }}
+          BUILD_PROCESSOR: ${{ steps.modules.outputs.processor }}
+        run: |
+          entries='[]'
+          add() {
+            entries="$(jq -c --arg n "$1" --arg d "$2" '. + [{name: $n, dockerfile: $d}]' <<<"$entries")"
+          }
+          add backup infra/docker/backup.Dockerfile
+          add migrate infra/docker/migrate.Dockerfile
+          add agent infra/docker/agent.Dockerfile
+          add web infra/docker/web.Dockerfile
+          if [ "$BUILD_BROWSER" = "true" ]; then
+            add browser infra/docker/browser-job.Dockerfile
+          fi
+          if [ "$BUILD_CODE" = "true" ]; then
+            add code infra/docker/code-runner.Dockerfile
+          fi
+          if [ "$BUILD_PROCESSOR" = "true" ]; then
+            add processor infra/docker/document-processor.Dockerfile
+          fi
+          echo "entries=${entries}" >> "$GITHUB_OUTPUT"
+          echo "Releasing: $(jq -r '[.[].name] | join(", ")' <<<"$entries")"
+
+  # ── image ──────────────────────────────────────────────────────────────────
+  # One image, start to finish: built, scanned, inventoried, pushed, signed.
+  # Keeping the whole per-image pipeline in one job is what lets it run on one
+  # runner without shipping the image around — the build stays in that runner's
+  # daemon, and the scan and the SBOM read it from there.
+  #
+  # fail-fast (the default) is deliberate: a HIGH CVE in any image should stop
+  # the release, and cancelling the siblings means no rollout follows. Images
+  # already pushed by a cancelled sibling are inert — nothing rolls them out.
+  image:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      matrix:
+        entry: ${{ fromJSON(needs.plan.outputs.images) }}
+    env:
+      RELEASE_SHA: ${{ needs.plan.outputs.sha }}
+      IMAGE_NAME: ${{ matrix.entry.name }}
+      DOCKERFILE: ${{ matrix.entry.dockerfile }}
       # The release image scans below exclude node_modules from vulnerability
       # scanning: the app's JavaScript dependency graph is already gated on every
       # PR by `pnpm audit` (CI `checks` job), so scanning it again here is
@@ -66,25 +165,17 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ env.RELEASE_SHA }}
-      # modules:plan and release.sh both run pnpm scripts against workspace
-      # packages, so the deploy runner needs the same toolchain CI uses.
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      # The stock runner image leaves this job ~14GB of headroom, and it has
-      # to build seven images (the chromium-carrying browser image among them)
-      # and then export each one to a tar for SBOM generation. That margin is
-      # a coin flip: run 30512378494 died at the syft step with "no space left
-      # on device" on browser:TAG while an otherwise-identical run the day
-      # before squeaked through. The preinstalled toolchains this job never
-      # touches (.NET, Android, GHC, CodeQL) plus the runner's preloaded
-      # docker images are ~30GB of reclaimable space — drop them up front so
-      # disk stops being a variable.
-      - name: Reclaim runner disk for the image builds
+          ref: ${{ needs.plan.outputs.sha }}
+      # The stock runner image leaves this job ~14GB of headroom, and exporting
+      # an image to a tar for SBOM generation needs room beside the image
+      # itself. That margin used to be a coin flip across seven images in one
+      # job: run 30512378494 died at the syft step with "no space left on
+      # device" on browser:TAG while an otherwise-identical run the day before
+      # squeaked through. One image per runner is far more headroom than that
+      # ever had, but the chromium-carrying browser image is big enough that
+      # this stays — and running in parallel it costs the release nothing but
+      # the slowest job's copy of it.
+      - name: Reclaim runner disk for the image build
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           docker image prune --all --force
@@ -102,139 +193,86 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
       - name: Authorize Artifact Registry
-        env:
-          GCP_REGION: us-west1
         run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
-      - name: Resolve optional runtime images
-        id: modules
-        env:
-          ASSISTANT_MODULES: ${{ vars.ASSISTANT_MODULES || 'all' }}
-        run: pnpm modules:plan --github-output="$GITHUB_OUTPUT"
-      - name: Build immutable images
+      - name: Build the image
         env:
           # RUN --mount=type=cache in the Dockerfiles requires BuildKit.
           DOCKER_BUILDKIT: '1'
-          GCP_PROJECT: bmson-assistant
-          GCP_REGION: us-west1
-          ARTIFACT_REPOSITORY: assistant
-          IMAGE_TAG: ${{ env.RELEASE_SHA }}
         run: |
           IMAGE_ROOT="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${ARTIFACT_REPOSITORY}"
-          docker build --file infra/docker/backup.Dockerfile --tag "${IMAGE_ROOT}/backup:${IMAGE_TAG}" .
-          docker build --file infra/docker/migrate.Dockerfile --tag "${IMAGE_ROOT}/migrate:${IMAGE_TAG}" .
-          docker build --file infra/docker/agent.Dockerfile --tag "${IMAGE_ROOT}/agent:${IMAGE_TAG}" .
-          docker build --file infra/docker/web.Dockerfile --build-arg "GIT_SHA=${IMAGE_TAG}" --tag "${IMAGE_ROOT}/web:${IMAGE_TAG}" .
-          if [ "${{ steps.modules.outputs.browser }}" = "true" ]; then
-            docker build --file infra/docker/browser-job.Dockerfile --tag "${IMAGE_ROOT}/browser:${IMAGE_TAG}" .
+          args=(--file "$DOCKERFILE" --tag "${IMAGE_ROOT}/${IMAGE_NAME}:${RELEASE_SHA}")
+          # Only the web image stamps the commit it was built from; that value
+          # is what /api/health reports, and what release.sh asserts against.
+          if [ "$IMAGE_NAME" = "web" ]; then
+            args+=(--build-arg "GIT_SHA=${RELEASE_SHA}")
           fi
-          if [ "${{ steps.modules.outputs.code }}" = "true" ]; then
-            docker build --file infra/docker/code-runner.Dockerfile --tag "${IMAGE_ROOT}/code:${IMAGE_TAG}" .
-          fi
-          if [ "${{ steps.modules.outputs.processor }}" = "true" ]; then
-            docker build --file infra/docker/document-processor.Dockerfile --tag "${IMAGE_ROOT}/processor:${IMAGE_TAG}" .
-          fi
-      - name: Scan agent image
+          docker build "${args[@]}" .
+      - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/agent:${{ env.RELEASE_SHA }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
-      - name: Scan migration image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/migrate:${{ env.RELEASE_SHA }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
-      - name: Scan backup image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/backup:${{ env.RELEASE_SHA }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
-      - name: Scan web image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/web:${{ env.RELEASE_SHA }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
-      - name: Scan browser image
-        if: steps.modules.outputs.browser == 'true'
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/browser:${{ env.RELEASE_SHA }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
-      - name: Scan code image
-        if: steps.modules.outputs.code == 'true'
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/code:${{ env.RELEASE_SHA }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
-      - name: Scan processor image
-        if: steps.modules.outputs.processor == 'true'
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/processor:${{ env.RELEASE_SHA }}
+          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/${{ matrix.entry.name }}:${{ needs.plan.outputs.sha }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
       - name: Install SBOM tooling
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-      - name: Generate SBOMs and push images
-        env:
-          GCP_PROJECT: bmson-assistant
-          GCP_REGION: us-west1
-          ARTIFACT_REPOSITORY: assistant
-          IMAGE_TAG: ${{ env.RELEASE_SHA }}
-          BUILD_BROWSER: ${{ steps.modules.outputs.browser }}
-          BUILD_CODE: ${{ steps.modules.outputs.code }}
-          BUILD_PROCESSOR: ${{ steps.modules.outputs.processor }}
+      - name: Generate the SBOM and push the image
         run: |
           IMAGE_ROOT="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${ARTIFACT_REPOSITORY}"
-          images="backup migrate agent web"
-          [ "$BUILD_BROWSER" = "true" ] && images="$images browser"
-          [ "$BUILD_CODE" = "true" ] && images="$images code"
-          [ "$BUILD_PROCESSOR" = "true" ] && images="$images processor"
           mkdir -p sbom
-          for image in $images; do
-            syft "${IMAGE_ROOT}/${image}:${IMAGE_TAG}" -o "spdx-json=sbom/${image}.spdx.json"
-            docker push "${IMAGE_ROOT}/${image}:${IMAGE_TAG}"
-          done
-          printf '%s\n' "$images" > sbom/images.txt
-      - name: Upload release SBOMs
+          syft "${IMAGE_ROOT}/${IMAGE_NAME}:${RELEASE_SHA}" \
+            -o "spdx-json=sbom/${IMAGE_NAME}.spdx.json"
+          docker push "${IMAGE_ROOT}/${IMAGE_NAME}:${RELEASE_SHA}"
+      # One artifact per image rather than one for the release: a matrix job
+      # cannot append to a shared artifact name, and merging them would mean
+      # adding an action this repo has not pinned. They carry the same content
+      # under the same release sha.
+      - name: Upload the release SBOM
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
-          name: release-sboms-${{ env.RELEASE_SHA }}
+          name: release-sboms-${{ needs.plan.outputs.sha }}-${{ matrix.entry.name }}
           path: sbom/*.spdx.json
           retention-days: 90
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-      - name: Sign images and attach SBOM attestations
-        env:
-          GCP_PROJECT: bmson-assistant
-          GCP_REGION: us-west1
-          ARTIFACT_REPOSITORY: assistant
-          IMAGE_TAG: ${{ env.RELEASE_SHA }}
+      - name: Sign the image and attach its SBOM attestation
         run: |
           IMAGE_ROOT="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${ARTIFACT_REPOSITORY}"
-          for image in $(cat sbom/images.txt); do
-            ref="${IMAGE_ROOT}/${image}:${IMAGE_TAG}"
-            cosign sign --yes "$ref"
-            cosign attest --yes --type spdxjson --predicate "sbom/${image}.spdx.json" "$ref"
-          done
+          ref="${IMAGE_ROOT}/${IMAGE_NAME}:${RELEASE_SHA}"
+          cosign sign --yes "$ref"
+          cosign attest --yes --type spdxjson --predicate "sbom/${IMAGE_NAME}.spdx.json" "$ref"
+
+  # ── release ────────────────────────────────────────────────────────────────
+  # The only job that changes production. It runs exactly as before, against
+  # images every one of which is now built, scanned, pushed and signed —
+  # `needs: image` is the whole matrix, so a single failed image means no
+  # rollout at all.
+  release:
+    needs: [plan, image]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+      # release.sh runs pnpm scripts against workspace packages.
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: projects/83709630368/locations/global/workloadIdentityPools/github/providers/github-actions
+          service_account: assistant-github-deploy@bmson-assistant.iam.gserviceaccount.com
+          project_id: bmson-assistant
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
       - name: Release immutable images
         env:
-          GCP_PROJECT: bmson-assistant
-          GCP_REGION: us-west1
-          ARTIFACT_REPOSITORY: assistant
-          IMAGE_TAG: ${{ env.RELEASE_SHA }}
-          ASSISTANT_MODULES: ${{ steps.modules.outputs.modules }}
+          IMAGE_TAG: ${{ needs.plan.outputs.sha }}
+          ASSISTANT_MODULES: ${{ needs.plan.outputs.modules }}
           SKIP_IMAGE_BUILD: 'true'
         run: bash infra/gcp/release.sh
