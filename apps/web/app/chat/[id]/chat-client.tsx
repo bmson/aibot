@@ -1279,13 +1279,17 @@ export function ChatClient({
         style={{ marginTop: `-${composerHeight}px` }}
         className="mobile-safe-bottom pointer-events-none sticky bottom-0 z-20 min-w-0 sm:pb-3"
       >
-        {/* The scrim stops at the composer's own bottom edge. It used to hang
-            below it, which cost nothing when the column ended above the fold
-            but now adds its overhang to the document — the whole page would
-            scroll a little, sliding the "full height" log out of place. */}
+        {/* The veil the composer and the jump pill are glass against: it
+            frosts and thins the log on its way under them rather than hiding
+            it behind a band of stage — conversation.css cuts the material.
+
+            It stops at the composer's own bottom edge. It used to hang below
+            it, which cost nothing when the column ended above the fold but now
+            adds its overhang to the document — the whole page would scroll a
+            little, sliding the "full height" log out of place. */}
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 -top-16 bottom-0 bg-gradient-to-t from-stage from-35% via-stage/85 to-transparent"
+          className="composer-veil pointer-events-none absolute inset-x-0 -top-16 bottom-0"
         />
         {!atBottom && log.length > 0 && !error && !commandPaletteOpen && !modelCommandOpen ? (
           <div className="pointer-events-none absolute inset-x-0 -top-14 z-10 flex justify-center">

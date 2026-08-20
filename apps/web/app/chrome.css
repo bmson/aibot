@@ -42,11 +42,12 @@ main .scroll-subtle:not(nav) {
 
 /* The composer's own material belongs to the conversation, which paints it as
    a well cut into the chat's green stage — see conversation.css. What stays
-   here is only the part that is chrome rather than voice. */
-[data-testid="chat-composer-surface"] {
-  isolation: isolate;
-}
+   here is only the part that is chrome rather than voice.
 
+   Nothing may isolate the composer from here either: `isolation: isolate` used
+   to sit on this selector and made the element its own backdrop root, which in
+   Chromium empties the backdrop — the composer's glass frosted nothing at all.
+   conversation.css carries the full note. */
 [data-testid="chat-composer-surface"] textarea {
   outline: none;
   box-shadow: none;
@@ -95,18 +96,24 @@ section[aria-label="Choose response model"] [role="option"] {
 }
 
 /* Pills and transient controls use the same material language as the composer:
-   on the stage, that is a frosted well rather than a white chip. */
+   on the stage, that is a frosted well rather than a white chip.
+
+   The pill rides high in the composer's veil, above where that veil's own
+   frosting has faded out — so the log behind it is still sharp, and this blur
+   is the only thing that makes it glass. It carries a real lift as well: with
+   nothing but blur it read as a smudge on the stage rather than an object
+   floating over it. */
 button[aria-label="Jump to latest"] {
-  border: 1px solid rgb(255 255 255 / 0.2);
-  background: rgb(255 255 255 / 0.14);
-  box-shadow: none;
+  border: 1px solid rgb(255 255 255 / 0.24);
+  background: rgb(255 255 255 / 0.13);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
   color: var(--stage-strong);
-  backdrop-filter: blur(18px) saturate(1.15);
+  backdrop-filter: blur(20px) saturate(1.5);
   transition: background-color var(--motion-fast) ease;
 }
 
 button[aria-label="Jump to latest"]:hover {
-  background: rgb(255 255 255 / 0.2);
+  background: rgb(255 255 255 / 0.19);
 }
 
 /* Selection uses the product accent without overpowering text contrast. */
