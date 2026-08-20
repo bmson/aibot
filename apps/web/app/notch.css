@@ -21,16 +21,47 @@
  * Base rules first, motion last, so the motion block can be lifted out whole.
  */
 
+/* One overlay owning both layers at the top of the screen: the status veil, and
+   the island in front of it.
+ *
+   The veil was `body::after` at z-35 against the island's z-50, and on iOS it
+   painted over the island regardless — through two separate attempted fixes,
+   because the ordering depended on how one engine composited a pseudo-element
+   against a fixed sibling. It does not depend on that any more. Both layers are
+   children here, the island is second, and a later sibling paints on top. There
+   is no z-index between them to lose.
+
+   Zero height, so it never intercepts anything: the two children place
+   themselves against the top edge and are free to overflow it. */
+.status-overlay {
+  position: fixed;
+  z-index: 40;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* The status area the conversation scrolls up under. A plain ramp out of the
+   page's own ground: solid where the clock sits, gone by the bottom, so text
+   thins out rather than crossing a visible edge. In a browser tab the inset is
+   0 and this is simply not there. */
+.status-veil {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: env(safe-area-inset-top, 0px);
+  background: linear-gradient(to bottom, var(--status-ground) 0 52%, transparent);
+}
+
 .notch-island {
   /* The hardware island on current iPhones is ~126pt across; matching that when
      closed is what lets this shape vanish into the real one. */
   --island-width: 7.9rem;
   --island-radius: 1.375rem;
-  position: fixed;
-  /* Above the status veil (z-35, mobile-shell.css). The veil is a plain colour
-     ramp rather than a backdrop-filter precisely so this can sit over it — see
-     the note there. */
-  z-index: 50;
+  position: absolute;
   top: 0;
   left: 50%;
   display: flex;
