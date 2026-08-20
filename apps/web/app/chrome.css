@@ -115,7 +115,11 @@ button[aria-label="Jump to latest"] {
   background: color-mix(in srgb, var(--stage) 72%, transparent);
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
   color: var(--stage-strong);
-  backdrop-filter: blur(20px) saturate(1.5);
+  /* A light frost, matched to the composer's. Enough to separate the label from
+     whatever is behind it, not enough to erase it: at full strength the pill
+     stopped reading as glass over the log and started reading as an opaque
+     lozenge that happened to be green. */
+  backdrop-filter: blur(4px) saturate(1.5);
   transition: background-color var(--motion-fast) ease;
 }
 
