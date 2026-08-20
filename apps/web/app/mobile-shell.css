@@ -9,18 +9,17 @@
   /* The ground the status veil ramps out of: whatever the page is actually
      standing on. The chat re-points it at its own green (conversation.css).
 
-     The band over it is glass: a tint at this colour with a blur behind it, so
-     the conversation goes soft on its way up rather than being painted out.
-     The blur IS what puts the island at risk — a backdrop-filter has to be
-     composited, and it will swallow any sibling the engine has not also given a
-     layer to, however the two are ordered. The blur was once removed over
-     exactly that, then restored on the reading that the island had been washed
-     on a build predating a separate fix. Both halves were half right: the blur
-     was implicated, and taking it out is not the fix. Promoting the island is,
-     and it is promoted (notch.css).
+     The band over it is a tint at this colour with a blur behind it, so the
+     conversation goes soft on its way up rather than being painted out. Those
+     are two separate layers on purpose, and the split is not cosmetic: a
+     backdrop-filter swallows whatever it covers, so the layer that covers the
+     Dynamic Island extension is the tint, and the blur keeps clear of it. Four
+     attempts to have one layer do both and still order it against the island
+     failed on device; notch.css has the list.
 
-     So if the island ever comes back frosted, suspect that promotion before
-     this line: check that the island still carries a 3D transform of its own.
+     So if the island ever comes back frosted, look for a `backdrop-filter` that
+     has been added to .status-veil, or for .status-veil-glass having lost the
+     rule that moves it below the island while the island is open.
 
      The band's shape, and how it and the island stack, are in notch.css — next
      to the island itself. */

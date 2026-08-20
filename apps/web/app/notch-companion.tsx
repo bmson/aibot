@@ -87,14 +87,19 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
   /*
    * One fixed overlay owning both layers, with the island LAST.
    *
-   * The veil used to be `body::after` at z-35 against the island's z-50, and on
-   * iOS the veil painted over the island anyway. Both are children here now, the
-   * island is second, and a later sibling paints on top — but that is only the
-   * paint order, and paint order was never what was wrong. The veil's blur puts
-   * it on a compositing layer, and the island has to be on one too or it is
-   * drawn into the veil's backdrop and blurred through it. What keeps it in
-   * front is the 3D transform on `.notch-island` (notch.css); do not remove it,
-   * and do not let this DOM order suggest the shape is safe without it.
+   * Ordering these by DOM position or z-index has been tried four times and has
+   * never been what kept the island clear of the band — the full account is in
+   * notch.css. What keeps it clear now is that the band's blur lives on its own
+   * layer, `.status-veil-glass`, which never overlaps the island: it covers the
+   * whole band while the island is closed and starts below it while it is open.
+   *
+   * That is what `data-open` is doing on the overlay as well as on the shape.
+   * The glass is a preceding sibling of the island, so it cannot select on the
+   * island's own state; the state is lifted to their common parent, and the
+   * glass reads it from there.
+   *
+   * The tint (`.status-veil`) still covers the island and is still harmless,
+   * because it carries no filter. Do not give it one.
    *
    * The shape is aria-hidden and the announcement is a sibling of it, never a
    * descendant: toggling aria-hidden on an ancestor of a live region is a good
@@ -104,8 +109,9 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
    * of these steps are ever named.
    */
   return (
-    <div className="status-overlay">
+    <div className="status-overlay" data-open={open}>
       <span className="status-veil" aria-hidden="true" />
+      <span className="status-veil-glass" aria-hidden="true" />
       <div
         className="notch-island"
         data-open={open}
