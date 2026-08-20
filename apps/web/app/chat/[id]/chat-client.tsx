@@ -811,12 +811,28 @@ export function ChatClient({
   useLayoutEffect(() => {
     const element = formRef.current;
     if (!element) return;
-    setComposerHeight(element.offsetHeight);
+    let frame = 0;
+    const commitHeight = (height: number) => {
+      // WebKit may report sub-pixel border-box changes while the visual
+      // viewport and safe-area settle. Round them, coalesce deliveries to one
+      // animation frame, and do not write state when the effective height did
+      // not change. This keeps ResizeObserver out of a synchronous layout /
+      // setState feedback loop (React production error #185).
+      const next = Math.max(0, Math.round(height));
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        setComposerHeight((current) => (current === next ? current : next));
+      });
+    };
+    commitHeight(element.offsetHeight);
     const observer = new ResizeObserver(([entry]) => {
-      if (entry) setComposerHeight(entry.borderBoxSize?.[0]?.blockSize ?? element.offsetHeight);
+      if (entry) commitHeight(entry.borderBoxSize?.[0]?.blockSize ?? element.offsetHeight);
     });
     observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, []);
 
   // Grow the composer with its content, up to the CSS max-height cap. `input`
@@ -1303,7 +1319,7 @@ export function ChatClient({
             little, sliding the "full height" log out of place. */}
         <span
           aria-hidden="true"
-          className="composer-veil pointer-events-none absolute inset-x-0 -top-16 bottom-0"
+          className="composer-veil pointer-events-none absolute inset-x-0 -top-28 bottom-0"
         />
         <div className="pointer-events-none absolute inset-x-0 bottom-full z-20 min-w-0">
           {/* Autonomy is a per-turn choice, so it no longer holds a permanent
@@ -1466,7 +1482,7 @@ export function ChatClient({
               the only inset either of them needs. */}
           <div
             data-testid="chat-composer-surface"
-            className="flex min-w-0 items-end gap-2 overflow-hidden rounded-[var(--radius-shell)] bg-raised/90 p-2 backdrop-blur-xl motion-safe:transition-shadow"
+            className="flex min-w-0 items-end gap-2 overflow-hidden rounded-[var(--radius-shell)] p-2 motion-safe:transition-shadow"
           >
             <textarea
               ref={textareaRef}

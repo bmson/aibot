@@ -23,62 +23,14 @@
  * Base rules first, motion last, so the motion block can be lifted out whole.
  */
 
-/* One overlay owning the layers at the top of the screen: the tint, the glass,
-   and the island in front of all app content.
- *
-   ── Why there are two veil layers and not one ────────────────────────────────
- *
-   Four separate attempts have been made to keep the status band's glass off the
-   island, and the first four all failed on device:
- *
-     1. z-index — the veil at 35, the island at 50.
-     2. Removing the veil's blur (later restored, on the mistaken reading that
-        the island had been washed on a build predating another fix).
-     3. Ordering: both as siblings of one stacking context, island second in the
-        DOM, both carrying explicit z-indexes.
-     4. Promotion: `translate3d` on the island, to force it onto a compositing
-        layer of its own so the compositor would sort it above the veil's.
- *
-   Every one of those is an argument about how WebKit orders a backdrop-filter
-   layer against a sibling, and WebKit does not order it the way any of them
-   assumed. The island did not merely come back covered — it came back BLURRED,
-   which means it was inside the veil's backdrop, not behind the veil. Nothing
-   stated about paint order can move an element out of a backdrop it is being
-   sampled into, and #4 proved that a compositing layer of its own does not
-   either. Attempt 3 is the informative one: it worked, and it worked only for
-   as long as the veil had no `backdrop-filter` on it at all.
- *
-   So this stops trying to order the two, and separates them instead. The blur
-   is no longer on the layer that covers the island. The band is now:
- *
-     .status-veil        the tint. Spans the whole band, no filter, so it can
-                         cover the island harmlessly — which is exactly the
-                         arrangement that already worked in attempt 3.
-     .status-veil-glass  the blur below the island. It spans the whole band
-                         while closed, and retreats below the island while open.
-     .status-crown-glass the blur beside the island. Two grid cells follow the
-                         island's animated width, so they never sit beneath it.
- *
-   Two layers that do not intersect cannot be ordered wrongly, whatever the
-   compositor does with either.
- *
-   An earlier attempt did try non-overlap, by cutting a hole in the veil around
-   the island. Mask gradients are elliptical and the island is a rounded rect,
-   so the hole had to be drawn wide enough to clear its corners, and left a
-   crescent of unveiled screen either side of the hardware pill. The difference
-   here is that nothing is cut to the island's SHAPE — the glass simply stops at
-   a horizontal line, which a gradient can express exactly.
- *
-   The cost is real and worth stating: while the island is open, the top of the
-   band is tint without blur. Text still fades out on its way up, it just stops
-   going soft first. That is the whole of what was traded away, and it buys an
-   island that is legible.
- *
-   `--island-top`, `--status-band` and `--island-bottom` live here so that every
-   child can read them.
- *
-   Zero height, so it never intercepts anything: the children place themselves
-   against the top edge and are free to overflow it. */
+/* One fixed overlay owns the status tint, the Island, and one small field of
+   glass below it. The filtered field must not touch the Island. Physical iOS
+   devices have shown that WebKit may sample a full backdrop-filter surface
+   before grid or stacking-context clipping, so side panes that were
+   geometrically disjoint still frosted the black label. The safe rule is now
+   simpler: no filtered surface exists above the Island's lower safety line.
+
+   The overlay has zero layout height and never intercepts input. */
 .status-overlay {
   position: fixed;
   /* Higher than every app-owned overlay. Native top-layer UI such as a popover
@@ -88,11 +40,8 @@
   right: 0;
   left: 0;
   height: 0;
-  /* How tall the band is, and where the island's underside sits when it is
-     open. The island's own height is measured from its top (see .notch-island);
-     its BOTTOM lands at the status inset plus the open shape's overhang, which
-     is independent of --island-top and so can be stated once here. */
-  --status-band: calc(env(safe-area-inset-top, 0px) * 2.8);
+  /* A shorter band keeps the top transition from becoming a green curtain. */
+  --status-band: calc(env(safe-area-inset-top, 0px) * 2.15);
   --island-bottom: calc(env(safe-area-inset-top, 0px) + 1.925rem);
   /* How far the pill floats below the top edge.
    *
@@ -106,30 +55,9 @@
   pointer-events: none;
 }
 
-/* The tint. The status area the conversation scrolls up under, in the page's
-   own ground: strong enough where the clock sits to hold it, and gone below, so
-   text thins out on its way up rather than crossing a visible edge. In a browser
-   tab, and in an installed app on an iOS that keeps its content below the status
-   bar, the inset is 0, every length here collapses with it, and this is simply
-   not there.
- *
-   It is the composer's scrim (conversation.css) turned upside down, and
-   deliberately so: one surface should not fade two different ways at its two
-   ends. Same proportions — near-full strength for the first 35%, then all the
-   way out — and the same generous length, ~2.8x the inset, which is what makes
-   it read as a fade rather than as a band with an edge on it.
- *
-   The eased colour stops carry the whole fade. Keeping this linear and free of
-   decorative arcs makes the band disappear without drawing a second shape
-   across the device's own curved top edge.
- *
-   92%, not 100%: a fully opaque cap would erase the top of the band, and the
-   point is that something stays visibly behind it.
- *
-   No `backdrop-filter` on this layer, and nothing may add one. It is the layer
-   that covers the island, and a filter here is precisely the bug — see the
-   header. The blur lives on .status-veil-glass and .status-crown-glass, which
-   keep clear of it. */
+/* A light wash keeps the system status symbols legible without hiding the
+   conversation. This layer crosses the Island and therefore must never carry a
+   backdrop filter. */
 .status-veil {
   position: absolute;
   z-index: 0;
@@ -139,84 +67,38 @@
   height: var(--status-band);
   background: linear-gradient(
     to bottom,
-    color-mix(in srgb, var(--status-ground) 92%, transparent) 0%,
-    color-mix(in srgb, var(--status-ground) 90%, transparent) 36%,
-    color-mix(in srgb, var(--status-ground) 72%, transparent) 61%,
-    color-mix(in srgb, var(--status-ground) 34%, transparent) 82%,
+    color-mix(in srgb, var(--status-ground) 62%, transparent) 0%,
+    color-mix(in srgb, var(--status-ground) 52%, transparent) 30%,
+    color-mix(in srgb, var(--status-ground) 30%, transparent) 62%,
+    color-mix(in srgb, var(--status-ground) 10%, transparent) 84%,
     transparent 100%
   );
 }
 
-/* The glass. What actually softens the conversation on its way up, kept on its
-   own layer so that the layer carrying a filter is never the layer over the
-   island.
- *
-   Closed, there is no island and this is the whole band, on the tint's own
-   profile — which is the band exactly as it was designed.
- *
-   Open, it starts at the island's underside instead. Note what it does NOT do:
-   it is not cut to the island's shape, and it does not stop at the island's
-   sides. It is a full-width layer that begins lower down, so the only thing a
-   gradient has to express is a horizontal line — which is the one thing the
-   earlier hole-in-the-veil attempt could not do, and why that one left crescents
-   around the pill.
- *
-   The open profile ramps IN over its first quarter rather than starting at full
-   strength. Its top edge runs the whole width of the screen while the island
-   only covers the middle of it, so a hard onset would draw a seam straight
-   across the band either side of the island. Fading in over ~20px puts no edge
-   anywhere.
- *
-   That ramp is also the margin of safety on the join. This layer's top and the
-   island's bottom are the same expression, so they meet exactly and neither
-   gaps nor overlaps — but rasterisation rounds, and a half-pixel of overlap on
-   some device is not worth being fragile about. The mask is fully transparent
-   for the first pixels of this layer, so a filter that strays under the island
-   by a rounding error has no strength there to do anything with.
- *
-   The position snaps rather than transitions. The island takes 380ms to grow,
-   and during that time this sits at its open position with the shape still
-   descending toward it — a sliver that is tint-only for a third of a second,
-   underneath a black shape that is moving over it. A transition here would
-   instead have to interpolate between two different mask profiles, which does
-   not interpolate at all. */
+/* The only top blur, mounted only while the Island is closed. Installed iOS
+   Web Apps can sample an otherwise disjoint filter surface into the Island
+   before clipping, so notch-companion removes this node from the tree for the
+   entire open state. The modest 6px blur reads as content moving under glass
+   without building the opaque fog visible in the previous 18px treatment. */
 .status-veil-glass {
   position: absolute;
   z-index: 0;
-  top: 0;
+  top: calc(var(--island-bottom) + 0.75rem);
   right: 0;
   left: 0;
-  height: var(--status-band);
-  backdrop-filter: blur(18px) saturate(1.12);
+  height: max(0px, calc(var(--status-band) - var(--island-bottom) - 0.75rem));
+  backdrop-filter: blur(6px) saturate(1.04);
   mask-image: linear-gradient(
     to bottom,
-    #000 0 38%,
-    rgb(0 0 0 / 0.78) 56%,
-    rgb(0 0 0 / 0.42) 74%,
-    rgb(0 0 0 / 0.14) 90%,
+    transparent 0%,
+    rgb(0 0 0 / 0.55) 28%,
+    rgb(0 0 0 / 0.72) 52%,
+    rgb(0 0 0 / 0.28) 78%,
     transparent 100%
   );
 }
 
-.status-overlay[data-open="true"] .status-veil-glass {
-  top: var(--island-bottom);
-  height: calc(var(--status-band) - var(--island-bottom));
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    rgb(0 0 0 / 0.5) 12%,
-    #000 24%,
-    rgb(0 0 0 / 0.76) 52%,
-    rgb(0 0 0 / 0.38) 76%,
-    rgb(0 0 0 / 0.12) 90%,
-    transparent 100%
-  );
-}
-
-/* When the island is open, these two panes complete the status-area blur to
-   either side of it. The island is the grid's middle column, so the panes and
-   the island are physically disjoint throughout its width animation. A small
-   column gap is extra protection against sub-pixel rasterisation at the seam. */
+/* The crown is only a centring rail. It contains no glass. */
 .status-crown {
   position: absolute;
   z-index: 1;
@@ -226,25 +108,7 @@
   display: grid;
   height: var(--island-bottom);
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  column-gap: 0.375rem;
   pointer-events: none;
-}
-
-.status-crown-glass {
-  z-index: 0;
-  height: 100%;
-  backdrop-filter: blur(18px) saturate(1.12);
-  mask-image: linear-gradient(
-    to bottom,
-    #000 0 58%,
-    rgb(0 0 0 / 0.72) 74%,
-    rgb(0 0 0 / 0.28) 91%,
-    transparent 100%
-  );
-}
-
-.status-overlay:not([data-open="true"]) .status-crown-glass {
-  visibility: hidden;
 }
 
 .notch-island {
@@ -254,6 +118,7 @@
   --island-radius: 1.15rem;
   position: relative;
   z-index: 2;
+  grid-column: 2;
   top: var(--island-top);
   display: flex;
   /* Narrow enough to stay an island. Past this a long label stops reading as a

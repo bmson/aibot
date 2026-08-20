@@ -218,13 +218,13 @@ async function assertDynamicIslandLayering(page: Page) {
     const veil = document.querySelector<HTMLElement>('.status-veil');
     const lowerGlass = document.querySelector<HTMLElement>('.status-veil-glass');
     const island = document.querySelector<HTMLElement>('.notch-island');
-    const crownGlass = [...document.querySelectorAll<HTMLElement>('.status-crown-glass')];
+    const crown = document.querySelector<HTMLElement>('.status-crown');
     const main = document.querySelector<HTMLElement>('main');
-    if (!overlay || !veil || !lowerGlass || !island || crownGlass.length !== 2 || !main) {
+    if (!overlay || !veil || !island || !crown || !main) {
       return null;
     }
     const overlayRect = overlay.getBoundingClientRect();
-    const lowerGlassRect = lowerGlass.getBoundingClientRect();
+    const lowerGlassRect = lowerGlass?.getBoundingClientRect();
     const islandRect = island.getBoundingClientRect();
     return {
       open: overlay.dataset.open === 'true',
@@ -238,13 +238,16 @@ async function assertDynamicIslandLayering(page: Page) {
       mainZ: Number.parseInt(getComputedStyle(main).zIndex, 10),
       veilFilter: getComputedStyle(veil).backdropFilter,
       veilBackground: getComputedStyle(veil).backgroundImage,
-      lowerGlass: {
-        left: lowerGlassRect.left,
-        right: lowerGlassRect.right,
-        top: lowerGlassRect.top,
-        bottom: lowerGlassRect.bottom,
-        filter: getComputedStyle(lowerGlass).backdropFilter,
-      },
+      lowerGlass:
+        lowerGlass && lowerGlassRect
+          ? {
+              left: lowerGlassRect.left,
+              right: lowerGlassRect.right,
+              top: lowerGlassRect.top,
+              bottom: lowerGlassRect.bottom,
+              filter: getComputedStyle(lowerGlass).backdropFilter,
+            }
+          : null,
       island: {
         left: islandRect.left,
         right: islandRect.right,
@@ -252,17 +255,9 @@ async function assertDynamicIslandLayering(page: Page) {
         bottom: islandRect.bottom,
         filter: getComputedStyle(island).backdropFilter,
       },
-      crownGlass: crownGlass.map((element) => {
-        const rect = element.getBoundingClientRect();
-        return {
-          left: rect.left,
-          right: rect.right,
-          top: rect.top,
-          bottom: rect.bottom,
-          filter: getComputedStyle(element).backdropFilter,
-          visibility: getComputedStyle(element).visibility,
-        };
-      }),
+      filteredCrownChildren: [...crown.children].filter(
+        (element) => getComputedStyle(element).backdropFilter !== 'none',
+      ).length,
     };
   });
   assert(metrics, 'Dynamic Island layers are incomplete');
@@ -275,28 +270,23 @@ async function assertDynamicIslandLayering(page: Page) {
     `a filtered layer covers the Dynamic Island: ${JSON.stringify(metrics)}`,
   );
   assert(
-    metrics.veilBackground.includes('0.92') || metrics.veilBackground.includes('92%'),
-    `status gradient is not 92% opaque at the top: ${metrics.veilBackground}`,
+    metrics.veilBackground.includes('0.62') || metrics.veilBackground.includes('62%'),
+    `status gradient is not softly translucent at the top: ${metrics.veilBackground}`,
   );
   assert(
-    metrics.lowerGlass.filter.includes('blur(') &&
-      metrics.crownGlass.every(({ filter }) => filter.includes('blur(')),
-    `status gradient does not carry complete backdrop blur: ${JSON.stringify(metrics)}`,
+    metrics.filteredCrownChildren === 0,
+    `the Dynamic Island crown contains filtered content: ${JSON.stringify(metrics)}`,
   );
   if (metrics.open) {
-    const [leftGlass, rightGlass] = metrics.crownGlass;
     assert(
-      leftGlass &&
-        rightGlass &&
-        metrics.lowerGlass.top >= metrics.island.bottom - 0.5 &&
-        leftGlass.right <= metrics.island.left &&
-        rightGlass.left >= metrics.island.right,
-      `backdrop glass intersects the open Dynamic Island: ${JSON.stringify(metrics)}`,
+      metrics.lowerGlass === null,
+      `a backdrop-filter surface is mounted while the Dynamic Island is open: ${JSON.stringify(metrics)}`,
     );
   } else {
     assert(
-      metrics.crownGlass.every(({ visibility }) => visibility === 'hidden'),
-      `side glass is active while the Dynamic Island is closed: ${JSON.stringify(metrics)}`,
+      metrics.lowerGlass?.filter.includes('blur(6px)') &&
+        metrics.lowerGlass.top >= metrics.island.bottom + 8,
+      `the closed-state top glass is missing or inside the safety zone: ${JSON.stringify(metrics)}`,
     );
   }
 }
@@ -542,6 +532,22 @@ try {
     const composerSurface = page.getByTestId('chat-composer-surface');
     await targetSize(message, 'chat message field');
     await targetSize(send, 'chat send button');
+    const glassContract = await composerSurface.evaluate((surface) => {
+      const veil = document.querySelector<HTMLElement>('.composer-veil');
+      const transcript = document.querySelector<HTMLElement>('[role="log"]');
+      return {
+        surfaceFilter: getComputedStyle(surface).backdropFilter,
+        veilFilter: veil ? getComputedStyle(veil).backdropFilter : 'missing',
+        transcriptMask: transcript ? getComputedStyle(transcript).maskImage : 'missing',
+      };
+    });
+    assert(
+      glassContract.surfaceFilter.includes('blur(7px)') &&
+        glassContract.veilFilter === 'none' &&
+        glassContract.transcriptMask !== 'none' &&
+        glassContract.transcriptMask !== 'missing',
+      `composer glass/fade contract regressed: ${JSON.stringify(glassContract)}`,
+    );
     // A side thread is a subpage, so "All chats" is its back link now — one
     // quiet row above the title, not an action competing with it.
     await assertBackLink(page, `/chat/${fixture.id}`, '/chat/all');
