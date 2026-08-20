@@ -18,8 +18,9 @@
      failed on device; notch.css has the list.
 
      So if the island ever comes back frosted, look for a `backdrop-filter` that
-     has been added to .status-veil, or for .status-veil-glass having lost the
-     rule that moves it below the island while the island is open.
+     has been added to .status-veil, for .status-veil-glass having lost the rule
+     that moves it below the open island, or for the two .status-crown-glass
+     panes no longer occupying the grid columns beside it.
 
      The band's shape, and how it and the island stack, are in notch.css — next
      to the island itself. */

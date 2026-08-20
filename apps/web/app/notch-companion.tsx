@@ -85,21 +85,24 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
   const Glyph = TONE_GLYPH[shown?.tone ?? 'working'];
 
   /*
-   * One fixed overlay owning both layers, with the island LAST.
+   * One fixed overlay owns the tint, the lower glass, and a crown that holds
+   * the island between two side panes of glass.
    *
    * Ordering these by DOM position or z-index has been tried four times and has
    * never been what kept the island clear of the band — the full account is in
    * notch.css. What keeps it clear now is that the band's blur lives on its own
-   * layer, `.status-veil-glass`, which never overlaps the island: it covers the
-   * whole band while the island is closed and starts below it while it is open.
+   * layers, `.status-veil-glass` and `.status-crown-glass`, which never overlap
+   * the island. The first starts below it while it is open; the latter two sit
+   * to its left and right. The grid sizes those side panes from the island's
+   * real animated width, so even a long status label remains outside the blur.
    *
    * That is what `data-open` is doing on the overlay as well as on the shape.
    * The glass is a preceding sibling of the island, so it cannot select on the
    * island's own state; the state is lifted to their common parent, and the
    * glass reads it from there.
    *
-   * The tint (`.status-veil`) still covers the island and is still harmless,
-   * because it carries no filter. Do not give it one.
+   * The tint (`.status-veil`) remains a separate, unfiltered layer. Do not give
+   * it a backdrop filter.
    *
    * The shape is aria-hidden and the announcement is a sibling of it, never a
    * descendant: toggling aria-hidden on an ancestor of a live region is a good
@@ -112,18 +115,17 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
     <div className="status-overlay" data-open={open}>
       <span className="status-veil" aria-hidden="true" />
       <span className="status-veil-glass" aria-hidden="true" />
-      <div
-        className="notch-island"
-        data-open={open}
-        data-tone={shown?.tone ?? 'working'}
-        aria-hidden="true"
-      >
-        <div className="notch-island-body">
-          <span className="notch-island-glyph">
-            <Glyph className="size-3.5" />
-          </span>
-          <span className="notch-island-label">{shown?.label ?? ''}</span>
+      <div className="status-crown" aria-hidden="true">
+        <span className="status-crown-glass" />
+        <div className="notch-island" data-open={open} data-tone={shown?.tone ?? 'working'}>
+          <div className="notch-island-body">
+            <span className="notch-island-glyph">
+              <Glyph className="size-3.5" />
+            </span>
+            <span className="notch-island-label">{shown?.label ?? ''}</span>
+          </div>
         </div>
+        <span className="status-crown-glass" />
       </div>
       <span role="status" aria-live="polite" className="sr-only">
         {shown ? `${shown.label}${shown.tone === 'failed' ? ' — failed' : ''}` : ''}
