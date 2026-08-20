@@ -11,12 +11,16 @@
 
      The band over it is glass: a tint at this colour with a blur behind it, so
      the conversation goes soft on its way up rather than being painted out.
-     The blur was removed once, on the theory that WebKit was compositing the
-     backdrop-filter layer over the Dynamic Island extension painted after it —
-     that turned out not to be what was wrong (the island was washed on a build
-     that predated the fix), and with the two ordered explicitly the island
-     stays black over a blurred band on device. Worth knowing if it ever comes
-     back frosted: this is the line to suspect first.
+     The blur IS what puts the island at risk — a backdrop-filter has to be
+     composited, and it will swallow any sibling the engine has not also given a
+     layer to, however the two are ordered. The blur was once removed over
+     exactly that, then restored on the reading that the island had been washed
+     on a build predating a separate fix. Both halves were half right: the blur
+     was implicated, and taking it out is not the fix. Promoting the island is,
+     and it is promoted (notch.css).
+
+     So if the island ever comes back frosted, suspect that promotion before
+     this line: check that the island still carries a 3D transform of its own.
 
      The band's shape, and how it and the island stack, are in notch.css — next
      to the island itself. */

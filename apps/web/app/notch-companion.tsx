@@ -88,11 +88,13 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
    * One fixed overlay owning both layers, with the island LAST.
    *
    * The veil used to be `body::after` at z-35 against the island's z-50, and on
-   * iOS the veil painted over the island anyway — through two separate
-   * attempted fixes, because the ordering rested on how one engine composited a
-   * pseudo-element against a fixed sibling. It rests on nothing of the sort now:
-   * both are children here, the island is second, and a later sibling paints on
-   * top. There is no z-index between them to lose.
+   * iOS the veil painted over the island anyway. Both are children here now, the
+   * island is second, and a later sibling paints on top — but that is only the
+   * paint order, and paint order was never what was wrong. The veil's blur puts
+   * it on a compositing layer, and the island has to be on one too or it is
+   * drawn into the veil's backdrop and blurred through it. What keeps it in
+   * front is the 3D transform on `.notch-island` (notch.css); do not remove it,
+   * and do not let this DOM order suggest the shape is safe without it.
    *
    * The shape is aria-hidden and the announcement is a sibling of it, never a
    * descendant: toggling aria-hidden on an ancestor of a live region is a good
