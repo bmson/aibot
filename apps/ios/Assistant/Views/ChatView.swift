@@ -208,12 +208,21 @@ struct ChatView: View {
                 menuRevealDistance(for: geometry)
             } action: { _, revealDistance in
                 guard !menuOpen, transcriptScrollPhase == .interacting else { return }
+                // A short ease on the live-drag value, not a raw assignment:
+                // onScrollGeometryChange is coalesced relative to the scroll
+                // view's own buttery-smooth native rubber-band, so writing
+                // the reveal distance straight through made the externally
+                // applied offset (which mirrors this on the conversation
+                // surface) step between samples instead of easing — visible
+                // as jitter through a slow, steady drag.
                 if revealDistance > 0.5 {
                     if !menuPullActive {
                         menuPullActive = true
                         composerFocused = false
                     }
-                    menuPullDistance = revealDistance
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.06)) {
+                        menuPullDistance = revealDistance
+                    }
                     // Hysteresis around the detent: a slow drag hovering at
                     // the threshold otherwise toggles the haptic every point.
                     let threshold = PullMenuMotion.openingCommitmentDistance(
@@ -224,7 +233,9 @@ struct ChatView: View {
                         : revealDistance >= threshold
                     updateMenuDetent(reached: detentReached)
                 } else if menuPullActive {
-                    menuPullDistance = 0
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.06)) {
+                        menuPullDistance = 0
+                    }
                     updateMenuDetent(reached: false)
                 }
             }
@@ -232,6 +243,17 @@ struct ChatView: View {
                 transcriptScrollPhase = newPhase
                 if oldPhase == .interacting, newPhase != .interacting, menuPullActive {
                     finishPullMenu(releasedAt: menuRevealDistance(for: context.geometry))
+                    // The scroll view's own rubber-band keeps easing back
+                    // toward rest for a few more frames after this — on its
+                    // own timeline, independent of the spring finishPullMenu
+                    // just started, and before .scrollDisabled(menuOpen) has
+                    // actually taken effect. Snapping content back to rest
+                    // right now hands the whole reveal over to our own
+                    // animation immediately, instead of the two settling in
+                    // different places (the misaligned bubbles after a fast
+                    // release). transcriptScrollPhase is already non-idle
+                    // here, so this takes scrollToBottom's instant-snap path.
+                    scrollToBottom(using: proxy)
                 }
             }
             // The mask is the only edge fade: it applies per-pixel, so even a
