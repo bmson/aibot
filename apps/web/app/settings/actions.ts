@@ -88,7 +88,7 @@ async function metadataAccessToken(): Promise<string> {
 async function publishToSecretManager(project: string, token: string): Promise<string | null> {
   const accessToken = await metadataAccessToken();
   const parent = `projects/${project}/secrets/mobile-api-token`;
-  const res = await fetch(`${parent}:addVersion`, {
+  const res = await fetch(`https://secretmanager.googleapis.com/v1/${parent}:addVersion`, {
     method: 'POST',
     headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
     body: JSON.stringify({ payload: { data: Buffer.from(token, 'utf8').toString('base64') } }),
