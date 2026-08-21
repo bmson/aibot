@@ -409,6 +409,13 @@ struct ChatView: View {
         let headerUnfurl = organicProgress(headerProgress)
 
         return VStack(spacing: 11) {
+            // The close-swipe lives on the grip handle alone, not the whole
+            // menu: sharing a DragGesture with the action grid raced the
+            // buttons' own tap recognizers (SwiftUI can misresolve a
+            // simultaneousGesture against a Button in the same view), which
+            // read as menu item taps just closing the menu and nothing else.
+            // The inset contentShape widens the handle's real hit area well
+            // past its painted 4pt height so the gesture stays easy to grab.
             Capsule()
                 .fill(AssistantTheme.ink(for: colorScheme).opacity(colorScheme == .dark ? 0.3 : 0.15))
                 .frame(width: 42, height: 4)
@@ -418,6 +425,8 @@ struct ChatView: View {
                     anchor: .center
                 )
                 .opacity(headerVisibility)
+                .contentShape(Rectangle().inset(by: -12))
+                .simultaneousGesture(pullMenuCloseGesture)
 
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 1) {
@@ -474,7 +483,6 @@ struct ChatView: View {
         .accessibilityAction(named: "Close menu") {
             closePullMenu()
         }
-        .simultaneousGesture(pullMenuCloseGesture)
     }
 
     @ViewBuilder
