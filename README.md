@@ -36,6 +36,17 @@ pnpm up
 For source development rather than containers, run `docker compose up db`, then `pnpm db:migrate`,
 `pnpm seed`, and `pnpm dev`.
 
+## Native iOS app
+
+The SwiftUI client lives in `apps/ios` and uses the same server-owned chat, task, goal, memory, and
+approval workflows as the web UI. Open `apps/ios/Assistant.xcodeproj` in Xcode 26 or newer and run
+the `Assistant` scheme on an iPhone or Simulator.
+
+For local source development, connect the app to `http://localhost:3000`; the explicit development
+auth bypass is sufficient. For a deployed server, set `MOBILE_API_TOKEN` to a random 32-byte hex
+value (`openssl rand -hex 32`) and enter the same value once in the app. It is stored in the iOS
+Keychain. See [the iOS setup guide](apps/ios/README.md).
+
 ## Choose capabilities
 
 The base platform always includes chat, memory, goals, missions, approvals, schedules, and the local

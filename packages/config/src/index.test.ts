@@ -18,6 +18,7 @@ describe('config', () => {
     expect(config.INTERNAL_AUTH_MODE).toBe('oidc');
     expect(config.AUTH_DEV_BYPASS).toBe(false);
     expect(config.AUTH_LOCALHOST_BYPASS).toBe(false);
+    expect(config.MOBILE_API_TOKEN).toBe('');
     expect(config.CANARY_ENABLED).toBe(false);
     expect(config.CANARY_MAX_COST_USD).toBe(0.03);
     expect(isModuleEnabled(config, 'google')).toBe(true);

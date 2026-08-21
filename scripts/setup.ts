@@ -50,6 +50,7 @@ for (const [name, value] of Object.entries({
   OWNER_NAME: ownerName,
   OWNER_EMAIL: ownerEmail,
   AUTH_SECRET: randomBytes(32).toString('base64url'),
+  MOBILE_API_TOKEN: randomBytes(32).toString('hex'),
   INTERNAL_API_SECRET: randomBytes(32).toString('hex'),
   PROFILE_ENC_KEY: randomBytes(32).toString('hex'),
 })) {

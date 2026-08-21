@@ -9,6 +9,7 @@ import {
   changeChatModel,
   checkReadiness,
   createChatConversation,
+  decideApproval,
   deleteApprovalPolicy,
   deleteAssistantSkill,
   deleteDocument,
@@ -28,9 +29,12 @@ import {
   getShellStatus,
   handleChatTurn,
   isValidChatCursor,
+  listActivity,
   listAnomalies,
+  listApprovalInbox,
   listAssistantSkills,
   listChatHistory,
+  listGoalsDashboard,
   listImprovementProposals,
   purgeImportedSource,
   restoreChatConversation,
@@ -157,6 +161,15 @@ function createApplication() {
       register?: string;
     }) => uploadImport(db, workspace, input),
     getPrimaryConversationId: () => getPrimaryConversationId(db),
+    listActivity: (input: {
+      archived: boolean;
+      filter: 'all' | 'needs-you' | 'working' | 'scheduled' | 'completed';
+      limit?: number;
+    }) => listActivity(db, input),
+    listGoals: (archived: boolean) => listGoalsDashboard(db, archived),
+    listApprovals: () => listApprovalInbox(db),
+    decideApproval: (approvalId: string, decision: 'approved' | 'denied') =>
+      decideApproval(db, approvalId, decision),
     // The layout calls this on every request of every route (force-dynamic),
     // and memory health aggregates the whole knowledge-memory table. A sidebar
     // badge does not need transactional freshness; 30 seconds keeps the scan

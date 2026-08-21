@@ -73,6 +73,12 @@ const ConfigSchema = z.object({
   AUTH_GOOGLE_SECRET: z.string().default(''),
   AUTH_URL: z.string().default(''),
   AUTH_TRUST_HOST: z.enum(['true', 'false']).optional(),
+  /**
+   * Owner-generated bearer token for the native iOS client. Empty leaves the
+   * mobile API behind the normal web session only. Keep this separate from
+   * AUTH_SECRET: rotating a phone credential must not invalidate web sessions.
+   */
+  MOBILE_API_TOKEN: z.string().default(''),
   QUEUE_DRIVER: z.enum(['local', 'cloudtasks']).default('local'),
   FILES_DRIVER: z.enum(['local', 'gcs']).default('local'),
   GCS_ENDPOINT: z.string().default('http://localhost:4443'),
