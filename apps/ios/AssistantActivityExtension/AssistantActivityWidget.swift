@@ -19,7 +19,7 @@ struct AssistantActivityWidget: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    IslandFace(tint: tint(for: context.state.thought.tone))
+                    phaseGlyph(context.state.thought.tone)
                         .padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.center) {
@@ -74,9 +74,12 @@ struct AssistantActivityWidget: Widget {
 
     private func lockScreenView(_ context: ActivityViewContext<AssistantActivityAttributes>) -> some View {
         HStack(spacing: 14) {
-            IslandFace(tint: tint(for: context.state.thought.tone))
+            Image(systemName: phaseSymbolName(for: context.state.thought.tone))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(tint(for: context.state.thought.tone))
                 .frame(width: 38, height: 38)
                 .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 13))
+                .contentTransition(.symbolEffect(.replace))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(context.state.thought.label)
@@ -131,8 +134,12 @@ struct AssistantActivityWidget: Widget {
 
     @ViewBuilder
     private func phaseGlyph(_ tone: AssistantActivityTone, compact: Bool = false) -> some View {
-        if tone == .working {
-            IslandFace(tint: tint(for: tone), compact: compact)
+        // Simple SF Symbols only — the earlier paired-capsule "eyes" read as
+        // noise at Dynamic Island sizes.
+        if tone == .working || tone == .thinking {
+            ProgressView()
+                .controlSize(.mini)
+                .tint(tint(for: tone))
         } else {
             Image(systemName: phaseSymbolName(for: tone))
                 .foregroundStyle(tint(for: tone))
@@ -179,15 +186,3 @@ struct AssistantActivityWidget: Widget {
     }
 }
 
-private struct IslandFace: View {
-    let tint: Color
-    var compact = false
-
-    var body: some View {
-        HStack(spacing: compact ? 3 : 5) {
-            Capsule().fill(tint).frame(width: compact ? 3.5 : 5, height: compact ? 5 : 7)
-            Capsule().fill(tint).frame(width: compact ? 3.5 : 5, height: compact ? 5 : 7)
-        }
-        .accessibilityHidden(true)
-    }
-}

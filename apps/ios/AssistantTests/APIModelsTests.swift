@@ -109,24 +109,6 @@ final class APIModelsTests: XCTestCase {
         )
     }
 
-    func testPullMenuSpringVelocityAlwaysContinuesTowardDestination() {
-        let openingVelocity = PullMenuMotion.springInitialVelocity(
-            releaseVelocity: 240,
-            currentDistance: 100,
-            targetDistance: 184
-        )
-        let closingVelocity = PullMenuMotion.springInitialVelocity(
-            releaseVelocity: 240,
-            currentDistance: 84,
-            targetDistance: 0
-        )
-
-        XCTAssertGreaterThan(openingVelocity, 0)
-        XCTAssertGreaterThan(closingVelocity, 0)
-        XCTAssertLessThanOrEqual(openingVelocity, 1)
-        XCTAssertLessThanOrEqual(closingVelocity, 1)
-    }
-
     func testPullMenuCommitmentDetentsMatchReleaseDecisions() {
         let standardHeight: CGFloat = 184
         let accessibilityHeight: CGFloat = 320
@@ -155,7 +137,9 @@ final class APIModelsTests: XCTestCase {
         )
     }
 
-    func testTranscriptEdgeMotionPreservesSoftFabricMotionTowardBothEdges() {
+    func testTranscriptEdgeMotionFadesWithoutFoldingTowardBothEdges() {
+        // Cards translate with the scroll and fade at the clipped edges — no
+        // folding, scaling, or rotation as they approach the screen edge.
         XCTAssertEqual(TranscriptEdgeMotion.progress(for: 0), 0, accuracy: 0.001)
         XCTAssertEqual(TranscriptEdgeMotion.opacity(for: 0, reduceTransparency: false), 1, accuracy: 0.001)
         XCTAssertLessThan(
@@ -172,17 +156,13 @@ final class APIModelsTests: XCTestCase {
             0.62,
             accuracy: 0.001
         )
-        XCTAssertLessThan(TranscriptEdgeMotion.rotation(for: -1), 0)
-        XCTAssertGreaterThan(TranscriptEdgeMotion.rotation(for: 1), 0)
-        XCTAssertEqual(TranscriptEdgeMotion.rotation(for: 1), 26, accuracy: 0.001)
-        XCTAssertLessThan(TranscriptEdgeMotion.counterRotation(for: 1), 0)
-        XCTAssertGreaterThan(TranscriptEdgeMotion.counterRotation(for: -1), 0)
-        XCTAssertEqual(TranscriptEdgeMotion.verticalScale(for: 1), 0.72, accuracy: 0.001)
-        XCTAssertEqual(TranscriptEdgeMotion.horizontalScale(for: 1), 0.975, accuracy: 0.001)
-        XCTAssertGreaterThan(TranscriptEdgeMotion.edgeTranslation(for: -1), 0)
-        XCTAssertLessThan(TranscriptEdgeMotion.edgeTranslation(for: 1), 0)
-        XCTAssertLessThan(TranscriptEdgeMotion.lateralTranslation(for: -1), 0)
-        XCTAssertGreaterThan(TranscriptEdgeMotion.lateralTranslation(for: 1), 0)
+        XCTAssertEqual(TranscriptEdgeMotion.blurRadius(for: 0), 0, accuracy: 0.001)
+        XCTAssertEqual(TranscriptEdgeMotion.blurRadius(for: 1), 2.8, accuracy: 0.001)
+        XCTAssertEqual(
+            TranscriptEdgeMotion.blurRadius(for: -1),
+            TranscriptEdgeMotion.blurRadius(for: 1),
+            accuracy: 0.001
+        )
     }
 
     func testNativeRouteCatalogMatchesTheCompleteWorkspaceMenu() {

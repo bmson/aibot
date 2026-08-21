@@ -33,7 +33,6 @@
 		B00000000000000000000018 /* AssistantActivityExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = C00000000000000000000019 /* AssistantActivityExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B00000000000000000000019 /* Components/ActivityCrown.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000022 /* Components/ActivityCrown.swift */; };
 		B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000023 /* Views/WorkspaceView.swift */; };
-		B0000000000000000000001B /* Effects/FabricFold.metal in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000024 /* Effects/FabricFold.metal */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -97,7 +96,6 @@
 		C00000000000000000000021 /* AssistantTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AssistantTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C00000000000000000000022 /* Components/ActivityCrown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/ActivityCrown.swift; sourceTree = "<group>"; };
 		C00000000000000000000023 /* Views/WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WorkspaceView.swift; sourceTree = "<group>"; };
-		C00000000000000000000024 /* Effects/FabricFold.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Effects/FabricFold.metal; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -169,7 +167,6 @@
 				C0000000000000000000000F /* Views/MoreView.swift */,
 				C00000000000000000000010 /* Views/ConnectionView.swift */,
 				C00000000000000000000023 /* Views/WorkspaceView.swift */,
-				C00000000000000000000024 /* Effects/FabricFold.metal */,
 				C00000000000000000000011 /* Assets.xcassets */,
 				C00000000000000000000012 /* Info.plist */,
 			);
@@ -343,7 +340,6 @@
 				B0000000000000000000000F /* Views/MoreView.swift in Sources */,
 				B00000000000000000000010 /* Views/ConnectionView.swift in Sources */,
 				B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */,
-				B0000000000000000000001B /* Effects/FabricFold.metal in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

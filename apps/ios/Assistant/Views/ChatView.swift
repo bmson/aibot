@@ -11,16 +11,6 @@ enum PullMenuMotion {
         return progress * progress * (3 - (2 * progress))
     }
 
-    static func springInitialVelocity(
-        releaseVelocity: CGFloat,
-        currentDistance: CGFloat,
-        targetDistance: CGFloat,
-        minimumTravel: CGFloat = 24
-    ) -> Double {
-        let remainingTravel = max(abs(targetDistance - currentDistance), minimumTravel)
-        return Double(min(max(releaseVelocity, 0) / remainingTravel, 1))
-    }
-
     static func openingCommitmentDistance(revealHeight: CGFloat) -> CGFloat {
         min(max(revealHeight, 0) * 0.58, 150)
     }
@@ -58,38 +48,8 @@ enum TranscriptEdgeMotion {
         return 1 - ((1 - terminalOpacity) * progress(for: phaseValue))
     }
 
-    static func horizontalScale(for phaseValue: Double) -> CGFloat {
-        CGFloat(1 - (0.025 * progress(for: phaseValue)))
-    }
-
-    static func verticalScale(for phaseValue: Double) -> CGFloat {
-        // Let the shader supply the curvature. A modest compression keeps the
-        // material soft instead of collapsing like a rigid sheet.
-        CGFloat(1 - (0.28 * progress(for: phaseValue)))
-    }
-
-    static func rotation(for phaseValue: Double) -> Double {
-        let direction = phaseValue < 0 ? -1.0 : 1.0
-        return direction * 26 * progress(for: phaseValue)
-    }
-
-    static func counterRotation(for phaseValue: Double) -> Double {
-        let direction = phaseValue < 0 ? -1.0 : 1.0
-        return -direction * 6 * progress(for: phaseValue)
-    }
-
     static func blurRadius(for phaseValue: Double) -> CGFloat {
         CGFloat(2.8 * progress(for: phaseValue))
-    }
-
-    static func edgeTranslation(for phaseValue: Double) -> CGFloat {
-        let direction: CGFloat = phaseValue < 0 ? 1 : -1
-        return direction * CGFloat(8 * progress(for: phaseValue))
-    }
-
-    static func lateralTranslation(for phaseValue: Double) -> CGFloat {
-        let direction: CGFloat = phaseValue < 0 ? -1 : 1
-        return direction * CGFloat(4 * progress(for: phaseValue))
     }
 }
 
@@ -110,7 +70,6 @@ struct ChatView: View {
     @State private var hasPositionedInitialConversation = false
     @State private var menuPullDistance: CGFloat = 0
     @State private var menuCloseDragDistance: CGFloat = 0
-    @State private var menuPullReleaseVelocity: CGFloat = 0
     @State private var menuPullActive = false
     @State private var menuOpen = false
     @State private var menuDetentReached = false
@@ -158,7 +117,6 @@ struct ChatView: View {
                 )
                 .offset(y: -conversationRevealDistance)
                 .ignoresSafeArea(.container)
-                .simultaneousGesture(menuPullTrackingGesture)
                 // Tap-outside-to-dismiss: the shifted surface stays visible
                 // above the open menu, and the standard sheet affordance is
                 // that tapping it closes the menu. The catcher lives outside
@@ -309,13 +267,23 @@ struct ChatView: View {
             .onAppear {
                 positionInitialConversationIfNeeded(using: proxy)
             }
-            .onChange(of: model.messages) { _, _ in
-                if model.messages.isEmpty {
+            .onChange(of: model.messages) { oldMessages, newMessages in
+                if newMessages.isEmpty {
                     hasPositionedInitialConversation = false
                 } else if !hasPositionedInitialConversation {
                     positionInitialConversationIfNeeded(using: proxy)
                 } else if isAtBottom {
-                    scrollToBottom(using: proxy)
+                    let isStreamingUpdate = newMessages.count == oldMessages.count
+                        && newMessages.last?.id.hasPrefix("stream-") == true
+                    // Streaming deltas arrive many times per second; animating
+                    // a scroll for each one makes the whole transcript judder
+                    // as it grows. Keep the anchor pinned instead — only
+                    // brand-new messages get the animated reveal.
+                    if isStreamingUpdate {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    } else {
+                        scrollToBottom(using: proxy)
+                    }
                 } else {
                     hasUnseenMessages = true
                 }
@@ -323,9 +291,15 @@ struct ChatView: View {
             .onChange(of: scrollRequest) { _, _ in
                 scrollToBottom(using: proxy)
             }
-            .onChange(of: composerHeight) { previousHeight, _ in
-                if isAtBottom || previousHeight == 0 {
-                    scrollToBottom(using: proxy)
+            .onChange(of: composerHeight) { previousHeight, newHeight in
+                guard previousHeight > 0, newHeight != previousHeight, isAtBottom else { return }
+                // Composer growth (keyboard, extra lines) should not fight the
+                // system keyboard animation or repeatedly relaunch a scroll
+                // spring. Re-anchor silently so the latest message stays put.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
                 }
             }
             .overlay(alignment: .bottom) {
@@ -362,65 +336,20 @@ struct ChatView: View {
         motionIsReduced: Bool,
         reduceTransparency: Bool
     ) -> some VisualEffect {
+        // Cards only translate with the scroll and fade at the clipped edges —
+        // no folding, scaling, or rotation as they approach the screen edge.
         let phaseValue = phase.value
-        let edgeAnchor: UnitPoint = phaseValue < 0 ? .top : .bottom
-        let horizontalScale = motionIsReduced
-            ? CGFloat(1)
-            : TranscriptEdgeMotion.horizontalScale(for: phaseValue)
-        let verticalScale = motionIsReduced
-            ? CGFloat(1)
-            : TranscriptEdgeMotion.verticalScale(for: phaseValue)
-        let angle = motionIsReduced ? 0 : TranscriptEdgeMotion.rotation(for: phaseValue)
-        let counterAngle = motionIsReduced
-            ? 0
-            : TranscriptEdgeMotion.counterRotation(for: phaseValue)
-        let translation = motionIsReduced
-            ? CGFloat(0)
-            : TranscriptEdgeMotion.edgeTranslation(for: phaseValue)
-        let lateralTranslation = motionIsReduced
-            ? CGFloat(0)
-            : TranscriptEdgeMotion.lateralTranslation(for: phaseValue)
         let blur = motionIsReduced || reduceTransparency
             ? CGFloat(0)
             : TranscriptEdgeMotion.blurRadius(for: phaseValue)
-        let hingeAxisY: CGFloat = phaseValue < 0 ? -0.17 : 0.17
 
         return content
-            .distortionEffect(
-                ShaderLibrary.default.fabricFold(
-                    .float(phaseValue),
-                    .boundingRect
-                ),
-                maxSampleOffset: CGSize(width: 12, height: 18),
-                isEnabled: !motionIsReduced
-            )
-            .colorEffect(
-                ShaderLibrary.default.fabricFoldShade(
-                    .float(phaseValue),
-                    .boundingRect
-                ),
-                isEnabled: !motionIsReduced && !reduceTransparency
-            )
             .opacity(
                 TranscriptEdgeMotion.opacity(
                     for: phaseValue,
                     reduceTransparency: reduceTransparency
                 )
             )
-            .scaleEffect(x: horizontalScale, y: verticalScale, anchor: edgeAnchor)
-            .rotation3DEffect(
-                .degrees(angle),
-                axis: (x: 1, y: hingeAxisY, z: 0.06),
-                anchor: edgeAnchor,
-                perspective: 0.64
-            )
-            .rotation3DEffect(
-                .degrees(counterAngle),
-                axis: (x: 0, y: 1, z: 0),
-                anchor: edgeAnchor,
-                perspective: 0.64
-            )
-            .offset(x: lateralTranslation, y: translation)
             .blur(radius: blur)
     }
 
@@ -470,14 +399,6 @@ struct ChatView: View {
         visibleMenuRevealDistance
     }
 
-    private var bottomSafeAreaInset: CGFloat {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first(where: \.isKeyWindow)?
-            .safeAreaInsets.bottom ?? 0
-    }
-
     private var menuSurfaceProgress: CGFloat {
         PullMenuMotion.smoothStep(menuRevealProgress)
     }
@@ -509,32 +430,12 @@ struct ChatView: View {
     }
 
     private func finishPullMenu(releasedAt releaseDistance: CGFloat) {
-        let releaseVelocity = menuPullReleaseVelocity
-        let momentumDistance = min(
-            releaseVelocity * 0.055,
-            menuRevealHeight * 0.28
-        )
-        let projectedDistance = releaseDistance + momentumDistance
-        let finalDistance = max(menuPullDistance, projectedDistance)
-        // A decisive upward flick opens the menu even from a shallow pull —
-        // the distance threshold alone treated a fast, intentional gesture the
-        // same as an accidental brush past the bottom of the transcript.
-        let flickedOpen = releaseVelocity > 650 && releaseDistance > menuRevealHeight * 0.15
         setPullMenu(
-            open: flickedOpen || PullMenuMotion.commitsToOpen(
-                revealDistance: finalDistance,
+            open: PullMenuMotion.commitsToOpen(
+                revealDistance: releaseDistance,
                 revealHeight: menuRevealHeight
-            ),
-            releaseVelocity: releaseVelocity
+            )
         )
-    }
-
-    private var menuPullTrackingGesture: some Gesture {
-        DragGesture(minimumDistance: 2, coordinateSpace: .local)
-            .onChanged { value in
-                guard !menuOpen else { return }
-                menuPullReleaseVelocity = max(0, -value.velocity.height)
-            }
     }
 
     private var pullMenu: some View {
@@ -566,7 +467,6 @@ struct ChatView: View {
                 Spacer()
 
                 menuAutonomyToggle
-                menuCloseButton
             }
             .opacity(headerVisibility)
             .offset(y: (1 - headerUnfurl) * 12)
@@ -579,9 +479,9 @@ struct ChatView: View {
             pullMenuActions
         }
         .padding(.horizontal, 16)
-        .padding(.top, 8)
+        .padding(.top, 26)
         .frame(height: menuRevealHeight, alignment: .top)
-        .background(alignment: .bottom) {
+        .background {
             ZStack {
                 AssistantTheme.canvas(for: colorScheme)
                 LinearGradient(
@@ -593,15 +493,24 @@ struct ChatView: View {
                     endPoint: .bottom
                 )
             }
-            .frame(height: menuRevealHeight + 48 + bottomSafeAreaInset)
-            .offset(y: bottomSafeAreaInset)
+            .allowsHitTesting(false)
         }
-        .allowsHitTesting(menuOpen)
+        // Hit-testing must be tied to visibility, not just the open flag: an
+        // invisible-but-present menu otherwise swallows taps meant for the
+        // composer, and a still-animating closed menu swallows them after the
+        // state flips. The close gesture lives on a transparent catcher below.
+        .allowsHitTesting(menuRevealProgress > 0.55)
         .accessibilityHidden(!menuOpen)
         .accessibilityAction(named: "Close menu") {
             closePullMenu()
         }
-        .simultaneousGesture(pullMenuCloseGesture)
+        .overlay {
+            if menuOpen {
+                Color.black.opacity(0.001)
+                    .contentShape(Rectangle())
+                    .gesture(pullMenuCloseGesture)
+            }
+        }
     }
 
     @ViewBuilder
@@ -705,42 +614,6 @@ struct ChatView: View {
         )
         .accessibilityLabel(autonomous ? "Turn autonomous work off" : "Turn autonomous work on")
         .accessibilityValue(autonomous ? "On" : "Off")
-    }
-
-    @ViewBuilder
-    private var menuCloseButton: some View {
-        Button {
-            closePullMenu()
-        } label: {
-            ZStack {
-                if #available(iOS 26.0, *) {
-                    Image(systemName: "chevron.down")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                        .frame(width: 34, height: 34)
-                        .glassEffect(
-                            .regular.tint(.white.opacity(0.12)).interactive(),
-                            in: Circle()
-                        )
-                } else {
-                    Image(systemName: "chevron.down")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                        .frame(width: 34, height: 34)
-                        .background(AssistantTheme.sunken(for: colorScheme), in: Circle())
-                }
-            }
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(
-            AssistantTactileButtonStyle(
-                reduceMotion: reduceMotion,
-                pressedScale: 0.975
-            )
-        )
-        .accessibilityLabel("Close menu")
-        .accessibilityIdentifier("assistant.chat.menu.close")
     }
 
     private func pullMenuButton(
@@ -877,43 +750,26 @@ struct ChatView: View {
                     value.translation.height,
                     value.predictedEndTranslation.height
                 )
-                if PullMenuMotion.commitsToClose(
-                    dragDistance: projectedDistance,
-                    revealHeight: menuRevealHeight
-                ) {
-                    setPullMenu(
-                        open: false,
-                        releaseVelocity: max(0, value.velocity.height)
+                setPullMenu(
+                    open: !PullMenuMotion.commitsToClose(
+                        dragDistance: projectedDistance,
+                        revealHeight: menuRevealHeight
                     )
-                } else {
-                    setPullMenu(
-                        open: true,
-                        releaseVelocity: max(0, value.velocity.height)
-                    )
-                }
+                )
             }
     }
 
     private func menuTransitionAnimation(
-        open: Bool,
-        releaseVelocity: CGFloat = 0,
-        currentDistance: CGFloat
+        open: Bool
     ) -> Animation? {
         guard !reduceMotion else { return nil }
-        let targetDistance = open ? menuRevealHeight : 0
-        let normalizedVelocity = PullMenuMotion.springInitialVelocity(
-            releaseVelocity: releaseVelocity,
-            currentDistance: currentDistance,
-            targetDistance: targetDistance
-        )
         return .interpolatingSpring(
             duration: open ? 0.5 : 0.4,
-            bounce: open ? 0.13 : 0.035,
-            initialVelocity: normalizedVelocity
+            bounce: open ? 0.13 : 0.035
         )
     }
 
-    private func setPullMenu(open: Bool, releaseVelocity: CGFloat = 0) {
+    private func setPullMenu(open: Bool) {
         let currentRevealDistance = visibleMenuRevealDistance
 
         if menuDetentReached != open {
@@ -929,17 +785,10 @@ struct ChatView: View {
         }
 
         menuOpen = open
-        withAnimation(
-            menuTransitionAnimation(
-                open: open,
-                releaseVelocity: releaseVelocity,
-                currentDistance: currentRevealDistance
-            )
-        ) {
+        withAnimation(menuTransitionAnimation(open: open)) {
             menuPullActive = false
             menuPullDistance = open ? menuRevealHeight : 0
         }
-        menuPullReleaseVelocity = 0
     }
 
     private func updateMenuDetent(reached: Bool) {
@@ -1305,20 +1154,8 @@ struct ChatView: View {
             content()
                 .background {
                     shape.fill(
-                        LinearGradient(
-                            colors: [
-                                .white.opacity(
-                                    reduceTransparency
-                                        ? 0.1
-                                        : (composerFocused ? 0.055 : 0.025)
-                                ),
-                                AssistantTheme.stageDepth.opacity(
-                                    reduceTransparency ? 0.08 : 0.025
-                                ),
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
+                        AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
+                            .opacity(reduceTransparency ? 0.3 : (composerFocused ? 0.24 : 0.16))
                     )
                 }
                 .glassEffect(
@@ -1327,8 +1164,8 @@ struct ChatView: View {
                             AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
                                 .opacity(
                                     reduceTransparency
-                                        ? 0.66
-                                        : (composerFocused ? 0.34 : 0.25)
+                                        ? 0.5
+                                        : (composerFocused ? 0.2 : 0.13)
                                 )
                         )
                         .interactive(),
@@ -1381,7 +1218,9 @@ struct ChatView: View {
     private func jumpToLatestButton(action: @escaping () -> Void) -> some View {
         Button(action: action) {
             jumpToLatestSurface
-                .padding(.vertical, 4)
+                .frame(minWidth: 44, minHeight: 44)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 4)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1404,18 +1243,15 @@ struct ChatView: View {
                 .background {
                     Capsule()
                         .fill(
-                            LinearGradient(
-                                colors: [.white.opacity(0.08), .white.opacity(0.018)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
+                            AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
+                                .opacity(reduceTransparency ? 0.34 : 0.26)
                         )
                 }
                 .glassEffect(
                     glass
                         .tint(
                             AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
-                                .opacity(reduceTransparency ? 0.82 : 0.52)
+                                .opacity(reduceTransparency ? 0.55 : 0.3)
                         )
                         .interactive(),
                     in: Capsule()
