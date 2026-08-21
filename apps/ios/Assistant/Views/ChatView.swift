@@ -121,9 +121,12 @@ struct ChatView: View {
     @State private var jumpFeedback = 0
     @FocusState private var composerFocused: Bool
 
+    // The menu holds a fixed two-row grid of eight destinations (three rows at
+    // accessibility sizes, one horizontal strip at extra-large), so the reveal
+    // height is exact rather than a guess: padding + grip + header + rows.
     private var menuRevealHeight: CGFloat {
-        if usesExtraLargeAccessibilityMenu { return 304 }
-        return dynamicTypeSize.isAccessibilitySize ? 410 : 312
+        if usesExtraLargeAccessibilityMenu { return 208 }
+        return dynamicTypeSize.isAccessibilitySize ? 336 : 236
     }
 
     private var menuButtonHeight: CGFloat {
@@ -156,7 +159,20 @@ struct ChatView: View {
                 .offset(y: -conversationRevealDistance)
                 .ignoresSafeArea(.container)
                 .simultaneousGesture(menuPullTrackingGesture)
-                .allowsHitTesting(!menuOpen)
+                // Tap-outside-to-dismiss: the shifted surface stays visible
+                // above the open menu, and the standard sheet affordance is
+                // that tapping it closes the menu. The catcher lives outside
+                // the ScrollView so it stays interactive while the transcript
+                // itself is not.
+                .overlay {
+                    if menuOpen {
+                        Color.black.opacity(0.001)
+                            .contentShape(Rectangle())
+                            .onTapGesture { closePullMenu() }
+                            .accessibilityLabel("Close menu")
+                            .accessibilityAddTraits(.isButton)
+                    }
+                }
         }
         .background(
             stageBackdrop.ignoresSafeArea(.container)
@@ -229,6 +245,10 @@ struct ChatView: View {
             .ignoresSafeArea(.container, edges: [.top, .bottom])
             .scrollClipDisabled()
             .scrollIndicators(.hidden)
+            // A live scroll view under an open menu can still rubber-band from
+            // momentum or an external scroll request, which fights the spring
+            // that is animating the surface back down. Freeze it while open.
+            .scrollDisabled(menuOpen)
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
             .onScrollGeometryChange(for: Bool.self) { geometry in
@@ -327,6 +347,7 @@ struct ChatView: View {
                     .transition(.opacity)
                 }
             }
+            .allowsHitTesting(!menuOpen)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: showsJumpToLatest)
         }
     }
@@ -495,8 +516,12 @@ struct ChatView: View {
         )
         let projectedDistance = releaseDistance + momentumDistance
         let finalDistance = max(menuPullDistance, projectedDistance)
+        // A decisive upward flick opens the menu even from a shallow pull —
+        // the distance threshold alone treated a fast, intentional gesture the
+        // same as an accidental brush past the bottom of the transcript.
+        let flickedOpen = releaseVelocity > 650 && releaseDistance > menuRevealHeight * 0.15
         setPullMenu(
-            open: PullMenuMotion.commitsToOpen(
+            open: flickedOpen || PullMenuMotion.commitsToOpen(
                 revealDistance: finalDistance,
                 revealHeight: menuRevealHeight
             ),
@@ -608,6 +633,9 @@ struct ChatView: View {
         }
     }
 
+    // Eight primary destinations, two rows of four. The lower-traffic areas
+    // (Documents, Skills, Anomalies, Improvements) live under Settings, which
+    // keeps every label here a single scannable word and the grid symmetric.
     @ViewBuilder
     private var pullMenuActionButtons: some View {
         pullMenuButton("Chat", icon: "bubble.left", isSelected: true, index: 0) {
@@ -638,22 +666,10 @@ struct ChatView: View {
         ) {
             openRoute(.memory)
         }
-        pullMenuButton("Documents", icon: "doc.text", index: 6) {
-            openRoute(.documents)
-        }
-        pullMenuButton("Skills", icon: "lightbulb", index: 7) {
-            openRoute(.skills)
-        }
-        pullMenuButton("Costs", icon: "dollarsign.circle", index: 8) {
+        pullMenuButton("Costs", icon: "dollarsign.circle", index: 6) {
             openRoute(.costs)
         }
-        pullMenuButton("Anomalies", icon: "exclamationmark.triangle", index: 9) {
-            openRoute(.anomalies)
-        }
-        pullMenuButton("Improvements", icon: "arrow.triangle.2.circlepath", index: 10) {
-            openRoute(.improvements)
-        }
-        pullMenuButton("Settings", icon: "slider.horizontal.3", index: 11) {
+        pullMenuButton("Settings", icon: "slider.horizontal.3", index: 7) {
             openRoute(.settings)
         }
     }
@@ -752,29 +768,24 @@ struct ChatView: View {
                         .frame(height: usesExtraLargeAccessibilityMenu ? 30 : 18)
                         .overlay(alignment: .topTrailing) {
                             if badge > 0 {
-                                Text("\(badge)")
+                                Text(badge > 99 ? "99+" : "\(badge)")
                                     .font(.system(size: 8, weight: .bold, design: .rounded))
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 4)
                                     .frame(minWidth: 14, minHeight: 14)
                                     .background(Color.orange, in: Capsule())
-                                    .offset(x: 9, y: -7)
+                                    .offset(x: 10, y: -8)
+                                    .accessibilityHidden(true)
                             }
                         }
                     Text(title)
                         .font(
                             usesExtraLargeAccessibilityMenu
                                 ? .caption.weight(.semibold)
-                                : .system(size: 10, weight: .semibold, design: .rounded)
+                                : .system(size: 11, weight: .semibold, design: .rounded)
                         )
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-                        .minimumScaleFactor(
-                            usesExtraLargeAccessibilityMenu
-                                ? 0.9
-                                : (dynamicTypeSize.isAccessibilitySize ? 1 : 0.88)
-                        )
-                        .frame(height: usesExtraLargeAccessibilityMenu ? nil : 22)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 .foregroundStyle(
                     isSelected ? Color.white : AssistantTheme.ink(for: colorScheme)
@@ -804,7 +815,11 @@ struct ChatView: View {
             anchor: .bottom
         )
         .accessibilityLabel(title)
-        .accessibilityValue(isSelected ? "On" : "")
+        .accessibilityValue(
+            badge > 0
+                ? "\(badge) pending"
+                : (isSelected ? "Selected" : "")
+        )
         .accessibilityIdentifier(
             "assistant.chat.menu.\(title.lowercased().replacingOccurrences(of: " ", with: "-"))"
         )
@@ -1255,7 +1270,8 @@ struct ChatView: View {
     }
 
     private var composerPrompt: String {
-        model.isSending ? "Working — you can keep typing" : "Ask anything…"
+        // Short enough to survive the narrowest phones without truncating.
+        model.isSending ? "Working — keep typing" : "Ask anything…"
     }
 
     private var composerPlaceholderColor: Color {

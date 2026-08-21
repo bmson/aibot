@@ -1,4 +1,5 @@
 import { getCostsDashboard, getProfileOverview } from '@assistant/application';
+import { policyLabels, scheduleLabels } from '@/app/settings/labels';
 import { getApplication, getDb } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -89,9 +90,12 @@ export async function GET(request: Request): Promise<Response> {
         locale: settings.agent.locale,
         signature: settings.agent.signature,
       },
+      // `label` carries the same human wording the web settings page shows,
+      // so the phone never has to keep its own copy of the dictionaries.
       schedules: settings.schedules.map((schedule) => ({
         id: schedule.id,
         name: schedule.name,
+        label: scheduleLabels[schedule.name] ?? null,
         cron: schedule.cron,
         enabled: schedule.enabled,
         nextRunAt: schedule.nextRunAt,
@@ -101,6 +105,7 @@ export async function GET(request: Request): Promise<Response> {
         id: policy.id,
         toolName: policy.toolName,
         templateKey: policy.templateKey,
+        label: policyLabels[policy.templateKey] ?? null,
         effect: policy.effect,
         enabled: policy.enabled,
         createdVia: policy.createdVia,

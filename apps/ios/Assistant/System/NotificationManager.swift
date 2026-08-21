@@ -11,7 +11,16 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     @Published private(set) var authorizationError: String?
     @Published private(set) var pendingRoute: AssistantRoute?
 
+    /// Wired up by AppModel: handles Approve/Deny actions taken directly on a
+    /// notification without opening the app into the Approvals sheet first.
+    var approvalDecisionHandler: (@MainActor (String, String) async -> Void)?
+
     private let center = UNUserNotificationCenter.current()
+
+    static let attentionCategory = "ASSISTANT_ATTENTION"
+    static let updateCategory = "ASSISTANT_UPDATE"
+    static let approveAction = "ASSISTANT_APPROVE"
+    static let denyAction = "ASSISTANT_DENY"
 
     private override init() {
         super.init()
@@ -38,7 +47,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     }
 
     @discardableResult
-    func schedule(title: String, body: String, route: AssistantRoute?) async -> Bool {
+    func schedule(title: String, body: String, route: AssistantRoute?, approvalId: String? = nil) async -> Bool {
         let settings = await center.notificationSettings()
         authorizationStatus = settings.authorizationStatus
         guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional,
@@ -49,9 +58,12 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         content.body = body
         content.sound = .default
         content.threadIdentifier = "assistant-work"
-        content.categoryIdentifier = route == .approvals ? "ASSISTANT_ATTENTION" : "ASSISTANT_UPDATE"
+        content.categoryIdentifier = route == .approvals ? Self.attentionCategory : Self.updateCategory
         if let route {
             content.userInfo["route"] = route.rawValue
+        }
+        if let approvalId {
+            content.userInfo["approvalId"] = approvalId
         }
 
         let request = UNNotificationRequest(
@@ -64,6 +76,17 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
             return true
         } catch {
             return false
+        }
+    }
+
+    /// Mirrors the pending-approval count onto the app icon badge. Zero clears
+    /// it. Local notifications never touch the badge themselves, so this is
+    /// the single place the number is asserted.
+    func updateBadge(_ count: Int) async {
+        do {
+            try await center.setBadgeCount(max(0, count))
+        } catch {
+            // Badge failure is cosmetic — never surface it as an app error.
         }
     }
 
@@ -82,7 +105,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         content.body = "A decision is ready to review."
         content.sound = .default
         content.threadIdentifier = "assistant-work"
-        content.categoryIdentifier = "ASSISTANT_ATTENTION"
+        content.categoryIdentifier = Self.attentionCategory
         content.userInfo["route"] = AssistantRoute.approvals.rawValue
 
         let request = UNNotificationRequest(
@@ -112,30 +135,63 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        []
+        // Notifications are normally suppressed while the app is active, but a
+        // decision request is worth a banner even then: the owner may be on a
+        // different screen and the work is parked until they respond.
+        if notification.request.content.categoryIdentifier == Self.attentionCategory {
+            return [.banner, .sound]
+        }
+        return []
     }
 
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
-        let rawRoute = response.notification.request.content.userInfo["route"] as? String
+        let userInfo = response.notification.request.content.userInfo
+
+        // Inline Approve/Deny actions resolve the approval in place and skip
+        // navigation entirely — the handler refreshes the model behind them.
+        if response.actionIdentifier == Self.approveAction
+            || response.actionIdentifier == Self.denyAction,
+            let approvalId = userInfo["approvalId"] as? String {
+            let decision = response.actionIdentifier == Self.approveAction ? "approved" : "denied"
+            if let handler = await MainActor.run(body: { self.approvalDecisionHandler }) {
+                await handler(approvalId, decision)
+                return
+            }
+        }
+
+        let rawRoute = userInfo["route"] as? String
         let route = rawRoute.flatMap(AssistantRoute.init(rawValue:))
         guard let route else { return }
         await MainActor.run { self.pendingRoute = route }
     }
 
     private func registerCategories() {
+        // Authentication is required for both: an approval button that works
+        // from the lock screen without unlocking would let anyone holding the
+        // phone authorize an outward-facing action.
+        let approve = UNNotificationAction(
+            identifier: Self.approveAction,
+            title: "Approve",
+            options: [.authenticationRequired]
+        )
+        let deny = UNNotificationAction(
+            identifier: Self.denyAction,
+            title: "Deny",
+            options: [.authenticationRequired, .destructive]
+        )
         center.setNotificationCategories([
             UNNotificationCategory(
-                identifier: "ASSISTANT_ATTENTION",
-                actions: [],
+                identifier: Self.attentionCategory,
+                actions: [approve, deny],
                 intentIdentifiers: [],
                 hiddenPreviewsBodyPlaceholder: "Decision ready",
                 options: []
             ),
             UNNotificationCategory(
-                identifier: "ASSISTANT_UPDATE",
+                identifier: Self.updateCategory,
                 actions: [],
                 intentIdentifiers: [],
                 hiddenPreviewsBodyPlaceholder: "Assistant update",

@@ -166,12 +166,12 @@ struct ApprovalsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         } else {
-            HStack(spacing: 6) {
-                Text(item.taskType.sentenceCaseIdentifier)
-                Text("·")
+            // Two short lines rather than one dot-joined row: three segments
+            // plus separators wrapped awkwardly on narrow phones, leaving the
+            // trust level stranded mid-line.
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(item.taskType.sentenceCaseIdentifier) · \(item.taskTrust.sentenceCaseIdentifier)")
                 Text("Requested \(relative(item.approval.requestedAt))")
-                Text("·")
-                Text(item.taskTrust.sentenceCaseIdentifier)
             }
             .font(.caption)
             .foregroundStyle(.secondary)

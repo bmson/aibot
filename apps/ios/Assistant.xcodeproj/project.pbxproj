@@ -1,133 +1,250 @@
 // !$*UTF8*$!
 {
 	archiveVersion = 1;
-	classes = {};
+	classes = {
+	};
 	objectVersion = 56;
 	objects = {
 
 /* Begin PBXBuildFile section */
 		B00000000000000000000001 /* AssistantApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000001 /* AssistantApp.swift */; };
 		B00000000000000000000002 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000002 /* AppModel.swift */; };
-		B00000000000000000000003 /* AssistantTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000003 /* AssistantTheme.swift */; };
-		B00000000000000000000004 /* APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000004 /* APIModels.swift */; };
-		B00000000000000000000005 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000005 /* KeychainStore.swift */; };
-		B00000000000000000000006 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000006 /* APIClient.swift */; };
-		B00000000000000000000007 /* CompanionCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000007 /* CompanionCapsule.swift */; };
-		B00000000000000000000008 /* StatusPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000008 /* StatusPill.swift */; };
-		B00000000000000000000009 /* MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000009 /* MessageBubble.swift */; };
-		B0000000000000000000000A /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000A /* RootView.swift */; };
-		B0000000000000000000000B /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000B /* ChatView.swift */; };
-		B0000000000000000000000C /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000C /* ActivityView.swift */; };
-		B0000000000000000000000D /* GoalsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000D /* GoalsView.swift */; };
-		B0000000000000000000000E /* ApprovalsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000E /* ApprovalsView.swift */; };
-		B0000000000000000000000F /* MoreView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000F /* MoreView.swift */; };
-		B00000000000000000000010 /* ConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000010 /* ConnectionView.swift */; };
+		B00000000000000000000003 /* Design/AssistantTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000003 /* Design/AssistantTheme.swift */; };
+		B00000000000000000000004 /* Models/APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000004 /* Models/APIModels.swift */; };
+		B00000000000000000000005 /* Networking/KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000005 /* Networking/KeychainStore.swift */; };
+		B00000000000000000000006 /* Networking/APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000006 /* Networking/APIClient.swift */; };
+		B00000000000000000000007 /* Components/CompanionCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000007 /* Components/CompanionCapsule.swift */; };
+		B00000000000000000000008 /* Components/StatusPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000008 /* Components/StatusPill.swift */; };
+		B00000000000000000000009 /* Components/MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000009 /* Components/MessageBubble.swift */; };
+		B0000000000000000000000A /* Views/RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000A /* Views/RootView.swift */; };
+		B0000000000000000000000B /* Views/ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000B /* Views/ChatView.swift */; };
+		B0000000000000000000000C /* Views/ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000C /* Views/ActivityView.swift */; };
+		B0000000000000000000000D /* Views/GoalsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000D /* Views/GoalsView.swift */; };
+		B0000000000000000000000E /* Views/ApprovalsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000E /* Views/ApprovalsView.swift */; };
+		B0000000000000000000000F /* Views/MoreView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000F /* Views/MoreView.swift */; };
+		B00000000000000000000010 /* Views/ConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000010 /* Views/ConnectionView.swift */; };
 		B00000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000011 /* Assets.xcassets */; };
 		B00000000000000000000012 /* APIModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000020 /* APIModelsTests.swift */; };
-		B00000000000000000000013 /* AssistantActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000014 /* AssistantActivityAttributes.swift */; };
-		B00000000000000000000014 /* LiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000015 /* LiveActivityManager.swift */; };
-		B00000000000000000000015 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000016 /* NotificationManager.swift */; };
+		B00000000000000000000013 /* System/AssistantActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000014 /* System/AssistantActivityAttributes.swift */; };
+		B00000000000000000000014 /* System/LiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000015 /* System/LiveActivityManager.swift */; };
+		B00000000000000000000015 /* System/NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000016 /* System/NotificationManager.swift */; };
 		B00000000000000000000016 /* AssistantActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000017 /* AssistantActivityWidget.swift */; };
-		B00000000000000000000017 /* AssistantActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000014 /* AssistantActivityAttributes.swift */; };
+		B00000000000000000000017 /* System/AssistantActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000014 /* System/AssistantActivityAttributes.swift */; };
 		B00000000000000000000018 /* AssistantActivityExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = C00000000000000000000019 /* AssistantActivityExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		B00000000000000000000019 /* ActivityCrown.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000022 /* ActivityCrown.swift */; };
-		B0000000000000000000001A /* WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000023 /* WorkspaceView.swift */; };
-		B0000000000000000000001B /* FabricFold.metal in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000024 /* FabricFold.metal */; };
+		B00000000000000000000019 /* Components/ActivityCrown.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000022 /* Components/ActivityCrown.swift */; };
+		B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000023 /* Views/WorkspaceView.swift */; };
+		B0000000000000000000001B /* Effects/FabricFold.metal in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000024 /* Effects/FabricFold.metal */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		F00000000000000000000001 = {isa = PBXContainerItemProxy; containerPortal = A00000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = A00000000000000000000010; remoteInfo = Assistant; };
-		F00000000000000000000003 = {isa = PBXContainerItemProxy; containerPortal = A00000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = A00000000000000000000030; remoteInfo = AssistantActivityExtension; };
+		F00000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A00000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A00000000000000000000010;
+			remoteInfo = Assistant;
+		};
+		F00000000000000000000003 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A00000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A00000000000000000000030;
+			remoteInfo = AssistantActivityExtension;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		A00000000000000000000015 /* Embed App Extensions */ = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = (B00000000000000000000018 /* AssistantActivityExtension.appex in Embed App Extensions */); name = "Embed App Extensions"; runOnlyForDeploymentPostprocessing = 0; };
+		A00000000000000000000015 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				B00000000000000000000018 /* AssistantActivityExtension.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		C00000000000000000000001 /* AssistantApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantApp.swift; sourceTree = "<group>"; };
 		C00000000000000000000002 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
-		C00000000000000000000003 /* AssistantTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Design/AssistantTheme.swift; sourceTree = "<group>"; };
-		C00000000000000000000004 /* APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/APIModels.swift; sourceTree = "<group>"; };
-		C00000000000000000000005 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Networking/KeychainStore.swift; sourceTree = "<group>"; };
-		C00000000000000000000006 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Networking/APIClient.swift; sourceTree = "<group>"; };
-		C00000000000000000000007 /* CompanionCapsule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/CompanionCapsule.swift; sourceTree = "<group>"; };
-		C00000000000000000000008 /* StatusPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/StatusPill.swift; sourceTree = "<group>"; };
-		C00000000000000000000009 /* MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/MessageBubble.swift; sourceTree = "<group>"; };
-		C0000000000000000000000A /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/RootView.swift; sourceTree = "<group>"; };
-		C0000000000000000000000B /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ChatView.swift; sourceTree = "<group>"; };
-		C0000000000000000000000C /* ActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ActivityView.swift; sourceTree = "<group>"; };
-		C0000000000000000000000D /* GoalsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/GoalsView.swift; sourceTree = "<group>"; };
-		C0000000000000000000000E /* ApprovalsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ApprovalsView.swift; sourceTree = "<group>"; };
-		C0000000000000000000000F /* MoreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MoreView.swift; sourceTree = "<group>"; };
-		C00000000000000000000010 /* ConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ConnectionView.swift; sourceTree = "<group>"; };
+		C00000000000000000000003 /* Design/AssistantTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Design/AssistantTheme.swift; sourceTree = "<group>"; };
+		C00000000000000000000004 /* Models/APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/APIModels.swift; sourceTree = "<group>"; };
+		C00000000000000000000005 /* Networking/KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Networking/KeychainStore.swift; sourceTree = "<group>"; };
+		C00000000000000000000006 /* Networking/APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Networking/APIClient.swift; sourceTree = "<group>"; };
+		C00000000000000000000007 /* Components/CompanionCapsule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/CompanionCapsule.swift; sourceTree = "<group>"; };
+		C00000000000000000000008 /* Components/StatusPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/StatusPill.swift; sourceTree = "<group>"; };
+		C00000000000000000000009 /* Components/MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/MessageBubble.swift; sourceTree = "<group>"; };
+		C0000000000000000000000A /* Views/RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/RootView.swift; sourceTree = "<group>"; };
+		C0000000000000000000000B /* Views/ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ChatView.swift; sourceTree = "<group>"; };
+		C0000000000000000000000C /* Views/ActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ActivityView.swift; sourceTree = "<group>"; };
+		C0000000000000000000000D /* Views/GoalsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/GoalsView.swift; sourceTree = "<group>"; };
+		C0000000000000000000000E /* Views/ApprovalsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ApprovalsView.swift; sourceTree = "<group>"; };
+		C0000000000000000000000F /* Views/MoreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MoreView.swift; sourceTree = "<group>"; };
+		C00000000000000000000010 /* Views/ConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ConnectionView.swift; sourceTree = "<group>"; };
 		C00000000000000000000011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C00000000000000000000012 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		C00000000000000000000013 /* Assistant.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Assistant.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		C00000000000000000000014 /* AssistantActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/AssistantActivityAttributes.swift; sourceTree = "<group>"; };
-		C00000000000000000000015 /* LiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/LiveActivityManager.swift; sourceTree = "<group>"; };
-		C00000000000000000000016 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/NotificationManager.swift; sourceTree = "<group>"; };
+		C00000000000000000000014 /* System/AssistantActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/AssistantActivityAttributes.swift; sourceTree = "<group>"; };
+		C00000000000000000000015 /* System/LiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/LiveActivityManager.swift; sourceTree = "<group>"; };
+		C00000000000000000000016 /* System/NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/NotificationManager.swift; sourceTree = "<group>"; };
 		C00000000000000000000017 /* AssistantActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantActivityWidget.swift; sourceTree = "<group>"; };
 		C00000000000000000000018 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		C00000000000000000000019 /* AssistantActivityExtension.appex */ = {isa = PBXFileReference; explicitFileType = wrapper.app-extension; includeInIndex = 0; path = AssistantActivityExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C00000000000000000000019 /* AssistantActivityExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AssistantActivityExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C00000000000000000000020 /* APIModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModelsTests.swift; sourceTree = "<group>"; };
 		C00000000000000000000021 /* AssistantTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AssistantTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		C00000000000000000000022 /* ActivityCrown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/ActivityCrown.swift; sourceTree = "<group>"; };
-		C00000000000000000000023 /* WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WorkspaceView.swift; sourceTree = "<group>"; };
-		C00000000000000000000024 /* FabricFold.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Effects/FabricFold.metal; sourceTree = "<group>"; };
+		C00000000000000000000022 /* Components/ActivityCrown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/ActivityCrown.swift; sourceTree = "<group>"; };
+		C00000000000000000000023 /* Views/WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WorkspaceView.swift; sourceTree = "<group>"; };
+		C00000000000000000000024 /* Effects/FabricFold.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Effects/FabricFold.metal; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		A00000000000000000000013 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-		A00000000000000000000023 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-		A00000000000000000000033 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		A00000000000000000000013 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000023 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000033 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		A00000000000000000000002 = {
 			isa = PBXGroup;
-			children = (D00000000000000000000001 /* Assistant */, D00000000000000000000002 /* AssistantTests */, D00000000000000000000003 /* AssistantActivityExtension */, A00000000000000000000003 /* Products */);
+			children = (
+				D00000000000000000000001 /* Assistant */,
+				D00000000000000000000002 /* AssistantTests */,
+				D00000000000000000000003 /* AssistantActivityExtension */,
+				A00000000000000000000003 /* Products */,
+			);
 			sourceTree = "<group>";
 		};
-		A00000000000000000000003 /* Products */ = {isa = PBXGroup; children = (C00000000000000000000013 /* Assistant.app */, C00000000000000000000019 /* AssistantActivityExtension.appex */, C00000000000000000000021 /* AssistantTests.xctest */); name = Products; sourceTree = "<group>"; };
+		A00000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C00000000000000000000013 /* Assistant.app */,
+				C00000000000000000000019 /* AssistantActivityExtension.appex */,
+				C00000000000000000000021 /* AssistantTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
 		D00000000000000000000001 /* Assistant */ = {
 			isa = PBXGroup;
-			children = (C00000000000000000000001, C00000000000000000000002, C00000000000000000000003, C00000000000000000000004, C00000000000000000000005, C00000000000000000000006, C00000000000000000000014, C00000000000000000000015, C00000000000000000000016, C00000000000000000000007, C00000000000000000000022, C00000000000000000000008, C00000000000000000000009, C0000000000000000000000A, C0000000000000000000000B, C0000000000000000000000C, C0000000000000000000000D, C0000000000000000000000E, C0000000000000000000000F, C00000000000000000000010, C00000000000000000000023, C00000000000000000000024, C00000000000000000000011, C00000000000000000000012);
-			path = Assistant; sourceTree = "<group>";
+			children = (
+				C00000000000000000000001 /* AssistantApp.swift */,
+				C00000000000000000000002 /* AppModel.swift */,
+				C00000000000000000000003 /* Design/AssistantTheme.swift */,
+				C00000000000000000000004 /* Models/APIModels.swift */,
+				C00000000000000000000005 /* Networking/KeychainStore.swift */,
+				C00000000000000000000006 /* Networking/APIClient.swift */,
+				C00000000000000000000014 /* System/AssistantActivityAttributes.swift */,
+				C00000000000000000000015 /* System/LiveActivityManager.swift */,
+				C00000000000000000000016 /* System/NotificationManager.swift */,
+				C00000000000000000000007 /* Components/CompanionCapsule.swift */,
+				C00000000000000000000022 /* Components/ActivityCrown.swift */,
+				C00000000000000000000008 /* Components/StatusPill.swift */,
+				C00000000000000000000009 /* Components/MessageBubble.swift */,
+				C0000000000000000000000A /* Views/RootView.swift */,
+				C0000000000000000000000B /* Views/ChatView.swift */,
+				C0000000000000000000000C /* Views/ActivityView.swift */,
+				C0000000000000000000000D /* Views/GoalsView.swift */,
+				C0000000000000000000000E /* Views/ApprovalsView.swift */,
+				C0000000000000000000000F /* Views/MoreView.swift */,
+				C00000000000000000000010 /* Views/ConnectionView.swift */,
+				C00000000000000000000023 /* Views/WorkspaceView.swift */,
+				C00000000000000000000024 /* Effects/FabricFold.metal */,
+				C00000000000000000000011 /* Assets.xcassets */,
+				C00000000000000000000012 /* Info.plist */,
+			);
+			path = Assistant;
+			sourceTree = "<group>";
 		};
-		D00000000000000000000002 /* AssistantTests */ = {isa = PBXGroup; children = (C00000000000000000000020); path = AssistantTests; sourceTree = "<group>"; };
-		D00000000000000000000003 /* AssistantActivityExtension */ = {isa = PBXGroup; children = (C00000000000000000000017, C00000000000000000000018); path = AssistantActivityExtension; sourceTree = "<group>"; };
+		D00000000000000000000002 /* AssistantTests */ = {
+			isa = PBXGroup;
+			children = (
+				C00000000000000000000020 /* APIModelsTests.swift */,
+			);
+			path = AssistantTests;
+			sourceTree = "<group>";
+		};
+		D00000000000000000000003 /* AssistantActivityExtension */ = {
+			isa = PBXGroup;
+			children = (
+				C00000000000000000000017 /* AssistantActivityWidget.swift */,
+				C00000000000000000000018 /* Info.plist */,
+			);
+			path = AssistantActivityExtension;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
 		A00000000000000000000010 /* Assistant */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = EA00000000000000000000010;
-			buildPhases = (A00000000000000000000012, A00000000000000000000013, A00000000000000000000014, A00000000000000000000015);
-			buildRules = ();
-			dependencies = (F00000000000000000000004);
+			buildConfigurationList = EA00000000000000000000010 /* Build configuration list for PBXNativeTarget "Assistant" */;
+			buildPhases = (
+				A00000000000000000000012 /* Sources */,
+				A00000000000000000000013 /* Frameworks */,
+				A00000000000000000000014 /* Resources */,
+				A00000000000000000000015 /* Embed App Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F00000000000000000000004 /* PBXTargetDependency */,
+			);
 			name = Assistant;
 			productName = Assistant;
-			productReference = C00000000000000000000013;
+			productReference = C00000000000000000000013 /* Assistant.app */;
 			productType = "com.apple.product-type.application";
 		};
 		A00000000000000000000020 /* AssistantTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = EA00000000000000000000020;
-			buildPhases = (A00000000000000000000022, A00000000000000000000023, A00000000000000000000024);
-			buildRules = ();
-			dependencies = (F00000000000000000000002);
+			buildConfigurationList = EA00000000000000000000020 /* Build configuration list for PBXNativeTarget "AssistantTests" */;
+			buildPhases = (
+				A00000000000000000000022 /* Sources */,
+				A00000000000000000000023 /* Frameworks */,
+				A00000000000000000000024 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F00000000000000000000002 /* PBXTargetDependency */,
+			);
 			name = AssistantTests;
 			productName = AssistantTests;
-			productReference = C00000000000000000000021;
+			productReference = C00000000000000000000021 /* AssistantTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 		A00000000000000000000030 /* AssistantActivityExtension */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = EA00000000000000000000030;
-			buildPhases = (A00000000000000000000032, A00000000000000000000033, A00000000000000000000034);
-			buildRules = ();
-			dependencies = ();
+			buildConfigurationList = EA00000000000000000000030 /* Build configuration list for PBXNativeTarget "AssistantActivityExtension" */;
+			buildPhases = (
+				A00000000000000000000032 /* Sources */,
+				A00000000000000000000033 /* Frameworks */,
+				A00000000000000000000034 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
 			name = AssistantActivityExtension;
 			productName = AssistantActivityExtension;
 			productReference = C00000000000000000000019 /* AssistantActivityExtension.appex */;
@@ -138,53 +255,335 @@
 /* Begin PBXProject section */
 		A00000000000000000000001 /* Project object */ = {
 			isa = PBXProject;
-			attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 2660; LastUpgradeCheck = 2660; TargetAttributes = {A00000000000000000000010 = {CreatedOnToolsVersion = 26.0; }; A00000000000000000000020 = {CreatedOnToolsVersion = 26.0; TestTargetID = A00000000000000000000010; }; A00000000000000000000030 = {CreatedOnToolsVersion = 26.0; }; }; };
-			buildConfigurationList = EA00000000000000000000001;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					A00000000000000000000010 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					A00000000000000000000020 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = A00000000000000000000010;
+					};
+					A00000000000000000000030 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+				};
+			};
+			buildConfigurationList = EA00000000000000000000001 /* Build configuration list for PBXProject "Assistant" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
-			knownRegions = (en, Base);
+			knownRegions = (
+				en,
+				Base,
+			);
 			mainGroup = A00000000000000000000002;
-			productRefGroup = A00000000000000000000003;
+			productRefGroup = A00000000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-			targets = (A00000000000000000000010, A00000000000000000000030, A00000000000000000000020);
+			targets = (
+				A00000000000000000000010 /* Assistant */,
+				A00000000000000000000030 /* AssistantActivityExtension */,
+				A00000000000000000000020 /* AssistantTests */,
+			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		A00000000000000000000014 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (B00000000000000000000011); runOnlyForDeploymentPostprocessing = 0; };
-		A00000000000000000000024 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-		A00000000000000000000034 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		A00000000000000000000014 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000011 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000024 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000034 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A00000000000000000000012 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B00000000000000000000001, B00000000000000000000002, B00000000000000000000003, B00000000000000000000004, B00000000000000000000005, B00000000000000000000006, B00000000000000000000013, B00000000000000000000014, B00000000000000000000015, B00000000000000000000007, B00000000000000000000019, B00000000000000000000008, B00000000000000000000009, B0000000000000000000000A, B0000000000000000000000B, B0000000000000000000000C, B0000000000000000000000D, B0000000000000000000000E, B0000000000000000000000F, B00000000000000000000010, B0000000000000000000001A, B0000000000000000000001B); runOnlyForDeploymentPostprocessing = 0; };
-		A00000000000000000000022 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B00000000000000000000012); runOnlyForDeploymentPostprocessing = 0; };
-		A00000000000000000000032 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B00000000000000000000016, B00000000000000000000017); runOnlyForDeploymentPostprocessing = 0; };
+		A00000000000000000000012 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000001 /* AssistantApp.swift in Sources */,
+				B00000000000000000000002 /* AppModel.swift in Sources */,
+				B00000000000000000000003 /* Design/AssistantTheme.swift in Sources */,
+				B00000000000000000000004 /* Models/APIModels.swift in Sources */,
+				B00000000000000000000005 /* Networking/KeychainStore.swift in Sources */,
+				B00000000000000000000006 /* Networking/APIClient.swift in Sources */,
+				B00000000000000000000013 /* System/AssistantActivityAttributes.swift in Sources */,
+				B00000000000000000000014 /* System/LiveActivityManager.swift in Sources */,
+				B00000000000000000000015 /* System/NotificationManager.swift in Sources */,
+				B00000000000000000000007 /* Components/CompanionCapsule.swift in Sources */,
+				B00000000000000000000019 /* Components/ActivityCrown.swift in Sources */,
+				B00000000000000000000008 /* Components/StatusPill.swift in Sources */,
+				B00000000000000000000009 /* Components/MessageBubble.swift in Sources */,
+				B0000000000000000000000A /* Views/RootView.swift in Sources */,
+				B0000000000000000000000B /* Views/ChatView.swift in Sources */,
+				B0000000000000000000000C /* Views/ActivityView.swift in Sources */,
+				B0000000000000000000000D /* Views/GoalsView.swift in Sources */,
+				B0000000000000000000000E /* Views/ApprovalsView.swift in Sources */,
+				B0000000000000000000000F /* Views/MoreView.swift in Sources */,
+				B00000000000000000000010 /* Views/ConnectionView.swift in Sources */,
+				B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */,
+				B0000000000000000000001B /* Effects/FabricFold.metal in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000022 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000012 /* APIModelsTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000032 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000016 /* AssistantActivityWidget.swift in Sources */,
+				B00000000000000000000017 /* System/AssistantActivityAttributes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		F00000000000000000000002 = {isa = PBXTargetDependency; target = A00000000000000000000010; targetProxy = F00000000000000000000001; };
-		F00000000000000000000004 = {isa = PBXTargetDependency; target = A00000000000000000000030; targetProxy = F00000000000000000000003; };
+		F00000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A00000000000000000000010 /* Assistant */;
+			targetProxy = F00000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		F00000000000000000000004 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A00000000000000000000030 /* AssistantActivityExtension */;
+			targetProxy = F00000000000000000000003 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		E00000000000000000000001 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; GCC_C_LANGUAGE_STANDARD = gnu17; GCC_OPTIMIZATION_LEVEL = 0; ONLY_ACTIVE_ARCH = YES; SDKROOT = iphoneos; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
-		E00000000000000000000002 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; ENABLE_NS_ASSERTIONS = NO; GCC_C_LANGUAGE_STANDARD = gnu17; SDKROOT = iphoneos; SWIFT_COMPILATION_MODE = wholemodule; VALIDATE_PRODUCT = YES; }; name = Release; };
-		E00000000000000000000011 = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_ACCENT_COLOR_NAME = AccentColor; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; DEVELOPMENT_TEAM = ""; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Assistant/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 18.0; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
-		E00000000000000000000012 = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_ACCENT_COLOR_NAME = AccentColor; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; DEVELOPMENT_TEAM = ""; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Assistant/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 18.0; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
-		E00000000000000000000021 = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 18.0; PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Assistant.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Assistant"; }; name = Debug; };
-		E00000000000000000000022 = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 18.0; PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Assistant.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Assistant"; }; name = Release; };
-		E00000000000000000000031 = {isa = XCBuildConfiguration; buildSettings = {APPLICATION_EXTENSION_API_ONLY = YES; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = AssistantActivityExtension/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 18.0; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../../Frameworks"; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant.AssistantActivityExtension; PRODUCT_NAME = "$(TARGET_NAME)"; SKIP_INSTALL = YES; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
-		E00000000000000000000032 = {isa = XCBuildConfiguration; buildSettings = {APPLICATION_EXTENSION_API_ONLY = YES; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = AssistantActivityExtension/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 18.0; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../../Frameworks"; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant.AssistantActivityExtension; PRODUCT_NAME = "$(TARGET_NAME)"; SKIP_INSTALL = YES; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
+		E00000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		E00000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		E00000000000000000000011 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LY7X52447Z;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Assistant/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E00000000000000000000012 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LY7X52447Z;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Assistant/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		E00000000000000000000021 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Assistant.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Assistant";
+			};
+			name = Debug;
+		};
+		E00000000000000000000022 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Assistant.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Assistant";
+			};
+			name = Release;
+		};
+		E00000000000000000000031 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = LY7X52447Z;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AssistantActivityExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant.AssistantActivityExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E00000000000000000000032 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = LY7X52447Z;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AssistantActivityExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant.AssistantActivityExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		EA00000000000000000000001 = {isa = XCConfigurationList; buildConfigurations = (E00000000000000000000001, E00000000000000000000002); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		EA00000000000000000000010 = {isa = XCConfigurationList; buildConfigurations = (E00000000000000000000011, E00000000000000000000012); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		EA00000000000000000000020 = {isa = XCConfigurationList; buildConfigurations = (E00000000000000000000021, E00000000000000000000022); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		EA00000000000000000000030 = {isa = XCConfigurationList; buildConfigurations = (E00000000000000000000031, E00000000000000000000032); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		EA00000000000000000000001 /* Build configuration list for PBXProject "Assistant" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000000000000000000001 /* Debug */,
+				E00000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EA00000000000000000000010 /* Build configuration list for PBXNativeTarget "Assistant" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000000000000000000011 /* Debug */,
+				E00000000000000000000012 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EA00000000000000000000020 /* Build configuration list for PBXNativeTarget "AssistantTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000000000000000000021 /* Debug */,
+				E00000000000000000000022 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EA00000000000000000000030 /* Build configuration list for PBXNativeTarget "AssistantActivityExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000000000000000000031 /* Debug */,
+				E00000000000000000000032 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 	};
 	rootObject = A00000000000000000000001 /* Project object */;

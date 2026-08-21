@@ -88,6 +88,14 @@ fi
 
 # A release-tagged, consistent dump is a hard gate before schema changes. The
 # backup job has the same database/storage access as the agent but no app code.
+#
+# SKIP_BACKUP=true opts out for releases that cannot have touched the schema
+# (a web-only copy change, an iOS-only commit) — the backup and its Cloud Run
+# Job round-trip cost one to two minutes that a same-day iteration loop feels.
+# It stays opt-OUT, never opt-in: the default path keeps the gate.
+if [[ "${SKIP_BACKUP:-false}" == "true" ]]; then
+  echo "Skipping the pre-migration backup (SKIP_BACKUP=true) — only safe when the schema is unchanged"
+else
 BACKUP_BUCKET="$(agent_env_value WORKSPACE_BUCKET)"
 BACKUP_WORKSPACE_ID="$(agent_env_value ASSISTANT_WORKSPACE_ID)"
 [ -n "$BACKUP_BUCKET" ] || { echo "WORKSPACE_BUCKET is missing on assistant-agent" >&2; exit 1; }
@@ -120,6 +128,7 @@ else
     --memory 512Mi --cpu 1 --task-timeout 1200 --max-retries 0 --quiet
 fi
 gcloud run jobs execute assistant-backup --project "$PROJECT" --region "$REGION" --wait --quiet
+fi
 
 # Migrations run in a short-lived Cloud Run Job with the agent's existing
 # database-secret access. The GitHub deployer never receives the database URL,

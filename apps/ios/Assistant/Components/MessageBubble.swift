@@ -229,22 +229,32 @@ enum AssistantMarkdown {
     enum Block: Hashable {
         case heading(level: Int, text: String)
         case paragraph(String)
-        case unorderedList([String])
-        case orderedList([ListItem])
-        case taskList([TaskItem])
+        /// Bullets, numbered items, and task checkboxes in one tree — LLM
+        /// output nests and mixes them freely, so the renderer recurses
+        /// rather than committing to a flat list of a single kind.
+        case list([ListNode])
         case quote(String)
         case code(language: String?, text: String)
         case divider
         case table(headers: [String], rows: [[String]])
     }
 
-    struct ListItem: Hashable {
-        let ordinal: Int
-        let text: String
+    enum ListMarker: Hashable {
+        case bullet
+        case number(Int)
+        case task(isComplete: Bool)
     }
 
-    struct TaskItem: Hashable {
-        let isComplete: Bool
+    struct ListNode: Hashable {
+        let marker: ListMarker
+        let text: String
+        let children: [ListNode]
+    }
+
+    /// One raw parsed list line: its indent depth, marker, and text.
+    private struct RawListItem {
+        let indent: Int
+        let marker: ListMarker
         let text: String
     }
 
@@ -320,33 +330,14 @@ enum AssistantMarkdown {
                 continue
             }
 
-            if taskItem(in: line) != nil {
-                var tasks: [TaskItem] = []
-                while index < lines.count, let task = taskItem(in: lines[index]) {
-                    tasks.append(task)
+            if listItem(in: line) != nil {
+                var rawItems: [RawListItem] = []
+                while index < lines.count, let item = listItem(in: lines[index]) {
+                    rawItems.append(item)
                     index += 1
                 }
-                result.append(.taskList(tasks))
-                continue
-            }
-
-            if unorderedListItem(in: line) != nil {
-                var items: [String] = []
-                while index < lines.count, let item = unorderedListItem(in: lines[index]) {
-                    items.append(item)
-                    index += 1
-                }
-                result.append(.unorderedList(items))
-                continue
-            }
-
-            if orderedListItem(in: line) != nil {
-                var items: [ListItem] = []
-                while index < lines.count, let item = orderedListItem(in: lines[index]) {
-                    items.append(item)
-                    index += 1
-                }
-                result.append(.orderedList(items))
+                var cursor = 0
+                result.append(.list(parseListLevel(rawItems, index: &cursor, indent: rawItems.first?.indent ?? 0)))
                 continue
             }
 
@@ -375,9 +366,7 @@ enum AssistantMarkdown {
             || heading(in: line) != nil
             || isDivider(line)
             || quoteLineContent(line) != nil
-            || taskItem(in: line) != nil
-            || unorderedListItem(in: line) != nil
-            || orderedListItem(in: line) != nil
+            || listItem(in: line) != nil
             || table(at: index, in: lines) != nil
     }
 
@@ -425,17 +414,43 @@ enum AssistantMarkdown {
         return String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
     }
 
-    private static func unorderedListItem(in line: String) -> String? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard let marker = trimmed.first, ["-", "*", "+"].contains(marker) else { return nil }
-        let remainder = trimmed.dropFirst()
-        guard remainder.first?.isWhitespace == true else { return nil }
-        let text = remainder.trimmingCharacters(in: .whitespaces)
-        return text.isEmpty ? nil : text
+    /// Leading indent in columns (a tab counts as four) so nesting survives
+    /// the common LLM convention of two- or four-space child bullets.
+    private static func leadingIndent(of line: String) -> Int {
+        var columns = 0
+        for character in line {
+            if character == " " { columns += 1 }
+            else if character == "\t" { columns += 4 }
+            else { break }
+        }
+        return columns
     }
 
-    private static func orderedListItem(in line: String) -> ListItem? {
+    /// Parses any list line — bullet, numbered, or task — into a raw item,
+    /// or nil when the line is not a list item at all.
+    private static func listItem(in line: String) -> RawListItem? {
+        let indent = leadingIndent(of: line)
         let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+        if let marker = trimmed.first, ["-", "*", "+"].contains(marker) {
+            let remainder = trimmed.dropFirst()
+            guard remainder.first?.isWhitespace == true else { return nil }
+            let text = remainder.trimmingCharacters(in: .whitespaces)
+            guard !text.isEmpty else { return nil }
+            // GFM task syntax rides on the bullet marker: "- [ ] …" / "- [x] …".
+            let lowercased = text.lowercased()
+            if lowercased.hasPrefix("[ ] ") || lowercased.hasPrefix("[x] ") {
+                let taskText = String(text.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+                guard !taskText.isEmpty else { return nil }
+                return RawListItem(
+                    indent: indent,
+                    marker: .task(isComplete: lowercased.hasPrefix("[x] ")),
+                    text: taskText
+                )
+            }
+            return RawListItem(indent: indent, marker: .bullet, text: text)
+        }
+
         let digits = trimmed.prefix { $0.isNumber }
         guard !digits.isEmpty,
               let ordinal = Int(digits),
@@ -443,16 +458,41 @@ enum AssistantMarkdown {
         let remainder = trimmed.dropFirst(digits.count + 1)
         guard remainder.first?.isWhitespace == true else { return nil }
         let text = remainder.trimmingCharacters(in: .whitespaces)
-        return text.isEmpty ? nil : ListItem(ordinal: ordinal, text: text)
+        guard !text.isEmpty else { return nil }
+        return RawListItem(indent: indent, marker: .number(ordinal), text: text)
     }
 
-    private static func taskItem(in line: String) -> TaskItem? {
-        guard let item = unorderedListItem(in: line) else { return nil }
-        let lowercased = item.lowercased()
-        guard lowercased.hasPrefix("[ ] ") || lowercased.hasPrefix("[x] ") else { return nil }
-        let text = String(item.dropFirst(4)).trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty else { return nil }
-        return TaskItem(isComplete: lowercased.hasPrefix("[x] "), text: text)
+    /// Folds the flat indent-ordered items into a tree. Anything indented
+    /// deeper than the current level attaches to the previous node; a line
+    /// indented with no parent above it degrades to a sibling rather than
+    /// being dropped, which keeps partially streamed lists renderable.
+    private static func parseListLevel(
+        _ items: [RawListItem],
+        index: inout Int,
+        indent: Int
+    ) -> [ListNode] {
+        var nodes: [ListNode] = []
+        while index < items.count {
+            let item = items[index]
+            if item.indent < indent { break }
+            if item.indent > indent {
+                guard let last = nodes.last else {
+                    index += 1
+                    nodes.append(ListNode(marker: item.marker, text: item.text, children: []))
+                    continue
+                }
+                let children = parseListLevel(items, index: &index, indent: item.indent)
+                nodes[nodes.count - 1] = ListNode(
+                    marker: last.marker,
+                    text: last.text,
+                    children: last.children + children
+                )
+                continue
+            }
+            index += 1
+            nodes.append(ListNode(marker: item.marker, text: item.text, children: []))
+        }
+        return nodes
     }
 
     private static func table(at index: Int, in lines: [String]) -> (headers: [String], rows: [[String]], endIndex: Int)? {
@@ -530,35 +570,9 @@ private struct AssistantMarkdownView: View {
         case let .paragraph(text):
             markdownText(text)
 
-        case let .unorderedList(items):
-            VStack(alignment: .leading, spacing: 7) {
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    listRow(marker: "•", text: item, markerColor: accent)
-                }
-            }
-
-        case let .orderedList(items):
-            VStack(alignment: .leading, spacing: 7) {
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    listRow(marker: "\(item.ordinal).", text: item.text, markerColor: mutedInk)
-                }
-            }
-
-        case let .taskList(items):
-            VStack(alignment: .leading, spacing: 7) {
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: item.isComplete ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: baseFontSize * 0.94, weight: .medium))
-                            .foregroundStyle(item.isComplete ? accent : mutedInk.opacity(0.75))
-                            .accessibilityHidden(true)
-                        markdownText(item.text, strikethrough: item.isComplete)
-                            .opacity(item.isComplete ? 0.72 : 1)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(item.isComplete ? "Completed" : "Not completed"): \(plainText(item.text))")
-                }
-            }
+        case let .list(nodes):
+            listNodesView(nodes)
+            .accessibilityElement(children: .contain)
 
         case let .quote(text):
             HStack(alignment: .top, spacing: 10) {
@@ -582,21 +596,28 @@ private struct AssistantMarkdownView: View {
                         .foregroundStyle(mutedInk)
                         .accessibilityHidden(true)
                 }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    Text(text.isEmpty ? " " : text)
-                        .font(.system(size: max(11, baseFontSize * 0.84), design: .monospaced))
-                        .foregroundStyle(ink)
-                        .lineSpacing(3)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 12)
-                }
-                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-                .background(codeSurface.opacity(0.82), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(ink.opacity(0.075), lineWidth: 0.75)
-                }
+                // The transcript is a LazyVStack, which proposes zero height
+                // to children while it measures — a horizontal ScrollView
+                // whose content is `fixedSize(horizontal: true)` then
+                // collapses to nothing and the code body renders blank. Code
+                // wraps to the bubble instead: on a phone, wrapping is more
+                // readable than a sideways pan, and the text stays selectable.
+                Text(text.isEmpty ? " " : text)
+                    .font(.system(size: max(11, baseFontSize * 0.84), design: .monospaced))
+                    .foregroundStyle(ink)
+                    .lineSpacing(3)
+                    .textSelection(.enabled)
+                    // Without an explicit vertical fix the LazyVStack measures
+                    // the block at two lines and tail-truncates the rest.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 12)
+                    .background(codeSurface.opacity(0.82), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(ink.opacity(0.075), lineWidth: 0.75)
+                    }
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel(language.map { "\($0) code block" } ?? "Code block")
@@ -609,29 +630,55 @@ private struct AssistantMarkdownView: View {
                 .accessibilityHidden(true)
 
         case let .table(headers, rows):
-            ScrollView(.horizontal, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
-                    tableRow(headers, isHeader: true)
-                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                        tableRow(row, isHeader: false)
+            // A horizontally scrolling grid collapses to zero height inside the
+            // transcript's LazyVStack (its width is indeterminate while the
+            // stack measures), so the table rendered blank. On a phone a table
+            // is far more readable as one card per row — header: value pairs —
+            // which wraps naturally and needs no sideways pan.
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(zip(headers, row).enumerated()), id: \.offset) { _, pair in
+                            let (header, cell) = pair
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(header)
+                                    .font(.system(size: baseFontSize * 0.8, weight: .semibold))
+                                    .foregroundStyle(mutedInk)
+                                    .frame(width: 88, alignment: .trailing)
+                                markdownText(cell.isEmpty ? "—" : cell, inline: true)
+                                    .font(.system(size: baseFontSize * 0.92))
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 10)
+                    if rowIndex < rows.count - 1 {
+                        Rectangle()
+                            .fill(ink.opacity(0.08))
+                            .frame(height: 0.75)
                     }
                 }
-                .background(codeSurface.opacity(0.56), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(ink.opacity(0.09), lineWidth: 0.75)
-                }
             }
-            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(codeSurface.opacity(0.56), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(ink.opacity(0.09), lineWidth: 0.75)
+            }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Table with \(headers.count) columns and \(rows.count) rows")
         }
     }
 
-    private func markdownText(_ source: String, strikethrough: Bool = false) -> some View {
+    private func markdownText(_ source: String, strikethrough: Bool = false, inline: Bool = false) -> some View {
+        // Table cells use inline-only interpretation: a block-level construct
+        // inside a cell (a heading marker, a hard break) would otherwise tear
+        // the row layout apart.
         let attributed = (try? AttributedString(
             markdown: source,
-            options: .init(interpretedSyntax: .full)
+            options: .init(
+                interpretedSyntax: inline ? .inlineOnlyPreservingWhitespace : .full
+            )
         )) ?? AttributedString(source)
 
         return Text(attributed)
@@ -643,6 +690,54 @@ private struct AssistantMarkdownView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
+    // Recursion lives in a named child view: a `some View` function that
+    // returns itself cannot be inferred by the compiler (the opaque type
+    // would be defined in terms of itself), so the nesting is expressed as a
+    // concrete `NestedList` whose body recurses instead.
+    private func listNodesView(_ nodes: [AssistantMarkdown.ListNode]) -> some View {
+        NestedList(nodes: nodes) { node in AnyView(listNodeRow(node)) }
+    }
+
+    private struct NestedList: View {
+        let nodes: [AssistantMarkdown.ListNode]
+        let row: (AssistantMarkdown.ListNode) -> AnyView
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(Array(nodes.enumerated()), id: \.offset) { _, node in
+                    VStack(alignment: .leading, spacing: 7) {
+                        row(node)
+                        if !node.children.isEmpty {
+                            NestedList(nodes: node.children, row: row)
+                                .padding(.leading, 18)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func listNodeRow(_ node: AssistantMarkdown.ListNode) -> some View {
+        switch node.marker {
+        case .bullet:
+            listRow(marker: "•", text: node.text, markerColor: accent)
+        case let .number(ordinal):
+            listRow(marker: "\(ordinal).", text: node.text, markerColor: mutedInk)
+        case let .task(isComplete):
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: isComplete ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: baseFontSize * 0.94, weight: .medium))
+                    .foregroundStyle(isComplete ? accent : mutedInk.opacity(0.75))
+                    .accessibilityHidden(true)
+                markdownText(node.text, strikethrough: isComplete)
+                    .opacity(isComplete ? 0.72 : 1)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(isComplete ? "Completed" : "Not completed"): \(plainText(node.text))")
+        }
+    }
+
     private func listRow(marker: String, text: String, markerColor: Color) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(marker)
@@ -651,32 +746,6 @@ private struct AssistantMarkdownView: View {
                 .frame(minWidth: marker.count > 1 ? 17 : 10, alignment: .trailing)
                 .accessibilityHidden(true)
             markdownText(text)
-        }
-    }
-
-    private func tableRow(_ cells: [String], isHeader: Bool) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            ForEach(Array(cells.enumerated()), id: \.offset) { index, cell in
-                markdownText(cell.isEmpty ? "—" : cell)
-                    .font(.system(size: baseFontSize * 0.9, weight: isHeader ? .semibold : .regular))
-                    .foregroundStyle(isHeader ? ink : mutedInk)
-                    .frame(minWidth: 120, maxWidth: 210, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .overlay(alignment: .trailing) {
-                        if index < cells.count - 1 {
-                            Rectangle()
-                                .fill(ink.opacity(0.08))
-                                .frame(width: 0.75)
-                        }
-                    }
-            }
-        }
-        .background(isHeader ? ink.opacity(0.045) : .clear)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(ink.opacity(0.075))
-                .frame(height: 0.75)
         }
     }
 

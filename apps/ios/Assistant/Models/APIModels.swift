@@ -435,19 +435,29 @@ struct WorkspaceAgentSettings: Codable, Sendable {
 struct WorkspaceSchedule: Codable, Identifiable, Sendable {
     let id: String
     let name: String
+    /// Human wording from the server's own label dictionary; nil for names it
+    /// doesn't know, in which case the UI sentence-cases the identifier.
+    let label: String?
     let cron: String
     let enabled: Bool
     let nextRunAt: String?
     let lastRunAt: String?
+
+    var displayName: String { label ?? name.sentenceCaseIdentifier }
 }
 
 struct WorkspacePolicy: Codable, Identifiable, Sendable {
     let id: String
     let toolName: String
     let templateKey: String
+    /// Human wording from the server's own label dictionary; nil for keys it
+    /// doesn't know, in which case the UI sentence-cases the identifier.
+    let label: String?
     let effect: String
     let enabled: Bool
     let createdVia: String
+
+    var displayName: String { label ?? templateKey.sentenceCaseIdentifier }
 }
 
 struct WorkspaceCosts: Codable, Sendable {

@@ -1,0 +1,72 @@
+/**
+ * Visual QA: screenshot every primary surface at desktop and phone widths.
+ * Run against a dev server with AUTH_DEV_BYPASS=true:
+ *   pnpm tsx scripts/visual-qa.ts [baseUrl]
+ * Output lands in /tmp/visual-qa/.
+ */
+
+import { mkdirSync } from 'node:fs';
+import { chromium } from 'playwright';
+
+const base = process.argv[2] ?? 'http://127.0.0.1:3000';
+const outDir = '/tmp/visual-qa';
+mkdirSync(outDir, { recursive: true });
+
+const pages: Array<{ name: string; path: string; wait?: number }> = [
+  { name: 'chat', path: '/chat' },
+  { name: 'chat-all', path: '/chat/all' },
+  { name: 'goals', path: '/goals' },
+  { name: 'tasks', path: '/tasks' },
+  { name: 'approvals', path: '/approvals' },
+  { name: 'costs', path: '/costs' },
+  { name: 'settings', path: '/settings' },
+  { name: 'documents', path: '/documents' },
+  { name: 'skills', path: '/skills' },
+  { name: 'profile', path: '/profile' },
+  { name: 'profile-memories', path: '/profile/memories' },
+  { name: 'anomalies', path: '/anomalies' },
+  { name: 'improvements', path: '/improvements' },
+  { name: 'suggestions', path: '/suggestions' },
+  { name: 'import', path: '/import' },
+];
+
+const viewports = [
+  { name: 'desktop', width: 1280, height: 900 },
+  { name: 'phone', width: 390, height: 844 },
+];
+
+const browser = await chromium.launch();
+for (const viewport of viewports) {
+  const context = await browser.newContext({
+    viewport: { width: viewport.width, height: viewport.height },
+    deviceScaleFactor: viewport.name === 'phone' ? 2 : 1,
+    isMobile: viewport.name === 'phone',
+    hasTouch: viewport.name === 'phone',
+  });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on('pageerror', (err) => errors.push(`${err.message}`));
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') errors.push(msg.text());
+  });
+
+  for (const target of pages) {
+    const url = `${base}${target.path}`;
+    try {
+      const response = await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
+      await page.waitForTimeout(target.wait ?? 600);
+      const status = response?.status() ?? 0;
+      const file = `${outDir}/${viewport.name}-${target.name}.png`;
+      await page.screenshot({ path: file, fullPage: true });
+      console.log(
+        `${status} ${viewport.name}/${target.name}${errors.length ? `  [console: ${errors[errors.length - 1]?.slice(0, 120)}]` : ''}`,
+      );
+      errors.length = 0;
+    } catch (error) {
+      console.log(`ERR ${viewport.name}/${target.name}: ${String(error).slice(0, 160)}`);
+    }
+  }
+  await context.close();
+}
+await browser.close();
+console.log(`\nScreenshots in ${outDir}`);

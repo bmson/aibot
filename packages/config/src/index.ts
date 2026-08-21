@@ -284,6 +284,16 @@ export function outboundEmailAllowed(address: string, config: Config = loadConfi
   return domain.length > 0 && domains.includes(domain);
 }
 
+/**
+ * Drop the process-level cache and re-parse — used by settings actions that
+ * persist a new value (for example rotating the mobile token) and need the
+ * running process to honour it without a restart.
+ */
+export function reloadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  cached = undefined;
+  return loadConfig(env);
+}
+
 /** Test seam — clears the process-level config cache. */
 export function resetConfigForTest(): void {
   cached = undefined;

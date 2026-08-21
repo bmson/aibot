@@ -231,10 +231,13 @@ final class APIModelsTests: XCTestCase {
             [
                 .heading(level: 2, text: "Trip brief"),
                 .paragraph("Your **best option** is below."),
-                .unorderedList(["Leave early", "Keep a flexible fare"]),
-                .taskList([
-                    .init(isComplete: true, text: "Compare dates"),
-                    .init(isComplete: false, text: "Book the flight"),
+                .list([
+                    .init(marker: .bullet, text: "Leave early", children: []),
+                    .init(marker: .bullet, text: "Keep a flexible fare", children: []),
+                ]),
+                .list([
+                    .init(marker: .task(isComplete: true), text: "Compare dates", children: []),
+                    .init(marker: .task(isComplete: false), text: "Book the flight", children: []),
                 ]),
                 .quote("Prices can change quickly."),
                 .table(

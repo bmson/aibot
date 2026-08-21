@@ -27,26 +27,29 @@ Long-running turns start a Live Activity automatically. Tool progress updates it
 line, approval waits remain visible in amber, and completed work settles briefly before the activity
 closes. Tapping an attention activity opens the Approvals sheet through `assistant://approvals`.
 
-Notifications are opt-in under Settings. The app only posts them while it is not active, avoiding
-duplicate banners while the conversation is already visible. These are device-local notifications
-for turns the app is able to observe. Delivery after the app has been force-quit requires a future
-APNs provider integration and Apple signing credentials; no provider credential is embedded in the
-client.
+Notifications are opt-in under Settings. Approval requests carry inline **Approve** / **Deny**
+actions (device unlock required) and may banner even while the app is open; routine updates post
+only while the app is inactive, avoiding duplicate banners while the conversation is visible.
+The app icon badge mirrors the pending-approval count. These are device-local notifications for
+turns the app is able to observe. Delivery after the app has been force-quit requires a future
+APNs provider integration and Apple signing credentials; no provider credential is embedded in
+the client.
 
 ## Connect a deployed server
 
-Generate a separate owner credential rather than reusing `AUTH_SECRET`:
+The web UI has a self-serve pairing panel under **Settings → Mobile app**: it shows the server
+URL and lets you generate or rotate the access key. The stored key is never displayed — the full
+value is revealed once, when it is generated, so copy it into the app's Connection screen right
+away.
 
-```sh
-openssl rand -hex 32
-```
-
-Set the result as `MOBILE_API_TOKEN` on the web service and enter it in the app's Connection screen.
-The app sends it as a bearer token only to the configured server and stores it with
+The app sends the key as a bearer token only to the configured server and stores it with
 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Use HTTPS for any non-local server.
 
-`infra/gcp/deploy.sh` creates and provisions this token automatically when it is missing. A regular
-release preserves the web service's existing secret binding.
+The manual path still exists for Cloud Run deployments (where the web process has no writable
+`.env`): set `MOBILE_API_TOKEN` in your local `.env` (`openssl rand -hex 32`) and run
+`bash infra/gcp/deploy.sh` to publish it to Secret Manager. `deploy.sh` also creates the token
+automatically on first provision when it is missing, and a regular release preserves the web
+service's existing secret binding.
 
 ## Verify
 

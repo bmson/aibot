@@ -43,9 +43,10 @@ approval workflows as the web UI. Open `apps/ios/Assistant.xcodeproj` in Xcode 2
 the `Assistant` scheme on an iPhone or Simulator.
 
 For local source development, connect the app to `http://localhost:3000`; the explicit development
-auth bypass is sufficient. For a deployed server, set `MOBILE_API_TOKEN` to a random 32-byte hex
-value (`openssl rand -hex 32`) and enter the same value once in the app. It is stored in the iOS
-Keychain. See [the iOS setup guide](apps/ios/README.md).
+auth bypass is sufficient. For a deployed server, open **Settings → Mobile app** in the web UI:
+it shows the server URL and a masked access key, and can generate or rotate the key in one click.
+The key is revealed once at rotation — copy it into the app's Connection screen, where it is
+stored in the iOS Keychain. See [the iOS setup guide](apps/ios/README.md).
 
 ## Choose capabilities
 
@@ -149,7 +150,16 @@ The script provisions Secret Manager, least-privilege service accounts, Cloud Ru
 Cloud Tasks, Scheduler, Pub/Sub, and storage. Optional Gmail scheduling and Pub/Sub are skipped when
 the `google` module is disabled. Worker images and resources are also skipped when their modules are
 disabled. Normal releases use `bash infra/gcp/release.sh`, which backs up the database before
-migrating.
+migrating. Day-to-day iteration on a single service has a faster path that skips the backup,
+migration, and unrelated images:
+
+```sh
+bash infra/gcp/release-fast.sh web    # or: agent
+```
+
+Use it only when the change cannot have touched the schema, seed data, or environment —
+`release.sh` stays the source of truth for everything else. `SKIP_BACKUP=true bash infra/gcp/release.sh`
+skips just the pre-migration backup for a full release where only code changed.
 
 See [self-hosting on Cloud Run](docs/self-hosting.md) for the exact prerequisites and post-deploy
 OAuth steps.

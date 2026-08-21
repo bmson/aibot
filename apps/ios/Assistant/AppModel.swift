@@ -52,6 +52,18 @@ final class AppModel: ObservableObject {
         if let configuration = try? Self.configuration(urlString: serverURL, token: KeychainStore.readToken()) {
             client = APIClient(configuration: configuration)
         }
+        // Approve/Deny straight from a notification. The handler goes through
+        // the same client call as the in-app buttons, then refreshes so the
+        // badge and the Approvals sheet agree with the server.
+        NotificationManager.shared.approvalDecisionHandler = { [weak self] approvalId, decision in
+            guard let self, let client = self.client else { return }
+            do {
+                _ = try await client.decideApproval(id: approvalId, decision: decision)
+                await self.refreshAll()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+        }
     }
 
     deinit {
@@ -107,6 +119,7 @@ final class AppModel: ObservableObject {
             apply(loadedBoot)
             self.overview = loadedOverview
             await reconcileBaselineActivity()
+            await syncNotificationBadge()
             hasSavedConnection = true
             defaults.set(true, forKey: configuredKey)
             startIdlePolling()
@@ -145,6 +158,7 @@ final class AppModel: ObservableObject {
             apply(loadedBoot, preservingLocalMessages: isSending)
             self.overview = loadedOverview
             await reconcileBaselineActivity()
+            await syncNotificationBadge()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -347,7 +361,8 @@ final class AppModel: ObservableObject {
 
         let reply = messages.reversed().first(where: { $0.role == .assistant && !$0.text.isEmpty })?.text
         if let finalStatus, attention.contains(finalStatus) {
-            let summary = overview?.approvals.pending.first?.approval.summary ?? "Open the assistant to review the next step."
+            let pendingApproval = overview?.approvals.pending.first
+            let summary = pendingApproval?.approval.summary ?? "Open the assistant to review the next step."
             setActivityThought(.needsYou, proposedDetail: summary)
             await LiveActivityManager.shared.needsAttention(
                 detail: summary,
@@ -357,8 +372,10 @@ final class AppModel: ObservableObject {
                 key: "\(taskId ?? streamID)-\(finalStatus)",
                 title: "\(agentName) needs you",
                 body: "A decision is ready to review.",
-                route: .approvals
+                route: .approvals,
+                approvalId: pendingApproval?.id
             )
+            await syncNotificationBadge()
         } else {
             let succeeded = finalStatus != "failed" && finalStatus != "cancelled"
             let thought: AssistantThought = succeeded ? .finished : .stopped
@@ -431,10 +448,17 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func notifyOnce(key: String, title: String, body: String, route: AssistantRoute?) async -> Bool {
+    private func notifyOnce(key: String, title: String, body: String, route: AssistantRoute?, approvalId: String? = nil) async -> Bool {
         guard key != lastNotifiedTaskState else { return false }
         lastNotifiedTaskState = key
-        return await NotificationManager.shared.schedule(title: title, body: body, route: route)
+        return await NotificationManager.shared.schedule(title: title, body: body, route: route, approvalId: approvalId)
+    }
+
+    /// The app icon badge tracks exactly one thing: decisions waiting on the
+    /// owner. Anything else (finished work, replies) has a banner or the Live
+    /// Activity, so the badge staying specific keeps it meaningful.
+    private func syncNotificationBadge() async {
+        await NotificationManager.shared.updateBadge(pendingApprovalCount)
     }
 
     private func publishThought(_ thought: AssistantThought, detail: String) async {

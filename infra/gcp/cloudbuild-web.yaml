@@ -1,0 +1,29 @@
+# Single-image build for fast web-only iteration. Used by release-fast.sh;
+# the full release pipeline stays in cloudbuild.yaml.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      [
+        build,
+        -f,
+        infra/docker/web.Dockerfile,
+        --build-arg,
+        'GIT_SHA=${_TAG}',
+        -t,
+        '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:latest',
+        -t,
+        '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:${_TAG}',
+        .,
+      ]
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:latest'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:${_TAG}'
+substitutions:
+  _REGION: us-west1
+  _REPO: assistant
+  _TAG: manual
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+  env:
+    - DOCKER_BUILDKIT=1

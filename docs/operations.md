@@ -25,6 +25,17 @@ attributes), and the nightly self-maintenance jobs. Locally, `OTEL_EXPORTER=cons
 to stdout; `OTEL_EXPORTER=otlp` exports over OTLP/HTTP to whatever `OTEL_EXPORTER_OTLP_ENDPOINT`
 points at.
 
+## Releases
+
+`bash infra/gcp/release.sh` is the source of truth: build all images, back up the database,
+migrate, roll out, verify. Two sanctioned shortcuts exist for iteration:
+
+- `bash infra/gcp/release-fast.sh [web|agent]` builds one image and rolls out one service,
+  skipping the backup, migration, and unrelated images. Only safe when the change cannot have
+  touched the schema, seed data, or environment.
+- `SKIP_BACKUP=true bash infra/gcp/release.sh` runs a full release without the pre-migration
+  backup — for code-only changes when a same-day loop feels the extra minute.
+
 ## Live verification scripts
 
 Two scripts prove end-to-end behavior against a real database with real model calls (they cost

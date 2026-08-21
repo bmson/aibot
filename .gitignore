@@ -8,6 +8,8 @@ coverage/
 
 # env & secrets
 .env
+.env.bak
+.env.*.tmp
 .env.local
 .env.*.local
 # Temporary credential files written by Google GitHub Actions authentication.
@@ -25,3 +27,7 @@ seed-data/voice/*.txt
 
 # assistant local workspace (FILES_DRIVER=local)
 .workspace/
+
+# Xcode user state
+**/xcuserdata/
+**/*.xcuserstate

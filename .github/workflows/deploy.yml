@@ -40,10 +40,13 @@ concurrency:
   group: production-deploy
   cancel-in-progress: false
 
+# Installation identity comes from repository (or `production` environment)
+# Variables — see infra/gcp/github-actions.md. Nothing about this workflow is
+# tied to one GCP project, so forking it is a settings exercise, not an edit.
 env:
-  GCP_PROJECT: bmson-assistant
-  GCP_REGION: us-west1
-  ARTIFACT_REPOSITORY: assistant
+  GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+  GCP_REGION: ${{ vars.GCP_REGION || 'us-west1' }}
+  ARTIFACT_REPOSITORY: ${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}
 
 jobs:
   # ── plan ───────────────────────────────────────────────────────────────────
@@ -182,14 +185,9 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
-          # TEMPORARY: identifiers hardcoded to restore deploys. #14 parameterized
-          # these to GitHub Actions Variables (vars.*) that were never populated,
-          # so every deploy since has failed here with an empty provider. Revert to
-          # ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }} / GCP_DEPLOY_SERVICE_ACCOUNT /
-          # GCP_PROJECT once those repo/environment Variables are set.
-          workload_identity_provider: projects/83709630368/locations/global/workloadIdentityPools/github/providers/github-actions
-          service_account: assistant-github-deploy@bmson-assistant.iam.gserviceaccount.com
-          project_id: bmson-assistant
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          project_id: ${{ vars.GCP_PROJECT }}
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
       - name: Authorize Artifact Registry
@@ -210,7 +208,7 @@ jobs:
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: us-west1-docker.pkg.dev/bmson-assistant/assistant/${{ matrix.entry.name }}:${{ needs.plan.outputs.sha }}
+          image-ref: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.ARTIFACT_REPOSITORY }}/${{ matrix.entry.name }}:${{ needs.plan.outputs.sha }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
@@ -265,9 +263,9 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
-          workload_identity_provider: projects/83709630368/locations/global/workloadIdentityPools/github/providers/github-actions
-          service_account: assistant-github-deploy@bmson-assistant.iam.gserviceaccount.com
-          project_id: bmson-assistant
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          project_id: ${{ vars.GCP_PROJECT }}
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
       - name: Release immutable images

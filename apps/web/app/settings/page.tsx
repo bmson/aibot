@@ -1,9 +1,13 @@
+import { existsSync } from 'node:fs';
+import { envFile, loadConfig } from '@assistant/config';
 import { ArrowRight } from 'lucide-react';
+import { headers } from 'next/headers';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { deletePolicy, setPolicyEnabled, setScheduleEnabled } from '@/app/settings/actions';
 import { AgentForm } from '@/app/settings/agent-form';
 import { policyLabels, policyScope, scheduleLabels } from '@/app/settings/labels';
+import { MobileTokenPanel } from '@/app/settings/mobile-token';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getApplication } from '@/lib/server';
@@ -73,6 +77,25 @@ export default async function SettingsPage() {
     goalAutomationCount,
   } = await getApplication().getSettings();
 
+  // Pairing values for the iOS app. The URL mirrors what the owner is
+  // browsing right now — if they reached settings over a LAN IP or the
+  // production domain, that is exactly the address the phone should use.
+  //
+  // The token leaves the server ONLY as a masked preview: the plaintext in an
+  // RSC payload would be one cached-response or shoulder-surf away from a
+  // bearer credential that bypasses web sign-in entirely. The full value is
+  // revealed once, at rotation time, by the action that generates it.
+  const config = loadConfig();
+  const requestHeaders = await headers();
+  const host = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host') ?? '';
+  const proto = requestHeaders.get('x-forwarded-proto') ?? 'http';
+  const serverUrl = host ? `${proto}://${host}` : config.AUTH_URL;
+  const token = config.MOBILE_API_TOKEN;
+  const maskedToken = token ? `${token.slice(0, 6)}…${token.slice(-4)}` : null;
+  // Rotation works when there's a .env to persist to, OR when running on
+  // Cloud Run where the service account can add a Secret Manager version.
+  const canRotate = existsSync(envFile) || Boolean(config.GCP_PROJECT);
+
   return (
     <PageShell size="reading" className="flex flex-col gap-10">
       <PageHeader
@@ -99,6 +122,14 @@ export default async function SettingsPage() {
             provisioned at deploy time — the name matches the assistant’s email account, so messages
             it sends agree with what you see here.
           </p>
+        </Card>
+      </section>
+
+      {/* Mobile app pairing */}
+      <section>
+        <SectionHeading title="Mobile app" hint="pair the iPhone app with this server" />
+        <Card className="mt-3">
+          <MobileTokenPanel maskedToken={maskedToken} serverUrl={serverUrl} canRotate={canRotate} />
         </Card>
       </section>
 

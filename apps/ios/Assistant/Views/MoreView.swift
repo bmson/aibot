@@ -32,6 +32,31 @@ struct MoreView: View {
                 }
             }
 
+            // The lower-traffic work areas. The pull-up menu stays at eight
+            // primary destinations; these open from here instead.
+            Section("Workspace") {
+                NavigationLink {
+                    WorkspaceView(area: .documents)
+                } label: {
+                    Label("Documents", systemImage: "doc.text")
+                }
+                NavigationLink {
+                    WorkspaceView(area: .skills)
+                } label: {
+                    Label("Skills", systemImage: "lightbulb")
+                }
+                NavigationLink {
+                    WorkspaceView(area: .anomalies)
+                } label: {
+                    Label("Anomalies", systemImage: "exclamationmark.triangle")
+                }
+                NavigationLink {
+                    WorkspaceView(area: .improvements)
+                } label: {
+                    Label("Improvements", systemImage: "arrow.triangle.2.circlepath")
+                }
+            }
+
             if let settings = model.workspace?.settings {
                 Section("Recurring jobs") {
                     if settings.schedules.isEmpty {
@@ -167,10 +192,12 @@ struct MoreView: View {
 
     private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
 
+    // Labels arrive with the payload from the server's own dictionaries, so
+    // the phone and the web dashboard describe the same job the same way.
     @ViewBuilder
     private func scheduleRow(_ schedule: WorkspaceSchedule) -> some View {
         let detail = VStack(alignment: .leading, spacing: 3) {
-            Text(schedule.name.sentenceCaseIdentifier)
+            Text(schedule.displayName)
             Text(
                 schedule.enabled
                     ? schedule.nextRunAt.map { "Next \(relative($0))" } ?? "Preparing next run"
@@ -197,7 +224,7 @@ struct MoreView: View {
     @ViewBuilder
     private func policyRow(_ policy: WorkspacePolicy) -> some View {
         let detail = VStack(alignment: .leading, spacing: 3) {
-            Text(policy.templateKey.sentenceCaseIdentifier)
+            Text(policy.displayName)
             Text(policy.toolName.sentenceCaseIdentifier)
                 .font(.caption)
                 .foregroundStyle(.secondary)

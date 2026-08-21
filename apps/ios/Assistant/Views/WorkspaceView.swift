@@ -527,9 +527,10 @@ struct WorkspaceView: View {
                     Text("\(metric.1)")
                         .font(.title3.monospacedDigit().weight(.semibold))
                     Text(metric.0)
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .assistantCard(in: colorScheme)
