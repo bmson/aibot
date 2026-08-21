@@ -137,34 +137,6 @@ final class APIModelsTests: XCTestCase {
         )
     }
 
-    func testTranscriptEdgeMotionFadesWithoutFoldingTowardBothEdges() {
-        // Cards translate with the scroll and fade at the clipped edges — no
-        // folding, scaling, or rotation as they approach the screen edge.
-        XCTAssertEqual(TranscriptEdgeMotion.progress(for: 0), 0, accuracy: 0.001)
-        XCTAssertEqual(TranscriptEdgeMotion.opacity(for: 0, reduceTransparency: false), 1, accuracy: 0.001)
-        XCTAssertLessThan(
-            TranscriptEdgeMotion.opacity(for: 0.7, reduceTransparency: false),
-            0.5
-        )
-        XCTAssertEqual(
-            TranscriptEdgeMotion.opacity(for: 1, reduceTransparency: false),
-            0.26,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            TranscriptEdgeMotion.opacity(for: 1, reduceTransparency: true),
-            0.62,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(TranscriptEdgeMotion.blurRadius(for: 0), 0, accuracy: 0.001)
-        XCTAssertEqual(TranscriptEdgeMotion.blurRadius(for: 1), 2.8, accuracy: 0.001)
-        XCTAssertEqual(
-            TranscriptEdgeMotion.blurRadius(for: -1),
-            TranscriptEdgeMotion.blurRadius(for: 1),
-            accuracy: 0.001
-        )
-    }
-
     func testNativeRouteCatalogMatchesTheCompleteWorkspaceMenu() {
         XCTAssertEqual(
             Set(AssistantRoute.allCases),

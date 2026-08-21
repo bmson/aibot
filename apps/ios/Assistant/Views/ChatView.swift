@@ -28,31 +28,6 @@ enum PullMenuMotion {
     }
 }
 
-enum TranscriptEdgeMotion {
-    static func unit(_ value: Double) -> Double {
-        min(max(value, 0), 1)
-    }
-
-    /// Keeps the conversation steady through the center, then accelerates
-    /// gently as a bubble approaches either clipped edge.
-    static func progress(for phaseValue: Double) -> Double {
-        let value = unit(abs(phaseValue))
-        return value * value * (3 - (2 * value))
-    }
-
-    static func opacity(
-        for phaseValue: Double,
-        reduceTransparency: Bool
-    ) -> Double {
-        let terminalOpacity = reduceTransparency ? 0.62 : 0.26
-        return 1 - ((1 - terminalOpacity) * progress(for: phaseValue))
-    }
-
-    static func blurRadius(for phaseValue: Double) -> CGFloat {
-        CGFloat(2.8 * progress(for: phaseValue))
-    }
-}
-
 struct ChatView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
@@ -103,7 +78,9 @@ struct ChatView: View {
 
             conversationSurface
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(stageBackdrop.ignoresSafeArea(.container))
+                // Bleed under the keyboard as well — otherwise the window's
+                // white shows around the keyboard's rounded corners.
+                .background(stageBackdrop.ignoresSafeArea(.container).ignoresSafeArea(.keyboard))
                 .clipShape(
                     RoundedRectangle(
                         cornerRadius: 34 * menuSurfaceProgress,
@@ -124,7 +101,12 @@ struct ChatView: View {
                 // itself is not.
                 .overlay {
                     if menuOpen {
+                        // The overlay does not follow the surface's .offset — it
+                        // covers the full unshifted frame — so without the bottom
+                        // padding it would invisibly cover the open menu and
+                        // swallow every tap meant for the menu buttons.
                         Color.black.opacity(0.001)
+                            .padding(.bottom, visibleMenuRevealDistance)
                             .contentShape(Rectangle())
                             .onTapGesture { closePullMenu() }
                             .accessibilityLabel("Close menu")
@@ -133,7 +115,7 @@ struct ChatView: View {
                 }
         }
         .background(
-            stageBackdrop.ignoresSafeArea(.container)
+            stageBackdrop.ignoresSafeArea(.container).ignoresSafeArea(.keyboard)
         )
         .toolbar(.hidden, for: .navigationBar)
         .overlay(alignment: .top) {
@@ -208,7 +190,11 @@ struct ChatView: View {
             // that is animating the surface back down. Freeze it while open.
             .scrollDisabled(menuOpen)
             .scrollDismissesKeyboard(.interactively)
-            .defaultScrollAnchor(.bottom)
+            // Pin to the bottom only when the reader is at rest and nothing
+            // is streaming: the anchor fights a finger on the transcript, and
+            // while a reply streams in it force-scrolls the view down with
+            // every token instead of letting the text grow below the fold.
+            .defaultScrollAnchor(pinsTranscriptToBottom ? .bottom : nil)
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 let contentFits = geometry.contentSize.height <= geometry.containerSize.height + 1
                 return contentFits || geometry.visibleRect.maxY >= geometry.contentSize.height - 64
@@ -228,12 +214,15 @@ struct ChatView: View {
                         composerFocused = false
                     }
                     menuPullDistance = revealDistance
-                    updateMenuDetent(
-                        reached: PullMenuMotion.commitsToOpen(
-                            revealDistance: revealDistance,
-                            revealHeight: menuRevealHeight
-                        )
+                    // Hysteresis around the detent: a slow drag hovering at
+                    // the threshold otherwise toggles the haptic every point.
+                    let threshold = PullMenuMotion.openingCommitmentDistance(
+                        revealHeight: menuRevealHeight
                     )
+                    let detentReached = menuDetentReached
+                        ? revealDistance > threshold - 14
+                        : revealDistance >= threshold
+                    updateMenuDetent(reached: detentReached)
                 } else if menuPullActive {
                     menuPullDistance = 0
                     updateMenuDetent(reached: false)
@@ -245,17 +234,20 @@ struct ChatView: View {
                     finishPullMenu(releasedAt: menuRevealDistance(for: context.geometry))
                 }
             }
+            // The mask is the only edge fade: it applies per-pixel, so even a
+            // message taller than the viewport fades only where it actually
+            // leaves the screen. Per-row scroll transitions dimmed the whole
+            // bubble and were removed for exactly that reason.
             .mask {
                 LinearGradient(
                     stops: [
-                        .init(color: .black.opacity(0.32), location: 0),
-                        .init(color: .black.opacity(0.5), location: 0.045),
-                        .init(color: .black.opacity(0.74), location: 0.105),
-                        .init(color: .black.opacity(0.94), location: 0.165),
-                        .init(color: .black, location: 0.21),
-                        .init(color: .black, location: 0.92),
-                        .init(color: .black.opacity(0.96), location: 0.98),
-                        .init(color: .black.opacity(0.86), location: 1),
+                        .init(color: .clear, location: 0),
+                        .init(color: .black.opacity(0.4), location: 0.05),
+                        .init(color: .black.opacity(0.85), location: 0.115),
+                        .init(color: .black, location: 0.18),
+                        .init(color: .black, location: 0.94),
+                        .init(color: .black.opacity(0.9), location: 0.985),
+                        .init(color: .black.opacity(0.72), location: 1),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -273,15 +265,15 @@ struct ChatView: View {
                 } else if !hasPositionedInitialConversation {
                     positionInitialConversationIfNeeded(using: proxy)
                 } else if isAtBottom {
+                    // While a finger is on the transcript the gesture owns the
+                    // scroll position — re-anchoring here would fight the drag.
+                    guard !userIsDraggingTranscript else { return }
                     let isStreamingUpdate = newMessages.count == oldMessages.count
                         && newMessages.last?.id.hasPrefix("stream-") == true
-                    // Streaming deltas arrive many times per second; animating
-                    // a scroll for each one makes the whole transcript judder
-                    // as it grows. Keep the anchor pinned instead — only
-                    // brand-new messages get the animated reveal.
-                    if isStreamingUpdate {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    } else {
+                    // Streaming text must not scroll the view: the bubble grows
+                    // below the fold and Jump to latest takes the reader down.
+                    // Only brand-new messages get the animated reveal.
+                    if !isStreamingUpdate {
                         scrollToBottom(using: proxy)
                     }
                 } else {
@@ -291,11 +283,13 @@ struct ChatView: View {
             .onChange(of: scrollRequest) { _, _ in
                 scrollToBottom(using: proxy)
             }
-            .onChange(of: composerHeight) { previousHeight, newHeight in
-                guard previousHeight > 0, newHeight != previousHeight, isAtBottom else { return }
-                // Composer growth (keyboard, extra lines) should not fight the
-                // system keyboard animation or repeatedly relaunch a scroll
-                // spring. Re-anchor silently so the latest message stays put.
+            .onChange(of: composerHeight) { previousHeight, _ in
+                // Only the first measurement needs help landing on the latest
+                // message. Ongoing changes — the keyboard animating in, the
+                // field growing — are followed automatically by the bottom
+                // scroll anchor inside the keyboard's own animation; an
+                // explicit scroll here stepped the transcript in jumps.
+                guard previousHeight == 0 else { return }
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
                 withTransaction(transaction) {
@@ -330,50 +324,21 @@ struct ChatView: View {
         min(max(visibleMenuRevealDistance / menuRevealHeight, 0), 1)
     }
 
-    nonisolated private static func transcriptEdgeEffect<Content: VisualEffect>(
-        _ content: Content,
-        phase: ScrollTransitionPhase,
-        motionIsReduced: Bool,
-        reduceTransparency: Bool
-    ) -> some VisualEffect {
-        // Cards only translate with the scroll and fade at the clipped edges —
-        // no folding, scaling, or rotation as they approach the screen edge.
-        let phaseValue = phase.value
-        let blur = motionIsReduced || reduceTransparency
-            ? CGFloat(0)
-            : TranscriptEdgeMotion.blurRadius(for: phaseValue)
-
-        return content
-            .opacity(
-                TranscriptEdgeMotion.opacity(
-                    for: phaseValue,
-                    reduceTransparency: reduceTransparency
-                )
-            )
-            .blur(radius: blur)
-    }
-
     private func messageRow(
         _ message: ChatMessage,
         at index: Int,
         motionIsReduced: Bool
     ) -> some View {
-        let reducesTransparency = reduceTransparency
-
-        return MessageBubble(
+        // No per-row edge effects: a scroll transition applies opacity and
+        // blur to the whole row, so a message taller than the viewport would
+        // dim even though most of it is on screen. The ScrollView mask fades
+        // pixels at the clipped edges instead, which works for any height.
+        MessageBubble(
             message: message,
             isStreaming: message.id.hasPrefix("stream-") && model.isSending,
             openApprovals: { model.present(.approvals) }
         )
         .padding(.top, startsRun(at: index) ? 22 : 7)
-        .scrollTransition(.interactive, axis: .vertical) { content, phase in
-            Self.transcriptEdgeEffect(
-                content,
-                phase: phase,
-                motionIsReduced: motionIsReduced,
-                reduceTransparency: reducesTransparency
-            )
-        }
         .transition(
             motionIsReduced
                 ? .opacity
@@ -482,6 +447,9 @@ struct ChatView: View {
         .padding(.top, 26)
         .frame(height: menuRevealHeight, alignment: .top)
         .background {
+            // Bleed into the bottom safe area: the menu is bottom-aligned
+            // inside the safe area, so without this the stage color shows
+            // through as a strip under the menu by the home indicator.
             ZStack {
                 AssistantTheme.canvas(for: colorScheme)
                 LinearGradient(
@@ -493,24 +461,20 @@ struct ChatView: View {
                     endPoint: .bottom
                 )
             }
+            .ignoresSafeArea(.container, edges: .bottom)
             .allowsHitTesting(false)
         }
-        // Hit-testing must be tied to visibility, not just the open flag: an
-        // invisible-but-present menu otherwise swallows taps meant for the
-        // composer, and a still-animating closed menu swallows them after the
-        // state flips. The close gesture lives on a transparent catcher below.
-        .allowsHitTesting(menuRevealProgress > 0.55)
+        // Hit-testing follows the open flag, which stays true for the whole
+        // close drag and flips false the moment the close animation starts —
+        // so the composer is reachable as soon as the menu begins to dismiss.
+        // Gating on the reveal progress instead cancelled the active close
+        // gesture mid-drag once the menu was halfway shut.
+        .allowsHitTesting(menuOpen)
         .accessibilityHidden(!menuOpen)
         .accessibilityAction(named: "Close menu") {
             closePullMenu()
         }
-        .overlay {
-            if menuOpen {
-                Color.black.opacity(0.001)
-                    .contentShape(Rectangle())
-                    .gesture(pullMenuCloseGesture)
-            }
-        }
+        .simultaneousGesture(pullMenuCloseGesture)
     }
 
     @ViewBuilder
@@ -737,12 +701,14 @@ struct ChatView: View {
                 guard menuOpen else { return }
                 let dragDistance = min(max(value.translation.height, 0), menuRevealHeight)
                 menuCloseDragDistance = dragDistance
-                updateMenuDetent(
-                    reached: !PullMenuMotion.commitsToClose(
-                        dragDistance: dragDistance,
-                        revealHeight: menuRevealHeight
-                    )
+                // Same hysteresis as the opening detent, mirrored.
+                let threshold = PullMenuMotion.closingCommitmentDistance(
+                    revealHeight: menuRevealHeight
                 )
+                let willClose = menuDetentReached
+                    ? dragDistance >= threshold + 14
+                    : dragDistance > threshold - 14
+                updateMenuDetent(reached: !willClose)
             }
             .onEnded { value in
                 guard menuOpen else { return }
@@ -944,6 +910,7 @@ struct ChatView: View {
                 endPoint: .bottom
             )
             .ignoresSafeArea(.container)
+            .ignoresSafeArea(.keyboard)
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: autonomous)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: composerFocused)
@@ -1074,29 +1041,9 @@ struct ChatView: View {
             .padding(.vertical, 8)
             .frame(minHeight: 60)
         }
-        .overlay {
-            RoundedRectangle(
-                cornerRadius: AssistantTheme.conversationCornerRadius,
-                style: .continuous
-            )
-            .strokeBorder(
-                composerTextColor.opacity(
-                    colorSchemeContrast == .increased
-                        ? (composerFocused ? 0.54 : 0.38)
-                        : (composerFocused ? 0.28 : 0.16)
-                ),
-                lineWidth: colorSchemeContrast == .increased ? 1.1 : 0.8
-            )
-        }
-        .overlay(alignment: .top) {
-            Capsule()
-                .fill(.white.opacity(reduceTransparency ? 0.16 : 0.1))
-                .frame(height: 0.8)
-                .padding(.horizontal, 28)
-                .padding(.top, 1)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
+        // No manual stroke or top highlight on top of the glass: the glass
+        // rim already draws the edge, and a static outline layered over the
+        // touch-reactive glass is what produced the visible double outline.
         .shadow(
             color: Color(hex: 0x0C2D1B, alpha: composerFocused ? 0.15 : 0.1),
             radius: composerFocused ? 18 : 13,
@@ -1124,13 +1071,8 @@ struct ChatView: View {
     }
 
     private var composerPlaceholderColor: Color {
-        // Keep the prompt deliberately quieter than entered text without
-        // letting it sink into the green glass.
-        AssistantTheme.stageStrong.opacity(
-            colorSchemeContrast == .increased
-                ? 0.9
-                : (composerFocused ? 0.78 : 0.68)
-        )
+        // Same warm white as the jump-to-latest label, per owner feedback.
+        AssistantTheme.stageStrong
     }
 
     private var composerCursorColor: Color {
@@ -1155,20 +1097,23 @@ struct ChatView: View {
                 .background {
                     shape.fill(
                         AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
-                            .opacity(reduceTransparency ? 0.3 : (composerFocused ? 0.24 : 0.16))
+                            .opacity(reduceTransparency ? 0.38 : (composerFocused ? 0.3 : 0.22))
                     )
                 }
+                // Not .interactive(): the glass would expand slightly on
+                // touch, which read as a duplicated, offset input outline
+                // over the field's own edge. Focus already lifts the field
+                // via the shadow and tint below.
                 .glassEffect(
                     glass
                         .tint(
                             AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
                                 .opacity(
                                     reduceTransparency
-                                        ? 0.5
-                                        : (composerFocused ? 0.2 : 0.13)
+                                        ? 0.42
+                                        : (composerFocused ? 0.13 : 0.08)
                                 )
-                        )
-                        .interactive(),
+                        ),
                     in: shape
                 )
         } else {
@@ -1244,14 +1189,14 @@ struct ChatView: View {
                     Capsule()
                         .fill(
                             AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
-                                .opacity(reduceTransparency ? 0.34 : 0.26)
+                                .opacity(reduceTransparency ? 0.42 : 0.34)
                         )
                 }
                 .glassEffect(
                     glass
                         .tint(
                             AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
-                                .opacity(reduceTransparency ? 0.55 : 0.3)
+                                .opacity(reduceTransparency ? 0.46 : 0.2)
                         )
                         .interactive(),
                     in: Capsule()
@@ -1320,9 +1265,29 @@ struct ChatView: View {
         }
     }
 
+    private var userIsDraggingTranscript: Bool {
+        transcriptScrollPhase == .interacting || transcriptScrollPhase == .tracking
+    }
+
+    private var pinsTranscriptToBottom: Bool {
+        !userIsDraggingTranscript && !model.isSending
+    }
+
     private func scrollToBottom(using proxy: ScrollViewProxy) {
-        withAnimation(reduceMotion ? nil : .snappy(duration: 0.26, extraBounce: 0)) {
-            proxy.scrollTo("bottom", anchor: .bottom)
+        if transcriptScrollPhase == .idle {
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.26, extraBounce: 0)) {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+        } else {
+            // An animated scrollTo issued while the transcript still has
+            // momentum is deferred until the movement settles, so the button
+            // felt unresponsive mid-fling. Snap immediately instead — that
+            // interrupts the momentum and lands on the latest message.
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
         }
     }
 
@@ -1399,35 +1364,28 @@ private struct ComposerWorkingIndicator: View {
     let color: Color
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var rotating = false
 
     var body: some View {
-        ZStack {
-            Circle()
-                .stroke(color.opacity(0.15), lineWidth: 1.6)
+        // TimelineView keeps the motion smooth even while the transcript
+        // re-renders on every streamed token — an animation started in .task
+        // stuttered or stalled under that churn. The arc breathes in length
+        // while it rotates, which reads calmer than the old rigid comet.
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: reduceMotion)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            let rotation = (time / 1.3).truncatingRemainder(dividingBy: 1) * 360
+            let breath = 0.5 - (0.5 * cos(2 * Double.pi * (time / 1.7).truncatingRemainder(dividingBy: 1)))
+            let arcLength = 0.14 + (0.58 * breath)
 
-            Circle()
-                .trim(from: 0.08, to: 0.68)
-                .stroke(
-                    color.opacity(0.88),
-                    style: StrokeStyle(lineWidth: 1.8, lineCap: .round)
-                )
-                .rotationEffect(.degrees(rotating ? 360 : 0))
-
-            Circle()
-                .fill(color)
-                .frame(width: 3.5, height: 3.5)
-                .offset(y: -9)
-                .rotationEffect(.degrees(rotating ? 360 : 0))
-        }
-        .frame(width: 21, height: 21)
-        .task(id: reduceMotion) {
-            rotating = false
-            guard !reduceMotion else { return }
-            withAnimation(.linear(duration: 1.05).repeatForever(autoreverses: false)) {
-                rotating = true
+            ZStack {
+                Circle()
+                    .stroke(color.opacity(0.18), lineWidth: 2)
+                Circle()
+                    .trim(from: 0, to: arcLength)
+                    .stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(rotation))
             }
         }
+        .frame(width: 20, height: 20)
         .accessibilityHidden(true)
     }
 }
