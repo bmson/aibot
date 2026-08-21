@@ -11,6 +11,9 @@ The native SwiftUI client keeps the agent runtime on the existing Assistant serv
 - deliberate confirmation before approving or denying outward actions;
 - a Keychain-stored mobile credential, Dynamic Type, dark mode, and Reduce Motion support.
 
+Open findings on the visual and interaction layer are tracked in
+[`docs/visual-qa.md`](docs/visual-qa.md).
+
 ## Run locally
 
 1. Start the database, agent, and web service with `pnpm dev` (or `docker compose up --build`).
