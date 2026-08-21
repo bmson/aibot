@@ -251,9 +251,16 @@ struct ChatView: View {
                     // right now hands the whole reveal over to our own
                     // animation immediately, instead of the two settling in
                     // different places (the misaligned bubbles after a fast
-                    // release). transcriptScrollPhase is already non-idle
-                    // here, so this takes scrollToBottom's instant-snap path.
-                    scrollToBottom(using: proxy)
+                    // release). This must be unconditionally instant — a
+                    // slow release with no momentum lands directly on
+                    // .idle, which would make scrollToBottom(using:) take
+                    // its animated branch and race finishPullMenu's spring,
+                    // the exact thing this is here to prevent.
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
                 }
             }
             // The mask is the only edge fade: it applies per-pixel, so even a
