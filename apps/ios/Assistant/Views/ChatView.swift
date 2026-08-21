@@ -208,12 +208,21 @@ struct ChatView: View {
                 menuRevealDistance(for: geometry)
             } action: { _, revealDistance in
                 guard !menuOpen, transcriptScrollPhase == .interacting else { return }
+                // A short ease on the live-drag value, not a raw assignment:
+                // onScrollGeometryChange is coalesced relative to the scroll
+                // view's own buttery-smooth native rubber-band, so writing
+                // the reveal distance straight through made the externally
+                // applied offset (which mirrors this on the conversation
+                // surface) step between samples instead of easing — visible
+                // as jitter through a slow, steady drag.
                 if revealDistance > 0.5 {
                     if !menuPullActive {
                         menuPullActive = true
                         composerFocused = false
                     }
-                    menuPullDistance = revealDistance
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.06)) {
+                        menuPullDistance = revealDistance
+                    }
                     // Hysteresis around the detent: a slow drag hovering at
                     // the threshold otherwise toggles the haptic every point.
                     let threshold = PullMenuMotion.openingCommitmentDistance(
@@ -224,7 +233,9 @@ struct ChatView: View {
                         : revealDistance >= threshold
                     updateMenuDetent(reached: detentReached)
                 } else if menuPullActive {
-                    menuPullDistance = 0
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.06)) {
+                        menuPullDistance = 0
+                    }
                     updateMenuDetent(reached: false)
                 }
             }
@@ -232,6 +243,24 @@ struct ChatView: View {
                 transcriptScrollPhase = newPhase
                 if oldPhase == .interacting, newPhase != .interacting, menuPullActive {
                     finishPullMenu(releasedAt: menuRevealDistance(for: context.geometry))
+                    // The scroll view's own rubber-band keeps easing back
+                    // toward rest for a few more frames after this — on its
+                    // own timeline, independent of the spring finishPullMenu
+                    // just started, and before .scrollDisabled(menuOpen) has
+                    // actually taken effect. Snapping content back to rest
+                    // right now hands the whole reveal over to our own
+                    // animation immediately, instead of the two settling in
+                    // different places (the misaligned bubbles after a fast
+                    // release). This must be unconditionally instant — a
+                    // slow release with no momentum lands directly on
+                    // .idle, which would make scrollToBottom(using:) take
+                    // its animated branch and race finishPullMenu's spring,
+                    // the exact thing this is here to prevent.
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
                 }
             }
             // The mask is the only edge fade: it applies per-pixel, so even a
@@ -409,6 +438,13 @@ struct ChatView: View {
         let headerUnfurl = organicProgress(headerProgress)
 
         return VStack(spacing: 11) {
+            // The close-swipe lives on the grip handle alone, not the whole
+            // menu: sharing a DragGesture with the action grid raced the
+            // buttons' own tap recognizers (SwiftUI can misresolve a
+            // simultaneousGesture against a Button in the same view), which
+            // read as menu item taps just closing the menu and nothing else.
+            // The inset contentShape widens the handle's real hit area well
+            // past its painted 4pt height so the gesture stays easy to grab.
             Capsule()
                 .fill(AssistantTheme.ink(for: colorScheme).opacity(colorScheme == .dark ? 0.3 : 0.15))
                 .frame(width: 42, height: 4)
@@ -418,6 +454,8 @@ struct ChatView: View {
                     anchor: .center
                 )
                 .opacity(headerVisibility)
+                .contentShape(Rectangle().inset(by: -12))
+                .simultaneousGesture(pullMenuCloseGesture)
 
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 1) {
@@ -474,7 +512,6 @@ struct ChatView: View {
         .accessibilityAction(named: "Close menu") {
             closePullMenu()
         }
-        .simultaneousGesture(pullMenuCloseGesture)
     }
 
     @ViewBuilder
