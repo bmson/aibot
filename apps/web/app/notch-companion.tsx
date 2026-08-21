@@ -92,15 +92,12 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
   const Glyph = TONE_GLYPH[shown?.tone ?? 'working'];
 
   /*
-   * One fixed overlay owns the tint, a low blur below the island, and the
-   * island itself. There is deliberately no filtered layer beside or beneath
-   * the black shape: iOS WebKit can sample a whole filter surface before grid
-   * clipping, so even geometrically disjoint side panes softened the label on
-   * a physical phone. The only blur is not mounted at all while the shape is
-   * open; notch.css documents that boundary.
-   *
-   * The tint (`.status-veil`) remains a separate, unfiltered layer. Do not give
-   * it a backdrop filter.
+   * One fixed overlay owns the closed-state tint and low blur plus the island
+   * itself. There is deliberately no visual surface beside, beneath, or behind
+   * the black shape while it is open. Physical iOS Web Apps can flatten even an
+   * unfiltered translucent sibling across the Island before z-order is
+   * resolved; Simulator does not reproduce that compositor path reliably.
+   * Both veil nodes therefore leave the tree for the entire open state.
    *
    * The shape is aria-hidden and the announcement is a sibling of it, never a
    * descendant: toggling aria-hidden on an ancestor of a live region is a good
@@ -111,12 +108,15 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
    */
   return (
     <div className="status-overlay" data-open={open}>
-      <span className="status-veil" aria-hidden="true" />
-      {/* Do not leave even a geometrically separated filter surface mounted
-          while the Island is open. Installed iOS Web Apps composite that
-          surface differently from a browser tab and can sample the label into
-          it before clipping. Absence from the tree is the reliable boundary. */}
-      {open ? null : <span className="status-veil-glass" aria-hidden="true" />}
+      {/* Absence from the tree is the reliable physical-device boundary. Even
+          the unfiltered tint is removed because real iPhones and Simulator do
+          not flatten translucent fixed siblings in exactly the same way. */}
+      {open ? null : (
+        <>
+          <span className="status-veil" aria-hidden="true" />
+          <span className="status-veil-glass" aria-hidden="true" />
+        </>
+      )}
       <div className="status-crown" aria-hidden="true">
         <div className="notch-island" data-open={open} data-tone={shown?.tone ?? 'working'}>
           <div className="notch-island-body">

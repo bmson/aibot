@@ -9,18 +9,16 @@
   /* The ground the status veil ramps out of: whatever the page is actually
      standing on. The chat re-points it at its own green (conversation.css).
 
-     The band over it is a tint at this colour with a blur behind it, so the
-     conversation goes soft on its way up rather than being painted out. Those
-     are two separate layers on purpose, and the split is not cosmetic: a
-     backdrop-filter swallows whatever it covers, so the layer that covers the
-     Dynamic Island extension is the tint, and the blur begins well below it.
-     Several attempts to clip blur beside the Island still failed on device;
-     notch.css records the resulting no-filter safety zone.
+     In the closed state, the band over it is a tint at this colour with a blur
+     behind it, so the conversation goes soft on its way up rather than being
+     painted out. Both visual layers leave the tree while the Island is open.
+     Several attempts to clip or stack them around the Island still failed on
+     physical devices even when Simulator looked correct; notch.css records the
+     resulting no-surface safety rule.
 
-     So if the island ever comes back frosted, look for a `backdrop-filter` that
-     has been added to .status-veil, for .status-veil-glass being rendered while
-     the Island is open, or for any new filtered sibling inside the status
-     crown.
+     So if the island ever comes back frosted, look for either veil node being
+     rendered while the Island is open or for any visual sibling added inside
+     the status crown.
 
      The band's shape, and how it and the island stack, are in notch.css — next
      to the island itself. */
