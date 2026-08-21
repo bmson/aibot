@@ -56,8 +56,10 @@
 }
 
 /* A light wash keeps the system status symbols legible without hiding the
-   conversation. This layer crosses the Island and therefore must never carry a
-   backdrop filter. */
+   conversation. This layer crosses the Island, so it is mounted only in the
+   closed state and must never carry a backdrop filter. Physical iPhones can
+   flatten even an unfiltered translucent fixed sibling across the open Island;
+   Simulator does not consistently reproduce that path. */
 .status-veil {
   position: absolute;
   z-index: 0;
@@ -75,11 +77,12 @@
   );
 }
 
-/* The only top blur, mounted only while the Island is closed. Installed iOS
-   Web Apps can sample an otherwise disjoint filter surface into the Island
-   before clipping, so notch-companion removes this node from the tree for the
-   entire open state. The modest 6px blur reads as content moving under glass
-   without building the opaque fog visible in the previous 18px treatment. */
+/* The only top blur, mounted together with the tint only while the Island is
+   closed. Installed iOS Web Apps can sample an otherwise disjoint visual
+   surface into the Island before clipping, so notch-companion removes both
+   nodes from the tree for the entire open state. The modest 6px blur reads as
+   content moving under glass without building the opaque fog visible in the
+   previous 18px treatment. */
 .status-veil-glass {
   position: absolute;
   z-index: 0;

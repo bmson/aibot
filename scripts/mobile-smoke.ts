@@ -207,10 +207,9 @@ async function assertResponsiveContract(page: Page, label: string, mobile: boole
 }
 
 /**
- * The status gradient may tint the island but no filtered layer may intersect
- * it. WebKit samples intersecting backdrop-filter siblings before their visual
- * z-order is resolved, which is what made the status label look frosted on an
- * installed iPhone even though the island had the higher z-index.
+ * No visual veil may exist while the Island is open. Physical iOS Web Apps can
+ * flatten even an unfiltered translucent fixed sibling across the label before
+ * visual z-order is resolved; Simulator does not reliably reproduce that path.
  */
 async function assertDynamicIslandLayering(page: Page) {
   const metrics = await page.evaluate(() => {
@@ -220,7 +219,7 @@ async function assertDynamicIslandLayering(page: Page) {
     const island = document.querySelector<HTMLElement>('.notch-island');
     const crown = document.querySelector<HTMLElement>('.status-crown');
     const main = document.querySelector<HTMLElement>('main');
-    if (!overlay || !veil || !island || !crown || !main) {
+    if (!overlay || !island || !crown || !main) {
       return null;
     }
     const overlayRect = overlay.getBoundingClientRect();
@@ -236,8 +235,8 @@ async function assertDynamicIslandLayering(page: Page) {
         zIndex: getComputedStyle(overlay).zIndex,
       },
       mainZ: Number.parseInt(getComputedStyle(main).zIndex, 10),
-      veilFilter: getComputedStyle(veil).backdropFilter,
-      veilBackground: getComputedStyle(veil).backgroundImage,
+      veilFilter: veil ? getComputedStyle(veil).backdropFilter : null,
+      veilBackground: veil ? getComputedStyle(veil).backgroundImage : null,
       lowerGlass:
         lowerGlass && lowerGlassRect
           ? {
@@ -266,12 +265,8 @@ async function assertDynamicIslandLayering(page: Page) {
     `Dynamic Island is not above app content: ${JSON.stringify(metrics)}`,
   );
   assert(
-    metrics.veilFilter === 'none' && metrics.island.filter === 'none',
-    `a filtered layer covers the Dynamic Island: ${JSON.stringify(metrics)}`,
-  );
-  assert(
-    metrics.veilBackground.includes('0.62') || metrics.veilBackground.includes('62%'),
-    `status gradient is not softly translucent at the top: ${metrics.veilBackground}`,
+    metrics.island.filter === 'none',
+    `the Dynamic Island is filtered: ${JSON.stringify(metrics)}`,
   );
   assert(
     metrics.filteredCrownChildren === 0,
@@ -279,10 +274,15 @@ async function assertDynamicIslandLayering(page: Page) {
   );
   if (metrics.open) {
     assert(
-      metrics.lowerGlass === null,
-      `a backdrop-filter surface is mounted while the Dynamic Island is open: ${JSON.stringify(metrics)}`,
+      metrics.veilFilter === null && metrics.lowerGlass === null,
+      `a visual veil is mounted while the Dynamic Island is open: ${JSON.stringify(metrics)}`,
     );
   } else {
+    assert(
+      metrics.veilFilter === 'none' &&
+        (metrics.veilBackground?.includes('0.62') || metrics.veilBackground?.includes('62%')),
+      `the closed-state status tint is missing or not softly translucent: ${JSON.stringify(metrics)}`,
+    );
     assert(
       metrics.lowerGlass?.filter.includes('blur(6px)') &&
         metrics.lowerGlass.top >= metrics.island.bottom + 8,
