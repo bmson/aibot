@@ -140,72 +140,161 @@ final class APIModelsTests: XCTestCase {
         )
     }
 
-    func testPullMenuCommitmentDetentsMatchReleaseDecisions() {
-        let standardHeight: CGFloat = 184
-        let accessibilityHeight: CGFloat = 320
+    func testPullMenuMotionCoversBoundaryReversalFlingAndAccessibilityCases() {
+        // The regular menu is 236pt tall; its opening action must stay short
+        // even though its two rows make the sheet visually substantial.
+        let standardHeight: CGFloat = 236
+        let accessibilityHeight: CGFloat = 336
 
         XCTAssertEqual(
             PullMenuMotion.openingCommitmentDistance(revealHeight: standardHeight),
-            106.72,
+            59,
             accuracy: 0.001
         )
         XCTAssertEqual(
             PullMenuMotion.openingCommitmentDistance(revealHeight: accessibilityHeight),
-            150,
+            60,
             accuracy: 0.001
         )
+        XCTAssertEqual(PullMenuMotion.openingCommitmentDistance(revealHeight: 0), 0)
+        XCTAssertEqual(PullMenuMotion.closingCommitmentDistance(revealHeight: standardHeight), 51.92, accuracy: 0.001)
+        XCTAssertEqual(PullMenuMotion.closingCommitmentDistance(revealHeight: accessibilityHeight), 56, accuracy: 0.001)
+
+        // Upward, downward, and over-extended drags all follow one clamped
+        // path. That is what prevents a reversing slow pull from snap-back.
+        XCTAssertEqual(
+            PullMenuMotion.openingDistance(translationY: -34, revealHeight: standardHeight),
+            34
+        )
+        XCTAssertEqual(
+            PullMenuMotion.openingDistance(translationY: 18, revealHeight: standardHeight),
+            0
+        )
+        XCTAssertEqual(
+            PullMenuMotion.openingDistance(translationY: -900, revealHeight: standardHeight),
+            standardHeight
+        )
+        XCTAssertEqual(
+            PullMenuMotion.closingDistance(translationY: 34, revealHeight: standardHeight),
+            34
+        )
+        XCTAssertEqual(
+            PullMenuMotion.closingDistance(translationY: -18, revealHeight: standardHeight),
+            0
+        )
+        XCTAssertEqual(
+            PullMenuMotion.closingDistance(translationY: 900, revealHeight: standardHeight),
+            standardHeight
+        )
+
+        // A quick flick can commit, but only in the direction of the menu;
+        // a prediction pointing the other way cannot make a menu open/close.
+        XCTAssertEqual(
+            PullMenuMotion.projectedOpeningDistance(
+                translationY: -18,
+                predictedEndTranslationY: -75,
+                revealHeight: standardHeight
+            ),
+            75
+        )
+        XCTAssertEqual(
+            PullMenuMotion.projectedOpeningDistance(
+                translationY: 18,
+                predictedEndTranslationY: 60,
+                revealHeight: standardHeight
+            ),
+            0
+        )
+        XCTAssertEqual(
+            PullMenuMotion.projectedClosingDistance(
+                translationY: 18,
+                predictedEndTranslationY: 75,
+                revealHeight: standardHeight
+            ),
+            75
+        )
+        XCTAssertEqual(
+            PullMenuMotion.projectedClosingDistance(
+                translationY: -18,
+                predictedEndTranslationY: -60,
+                revealHeight: standardHeight
+            ),
+            0
+        )
+
         XCTAssertFalse(
-            PullMenuMotion.commitsToOpen(revealDistance: 106, revealHeight: standardHeight)
+            PullMenuMotion.holdsOpeningDetent(
+                revealDistance: 58,
+                revealHeight: standardHeight,
+                detentHeld: false
+            )
         )
         XCTAssertTrue(
-            PullMenuMotion.commitsToOpen(revealDistance: 107, revealHeight: standardHeight)
+            PullMenuMotion.holdsOpeningDetent(
+                revealDistance: 59,
+                revealHeight: standardHeight,
+                detentHeld: false
+            )
         )
-        // Closing threshold is 55.2 at this height, with 14pt of slack either
-        // side. While the menu is holding open the detent asks for the far edge
-        // of the band; once it has reported "will close" it only asks for the
-        // near one.
+        XCTAssertTrue(
+            PullMenuMotion.holdsOpeningDetent(
+                revealDistance: 48,
+                revealHeight: standardHeight,
+                detentHeld: true
+            )
+        )
+        XCTAssertFalse(
+            PullMenuMotion.holdsOpeningDetent(
+                revealDistance: 47,
+                revealHeight: standardHeight,
+                detentHeld: true
+            )
+        )
+
+        // Once an opened menu's close detent has fired at roughly 64pt, a
+        // release stays closed. A shallow downward probe springs back open.
         XCTAssertFalse(
             PullMenuMotion.closesOnRelease(
-                dragDistance: 69,
+                dragDistance: 63,
                 revealHeight: standardHeight,
                 detentHeld: true
             )
         )
         XCTAssertTrue(
             PullMenuMotion.closesOnRelease(
-                dragDistance: 70,
+                dragDistance: 64,
                 revealHeight: standardHeight,
                 detentHeld: true
             )
         )
         XCTAssertFalse(
             PullMenuMotion.closesOnRelease(
-                dragDistance: 41,
+                dragDistance: 39,
                 revealHeight: standardHeight,
                 detentHeld: false
             )
         )
         XCTAssertTrue(
             PullMenuMotion.closesOnRelease(
-                dragDistance: 42,
+                dragDistance: 40,
                 revealHeight: standardHeight,
                 detentHeld: false
             )
         )
-        // The property this test is named for: a release inside the hysteresis
-        // band agrees with the detent the finger last felt. The release used to
-        // compare against the bare threshold, so 56–69pt reported "stays open"
-        // and then closed anyway.
-        for distance in stride(from: CGFloat(56), through: CGFloat(69), by: 1) {
-            XCTAssertFalse(
-                PullMenuMotion.closesOnRelease(
-                    dragDistance: distance,
-                    revealHeight: standardHeight,
-                    detentHeld: true
-                ),
-                "A release at \(distance)pt should honour the open detent"
-            )
-        }
+    }
+
+    func testWorkspaceCostBreakdownsAcceptPostgresAggregateCounts() throws {
+        // PostgreSQL count(*) may reach an older mobile API deployment as a
+        // JSON string, while the current endpoint normalizes it to a number.
+        // The phone must load Workspace in either case.
+        let stringCount = #"[{"source":"tool","usd":"0.012","count":"3"}]"#.data(using: .utf8)!
+        let numericCount = #"[{"model":"gpt-5","usd":"0.024","count":4}]"#.data(using: .utf8)!
+
+        let bySource = try JSONDecoder().decode([WorkspaceCostBreakdown].self, from: stringCount)
+        let byModel = try JSONDecoder().decode([WorkspaceModelBreakdown].self, from: numericCount)
+
+        XCTAssertEqual(bySource[0].count, 3)
+        XCTAssertEqual(byModel[0].count, 4)
     }
 
     func testNativeRouteCatalogMatchesTheCompleteWorkspaceMenu() {
@@ -220,6 +309,7 @@ final class APIModelsTests: XCTestCase {
                 .memory,
                 .documents,
                 .skills,
+                .capabilities,
                 .settings,
                 .costs,
                 .anomalies,

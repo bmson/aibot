@@ -5,6 +5,7 @@ enum WorkspaceArea {
     case memory
     case documents
     case skills
+    case capabilities
     case costs
     case anomalies
     case improvements
@@ -15,6 +16,7 @@ enum WorkspaceArea {
         case .memory: "Memory"
         case .documents: "Documents"
         case .skills: "Skills"
+        case .capabilities: "Capabilities"
         case .costs: "Costs"
         case .anomalies: "Anomalies"
         case .improvements: "Improvements"
@@ -27,6 +29,7 @@ enum WorkspaceArea {
         case .memory: "brain.head.profile"
         case .documents: "doc.text"
         case .skills: "lightbulb"
+        case .capabilities: "puzzlepiece.extension"
         case .costs: "dollarsign.circle"
         case .anomalies: "exclamationmark.triangle"
         case .improvements: "arrow.triangle.2.circlepath"
@@ -43,6 +46,8 @@ enum WorkspaceArea {
             "Files the assistant can search and cite when you ask a question in chat."
         case .skills:
             "Procedures the assistant has learned from completed work and reads as advice before planning."
+        case .capabilities:
+            "Optional tools installed on this assistant, including anything that still needs setup."
         case .costs:
             "Live spend, reserved work, and the limits that keep your assistant in control."
         case .anomalies:
@@ -117,6 +122,8 @@ struct WorkspaceView: View {
             memory(workspace.memory)
         case .skills:
             skills(workspace.skills)
+        case .capabilities:
+            capabilities(workspace.capabilities)
         case .costs:
             costs(workspace.costs)
         case .anomalies:
@@ -293,6 +300,72 @@ struct WorkspaceView: View {
                     .assistantCard(in: colorScheme)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func capabilities(_ capabilities: [WorkspaceCapability]?) -> some View {
+        if let capabilities {
+            let enabledCount = capabilities.filter(\.enabled).count
+            let readyCount = capabilities.filter { $0.enabled && $0.ready }.count
+
+            VStack(alignment: .leading, spacing: 14) {
+                metricGrid([
+                    ("Installed", enabledCount, "puzzlepiece.extension", AssistantTheme.accent(for: colorScheme)),
+                    ("Ready", readyCount, "checkmark.circle", .green),
+                    ("Available", capabilities.count, "square.grid.2x2", .secondary),
+                ])
+
+                sectionHeading("Optional capabilities", count: capabilities.count)
+
+                ForEach(capabilities) { capability in
+                    let tint: Color = if !capability.enabled {
+                        .secondary
+                    } else if capability.ready {
+                        .green
+                    } else {
+                        .orange
+                    }
+
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: capability.icon)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(tint)
+                            .frame(width: 42, height: 42)
+                            .background(tint.opacity(0.11), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                            .accessibilityHidden(true)
+
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(capability.title)
+                                    .font(.headline)
+                                Spacer(minLength: 4)
+                                workspaceTag(capability.statusTitle, tint: tint)
+                            }
+                            Text(capability.summary)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if capability.enabled && !capability.ready {
+                                Text(capability.detail.sentenceCaseIdentifier)
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    .assistantCard(in: colorScheme)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(capability.title), \(capability.statusTitle). \(capability.summary)")
+                }
+            }
+        } else {
+            ContentUnavailableView(
+                "Capabilities unavailable",
+                systemImage: "puzzlepiece.extension",
+                description: Text("Update the assistant server to see installed optional tools.")
+            )
+            .frame(maxWidth: .infinity, minHeight: 220)
         }
     }
 
@@ -524,6 +597,7 @@ struct WorkspaceView: View {
                     Image(systemName: metric.2)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(metric.3)
+                        .accessibilityHidden(true)
                     Text("\(metric.1)")
                         .font(.title3.monospacedDigit().weight(.semibold))
                     Text(metric.0)
@@ -534,6 +608,8 @@ struct WorkspaceView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .assistantCard(in: colorScheme)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(metric.0), \(metric.1)")
             }
         }
     }

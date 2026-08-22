@@ -6,33 +6,66 @@ struct RootView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    // Seeded from UIKit so the very first frame is positioned, then kept
-    // current by the geometry reading below — the crown has to stay registered
-    // with the hardware cutout across rotation and status-bar height changes.
-    @State private var topSafeAreaInset = ActivityCrown.windowTopInset
     // The launch screen belongs to the automatic connect at startup, not to a
     // connect the owner just triggered from the Connection form.
     @State private var hasPresentedConnection = false
 
     var body: some View {
-        Group {
-            if model.isLoading && model.bootstrap == nil && !hasPresentedConnection {
-                launchView
-                    .transition(.opacity)
-            } else if model.bootstrap == nil {
-                // Deliberately survives `isLoading`: swapping this out for the
-                // launch screen mid-attempt destroyed the form, and the fresh
-                // instance that replaced it ran ConnectionView's `.onAppear` →
-                // `dismissError()`, wiping the failure before it could render.
-                // A failed "Save and connect" looked like nothing happening.
-                ConnectionView(isOnboarding: true)
-                    .transition(.opacity)
-                    .onAppear { hasPresentedConnection = true }
-            } else {
-                NavigationStack { ChatView() }
-                    .transition(.opacity)
+        ZStack(alignment: .top) {
+            // Establishes an edge-to-edge coordinate space for the crown.
+            Color.clear
+                .ignoresSafeArea(.container, edges: .top)
+                .allowsHitTesting(false)
+
+            Group {
+                if model.isLoading && model.bootstrap == nil && !hasPresentedConnection {
+                    launchView
+                        .transition(.opacity)
+                } else if model.bootstrap == nil {
+                    // Deliberately survives `isLoading`: swapping this out for the
+                    // launch screen mid-attempt destroyed the form, and the fresh
+                    // instance that replaced it ran ConnectionView's `.onAppear` →
+                    // `dismissError()`, wiping the failure before it could render.
+                    // A failed "Save and connect" looked like nothing happening.
+                    ConnectionView(isOnboarding: true)
+                        .transition(.opacity)
+                        .onAppear { hasPresentedConnection = true }
+                } else {
+                    NavigationStack {
+                        ChatView()
+                            .navigationDestination(item: $model.presentedRoute) { route in
+                                destination(for: route)
+                            }
+                    }
+                        .transition(.opacity)
+                }
+            }
+
+            if model.bootstrap != nil && model.presentedRoute == nil {
+                ActivityCrown(
+                    thought: model.activityThought,
+                    detail: model.activityDetail,
+                    agentName: model.agentName,
+                    action: {
+                        model.present(
+                            model.activityThought?.tone == .waiting ? .approvals : .activity
+                        )
+                    }
+                )
+                // Share the physical Island's top edge. The rounded active
+                // surface surrounds the camera; idle leaves the pill alone.
+                .padding(.top, ActivityCrown.islandTopInset)
+                .zIndex(100)
             }
         }
+        // This is intentionally on the outer stack, not merely the clear
+        // background. Otherwise the overlay begins below the notch's safe
+        // area, leaving the visible green gap shown above the notification.
+        .ignoresSafeArea(.container, edges: .top)
+        // The assistant is an edge-to-edge workspace. Its own activity crown
+        // handles the top interaction space, so the clock, signal, and battery
+        // status bar would only compete with the app's chrome.
+        .statusBarHidden(true)
         .animation(
             .easeOut(duration: reduceMotion ? 0.12 : 0.24),
             value: model.isLoading
@@ -60,18 +93,6 @@ struct RootView: View {
                 ConnectionView(isOnboarding: false, showsDoneButton: true)
             }
         }
-        .sheet(item: $model.presentedRoute) { route in
-            destination(for: route)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-        }
-        .onGeometryChange(for: CGFloat.self) { geometry in
-            geometry.safeAreaInsets.top
-        } action: { inset in
-            // Guard the zero: a transient measurement of 0 would drop the crown
-            // out of the cutout and onto the transcript.
-            if inset > 0 { topSafeAreaInset = inset }
-        }
         .onOpenURL { url in
             guard url.scheme == "assistant" else { return }
 #if DEBUG
@@ -94,54 +115,28 @@ struct RootView: View {
             model.present(route)
             NotificationManager.shared.consumePendingRoute()
         }
-        .overlay(alignment: .top) {
-            if model.bootstrap != nil {
-                ActivityCrown(
-                    thought: model.activityThought,
-                    detail: model.activityDetail,
-                    agentName: model.agentName,
-                    action: {
-                        model.present(
-                            model.activityThought?.tone == .waiting ? .approvals : .activity
-                        )
-                    }
-                )
-                    .offset(y: -ActivityCrown.lift(forTopInset: topSafeAreaInset))
-                    .zIndex(100)
-            }
-        }
     }
 
     @ViewBuilder
     private func destination(for route: AssistantRoute) -> some View {
-        NavigationStack {
-            Group {
-                switch route {
-                case .chat: ChatView()
-                case .chats: WorkspaceView(area: .chats)
-                case .activity: ActivityView()
-                case .goals: GoalsView()
-                case .approvals: ApprovalsView()
-                case .memory: WorkspaceView(area: .memory)
-                case .documents: WorkspaceView(area: .documents)
-                case .skills: WorkspaceView(area: .skills)
-                case .settings: MoreView()
-                case .costs: WorkspaceView(area: .costs)
-                case .anomalies: WorkspaceView(area: .anomalies)
-                case .improvements: WorkspaceView(area: .improvements)
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        model.returnToChat()
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .accessibilityLabel("Close")
-                }
+        Group {
+            switch route {
+            case .chat: ChatView()
+            case .chats: WorkspaceView(area: .chats)
+            case .activity: ActivityView()
+            case .goals: GoalsView()
+            case .approvals: ApprovalsView()
+            case .memory: WorkspaceView(area: .memory)
+            case .documents: WorkspaceView(area: .documents)
+            case .skills: WorkspaceView(area: .skills)
+            case .capabilities: WorkspaceView(area: .capabilities)
+            case .settings: MoreView()
+            case .costs: WorkspaceView(area: .costs)
+            case .anomalies: WorkspaceView(area: .anomalies)
+            case .improvements: WorkspaceView(area: .improvements)
             }
         }
+        .toolbar(.visible, for: .navigationBar)
         .tint(AssistantTheme.accent(for: colorScheme))
     }
 

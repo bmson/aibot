@@ -11,12 +11,52 @@ enum PullMenuMotion {
         return progress * progress * (3 - (2 * progress))
     }
 
+    /// Converts an upward drag into a stable, bounded menu reveal. Keeping
+    /// this independent from the scroll view makes a reversing finger return
+    /// along the same path rather than letting UIKit's rubber-band add motion.
+    static func openingDistance(translationY: CGFloat, revealHeight: CGFloat) -> CGFloat {
+        min(max(-translationY, 0), max(revealHeight, 0))
+    }
+
+    static func projectedOpeningDistance(
+        translationY: CGFloat,
+        predictedEndTranslationY: CGFloat,
+        revealHeight: CGFloat
+    ) -> CGFloat {
+        openingDistance(
+            translationY: min(translationY, predictedEndTranslationY),
+            revealHeight: revealHeight
+        )
+    }
+
+    static func closingDistance(translationY: CGFloat, revealHeight: CGFloat) -> CGFloat {
+        min(max(translationY, 0), max(revealHeight, 0))
+    }
+
+    static func projectedClosingDistance(
+        translationY: CGFloat,
+        predictedEndTranslationY: CGFloat,
+        revealHeight: CGFloat
+    ) -> CGFloat {
+        closingDistance(
+            translationY: max(translationY, predictedEndTranslationY),
+            revealHeight: revealHeight
+        )
+    }
+
     static func openingCommitmentDistance(revealHeight: CGFloat) -> CGFloat {
-        min(max(revealHeight, 0) * 0.58, 150)
+        // Keep the committed pull short and physical rather than scaling it
+        // with the whole menu. The normal menu is tall because it holds two
+        // rows of destinations, but requiring a third of it made slow drags
+        // travel more than 80pt before opening. Accessibility layouts should
+        // not need an even longer pull either.
+        guard revealHeight > 0 else { return 0 }
+        return min(max(revealHeight * 0.25, 48), 60)
     }
 
     static func closingCommitmentDistance(revealHeight: CGFloat) -> CGFloat {
-        max(revealHeight, 0) * 0.3
+        guard revealHeight > 0 else { return 0 }
+        return min(max(revealHeight * 0.22, 44), 56)
     }
 
     static func commitsToOpen(revealDistance: CGFloat, revealHeight: CGFloat) -> Bool {
@@ -25,7 +65,21 @@ enum PullMenuMotion {
 
     /// Slack around the closing detent, so a drag hovering at the threshold
     /// does not toggle the haptic every point.
-    static let detentHysteresis: CGFloat = 14
+    static let detentHysteresis: CGFloat = 12
+
+    /// Retains the opening detent within a small release band. This ensures a
+    /// finger that felt the open haptic does not unexpectedly snap closed when
+    /// it lifts a few points short of the bare threshold.
+    static func holdsOpeningDetent(
+        revealDistance: CGFloat,
+        revealHeight: CGFloat,
+        detentHeld: Bool
+    ) -> Bool {
+        let threshold = openingCommitmentDistance(revealHeight: revealHeight)
+        return detentHeld
+            ? revealDistance > threshold - detentHysteresis
+            : revealDistance >= threshold
+    }
 
     /// Whether a release at this distance closes the menu.
     ///
@@ -68,6 +122,7 @@ struct ChatView: View {
     @State private var menuPullDistance: CGFloat = 0
     @State private var menuCloseDragDistance: CGFloat = 0
     @State private var menuPullActive = false
+    @State private var menuPullTranscriptCompensation: CGFloat = 0
     @State private var menuOpen = false
     @State private var menuDetentReached = false
     @State private var menuDetentFeedback = 0
@@ -126,18 +181,35 @@ struct ChatView: View {
                         // The overlay does not follow the surface's .offset — it
                         // covers the full unshifted frame — so without the bottom
                         // padding it would invisibly cover the open menu and
-                        // swallow every tap meant for the menu buttons.
+                        // swallow every tap meant for the menu buttons. Keep
+                        // the content shape and gesture *inside* that padding:
+                        // applying either after it makes the transparent inset
+                        // tappable too, so a destination tap only closes the
+                        // menu instead of opening its route.
                         Color.black.opacity(0.001)
-                            .padding(.bottom, visibleMenuRevealDistance)
                             .contentShape(Rectangle())
                             .onTapGesture { closePullMenu() }
                             .accessibilityLabel("Close menu")
                             .accessibilityAddTraits(.isButton)
+                            .padding(.bottom, conversationRevealDistance)
                     }
                 }
+
+            if !menuOpen {
+                pullMenuOpenGestureTarget
+            }
         }
         .background(
             stageBackdrop.ignoresSafeArea(.container).ignoresSafeArea(.keyboard)
+        )
+        // The conversation surface is visually above the revealed submenu.
+        // Once it is open, the sheet's vertical dismissal drag takes priority
+        // across both surfaces. Its 10pt threshold means ordinary tile taps
+        // still reach their buttons. Leaving it inactive while closed avoids
+        // competing with the ScrollView's opening pull.
+        .highPriorityGesture(
+            pullMenuCloseGesture,
+            including: menuOpen ? .all : .none
         )
         .toolbar(.hidden, for: .navigationBar)
         .overlay(alignment: .top) {
@@ -231,10 +303,12 @@ struct ChatView: View {
             .ignoresSafeArea(.container, edges: [.top, .bottom])
             .scrollClipDisabled()
             .scrollIndicators(.hidden)
-            // A live scroll view under an open menu can still rubber-band from
-            // momentum or an external scroll request, which fights the spring
-            // that is animating the surface back down. Freeze it while open.
-            .scrollDisabled(menuOpen)
+            // A live scroll view under an active menu pull can still pan a
+            // fraction independently of the composer. That compresses the
+            // latest-message spacer during a slow pull, making the input look
+            // attached to the bubble. Freeze it from the first pull point,
+            // not only after the sheet has committed open.
+            .scrollDisabled(menuOpen || menuPullActive)
             .scrollDismissesKeyboard(.interactively)
             // Pin to the bottom only when the reader is at rest and nothing
             // is streaming: the anchor fights a finger on the transcript, and
@@ -250,76 +324,32 @@ struct ChatView: View {
                     hasUnseenMessages = false
                 }
             }
+            // A ScrollView may adjust its content offset while its pan is
+            // being cancelled. Mirror that exact adjustment on the composer
+            // during a menu pull so its clearance from the latest bubble is
+            // invariant instead of briefly compressing or expanding.
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                menuRevealDistance(for: geometry)
-            } action: { _, revealDistance in
-                guard !menuOpen, transcriptScrollPhase == .interacting else { return }
-                // A short ease on the live-drag value, not a raw assignment:
-                // onScrollGeometryChange is coalesced relative to the scroll
-                // view's own buttery-smooth native rubber-band, so writing
-                // the reveal distance straight through made the externally
-                // applied offset (which mirrors this on the conversation
-                // surface) step between samples instead of easing — visible
-                // as jitter through a slow, steady drag.
-                if revealDistance > 0.5 {
-                    if !menuPullActive {
-                        menuPullActive = true
-                        composerFocused = false
-                    }
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.06)) {
-                        menuPullDistance = revealDistance
-                    }
-                    // Hysteresis around the detent: a slow drag hovering at
-                    // the threshold otherwise toggles the haptic every point.
-                    let threshold = PullMenuMotion.openingCommitmentDistance(
-                        revealHeight: menuRevealHeight
-                    )
-                    let detentReached = menuDetentReached
-                        ? revealDistance > threshold - 14
-                        : revealDistance >= threshold
-                    updateMenuDetent(reached: detentReached)
-                } else if menuPullActive {
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.06)) {
-                        menuPullDistance = 0
-                    }
-                    updateMenuDetent(reached: false)
+                guard menuPullActive else { return 0 }
+                return transcriptContentDisplacement(for: geometry)
+            } action: { _, displacement in
+                guard menuPullActive else { return }
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    menuPullTranscriptCompensation = displacement
                 }
             }
-            .onScrollPhaseChange { oldPhase, newPhase, context in
+            .onScrollPhaseChange { _, newPhase, _ in
                 transcriptScrollPhase = newPhase
-                if oldPhase == .interacting, newPhase != .interacting, menuPullActive {
-                    finishPullMenu(releasedAt: menuRevealDistance(for: context.geometry))
-                    // The scroll view's own rubber-band keeps easing back
-                    // toward rest for a few more frames after this — on its
-                    // own timeline, independent of the spring finishPullMenu
-                    // just started, and before .scrollDisabled(menuOpen) has
-                    // actually taken effect. Snapping content back to rest
-                    // right now hands the whole reveal over to our own
-                    // animation immediately, instead of the two settling in
-                    // different places (the misaligned bubbles after a fast
-                    // release). This must be unconditionally instant — a
-                    // slow release with no momentum lands directly on
-                    // .idle, which would make scrollToBottom(using:) take
-                    // its animated branch and race finishPullMenu's spring,
-                    // the exact thing this is here to prevent.
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
             }
-            // The mask is the only edge fade: it applies per-pixel, so even a
-            // message taller than the viewport fades only where it actually
-            // leaves the screen. Per-row scroll transitions dimmed the whole
-            // bubble and were removed for exactly that reason.
+            // Keep the transcript fully legible at the top. The mask only
+            // softens its lower edge where content approaches the composer;
+            // per-row scroll transitions dimmed whole bubbles and were
+            // removed for exactly that reason.
             .mask {
                 LinearGradient(
                     stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: .black.opacity(0.4), location: 0.05),
-                        .init(color: .black.opacity(0.85), location: 0.115),
-                        .init(color: .black, location: 0.18),
+                        .init(color: .black, location: 0),
                         .init(color: .black, location: 0.94),
                         .init(color: .black.opacity(0.9), location: 0.985),
                         .init(color: .black.opacity(0.72), location: 1),
@@ -327,9 +357,6 @@ struct ChatView: View {
                     startPoint: .top,
                     endPoint: .bottom
                 )
-            }
-            .overlay(alignment: .top) {
-                topTranscriptVeil
             }
             .onAppear {
                 positionInitialConversationIfNeeded(using: proxy)
@@ -383,6 +410,7 @@ struct ChatView: View {
             .overlay(alignment: .bottom) {
                 composer
                     .safeAreaPadding(.bottom)
+                    .offset(y: menuPullActive ? menuPullTranscriptCompensation : 0)
                     .onGeometryChange(for: CGFloat.self) { geometry in
                         geometry.size.height
                     } action: { height in
@@ -406,6 +434,18 @@ struct ChatView: View {
 
     private var menuRevealProgress: CGFloat {
         min(max(visibleMenuRevealDistance / menuRevealHeight, 0), 1)
+    }
+
+    /// The content's position relative to its resting bottom anchor. Applying
+    /// this to the composer during a pull keeps the message/input gap fixed if
+    /// UIKit briefly repositions the ScrollView while its pan is disabled.
+    private func transcriptContentDisplacement(for geometry: ScrollGeometry) -> CGFloat {
+        let minimumOffset = -geometry.contentInsets.top
+        let contentBottomOffset = geometry.contentSize.height
+            - geometry.containerSize.height
+            + geometry.contentInsets.bottom
+        let restingBottomOffset = max(minimumOffset, contentBottomOffset)
+        return restingBottomOffset - geometry.contentOffset.y
     }
 
     private func messageRow(
@@ -441,11 +481,20 @@ struct ChatView: View {
     }
 
     private var conversationRevealDistance: CGFloat {
-        // The chat surface and menu meet on the same bottom plane. Moving the
-        // conversation by an extra safe-area inset left a visible air gap, so
-        // the screen looked like a separate sheet rather than something being
-        // peeled away from the controls beneath it.
-        visibleMenuRevealDistance
+        // The menu frame is bottom-aligned to the container safe area while
+        // its background bleeds under the home indicator. The conversation is
+        // edge-to-edge, so it has to travel the same physical distance: the
+        // reveal plus the device's bottom inset. Scale the inset with the live
+        // drag so both surfaces remain attached for the entire gesture.
+        visibleMenuRevealDistance + (deviceBottomSafeAreaInset * menuRevealProgress)
+    }
+
+    private var deviceBottomSafeAreaInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?
+            .safeAreaInsets.bottom ?? 0
     }
 
     private var menuSurfaceProgress: CGFloat {
@@ -468,23 +517,85 @@ struct ChatView: View {
         return progress * progress * (3 - (2 * progress))
     }
 
-    private func menuRevealDistance(for geometry: ScrollGeometry) -> CGFloat {
-        let minimumOffset = -geometry.contentInsets.top
-        let contentBottomOffset = geometry.contentSize.height
-            - geometry.containerSize.height
-            + geometry.contentInsets.bottom
-        let restingBottomOffset = max(minimumOffset, contentBottomOffset)
-        let nativeOverscroll = max(0, geometry.contentOffset.y - restingBottomOffset)
-        return min(nativeOverscroll * 1.55, menuRevealHeight)
-    }
-
     private func finishPullMenu(releasedAt releaseDistance: CGFloat) {
         setPullMenu(
-            open: PullMenuMotion.commitsToOpen(
+            open: PullMenuMotion.holdsOpeningDetent(
                 revealDistance: releaseDistance,
-                revealHeight: menuRevealHeight
+                revealHeight: menuRevealHeight,
+                detentHeld: menuDetentReached
             )
         )
+    }
+
+    private func pullMenuOpenGesture(
+        requiresTranscriptBottom: Bool,
+        minimumDistance: CGFloat = 0
+    ) -> some Gesture {
+        // Claim the pan at its first point so ScrollView cannot begin its own
+        // rubber-band before the pull becomes active. A zero translation is
+        // still ignored below, so ordinary taps remain ordinary taps.
+        DragGesture(minimumDistance: minimumDistance)
+            .onChanged { value in
+                guard !menuOpen else { return }
+
+                let pullDistance = PullMenuMotion.openingDistance(
+                    translationY: value.translation.height,
+                    revealHeight: menuRevealHeight
+                )
+                // A pull can begin only at the latest message, but once it
+                // starts it remains latched even as the ScrollView reports a
+                // transient non-bottom geometry during its rubber-band.
+                guard menuPullActive
+                    || ((!requiresTranscriptBottom || isAtBottom) && pullDistance > 0)
+                else { return }
+
+                if !menuPullActive {
+                    menuPullActive = true
+                    composerFocused = false
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        menuPullTranscriptCompensation = 0
+                    }
+                }
+
+                menuPullDistance = pullDistance
+
+                // Hysteresis around the detent: a slow drag hovering at the
+                // threshold otherwise toggles the haptic every point.
+                let detentReached = PullMenuMotion.holdsOpeningDetent(
+                    revealDistance: pullDistance,
+                    revealHeight: menuRevealHeight,
+                    detentHeld: menuDetentReached
+                )
+                updateMenuDetent(reached: detentReached)
+            }
+            .onEnded { value in
+                guard menuPullActive else { return }
+
+                let projectedPull = PullMenuMotion.projectedOpeningDistance(
+                    translationY: value.translation.height,
+                    predictedEndTranslationY: value.predictedEndTranslation.height,
+                    revealHeight: menuRevealHeight
+                )
+                finishPullMenu(releasedAt: projectedPull)
+            }
+    }
+
+    /// The target deliberately sits beside—not inside—the moving conversation
+    /// surface. Otherwise the target is offset under the finger while a drag
+    /// is being sampled, which can make a slow pull re-anchor and flicker.
+    private var pullMenuOpenGestureTarget: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .frame(maxWidth: .infinity)
+            .frame(height: 132)
+            // Take precedence over the ScrollView's pan recognizer. The
+            // gesture is attached before the padding so the composer remains
+            // fully interactive below this fixed pull zone.
+            .highPriorityGesture(pullMenuOpenGesture(requiresTranscriptBottom: true))
+            .padding(.bottom, composerHeight + 8)
+            .accessibilityHidden(true)
     }
 
     private var pullMenu: some View {
@@ -493,13 +604,10 @@ struct ChatView: View {
         let headerUnfurl = organicProgress(headerProgress)
 
         return VStack(spacing: 11) {
-            // The close-swipe lives on the grip handle alone, not the whole
-            // menu: sharing a DragGesture with the action grid raced the
-            // buttons' own tap recognizers (SwiftUI can misresolve a
-            // simultaneousGesture against a Button in the same view), which
-            // read as menu item taps just closing the menu and nothing else.
-            // The inset contentShape widens the handle's real hit area well
-            // past its painted 4pt height so the gesture stays easy to grab.
+            // The handle advertises that this sheet can be dragged closed.
+            // Its recognizer lives on the shared chat/menu container, so the
+            // same downward swipe works from a tile, its header, or the chat
+            // sheet. Its 10pt threshold leaves ordinary taps untouched.
             Capsule()
                 .fill(AssistantTheme.ink(for: colorScheme).opacity(colorScheme == .dark ? 0.3 : 0.15))
                 .frame(width: 42, height: 4)
@@ -509,26 +617,22 @@ struct ChatView: View {
                     anchor: .center
                 )
                 .opacity(headerVisibility)
-                // -20 rather than -12: the painted handle is 4pt tall, so this
-                // is what takes the only close-drag target in the menu up to
-                // the 44pt minimum.
-                .contentShape(Rectangle().inset(by: -20))
-                .simultaneousGesture(pullMenuCloseGesture)
 
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(usesExtraLargeAccessibilityMenu ? "Workspace" : "Assistant workspace")
+                    Text("Menu")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                    Text(usesExtraLargeAccessibilityMenu ? "Pull down" : "Everything in one place")
-                        .font(.caption)
+                    Text("Swipe down to close")
+                        .font(.caption2)
                         .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 }
+                .accessibilityElement(children: .combine)
 
                 Spacer()
-
                 menuAutonomyToggle
             }
+            .frame(height: 40)
             .opacity(headerVisibility)
             .offset(y: (1 - headerUnfurl) * 12)
             .scaleEffect(
@@ -547,11 +651,14 @@ struct ChatView: View {
             // inside the safe area, so without this the stage color shows
             // through as a strip under the menu by the home indicator.
             ZStack {
+                // Keep the submenu's familiar neutral-gray canvas. The green
+                // conversation stage remains behind this half-opacity glass,
+                // rather than becoming the submenu's own color.
                 AssistantTheme.canvas(for: colorScheme)
                 LinearGradient(
                     colors: [
-                        AssistantTheme.raised(for: colorScheme).opacity(colorScheme == .dark ? 0.38 : 0.72),
-                        AssistantTheme.canvas(for: colorScheme).opacity(0.96),
+                        AssistantTheme.raised(for: colorScheme).opacity(colorScheme == .dark ? 0.19 : 0.36),
+                        AssistantTheme.canvas(for: colorScheme).opacity(0.48),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -602,29 +709,29 @@ struct ChatView: View {
     }
 
     // Eight primary destinations, two rows of four. The lower-traffic areas
-    // (Documents, Skills, Anomalies, Improvements) live under Settings, which
+    // (Documents, Skills, Costs, Anomalies, Improvements) live under More, which
     // keeps every label here a single scannable word and the grid symmetric.
     @ViewBuilder
     private var pullMenuActionButtons: some View {
         pullMenuButton("Chat", icon: "bubble.left", isSelected: true, index: 0) {
             closePullMenu()
         }
-        pullMenuButton("Chats", icon: "bubble.left.and.bubble.right", index: 1) {
-            openRoute(.chats)
-        }
-        pullMenuButton("Activity", icon: "waveform.path.ecg", index: 2) {
+        pullMenuButton("Activity", icon: "waveform.path.ecg", index: 1) {
             openRoute(.activity)
         }
-        pullMenuButton("Goals", icon: "scope", index: 3) {
+        pullMenuButton("Goals", icon: "scope", index: 2) {
             openRoute(.goals)
         }
         pullMenuButton(
             "Approvals",
             icon: "checkmark.shield",
             badge: model.pendingApprovalCount,
-            index: 4
+            index: 3
         ) {
             openRoute(.approvals)
+        }
+        pullMenuButton("Chats", icon: "bubble.left.and.bubble.right", index: 4) {
+            openRoute(.chats)
         }
         pullMenuButton(
             "Memory",
@@ -634,10 +741,10 @@ struct ChatView: View {
         ) {
             openRoute(.memory)
         }
-        pullMenuButton("Costs", icon: "dollarsign.circle", index: 6) {
-            openRoute(.costs)
+        pullMenuButton("Capabilities", icon: "puzzlepiece.extension", index: 6) {
+            openRoute(.capabilities)
         }
-        pullMenuButton("Settings", icon: "slider.horizontal.3", index: 7) {
+        pullMenuButton("More", icon: "ellipsis", index: 7) {
             openRoute(.settings)
         }
     }
@@ -648,7 +755,7 @@ struct ChatView: View {
             menuActionFeedback += 1
         } label: {
             Label(
-                autonomous ? "Auto on" : "Auto",
+                autonomous ? "Auto on" : "Auto next",
                 systemImage: autonomous ? "bolt.shield.fill" : "bolt.shield"
             )
             .font(.caption.weight(.semibold))
@@ -676,6 +783,7 @@ struct ChatView: View {
         )
         .accessibilityLabel(autonomous ? "Turn autonomous work off" : "Turn autonomous work on")
         .accessibilityValue(autonomous ? "On" : "Off")
+        .accessibilityHint("Applies to the next message only")
     }
 
     private func pullMenuButton(
@@ -727,6 +835,15 @@ struct ChatView: View {
                 )
                 .frame(maxWidth: .infinity)
                 .frame(height: menuButtonHeight)
+                .overlay(alignment: .topTrailing) {
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(8)
+                            .accessibilityHidden(true)
+                    }
+                }
             }
         }
         .buttonStyle(
@@ -758,6 +875,8 @@ struct ChatView: View {
         .accessibilityIdentifier(
             "assistant.chat.menu.\(title.lowercased().replacingOccurrences(of: " ", with: "-"))"
         )
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityRemoveTraits(isSelected ? [] : .isSelected)
     }
 
     @ViewBuilder
@@ -773,8 +892,8 @@ struct ChatView: View {
                     .regular
                         .tint(
                             isSelected
-                                ? AssistantTheme.accent(for: colorScheme).opacity(0.78)
-                                : .white.opacity(0.11)
+                                ? AssistantTheme.accent(for: colorScheme).opacity(0.39)
+                                : .white.opacity(0.055)
                         )
                         .interactive(),
                     in: shape
@@ -783,8 +902,8 @@ struct ChatView: View {
             content()
                 .background(
                     isSelected
-                        ? AssistantTheme.accent(for: colorScheme)
-                        : AssistantTheme.raised(for: colorScheme),
+                        ? AssistantTheme.accent(for: colorScheme).opacity(0.5)
+                        : AssistantTheme.raised(for: colorScheme).opacity(0.5),
                     in: shape
                 )
                 .overlay {
@@ -797,7 +916,10 @@ struct ChatView: View {
         DragGesture(minimumDistance: 10)
             .onChanged { value in
                 guard menuOpen else { return }
-                let dragDistance = min(max(value.translation.height, 0), menuRevealHeight)
+                let dragDistance = PullMenuMotion.closingDistance(
+                    translationY: value.translation.height,
+                    revealHeight: menuRevealHeight
+                )
                 menuCloseDragDistance = dragDistance
                 // Same hysteresis as the opening detent, mirrored.
                 let willClose = PullMenuMotion.closesOnRelease(
@@ -809,9 +931,10 @@ struct ChatView: View {
             }
             .onEnded { value in
                 guard menuOpen else { return }
-                let projectedDistance = max(
-                    value.translation.height,
-                    value.predictedEndTranslation.height
+                let projectedDistance = PullMenuMotion.projectedClosingDistance(
+                    translationY: value.translation.height,
+                    predictedEndTranslationY: value.predictedEndTranslation.height,
+                    revealHeight: menuRevealHeight
                 )
                 // Released against the same edge the detent last reported, so
                 // the haptic the finger felt and the outcome always agree.
@@ -848,6 +971,7 @@ struct ChatView: View {
         withTransaction(normalizationTransaction) {
             menuPullDistance = currentRevealDistance
             menuCloseDragDistance = 0
+            menuPullTranscriptCompensation = 0
         }
 
         menuOpen = open
@@ -913,26 +1037,6 @@ struct ChatView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var topTranscriptVeil: some View {
-        // The edge treatment is deliberately pigment-only. A material veil
-        // caught the crown and created a bright, floating glow behind the
-        // Dynamic Island; the scroll mask and per-row edge motion already
-        // provide the required fade and blur.
-        LinearGradient(
-            colors: [
-                AssistantTheme.stageDepth.opacity(reduceTransparency ? 0.2 : 0.12),
-                AssistantTheme.stageDepth.opacity(reduceTransparency ? 0.07 : 0.025),
-                .clear,
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .frame(height: 118)
-        .offset(y: -30)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
     private func starter(_ text: String, prompt: String, icon: String) -> some View {
         Button {
             sendFeedback += 1
@@ -957,6 +1061,8 @@ struct ChatView: View {
 
     private var composer: some View {
         VStack(spacing: 8) {
+            menuPullTab
+
             if autonomous {
                 autonomousNotice
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
@@ -991,6 +1097,7 @@ struct ChatView: View {
                     }
                 }
                 .scrollClipDisabled()
+                .opacity(0.5)
                 .transition(.opacity)
             }
 
@@ -1003,8 +1110,8 @@ struct ChatView: View {
             LinearGradient(
                 colors: [
                     .clear,
-                    AssistantTheme.stage(for: colorScheme, mood: model.latestMood).opacity(0.06),
-                    AssistantTheme.stage(for: colorScheme, mood: model.latestMood).opacity(0.24),
+                    AssistantTheme.stage(for: colorScheme, mood: model.latestMood).opacity(0.03),
+                    AssistantTheme.stage(for: colorScheme, mood: model.latestMood).opacity(0.12),
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -1018,6 +1125,49 @@ struct ChatView: View {
         // composer changed height in a hard step at the start and end of every
         // turn.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.isSending)
+    }
+
+    private var menuPullTab: some View {
+        Button {
+            openPullMenu()
+        } label: {
+            ZStack {
+                Color.clear
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("Menu")
+                        .font(.caption2.weight(.semibold))
+                }
+                .foregroundStyle(AssistantTheme.stageStrong.opacity(0.86))
+                .padding(.horizontal, 11)
+                .frame(height: 28)
+                .background(.black.opacity(colorScheme == .dark ? 0.2 : 0.13), in: Capsule())
+                .overlay {
+                    Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 0.7)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 32)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(
+            AssistantTactileButtonStyle(
+                reduceMotion: reduceMotion,
+                pressedScale: 0.97
+            )
+        )
+        // Tapping is the discoverable shortcut; dragging upward from the same
+        // visible tab preserves the physical pull interaction.
+        .highPriorityGesture(
+            pullMenuOpenGesture(
+                requiresTranscriptBottom: false,
+                minimumDistance: 8
+            )
+        )
+        .accessibilityLabel("Open menu")
+        .accessibilityHint("Tap or swipe up to show destinations")
+        .accessibilityIdentifier("assistant.chat.menu-handle")
     }
 
     private var autonomousNotice: some View {
@@ -1116,8 +1266,8 @@ struct ChatView: View {
                     .background(
                         AssistantTheme.raised(for: colorScheme).opacity(
                             model.isSending
-                                ? 0.56
-                                : (!canSend ? 0.12 : 0.68)
+                                ? 0.28
+                                : (!canSend ? 0.06 : 0.34)
                         ),
                         in: Circle()
                     )
@@ -1187,12 +1337,7 @@ struct ChatView: View {
     }
 
     private var composerPlaceholderColor: Color {
-        // Same warm white as the jump-to-latest label, per owner feedback — but
-        // set back from the typed text, which now sits at full strength. The
-        // two were the other way round, so the prompt outweighed the content.
-        AssistantTheme.stageStrong.opacity(
-            colorSchemeContrast == .increased ? 0.78 : 0.62
-        )
+        Color.white
     }
 
     private var composerCursorColor: Color {
@@ -1217,7 +1362,11 @@ struct ChatView: View {
                 .background {
                     shape.fill(
                         AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
-                            .opacity(reduceTransparency ? 0.38 : (composerFocused ? 0.3 : 0.22))
+                            // Keep the input visually grounded in the green
+                            // conversation stage; the liquid glass remains
+                            // above it, while 85% of the surface remains the
+                            // darker green conversation stage.
+                            .opacity(0.85)
                     )
                 }
                 // Not .interactive(): the glass would expand slightly on
@@ -1231,7 +1380,7 @@ struct ChatView: View {
                                 .opacity(
                                     reduceTransparency
                                         ? 0.42
-                                        : (composerFocused ? 0.13 : 0.08)
+                                        : (composerFocused ? 0.065 : 0.04)
                                 )
                         ),
                     in: shape
@@ -1243,7 +1392,7 @@ struct ChatView: View {
                         shape.fill(.ultraThinMaterial)
                         shape.fill(
                             AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
-                                .opacity(composerFocused ? 0.49 : 0.4)
+                                .opacity(0.85)
                         )
                         shape.fill(
                             LinearGradient(
@@ -1309,14 +1458,14 @@ struct ChatView: View {
                     Capsule()
                         .fill(
                             AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
-                                .opacity(reduceTransparency ? 0.42 : 0.34)
+                                .opacity(0.85)
                         )
                 }
                 .glassEffect(
                     glass
                         .tint(
                             AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
-                                .opacity(reduceTransparency ? 0.46 : 0.2)
+                                .opacity(reduceTransparency ? 0.46 : 0.1)
                         )
                         .interactive(),
                     in: Capsule()
@@ -1337,7 +1486,7 @@ struct ChatView: View {
                         .overlay {
                             Capsule().fill(
                                 AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
-                                    .opacity(0.6)
+                                    .opacity(0.85)
                             )
                         }
                 }
@@ -1390,7 +1539,7 @@ struct ChatView: View {
     }
 
     private var pinsTranscriptToBottom: Bool {
-        !userIsDraggingTranscript && !model.isSending
+        !userIsDraggingTranscript && !menuPullActive && !model.isSending
     }
 
     private func scrollToBottom(using proxy: ScrollViewProxy) {

@@ -28,9 +28,8 @@ struct GoalsView: View {
         .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("Goals")
         .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
-        // No local toolbar item: the sheet wrapper in RootView already puts a
-        // close button in .topBarTrailing for every route, and the card-level
-        // "Continue in chat" button covers the rest.
+        // Navigation back returns to chat; the card-level "Continue in chat"
+        // button remains the direct route back into the conversation.
         .refreshable { await model.refreshAll() }
         .task { if model.overview == nil { await model.refreshOverview() } }
     }

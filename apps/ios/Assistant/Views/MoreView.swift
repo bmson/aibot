@@ -36,6 +36,11 @@ struct MoreView: View {
             // primary destinations; these open from here instead.
             Section("Workspace") {
                 NavigationLink {
+                    WorkspaceView(area: .capabilities)
+                } label: {
+                    Label("Capabilities", systemImage: "puzzlepiece.extension")
+                }
+                NavigationLink {
                     WorkspaceView(area: .documents)
                 } label: {
                     Label("Documents", systemImage: "doc.text")
@@ -44,6 +49,11 @@ struct MoreView: View {
                     WorkspaceView(area: .skills)
                 } label: {
                     Label("Skills", systemImage: "lightbulb")
+                }
+                NavigationLink {
+                    WorkspaceView(area: .costs)
+                } label: {
+                    Label("Costs", systemImage: "dollarsign.circle")
                 }
                 NavigationLink {
                     WorkspaceView(area: .anomalies)
@@ -91,7 +101,7 @@ struct MoreView: View {
         }
         .scrollContentBackground(.hidden)
         .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
-        .navigationTitle("Settings")
+        .navigationTitle("More")
         .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
         .refreshable {
             async let overviewRefresh: Void = model.refreshAll()

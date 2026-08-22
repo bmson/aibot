@@ -1,9 +1,8 @@
 import SwiftUI
-import UIKit
 
-/// Foreground counterpart to the system Live Activity. The collapsed surface
-/// sits directly behind the hardware cutout, then grows downward from that
-/// same top edge when work is active.
+/// Foreground counterpart to the system Live Activity. Active work surrounds
+/// the camera with one native-style black surface; idle leaves the hardware
+/// Dynamic Island untouched.
 struct ActivityCrown: View {
     let thought: AssistantThought?
     let detail: String?
@@ -151,7 +150,7 @@ struct ActivityCrown: View {
     }
 
     private var expandedWidth: CGFloat {
-        guard let thought else { return collapsedWidth }
+        guard let thought else { return Self.collapsedWidth }
         if usesAccessibilityLayout {
             return Self.accessibilityExpandedWidth
         }
@@ -170,39 +169,31 @@ struct ActivityCrown: View {
             : Self.standardExpandedHeight
     }
 
-    private var collapsedWidth: CGFloat { 126 }
-
     // Geometry the crown is built from. These are shared so a sibling overlay
     // can work out how much of the screen the crown occupies without
     // duplicating the numbers.
     static let collapsedHeight: CGFloat = 37
+    static let collapsedWidth: CGFloat = 126
+    /// The physical top edge of the Dynamic Island in the app's full-screen
+    /// coordinate space.
+    static let islandTopInset: CGFloat = 14
     static let standardExpandedHeight: CGFloat = 76
     static let accessibilityExpandedHeight: CGFloat = 188
     static let accessibilityExpandedWidth: CGFloat = 342
-    /// Distance from the top of the display to the crown's own top edge, which
-    /// is where the hardware cutout begins on the devices this is drawn for.
-    static let cutoutTopMargin: CGFloat = 10
 
     private var expandedCornerRadius: CGFloat {
         usesAccessibilityLayout ? 28 : 24
     }
 
-    /// The foreground surface needs to read as an extension of the hardware
-    /// cutout. State lives in the glyph and label, not in a glowing backdrop
-    /// that can spill onto the transcript behind it.
-    ///
-    /// The idle surface is fully transparent. It used to paint black
-    /// unconditionally, which is invisible only while it is sitting behind a
-    /// Dynamic Island: on a notch device, on iPad, or on any island iPhone
-    /// rotated into landscape — where the top inset collapses and the lift
-    /// goes to zero — it read as a black pill floating over the transcript.
+    /// The active surface surrounds the camera just like the native expanded
+    /// Dynamic Island. Idle draws nothing, leaving only the hardware pill.
     private var crownBackground: some View {
-        let shape = RoundedRectangle(
+        RoundedRectangle(
             cornerRadius: thought == nil ? 19 : expandedCornerRadius,
             style: .continuous
         )
-
-        return shape.fill(.black).opacity(thought == nil ? 0 : 1)
+        .fill(.black)
+        .opacity(thought == nil ? 0 : 1)
     }
 
     private var crownRim: Color {
@@ -232,32 +223,15 @@ struct ActivityCrown: View {
             .joined(separator: ": ")
     }
 
-    /// The window's top safe-area inset, read straight from UIKit. This is only
-    /// a seed: it is correct once the key window exists but never reports a
-    /// change, so the view that positions the crown measures the inset itself
-    /// and feeds it back through `lift(forTopInset:)`.
-    static var windowTopInset: CGFloat {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first(where: \.isKeyWindow)?
-            .safeAreaInsets.top ?? 0
-    }
-
-    /// The app's safe-area layout begins below the camera housing. Pull the
-    /// custom surface back into that space so its collapsed frame and the
-    /// physical pill share the same origin.
-    static func lift(forTopInset topInset: CGFloat) -> CGFloat {
-        max(0, topInset - cutoutTopMargin)
-    }
-
     /// How far the expanded crown hangs below the top of the app's safe area —
     /// what a top-aligned overlay inside the chat has to clear to avoid being
     /// drawn underneath it. Uses the smallest cutout inset the crown is drawn
     /// for, so the clearance errs generous on taller devices.
     static func safeAreaOverhang(isAccessibilitySize: Bool) -> CGFloat {
-        let height = isAccessibilitySize ? accessibilityExpandedHeight : standardExpandedHeight
-        return max(0, cutoutTopMargin + height - smallestCutoutInset)
+        let height = isAccessibilitySize
+            ? accessibilityExpandedHeight
+            : standardExpandedHeight
+        return max(0, islandTopInset + height - smallestCutoutInset)
     }
 
     /// Top safe-area inset of the shallowest cutout device this runs on.

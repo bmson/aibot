@@ -11,6 +11,7 @@ enum AssistantRoute: String, Hashable, Identifiable, CaseIterable {
     case memory
     case documents
     case skills
+    case capabilities
     case settings
     case costs
     case anomalies

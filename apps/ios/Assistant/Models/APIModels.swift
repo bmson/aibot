@@ -361,10 +361,41 @@ struct WorkspaceResponse: Codable, Sendable {
     let chats: WorkspaceChats
     let memory: WorkspaceMemory
     let skills: [WorkspaceSkill]
+    // Optional so a newer app remains usable while an older server is still
+    // rolling out the capabilities projection.
+    let capabilities: [WorkspaceCapability]?
     let settings: WorkspaceSettings
     let costs: WorkspaceCosts
     let anomalies: [WorkspaceAnomaly]
     let improvements: [WorkspaceImprovement]
+}
+
+struct WorkspaceCapability: Codable, Identifiable, Sendable {
+    let id: String
+    let title: String
+    let summary: String
+    let enabled: Bool
+    let ready: Bool
+    let detail: String
+
+    var statusTitle: String {
+        if !enabled { return "Off" }
+        return ready ? "Ready" : "Setup needed"
+    }
+
+    var icon: String {
+        switch id {
+        case "browser": "safari"
+        case "code": "terminal"
+        case "documents": "doc.text.magnifyingglass"
+        case "google": "square.grid.2x2"
+        case "reminders": "bell.badge"
+        case "search": "magnifyingglass"
+        case "sms": "message"
+        case "watches": "eye"
+        default: "puzzlepiece.extension"
+        }
+    }
 }
 
 struct WorkspaceChats: Codable, Sendable {
@@ -480,6 +511,19 @@ struct WorkspaceCostBreakdown: Codable, Identifiable, Sendable {
     let source: String
     let usd: String?
     let count: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case usd
+        case count
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        source = try container.decode(String.self, forKey: .source)
+        usd = try container.decodeIfPresent(String.self, forKey: .usd)
+        count = try container.decodeIntegerOrPostgresCount(forKey: .count)
+    }
 }
 
 struct WorkspaceModelBreakdown: Codable, Identifiable, Sendable {
@@ -487,6 +531,19 @@ struct WorkspaceModelBreakdown: Codable, Identifiable, Sendable {
     let model: String
     let usd: String?
     let count: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case model
+        case usd
+        case count
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        model = try container.decode(String.self, forKey: .model)
+        usd = try container.decodeIfPresent(String.self, forKey: .usd)
+        count = try container.decodeIntegerOrPostgresCount(forKey: .count)
+    }
 }
 
 struct WorkspaceHeldCost: Codable, Identifiable, Sendable {
@@ -533,6 +590,30 @@ struct WorkspaceImprovement: Codable, Identifiable, Sendable {
     let evidenceCount: Int
     let applyable: Bool
     let createdAt: String
+}
+
+private extension KeyedDecodingContainer {
+    /// PostgreSQL drivers often serialize aggregate `count(*)` columns as
+    /// strings, while the mobile API's current contract sends an integer. The
+    /// app accepts both so an updated client remains compatible with a server
+    /// that has not yet deployed the contract normalization.
+    func decodeIntegerOrPostgresCount(forKey key: Key) throws -> Int {
+        if let integer = try? decode(Int.self, forKey: key) {
+            return integer
+        }
+
+        let string = try decode(String.self, forKey: key)
+        guard let integer = Int(string) else {
+            throw DecodingError.typeMismatch(
+                Int.self,
+                .init(
+                    codingPath: codingPath + [key],
+                    debugDescription: "Expected an integer or a PostgreSQL count string."
+                )
+            )
+        }
+        return integer
+    }
 }
 
 struct ChatUpdates: Codable, Sendable {

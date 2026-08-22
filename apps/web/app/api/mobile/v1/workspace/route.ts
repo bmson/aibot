@@ -1,4 +1,5 @@
 import { getCostsDashboard, getProfileOverview } from '@assistant/application';
+import { assistantModuleMetas, moduleDiagnostics } from '@assistant/modules/meta';
 import { policyLabels, scheduleLabels } from '@/app/settings/labels';
 import { getApplication, getDb } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
@@ -15,6 +16,9 @@ export async function GET(request: Request): Promise<Response> {
 
   const application = getApplication();
   const db = getDb();
+  const diagnosticsByModule = new Map(
+    moduleDiagnostics().map((diagnostic) => [diagnostic.module, diagnostic]),
+  );
   const [currentChats, archivedChats, profile, skills, settings, costs, anomalies, improvements] =
     await Promise.all([
       application.listChatHistory(false),
@@ -83,6 +87,17 @@ export async function GET(request: Request): Promise<Response> {
       failureCount: skill.failureCount,
       updatedAt: skill.updatedAt,
     })),
+    capabilities: assistantModuleMetas.map((meta) => {
+      const diagnostic = diagnosticsByModule.get(meta.name);
+      return {
+        id: meta.name,
+        title: meta.title,
+        summary: meta.summary,
+        enabled: diagnostic?.enabled ?? false,
+        ready: diagnostic?.ready ?? false,
+        detail: diagnostic?.detail ?? 'unavailable',
+      };
+    }),
     settings: {
       agent: {
         name: settings.agent.name,
@@ -124,8 +139,18 @@ export async function GET(request: Request): Promise<Response> {
         : null,
       taskDefaultLimit: costs.taskDefaultLimit,
       parkedTasks: costs.parkedTasks,
-      bySource: costs.bySource,
-      byModel: costs.byModel,
+      // PostgreSQL's aggregate count is returned as a string by the driver.
+      // The native contract uses an integer for both of these values, so
+      // normalize it at the API boundary rather than making iOS decode a
+      // database representation.
+      bySource: costs.bySource.map((row) => ({
+        ...row,
+        count: Number(row.count),
+      })),
+      byModel: costs.byModel.map((row) => ({
+        ...row,
+        count: Number(row.count),
+      })),
       held: costs.held,
       topTasks: costs.topTasks,
       recent: costs.recent,
