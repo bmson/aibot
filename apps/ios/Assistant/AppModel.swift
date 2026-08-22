@@ -114,15 +114,27 @@ final class AppModel: ObservableObject {
         isLoading = true
         errorMessage = nil
         do {
-            async let boot = client.bootstrap()
-            async let overview = client.overview()
-            let (loadedBoot, loadedOverview) = try await (boot, overview)
-            apply(loadedBoot)
-            self.overview = loadedOverview
-            await reconcileBaselineActivity()
-            await syncNotificationBadge()
+            // Bootstrap alone decides whether the pairing is usable: it carries
+            // the identity and the conversation the app opens onto, and it is
+            // what `bootstrap != nil` gates entry on. Overview is supplementary
+            // — approvals, activity, goals — and fetching both in one
+            // `try await` meant a single failing dashboard query rejected an
+            // otherwise valid connection outright.
+            apply(try await client.bootstrap())
             hasSavedConnection = true
             defaults.set(true, forKey: configuredKey)
+
+            do {
+                overview = try await client.overview()
+            } catch {
+                // Non-fatal: the app is connected and usable, the dashboard
+                // sections are just empty. Surfacing it keeps the failure
+                // visible instead of presenting stale counts as current.
+                errorMessage = error.localizedDescription
+            }
+
+            await reconcileBaselineActivity()
+            await syncNotificationBadge()
             startIdlePolling()
         } catch {
             errorMessage = error.localizedDescription
@@ -134,7 +146,16 @@ final class AppModel: ObservableObject {
     func saveConnection(serverURL: String, token: String) async -> Bool {
         do {
             let configuration = try Self.configuration(urlString: serverURL, token: token)
-            try KeychainStore.saveToken(token.trimmingCharacters(in: .whitespacesAndNewlines))
+            // A Keychain refusal must not reject a valid pairing. The token is
+            // already held in the APIConfiguration for this session, so the
+            // only real consequence is having to enter it again next launch —
+            // reported after a successful connect rather than instead of one.
+            var keychainWarning: String?
+            do {
+                try KeychainStore.saveToken(token.trimmingCharacters(in: .whitespacesAndNewlines))
+            } catch {
+                keychainWarning = "Connected, but this device refused to store the key (\(error.localizedDescription)). You will need to enter it again next launch."
+            }
             let normalized = configuration.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             self.serverURL = normalized
             defaults.set(normalized, forKey: serverKey)
@@ -142,6 +163,7 @@ final class AppModel: ObservableObject {
             await connect()
             if bootstrap != nil {
                 showingConnection = false
+                if let keychainWarning { errorMessage = keychainWarning }
                 return true
             }
         } catch {

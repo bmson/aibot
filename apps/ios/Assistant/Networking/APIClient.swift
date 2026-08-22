@@ -10,6 +10,7 @@ enum APIError: LocalizedError {
     case invalidResponse
     case unauthorized
     case server(status: Int, message: String)
+    case decoding(model: String, detail: String)
 
     var errorDescription: String? {
         switch self {
@@ -17,7 +18,30 @@ enum APIError: LocalizedError {
         case .invalidResponse: "The server returned an unreadable response."
         case .unauthorized: "The access key was not accepted by this Assistant server."
         case let .server(_, message): message
+        case let .decoding(model, detail): "Could not read the \(model) response: \(detail)."
         }
+    }
+
+    /// Name the field that failed rather than collapsing every mismatch into
+    /// "unreadable response" — a decode failure against a server that answered
+    /// 200 is otherwise indistinguishable from a network problem.
+    static func decodeFailure(_ error: Error, as type: Any.Type) -> APIError {
+        let model = String(describing: type)
+        guard let decodingError = error as? DecodingError else {
+            return .decoding(model: model, detail: error.localizedDescription)
+        }
+        func at(_ context: DecodingError.Context) -> String {
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return path.isEmpty ? "the top level" : "'\(path)'"
+        }
+        let detail: String = switch decodingError {
+        case let .keyNotFound(key, context): "'\(key.stringValue)' is missing at \(at(context))"
+        case let .typeMismatch(_, context): "unexpected type at \(at(context))"
+        case let .valueNotFound(_, context): "an expected value was null at \(at(context))"
+        case let .dataCorrupted(context): "malformed data at \(at(context))"
+        @unknown default: "an unrecognized decoding failure"
+        }
+        return .decoding(model: model, detail: detail)
     }
 }
 
@@ -133,7 +157,7 @@ struct APIClient: Sendable {
         do {
             return try JSONDecoder().decode(type, from: data)
         } catch {
-            throw APIError.invalidResponse
+            throw APIError.decodeFailure(error, as: type)
         }
     }
 
