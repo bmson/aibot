@@ -1,0 +1,112 @@
+name: iOS
+
+permissions:
+  contents: read
+
+# A separate workflow rather than a fourth job in CI, deliberately.
+#
+# `deploy.yml` starts on the CI workflow's conclusion — "the AND of all three"
+# jobs, as ci.yml puts it. Folding the iOS build into that AND would mean a
+# broken Swift file, a macOS runner outage, or an Xcode image bump blocking a
+# Cloud Run rollout of server code it has nothing to do with. `apps/ios` ships
+# in no image and no compose service; its build result should gate the app, not
+# production.
+#
+# To make this a hard merge gate, add "Build and test the iOS app" to the
+# branch's required status checks. Note the interaction with the path filter
+# below: a required check that never runs blocks a PR forever, so if you make
+# it required, drop `paths:` and let the job run (and exit fast) everywhere.
+on:
+  pull_request:
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios.yml'
+  # Every branch, not just main: the path filter already keeps this off the
+  # runner for server-only work, and a Swift change is worth checking before it
+  # reaches a pull request. macOS minutes bill at ten times Linux, so the filter
+  # is what makes this affordable — keep it.
+  push:
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and test the iOS app
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # The app targets iOS 18 but compiles iOS 26 APIs behind
+      # `if #available(iOS 26.0, *)` — the Liquid Glass surfaces in ChatView.
+      # Availability-gated code still has to type-check, so the *SDK* has to be
+      # new enough even though the deployment target is not. Runner images move
+      # under us, so take the newest Xcode present and print what that was:
+      # when this fails, the log should say "no iOS 26 SDK" rather than leaving
+      # someone to infer it from a `glassEffect` error.
+      - name: Select the newest installed Xcode
+        run: |
+          latest="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$latest" ]; then
+            echo "::error::No Xcode found on this runner image."
+            exit 1
+          fi
+          sudo xcode-select -s "$latest"
+          echo "Using $latest"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i "iphoneos" || true
+
+      # Pinning a device name ties the workflow to whatever the runner image
+      # happens to preinstall, which changes without notice. Resolve the newest
+      # available iPhone simulator instead and fail loudly if there is none.
+      - name: Resolve an iPhone simulator
+        id: simulator
+        run: |
+          udid="$(xcrun simctl list devices available --json \
+            | jq -r '.devices
+                     | to_entries
+                     | map(select(.key | test("SimRuntime.iOS")))
+                     | sort_by(.key)
+                     | map(.value[])
+                     | map(select(.name | startswith("iPhone")))
+                     | last
+                     | .udid // empty')"
+          if [ -z "$udid" ]; then
+            echo "::error::No available iPhone simulator on this runner image."
+            xcrun simctl list devices available
+            exit 1
+          fi
+          xcrun simctl list devices available | grep "$udid"
+          echo "udid=${udid}" >> "$GITHUB_OUTPUT"
+
+      # Code signing is off: the project carries a DEVELOPMENT_TEAM for local
+      # device builds, and a runner has no certificate for it. A simulator build
+      # does not need one — and this job is here to prove the code compiles and
+      # the tests pass, not to produce a shippable artifact. Releases are signed
+      # and uploaded from Xcode; see apps/ios/docs/shipping.md.
+      - name: Build and test
+        env:
+          DESTINATION_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project apps/ios/Assistant.xcodeproj \
+            -scheme Assistant \
+            -destination "id=${DESTINATION_UDID}" \
+            -resultBundlePath "${RUNNER_TEMP}/Assistant.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            test
+
+      # The result bundle carries the failing assertion and any crash logs,
+      # which the console output truncates.
+      - name: Upload the test results
+        if: failure()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: ios-xcresult-${{ github.sha }}
+          path: ${{ runner.temp }}/Assistant.xcresult
+          retention-days: 14

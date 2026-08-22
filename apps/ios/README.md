@@ -12,7 +12,8 @@ The native SwiftUI client keeps the agent runtime on the existing Assistant serv
 - a Keychain-stored mobile credential, Dynamic Type, dark mode, and Reduce Motion support.
 
 Open findings on the visual and interaction layer are tracked in
-[`docs/visual-qa.md`](docs/visual-qa.md).
+[`docs/visual-qa.md`](docs/visual-qa.md). Getting a build to TestFlight is
+[`docs/shipping.md`](docs/shipping.md) — the app does not ship from CI.
 
 ## Run locally
 
