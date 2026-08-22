@@ -16,14 +16,16 @@ struct StatusPill: View {
                 )
                 .accessibilityHidden(true)
             Text(label)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(color.opacity(0.12), in: Capsule())
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Status: \(label)")
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(color.opacity(0.12), in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Status: \(label)")
     }
 
     private var label: String { status.sentenceCaseIdentifier }
@@ -41,9 +43,10 @@ struct StatusPill: View {
 
     private var color: Color {
         switch status {
-        case "done", "approved", "ready": AssistantTheme.accent(for: colorScheme)
+        case "running": AssistantTheme.accent(for: colorScheme)
+        case "done", "approved", "ready": AssistantTheme.success(for: colorScheme)
         case "failed", "denied", "cancelled": .red
-        case "waiting_approval", "waiting_budget", "needs_attention": .orange
+        case "waiting_approval", "waiting_budget", "needs_attention": AssistantTheme.warning(for: colorScheme)
         default: .secondary
         }
     }

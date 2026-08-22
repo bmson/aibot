@@ -93,6 +93,8 @@ struct ConnectionView: View {
             .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
         }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollDismissesKeyboard(.interactively)
         .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle(isOnboarding ? "Connect Assistant" : "Connection")
         .navigationBarTitleDisplayMode(.inline)

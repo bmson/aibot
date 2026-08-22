@@ -174,12 +174,44 @@ struct ActivityCrown: View {
     // duplicating the numbers.
     static let collapsedHeight: CGFloat = 37
     static let collapsedWidth: CGFloat = 126
-    /// The physical top edge of the Dynamic Island in the app's full-screen
-    /// coordinate space.
-    static let islandTopInset: CGFloat = 14
+    /// Resolves the physical Island's top edge from the device's safe area.
+    /// Dynamic Island phones keep 48pt between that edge and the safe-area
+    /// boundary. Pulling the crown one additional point upward prevents a
+    /// scaled or antialiased frame from exposing a hairline of stage color.
+    static func islandTopInset(safeAreaTopInset: CGFloat) -> CGFloat {
+        guard safeAreaTopInset >= dynamicIslandSafeAreaThreshold else {
+            return legacyIslandTopInset
+        }
+
+        return max(
+            0,
+            safeAreaTopInset - dynamicIslandSafeAreaClearance - attachmentOverlap
+        )
+    }
+
+    private static let dynamicIslandSafeAreaThreshold: CGFloat = 55
+    private static let dynamicIslandSafeAreaClearance: CGFloat = 48
+    private static let attachmentOverlap: CGFloat = 1
+    private static let legacyIslandTopInset: CGFloat = 14
     static let standardExpandedHeight: CGFloat = 76
     static let accessibilityExpandedHeight: CGFloat = 188
     static let accessibilityExpandedWidth: CGFloat = 342
+
+    static func screenClearanceHeight(
+        isAccessibilitySize: Bool,
+        isExpanded: Bool,
+        islandTopInset: CGFloat
+    ) -> CGFloat {
+        let height: CGFloat
+        if !isExpanded {
+            height = collapsedHeight
+        } else if isAccessibilitySize {
+            height = accessibilityExpandedHeight
+        } else {
+            height = standardExpandedHeight
+        }
+        return islandTopInset + height
+    }
 
     private var expandedCornerRadius: CGFloat {
         usesAccessibilityLayout ? 28 : 24
@@ -223,19 +255,21 @@ struct ActivityCrown: View {
             .joined(separator: ": ")
     }
 
-    /// How far the expanded crown hangs below the top of the app's safe area —
+    /// How far the expanded crown hangs below this device's safe-area edge —
     /// what a top-aligned overlay inside the chat has to clear to avoid being
-    /// drawn underneath it. Uses the smallest cutout inset the crown is drawn
-    /// for, so the clearance errs generous on taller devices.
-    static func safeAreaOverhang(isAccessibilitySize: Bool) -> CGFloat {
+    /// drawn underneath it.
+    static func safeAreaOverhang(
+        isAccessibilitySize: Bool,
+        safeAreaTopInset: CGFloat
+    ) -> CGFloat {
         let height = isAccessibilitySize
             ? accessibilityExpandedHeight
             : standardExpandedHeight
-        return max(0, islandTopInset + height - smallestCutoutInset)
+        return max(
+            0,
+            islandTopInset(safeAreaTopInset: safeAreaTopInset) + height - safeAreaTopInset
+        )
     }
-
-    /// Top safe-area inset of the shallowest cutout device this runs on.
-    private static let smallestCutoutInset: CGFloat = 47
 }
 
 private struct ActivityCrownButtonStyle: ButtonStyle {

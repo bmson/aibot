@@ -34,6 +34,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var activityDetail: String?
     @Published var errorMessage: String?
     @Published var showingConnection = false
+    /// One-shot intent shared by every user-facing way to send a message,
+    /// including quick replies and document shortcuts.
+    @Published var nextMessageAutonomous = false
     @Published private(set) var hasSavedConnection: Bool
 
     private(set) var serverURL: String
@@ -200,12 +203,14 @@ final class AppModel: ObservableObject {
         catch { errorMessage = error.localizedDescription }
     }
 
-    func send(_ rawText: String, autonomous: Bool = false) {
+    func send(_ rawText: String, autonomous override: Bool? = nil) {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending,
               let client,
               let conversationId else { return }
 
+        let autonomous = override ?? nextMessageAutonomous
+        nextMessageAutonomous = false
         errorMessage = nil
         isSending = true
         lastNotifiedTaskState = nil

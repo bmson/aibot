@@ -4,6 +4,7 @@ struct GoalsView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ScrollView {
@@ -25,6 +26,7 @@ struct GoalsView: View {
             }
             .padding(16)
         }
+        .scrollBounceBehavior(.basedOnSize)
         .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("Goals")
         .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
@@ -42,7 +44,11 @@ struct GoalsView: View {
         return Group {
             if usesAccessibilityLayout {
                 VStack(alignment: .leading, spacing: 14) {
-                    metric(value: waiting, label: "waiting on you", color: .orange)
+                    metric(
+                        value: waiting,
+                        label: "waiting on you",
+                        color: AssistantTheme.warning(for: colorScheme)
+                    )
                     Divider()
                     metric(
                         value: moving,
@@ -52,7 +58,11 @@ struct GoalsView: View {
                 }
             } else {
                 HStack(spacing: 14) {
-                    metric(value: waiting, label: "waiting on you", color: .orange)
+                    metric(
+                        value: waiting,
+                        label: "waiting on you",
+                        color: AssistantTheme.warning(for: colorScheme)
+                    )
                     Divider().frame(height: 30)
                     metric(
                         value: moving,
@@ -72,7 +82,14 @@ struct GoalsView: View {
 
     private func metric(value: Int, label: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("\(value)").font(.title3.monospacedDigit().weight(.semibold)).foregroundStyle(color)
+            Text("\(value)")
+                .font(.title3.monospacedDigit().weight(.semibold))
+                .foregroundStyle(color)
+                .contentTransition(.numericText(value: Double(value)))
+                .animation(
+                    reduceMotion ? nil : .snappy(duration: 0.24, extraBounce: 0),
+                    value: value
+                )
             Text(label).font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -82,19 +99,11 @@ struct GoalsView: View {
             goalHeader(item)
 
             if !item.blockedQuestion.isEmpty || item.stalled {
-                Label(
-                    item.blockedQuestion.isEmpty ? "The last session needs review." : item.blockedQuestion,
-                    systemImage: "hand.raised.fill"
-                )
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(Color.orange)
-                .padding(11)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+                attentionCallout(item)
             } else if !item.goal.progress.isEmpty {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Latest progress").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    Text(item.goal.progress)
+                    Text(inlineMarkdown(item.goal.progress))
                         .font(.subheadline)
                         .lineLimit(usesAccessibilityLayout ? nil : 3)
                 }
@@ -108,26 +117,87 @@ struct GoalsView: View {
                 } label: {
                     Label("Continue in chat", systemImage: "bubble.left")
                         .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(
+                    AssistantTactileButtonStyle(
+                        reduceMotion: reduceMotion,
+                        pressedScale: 0.985
+                    )
+                )
             }
         }
         .assistantCard(in: colorScheme)
     }
 
+    private func attentionCallout(_ item: GoalDashboardItem) -> some View {
+        let source = item.blockedQuestion.isEmpty
+            ? "The last session needs review."
+            : item.blockedQuestion
+        let rendered = inlineMarkdown(source)
+        let tint = AssistantTheme.warningInk(for: colorScheme)
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
+        return HStack(alignment: .top, spacing: 11) {
+            Image(systemName: "hand.raised.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(tint)
+                .frame(width: 32, height: 32)
+                .background(
+                    AssistantTheme.warning(for: colorScheme).opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.stalled && item.blockedQuestion.isEmpty ? "Review needed" : "Needs you")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(tint)
+                Text(rendered)
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    .lineLimit(usesAccessibilityLayout ? nil : 4)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AssistantTheme.warningSurface(for: colorScheme), in: shape)
+        .overlay {
+            shape.strokeBorder(
+                AssistantTheme.warning(for: colorScheme).opacity(colorScheme == .dark ? 0.22 : 0.16),
+                lineWidth: 0.8
+            )
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func inlineMarkdown(_ source: String) -> AttributedString {
+        let compactSource = source
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (try? AttributedString(
+            markdown: compactSource,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(compactSource)
+    }
+
     @ViewBuilder
     private func goalHeader(_ item: GoalDashboardItem) -> some View {
         let identity = VStack(alignment: .leading, spacing: 5) {
-            Text(item.goal.title)
+            Text(item.goal.displayTitle)
                 .font(.headline)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(usesAccessibilityLayout ? nil : 2)
+                .fixedSize(horizontal: false, vertical: usesAccessibilityLayout)
                 .accessibilityAddTraits(.isHeader)
             if !item.goal.description.isEmpty {
                 Text(item.goal.description)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .lineLimit(usesAccessibilityLayout ? nil : 3)
+                    .lineLimit(usesAccessibilityLayout ? nil : 2)
             }
         }
+        .layoutPriority(1)
 
         if usesAccessibilityLayout {
             VStack(alignment: .leading, spacing: 10) {

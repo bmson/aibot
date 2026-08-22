@@ -33,6 +33,16 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(missingTitle.displayTitle, "Ambient Refresh")
     }
 
+    func testGoalTitlesHideAutomationRunIdentifiers() {
+        let generated = goalRecord(title: "gate-test-1787275766328-0.08720229193630735")
+        let human = goalRecord(title: "Find a senior product role")
+        let machine = goalRecord(title: "quarterly-review")
+
+        XCTAssertEqual(generated.displayTitle, "Gate Test")
+        XCTAssertEqual(human.displayTitle, "Find a senior product role")
+        XCTAssertEqual(machine.displayTitle, "Quarterly Review")
+    }
+
     func testActivityProgressRemovesKnownTechnicalPrefixesWithoutRewritingDetails() {
         let documentTask = activityItem(
             title: "document-processing",
@@ -91,6 +101,24 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(content.relevanceScore, 1)
     }
 
+    func testActivityCrownAttachesAcrossDynamicIslandSafeAreas() {
+        XCTAssertEqual(
+            ActivityCrown.islandTopInset(safeAreaTopInset: 59),
+            10,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            ActivityCrown.islandTopInset(safeAreaTopInset: 62),
+            13,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            ActivityCrown.islandTopInset(safeAreaTopInset: 47),
+            14,
+            accuracy: 0.001
+        )
+    }
+
     func testActivityDetailIsSafeForBothSystemAndInAppStatusSurfaces() {
         XCTAssertEqual(
             LiveActivityManager.safeDetail(
@@ -144,7 +172,7 @@ final class APIModelsTests: XCTestCase {
         // The regular menu is 236pt tall; its opening action must stay short
         // even though its two rows make the sheet visually substantial.
         let standardHeight: CGFloat = 236
-        let accessibilityHeight: CGFloat = 336
+        let accessibilityHeight: CGFloat = 360
 
         XCTAssertEqual(
             PullMenuMotion.openingCommitmentDistance(revealHeight: standardHeight),
@@ -221,6 +249,60 @@ final class APIModelsTests: XCTestCase {
             ),
             0
         )
+
+        // UIKit's predicted end can be surprisingly large for a tiny probe.
+        // Momentum is accepted only after enough physical travel, and a slow
+        // release always lands where the finger actually stopped.
+        XCTAssertEqual(
+            PullMenuMotion.releaseDistance(
+                actualDistance: 24,
+                projectedDistance: 90,
+                gestureDuration: 0.08
+            ),
+            24
+        )
+        XCTAssertEqual(
+            PullMenuMotion.releaseDistance(
+                actualDistance: 36,
+                projectedDistance: 90,
+                gestureDuration: 0.35
+            ),
+            36
+        )
+        XCTAssertEqual(
+            PullMenuMotion.releaseDistance(
+                actualDistance: 36,
+                projectedDistance: 90,
+                gestureDuration: 0.1
+            ),
+            90
+        )
+
+        // Both directions reject sideways and ambiguous diagonals. Opening
+        // shares its grab region with the composer, while closing coexists
+        // with the horizontally scrolling extra-large menu.
+        XCTAssertTrue(PullMenuMotion.hasOpeningIntent(translationX: 8, translationY: -40))
+        XCTAssertFalse(PullMenuMotion.hasOpeningIntent(translationX: 40, translationY: -8))
+        XCTAssertFalse(PullMenuMotion.hasOpeningIntent(translationX: 20, translationY: -20))
+        XCTAssertFalse(PullMenuMotion.hasOpeningIntent(translationX: 4, translationY: 40))
+        XCTAssertTrue(PullMenuMotion.hasClosingIntent(translationX: 8, translationY: 40))
+        XCTAssertFalse(PullMenuMotion.hasClosingIntent(translationX: 40, translationY: 8))
+        XCTAssertFalse(PullMenuMotion.hasClosingIntent(translationX: 20, translationY: 20))
+        XCTAssertFalse(PullMenuMotion.hasClosingIntent(translationX: 4, translationY: -40))
+
+        // Early diagonal jitter remains undecided instead of permanently
+        // stealing the gesture from the direction the finger settles into.
+        XCTAssertFalse(PullMenuMotion.hasOpeningIntent(translationX: 12, translationY: -11))
+        XCTAssertFalse(PullMenuMotion.hasHorizontalIntent(translationX: 12, translationY: -11))
+        XCTAssertTrue(PullMenuMotion.hasOpeningIntent(translationX: 12, translationY: -30))
+        XCTAssertFalse(PullMenuMotion.hasHorizontalIntent(translationX: 12, translationY: -30))
+
+        // Tiny probes do not claim either axis, while deliberate horizontal
+        // swipes keep cursor movement and accessibility strips undisturbed.
+        XCTAssertFalse(PullMenuMotion.hasOpeningIntent(translationX: 3, translationY: -9))
+        XCTAssertFalse(PullMenuMotion.hasClosingIntent(translationX: 3, translationY: 9))
+        XCTAssertFalse(PullMenuMotion.hasHorizontalIntent(translationX: 11, translationY: 1))
+        XCTAssertTrue(PullMenuMotion.hasHorizontalIntent(translationX: 18, translationY: 4))
 
         XCTAssertFalse(
             PullMenuMotion.holdsOpeningDetent(
@@ -393,6 +475,25 @@ final class APIModelsTests: XCTestCase {
             updatedAt: "2026-01-01T00:00:00Z",
             archivedAt: nil,
             hasPendingApproval: false
+        )
+    }
+
+    private func goalRecord(title: String) -> GoalRecord {
+        .init(
+            id: "goal",
+            title: title,
+            description: "",
+            status: "active",
+            priority: 0,
+            progress: "",
+            nextAction: "",
+            targetDate: nil,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            archivedAt: nil,
+            mirrorToPrimary: false,
+            autonomy: true,
+            taintedOrigin: false
         )
     }
 }

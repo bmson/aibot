@@ -64,6 +64,7 @@ struct WorkspaceView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ScrollView {
@@ -83,6 +84,7 @@ struct WorkspaceView: View {
             .padding(16)
             .padding(.bottom, 28)
         }
+        .scrollBounceBehavior(.basedOnSize)
         .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle(area.title)
         .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
@@ -90,27 +92,40 @@ struct WorkspaceView: View {
         .task { await load() }
     }
 
+    @ViewBuilder
     private var header: some View {
-        HStack(alignment: .top, spacing: 13) {
-            Image(systemName: area.icon)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                .frame(width: 46, height: 46)
-                .background(
-                    AssistantTheme.accent(for: colorScheme).opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 15, style: .continuous)
-                )
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(area.introduction)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        if usesAccessibilityLayout {
+            VStack(alignment: .leading, spacing: 11) {
+                headerIcon
+                headerIntroduction
             }
-
-            Spacer(minLength: 0)
+            .padding(.vertical, 3)
+        } else {
+            HStack(alignment: .top, spacing: 13) {
+                headerIcon
+                headerIntroduction
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 3)
         }
-        .padding(.vertical, 3)
+    }
+
+    private var headerIcon: some View {
+        Image(systemName: area.icon)
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+            .frame(width: 46, height: 46)
+            .background(
+                AssistantTheme.accent(for: colorScheme).opacity(0.12),
+                in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+            )
+    }
+
+    private var headerIntroduction: some View {
+        Text(area.introduction)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -152,18 +167,7 @@ struct WorkspaceView: View {
                                 AssistantTheme.sunken(for: colorScheme),
                                 in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                             )
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(spacing: 6) {
-                                Text(chat.displayTitle)
-                                    .font(.subheadline.weight(.semibold))
-                                    .lineLimit(1)
-                                if chat.isPrimary { workspaceTag("Main", tint: AssistantTheme.accent(for: colorScheme)) }
-                                if chat.active { workspaceTag("Working", tint: .orange) }
-                            }
-                            Text("Last active \(relative(chat.updatedAt))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                        chatIdentity(chat)
                         Spacer(minLength: 0)
                     }
                     .assistantCard(in: colorScheme)
@@ -174,12 +178,23 @@ struct WorkspaceView: View {
                 DisclosureGroup("Archived chats (\(chats.archived.count))") {
                     VStack(spacing: 0) {
                         ForEach(chats.archived) { chat in
-                            HStack {
-                                Text(chat.displayTitle).lineLimit(1)
-                                Spacer()
-                                Text(relative(chat.updatedAt))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            Group {
+                                if usesAccessibilityLayout {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(chat.displayTitle)
+                                        Text(relative(chat.updatedAt))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                } else {
+                                    HStack {
+                                        Text(chat.displayTitle).lineLimit(1)
+                                        Spacer()
+                                        Text(relative(chat.updatedAt))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
                             }
                             .padding(.vertical, 10)
                             if chat.id != chats.archived.last?.id { Divider() }
@@ -198,8 +213,8 @@ struct WorkspaceView: View {
         VStack(alignment: .leading, spacing: 16) {
             metricGrid([
                 ("In use", memory.health.totalUsable, "brain.head.profile", AssistantTheme.accent(for: colorScheme)),
-                ("Review", memory.health.awaitingReview, "checklist", .orange),
-                ("Verified", memory.health.ownerConfirmed, "checkmark.seal", .green),
+                ("Review", memory.health.awaitingReview, "checklist", AssistantTheme.warning(for: colorScheme)),
+                ("Verified", memory.health.ownerConfirmed, "checkmark.seal", AssistantTheme.success(for: colorScheme)),
             ])
 
             if !memory.awaitingReview.isEmpty {
@@ -240,8 +255,8 @@ struct WorkspaceView: View {
             if let documents = model.overview?.documents {
                 metricGrid([
                     ("Filed", documents.stats.total, "doc", AssistantTheme.accent(for: colorScheme)),
-                    ("Ready", documents.stats.ready, "checkmark.circle", .green),
-                    ("Reading", documents.stats.pending, "clock.arrow.circlepath", .orange),
+                    ("Ready", documents.stats.ready, "checkmark.circle", AssistantTheme.success(for: colorScheme)),
+                    ("Reading", documents.stats.pending, "clock.arrow.circlepath", AssistantTheme.warning(for: colorScheme)),
                 ])
 
                 sectionHeading("Filed documents", count: documents.documents.count)
@@ -268,27 +283,29 @@ struct WorkspaceView: View {
             } else {
                 ForEach(skills) { skill in
                     VStack(alignment: .leading, spacing: 11) {
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(skill.name)
-                                    .font(.headline)
-                                Text(skill.ownerAuthored ? "Written by you" : "Learned from completed work")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                        if usesAccessibilityLayout {
+                            VStack(alignment: .leading, spacing: 7) {
+                                skillIdentity(skill)
+                                if skill.deprecated { workspaceTag("Retired", tint: .secondary) }
                             }
-                            Spacer()
-                            if skill.deprecated { workspaceTag("Retired", tint: .secondary) }
+                        } else {
+                            HStack(alignment: .top) {
+                                skillIdentity(skill)
+                                Spacer()
+                                if skill.deprecated { workspaceTag("Retired", tint: .secondary) }
+                            }
                         }
                         Text(skill.steps)
                             .font(.subheadline)
                             .fixedSize(horizontal: false, vertical: true)
                         if !skill.preconditions.isEmpty || !skill.gotchas.isEmpty {
-                            HStack(alignment: .top, spacing: 8) {
-                                if !skill.preconditions.isEmpty {
-                                    detailPill("When to use", detail: skill.preconditions, tint: AssistantTheme.sunken(for: colorScheme))
+                            if usesAccessibilityLayout {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    skillDetailPills(skill)
                                 }
-                                if !skill.gotchas.isEmpty {
-                                    detailPill("Watch for", detail: skill.gotchas, tint: Color.orange.opacity(0.11))
+                            } else {
+                                HStack(alignment: .top, spacing: 8) {
+                                    skillDetailPills(skill)
                                 }
                             }
                         }
@@ -312,7 +329,7 @@ struct WorkspaceView: View {
             VStack(alignment: .leading, spacing: 14) {
                 metricGrid([
                     ("Installed", enabledCount, "puzzlepiece.extension", AssistantTheme.accent(for: colorScheme)),
-                    ("Ready", readyCount, "checkmark.circle", .green),
+                    ("Ready", readyCount, "checkmark.circle", AssistantTheme.success(for: colorScheme)),
                     ("Available", capabilities.count, "square.grid.2x2", .secondary),
                 ])
 
@@ -322,9 +339,9 @@ struct WorkspaceView: View {
                     let tint: Color = if !capability.enabled {
                         .secondary
                     } else if capability.ready {
-                        .green
+                        AssistantTheme.success(for: colorScheme)
                     } else {
-                        .orange
+                        AssistantTheme.warning(for: colorScheme)
                     }
 
                     HStack(alignment: .top, spacing: 12) {
@@ -336,11 +353,19 @@ struct WorkspaceView: View {
                             .accessibilityHidden(true)
 
                         VStack(alignment: .leading, spacing: 5) {
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(capability.title)
-                                    .font(.headline)
-                                Spacer(minLength: 4)
-                                workspaceTag(capability.statusTitle, tint: tint)
+                            if usesAccessibilityLayout {
+                                VStack(alignment: .leading, spacing: 7) {
+                                    Text(capability.title)
+                                        .font(.headline)
+                                    workspaceTag(capability.statusTitle, tint: tint)
+                                }
+                            } else {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text(capability.title)
+                                        .font(.headline)
+                                    Spacer(minLength: 4)
+                                    workspaceTag(capability.statusTitle, tint: tint)
+                                }
                             }
                             Text(capability.summary)
                                 .font(.subheadline)
@@ -349,7 +374,7 @@ struct WorkspaceView: View {
                             if capability.enabled && !capability.ready {
                                 Text(capability.detail.sentenceCaseIdentifier)
                                     .font(.caption)
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(AssistantTheme.warning(for: colorScheme))
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
@@ -371,9 +396,16 @@ struct WorkspaceView: View {
 
     private func costs(_ costs: WorkspaceCosts) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 10) {
-                costMetric("Today", spent: costs.dailySpentUsd, limit: costs.dailyLimitUsd)
-                costMetric("This month", spent: costs.monthlySpentUsd, limit: costs.monthlyLimitUsd)
+            if usesAccessibilityLayout {
+                VStack(spacing: 10) {
+                    costMetric("Today", spent: costs.dailySpentUsd, limit: costs.dailyLimitUsd)
+                    costMetric("This month", spent: costs.monthlySpentUsd, limit: costs.monthlyLimitUsd)
+                }
+            } else {
+                HStack(spacing: 10) {
+                    costMetric("Today", spent: costs.dailySpentUsd, limit: costs.dailyLimitUsd)
+                    costMetric("This month", spent: costs.monthlySpentUsd, limit: costs.monthlyLimitUsd)
+                }
             }
 
             if costs.parkedTasks > 0 {
@@ -408,16 +440,37 @@ struct WorkspaceView: View {
             } else {
                 ForEach(anomalies) { anomaly in
                     VStack(alignment: .leading, spacing: 10) {
-                        HStack(alignment: .top) {
+                        if usesAccessibilityLayout {
                             VStack(alignment: .leading, spacing: 4) {
-                                workspaceTag(anomaly.kind.sentenceCaseIdentifier, tint: anomaly.kind == "burst" ? .red : .orange)
+                                workspaceTag(
+                                    anomaly.kind.sentenceCaseIdentifier,
+                                    tint: anomaly.kind == "burst"
+                                        ? .red
+                                        : AssistantTheme.warning(for: colorScheme)
+                                )
                                 Text(anomaly.toolName.sentenceCaseIdentifier)
                                     .font(.headline)
+                                Text(relative(anomaly.createdAt))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
-                            Spacer()
-                            Text(relative(anomaly.createdAt))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        } else {
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    workspaceTag(
+                                        anomaly.kind.sentenceCaseIdentifier,
+                                        tint: anomaly.kind == "burst"
+                                            ? .red
+                                            : AssistantTheme.warning(for: colorScheme)
+                                    )
+                                    Text(anomaly.toolName.sentenceCaseIdentifier)
+                                        .font(.headline)
+                                }
+                                Spacer()
+                                Text(relative(anomaly.createdAt))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         Text(anomaly.detail)
                             .font(.subheadline)
@@ -440,18 +493,28 @@ struct WorkspaceView: View {
             } else {
                 ForEach(improvements) { improvement in
                     VStack(alignment: .leading, spacing: 11) {
-                        HStack(alignment: .top) {
+                        if usesAccessibilityLayout {
                             VStack(alignment: .leading, spacing: 4) {
                                 workspaceTag(improvement.kind.sentenceCaseIdentifier, tint: AssistantTheme.accent(for: colorScheme))
-                                Text(improvement.title).font(.headline)
+                                Text(inlineMarkdown(improvement.title)).font(.headline)
+                                Text(relative(improvement.createdAt))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
-                            Spacer()
-                            Text(relative(improvement.createdAt))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        } else {
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    workspaceTag(improvement.kind.sentenceCaseIdentifier, tint: AssistantTheme.accent(for: colorScheme))
+                                    Text(inlineMarkdown(improvement.title)).font(.headline)
+                                }
+                                Spacer()
+                                Text(relative(improvement.createdAt))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         if !improvement.rationale.isEmpty {
-                            Text(improvement.rationale)
+                            Text(inlineMarkdown(improvement.rationale))
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
@@ -470,21 +533,7 @@ struct WorkspaceView: View {
 
     private func documentCard(_ document: DocumentRecord) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 11) {
-                Image(systemName: documentIcon(document.mime))
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                    .frame(width: 40, height: 40)
-                    .background(AssistantTheme.sunken(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(document.title).font(.headline).lineLimit(2)
-                    Text(document.source == "email" ? "Email attachment" : document.source.sentenceCaseIdentifier)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                StatusPill(status: document.status)
-            }
+            documentHeader(document)
             Text("\(ByteCountFormatter.string(fromByteCount: Int64(document.bytes), countStyle: .file)) · \(document.chunkCount) searchable \(document.chunkCount == 1 ? "passage" : "passages")")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -498,6 +547,12 @@ struct WorkspaceView: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(AssistantTheme.accent(for: colorScheme))
+                .disabled(model.isSending)
+                .accessibilityHint(
+                    model.isSending
+                        ? "Finish or stop the current response first"
+                        : "Starts a question in chat"
+                )
             }
             if document.status == "failed", let error = document.error {
                 Text(error)
@@ -508,29 +563,80 @@ struct WorkspaceView: View {
         .assistantCard(in: colorScheme)
     }
 
+    @ViewBuilder
+    private func documentHeader(_ document: DocumentRecord) -> some View {
+        if usesAccessibilityLayout {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center) {
+                    documentGlyph(document)
+                    Spacer(minLength: 10)
+                    StatusPill(status: document.status)
+                }
+                documentIdentity(document)
+            }
+        } else {
+            HStack(alignment: .top, spacing: 11) {
+                documentGlyph(document)
+                documentIdentity(document)
+                Spacer()
+                StatusPill(status: document.status)
+            }
+        }
+    }
+
+    private func documentGlyph(_ document: DocumentRecord) -> some View {
+        Image(systemName: documentIcon(document.mime))
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+            .frame(width: 40, height: 40)
+            .background(
+                AssistantTheme.sunken(for: colorScheme),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+    }
+
+    private func documentIdentity(_ document: DocumentRecord) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(document.title)
+                .font(.headline)
+                .lineLimit(usesAccessibilityLayout ? nil : 2)
+            Text(document.source == "email" ? "Email attachment" : document.source.sentenceCaseIdentifier)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private func factRow(_ fact: WorkspaceMemoryFact, review: Bool) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: review ? "questionmark.shield" : (fact.pinned ? "pin.fill" : "brain"))
+            Image(systemName: review ? "questionmark.circle.fill" : (fact.pinned ? "pin.fill" : "brain"))
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(review ? .orange : AssistantTheme.accent(for: colorScheme))
+                .foregroundStyle(
+                    review
+                        ? AssistantTheme.warningInk(for: colorScheme)
+                        : AssistantTheme.accent(for: colorScheme)
+                )
                 .frame(width: 32, height: 32)
                 .background(
-                    (review ? Color.orange : AssistantTheme.accent(for: colorScheme)).opacity(0.12),
+                    (
+                        review
+                            ? AssistantTheme.warning(for: colorScheme)
+                            : AssistantTheme.accent(for: colorScheme)
+                    ).opacity(0.12),
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                 )
             VStack(alignment: .leading, spacing: 4) {
                 Text(fact.content)
                     .font(.subheadline)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 6) {
-                    if let domain = fact.domain, !domain.isEmpty {
-                        Text(domain.sentenceCaseIdentifier)
+                if usesAccessibilityLayout {
+                    VStack(alignment: .leading, spacing: 3) {
+                        factMetadata(fact)
                     }
-                    Text(relative(fact.createdAt))
-                    if fact.ownerConfirmed { Text("Verified") }
+                } else {
+                    HStack(spacing: 6) {
+                        factMetadata(fact)
+                    }
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
@@ -576,41 +682,141 @@ struct WorkspaceView: View {
                 Text("No spending yet this month").font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(Array(rows.prefix(8).enumerated()), id: \.offset) { _, row in
-                    HStack(spacing: 9) {
-                        Text(row.0).lineLimit(1)
-                        Spacer(minLength: 8)
-                        Text("\(row.2)×").foregroundStyle(.secondary)
-                        Text(currency(Double(row.1) ?? 0)).font(.caption.monospacedDigit())
+                    if usesAccessibilityLayout {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(row.0)
+                                .fixedSize(horizontal: false, vertical: true)
+                            HStack(spacing: 9) {
+                                Text("\(row.2)×").foregroundStyle(.secondary)
+                                Text(currency(Double(row.1) ?? 0)).font(.caption.monospacedDigit())
+                            }
+                        }
+                        .font(.caption)
+                        .padding(.vertical, 5)
+                    } else {
+                        HStack(spacing: 9) {
+                            Text(row.0).lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text("\(row.2)×").foregroundStyle(.secondary)
+                            Text(currency(Double(row.1) ?? 0)).font(.caption.monospacedDigit())
+                        }
+                        .font(.caption)
+                        .padding(.vertical, 5)
                     }
-                    .font(.caption)
-                    .padding(.vertical, 5)
                 }
             }
         }
         .assistantCard(in: colorScheme)
     }
 
+    private func inlineMarkdown(_ source: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        return (try? AttributedString(markdown: source, options: options))
+            ?? AttributedString(source)
+    }
+
+    @ViewBuilder
     private func metricGrid(_ metrics: [(String, Int, String, Color)]) -> some View {
-        HStack(spacing: 8) {
-            ForEach(Array(metrics.enumerated()), id: \.offset) { _, metric in
-                VStack(alignment: .leading, spacing: 5) {
-                    Image(systemName: metric.2)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(metric.3)
-                        .accessibilityHidden(true)
-                    Text("\(metric.1)")
-                        .font(.title3.monospacedDigit().weight(.semibold))
-                    Text(metric.0)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .assistantCard(in: colorScheme)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(metric.0), \(metric.1)")
+        if usesAccessibilityLayout {
+            VStack(spacing: 8) {
+                metricCards(metrics)
             }
+        } else {
+            HStack(spacing: 8) {
+                metricCards(metrics)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func metricCards(_ metrics: [(String, Int, String, Color)]) -> some View {
+        ForEach(Array(metrics.enumerated()), id: \.offset) { _, metric in
+            VStack(alignment: .leading, spacing: 5) {
+                Image(systemName: metric.2)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(metric.3)
+                    .accessibilityHidden(true)
+                Text("\(metric.1)")
+                    .font(.title3.monospacedDigit().weight(.semibold))
+                    .contentTransition(.numericText(value: Double(metric.1)))
+                    .animation(
+                        reduceMotion ? nil : .snappy(duration: 0.24, extraBounce: 0),
+                        value: metric.1
+                    )
+                Text(metric.0)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(usesAccessibilityLayout ? nil : 1)
+                    .minimumScaleFactor(0.85)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .assistantCard(in: colorScheme)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(metric.0), \(metric.1)")
+        }
+    }
+
+    private func chatIdentity(_ chat: WorkspaceChat) -> some View {
+        VStack(alignment: .leading, spacing: usesAccessibilityLayout ? 6 : 3) {
+            if usesAccessibilityLayout {
+                Text(chat.displayTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    chatTags(chat)
+                }
+            } else {
+                HStack(spacing: 6) {
+                    Text(chat.displayTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    chatTags(chat)
+                }
+            }
+            Text("Last active \(relative(chat.updatedAt))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func chatTags(_ chat: WorkspaceChat) -> some View {
+        if chat.isPrimary {
+            workspaceTag("Main", tint: AssistantTheme.accent(for: colorScheme))
+        }
+        if chat.active {
+            workspaceTag("Working", tint: AssistantTheme.warning(for: colorScheme))
+        }
+    }
+
+    private func skillIdentity(_ skill: WorkspaceSkill) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(skill.name)
+                .font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(skill.ownerAuthored ? "Written by you" : "Learned from completed work")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func skillDetailPills(_ skill: WorkspaceSkill) -> some View {
+        if !skill.preconditions.isEmpty {
+            detailPill(
+                "When to use",
+                detail: skill.preconditions,
+                tint: AssistantTheme.sunken(for: colorScheme)
+            )
+        }
+        if !skill.gotchas.isEmpty {
+            detailPill(
+                "Watch for",
+                detail: skill.gotchas,
+                tint: AssistantTheme.warningSurface(for: colorScheme)
+            )
         }
     }
 
@@ -624,27 +830,52 @@ struct WorkspaceView: View {
         .background(tint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
+    @ViewBuilder
     private func sectionHeading(_ title: String, count: Int? = nil) -> some View {
-        HStack(spacing: 7) {
-            Text(title).font(.headline)
-            if let count {
-                Text("\(count)")
-                    .font(.caption.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
+        if usesAccessibilityLayout {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title).font(.headline)
+                if let count { countTag(count) }
+            }
+        } else {
+            HStack(spacing: 7) {
+                Text(title).font(.headline)
+                if let count { countTag(count) }
             }
         }
+    }
+
+    private func countTag(_ count: Int) -> some View {
+        Text("\(count)")
+            .font(.caption.monospacedDigit().weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
     }
 
     private func workspaceTag(_ title: String, tint: Color) -> some View {
         Text(title)
             .font(.caption2.weight(.semibold))
             .foregroundStyle(tint)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
             .background(tint.opacity(0.11), in: Capsule())
+    }
+
+    @ViewBuilder
+    private func factMetadata(_ fact: WorkspaceMemoryFact) -> some View {
+        Group {
+            if let domain = fact.domain, !domain.isEmpty {
+                Text(domain.sentenceCaseIdentifier)
+            }
+            Text(relative(fact.createdAt))
+            if fact.ownerConfirmed { Text("Verified") }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 
     private func emptyState(_ title: String, symbol: String) -> some View {

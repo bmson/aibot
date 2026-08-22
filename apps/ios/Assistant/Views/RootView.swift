@@ -11,7 +11,17 @@ struct RootView: View {
     @State private var hasPresentedConnection = false
 
     var body: some View {
-        ZStack(alignment: .top) {
+        GeometryReader { geometry in
+            rootContent(safeAreaTopInset: geometry.safeAreaInsets.top)
+        }
+    }
+
+    private func rootContent(safeAreaTopInset: CGFloat) -> some View {
+        let islandTopInset = ActivityCrown.islandTopInset(
+            safeAreaTopInset: safeAreaTopInset
+        )
+
+        return ZStack(alignment: .top) {
             // Establishes an edge-to-edge coordinate space for the crown.
             Color.clear
                 .ignoresSafeArea(.container, edges: .top)
@@ -32,9 +42,9 @@ struct RootView: View {
                         .onAppear { hasPresentedConnection = true }
                 } else {
                     NavigationStack {
-                        ChatView()
+                        ChatView(safeAreaTopInset: safeAreaTopInset)
                             .navigationDestination(item: $model.presentedRoute) { route in
-                                destination(for: route)
+                                destination(for: route, safeAreaTopInset: safeAreaTopInset)
                             }
                     }
                         .transition(.opacity)
@@ -54,7 +64,7 @@ struct RootView: View {
                 )
                 // Share the physical Island's top edge. The rounded active
                 // surface surrounds the camera; idle leaves the pill alone.
-                .padding(.top, ActivityCrown.islandTopInset)
+                .padding(.top, islandTopInset)
                 .zIndex(100)
             }
         }
@@ -118,10 +128,13 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private func destination(for route: AssistantRoute) -> some View {
+    private func destination(
+        for route: AssistantRoute,
+        safeAreaTopInset: CGFloat
+    ) -> some View {
         Group {
             switch route {
-            case .chat: ChatView()
+            case .chat: ChatView(safeAreaTopInset: safeAreaTopInset)
             case .chats: WorkspaceView(area: .chats)
             case .activity: ActivityView()
             case .goals: GoalsView()

@@ -14,15 +14,23 @@ enum AssistantTheme {
     static let inkMutedDark = Color(hex: 0xA9BAAF)
     static let accent = Color(hex: 0x217A4B)
     static let accentLight = Color(hex: 0x6FCB9C)
+    // Foreground semantic colors clear small-text contrast on the light card
+    // surfaces; their brighter companions are reserved for dark appearance.
+    static let success = Color(hex: 0x147A49)
+    static let successDark = Color(hex: 0x6EE7B7)
     static let stage = Color(hex: 0x2B8253)
     static let stageDark = Color(hex: 0x1B3626)
     static let stageStrong = Color(hex: 0xF4FAF5)
     static let bubblePaper = Color(hex: 0xF5FAF6)
-    static let bubblePaperDark = Color(hex: 0x223027)
+    // A paper surface needs to read as a distinct object on the dark green
+    // stage. The old value was nearly iso-luminant with `stageDark`, so reply
+    // bubbles disappeared even though their outlines remained visible.
+    static let bubblePaperDark = Color(hex: 0x293D31)
     static let bubblePaperInk = Color(hex: 0x15201A)
     static let bubblePaperInkDark = Color(hex: 0xEDF6F0)
     static let companionHousing = Color(hex: 0x131D17)
-    static let warning = Color(hex: 0xC47A1C)
+    static let warning = Color(hex: 0x9D5A0A)
+    static let warningDark = Color(hex: 0xF0B45A)
     static let warningSurface = Color(hex: 0xFFF7E7)
     static let warningSurfaceDark = Color(hex: 0x362A18)
     static let warningInk = Color(hex: 0x5C3A0E)
@@ -32,6 +40,12 @@ enum AssistantTheme {
     static let errorInk = Color(hex: 0x7A201B)
     static let errorInkDark = Color(hex: 0xFFD7D2)
     static let stageDepth = Color(hex: 0x0C2D1B)
+    // The system keyboard has rounded upper corners, so a few pixels of the
+    // app remain visible behind it. Match the opaque base of Apple's keyboard
+    // material there instead of letting the green conversation stage show
+    // through those pockets.
+    static let keyboardBackdrop = Color(hex: 0xD1D1D6)
+    static let keyboardBackdropDark = Color(hex: 0x1C1C1E)
     /// Warning pair for surfaces that sit on the conversation stage rather
     /// than the canvas. The stage is dark in both color schemes, so this pair
     /// deliberately does not vary — unlike `warningSurface(for:)`.
@@ -60,6 +74,14 @@ enum AssistantTheme {
 
     static func accent(for scheme: ColorScheme) -> Color {
         scheme == .dark ? accentLight : accent
+    }
+
+    static func success(for scheme: ColorScheme) -> Color {
+        scheme == .dark ? successDark : success
+    }
+
+    static func warning(for scheme: ColorScheme) -> Color {
+        scheme == .dark ? warningDark : warning
     }
 
     static func bubblePaper(for scheme: ColorScheme) -> Color {
@@ -97,6 +119,10 @@ enum AssistantTheme {
         case (.dark, _): stageDark
         default: stage
         }
+    }
+
+    static func keyboardBackdrop(for scheme: ColorScheme) -> Color {
+        scheme == .dark ? keyboardBackdropDark : keyboardBackdrop
     }
 }
 

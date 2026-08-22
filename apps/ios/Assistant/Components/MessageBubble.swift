@@ -57,7 +57,8 @@ struct MessageBubble: View {
                     .overlay {
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .stroke(
-                                Color.orange.opacity(colorSchemeContrast == .increased ? 0.58 : 0.3),
+                                AssistantTheme.warning(for: colorScheme)
+                                    .opacity(colorSchemeContrast == .increased ? 0.58 : 0.3),
                                 lineWidth: colorSchemeContrast == .increased ? 1.2 : 1
                             )
                     }

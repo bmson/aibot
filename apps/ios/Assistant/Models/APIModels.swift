@@ -263,6 +263,22 @@ struct GoalRecord: Codable, Identifiable, Sendable {
     let mirrorToPrimary: Bool
     let autonomy: Bool
     let taintedOrigin: Bool
+
+    /// Human-facing goal title. Test and automation-created goals can arrive
+    /// with a timestamp/run id appended to a machine identifier; that suffix
+    /// is useful to the server but turns into four lines of noise on a phone.
+    var displayTitle: String {
+        let candidate = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !candidate.isEmpty else { return "Untitled goal" }
+
+        let withoutRunIdentifier = candidate.replacingOccurrences(
+            of: #"-\d{10,}(?:-\d+(?:\.\d+)?)?$"#,
+            with: "",
+            options: .regularExpression
+        )
+        let resolved = withoutRunIdentifier.isEmpty ? candidate : withoutRunIdentifier
+        return resolved.isMachineIdentifier ? resolved.sentenceCaseIdentifier : resolved
+    }
 }
 
 struct GoalAutomation: Codable, Sendable {

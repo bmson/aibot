@@ -47,6 +47,7 @@ struct ApprovalsView: View {
             }
             .padding(16)
         }
+        .scrollBounceBehavior(.basedOnSize)
         .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("Approvals")
         .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
@@ -121,7 +122,7 @@ struct ApprovalsView: View {
             systemImage: "shield.lefthalf.filled"
         )
         .font(.caption.weight(.semibold))
-        .foregroundStyle(.orange)
+        .foregroundStyle(AssistantTheme.warning(for: colorScheme))
 
         if usesAccessibilityLayout {
             VStack(alignment: .leading, spacing: 10) {

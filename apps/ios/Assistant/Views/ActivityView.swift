@@ -13,6 +13,7 @@ struct ActivityView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var filter: ActivityFilter = .all
 
     var body: some View {
@@ -40,11 +41,17 @@ struct ActivityView: View {
             }
             .padding(16)
         }
+        .scrollBounceBehavior(.basedOnSize)
         .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("Activity")
         .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
         .refreshable { await model.refreshAll() }
         .task { if model.overview == nil { await model.refreshOverview() } }
+        .sensoryFeedback(.selection, trigger: filter)
+        .animation(
+            reduceMotion ? nil : .snappy(duration: 0.26, extraBounce: 0),
+            value: filter
+        )
     }
 
     @ViewBuilder
@@ -146,7 +153,7 @@ struct ActivityView: View {
                 Text(relative(item.updatedAt))
                 if item.hasPendingApproval {
                     Label("Approval waiting", systemImage: "hand.raised.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(AssistantTheme.warning(for: colorScheme))
                 }
             }
         } else {
@@ -157,7 +164,7 @@ struct ActivityView: View {
                 if item.hasPendingApproval {
                     Text("·")
                     Label("Approval waiting", systemImage: "hand.raised.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(AssistantTheme.warning(for: colorScheme))
                 }
             }
         }
@@ -181,9 +188,9 @@ struct ActivityView: View {
         case "running": AssistantTheme.accent(for: colorScheme)
         // The brand green, matching the StatusPill sitting beside it in the
         // same card — system green is a visibly different hue.
-        case "done": AssistantTheme.accent(for: colorScheme)
+        case "done": AssistantTheme.success(for: colorScheme)
         case "failed", "cancelled": .red
-        case "waiting_approval", "waiting_budget", "needs_attention": .orange
+        case "waiting_approval", "waiting_budget", "needs_attention": AssistantTheme.warning(for: colorScheme)
         default: .secondary
         }
     }

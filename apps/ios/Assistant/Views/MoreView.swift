@@ -220,13 +220,23 @@ struct MoreView: View {
         if usesAccessibilityLayout {
             VStack(alignment: .leading, spacing: 8) {
                 detail
-                settingsTag(schedule.enabled ? "On" : "Paused", tint: schedule.enabled ? .green : .orange)
+                settingsTag(
+                    schedule.enabled ? "On" : "Paused",
+                    tint: schedule.enabled
+                        ? AssistantTheme.success(for: colorScheme)
+                        : AssistantTheme.warning(for: colorScheme)
+                )
             }
         } else {
             HStack {
                 detail
                 Spacer()
-                settingsTag(schedule.enabled ? "On" : "Paused", tint: schedule.enabled ? .green : .orange)
+                settingsTag(
+                    schedule.enabled ? "On" : "Paused",
+                    tint: schedule.enabled
+                        ? AssistantTheme.success(for: colorScheme)
+                        : AssistantTheme.warning(for: colorScheme)
+                )
             }
         }
     }
@@ -243,13 +253,23 @@ struct MoreView: View {
         if usesAccessibilityLayout {
             VStack(alignment: .leading, spacing: 8) {
                 detail
-                settingsTag(policy.enabled ? (policy.effect == "allow" ? "Allowed" : "Blocked") : "Paused", tint: policy.enabled ? (policy.effect == "allow" ? .green : .red) : .orange)
+                settingsTag(
+                    policy.enabled ? (policy.effect == "allow" ? "Allowed" : "Blocked") : "Paused",
+                    tint: policy.enabled
+                        ? (policy.effect == "allow" ? AssistantTheme.success(for: colorScheme) : .red)
+                        : AssistantTheme.warning(for: colorScheme)
+                )
             }
         } else {
             HStack {
                 detail
                 Spacer()
-                settingsTag(policy.enabled ? (policy.effect == "allow" ? "Allowed" : "Blocked") : "Paused", tint: policy.enabled ? (policy.effect == "allow" ? .green : .red) : .orange)
+                settingsTag(
+                    policy.enabled ? (policy.effect == "allow" ? "Allowed" : "Blocked") : "Paused",
+                    tint: policy.enabled
+                        ? (policy.effect == "allow" ? AssistantTheme.success(for: colorScheme) : .red)
+                        : AssistantTheme.warning(for: colorScheme)
+                )
             }
         }
     }
