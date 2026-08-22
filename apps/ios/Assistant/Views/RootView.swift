@@ -10,15 +10,24 @@ struct RootView: View {
     // current by the geometry reading below — the crown has to stay registered
     // with the hardware cutout across rotation and status-bar height changes.
     @State private var topSafeAreaInset = ActivityCrown.windowTopInset
+    // The launch screen belongs to the automatic connect at startup, not to a
+    // connect the owner just triggered from the Connection form.
+    @State private var hasPresentedConnection = false
 
     var body: some View {
         Group {
-            if model.isLoading && model.bootstrap == nil {
+            if model.isLoading && model.bootstrap == nil && !hasPresentedConnection {
                 launchView
                     .transition(.opacity)
             } else if model.bootstrap == nil {
+                // Deliberately survives `isLoading`: swapping this out for the
+                // launch screen mid-attempt destroyed the form, and the fresh
+                // instance that replaced it ran ConnectionView's `.onAppear` →
+                // `dismissError()`, wiping the failure before it could render.
+                // A failed "Save and connect" looked like nothing happening.
                 ConnectionView(isOnboarding: true)
                     .transition(.opacity)
+                    .onAppear { hasPresentedConnection = true }
             } else {
                 NavigationStack { ChatView() }
                     .transition(.opacity)
