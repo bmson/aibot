@@ -179,7 +179,9 @@ struct ActivityView: View {
     private func color(for status: String) -> Color {
         switch status {
         case "running": AssistantTheme.accent(for: colorScheme)
-        case "done": .green
+        // The brand green, matching the StatusPill sitting beside it in the
+        // same card — system green is a visibly different hue.
+        case "done": AssistantTheme.accent(for: colorScheme)
         case "failed", "cancelled": .red
         case "waiting_approval", "waiting_budget", "needs_attention": .orange
         default: .secondary

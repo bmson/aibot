@@ -75,11 +75,11 @@ struct ActivityCrown: View {
             }
         }
         .frame(
-            width: thought == nil ? 126 : expandedWidth,
+            width: expandedWidth,
             alignment: .bottom
         )
         .frame(
-            minHeight: thought == nil ? 37 : expandedMinimumHeight,
+            minHeight: thought == nil ? Self.collapsedHeight : expandedMinimumHeight,
             alignment: .bottom
         )
         .background { crownBackground }
@@ -151,11 +151,11 @@ struct ActivityCrown: View {
     }
 
     private var expandedWidth: CGFloat {
-        guard let thought else { return 126 }
+        guard let thought else { return collapsedWidth }
         if usesAccessibilityLayout {
-            return 342
+            return Self.accessibilityExpandedWidth
         }
-        let estimatedCharacterWidth: CGFloat = usesAccessibilityLayout ? 8.2 : 6.4
+        let estimatedCharacterWidth: CGFloat = 6.4
         let longestLine = max(thought.label.count, detail?.count ?? 0)
         let measuredLabel = CGFloat(longestLine) * estimatedCharacterWidth + 54
         return min(
@@ -165,8 +165,23 @@ struct ActivityCrown: View {
     }
 
     private var expandedMinimumHeight: CGFloat {
-        usesAccessibilityLayout ? (detail == nil ? 104 : 188) : 76
+        usesAccessibilityLayout
+            ? (detail == nil ? 104 : Self.accessibilityExpandedHeight)
+            : Self.standardExpandedHeight
     }
+
+    private var collapsedWidth: CGFloat { 126 }
+
+    // Geometry the crown is built from. These are shared so a sibling overlay
+    // can work out how much of the screen the crown occupies without
+    // duplicating the numbers.
+    static let collapsedHeight: CGFloat = 37
+    static let standardExpandedHeight: CGFloat = 76
+    static let accessibilityExpandedHeight: CGFloat = 188
+    static let accessibilityExpandedWidth: CGFloat = 342
+    /// Distance from the top of the display to the crown's own top edge, which
+    /// is where the hardware cutout begins on the devices this is drawn for.
+    static let cutoutTopMargin: CGFloat = 10
 
     private var expandedCornerRadius: CGFloat {
         usesAccessibilityLayout ? 28 : 24
@@ -175,13 +190,19 @@ struct ActivityCrown: View {
     /// The foreground surface needs to read as an extension of the hardware
     /// cutout. State lives in the glyph and label, not in a glowing backdrop
     /// that can spill onto the transcript behind it.
+    ///
+    /// The idle surface is fully transparent. It used to paint black
+    /// unconditionally, which is invisible only while it is sitting behind a
+    /// Dynamic Island: on a notch device, on iPad, or on any island iPhone
+    /// rotated into landscape — where the top inset collapses and the lift
+    /// goes to zero — it read as a black pill floating over the transcript.
     private var crownBackground: some View {
         let shape = RoundedRectangle(
             cornerRadius: thought == nil ? 19 : expandedCornerRadius,
             style: .continuous
         )
 
-        return shape.fill(.black)
+        return shape.fill(.black).opacity(thought == nil ? 0 : 1)
     }
 
     private var crownRim: Color {
@@ -211,17 +232,36 @@ struct ActivityCrown: View {
             .joined(separator: ": ")
     }
 
-    /// The app's safe-area layout begins below the camera housing. Pull the
-    /// custom surface back into that space so its collapsed frame and the
-    /// physical pill share the same origin.
-    static var foregroundLift: CGFloat {
-        let topInset = UIApplication.shared.connectedScenes
+    /// The window's top safe-area inset, read straight from UIKit. This is only
+    /// a seed: it is correct once the key window exists but never reports a
+    /// change, so the view that positions the crown measures the inset itself
+    /// and feeds it back through `lift(forTopInset:)`.
+    static var windowTopInset: CGFloat {
+        UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
             .first(where: \.isKeyWindow)?
             .safeAreaInsets.top ?? 0
-        return max(0, topInset - 10)
     }
+
+    /// The app's safe-area layout begins below the camera housing. Pull the
+    /// custom surface back into that space so its collapsed frame and the
+    /// physical pill share the same origin.
+    static func lift(forTopInset topInset: CGFloat) -> CGFloat {
+        max(0, topInset - cutoutTopMargin)
+    }
+
+    /// How far the expanded crown hangs below the top of the app's safe area —
+    /// what a top-aligned overlay inside the chat has to clear to avoid being
+    /// drawn underneath it. Uses the smallest cutout inset the crown is drawn
+    /// for, so the clearance errs generous on taller devices.
+    static func safeAreaOverhang(isAccessibilitySize: Bool) -> CGFloat {
+        let height = isAccessibilitySize ? accessibilityExpandedHeight : standardExpandedHeight
+        return max(0, cutoutTopMargin + height - smallestCutoutInset)
+    }
+
+    /// Top safe-area inset of the shallowest cutout device this runs on.
+    private static let smallestCutoutInset: CGFloat = 47
 }
 
 private struct ActivityCrownButtonStyle: ButtonStyle {

@@ -559,6 +559,18 @@ struct ToolActivity: Codable, Sendable {
         return .init(label: displayLabel, tone: tone)
     }
 
+    /// The same step, described as progress rather than as an outcome.
+    ///
+    /// `thought` reports a single tool's own tone, which is right for a
+    /// per-step readout but wrong for the activity surfaces: `.done`,
+    /// `.failed`, and `.waiting` are terminal states owned by the turn. Letting
+    /// one finished tool call publish `.done` made the crown claim the whole
+    /// turn was over — green checkmark, "Your result is ready", and a success
+    /// haptic — after every successful step of a turn still in flight.
+    var inProgressThought: AssistantThought {
+        .init(label: displayLabel, tone: .working)
+    }
+
     var displayLabel: String {
         Self.labels[toolName] ?? toolName
             .replacingOccurrences(of: ".", with: " ")

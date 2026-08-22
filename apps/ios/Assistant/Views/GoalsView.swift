@@ -28,16 +28,9 @@ struct GoalsView: View {
         .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("Goals")
         .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    model.returnToChat()
-                } label: {
-                    Label("Open chat", systemImage: "bubble.left")
-                }
-                .accessibilityLabel("Open chat")
-            }
-        }
+        // No local toolbar item: the sheet wrapper in RootView already puts a
+        // close button in .topBarTrailing for every route, and the card-level
+        // "Continue in chat" button covers the rest.
         .refreshable { await model.refreshAll() }
         .task { if model.overview == nil { await model.refreshOverview() } }
     }

@@ -17,7 +17,6 @@ enum AssistantTheme {
     static let stage = Color(hex: 0x2B8253)
     static let stageDark = Color(hex: 0x1B3626)
     static let stageStrong = Color(hex: 0xF4FAF5)
-    static let stageMuted = Color(hex: 0xEAF6EE, alpha: 0.72)
     static let bubblePaper = Color(hex: 0xF5FAF6)
     static let bubblePaperDark = Color(hex: 0x223027)
     static let bubblePaperInk = Color(hex: 0x15201A)
@@ -33,6 +32,11 @@ enum AssistantTheme {
     static let errorInk = Color(hex: 0x7A201B)
     static let errorInkDark = Color(hex: 0xFFD7D2)
     static let stageDepth = Color(hex: 0x0C2D1B)
+    /// Warning pair for surfaces that sit on the conversation stage rather
+    /// than the canvas. The stage is dark in both color schemes, so this pair
+    /// deliberately does not vary — unlike `warningSurface(for:)`.
+    static let stageWarningSurface = Color(hex: 0xFFE9B7)
+    static let stageWarningInk = Color(hex: 0x5C3A0E)
 
     static func canvas(for scheme: ColorScheme) -> Color {
         scheme == .dark ? canvasDark : canvas

@@ -20,6 +20,10 @@ struct AssistantThought: Codable, Hashable, Sendable {
     static let needsYou = Self(label: "Needs you", tone: .waiting)
     static let finished = Self(label: "Finished", tone: .done)
     static let stopped = Self(label: "Task stopped", tone: .failed)
+    /// A turn the owner ended from the composer, as distinct from one that
+    /// failed on its own. Same tone — the turn produced no result either way —
+    /// but it should not tell them to open an app they are already looking at.
+    static let stoppedByYou = Self(label: "Stopped", tone: .failed)
 }
 
 struct AssistantActivityAttributes: ActivityAttributes {

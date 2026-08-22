@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 enum AssistantRoute: String, Hashable, Identifiable, CaseIterable {
     case chat
@@ -195,7 +196,10 @@ final class AppModel: ObservableObject {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             guard let self else { return }
-            await LiveActivityManager.shared.start(
+            // `ensure`, not `start`: starting ends every live activity first,
+            // so a message sent while background work was already on the island
+            // collapsed it and replayed the whole attach animation.
+            await LiveActivityManager.shared.ensure(
                 agentName: agentName,
                 thought: .thinking,
                 detail: text
@@ -223,6 +227,11 @@ final class AppModel: ObservableObject {
             } catch is CancellationError {
                 return
             } catch {
+                // URLSession's byte stream reports a cancelled task as
+                // URLError.cancelled rather than CancellationError, so a turn
+                // stopped from the composer would otherwise surface as an error
+                // banner. cancelSend owns the UI state in that case.
+                guard !Task.isCancelled else { return }
                 self.messages.removeAll { $0.id == streamID && $0.text.isEmpty }
                 self.errorMessage = error.localizedDescription
                 self.isSending = false
@@ -249,7 +258,32 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Stops the turn in flight, keeping whatever text has already streamed in.
+    func cancelSend() {
+        guard isSending else { return }
+        pollTask?.cancel()
+        pollTask = nil
+        isSending = false
+        toolActivity = []
+        messages.removeAll { $0.id.hasPrefix("stream-") && $0.text.isEmpty }
+        let detail = "You stopped this turn"
+        setActivityThought(.stoppedByYou, proposedDetail: detail)
+        Task {
+            await LiveActivityManager.shared.finish(
+                thought: .stoppedByYou,
+                detail: detail,
+                succeeded: false,
+                retainsSummary: false
+            )
+        }
+        clearThought(after: 2)
+    }
+
     func dismissError() { errorMessage = nil }
+
+    private var isForeground: Bool {
+        UIApplication.shared.applicationState == .active
+    }
 
 #if DEBUG
     func previewActivitySequence() {
@@ -331,7 +365,7 @@ final class AppModel: ObservableObject {
                 toolActivity = updates.activity
                 if let latestTool = updates.activity.last {
                     await publishThought(
-                        latestTool.thought,
+                        latestTool.inProgressThought,
                         detail: "Step \(latestTool.step)"
                     )
                 }
@@ -349,6 +383,9 @@ final class AppModel: ObservableObject {
                 }
                 if updates.hasMore { continue }
             } catch {
+                // Same as above: a poll interrupted by cancelSend must not
+                // report itself as a failure.
+                if Task.isCancelled { return }
                 if attempt > 3 {
                     errorMessage = error.localizedDescription
                     break
@@ -387,11 +424,16 @@ final class AppModel: ObservableObject {
                 body: succeeded ? "Your result is ready." : "Open the conversation for details.",
                 route: .chat
             )
+            // Hold the activity open as a receipt only when the owner might not
+            // have seen the result. `schedule` returns false whenever the app
+            // is active, so keying off it alone meant every turn watched
+            // on-screen pinned a stale "Finished" card to the island for
+            // fifteen minutes — while the in-app crown cleared it in under two.
             await LiveActivityManager.shared.finish(
                 thought: thought,
                 detail: detail,
                 succeeded: succeeded,
-                retainsSummary: !notificationDelivered
+                retainsSummary: !notificationDelivered && !isForeground
             )
             clearThought(after: succeeded ? 1.8 : 4)
         }

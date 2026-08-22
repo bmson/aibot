@@ -4,6 +4,7 @@ struct ApprovalsView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pendingDecision: (PendingApproval, String)?
     @State private var decisionInFlightID: String?
     @State private var decisionInFlightAction: String?
@@ -136,23 +137,32 @@ struct ApprovalsView: View {
         }
     }
 
-    @ViewBuilder
     private func approvalCode(_ item: PendingApproval) -> some View {
-        if decisionInFlightID == item.id {
-            ProgressView()
-                .controlSize(.small)
-                .frame(width: 44, height: 44)
-                .accessibilityLabel("Applying decision")
-        } else {
-            Text(item.approval.shortCode)
-                .font(.caption.monospaced().weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(
-                    AssistantTheme.sunken(for: colorScheme),
-                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-                )
+        // One fixed-height slot holding both states. The spinner used to be
+        // 44pt tall against the badge's ~26, so confirming a decision grew the
+        // card header by 18pt and snapped it back — on the most consequential
+        // screen in the app.
+        ZStack {
+            if decisionInFlightID == item.id {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Applying decision")
+            } else {
+                Text(item.approval.shortCode)
+                    .font(.caption.monospaced().weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        AssistantTheme.sunken(for: colorScheme),
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    )
+            }
         }
+        .frame(minHeight: 28)
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.18),
+            value: decisionInFlightID
+        )
     }
 
     @ViewBuilder

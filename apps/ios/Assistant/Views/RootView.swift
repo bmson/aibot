@@ -6,6 +6,10 @@ struct RootView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    // Seeded from UIKit so the very first frame is positioned, then kept
+    // current by the geometry reading below — the crown has to stay registered
+    // with the hardware cutout across rotation and status-bar height changes.
+    @State private var topSafeAreaInset = ActivityCrown.windowTopInset
 
     var body: some View {
         Group {
@@ -52,6 +56,13 @@ struct RootView: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
+        .onGeometryChange(for: CGFloat.self) { geometry in
+            geometry.safeAreaInsets.top
+        } action: { inset in
+            // Guard the zero: a transient measurement of 0 would drop the crown
+            // out of the cutout and onto the transcript.
+            if inset > 0 { topSafeAreaInset = inset }
+        }
         .onOpenURL { url in
             guard url.scheme == "assistant" else { return }
 #if DEBUG
@@ -86,7 +97,7 @@ struct RootView: View {
                         )
                     }
                 )
-                    .offset(y: -ActivityCrown.foregroundLift)
+                    .offset(y: -ActivityCrown.lift(forTopInset: topSafeAreaInset))
                     .zIndex(100)
             }
         }

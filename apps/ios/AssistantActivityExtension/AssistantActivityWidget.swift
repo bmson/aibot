@@ -142,6 +142,10 @@ struct AssistantActivityWidget: Widget {
                 .tint(tint(for: tone))
         } else {
             Image(systemName: phaseSymbolName(for: tone))
+                // The compact and minimal slots get a size of their own. This
+                // parameter was previously accepted and never read, so all
+                // three presentations drew the same glyph.
+                .font(.system(size: compact ? 15 : 17, weight: .semibold))
                 .foregroundStyle(tint(for: tone))
                 .contentTransition(.symbolEffect(.replace))
         }

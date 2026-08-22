@@ -23,8 +23,26 @@ enum PullMenuMotion {
         revealDistance >= openingCommitmentDistance(revealHeight: revealHeight)
     }
 
-    static func commitsToClose(dragDistance: CGFloat, revealHeight: CGFloat) -> Bool {
-        dragDistance >= closingCommitmentDistance(revealHeight: revealHeight)
+    /// Slack around the closing detent, so a drag hovering at the threshold
+    /// does not toggle the haptic every point.
+    static let detentHysteresis: CGFloat = 14
+
+    /// Whether a release at this distance closes the menu.
+    ///
+    /// Both the live detent and the release decision go through here so they
+    /// cannot disagree. They used to: the detent applied the hysteresis and the
+    /// release compared against the bare threshold, so a drag that stopped
+    /// anywhere in the upper half of the band reported "stays open" and then
+    /// closed anyway.
+    static func closesOnRelease(
+        dragDistance: CGFloat,
+        revealHeight: CGFloat,
+        detentHeld: Bool
+    ) -> Bool {
+        let threshold = closingCommitmentDistance(revealHeight: revealHeight)
+        return detentHeld
+            ? dragDistance >= threshold + detentHysteresis
+            : dragDistance > threshold - detentHysteresis
     }
 }
 
@@ -36,6 +54,10 @@ struct ChatView: View {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .body) private var composerFontSize = 16.0
+    // The menu tiles were the one surface in the app on absolute point sizes,
+    // so they stayed put through every Dynamic Type step below accessibility.
+    @ScaledMetric(relativeTo: .caption2) private var menuTileFontSize = 11.0
+    @ScaledMetric(relativeTo: .caption2) private var menuBadgeFontSize = 9.0
     @State private var draft = ""
     @State private var autonomous = false
     @State private var isAtBottom = true
@@ -122,7 +144,11 @@ struct ChatView: View {
             if let error = model.errorMessage {
                 errorBanner(error)
                     .padding(.horizontal, 12)
-                    .padding(.top, 4)
+                    // Clear the activity crown, which RootView draws over this
+                    // overlay at a higher zIndex — expanded, it reached about
+                    // 23pt into the banner, and covered it outright at
+                    // accessibility sizes.
+                    .padding(.top, errorBannerTopInset)
                     .transition(
                         reduceMotion
                             ? .opacity
@@ -130,10 +156,21 @@ struct ChatView: View {
                     )
             }
         }
+        .animation(
+            reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.86),
+            value: model.errorMessage
+        )
         .sensoryFeedback(.selection, trigger: menuDetentFeedback)
         .sensoryFeedback(.selection, trigger: menuActionFeedback)
         .sensoryFeedback(.impact(weight: .light), trigger: sendFeedback)
         .sensoryFeedback(.selection, trigger: jumpFeedback)
+    }
+
+    private var errorBannerTopInset: CGFloat {
+        guard model.activityThought != nil else { return 4 }
+        return ActivityCrown.safeAreaOverhang(
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+        ) + 8
     }
 
     private var stageBackdrop: some View {
@@ -181,6 +218,15 @@ struct ChatView: View {
                         .id("bottom")
                 }
                 .padding(.horizontal, 16)
+                // Keyed to the identity list rather than the messages
+                // themselves: without an animation transaction the row
+                // transitions above never played at all, but animating on the
+                // full array would re-animate the bubble's geometry on every
+                // streamed token.
+                .animation(
+                    reduceMotion ? nil : .snappy(duration: 0.3, extraBounce: 0.02),
+                    value: model.messages.map(\.id)
+                )
             }
             .ignoresSafeArea(.container, edges: [.top, .bottom])
             .scrollClipDisabled()
@@ -311,6 +357,15 @@ struct ChatView: View {
             }
             .onChange(of: scrollRequest) { _, _ in
                 scrollToBottom(using: proxy)
+            }
+            .onChange(of: model.latestQuickReplies) { _, replies in
+                // Suggestions only render while the composer is unfocused, and
+                // sendDraft deliberately keeps the keyboard up — so a reply's
+                // quick replies were never reachable without dismissing it by
+                // hand. Yield focus when one actually arrives, unless the
+                // reader has already started typing a follow-up.
+                guard !replies.isEmpty, !model.isSending, draft.isEmpty else { return }
+                composerFocused = false
             }
             .onChange(of: composerHeight) { previousHeight, _ in
                 // Only the first measurement needs help landing on the latest
@@ -454,7 +509,10 @@ struct ChatView: View {
                     anchor: .center
                 )
                 .opacity(headerVisibility)
-                .contentShape(Rectangle().inset(by: -12))
+                // -20 rather than -12: the painted handle is 4pt tall, so this
+                // is what takes the only close-drag target in the menu up to
+                // the 44pt minimum.
+                .contentShape(Rectangle().inset(by: -20))
                 .simultaneousGesture(pullMenuCloseGesture)
 
             HStack(spacing: 10) {
@@ -606,6 +664,9 @@ struct ChatView: View {
                     : AssistantTheme.sunken(for: colorScheme).opacity(0.72),
                 in: Capsule()
             )
+            // Takes the target to 44pt without growing the capsule, which the
+            // menu's fixed reveal height has no room for.
+            .contentShape(Rectangle().inset(by: -5))
         }
         .buttonStyle(
             AssistantTactileButtonStyle(
@@ -643,7 +704,7 @@ struct ChatView: View {
                         .overlay(alignment: .topTrailing) {
                             if badge > 0 {
                                 Text(badge > 99 ? "99+" : "\(badge)")
-                                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                                    .font(.system(size: menuBadgeFontSize, weight: .bold, design: .rounded))
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 4)
                                     .frame(minWidth: 14, minHeight: 14)
@@ -656,7 +717,7 @@ struct ChatView: View {
                         .font(
                             usesExtraLargeAccessibilityMenu
                                 ? .caption.weight(.semibold)
-                                : .system(size: 11, weight: .semibold, design: .rounded)
+                                : .system(size: menuTileFontSize, weight: .semibold, design: .rounded)
                         )
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
@@ -739,12 +800,11 @@ struct ChatView: View {
                 let dragDistance = min(max(value.translation.height, 0), menuRevealHeight)
                 menuCloseDragDistance = dragDistance
                 // Same hysteresis as the opening detent, mirrored.
-                let threshold = PullMenuMotion.closingCommitmentDistance(
-                    revealHeight: menuRevealHeight
+                let willClose = PullMenuMotion.closesOnRelease(
+                    dragDistance: dragDistance,
+                    revealHeight: menuRevealHeight,
+                    detentHeld: menuDetentReached
                 )
-                let willClose = menuDetentReached
-                    ? dragDistance >= threshold + 14
-                    : dragDistance > threshold - 14
                 updateMenuDetent(reached: !willClose)
             }
             .onEnded { value in
@@ -753,10 +813,13 @@ struct ChatView: View {
                     value.translation.height,
                     value.predictedEndTranslation.height
                 )
+                // Released against the same edge the detent last reported, so
+                // the haptic the finger felt and the outcome always agree.
                 setPullMenu(
-                    open: !PullMenuMotion.commitsToClose(
+                    open: !PullMenuMotion.closesOnRelease(
                         dragDistance: projectedDistance,
-                        revealHeight: menuRevealHeight
+                        revealHeight: menuRevealHeight,
+                        detentHeld: menuDetentReached
                     )
                 )
             }
@@ -812,10 +875,10 @@ struct ChatView: View {
     private func openRoute(_ route: AssistantRoute) {
         menuActionFeedback += 1
         composerFocused = false
-        menuOpen = false
-        menuPullDistance = 0
-        menuCloseDragDistance = 0
-        menuDetentReached = false
+        // Through setPullMenu rather than assigning the state directly, so
+        // picking a destination springs shut the way tapping Chat does instead
+        // of teleporting under the presenting sheet.
+        setPullMenu(open: false)
         model.present(route)
     }
 
@@ -951,6 +1014,10 @@ struct ChatView: View {
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: autonomous)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: composerFocused)
+        // The quick-reply strip is gated on this too, so without it the
+        // composer changed height in a hard step at the start and end of every
+        // turn.
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.isSending)
     }
 
     private var autonomousNotice: some View {
@@ -975,11 +1042,11 @@ struct ChatView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Turn off auto mode")
         }
-        .foregroundStyle(Color(hex: 0x5C3A0E))
+        .foregroundStyle(AssistantTheme.stageWarningInk)
         .padding(.leading, 12)
         .padding(.trailing, 7)
         .padding(.vertical, 7)
-        .background(Color(hex: 0xFFE9B7).opacity(0.94), in: Capsule())
+        .background(AssistantTheme.stageWarningSurface.opacity(0.94), in: Capsule())
         .overlay {
             Capsule().strokeBorder(.white.opacity(0.32), lineWidth: 0.7)
         }
@@ -1015,10 +1082,24 @@ struct ChatView: View {
                     }
                     .accessibilityIdentifier("assistant.chat.composer")
 
-                Button(action: sendDraft) {
+                Button {
+                    if model.isSending {
+                        model.cancelSend()
+                    } else {
+                        sendDraft()
+                    }
+                } label: {
                     ZStack {
                         if model.isSending {
+                            // A spinner in a button's position reads as a
+                            // progress indicator, not a control. The square
+                            // inside the arc says the turn can be stopped.
                             ComposerWorkingIndicator(color: composerTextColor)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                        .fill(composerTextColor)
+                                        .frame(width: 8, height: 8)
+                                }
                                 .transition(.scale(scale: 0.72).combined(with: .opacity))
                         } else {
                             Image(systemName: "arrow.up")
@@ -1027,7 +1108,7 @@ struct ChatView: View {
                         }
                     }
                     .foregroundStyle(
-                        !canSend
+                        !canSend && !model.isSending
                             ? composerPlaceholderColor
                             : AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
                     )
@@ -1056,12 +1137,12 @@ struct ChatView: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(!canSend || model.isSending)
-                .accessibilityLabel(model.isSending ? "Assistant is working" : "Send message")
+                .disabled(!canSend && !model.isSending)
+                .accessibilityLabel(model.isSending ? "Stop the assistant" : "Send message")
                 .accessibilityIdentifier("assistant.chat.send")
                 .accessibilityHint(
                     model.isSending
-                        ? "You can continue drafting while the assistant works"
+                        ? "Stops this turn and keeps what has arrived so far"
                         : "Sends the current message"
                 )
                 .animation(
@@ -1097,9 +1178,7 @@ struct ChatView: View {
         // warm white already present in the conversation instead of the
         // app's dark canvas ink. It stays soft, but remains readable over
         // every animated stage color.
-        AssistantTheme.stageStrong.opacity(
-            colorSchemeContrast == .increased ? 1 : 0.96
-        )
+        AssistantTheme.stageStrong
     }
 
     private var composerPrompt: String {
@@ -1108,8 +1187,12 @@ struct ChatView: View {
     }
 
     private var composerPlaceholderColor: Color {
-        // Same warm white as the jump-to-latest label, per owner feedback.
-        AssistantTheme.stageStrong
+        // Same warm white as the jump-to-latest label, per owner feedback — but
+        // set back from the typed text, which now sits at full strength. The
+        // two were the other way round, so the prompt outweighed the content.
+        AssistantTheme.stageStrong.opacity(
+            colorSchemeContrast == .increased ? 0.78 : 0.62
+        )
     }
 
     private var composerCursorColor: Color {

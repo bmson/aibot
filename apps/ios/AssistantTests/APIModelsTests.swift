@@ -107,6 +107,37 @@ final class APIModelsTests: XCTestCase {
             LiveActivityManager.safeDetail(for: .needsYou, proposed: "Approve a private account"),
             "A decision is ready to review"
         )
+        // A turn the owner stopped should not tell them to open the app they
+        // stopped it from, even though it shares the failed tone.
+        XCTAssertEqual(
+            LiveActivityManager.safeDetail(for: .stoppedByYou, proposed: "Anything private"),
+            "You stopped this turn"
+        )
+        XCTAssertEqual(
+            LiveActivityManager.safeDetail(for: .stopped, proposed: "Anything private"),
+            "Open Assistant for details"
+        )
+    }
+
+    func testToolProgressNeverPublishesATerminalTurnState() {
+        // A single finished tool call is not a finished turn. Publishing its own
+        // tone made the activity surfaces claim the whole turn was done — and
+        // fire a success haptic — after every successful step.
+        for status in ["succeeded", "failed", "denied", "awaiting_approval", "running"] {
+            let activity = ToolActivity(toolName: "web.search", status: status, step: 2)
+            XCTAssertEqual(
+                activity.inProgressThought.tone,
+                .working,
+                "Tool status \(status) should read as progress, not an outcome"
+            )
+            XCTAssertEqual(activity.inProgressThought.label, activity.displayLabel)
+        }
+
+        // The per-step accessor keeps reporting the tool's own outcome.
+        XCTAssertEqual(
+            ToolActivity(toolName: "web.search", status: "succeeded", step: 2).thought.tone,
+            .done
+        )
     }
 
     func testPullMenuCommitmentDetentsMatchReleaseDecisions() {
@@ -129,12 +160,52 @@ final class APIModelsTests: XCTestCase {
         XCTAssertTrue(
             PullMenuMotion.commitsToOpen(revealDistance: 107, revealHeight: standardHeight)
         )
+        // Closing threshold is 55.2 at this height, with 14pt of slack either
+        // side. While the menu is holding open the detent asks for the far edge
+        // of the band; once it has reported "will close" it only asks for the
+        // near one.
         XCTAssertFalse(
-            PullMenuMotion.commitsToClose(dragDistance: 55, revealHeight: standardHeight)
+            PullMenuMotion.closesOnRelease(
+                dragDistance: 69,
+                revealHeight: standardHeight,
+                detentHeld: true
+            )
         )
         XCTAssertTrue(
-            PullMenuMotion.commitsToClose(dragDistance: 56, revealHeight: standardHeight)
+            PullMenuMotion.closesOnRelease(
+                dragDistance: 70,
+                revealHeight: standardHeight,
+                detentHeld: true
+            )
         )
+        XCTAssertFalse(
+            PullMenuMotion.closesOnRelease(
+                dragDistance: 41,
+                revealHeight: standardHeight,
+                detentHeld: false
+            )
+        )
+        XCTAssertTrue(
+            PullMenuMotion.closesOnRelease(
+                dragDistance: 42,
+                revealHeight: standardHeight,
+                detentHeld: false
+            )
+        )
+        // The property this test is named for: a release inside the hysteresis
+        // band agrees with the detent the finger last felt. The release used to
+        // compare against the bare threshold, so 56–69pt reported "stays open"
+        // and then closed anyway.
+        for distance in stride(from: CGFloat(56), through: CGFloat(69), by: 1) {
+            XCTAssertFalse(
+                PullMenuMotion.closesOnRelease(
+                    dragDistance: distance,
+                    revealHeight: standardHeight,
+                    detentHeld: true
+                ),
+                "A release at \(distance)pt should honour the open detent"
+            )
+        }
     }
 
     func testNativeRouteCatalogMatchesTheCompleteWorkspaceMenu() {

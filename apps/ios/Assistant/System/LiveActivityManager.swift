@@ -182,6 +182,7 @@ final class LiveActivityManager {
         case .done:
             return "Your result is ready"
         case .failed:
+            if thought == .stoppedByYou { return "You stopped this turn" }
             return "Open Assistant for details"
         case .working:
             if detail.range(of: #"^Step \d+$"#, options: .regularExpression) != nil {
