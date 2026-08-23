@@ -5,6 +5,7 @@ struct MoreView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject private var notifications = NotificationManager.shared
+    @AppStorage(AssistantAppearance.defaultsKey) private var appearance = AssistantAppearance.dark
 
     var body: some View {
         List {
@@ -22,6 +23,19 @@ struct MoreView: View {
                 Text("Notifications")
             } footer: {
                 Text("Get an alert when background work finishes or needs a decision. Notification previews stay private.")
+            }
+
+            Section {
+                Picker("Appearance", selection: $appearance) {
+                    ForEach(AssistantAppearance.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text("Appearance")
+            } footer: {
+                Text("Dark keeps the conversation stage day and night. System follows this iPhone’s appearance setting.")
             }
 
             Section("Connection") {

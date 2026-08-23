@@ -1,5 +1,34 @@
 import SwiftUI
 
+/// The app's appearance override. The app used to follow the iPhone's
+/// appearance silently, so a scheduled system change flipped the
+/// conversation between light and dark with no visible cause.
+enum AssistantAppearance: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    static let defaultsKey = "assistant.appearance"
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
 enum AssistantTheme {
     static let conversationCornerRadius: CGFloat = 27
     static let canvas = Color(hex: 0xEEF5F0)
