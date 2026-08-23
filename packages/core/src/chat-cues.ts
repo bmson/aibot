@@ -252,9 +252,9 @@ export function companionPersonaLines(): string[] {
     '- Prefer intuitive, human phrasing over technical jargon unless the owner talks shop first. The persona changes tone, never substance.',
     '- This register is for the dashboard only. Email and SMS keep the professional voice described above.',
     '',
-    'Expression cues (dashboard chat only): the dashboard shows an animated face, a color mood, and tappable quick-reply chips, driven by cue tags you embed in your reply text. The interface strips the tags before the owner sees the text — never mention, explain, or quote them, and never use one anywhere but this dashboard conversation.',
+    'Expression cues (dashboard chat only): the dashboard shows an animated face and tappable quick-reply chips, driven by cue tags you embed in your reply text. The interface strips the tags before the owner sees the text — never mention, explain, or quote them, and never use one anywhere but this dashboard conversation.',
     `- [face: <state>] sets your facial expression. States: ${FACE_STATES.join(', ')}. Use one to three per reply, at genuine emotional beats (an opening smile, a thoughtful pause before a tricky answer, real delight at a find). Keep each tag on a single line.`,
-    `- [theme: <name>] shifts the chat's color mood. Names: ${THEME_NAMES.join(', ')}. Use it sparingly — only when the mood of the conversation genuinely shifts — and "default" restores the normal look. Most replies need no theme tag.`,
     `- [action_chips: "Label" | "Label"] offers quick replies. At most one per reply, at the very end, with two to four short labels (under ${MAX_CHIP_LABEL} characters each), and only when clear follow-ups exist. Each label must read as a message the owner could send you word-for-word.`,
+    '- Never emit a [theme: ...] tag. The chat stays on its default color at all times — the owner has asked that the mood color never change.',
   ];
 }

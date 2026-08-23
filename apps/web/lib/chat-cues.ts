@@ -98,21 +98,11 @@ export function latestFace(log: UIMessage[]): FaceState {
 }
 
 /**
- * The chat surface's color mood, derived from the newest theme cue within the
- * last THEME_LOOKBACK assistant messages. Deriving (rather than storing) keeps
- * the tint consistent with what is on screen after a reload; bounding the
- * lookback keeps a mood from outliving the exchange that set it, which is what
- * made the tint appear to change on its own. Only assistant messages spend
- * budget — a long run of owner messages does not age the mood out.
+ * The chat surface's color mood — pinned to 'default'. The owner asked to
+ * keep the mood color unchanged permanently, so this ignores any [theme:]
+ * cue in the log (the dashboard persona no longer emits them, but older
+ * messages can still carry one) rather than deriving a tint from it.
  */
-export function latestTheme(log: UIMessage[]): ThemeName {
-  let examined = 0;
-  for (let index = log.length - 1; index >= 0 && examined < THEME_LOOKBACK; index -= 1) {
-    const message = log[index];
-    if (!message || message.role !== 'assistant') continue;
-    examined += 1;
-    const name = themeCueOf(message);
-    if (name) return name;
-  }
+export function latestTheme(_log: UIMessage[]): ThemeName {
   return 'default';
 }

@@ -88,9 +88,12 @@ describe('log-level cues', () => {
     assistantMessage('m2', [{ type: 'text', text: 'Two' }]),
   ];
 
-  it('rests on the newest assistant cue, looking past cue-less replies', () => {
+  it('rests on the newest assistant face cue, looking past cue-less replies', () => {
     expect(latestFace(log)).toBe('happy_squint');
-    expect(latestTheme(log)).toBe('cool_sky');
+  });
+
+  it('stays on the default theme even with a theme cue in the log', () => {
+    expect(latestTheme(log)).toBe('default');
   });
 
   it('defaults to neutral and the default theme on an empty or cue-less log', () => {
@@ -102,43 +105,38 @@ describe('log-level cues', () => {
   });
 });
 
-describe('theme lookback', () => {
+describe('theme pinned to default', () => {
+  // The owner asked to keep the mood color unchanged permanently: latestTheme
+  // ignores every [theme:] cue regardless of position, recency, or how many
+  // there are.
   const themed = () =>
     assistantMessage('themed', [{ type: 'data-theme', data: { name: 'cool_sky' } }]);
   const plain = (id: string) => assistantMessage(id, [{ type: 'text', text: 'Working on it' }]);
   const owner = (id: string) =>
     ({ id, role: 'user', parts: [{ type: 'text', text: 'Thanks' }] }) as UIMessage;
 
-  it('still applies a cue at the edge of the lookback', () => {
+  it('ignores a cue at the edge of the old lookback window', () => {
     const log = [
       themed(),
       ...Array.from({ length: THEME_LOOKBACK - 1 }, (_, index) => plain(`m${index}`)),
     ];
-    expect(latestTheme(log)).toBe('cool_sky');
-  });
-
-  it('lets a cue decay once it falls past the lookback', () => {
-    const log = [
-      themed(),
-      ...Array.from({ length: THEME_LOOKBACK }, (_, index) => plain(`m${index}`)),
-    ];
     expect(latestTheme(log)).toBe('default');
   });
 
-  it('does not spend budget on owner messages', () => {
+  it('ignores a cue mixed with owner messages', () => {
     const log = [
       themed(),
       ...Array.from({ length: 40 }, (_, index) => owner(`u${index}`)),
       plain('m0'),
     ];
-    expect(latestTheme(log)).toBe('cool_sky');
+    expect(latestTheme(log)).toBe('default');
   });
 
-  it('prefers the newest cue when two are in range', () => {
+  it('ignores the newest cue even when it is the very last message', () => {
     const log = [
       themed(),
       assistantMessage('m0', [{ type: 'data-theme', data: { name: 'warm_amber' } }]),
     ];
-    expect(latestTheme(log)).toBe('warm_amber');
+    expect(latestTheme(log)).toBe('default');
   });
 });
