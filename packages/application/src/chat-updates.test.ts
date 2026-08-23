@@ -1,6 +1,6 @@
 import { encodeMessageCursor, getAgent } from '@assistant/core/chat';
 import { conversations, createDb, type Db, messages } from '@assistant/db';
-import { eq, inArray } from 'drizzle-orm';
+import { getTableColumns, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getChatUpdates } from './chat.js';
 
@@ -30,6 +30,9 @@ async function post(
   text: string,
   options: { createdAt?: Date; parts?: unknown[] } = {},
 ) {
+  // Project created_at at full timestamptz precision like listMessages does:
+  // cursor assertions compare against cursors advanced over stored rows, which
+  // carry microsecond-exact timestamps.
   const [row] = await db
     .insert(messages)
     .values({
@@ -40,7 +43,10 @@ async function post(
       text,
       ...(options.createdAt ? { createdAt: options.createdAt } : {}),
     })
-    .returning();
+    .returning({
+      ...getTableColumns(messages),
+      createdAtExact: sql<string>`to_char(${messages.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+    });
   return row as NonNullable<typeof row>;
 }
 

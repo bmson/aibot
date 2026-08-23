@@ -13,6 +13,7 @@ import {
   conversations,
   type Db,
   goals,
+  messages,
   models,
   suggestions,
   tasks,
@@ -119,8 +120,10 @@ function detailValue(value: unknown): string {
 /**
  * Persisted rows as the chat client reads them. `createdAt` travels on metadata
  * because it is what orders the rendered log — see orderChatLog in the web app.
+ * Accepts the base row shape: listMessages rows carry an extra microsecond
+ * cursor column that UI mapping has no use for.
  */
-function toUiMessages(rows: Awaited<ReturnType<typeof listMessages>>): UIMessage[] {
+function toUiMessages(rows: (typeof messages.$inferSelect)[]): UIMessage[] {
   return rows
     .filter((row) => row.role === 'user' || row.role === 'assistant')
     .map((row) => ({
