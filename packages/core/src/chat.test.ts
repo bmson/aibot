@@ -112,10 +112,17 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(dashboard).toContain('Pixar robot');
     expect(dashboard).toContain('[face: <state>]');
     expect(dashboard).toContain('warm_smile');
-    expect(dashboard).toContain('[theme: <name>]');
     expect(dashboard).toContain('[action_chips: "Label" | "Label"]');
     expect(dashboard).toMatch(/Email and SMS keep the professional voice/);
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(22);
+  });
+
+  it('tells the model never to emit a mood-color theme cue (v26)', () => {
+    const dashboard = buildSystemPrompt(agent, { channel: 'dashboard-chat' });
+    expect(dashboard).not.toContain('[theme: <name>]');
+    expect(dashboard).not.toContain("shifts the chat's color mood");
+    expect(dashboard).toMatch(/never emit a \[theme: \.\.\.\] tag/i);
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(26);
   });
 
   it('keeps every other channel free of the cue vocabulary', () => {

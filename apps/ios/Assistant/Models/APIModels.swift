@@ -124,23 +124,14 @@ enum CompanionMood: String, Codable, Sendable {
     /// Mirrors THEME_LOOKBACK in packages/core/src/chat-cues.ts.
     static let lookback = 8
 
-    /// The chat's color mood: the newest cue within the last `lookback`
-    /// assistant messages. Mirrors the web client's `latestTheme(log)` (see
-    /// apps/web/lib/chat-cues.ts), and lives here rather than on AppModel so it
-    /// is reachable from tests.
-    ///
-    /// The bound is the point. Unbounded, one cue held for the whole loaded
-    /// window and then expired the moment it scrolled out, so the chat's tint
-    /// changed with no message behind it. Only assistant messages spend budget —
-    /// a long run of owner messages does not age the mood out.
-    static func latest(in messages: [ChatMessage]) -> CompanionMood {
-        var examined = 0
-        for message in messages.reversed() where message.role == .assistant {
-            if examined >= lookback { break }
-            examined += 1
-            if let mood = message.mood { return mood }
-        }
-        return .default
+    /// The chat's color mood — pinned to `.default`. The owner asked to keep
+    /// the mood color unchanged permanently, so this ignores any `[theme:]`
+    /// cue in the log (the dashboard persona no longer emits them, but older
+    /// messages can still carry one). Mirrors the web client's
+    /// `latestTheme(log)` (see apps/web/lib/chat-cues.ts), and lives here
+    /// rather than on AppModel so it is reachable from tests.
+    static func latest(in _: [ChatMessage]) -> CompanionMood {
+        .default
     }
 }
 

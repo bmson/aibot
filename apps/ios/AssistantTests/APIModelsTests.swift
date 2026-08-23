@@ -11,7 +11,7 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(message.quickReplies, ["Show me", "Continue"])
     }
 
-    func testMoodAppliesAtTheEdgeOfTheLookbackAndDecaysBeyondIt() {
+    func testMoodStaysDefaultRegardlessOfThemeCues() {
         let themed = ChatMessage(
             id: "themed",
             role: .assistant,
@@ -22,13 +22,13 @@ final class APIModelsTests: XCTestCase {
         }
 
         let atEdge = [themed] + (0..<(CompanionMood.lookback - 1)).map(plain)
-        XCTAssertEqual(CompanionMood.latest(in: atEdge), .coolSky)
+        XCTAssertEqual(CompanionMood.latest(in: atEdge), .default)
 
-        let pastEdge = [themed] + (0..<CompanionMood.lookback).map(plain)
-        XCTAssertEqual(CompanionMood.latest(in: pastEdge), .default)
+        let asLastMessage = [themed]
+        XCTAssertEqual(CompanionMood.latest(in: asLastMessage), .default)
     }
 
-    func testMoodLookbackIgnoresOwnerMessages() {
+    func testMoodIgnoresThemeCuesMixedWithOwnerMessages() {
         let themed = ChatMessage(
             id: "themed",
             role: .assistant,
@@ -36,7 +36,7 @@ final class APIModelsTests: XCTestCase {
         )
         let owner = (0..<40).map { ChatMessage.optimistic(role: .user, text: "Thanks", id: "u\($0)") }
 
-        XCTAssertEqual(CompanionMood.latest(in: [themed] + owner), .softRose)
+        XCTAssertEqual(CompanionMood.latest(in: [themed] + owner), .default)
         XCTAssertEqual(CompanionMood.latest(in: []), .default)
     }
 
