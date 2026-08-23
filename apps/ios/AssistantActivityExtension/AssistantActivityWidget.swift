@@ -58,11 +58,11 @@ struct AssistantActivityWidget: Widget {
                     .animation(.smooth(duration: 0.38), value: context.state)
                 }
             } compactLeading: {
-                phaseGlyph(context.state.thought.tone, compact: true)
+                compactPhaseSymbol(context.state.thought.tone)
             } compactTrailing: {
-                compactTrailing(context.state)
+                compactTrailing(context.state, startedAt: context.attributes.startedAt)
             } minimal: {
-                phaseGlyph(context.state.thought.tone, compact: true)
+                compactPhaseSymbol(context.state.thought.tone)
             }
             // Use the system's native black Dynamic Island surface. Applying
             // custom region backgrounds causes iOS to composite them as glass,
@@ -116,12 +116,18 @@ struct AssistantActivityWidget: Widget {
     }
 
     @ViewBuilder
-    private func compactTrailing(_ state: AssistantActivityAttributes.ContentState) -> some View {
+    private func compactTrailing(
+        _ state: AssistantActivityAttributes.ContentState,
+        startedAt: Date
+    ) -> some View {
         switch state.thought.tone {
         case .thinking, .working:
-            ProgressView()
-                .controlSize(.mini)
-                .tint(tint(for: state.thought.tone))
+            // Live elapsed time is glanceable information. A second spinner
+            // here next to the leading one read as two meaningless circles.
+            Text(startedAt, style: .timer)
+                .font(.caption2.monospacedDigit().weight(.semibold))
+                .foregroundStyle(tint(for: state.thought.tone))
+                .multilineTextAlignment(.trailing)
         case .waiting:
             Text(state.pendingCount > 0 ? "\(state.pendingCount)" : "!")
                 .font(.caption2.monospacedDigit().weight(.bold))
@@ -132,8 +138,19 @@ struct AssistantActivityWidget: Widget {
         }
     }
 
+    /// Compact island slots and the minimal presentation have no room for a
+    /// spinner — an indeterminate circle reads as a dot with no meaning — so
+    /// they always get the phase's symbol. The expanded region, which pairs
+    /// the glyph with a text label, keeps its spinner.
+    private func compactPhaseSymbol(_ tone: AssistantActivityTone) -> some View {
+        Image(systemName: phaseSymbolName(for: tone))
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(tint(for: tone))
+            .contentTransition(.symbolEffect(.replace))
+    }
+
     @ViewBuilder
-    private func phaseGlyph(_ tone: AssistantActivityTone, compact: Bool = false) -> some View {
+    private func phaseGlyph(_ tone: AssistantActivityTone) -> some View {
         // Simple SF Symbols only — the earlier paired-capsule "eyes" read as
         // noise at Dynamic Island sizes.
         if tone == .working || tone == .thinking {
@@ -142,10 +159,7 @@ struct AssistantActivityWidget: Widget {
                 .tint(tint(for: tone))
         } else {
             Image(systemName: phaseSymbolName(for: tone))
-                // The compact and minimal slots get a size of their own. This
-                // parameter was previously accepted and never read, so all
-                // three presentations drew the same glyph.
-                .font(.system(size: compact ? 15 : 17, weight: .semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(tint(for: tone))
                 .contentTransition(.symbolEffect(.replace))
         }
