@@ -79,6 +79,15 @@ When building the owner's iOS Shortcut:
 A `409` response means the Shortcut's clock or its `capturedAt` value drifted past the skew window;
 a `403` means the signature (and therefore the secret) is wrong.
 
+### Native iOS app
+
+The iOS app posts the same ping shape to `POST /api/mobile/v1/location` on the web service instead,
+authenticated with its existing mobile access key rather than the HMAC secret — no second credential
+is installed on the phone. Pings carry the device's IANA time zone (`timeZone`) alongside `lat`/`lng`,
+so the ambient prompt line can anchor the owner's clock while traveling. Sharing is off by default and
+owner-gated (More → Assistant context → Share iPhone location); the app sends a one-shot fix on connect
+and on foreground, throttled to 15 minutes, with no background or continuous tracking.
+
 ## Release artifacts
 
 CI scans every selected container for HIGH/CRITICAL vulnerabilities, generates an SPDX JSON SBOM,
