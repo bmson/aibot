@@ -232,11 +232,11 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // Keep the stage edge-to-edge inside the currently available
                 // chat region. Respecting the keyboard safe area lets the
-                // neutral window backing show through its rounded corners.
+                // green window backing show through its rounded corners.
                 .background(stageBackdrop.ignoresSafeArea(.container))
                 .clipShape(
                     RoundedRectangle(
-                        cornerRadius: 34 * menuSurfaceProgress,
+                        cornerRadius: menuSheetCornerRadius * menuSurfaceProgress,
                         style: .continuous
                     )
                 )
@@ -262,9 +262,11 @@ struct ChatView: View {
         }
         .background {
             // This remains behind every app surface. When the keyboard is
-            // present, the stage above respects its safe area and exposes this
-            // neutral backing only around the keyboard's rounded corners.
-            AssistantTheme.keyboardBackdrop(for: colorScheme)
+            // present, the stage above respects its safe area and pockets of
+            // this backing show around the keyboard's rounded corners — keep
+            // it the conversation's green so those pockets read as the stage
+            // continuing, not a gray seam.
+            AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
                 .ignoresSafeArea()
         }
         // The conversation surface is visually above the revealed submenu.
@@ -611,6 +613,9 @@ struct ChatView: View {
             .safeAreaInsets.bottom ?? 0
     }
 
+    /// Corner radius the lifted conversation sheet rounds to at full reveal.
+    private var menuSheetCornerRadius: CGFloat { 34 }
+
     private var menuSurfaceProgress: CGFloat {
         PullMenuMotion.smoothStep(menuRevealProgress)
     }
@@ -838,6 +843,13 @@ struct ChatView: View {
                     endPoint: .bottom
                 )
             }
+            // The edge-to-edge conversation travels the reveal plus the
+            // device's bottom inset, but this frame starts at the safe area —
+            // without bleeding upward by the same inset (plus the sheet's
+            // corner radius), the window backing showed through the band's
+            // top strip and painted the sheet's rounded corners a wrong gray
+            // instead of the menu's canvas.
+            .padding(.top, -(deviceBottomSafeAreaInset + menuSheetCornerRadius))
             .ignoresSafeArea(.container, edges: .bottom)
             .allowsHitTesting(false)
         }

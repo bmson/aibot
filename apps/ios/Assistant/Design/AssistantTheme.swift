@@ -40,12 +40,6 @@ enum AssistantTheme {
     static let errorInk = Color(hex: 0x7A201B)
     static let errorInkDark = Color(hex: 0xFFD7D2)
     static let stageDepth = Color(hex: 0x0C2D1B)
-    // The system keyboard has rounded upper corners, so a few pixels of the
-    // app remain visible behind it. Match the opaque base of Apple's keyboard
-    // material there instead of letting the green conversation stage show
-    // through those pockets.
-    static let keyboardBackdrop = Color(hex: 0xD1D1D6)
-    static let keyboardBackdropDark = Color(hex: 0x1C1C1E)
     /// Warning pair for surfaces that sit on the conversation stage rather
     /// than the canvas. The stage is dark in both color schemes, so this pair
     /// deliberately does not vary — unlike `warningSurface(for:)`.
@@ -119,10 +113,6 @@ enum AssistantTheme {
         case (.dark, _): stageDark
         default: stage
         }
-    }
-
-    static func keyboardBackdrop(for scheme: ColorScheme) -> Color {
-        scheme == .dark ? keyboardBackdropDark : keyboardBackdrop
     }
 }
 
