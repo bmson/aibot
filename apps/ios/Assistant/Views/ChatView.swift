@@ -522,7 +522,7 @@ struct ChatView: View {
             .overlay(alignment: .bottom) {
                 composer
                     .safeAreaPadding(.bottom)
-                    .offset(y: menuPullActive ? menuPullTranscriptCompensation : 0)
+                    .offset(y: menuPullActive ? menuPullComposerOffset : 0)
                     .onGeometryChange(for: CGFloat.self) { geometry in
                         geometry.size.height
                     } action: { height in
@@ -562,6 +562,15 @@ struct ChatView: View {
             + geometry.contentInsets.bottom
         let restingBottomOffset = max(minimumOffset, contentBottomOffset)
         return restingBottomOffset - geometry.contentOffset.y
+    }
+
+    /// The correction above exists for the few points UIKit snaps the
+    /// transcript when it cancels the pan at pull start — never for the much
+    /// larger geometry drift of the keyboard leaving mid-pull. Unbounded,
+    /// that excursion pushed the input below the fold or off the clipped
+    /// sheet entirely and stretched the bubble-to-input gap.
+    private var menuPullComposerOffset: CGFloat {
+        min(max(menuPullTranscriptCompensation, -20), 20)
     }
 
     private func messageRow(
