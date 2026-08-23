@@ -4,6 +4,7 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     // The launch screen belongs to the automatic connect at startup, not to a
@@ -67,6 +68,24 @@ struct RootView: View {
                 .padding(.top, islandTopInset)
                 .zIndex(100)
             }
+
+            // Global error surface: an overlay inside ChatView never drew
+            // above pushed destinations, so a failed approve/deny on the
+            // Approvals page produced an error haptic with no message. The
+            // banner belongs to the root, above whatever route is showing.
+            // Gated on bootstrap so the onboarding Connection form keeps its
+            // own inline error instead of doubling it.
+            if model.bootstrap != nil, let error = model.errorMessage {
+                errorBanner(error)
+                    .padding(.horizontal, 12)
+                    .padding(.top, errorBannerTopInset(safeAreaTopInset: safeAreaTopInset))
+                    .transition(
+                        reduceMotion
+                            ? .opacity
+                            : .move(edge: .top).combined(with: .opacity)
+                    )
+                    .zIndex(99)
+            }
         }
         // This is intentionally on the outer stack, not merely the clear
         // background. Otherwise the overlay begins below the notch's safe
@@ -83,6 +102,10 @@ struct RootView: View {
         .animation(
             .easeOut(duration: reduceMotion ? 0.12 : 0.24),
             value: model.bootstrap != nil
+        )
+        .animation(
+            reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.86),
+            value: model.errorMessage
         )
         .task {
             if model.hasSavedConnection && model.bootstrap == nil { await model.connect() }
@@ -151,6 +174,61 @@ struct RootView: View {
         }
         .toolbar(.visible, for: .navigationBar)
         .tint(AssistantTheme.accent(for: colorScheme))
+    }
+
+    private func errorBannerTopInset(safeAreaTopInset: CGFloat) -> CGFloat {
+        if model.presentedRoute != nil {
+            // A pushed destination shows its navigation bar; clear it.
+            return safeAreaTopInset + 48
+        }
+        // Clear the activity crown: expanded, it reached about 23pt into the
+        // banner, and covered it outright at accessibility sizes.
+        guard model.activityThought != nil else { return 4 }
+        return ActivityCrown.safeAreaOverhang(
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+            safeAreaTopInset: safeAreaTopInset
+        ) + 8
+    }
+
+    private func errorBanner(_ text: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.footnote)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button {
+                model.dismissError()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.bold))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion))
+            .accessibilityLabel("Dismiss error")
+        }
+        .foregroundStyle(AssistantTheme.errorInk(for: colorScheme))
+        .padding(.leading, 14)
+        .padding(.trailing, 4)
+        .padding(.vertical, 4)
+        .background(
+            AssistantTheme.errorSurface(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(
+                    Color.red.opacity(colorSchemeContrast == .increased ? 0.48 : 0.18),
+                    lineWidth: colorSchemeContrast == .increased ? 1.1 : 0.7
+                )
+        }
+        .shadow(
+            color: .black.opacity(colorScheme == .dark ? 0.22 : 0.1),
+            radius: 12,
+            y: 4
+        )
     }
 
     private var launchView: some View {

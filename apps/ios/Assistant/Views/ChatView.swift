@@ -279,26 +279,6 @@ struct ChatView: View {
             including: menuOpen && !usesExtraLargeAccessibilityMenu ? .all : .none
         )
         .toolbar(.hidden, for: .navigationBar)
-        .overlay(alignment: .top) {
-            if let error = model.errorMessage {
-                errorBanner(error)
-                    .padding(.horizontal, 12)
-                    // Clear the activity crown, which RootView draws over this
-                    // overlay at a higher zIndex — expanded, it reached about
-                    // 23pt into the banner, and covered it outright at
-                    // accessibility sizes.
-                    .padding(.top, errorBannerTopInset)
-                    .transition(
-                        reduceMotion
-                            ? .opacity
-                            : .move(edge: .top).combined(with: .opacity)
-                    )
-            }
-        }
-        .animation(
-            reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.86),
-            value: model.errorMessage
-        )
         .sensoryFeedback(.selection, trigger: menuDetentFeedback)
         .sensoryFeedback(.selection, trigger: menuAutonomyFeedback)
         .sensoryFeedback(.impact(weight: .light), trigger: sendFeedback)
@@ -315,14 +295,6 @@ struct ChatView: View {
             guard phase != .active else { return }
             settleInterruptedMenuGesture()
         }
-    }
-
-    private var errorBannerTopInset: CGFloat {
-        guard model.activityThought != nil else { return 4 }
-        return ActivityCrown.safeAreaOverhang(
-            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
-            safeAreaTopInset: safeAreaTopInset
-        ) + 8
     }
 
     private var crownContentClearanceHeight: CGFloat {
@@ -1918,46 +1890,6 @@ struct ChatView: View {
         index == 0 || model.messages[index - 1].role != model.messages[index].role
     }
 
-    private func errorBanner(_ text: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .accessibilityHidden(true)
-            Text(text)
-                .font(.footnote)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 4)
-            Button {
-                model.dismissError()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion))
-            .accessibilityLabel("Dismiss error")
-        }
-        .foregroundStyle(AssistantTheme.errorInk(for: colorScheme))
-        .padding(.leading, 14)
-        .padding(.trailing, 4)
-        .padding(.vertical, 4)
-        .background(
-            AssistantTheme.errorSurface(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(
-                    Color.red.opacity(colorSchemeContrast == .increased ? 0.48 : 0.18),
-                    lineWidth: colorSchemeContrast == .increased ? 1.1 : 0.7
-                )
-        }
-        .shadow(
-            color: .black.opacity(colorScheme == .dark ? 0.22 : 0.1),
-            radius: 12,
-            y: 4
-        )
-    }
 }
 
 private struct QuickReplySurface: ViewModifier {

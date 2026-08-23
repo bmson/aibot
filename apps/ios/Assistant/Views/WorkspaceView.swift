@@ -540,7 +540,7 @@ struct WorkspaceView: View {
             if document.status == "ready" {
                 Button {
                     model.returnToChat()
-                    model.send("From my documents, tell me about \\\"\(document.title)\\\".")
+                    model.send("From my documents, tell me about \"\(document.title)\".")
                 } label: {
                     Label("Ask about this", systemImage: "bubble.left")
                         .font(.subheadline.weight(.semibold))
