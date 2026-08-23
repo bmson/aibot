@@ -1620,7 +1620,10 @@ struct ChatView: View {
     }
 
     private var composerPlaceholderColor: Color {
-        Color.white
+        // Same warm white as the typed text, quieted to half strength — the
+        // owner asked for the prompt to read as the input color at 50%, not
+        // gray. Increase Contrast keeps its lift so the hint stays legible.
+        composerTextColor.opacity(colorSchemeContrast == .increased ? 0.78 : 0.5)
     }
 
     private var composerCursorColor: Color {
