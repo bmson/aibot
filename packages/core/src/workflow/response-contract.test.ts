@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { enforceResponseContract, enforceUrlProvenance } from './response-contract.js';
+import {
+  enforceResponseContract,
+  enforceUrlProvenance,
+  groundReadDraft,
+} from './response-contract.js';
 
 describe('response execution contract', () => {
   it('blocks a fabricated spreadsheet and silent background-work claim', () => {
@@ -1233,5 +1237,232 @@ describe('enforceUrlProvenance', () => {
     });
     expect(result.blocked).toBe(false);
     expect(result.text).not.toContain('fabricated.example');
+  });
+});
+
+describe('groundReadDraft', () => {
+  const dayRequest = {
+    kind: 'calendar' as const,
+    queryTerms: [],
+    firstToolName: 'calendar.list_events' as const,
+    requiresThreadRead: false,
+    timeZone: 'America/Los_Angeles',
+    timeWindow: {
+      label: 'today',
+      timeMin: '2026-08-23T07:00:00.000Z',
+      timeMax: '2026-08-24T07:00:00.000Z',
+    },
+  };
+
+  const event = (over: Record<string, unknown>) => ({
+    eventId: 'e1',
+    calendarId: 'fam',
+    calendar: 'Family',
+    summary: 'Stagecoach Greens with Eva & Jordan’s Family',
+    location: 'Stagecoach Greens, 1379 4th St, San Francisco, CA 94158, USA',
+    organizer: 'family09996249469363640469@group.calendar.google.com',
+    start: '2026-08-23T11:15:00-07:00',
+    end: '2026-08-23T13:00:00-07:00',
+    ...over,
+  });
+
+  const dayEvidence = (events: Record<string, unknown>[], result: Record<string, unknown> = {}) => [
+    {
+      toolName: 'calendar.list_events',
+      status: 'succeeded',
+      args: {
+        timeMin: '2026-08-23T07:00:00.000Z',
+        timeMax: '2026-08-24T07:00:00.000Z',
+      },
+      result: { complete: true, calendarsSearched: ['Family'], events, ...result },
+    },
+  ];
+
+  it('accepts an agenda that reformats the ledger’s times into the owner’s clock', () => {
+    const result = groundReadDraft(
+      'One thing today:\n- **11:15–13:00** — Stagecoach Greens with Eva & Jordan’s Family',
+      dayRequest,
+      dayEvidence([event({})]),
+    );
+    expect(result).toEqual({ grounded: true, reasons: [] });
+  });
+
+  it('accepts the same times written as 12-hour wall clock', () => {
+    const result = groundReadDraft(
+      'One thing today:\n- **11:15 AM – 1:00 PM** — Stagecoach Greens with Eva & Jordan',
+      dayRequest,
+      dayEvidence([event({})]),
+    );
+    expect(result.grounded).toBe(true);
+  });
+
+  it('rejects an event that no read returned', () => {
+    const result = groundReadDraft(
+      [
+        'Two things today:',
+        '- **11:15–13:00** — Stagecoach Greens with Eva & Jordan',
+        '- **19:00–21:00** — Dinner at Zuni Cafe',
+      ].join('\n'),
+      dayRequest,
+      dayEvidence([event({})]),
+    );
+    expect(result.grounded).toBe(false);
+    expect(result.reasons.join(' ')).toMatch(/Zuni Cafe/);
+  });
+
+  it('rejects a time the ledger never carried', () => {
+    const result = groundReadDraft(
+      'One thing today:\n- **11:45–13:00** — Stagecoach Greens with Eva & Jordan',
+      dayRequest,
+      dayEvidence([event({})]),
+    );
+    expect(result.grounded).toBe(false);
+    expect(result.reasons.join(' ')).toMatch(/11:45/);
+  });
+
+  it('rejects an answer that silently drops a returned event', () => {
+    const result = groundReadDraft(
+      'One thing today:\n- **11:15–13:00** — Stagecoach Greens with Eva & Jordan',
+      dayRequest,
+      dayEvidence([
+        event({}),
+        event({
+          eventId: 'e2',
+          summary: 'Bay FC vs. Houston Dash',
+          location: 'PayPal Park',
+          start: '2026-08-23T14:00:00-07:00',
+          end: '2026-08-23T17:00:00-07:00',
+        }),
+      ]),
+    );
+    expect(result.grounded).toBe(false);
+    expect(result.reasons.join(' ')).toMatch(/Bay FC.*missing from the answer/);
+  });
+
+  it('accepts a shortened title — trimming is writing, not dropping', () => {
+    const result = groundReadDraft(
+      'Just the golf outing today, **11:15–13:00** at Stagecoach Greens.',
+      dayRequest,
+      dayEvidence([event({})]),
+    );
+    expect(result.grounded).toBe(true);
+  });
+
+  it('rejects an empty day claimed over a non-empty ledger', () => {
+    const result = groundReadDraft(
+      'Nothing on today — your calendar is clear.',
+      dayRequest,
+      dayEvidence([event({})]),
+    );
+    expect(result.grounded).toBe(false);
+    expect(result.reasons.join(' ')).toMatch(/empty day/);
+  });
+
+  it('rejects a count larger than the ledger holds', () => {
+    const result = groundReadDraft(
+      'Three things today:\n- **11:15–13:00** — Stagecoach Greens with Eva & Jordan',
+      dayRequest,
+      dayEvidence([event({})]),
+    );
+    expect(result.grounded).toBe(false);
+    expect(result.reasons.join(' ')).toMatch(/claims 3 items from 1/);
+  });
+
+  it('falls back when a calendar did not answer, however good the draft is', () => {
+    const result = groundReadDraft(
+      'One thing today:\n- **11:15–13:00** — Stagecoach Greens with Eva & Jordan',
+      dayRequest,
+      dayEvidence([event({})], { complete: false }),
+    );
+    expect(result.grounded).toBe(false);
+    expect(result.reasons.join(' ')).toMatch(/incomplete or failed/);
+  });
+
+  it('falls back when a read in this turn failed outright', () => {
+    const result = groundReadDraft(
+      'One thing today:\n- **11:15–13:00** — Stagecoach Greens with Eva & Jordan',
+      dayRequest,
+      [
+        ...dayEvidence([event({})]),
+        { toolName: 'gmail.search', status: 'failed', args: {}, result: {}, error: 'quota' },
+      ],
+    );
+    expect(result.grounded).toBe(false);
+  });
+
+  it('hands a verification challenge back to the ledger', () => {
+    const result = groundReadDraft(
+      'One thing today:\n- **11:15–13:00** — Stagecoach Greens with Eva & Jordan',
+      { ...dayRequest, verification: true },
+      dayEvidence([event({})]),
+    );
+    expect(result.grounded).toBe(false);
+    expect(result.reasons).toContain('verification request');
+  });
+
+  it('exempts availability phrasing from the event-boundary check', () => {
+    const result = groundReadDraft(
+      'One thing today, and you are clear from 16:00:\n- **11:15–13:00** — Stagecoach Greens with Eva & Jordan',
+      dayRequest,
+      dayEvidence([event({})]),
+    );
+    expect(result.grounded).toBe(true);
+  });
+
+  it('licenses words the owner’s own context supplied', () => {
+    const draft =
+      'One thing today:\n- **11:15–13:00** — Stagecoach Greens with Eva & Jordan\n\nIt is 19°C in Potrero Hill, so no jacket needed.';
+    expect(groundReadDraft(draft, dayRequest, dayEvidence([event({})])).grounded).toBe(false);
+    expect(
+      groundReadDraft(
+        draft,
+        dayRequest,
+        dayEvidence([event({})]),
+        "Owner's current location: near Potrero Hill (37.7587, -122.4001).",
+      ).grounded,
+    ).toBe(true);
+  });
+
+  const mailRequest = {
+    kind: 'email' as const,
+    queryTerms: [],
+    firstToolName: 'gmail.search' as const,
+    requiresThreadRead: false,
+    mailQuery: 'newer_than:7d',
+  };
+  const mailEvidence = [
+    {
+      toolName: 'gmail.search',
+      status: 'succeeded',
+      args: { query: 'newer_than:7d' },
+      result: {
+        complete: true,
+        mailboxSearched: 'assistant@example.com',
+        results: [
+          { messageId: 'm1', threadId: 't1', from: 'Alice Berg', subject: 'Q3 invoice' },
+          { messageId: 'm2', threadId: 't2', from: 'Delta', subject: 'Booking confirmed' },
+          { messageId: 'm3', threadId: 't3', from: 'Substack', subject: 'Your weekly digest' },
+        ],
+      },
+    },
+  ];
+
+  it('lets a mail rundown select — triage is the job', () => {
+    const result = groundReadDraft(
+      'Two worth reading:\n- **Alice Berg** — Q3 invoice\n- **Delta** — Booking confirmed',
+      mailRequest,
+      mailEvidence,
+    );
+    expect(result.grounded).toBe(true);
+  });
+
+  it('rejects a sender the mailbox never returned', () => {
+    const result = groundReadDraft(
+      'Two worth reading:\n- **Alice Berg** — Q3 invoice\n- **Wells Fargo** — Statement ready',
+      mailRequest,
+      mailEvidence,
+    );
+    expect(result.grounded).toBe(false);
+    expect(result.reasons.join(' ')).toMatch(/Wells Fargo/);
   });
 });

@@ -1026,6 +1026,300 @@ function literalLinks(value: string): string[] {
 }
 
 /**
+ * Words a grounded answer may use without having invented them: every literal
+ * field the lookup returned, plus whatever the owner and the tools already put
+ * in the window. Normalized to bare lowercase tokens so a draft that rewrites
+ * “Bay FC vs. Houston Dash” as “Bay FC vs Houston Dash” still matches.
+ */
+function groundingWords(value: string): string[] {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+}
+
+/**
+ * The calendar day and minute-of-day an instant falls on in the owner's zone.
+ * The draft states wall-clock times ("11:15"), while the ledger holds offsets
+ * ("2026-08-23T11:15:00-07:00"), so both sides have to be reduced to the same
+ * zoned reading before they can be compared at all. An all-day date carries no
+ * minute, which is why `minutes` is -1 rather than 0 there.
+ */
+function zonedClock(value: string, timeZone?: string): { day: string; minutes: number } | null {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return { day: value, minutes: -1 };
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) return null;
+  try {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: timeZone ?? 'UTC',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      })
+        .formatToParts(new Date(ms))
+        .map((part) => [part.type, part.value]),
+    );
+    const hour = Number(parts.hour === '24' ? '00' : parts.hour);
+    return {
+      day: `${parts.year}-${parts.month}-${parts.day}`,
+      minutes: hour * 60 + Number(parts.minute),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Wall-clock times the draft states: "09:30", "9:30 AM", "3pm", "14:00". */
+const DRAFT_CLOCK_RE = /\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s?m\.?\b|\b(\d{1,2}):(\d{2})\b/gi;
+
+/**
+ * Availability phrasing states a boundary the owner is free either side of
+ * ("clear from 14:00", "nothing after 5pm"). Those times are derived from the
+ * agenda rather than copied off an event, so they are exempt from the boundary
+ * check — only a time presented as an event's own is held to it.
+ */
+const AVAILABILITY_CONTEXT =
+  /\b(?:after|around|before|by|clear|free|from|open|past|rest of|since|till|until|up to)\b[^.;:\n]{0,24}$/i;
+
+/** Runs of two or more capitalised words — what an invented venue or title looks like. */
+const PROPER_RUN_RE =
+  /\b([A-Z][\w'’-]*(?:[ \t]+(?:of|the|at|in|on|and|de|van|von)[ \t]+)?(?:[ \t]+[A-Z][\w'’-]*)+)\b/g;
+
+const GROUNDING_STOPWORDS = new Set([
+  ...groundingWords(
+    'monday tuesday wednesday thursday friday saturday sunday jan feb mar apr may jun jul aug sep oct nov dec',
+  ),
+  ...groundingWords(
+    'january february march april june july august september october november december',
+  ),
+  ...groundingWords('am pm all day today tomorrow tonight this next last week weekend morning'),
+  ...groundingWords('afternoon evening night the and or you your i a an at on in to of for with'),
+  ...groundingWords('open in google calendar event link video meeting conference no nothing none'),
+]);
+
+const FALSE_EMPTY_RE =
+  /\b(?:nothing(?:\s+(?:on|at all|scheduled|happening|else|planned))?|no events?|no meetings?|calendar is (?:clear|empty)|(?:clear|free|empty) (?:all day|today|the whole day))\b/i;
+
+const CARDINALS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+};
+
+/**
+ * Past this many events an agenda stops being prose worth writing and the
+ * ledger's flat list is genuinely the better answer, so coverage is not
+ * enforced above it — the draft falls back instead.
+ */
+const MAX_AGENDA_EVENTS = 12;
+
+export interface ReadGrounding {
+  grounded: boolean;
+  reasons: string[];
+}
+
+/**
+ * Is this event's title actually present in the draft? Deliberately generous
+ * about form, because shortening a title is good writing and only dropping one
+ * is the failure being caught. “Stagecoach Greens with Eva & Jordan's Family”
+ * is answered as “Stagecoach Greens”, so a title counts as present when the
+ * draft carries its distinctive opening, not only when it carries most of it.
+ */
+function draftMentions(summary: string, draftWords: string[], draftText: string): boolean {
+  const normalized = groundingWords(summary);
+  if (normalized.length === 0) return true;
+  if (draftText.includes(normalized.join(' '))) return true;
+  const significant = normalized.filter((word) => word.length >= 3);
+  if (significant.length === 0) return normalized.some((word) => draftWords.includes(word));
+  const lead = significant.slice(0, 2);
+  if (lead.length === 2 && lead.join('').length >= 8 && draftText.includes(lead.join(' '))) {
+    return true;
+  }
+  const present = significant.filter((word) => draftWords.includes(word));
+  return (
+    present.length / significant.length >= 0.6 &&
+    (significant.every((word) => word.length < 5) || present.some((word) => word.length >= 5))
+  );
+}
+
+/**
+ * Check a model-written lookup answer against the tool ledger it must come
+ * from. This is the counterpart to letting the model write calendar and inbox
+ * answers at all: the prose is published only if every event-shaped fact in it
+ * traces back to a literal field a successful read returned.
+ *
+ * Deliberately asymmetric about the two ways an agenda can lie. Inventing an
+ * event is caught, and so is dropping one — a missed meeting harms the owner
+ * at least as much as a phantom one — but a mail rundown may select, because
+ * triaging twenty hits down to the three that matter is the entire job. What
+ * this cannot parse it leaves alone: a check that fell back on every good
+ * answer would just be the ledger under another name.
+ *
+ * `licensed` carries the rest of the turn's own words (the owner's question,
+ * earlier tool output, the ambient weather/location block) so context the
+ * owner supplied is never mistaken for something the model made up.
+ */
+export function groundReadDraft(
+  text: string,
+  request: PersonalReadRequest,
+  evidence: ActionEvidence[],
+  licensed = '',
+): ReadGrounding {
+  const draft = text.trim();
+  if (!draft) return { grounded: false, reasons: ['empty draft'] };
+  // "Are you sure?" is a challenge to the prose itself. The literal ledger is
+  // the only answer that settles it, so prose never wins this one.
+  if (request.verification) return { grounded: false, reasons: ['verification request'] };
+
+  const current = currentSuccessfulEvidence(evidence);
+  const calendarRows = matchingCalendarRows(request, current);
+  const searches = matchingGmailSearchRows(request, current);
+  const events = uniqueRecords(
+    calendarRows.flatMap((row) => resultItems(row, 'events')),
+    (event) =>
+      [
+        stringField(event, 'calendarId'),
+        stringField(event, 'eventId'),
+        stringField(event, 'start'),
+        stringField(event, 'summary'),
+      ].join('|'),
+  );
+  const messages = [
+    ...searches.flatMap((row) => resultItems(row, 'results')),
+    ...matchingGmailThreadRows(searches, current).flatMap((row) => resultItems(row, 'messages')),
+  ];
+
+  const reasons: string[] = [];
+
+  // Partial coverage is the ledger's strongest case: it names the gap in a way
+  // prose reliably smooths over. Hand those turns straight back to it.
+  const incomplete = [...calendarRows, ...searches].some((row) => {
+    const result = record(row.result);
+    return (
+      result?.complete === false ||
+      (Array.isArray(result?.unavailable) && result.unavailable.length > 0)
+    );
+  });
+  const failedRead = evidence.some(
+    (row) =>
+      row.fromCurrentTask !== false &&
+      /^(?:calendar|gmail)\./.test(row.toolName) &&
+      !successful(row),
+  );
+  if (incomplete || failedRead) reasons.push('a source was incomplete or failed');
+
+  const vocabulary = new Set<string>(GROUNDING_STOPWORDS);
+  const boundaries = new Set<number>();
+  for (const event of events) {
+    for (const key of ['summary', 'location', 'organizer', 'calendar', 'description']) {
+      for (const word of groundingWords(stringField(event, key))) vocabulary.add(word);
+    }
+    const attendees = event.attendees;
+    if (Array.isArray(attendees)) {
+      for (const attendee of attendees) {
+        if (typeof attendee === 'string') {
+          for (const word of groundingWords(attendee)) vocabulary.add(word);
+        }
+      }
+    }
+    for (const key of ['start', 'end']) {
+      const clock = zonedClock(stringField(event, key), request.timeZone);
+      if (clock && clock.minutes >= 0) boundaries.add(clock.minutes);
+    }
+  }
+  for (const message of messages) {
+    for (const key of ['subject', 'from', 'snippet', 'to']) {
+      for (const word of groundingWords(stringField(message, key))) vocabulary.add(word);
+    }
+    for (const word of groundingWords(rawStringField(message, 'text'))) vocabulary.add(word);
+  }
+  for (const term of request.queryTerms) {
+    for (const word of groundingWords(term)) vocabulary.add(word);
+  }
+  for (const word of groundingWords(licensed)) vocabulary.add(word);
+
+  // Strip links first: a fabricated URL is enforceUrlProvenance's job, and a
+  // link label would otherwise read as an invented proper noun.
+  const prose = draft
+    .replace(MARKDOWN_LINK_RE, ' ')
+    .replace(BARE_URL_RE, ' ')
+    .replace(/[*_`#]/g, ' ');
+  const draftWords = groundingWords(prose);
+  const draftText = draftWords.join(' ');
+
+  // Every event the calendar returned has to survive into the answer. Matching
+  // is deliberately loose — a shortened title is good writing, not a drop.
+  if (events.length > MAX_AGENDA_EVENTS) {
+    reasons.push(`${events.length} events is past the agenda shape`);
+  } else {
+    for (const event of events) {
+      const summary = stringField(event, 'summary');
+      if (!draftMentions(summary, draftWords, draftText)) {
+        reasons.push(
+          `“${summary || '(untitled event)'}” was returned but is missing from the answer`,
+        );
+      }
+    }
+  }
+
+  for (const match of prose.matchAll(PROPER_RUN_RE)) {
+    const phrase = match[1] ?? '';
+    const words = groundingWords(phrase).filter((word) => !GROUNDING_STOPWORDS.has(word));
+    if (words.length === 0) continue;
+    if (!words.every((word) => vocabulary.has(word))) {
+      reasons.push(`“${phrase}” is not in any source result`);
+    }
+  }
+
+  if (boundaries.size > 0) {
+    for (const match of prose.matchAll(DRAFT_CLOCK_RE)) {
+      if (AVAILABILITY_CONTEXT.test(prose.slice(0, match.index ?? 0))) continue;
+      const meridiem = match[3]?.toLowerCase();
+      const hour = Number(match[1] ?? match[4]);
+      const minute = Number(match[2] ?? match[5] ?? '0');
+      if (!Number.isFinite(hour) || hour > 23 || minute > 59) continue;
+      const minutes = meridiem
+        ? ((hour % 12) + (meridiem === 'p' ? 12 : 0)) * 60 + minute
+        : hour * 60 + minute;
+      if (!boundaries.has(minutes)) {
+        reasons.push(`${match[0].trim()} is not the start or end of any event that was read`);
+      }
+    }
+  }
+
+  if (events.length > 0 && FALSE_EMPTY_RE.test(prose)) {
+    reasons.push('reports an empty day over a non-empty ledger');
+  }
+
+  const opening = prose.split('\n', 1)[0] ?? '';
+  const cardinal = /^\W*(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b/i.exec(opening);
+  const stated = cardinal
+    ? (CARDINALS[cardinal[1]?.toLowerCase() ?? ''] ?? Number(cardinal[1]))
+    : undefined;
+  const available = request.kind === 'email' ? messages.length : events.length + messages.length;
+  if (stated !== undefined && Number.isFinite(stated) && stated > available) {
+    reasons.push(`claims ${stated} items from ${available} in the ledger`);
+  }
+
+  return { grounded: reasons.length === 0, reasons };
+}
+
+/**
  * Calendar/email answers are rendered from the tool ledger instead of model
  * prose. This is intentionally less flexible: a deterministic list of literal
  * fields is preferable to a fluent answer that can add one plausible event.
