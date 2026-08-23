@@ -823,11 +823,6 @@ struct ChatView: View {
             )
             .opacity(headerVisibility)
             .offset(y: (1 - headerUnfurl) * 12)
-            .scaleEffect(
-                x: 1,
-                y: reduceMotion ? 1 : 0.88 + (0.12 * headerUnfurl),
-                anchor: .bottom
-            )
 
             pullMenuActions
         }
@@ -1038,9 +1033,10 @@ struct ChatView: View {
         index: Int,
         action: @escaping () -> Void
     ) -> some View {
-        let progress = menuElementProgress(after: 0.18 + (CGFloat(index) * 0.045))
+        // Opacity only: the tiles used to also rise 24pt while fading in,
+        // which — uncovered progressively by the lifting sheet — read as the
+        // items stretching. The staggered fade keeps the cascade on its own.
         let visibility = menuVisibilityProgress(after: 0.18 + (CGFloat(index) * 0.045))
-        let unfurl = organicProgress(progress)
 
         return Button(action: action) {
             pullMenuButtonSurface(isSelected: isSelected) {
@@ -1104,7 +1100,6 @@ struct ChatView: View {
         )
         .frame(width: usesExtraLargeAccessibilityMenu ? 220 : nil)
         .opacity(visibility)
-        .offset(y: (1 - unfurl) * 24)
         .accessibilityLabel(title)
         .accessibilityValue(
             badge > 0
