@@ -282,6 +282,7 @@ final class AppModel: ObservableObject {
 
     func decide(_ item: PendingApproval, decision: String) async -> Bool {
         guard let client else { return false }
+        errorMessage = nil
         do {
             _ = try await client.decideApproval(id: item.id, decision: decision)
             await refreshAll()

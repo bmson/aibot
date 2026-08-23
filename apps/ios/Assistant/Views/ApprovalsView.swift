@@ -14,6 +14,38 @@ struct ApprovalsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                // The chat-level error banner lives on the navigation root and
+                // cannot draw above this pushed page, so a failed approve/deny
+                // was only an error haptic here. Surface it in place.
+                if let error = model.errorMessage {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .accessibilityHidden(true)
+                        Text(error)
+                            .font(.footnote)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        Button {
+                            model.dismissError()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption.weight(.bold))
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Dismiss error")
+                    }
+                    .foregroundStyle(AssistantTheme.errorInk(for: colorScheme))
+                    .padding(.leading, 14)
+                    .padding(.trailing, 4)
+                    .padding(.vertical, 4)
+                    .background(
+                        AssistantTheme.errorSurface(for: colorScheme),
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    )
+                }
+
                 if pending.isEmpty {
                     ContentUnavailableView(
                         "Nothing is waiting",
