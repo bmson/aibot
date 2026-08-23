@@ -5,6 +5,7 @@ import {
   FACE_STATES,
   MAX_TAG_LEN,
   stripCueTags,
+  THEME_LOOKBACK,
   THEME_NAMES,
 } from './chat-cues.js';
 
@@ -188,5 +189,7 @@ describe('vocabulary', () => {
       'focused',
     ]);
     expect(THEME_NAMES).toEqual(['default', 'warm_amber', 'soft_rose', 'cool_sky']);
+    // Also mirrored into apps/ios (CompanionMood.lookback).
+    expect(THEME_LOOKBACK).toBe(8);
   });
 });

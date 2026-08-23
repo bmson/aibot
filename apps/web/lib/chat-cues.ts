@@ -25,6 +25,7 @@ export type FaceState = (typeof FACE_STATES)[number];
 
 export const THEME_NAMES = ['default', 'warm_amber', 'soft_rose', 'cool_sky'] as const;
 export type ThemeName = (typeof THEME_NAMES)[number];
+export const THEME_LOOKBACK = 8;
 
 export const MAX_CHIPS = 4;
 export const MAX_CHIP_LABEL = 60;
@@ -97,15 +98,19 @@ export function latestFace(log: UIMessage[]): FaceState {
 }
 
 /**
- * The chat surface's color mood, derived from the newest theme cue still in
- * the loaded log. Deriving (rather than storing) keeps the tint consistent
- * with what is on screen after a reload, and a cue that scrolls out of the
- * loaded window simply expires.
+ * The chat surface's color mood, derived from the newest theme cue within the
+ * last THEME_LOOKBACK assistant messages. Deriving (rather than storing) keeps
+ * the tint consistent with what is on screen after a reload; bounding the
+ * lookback keeps a mood from outliving the exchange that set it, which is what
+ * made the tint appear to change on its own. Only assistant messages spend
+ * budget — a long run of owner messages does not age the mood out.
  */
 export function latestTheme(log: UIMessage[]): ThemeName {
-  for (let index = log.length - 1; index >= 0; index -= 1) {
+  let examined = 0;
+  for (let index = log.length - 1; index >= 0 && examined < THEME_LOOKBACK; index -= 1) {
     const message = log[index];
     if (!message || message.role !== 'assistant') continue;
+    examined += 1;
     const name = themeCueOf(message);
     if (name) return name;
   }

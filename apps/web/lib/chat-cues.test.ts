@@ -6,6 +6,7 @@ import {
   faceCueOf,
   latestFace,
   latestTheme,
+  THEME_LOOKBACK,
   THEME_NAMES,
   themeCueOf,
 } from './chat-cues';
@@ -30,6 +31,8 @@ describe('vocabulary', () => {
       'focused',
     ]);
     expect(THEME_NAMES).toEqual(['default', 'warm_amber', 'soft_rose', 'cool_sky']);
+    // Also mirrored into apps/ios (CompanionMood.lookback).
+    expect(THEME_LOOKBACK).toBe(8);
   });
 });
 
@@ -96,5 +99,46 @@ describe('log-level cues', () => {
     const plain = [assistantMessage('m1', [{ type: 'text', text: 'Hi' }])];
     expect(latestFace(plain)).toBe('neutral');
     expect(latestTheme(plain)).toBe('default');
+  });
+});
+
+describe('theme lookback', () => {
+  const themed = () =>
+    assistantMessage('themed', [{ type: 'data-theme', data: { name: 'cool_sky' } }]);
+  const plain = (id: string) => assistantMessage(id, [{ type: 'text', text: 'Working on it' }]);
+  const owner = (id: string) =>
+    ({ id, role: 'user', parts: [{ type: 'text', text: 'Thanks' }] }) as UIMessage;
+
+  it('still applies a cue at the edge of the lookback', () => {
+    const log = [
+      themed(),
+      ...Array.from({ length: THEME_LOOKBACK - 1 }, (_, index) => plain(`m${index}`)),
+    ];
+    expect(latestTheme(log)).toBe('cool_sky');
+  });
+
+  it('lets a cue decay once it falls past the lookback', () => {
+    const log = [
+      themed(),
+      ...Array.from({ length: THEME_LOOKBACK }, (_, index) => plain(`m${index}`)),
+    ];
+    expect(latestTheme(log)).toBe('default');
+  });
+
+  it('does not spend budget on owner messages', () => {
+    const log = [
+      themed(),
+      ...Array.from({ length: 40 }, (_, index) => owner(`u${index}`)),
+      plain('m0'),
+    ];
+    expect(latestTheme(log)).toBe('cool_sky');
+  });
+
+  it('prefers the newest cue when two are in range', () => {
+    const log = [
+      themed(),
+      assistantMessage('m0', [{ type: 'data-theme', data: { name: 'warm_amber' } }]),
+    ];
+    expect(latestTheme(log)).toBe('warm_amber');
   });
 });

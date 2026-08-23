@@ -119,6 +119,29 @@ enum CompanionMood: String, Codable, Sendable {
     case warmAmber = "warm_amber"
     case softRose = "soft_rose"
     case coolSky = "cool_sky"
+
+    /// How many recent assistant messages a theme cue reaches forward over.
+    /// Mirrors THEME_LOOKBACK in packages/core/src/chat-cues.ts.
+    static let lookback = 8
+
+    /// The chat's color mood: the newest cue within the last `lookback`
+    /// assistant messages. Mirrors the web client's `latestTheme(log)` (see
+    /// apps/web/lib/chat-cues.ts), and lives here rather than on AppModel so it
+    /// is reachable from tests.
+    ///
+    /// The bound is the point. Unbounded, one cue held for the whole loaded
+    /// window and then expired the moment it scrolled out, so the chat's tint
+    /// changed with no message behind it. Only assistant messages spend budget —
+    /// a long run of owner messages does not age the mood out.
+    static func latest(in messages: [ChatMessage]) -> CompanionMood {
+        var examined = 0
+        for message in messages.reversed() where message.role == .assistant {
+            if examined >= lookback { break }
+            examined += 1
+            if let mood = message.mood { return mood }
+        }
+        return .default
+    }
 }
 
 enum AssistantPresence: String, Codable, Sendable {
