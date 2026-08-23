@@ -181,7 +181,15 @@ export function buildSystemPrompt(
 
 /** Find the single agent row (v1: exactly one). */
 export async function getAgent(db: Db): Promise<AgentRow> {
-  const [agent] = await db.select().from(agents).limit(1);
+  // Deterministic when duplicate agent rows exist (the repair job folds them
+  // into the oldest). An unordered limit(1) lets Postgres heap order pick,
+  // and row movement after updates can flip the resolved agent between
+  // launches — the app then opens the other agent's empty conversation.
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .orderBy(asc(agents.createdAt), asc(agents.id))
+    .limit(1);
   if (!agent) throw new Error('no agent row — run pnpm seed');
   return agent;
 }
