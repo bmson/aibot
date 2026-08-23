@@ -35,6 +35,12 @@ final class LocationManager: NSObject, ObservableObject {
         manager.requestWhenInUseAuthorization()
     }
 
+    /// This app's page in iOS Settings, for recovering from a denied permission.
+    func openSystemSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
+    }
+
     /// A fresh fix with a short human label for the ambient line, or nil when
     /// access or a fix is unavailable. One-shot: nothing keeps listening.
     func captureCurrentPlace() async -> (location: CLLocation, label: String)? {

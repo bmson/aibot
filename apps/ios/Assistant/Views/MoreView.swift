@@ -62,7 +62,7 @@ struct MoreView: View {
                 }
                 if shareLocation && locations.accessDenied {
                     Button {
-                        notifications.openSystemSettings()
+                        locations.openSystemSettings()
                     } label: {
                         Label("Location access is off — open Settings", systemImage: "exclamationmark.triangle")
                             .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
