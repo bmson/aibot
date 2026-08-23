@@ -10,7 +10,7 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { type Cue, companionPersonaLines, cueMessageParts } from './chat-cues.js';
 import type { RecallSource } from './memory/recall.js';
 import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
@@ -45,11 +45,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export interface MessageCursor {
   createdAt: Date;
   id: string;
+  /**
+   * The row's timestamptz value at full precision. JS Dates truncate to
+   * milliseconds, so a cursor re-encoded from a row sits slightly BEFORE the
+   * row and the keyset comparison re-matches it — and every earlier row
+   * sharing that millisecond — forever. Cursors that reach a query carry
+   * this; cursors built from in-memory rows fall back to the Date.
+   */
+  createdAtExact?: string;
 }
 
 /** Stable chronological cursor; the UUID breaks timestamp ties. */
 export function encodeMessageCursor(cursor: MessageCursor): string {
-  return `${cursor.createdAt.toISOString()}|${cursor.id}`;
+  return `${cursor.createdAtExact ?? cursor.createdAt.toISOString()}|${cursor.id}`;
 }
 
 export function decodeMessageCursor(value: string | null | undefined): MessageCursor | undefined {
@@ -60,7 +68,7 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
   const id = value.slice(separator + 1);
   const createdAt = new Date(timestamp);
   if (Number.isNaN(createdAt.getTime()) || !UUID_RE.test(id)) return undefined;
-  return { createdAt, id };
+  return { createdAt, id, createdAtExact: timestamp };
 }
 
 /**
@@ -86,10 +94,13 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * v22: dashboard-chat-only companion persona with [face:]/[theme:]/
  * [action_chips:] cue vocabulary, gated by extras.channel and stripped from
  * the text before delivery (see chat-cues.ts).
+ * v23: dashboard chat gets explicit result-set formatting — lookup results
+ * (emails, events, files, contacts, search hits) go out as markdown lists or
+ * tables with the deciding fields bolded, never one run-on paragraph.
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 22;
+export const PROMPT_VERSION = 24;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is
@@ -148,7 +159,16 @@ export function buildSystemPrompt(
     'Voice and manner:',
     "- Write like a sharp, warm colleague of the owner's — a real person with your own identity, not a corporate assistant. Use the owner's name from the owner profile when it reads naturally; skip it when it would feel stilted.",
     '- Cut the filler and AI throat-clearing: no "I hope this helps", "As an AI", "Certainly!", "Let me know if there\'s anything else", "I\'d be happy to". Open with the substance.',
-    '- Warm does not mean wordy. Say the useful thing plainly, add a human touch when it fits, and stop. Match the channel register (the channel note below tells you which): SMS is one or two plain sentences; email opens with a short greeting and ends with a brief sign-off as yourself; dashboard chat is conversational and may use light formatting.',
+    '- Warm does not mean wordy. Say the useful thing plainly, add a human touch when it fits, and stop. Match the channel register (the channel note below tells you which): SMS is one or two plain sentences; email opens with a short greeting and ends with a brief sign-off as yourself; dashboard chat is conversational in tone but structured in layout.',
+    '- Dashboard chat formatting: prose for conversation, markdown for data. A result set — emails, events, files, contacts, search hits, receipts — is never one run-on paragraph: one short lead-in sentence, then a markdown list or table whose rows carry the deciding fields (**sender**, subject, date for email; **title**, time, place for events). One item per line, real list syntax — the chat surfaces render bold, lists, and tables, and a wall of text is always the wrong shape for lookup results.',
+    '  Shape an email rundown exactly like this (lead-in, then one row per item):',
+    '',
+    '  Three from this week — the receipt question is the one to answer first:',
+    '  - **Alice Berg** — Q3 invoice — Tue 14:02 · asking about the missing receipt for the Denver stay',
+    '  - **Delta** — Booking confirmed — Mon 09:41 · itinerary change for Friday\'s flight',
+    '  - **Substack** — Your weekly digest — Sun 18:05 · nothing actionable',
+    '',
+    '  The same shape applies to events, files, contacts, and search hits. Even two results get the list; a single result gets one tight sentence, not a table.',
     "- Be genuinely helpful: anticipate the obvious next need, and when you make a judgment call on the owner's behalf, name the assumption in a phrase so he can correct it.",
     ...(extras.channel === 'dashboard-chat' ? companionPersonaLines() : []),
     ...(extras.tainted
@@ -432,25 +452,28 @@ export async function listMessages(
     ? Math.max(1, Math.min(MAX_MESSAGE_LIMIT, Math.floor(requestedLimit)))
     : DEFAULT_MESSAGE_LIMIT;
 
+  // Every row also carries its created_at at full timestamptz precision
+  // (ISO text), which is what a cursor re-encoded from a row is compared
+  // against — see MessageCursor.createdAtExact.
+  const createdAtExact = sql<string>`to_char(${messages.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+  const selection = { ...getTableColumns(messages), createdAtExact };
+
   if (options.after) {
     const after = options.after;
+    const afterTimestamp = sql`${after.createdAtExact ?? after.createdAt.toISOString()}::timestamptz`;
     return db
-      .select()
+      .select(selection)
       .from(messages)
       .where(
         and(
           eq(messages.conversationId, conversationId),
           or(
-            gt(messages.createdAt, after.createdAt),
-            and(eq(messages.createdAt, after.createdAt), gt(messages.id, after.id)),
+            sql`${messages.createdAt} > ${afterTimestamp}`,
+            and(sql`${messages.createdAt} = ${afterTimestamp}`, gt(messages.id, after.id)),
           ),
-          // created_at is timestamptz (microseconds) but reaches us as a JS
-          // Date (milliseconds), so a cursor encoded from a row is slightly
-          // BEFORE that row and the tuple comparison above matches it again.
-          // Excluding it by id keeps the comparison on the (conversation_id,
-          // created_at) index while making the cursor properly exclusive —
-          // otherwise the thread poll re-delivers its newest message on every
-          // tick, forever, and never counts a page correctly.
+          // The exact-precision comparison above already excludes the cursor
+          // row; this stays as a belt-and-suspenders guard for cursors encoded
+          // at millisecond precision (before createdAtExact existed).
           ne(messages.id, after.id),
         ),
       )
@@ -461,7 +484,7 @@ export async function listMessages(
   // Fetch from the indexed tail, then restore chronological order for model
   // and UI consumers. This stays O(limit) as a conversation grows.
   const rows = await db
-    .select()
+    .select(selection)
     .from(messages)
     .where(eq(messages.conversationId, conversationId))
     .orderBy(desc(messages.createdAt), desc(messages.id))

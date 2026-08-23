@@ -76,6 +76,23 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(21);
   });
 
+  it('formats dashboard-chat result sets as markdown, never a wall of text (v23)', () => {
+    const prompt = buildSystemPrompt(agent, {});
+    expect(prompt).toMatch(/never one run-on paragraph/i);
+    expect(prompt).toMatch(/markdown list or table/i);
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(23);
+  });
+
+  it('shows the result-set shape concretely, not just as a rule (v24)', () => {
+    const prompt = buildSystemPrompt(agent, {});
+    // Models imitate an exemplar far more reliably than they obey an abstract
+    // formatting rule; the email rundown is the one owners hit most.
+    expect(prompt).toContain('Shape an email rundown exactly like this');
+    expect(prompt).toMatch(/\*\*Alice Berg\*\* — Q3 invoice/);
+    expect(prompt).toMatch(/single result gets one tight sentence/i);
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(24);
+  });
+
   it('gates the companion persona and cue vocabulary to the dashboard channel (v22)', () => {
     const dashboard = buildSystemPrompt(agent, { channel: 'dashboard-chat' });
     expect(dashboard).toContain('Dashboard companion');
@@ -110,7 +127,26 @@ describe('message cursors', () => {
       id: '123e4567-e89b-42d3-a456-426614174000',
     };
 
-    expect(decodeMessageCursor(encodeMessageCursor(cursor))).toEqual(cursor);
+    // Decode preserves the timestamp token verbatim as createdAtExact so the
+    // next keyset query compares at full stored precision.
+    expect(decodeMessageCursor(encodeMessageCursor(cursor))).toEqual({
+      ...cursor,
+      createdAtExact: '2026-07-17T18:00:00.123Z',
+    });
+  });
+
+  it('round-trips microsecond precision so same-millisecond rows stay exclusive', () => {
+    const cursor = {
+      createdAt: new Date('2026-07-17T18:00:00.123Z'),
+      id: '123e4567-e89b-42d3-a456-426614174000',
+      createdAtExact: '2026-07-17T18:00:00.123456Z',
+    };
+
+    const decoded = decodeMessageCursor(encodeMessageCursor(cursor));
+    expect(decoded).toEqual(cursor);
+    // The Date is millisecond-truncated; the exact string is what the query
+    // compares against, and it must not be.
+    expect(decoded?.createdAtExact).toBe('2026-07-17T18:00:00.123456Z');
   });
 
   it('rejects malformed and non-UUID cursors', () => {
