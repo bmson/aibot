@@ -129,7 +129,7 @@ function readRoutingFailure(request: PersonalReadRequest, toolName: string): str
       : request.kind === 'email'
         ? 'Gmail'
         : 'the calendar and Gmail';
-  return `I couldn't complete the required ${source} lookup because ${toolName} could not be run successfully. I’m not going to guess at the answer.`;
+  return `I couldn't get into ${source} just now — ${toolName} didn't come back, so I have nothing real to tell you yet. Ask me again in a minute and I'll re-run it.`;
 }
 
 export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<ExecuteResult> {

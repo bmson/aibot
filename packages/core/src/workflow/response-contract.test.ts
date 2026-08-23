@@ -209,7 +209,7 @@ describe('response execution contract', () => {
     expect(result.blocked).toBe(true);
     expect(result.unsupported).toEqual(expect.arrayContaining(['spreadsheet', 'outbound']));
     expect(result.text).toContain("Here's what I can confirm: the Google Doc action completed");
-    expect(result.text).toContain("I can't yet confirm");
+    expect(result.text).toContain("I can't confirm yet");
     expect(result.text).not.toContain("I couldn't verify this completed");
   });
 
@@ -234,7 +234,9 @@ describe('response execution contract', () => {
     );
     expect(result).toMatchObject({ blocked: true, unsupported: ['workspace'] });
     expect(result.text).toContain('portal returned an explicit application confirmation');
-    expect(result.text).toContain("can't yet confirm the requested document or file action");
+    expect(result.text).toContain(
+      "The rest — the requested document or file action — I can't confirm yet",
+    );
     expect(result.text).not.toContain('I have not submitted');
   });
 
@@ -754,7 +756,7 @@ describe('response execution contract', () => {
       });
       expect(result.blocked).toBe(true);
       expect(result.unsupported).toEqual(expect.arrayContaining(['calendar_read', 'inbox_read']));
-      expect(result.text).toMatch(/not going to guess/i);
+      expect(result.text).toMatch(/rather tell you that than fill it in/i);
     });
 
     it('allows interview details only when the searches and thread contain them', () => {

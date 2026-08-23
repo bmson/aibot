@@ -550,7 +550,7 @@ export function transparentFailureResponse(evidence: ActionEvidence[]): string {
   // Keep the opening sentence stable — the web chat matches on it to render
   // these as system notices (apps/web/lib/chat-notices.ts), alongside the
   // structured `contractNotice` flag.
-  return `I couldn't verify this completed, so I'm not claiming it did.${detail} Nothing was sent or changed outside this chat — say the word and I'll retry, or adjust the request.`;
+  return `Here's where this actually stands: I couldn't verify this completed, so I'm not claiming it did.${detail} Nothing was sent or changed outside this chat. Say the word and I'll run it again, or point me at another way in.`;
 }
 
 const UNSUPPORTED_LABEL: Record<ActionKind, string> = {
@@ -673,7 +673,7 @@ function partialFailureResponse(
   const failures = failureDetails(evidence);
   const failureDetail = failures.length ? ` What stopped it: ${failures.join('; ')}.` : '';
   // Opening kept stable for the web chat's notice matcher (chat-notices.ts).
-  return `Here's what I can confirm: ${verified.join('; ')}. I can't yet confirm ${missing.join(' or ')}, so I'm not claiming that part.${failureDetail}`;
+  return `Here's what I can confirm: ${verified.join('; ')}. The rest — ${missing.join(' or ')} — I can't confirm yet, so I'm leaving it out rather than guessing.${failureDetail}`;
 }
 
 // Google surfaces the model legitimately constructs from an id it already has
@@ -1701,7 +1701,7 @@ function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvid
 function missingReadResponse(labels: string[], evidence: ActionEvidence[]): string {
   const failures = failureDetails(evidence);
   return [
-    `I couldn't verify this from the required sources, so I’m not going to guess. Missing: ${labels.join('; ')}.`,
+    `That's everything I could actually see. What I couldn't get to: ${labels.join('; ')}. I'd rather tell you that than fill it in from memory.`,
     failures.length > 0 ? `What stopped the lookup: ${failures.join('; ')}.` : '',
   ]
     .filter(Boolean)
@@ -1803,7 +1803,7 @@ export function enforceResponseContract(
   }
   if (unsupported.includes('approval')) {
     return {
-      text: 'I did not create a real approval request, so nothing is waiting on the Approvals page. I stopped instead of showing an unverified approval code.',
+      text: 'No approval request actually exists — I never created one, so nothing is waiting on the Approvals page. I stopped rather than hand you a code that goes nowhere. Tell me to go ahead and I will raise the real one.',
       blocked: true,
       unsupported,
     };

@@ -370,7 +370,7 @@ export async function stageModelFinalResponse(
     await notifyOwnerAndConversation(
       deps,
       task,
-      `This goal's automatic session finished without completing any verified action. It needs you: ${text}`,
+      `Your goal's background run finished without getting anything verified done, so it needs you: ${text}`,
     );
     return stageFinalResponse(deps, task, state, window, {
       ...pending,

@@ -382,7 +382,7 @@ export async function mirrorGoalUpdateToPrimary(
   const primary = await findPrimaryConversation(db, mission.agentId);
   // Skip when there's no primary yet, or the mission already reports into it.
   if (!primary || primary.id === mission.conversationId) return;
-  const labeled = `On your goal “${goal.title}”: ${text}`;
+  const labeled = `Quick update on your “${goal.title}” goal: ${text}`;
   await persistMessage(db, {
     conversationId: primary.id,
     taskId: mission.id,
