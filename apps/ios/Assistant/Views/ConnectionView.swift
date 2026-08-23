@@ -110,7 +110,10 @@ struct ConnectionView: View {
         .onAppear {
             serverURL = model.serverURL
             token = KeychainStore.readToken()
-            model.dismissError()
+            // The onboarding form can appear *because* the automatic connect
+            // failed; clearing here would wipe the reason before it renders.
+            // Only the deliberately opened settings sheet starts clean.
+            if !isOnboarding { model.dismissError() }
         }
     }
 

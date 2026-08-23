@@ -57,6 +57,12 @@ final class AppModel: ObservableObject {
         if let configuration = try? Self.configuration(urlString: serverURL, token: KeychainStore.readToken()) {
             client = APIClient(configuration: configuration)
         }
+        // RootView's `.task` starts the automatic connect after the first
+        // render. Without seeding this, that render fell through to the
+        // Connection form, whose appearance latched `hasPresentedConnection`
+        // and barred the launch screen for the whole round-trip — a saved
+        // pairing saw the login page before landing on the conversation.
+        isLoading = hasSavedConnection && client != nil
         // Approve/Deny straight from a notification. The handler goes through
         // the same client call as the in-app buttons, then refreshes so the
         // badge and the Approvals sheet agree with the server.
