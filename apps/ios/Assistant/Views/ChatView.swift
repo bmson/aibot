@@ -1389,11 +1389,6 @@ struct ChatView: View {
 
     private var composer: some View {
         VStack(spacing: 8) {
-            if model.nextMessageAutonomous && !menuOpen {
-                autonomousNotice
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
-            }
-
             if !model.latestQuickReplies.isEmpty && !composerFocused && !model.isSending {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -1464,42 +1459,34 @@ struct ChatView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.isSending)
     }
 
-    private var autonomousNotice: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "bolt.shield.fill")
-                .font(.caption.weight(.semibold))
-            Text("Auto mode for the next message")
-                .font(.caption.weight(.medium))
-            Spacer(minLength: 8)
-            Button {
-                model.nextMessageAutonomous = false
-            } label: {
-                ZStack {
-                    Image(systemName: "xmark")
-                        .font(.caption2.weight(.bold))
-                        .frame(width: 26, height: 26)
-                        .background(.white.opacity(0.18), in: Circle())
-                }
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Turn off auto mode")
-        }
-        .foregroundStyle(AssistantTheme.stageWarningInk)
-        .padding(.leading, 12)
-        .padding(.trailing, 7)
-        .padding(.vertical, 7)
-        .background(AssistantTheme.stageWarningSurface.opacity(0.94), in: Capsule())
-        .overlay {
-            Capsule().strokeBorder(.white.opacity(0.32), lineWidth: 0.7)
-        }
-        .shadow(color: AssistantTheme.stageDepth.opacity(0.1), radius: 9, y: 4)
-    }
-
     private var composerInput: some View {
         composerInputSurface {
             HStack(alignment: .bottom, spacing: 8) {
+                if model.nextMessageAutonomous {
+                    // Auto mode lives inside the field as a leading affordance
+                    // — the pill above the composer read as a separate banner
+                    // detached from the message it affects. Tap to cancel.
+                    Button {
+                        model.nextMessageAutonomous = false
+                    } label: {
+                        Image(systemName: "bolt.shield.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(AssistantTheme.stageWarningInk)
+                            .frame(width: 30, height: 30)
+                            .background(AssistantTheme.stageWarningSurface.opacity(0.94), in: Circle())
+                            .overlay {
+                                Circle().strokeBorder(.white.opacity(0.32), lineWidth: 0.7)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+                    .padding(.leading, 6)
+                    .accessibilityLabel("Auto mode for the next message")
+                    .accessibilityHint("Sensitive steps still ask, and budget caps still apply. Activating turns auto mode off.")
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
+
                 TextField(
                     "",
                     text: $draft,
@@ -1564,15 +1551,16 @@ struct ChatView: View {
                     .foregroundStyle(
                         !canSend && !model.isSending
                             ? composerPlaceholderColor
-                            : AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
+                            : AssistantTheme.stageDepth
                     )
                     .frame(width: 44, height: 44)
                     .background(
-                        AssistantTheme.raised(for: colorScheme).opacity(
-                            model.isSending
-                                ? 0.28
-                                : (!canSend ? 0.06 : 0.34)
-                        ),
+                        // Readiness is a state change, not a dimmed copy: with
+                        // nothing to send the button sits back in the well; a
+                        // typed draft lifts it to the solid warm white that
+                        // reads as the one bright object on the stage.
+                        (canSend && !model.isSending ? AssistantTheme.stageStrong : AssistantTheme.raised(for: colorScheme))
+                            .opacity(model.isSending ? 0.28 : (!canSend ? 0.06 : 1)),
                         in: Circle()
                     )
                     .overlay {
