@@ -266,7 +266,7 @@ struct ChatView: View {
             // this backing show around the keyboard's rounded corners — keep
             // it the conversation's green so those pockets read as the stage
             // continuing, not a gray seam.
-            AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
+            AssistantTheme.stage(for: colorScheme)
                 .ignoresSafeArea()
         }
         // The conversation surface is visually above the revealed submenu.
@@ -309,7 +309,7 @@ struct ChatView: View {
 
     private var stageBackdrop: some View {
         ZStack {
-            AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
+            AssistantTheme.stage(for: colorScheme)
 
             LinearGradient(
                 stops: [
@@ -331,7 +331,6 @@ struct ChatView: View {
                 endRadius: 260
             )
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: model.latestMood)
     }
 
     private var conversationSurface: some View {
@@ -1400,6 +1399,10 @@ struct ChatView: View {
                     )
                 )
         }
+        // The caret and the ready send button are the only surfaces a [theme:]
+        // cue moves, so the mood glides here rather than behind the transcript.
+        // 0.6s matches the web client's scoped --accent transition.
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.6), value: model.latestMood)
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, 10)
@@ -1407,8 +1410,8 @@ struct ChatView: View {
             LinearGradient(
                 colors: [
                     .clear,
-                    AssistantTheme.stage(for: colorScheme, mood: model.latestMood).opacity(0.03),
-                    AssistantTheme.stage(for: colorScheme, mood: model.latestMood).opacity(0.12),
+                    AssistantTheme.stage(for: colorScheme).opacity(0.03),
+                    AssistantTheme.stage(for: colorScheme).opacity(0.12),
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -1524,9 +1527,10 @@ struct ChatView: View {
                     .background(
                         // Readiness is a state change, not a dimmed copy: with
                         // nothing to send the button sits back in the well; a
-                        // typed draft lifts it to the solid warm white that
-                        // reads as the one bright object on the stage.
-                        (canSend && !model.isSending ? AssistantTheme.stageStrong : AssistantTheme.raised(for: colorScheme))
+                        // typed draft lifts it to the solid fill that reads as
+                        // the one bright object on the stage — warm white, or
+                        // the mood tint when a [theme:] cue is active.
+                        (canSend && !model.isSending ? sendReadyFill : AssistantTheme.raised(for: colorScheme))
                             .opacity(model.isSending ? 0.28 : (!canSend ? 0.06 : 1)),
                         in: Circle()
                     )
@@ -1602,10 +1606,20 @@ struct ChatView: View {
         composerTextColor.opacity(colorSchemeContrast == .increased ? 0.78 : 0.5)
     }
 
+    /// The ready send button's fill — the one bright object on the stage, and
+    /// the most legible place for a [theme:] cue to show: every mood tint is
+    /// light, so the dark `stageDepth` glyph keeps its contrast on all of them.
+    /// With no cue active this stays the warm white it has always been.
+    private var sendReadyFill: Color {
+        model.latestMood == .default
+            ? AssistantTheme.stageStrong
+            : AssistantTheme.chatAccent(mood: model.latestMood)
+    }
+
     private var composerCursorColor: Color {
         colorSchemeContrast == .increased
             ? AssistantTheme.stageStrong
-            : Color(hex: 0xB9ECCF)
+            : AssistantTheme.chatAccent(mood: model.latestMood)
     }
 
     /// Shared resting tint for controls floating over the conversation stage.
@@ -1626,7 +1640,7 @@ struct ChatView: View {
         if reduceTransparency {
             content()
                 .background(
-                    AssistantTheme.stage(for: colorScheme, mood: model.latestMood),
+                    AssistantTheme.stage(for: colorScheme),
                     in: shape
                 )
                 .overlay {
@@ -1639,7 +1653,7 @@ struct ChatView: View {
             content()
                 .background {
                     shape.fill(
-                        AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
+                        AssistantTheme.stage(for: colorScheme)
                             // Keep the input visually grounded in the green
                             // conversation stage; the liquid glass remains
                             // above it, while 85% of the surface remains the
@@ -1654,7 +1668,7 @@ struct ChatView: View {
                 .glassEffect(
                     Glass.clear
                         .tint(
-                            AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
+                            AssistantTheme.stage(for: colorScheme)
                                 .opacity(
                                     composerFocused
                                         ? 0.065
@@ -1669,7 +1683,7 @@ struct ChatView: View {
                     ZStack {
                         shape.fill(.ultraThinMaterial)
                         shape.fill(
-                            AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
+                            AssistantTheme.stage(for: colorScheme)
                                 .opacity(0.85)
                         )
                         shape.fill(
@@ -1746,7 +1760,7 @@ struct ChatView: View {
             jumpToLatestLabel
                 .foregroundStyle(AssistantTheme.stageStrong)
                 .background(
-                    AssistantTheme.stage(for: colorScheme, mood: model.latestMood),
+                    AssistantTheme.stage(for: colorScheme),
                     in: Capsule()
                 )
                 .overlay {
@@ -1761,7 +1775,7 @@ struct ChatView: View {
                 .foregroundStyle(AssistantTheme.stageStrong)
                 .background {
                     Capsule().fill(
-                        AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
+                        AssistantTheme.stage(for: colorScheme)
                             .opacity(conversationControlBackgroundOpacity)
                     )
                 }
@@ -1771,7 +1785,7 @@ struct ChatView: View {
                     // solid green pill next to the input's liquid glass.
                     Glass.clear
                         .tint(
-                            AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
+                            AssistantTheme.stage(for: colorScheme)
                                 .opacity(conversationControlGlassTintOpacity)
                         )
                         .interactive(),
@@ -1786,7 +1800,7 @@ struct ChatView: View {
                         .fill(.ultraThinMaterial)
                         .overlay {
                             Capsule().fill(
-                                AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
+                                AssistantTheme.stage(for: colorScheme)
                                     .opacity(0.85)
                             )
                         }

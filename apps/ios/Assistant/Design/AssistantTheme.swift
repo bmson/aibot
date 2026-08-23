@@ -131,16 +131,29 @@ enum AssistantTheme {
         scheme == .dark ? errorInkDark : errorInk
     }
 
-    static func stage(for scheme: ColorScheme, mood: CompanionMood = .default) -> Color {
-        switch (scheme, mood) {
-        case (.light, .warmAmber): Color(hex: 0x8A6337)
-        case (.dark, .warmAmber): Color(hex: 0x45331F)
-        case (.light, .softRose): Color(hex: 0x8A5A62)
-        case (.dark, .softRose): Color(hex: 0x442A30)
-        case (.light, .coolSky): Color(hex: 0x397786)
-        case (.dark, .coolSky): Color(hex: 0x203C44)
-        case (.dark, _): stageDark
-        default: stage
+    static func stage(for scheme: ColorScheme) -> Color {
+        scheme == .dark ? stageDark : stage
+    }
+
+    /// The chat's accent, tinted by the companion's color mood.
+    ///
+    /// A `[theme:]` cue re-tints the accent and leaves the stage alone, which is
+    /// what the web client has always done (`globals.css`, "Companion chat
+    /// themes"). The stage used to carry the mood here instead, so one cue
+    /// repainted the whole conversation background — a swing with no visible
+    /// cause, since the cue tag never reaches the reader.
+    ///
+    /// Deliberately does not vary by color scheme: the stage is dark in both, so
+    /// one light tint reads on either — the same reasoning as
+    /// `stageWarningSurface`. The three mood tints are the web values verbatim;
+    /// the resting tint stays this app's own `0xB9ECCF` rather than web's
+    /// `#9fe7c0`, so the default look is unchanged.
+    static func chatAccent(mood: CompanionMood = .default) -> Color {
+        switch mood {
+        case .warmAmber: Color(hex: 0xFCD390)
+        case .softRose: Color(hex: 0xF7BCD2)
+        case .coolSky: Color(hex: 0xA5DAF6)
+        case .default: Color(hex: 0xB9ECCF)
         }
     }
 }

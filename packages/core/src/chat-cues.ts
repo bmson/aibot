@@ -31,6 +31,16 @@ export type FaceState = (typeof FACE_STATES)[number];
 
 export const THEME_NAMES = ['default', 'warm_amber', 'soft_rose', 'cool_sky'] as const;
 export type ThemeName = (typeof THEME_NAMES)[number];
+/**
+ * How many recent assistant messages a `[theme:]` cue reaches forward over.
+ *
+ * The mood is derived from the log rather than stored, so without a bound it
+ * held for the whole loaded window (the newest 100 messages) and then vanished
+ * the moment the cue scrolled out — a color change with no message behind it.
+ * Bounding the lookback lets a mood cover a normal exchange and then decay on a
+ * boundary the owner can actually see.
+ */
+export const THEME_LOOKBACK = 8;
 
 export const MAX_CHIPS = 4;
 export const MAX_CHIP_LABEL = 60;

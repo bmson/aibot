@@ -11,6 +11,35 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(message.quickReplies, ["Show me", "Continue"])
     }
 
+    func testMoodAppliesAtTheEdgeOfTheLookbackAndDecaysBeyondIt() {
+        let themed = ChatMessage(
+            id: "themed",
+            role: .assistant,
+            parts: [.init(type: "data-theme", data: .object(["name": .string("cool_sky")]))]
+        )
+        let plain = { (index: Int) in
+            ChatMessage.optimistic(role: .assistant, text: "Working", id: "a\(index)")
+        }
+
+        let atEdge = [themed] + (0..<(CompanionMood.lookback - 1)).map(plain)
+        XCTAssertEqual(CompanionMood.latest(in: atEdge), .coolSky)
+
+        let pastEdge = [themed] + (0..<CompanionMood.lookback).map(plain)
+        XCTAssertEqual(CompanionMood.latest(in: pastEdge), .default)
+    }
+
+    func testMoodLookbackIgnoresOwnerMessages() {
+        let themed = ChatMessage(
+            id: "themed",
+            role: .assistant,
+            parts: [.init(type: "data-theme", data: .object(["name": .string("soft_rose")]))]
+        )
+        let owner = (0..<40).map { ChatMessage.optimistic(role: .user, text: "Thanks", id: "u\($0)") }
+
+        XCTAssertEqual(CompanionMood.latest(in: [themed] + owner), .softRose)
+        XCTAssertEqual(CompanionMood.latest(in: []), .default)
+    }
+
     func testOptimisticMessageUsesLocalIdentity() {
         let message = ChatMessage.optimistic(role: .user, text: "Hello")
         XCTAssertTrue(message.id.hasPrefix("local-"))
