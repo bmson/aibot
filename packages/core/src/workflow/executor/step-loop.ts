@@ -103,6 +103,25 @@ function readLookupDirective(request: PersonalReadRequest): string {
   ].join('\n');
 }
 
+/**
+ * The turn where the model finally writes the lookup answer. Its results are
+ * already in the window; what it needs is the boundary between what it may
+ * change (shape, emphasis, wording, time format) and what it may not (which
+ * events exist, when they are). Naming the check is the cheapest way to raise
+ * the pass rate: a model told its answer is verified writes a more faithful
+ * one than a model told only to be careful.
+ */
+function readAnswerDirective(request: PersonalReadRequest): string {
+  return [
+    '\nEvery lookup this needed has run, and the results are in this conversation. Write the answer now, in the agenda or rundown shape from your voice rules — no tool calls on this turn.',
+    'You may reformat and convert times into the owner\u2019s timezone, shorten a long title, decide what leads, and leave out what does not matter. You may not move a time, rename an event, or add one.',
+    request.kind === 'email'
+      ? 'Select what is worth the owner\u2019s attention, but every sender, subject, and detail you name has to come from a result.'
+      : 'Every event the calendar returned for this window has to appear in your answer; do not drop one.',
+    'Your answer is checked against those results before it goes out. If it does not match them, the owner gets a plain generated list instead of your reply \u2014 so keep it faithful and it goes out in your voice.',
+  ].join('\n');
+}
+
 function readRoutingFailure(request: PersonalReadRequest, toolName: string): string {
   const source =
     request.kind === 'calendar'
@@ -110,7 +129,7 @@ function readRoutingFailure(request: PersonalReadRequest, toolName: string): str
       : request.kind === 'email'
         ? 'Gmail'
         : 'the calendar and Gmail';
-  return `I couldn't complete the required ${source} lookup because ${toolName} could not be run successfully. I’m not going to guess at the answer.`;
+  return `I couldn't get into ${source} just now — ${toolName} didn't come back, so I have nothing real to tell you yet. Ask me again in a minute and I'll re-run it.`;
 }
 
 export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<ExecuteResult> {
@@ -267,6 +286,10 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // tool ledger. Measured from the entry step so a retry after a real database
   // failure gets exactly one fresh persistence attempt instead of none.
   const bookkeepingStepCap = Math.max(task.maxSteps, state.step) + 1;
+  // The answer turn happens once. Without this a model that somehow emits a
+  // tool call on it would come back round to another answer turn, and a lookup
+  // could ping-pong until the step budget ran out.
+  let readAnswerAttempted = false;
   while (state.step < bookkeepingStepCap) {
     const goalToolEvidence = isUnattendedGoalSession(task)
       ? await db
@@ -297,24 +320,31 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         ? nextRequiredReadTool(readRequest, readToolEvidence)
         : undefined;
     // Once every required read has either succeeded or exhausted its bounded
-    // retries, answer straight from the ledger. No model gets a chance to add a
-    // plausible event, reinterpret a date, ask which account to use, or perform
-    // an unrequested follow-up action.
+    // retries, the lookup is ready to be answered. A coverage gap is still
+    // answered straight from the ledger, which names the gap far more reliably
+    // than prose does; so is an automatic goal session, which has no owner
+    // reading it. Otherwise the model writes the answer and the response
+    // contract checks it against this same ledger before it goes out.
+    let readAnswerTurn = false;
     if (readRequest && !mustRecordGoalProgress && !forcedReadTool) {
       const checked = enforcePersonalReadResponse(
         readRequest,
         readToolEvidence.map((row) => ({ ...row, result: row.result })),
       );
-      rc.window.push({ role: 'assistant', content: checked.text } as ModelMessage);
-      return stageFinalResponse(deps, lease, state, rc.window, {
-        text: checked.text,
-        progress: checked.text.slice(0, 200),
-        terminalStatus: 'done',
-        outcome: 'done',
-        contractBlocked: checked.blocked,
-        contractUnsupportedCount: checked.unsupported.length,
-        contractNotice: checked.blocked || undefined,
-      });
+      if (checked.blocked || isUnattendedGoalSession(task) || readAnswerAttempted) {
+        rc.window.push({ role: 'assistant', content: checked.text } as ModelMessage);
+        return stageFinalResponse(deps, lease, state, rc.window, {
+          text: checked.text,
+          progress: checked.text.slice(0, 200),
+          terminalStatus: 'done',
+          outcome: 'done',
+          contractBlocked: checked.blocked,
+          contractUnsupportedCount: checked.unsupported.length,
+          contractNotice: checked.blocked || undefined,
+        });
+      }
+      readAnswerTurn = true;
+      readAnswerAttempted = true;
     }
     // Past the ordinary budget, only the owed bookkeeping turn may run.
     if (state.step >= task.maxSteps && !mustRecordGoalProgress) break;
@@ -339,6 +369,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         : '',
       plan ? `\n${renderPlan(plan)}` : '',
       readRequest ? readLookupDirective(readRequest) : '',
+      readAnswerTurn && readRequest ? readAnswerDirective(readRequest) : '',
       plan?.action === 'schedule' ? SCHEDULE_DIRECTIVE : '',
     ]
       .filter(Boolean)
@@ -467,11 +498,13 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         system,
         messages: rc.window,
         tools: toolSet as never,
-        toolChoice: forcedArtifact
-          ? { type: 'tool', toolName: forcedArtifact.toolName }
-          : mustAct
-            ? 'required'
-            : undefined,
+        toolChoice: readAnswerTurn
+          ? 'none'
+          : forcedArtifact
+            ? { type: 'tool', toolName: forcedArtifact.toolName }
+            : mustAct
+              ? 'required'
+              : undefined,
         // The primary chat model has intermittently timed out when a named
         // artifact tool is mandatory. Use the role's configured
         // tool-capable fallback where appropriate.
@@ -479,6 +512,14 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         critical,
       });
       if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+    }
+
+    // toolChoice 'none' already asks for this; dropping the calls outright is
+    // what makes it a guarantee. The old ledger short-circuit got the same
+    // property by never running a model turn at all, and letting the model
+    // write the answer must not quietly buy that back for an unrequested send.
+    if (stepResult.ok && readAnswerTurn && stepResult.toolCalls.length > 0) {
+      stepResult = { ...stepResult, toolCalls: [] };
     }
 
     if (stepResult.ok && isUnattendedGoalSession(task) && !mustRecordGoalProgress) {
@@ -956,6 +997,22 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     }
 
     // no tool calls → final answer
+    if (readAnswerTurn && readRequest && stepResult.text.trim().length === 0) {
+      const checked = enforcePersonalReadResponse(
+        readRequest,
+        readToolEvidence.map((row) => ({ ...row, result: row.result })),
+      );
+      rc.window.push({ role: 'assistant', content: checked.text } as ModelMessage);
+      return stageFinalResponse(deps, lease, state, rc.window, {
+        text: checked.text,
+        progress: checked.text.slice(0, 200),
+        terminalStatus: 'done',
+        outcome: 'done',
+        contractBlocked: checked.blocked,
+        contractUnsupportedCount: checked.unsupported.length,
+        contractNotice: checked.blocked || undefined,
+      });
+    }
     const text = stepResult.text.trim() || '(no response)';
     rc.window.push({ role: 'assistant', content: text } as ModelMessage);
     return stageModelFinalResponse(
@@ -970,6 +1027,10 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         outcome: 'done',
       },
       artifactIntent,
+      // The ambient block is in the system prompt, not the window, so the
+      // grounding check would read a true local aside — the weather, where the
+      // owner is — as something the model made up.
+      { readRequest, groundingCorpus: state.untrustedContext ? undefined : ambientBlock },
     );
   }
 

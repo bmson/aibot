@@ -118,10 +118,16 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * v26: the owner asked to keep the dashboard's mood color on default
  * permanently — the [theme:] cue is dropped from the vocabulary and the
  * persona now explicitly tells the model never to emit one.
+ * v27: lookup answers are written by the model and checked against the tool
+ * ledger rather than replaced by it (see groundReadDraft in
+ * workflow/response-contract.ts), so the voice block now states the check,
+ * requires every returned event to survive into the answer, allows times to be
+ * reformatted but never moved, and bans narrating the lookup or reciting raw
+ * record fields.
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 26;
+export const PROMPT_VERSION = 27;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is
@@ -198,6 +204,8 @@ export function buildSystemPrompt(
     '  - **13:00–14:00** — Dentist — Laugavegur 12, Reykjavík',
     '',
     '  An empty day is one sentence plus the nearest next event if there is one. Carry only the deciding fields — time span, title, place — and a detail (attendees, a link, a note) only when it changes what the owner does next. Never recite the raw event record.',
+    '  When you answer a lookup, the tool results in this conversation are the only source of facts, and the answer is checked against them before it goes out: every event the calendar returned for the window appears in your answer, nothing that was not returned appears at all, and a time may be reformatted or converted into the owner\u2019s timezone but never moved. If a source failed or came back partial, say so in the same breath rather than smoothing over it.',
+    '- Answer like someone who already looked. Lead with what changes the next few hours, then the rows. Never narrate the lookup itself ("I searched your calendar and found..."), never print raw record fields (organizer addresses, calendar ids, message ids, ISO timestamps), and never hedge an answer you actually verified.',
     "- Be genuinely helpful: anticipate the obvious next need, and when you make a judgment call on the owner's behalf, name the assumption in a phrase so he can correct it.",
     ...(extras.channel === 'dashboard-chat' ? companionPersonaLines() : []),
     ...(extras.tainted
@@ -385,7 +393,7 @@ export async function mirrorGoalUpdateToPrimary(
   const primary = await findPrimaryConversation(db, mission.agentId);
   // Skip when there's no primary yet, or the mission already reports into it.
   if (!primary || primary.id === mission.conversationId) return;
-  const labeled = `On your goal “${goal.title}”: ${text}`;
+  const labeled = `Quick update on your “${goal.title}” goal: ${text}`;
   await persistMessage(db, {
     conversationId: primary.id,
     taskId: mission.id,

@@ -36,7 +36,28 @@ export function isContractNotice(text: string): boolean {
   ) {
     return true;
   }
-  return trimmed.startsWith('I did not create a real approval request, so nothing is waiting');
+  if (trimmed.startsWith('I did not create a real approval request, so nothing is waiting')) {
+    return true;
+  }
+  // 2026-08 copy. The openings above stay: a message persisted before this
+  // change keeps its exact string forever, so a pattern here is only ever
+  // added, never replaced. New copy uses ASCII apostrophes throughout — core
+  // has historically mixed ' and ’, and a typographic one here would silently
+  // fail to match.
+  if (
+    trimmed.startsWith("Here's where this actually stands:") &&
+    trimmed.includes("I'm not claiming it did")
+  ) {
+    return true;
+  }
+  if (
+    trimmed.startsWith("Here's what I can confirm: ") &&
+    trimmed.includes("I'm leaving it out rather than guessing")
+  ) {
+    return true;
+  }
+  if (trimmed.startsWith("That's everything I could actually see.")) return true;
+  return trimmed.startsWith('No approval request actually exists');
 }
 
 /**

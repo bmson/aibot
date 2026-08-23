@@ -74,6 +74,36 @@ describe('isContractNotice', () => {
     ).toBe(true);
     expect(isContractNotice("Here's what I can confirm: your flight lands at 6pm.")).toBe(false);
   });
+
+  it('matches the 2026-08 copy without losing the strings before it', () => {
+    expect(
+      isContractNotice(
+        "Here's where this actually stands: I couldn't verify this completed, so I'm not " +
+          'claiming it did. Nothing was sent or changed outside this chat. Say the word and ' +
+          "I'll run it again, or point me at another way in.",
+      ),
+    ).toBe(true);
+    expect(
+      isContractNotice(
+        "Here's what I can confirm: the Google Sheet action completed earlier in this " +
+          "conversation. The rest — the requested calendar action — I can't confirm yet, so " +
+          "I'm leaving it out rather than guessing.",
+      ),
+    ).toBe(true);
+    expect(
+      isContractNotice(
+        "That's everything I could actually see. What I couldn't get to: a successful " +
+          "all-calendar event search. I'd rather tell you that than fill it in from memory.",
+      ),
+    ).toBe(true);
+    expect(
+      isContractNotice(
+        'No approval request actually exists — I never created one, so nothing is waiting on ' +
+          'the Approvals page. I stopped rather than hand you a code that goes nowhere. Tell ' +
+          'me to go ahead and I will raise the real one.',
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('noticeKindOf', () => {

@@ -38,6 +38,11 @@ afterAll(async () => {
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
 });
 
+/** The fixture's events must land inside the window the runtime resolves for "today". */
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 const workflowPlan = {
   action: 'workflow' as const,
   reasoning: 'look the fact up, then answer',
@@ -69,6 +74,131 @@ describe('golden tasks', () => {
 
     expect(result.toolNames).toEqual(['facts.lookup']);
     expect(result.finalText).toContain('hunter2');
+  });
+
+  /**
+   * The owner's most common question. What is pinned here is that the ANSWER is
+   * the model's — the executor used to render calendar replies from the ledger
+   * without ever asking for one, which is why no amount of prompt work ever
+   * changed how a schedule answer read.
+   */
+  it('lets the model write a day agenda once the calendar read is grounded', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const agenda = [
+      'Two things today, and the afternoon is the tight one:',
+      '- **09:30–10:15** — Linear interview prep — Zoom',
+      '- **13:00–14:00** — Dentist — Laugavegur 12',
+    ].join('\n');
+    const fixture: GoldenFixture = {
+      name: 'calendar-day-answer-grounded',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: { text: 'what is happening today?' },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      // The required calendar read is dispatched by the runtime, not scripted;
+      // this entry is consumed by the answer turn that follows it.
+      script: [{ text: agenda }],
+      tools: {
+        'calendar.list_events': {
+          schema: z.object({}).passthrough(),
+          execute: async () => ({
+            complete: true,
+            calendarsSearched: ['Assistant'],
+            events: [
+              {
+                eventId: 'evt-prep',
+                calendarId: 'primary',
+                calendar: 'Assistant',
+                summary: 'Linear interview prep',
+                location: 'Zoom',
+                start: `${today()}T09:30:00Z`,
+                end: `${today()}T10:15:00Z`,
+              },
+              {
+                eventId: 'evt-dentist',
+                calendarId: 'primary',
+                calendar: 'Assistant',
+                summary: 'Dentist',
+                location: 'Laugavegur 12',
+                start: `${today()}T13:00:00Z`,
+                end: `${today()}T14:00:00Z`,
+              },
+            ],
+          }),
+        },
+      },
+    };
+    const result = await runGoldenTask(db, agentId, fixture);
+    createdTaskIds.push(result.taskId);
+
+    expect(result.toolNames).toEqual(['calendar.list_events']);
+    // The agenda goes out as written, not restated as a field dump.
+    expect(result.finalText).toBe(agenda);
+    expect(result.finalText).not.toContain("Here's what the calendar has");
+    expect(result.finalText).not.toContain('organizer:');
+
+    const [check] = await db
+      .select()
+      .from(responseChecks)
+      .where(eq(responseChecks.taskId, result.taskId));
+    expect(check?.blocked).toBe(false);
+  });
+
+  it('falls back to the verified list when the agenda invents an event', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const fixture: GoldenFixture = {
+      name: 'calendar-day-answer-fabricated',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: { text: 'what is happening today?' },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [
+        {
+          text: [
+            'Two things today:',
+            '- **09:30–10:15** — Linear interview prep — Zoom',
+            '- **19:00–21:00** — Dinner at Zuni Cafe — 1658 Market St',
+          ].join('\n'),
+        },
+      ],
+      tools: {
+        'calendar.list_events': {
+          schema: z.object({}).passthrough(),
+          execute: async () => ({
+            complete: true,
+            calendarsSearched: ['Assistant'],
+            events: [
+              {
+                eventId: 'evt-prep',
+                calendarId: 'primary',
+                calendar: 'Assistant',
+                summary: 'Linear interview prep',
+                location: 'Zoom',
+                start: `${today()}T09:30:00Z`,
+                end: `${today()}T10:15:00Z`,
+              },
+            ],
+          }),
+        },
+      },
+    };
+    const result = await runGoldenTask(db, agentId, fixture);
+    createdTaskIds.push(result.taskId);
+
+    expect(result.finalText).not.toContain('Zuni Cafe');
+    expect(result.finalText).toContain('Linear interview prep');
+    // A fallback is not an honesty failure: the owner still gets every fact.
+    const [check] = await db
+      .select()
+      .from(responseChecks)
+      .where(eq(responseChecks.taskId, result.taskId));
+    expect(check?.blocked).toBe(false);
   });
 
   it('lets the response contract block an action claim with no tool evidence', async (ctx) => {

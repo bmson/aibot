@@ -26,7 +26,7 @@ import {
   taskState,
 } from '../machine.js';
 import { PLANNER_VERSION } from '../planner.js';
-import { detectPersonalReadRequest } from '../read-intent.js';
+import { detectPersonalReadRequest, type PersonalReadRequest } from '../read-intent.js';
 import { type ActionEvidence, enforceResponseContract } from '../response-contract.js';
 import { isUnattendedGoalSession, KNOWN_SENDER_REPLY_KIND } from './context-helpers.js';
 import { notifyOwnerAndConversation, recordGoalBlocked } from './notices.js';
@@ -274,6 +274,14 @@ export async function stageModelFinalResponse(
   window: ModelMessage[],
   pending: PendingFinal,
   expectedArtifact?: ArtifactIntent,
+  /**
+   * The lookup this turn is answering, and the non-tool context it may draw
+   * on. Both come from the step loop, which resolved the request against the
+   * owner's clock and timezone; re-detecting here would silently produce a
+   * request with neither, and the grounding check would then have no window to
+   * measure a stated time against.
+   */
+  readContext?: { readRequest?: PersonalReadRequest | null; groundingCorpus?: string },
 ): Promise<ExecuteResult> {
   // Companion cue tags come out for EVERY channel before the contract or any
   // delivery sees the text. The prompt gates the vocabulary to dashboard chat,
@@ -322,8 +330,15 @@ export async function stageModelFinalResponse(
   ].join('\n');
   const checked = enforceResponseContract(pending.text, evidence, {
     urlCorpus: sourceCorpus,
-    readRequest: detectPersonalReadRequest(window),
+    readRequest: readContext ? readContext.readRequest : detectPersonalReadRequest(window),
+    groundingCorpus: readContext?.groundingCorpus,
   });
+  if (checked.groundingFallback && checked.groundingFallback.length > 0) {
+    console.warn('lookup answer fell back to the verified ledger', {
+      taskId: task.id,
+      reasons: checked.groundingFallback,
+    });
+  }
   const text = checked.text;
   // Stamp the contract verdict on pending; recordQualitySignals reads it from
   // the single funnel in finalizePendingResponse, so every terminal path — not
@@ -355,7 +370,7 @@ export async function stageModelFinalResponse(
     await notifyOwnerAndConversation(
       deps,
       task,
-      `This goal's automatic session finished without completing any verified action. It needs you: ${text}`,
+      `Your goal's background run finished without getting anything verified done, so it needs you: ${text}`,
     );
     return stageFinalResponse(deps, task, state, window, {
       ...pending,

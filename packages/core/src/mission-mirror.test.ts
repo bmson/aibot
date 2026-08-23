@@ -83,7 +83,7 @@ describe('mirrorGoalUpdateToPrimary (integration)', () => {
     const rows = await primaryMessages();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.text).toBe(
-      'On your goal “Ship the thing”: Booked the venue and emailed the caterer.',
+      'Quick update on your “Ship the thing” goal: Booked the venue and emailed the caterer.',
     );
     expect(rows[0]?.taskId).toBe(taskId);
   });

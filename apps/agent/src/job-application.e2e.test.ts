@@ -412,8 +412,10 @@ describe('complex job application workflow (integration, scripted model)', () =>
 
     const [finalTask] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(finalTask?.progress).toContain('requested Drive file was staged');
-    expect(finalTask?.progress).toContain("can't yet confirm the application submission");
-    expect(finalTask?.progress).toContain('not claiming that part');
+    expect(finalTask?.progress).toContain(
+      "The rest — the application submission — I can't confirm yet",
+    );
+    expect(finalTask?.progress).toContain('leaving it out rather than guessing');
     expect(finalTask?.progress).not.toContain('successfully');
   });
 

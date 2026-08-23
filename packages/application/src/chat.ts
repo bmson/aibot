@@ -13,7 +13,7 @@ import {
   conversations,
   type Db,
   goals,
-  messages,
+  type messages,
   models,
   suggestions,
   tasks,

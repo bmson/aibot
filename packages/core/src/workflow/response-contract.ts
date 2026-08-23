@@ -40,12 +40,26 @@ export interface ResponseContractResult {
   text: string;
   blocked: boolean;
   unsupported: ActionKind[];
+  /**
+   * Why a lookup answer was rendered from the ledger instead of published as
+   * the model wrote it. Absent on a published draft and on every non-read
+   * turn. Not a block: the owner still gets a complete, verified answer, just
+   * in a plainer shape, so this is a signal to watch rather than a failure to
+   * surface.
+   */
+  groundingFallback?: string[];
 }
 
 interface ResponseContractOptions {
   urlCorpus?: string;
   /** Deterministically detected from the latest owner turn. */
   readRequest?: PersonalReadRequest | null;
+  /**
+   * Context the turn legitimately supplied that is not itself a tool result —
+   * chiefly the ambient weather/location block, which v25 invites the answer
+   * to close on. Without it a true local aside reads as an invention.
+   */
+  groundingCorpus?: string;
 }
 
 const OUTBOUND_OBJECTS = 'email|message|sms|text|call|outreach|reply|follow-?up';
@@ -536,7 +550,7 @@ export function transparentFailureResponse(evidence: ActionEvidence[]): string {
   // Keep the opening sentence stable — the web chat matches on it to render
   // these as system notices (apps/web/lib/chat-notices.ts), alongside the
   // structured `contractNotice` flag.
-  return `I couldn't verify this completed, so I'm not claiming it did.${detail} Nothing was sent or changed outside this chat — say the word and I'll retry, or adjust the request.`;
+  return `Here's where this actually stands: I couldn't verify this completed, so I'm not claiming it did.${detail} Nothing was sent or changed outside this chat. Say the word and I'll run it again, or point me at another way in.`;
 }
 
 const UNSUPPORTED_LABEL: Record<ActionKind, string> = {
@@ -659,7 +673,7 @@ function partialFailureResponse(
   const failures = failureDetails(evidence);
   const failureDetail = failures.length ? ` What stopped it: ${failures.join('; ')}.` : '';
   // Opening kept stable for the web chat's notice matcher (chat-notices.ts).
-  return `Here's what I can confirm: ${verified.join('; ')}. I can't yet confirm ${missing.join(' or ')}, so I'm not claiming that part.${failureDetail}`;
+  return `Here's what I can confirm: ${verified.join('; ')}. The rest — ${missing.join(' or ')} — I can't confirm yet, so I'm leaving it out rather than guessing.${failureDetail}`;
 }
 
 // Google surfaces the model legitimately constructs from an id it already has
@@ -952,6 +966,49 @@ function calendarTime(value: string, timeZone?: string): string {
   }
 }
 
+/** "09:30" in the owner's zone; empty for a date with no time of day. */
+function clockOnly(value: string, timeZone?: string): string {
+  if (!value || /^\d{4}-\d{2}-\d{2}$/.test(value)) return '';
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) return '';
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: timeZone ?? 'UTC',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(new Date(ms));
+  } catch {
+    return '';
+  }
+}
+
+/** "Mon 17 Aug" — the date prefix a window spanning several days needs. */
+function shortDate(value: string, timeZone?: string): string {
+  if (!value) return '';
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const ms = Date.parse(isDateOnly ? `${value}T12:00:00.000Z` : value);
+  if (Number.isNaN(ms)) return '';
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: isDateOnly ? 'UTC' : (timeZone ?? 'UTC'),
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+    }).format(new Date(ms));
+  } catch {
+    return '';
+  }
+}
+
+/** Does the searched window cover more than one local day? */
+function spansDays(window: PersonalReadRequest['timeWindow']): boolean {
+  if (!window) return true;
+  const from = Date.parse(window.timeMin);
+  const to = Date.parse(window.timeMax);
+  return !Number.isFinite(from) || !Number.isFinite(to) || to - from > 26 * 60 * 60 * 1000;
+}
+
 function calendarFreeIntervals(
   slots: Record<string, unknown>[],
   window: NonNullable<PersonalReadRequest['timeWindow']>,
@@ -1026,16 +1083,368 @@ function literalLinks(value: string): string[] {
 }
 
 /**
+ * Words a grounded answer may use without having invented them: every literal
+ * field the lookup returned, plus whatever the owner and the tools already put
+ * in the window. Normalized to bare lowercase tokens so a draft that rewrites
+ * “Bay FC vs. Houston Dash” as “Bay FC vs Houston Dash” still matches.
+ */
+function groundingWords(value: string): string[] {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+}
+
+/**
+ * The calendar day and minute-of-day an instant falls on in the owner's zone.
+ * The draft states wall-clock times ("11:15"), while the ledger holds offsets
+ * ("2026-08-23T11:15:00-07:00"), so both sides have to be reduced to the same
+ * zoned reading before they can be compared at all. An all-day date carries no
+ * minute, which is why `minutes` is -1 rather than 0 there.
+ */
+function zonedClock(value: string, timeZone?: string): { day: string; minutes: number } | null {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return { day: value, minutes: -1 };
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) return null;
+  try {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: timeZone ?? 'UTC',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      })
+        .formatToParts(new Date(ms))
+        .map((part) => [part.type, part.value]),
+    );
+    const hour = Number(parts.hour === '24' ? '00' : parts.hour);
+    return {
+      day: `${parts.year}-${parts.month}-${parts.day}`,
+      minutes: hour * 60 + Number(parts.minute),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Wall-clock times the draft states: "09:30", "9:30 AM", "3pm", "14:00". */
+const DRAFT_CLOCK_RE = /\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s?m\.?\b|\b(\d{1,2}):(\d{2})\b/gi;
+
+/**
+ * Availability phrasing states a boundary the owner is free either side of
+ * ("clear from 14:00", "nothing after 5pm"). Those times are derived from the
+ * agenda rather than copied off an event, so they are exempt from the boundary
+ * check — only a time presented as an event's own is held to it.
+ */
+const AVAILABILITY_CONTEXT =
+  /\b(?:after|around|before|by|clear|free|from|open|past|rest of|since|till|until|up to)\b[^.;:\n]{0,24}$/i;
+
+/** Runs of two or more capitalised words — what an invented venue or title looks like. */
+const PROPER_RUN_RE =
+  /\b([A-Z][\w'’-]*(?:[ \t]+(?:of|the|at|in|on|and|de|van|von)[ \t]+)?(?:[ \t]+[A-Z][\w'’-]*)+)\b/g;
+
+const GROUNDING_STOPWORDS = new Set([
+  ...groundingWords(
+    'monday tuesday wednesday thursday friday saturday sunday jan feb mar apr may jun jul aug sep oct nov dec',
+  ),
+  ...groundingWords(
+    'january february march april june july august september october november december',
+  ),
+  ...groundingWords('am pm all day today tomorrow tonight this next last week weekend morning'),
+  ...groundingWords('afternoon evening night the and or you your i a an at on in to of for with'),
+  ...groundingWords('open in google calendar event link video meeting conference no nothing none'),
+]);
+
+const FALSE_EMPTY_RE =
+  /\b(?:nothing(?:\s+(?:on|at all|scheduled|happening|else|planned))?|no events?|no meetings?|calendar is (?:clear|empty)|(?:clear|free|empty) (?:all day|today|the whole day))\b/i;
+
+/**
+ * Claims about time the owner does NOT have booked. These cannot be read off
+ * an event the way a start time can — they are an assertion about everything
+ * that is absent, which only a complete view of the window can support.
+ */
+const FREE_CLAIM_RE =
+  /\b(?:free|clear|wide open|nothing (?:on|until|till|after|before)|no conflicts?|available)\b/i;
+
+const CARDINALS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+};
+
+/**
+ * Past this many events an agenda stops being prose worth writing and the
+ * ledger's flat list is genuinely the better answer, so coverage is not
+ * enforced above it — the draft falls back instead.
+ */
+const MAX_AGENDA_EVENTS = 12;
+
+/** Every wall-clock time stated in a piece of text, as minutes past midnight. */
+function statedClocks(value: string): number[] {
+  const found: number[] = [];
+  for (const match of value.matchAll(DRAFT_CLOCK_RE)) {
+    const meridiem = match[3]?.toLowerCase();
+    const hour = Number(match[1] ?? match[4]);
+    const minute = Number(match[2] ?? match[5] ?? '0');
+    if (!Number.isFinite(hour) || hour > 23 || minute > 59) continue;
+    found.push(
+      meridiem ? ((hour % 12) + (meridiem === 'p' ? 12 : 0)) * 60 + minute : hour * 60 + minute,
+    );
+  }
+  return found;
+}
+
+export interface ReadGrounding {
+  grounded: boolean;
+  reasons: string[];
+}
+
+/**
+ * Is this event's title actually present in the draft? Deliberately generous
+ * about form, because shortening a title is good writing and only dropping one
+ * is the failure being caught. “Stagecoach Greens with Eva & Jordan's Family”
+ * is answered as “Stagecoach Greens”, so a title counts as present when the
+ * draft carries its distinctive opening, not only when it carries most of it.
+ */
+function draftMentions(summary: string, draftWords: string[], draftText: string): boolean {
+  const normalized = groundingWords(summary);
+  if (normalized.length === 0) return true;
+  if (draftText.includes(normalized.join(' '))) return true;
+  const significant = normalized.filter((word) => word.length >= 3);
+  if (significant.length === 0) return normalized.some((word) => draftWords.includes(word));
+  const lead = significant.slice(0, 2);
+  if (lead.length === 2 && lead.join('').length >= 8 && draftText.includes(lead.join(' '))) {
+    return true;
+  }
+  const present = significant.filter((word) => draftWords.includes(word));
+  return (
+    present.length / significant.length >= 0.6 &&
+    (significant.every((word) => word.length < 5) || present.some((word) => word.length >= 5))
+  );
+}
+
+/**
+ * Check a model-written lookup answer against the tool ledger it must come
+ * from. This is the counterpart to letting the model write calendar and inbox
+ * answers at all: the prose is published only if every event-shaped fact in it
+ * traces back to a literal field a successful read returned.
+ *
+ * Deliberately asymmetric about the two ways an agenda can lie. Inventing an
+ * event is caught, and so is dropping one — a missed meeting harms the owner
+ * at least as much as a phantom one — but a mail rundown may select, because
+ * triaging twenty hits down to the three that matter is the entire job. What
+ * this cannot parse it leaves alone: a check that fell back on every good
+ * answer would just be the ledger under another name.
+ *
+ * `licensed` carries the rest of the turn's own words (the owner's question,
+ * earlier tool output, the ambient weather/location block) so context the
+ * owner supplied is never mistaken for something the model made up.
+ */
+export function groundReadDraft(
+  text: string,
+  request: PersonalReadRequest,
+  evidence: ActionEvidence[],
+  licensed = '',
+): ReadGrounding {
+  const draft = text.trim();
+  if (!draft) return { grounded: false, reasons: ['empty draft'] };
+  // "Are you sure?" is a challenge to the prose itself. The literal ledger is
+  // the only answer that settles it, so prose never wins this one.
+  if (request.verification) return { grounded: false, reasons: ['verification request'] };
+  // A free/busy answer is a claim about every hour in the window at once, and
+  // getting it wrong double-books the owner. The ledger's explicit busy blocks
+  // and open intervals are the right shape for that question, so it keeps it.
+  if (request.firstToolName === 'calendar.availability') {
+    return { grounded: false, reasons: ['availability lookup'] };
+  }
+
+  const current = currentSuccessfulEvidence(evidence);
+  const calendarRows = matchingCalendarRows(request, current);
+  const searches = matchingGmailSearchRows(request, current);
+  const events = uniqueRecords(
+    calendarRows.flatMap((row) => resultItems(row, 'events')),
+    (event) =>
+      [
+        stringField(event, 'calendarId'),
+        stringField(event, 'eventId'),
+        stringField(event, 'start'),
+        stringField(event, 'summary'),
+      ].join('|'),
+  );
+  const messages = [
+    ...searches.flatMap((row) => resultItems(row, 'results')),
+    ...matchingGmailThreadRows(searches, current).flatMap((row) => resultItems(row, 'messages')),
+  ];
+
+  const reasons: string[] = [];
+
+  // Partial coverage is the ledger's strongest case: it names the gap in a way
+  // prose reliably smooths over. Hand those turns straight back to it.
+  const incomplete = [...calendarRows, ...searches].some((row) => {
+    const result = record(row.result);
+    return (
+      result?.complete === false ||
+      (Array.isArray(result?.unavailable) && result.unavailable.length > 0)
+    );
+  });
+  const failedRead = evidence.some(
+    (row) =>
+      row.fromCurrentTask !== false &&
+      /^(?:calendar|gmail)\./.test(row.toolName) &&
+      !successful(row),
+  );
+  if (incomplete || failedRead) reasons.push('a source was incomplete or failed');
+
+  const vocabulary = new Set<string>(GROUNDING_STOPWORDS);
+  const boundaries = new Set<number>();
+  for (const event of events) {
+    for (const key of ['summary', 'location', 'organizer', 'calendar', 'description']) {
+      for (const word of groundingWords(stringField(event, key))) vocabulary.add(word);
+    }
+    const attendees = event.attendees;
+    if (Array.isArray(attendees)) {
+      for (const attendee of attendees) {
+        if (typeof attendee === 'string') {
+          for (const word of groundingWords(attendee)) vocabulary.add(word);
+        }
+      }
+    }
+    for (const key of ['start', 'end']) {
+      const clock = zonedClock(stringField(event, key), request.timeZone);
+      if (clock && clock.minutes >= 0) boundaries.add(clock.minutes);
+    }
+  }
+  for (const message of messages) {
+    for (const key of ['subject', 'from', 'snippet', 'to']) {
+      for (const word of groundingWords(stringField(message, key))) vocabulary.add(word);
+    }
+    for (const word of groundingWords(rawStringField(message, 'text'))) vocabulary.add(word);
+    // A named appointment is often confirmed only in the mail body, so the
+    // times written there are as literal a source as an event's own start.
+    for (const clock of statedClocks(
+      `${stringField(message, 'subject')} ${stringField(message, 'snippet')} ${rawStringField(message, 'text')}`,
+    )) {
+      boundaries.add(clock);
+    }
+  }
+  for (const term of request.queryTerms) {
+    for (const word of groundingWords(term)) vocabulary.add(word);
+  }
+  for (const word of groundingWords(licensed)) vocabulary.add(word);
+
+  // Strip links first: a fabricated URL is enforceUrlProvenance's job, and a
+  // link label would otherwise read as an invented proper noun.
+  const prose = draft
+    .replace(MARKDOWN_LINK_RE, ' ')
+    .replace(BARE_URL_RE, ' ')
+    .replace(/[*_`#]/g, ' ');
+  const draftWords = groundingWords(prose);
+  const draftText = draftWords.join(' ');
+
+  // Every event the calendar returned has to survive into the answer. Matching
+  // is deliberately loose — a shortened title is good writing, not a drop.
+  if (events.length > MAX_AGENDA_EVENTS) {
+    reasons.push(`${events.length} events is past the agenda shape`);
+  } else {
+    for (const event of events) {
+      const summary = stringField(event, 'summary');
+      if (!draftMentions(summary, draftWords, draftText)) {
+        reasons.push(
+          `“${summary || '(untitled event)'}” was returned but is missing from the answer`,
+        );
+      }
+    }
+  }
+
+  for (const match of prose.matchAll(PROPER_RUN_RE)) {
+    const phrase = match[1] ?? '';
+    const words = groundingWords(phrase).filter((word) => !GROUNDING_STOPWORDS.has(word));
+    if (words.length === 0) continue;
+    if (!words.every((word) => vocabulary.has(word))) {
+      reasons.push(`“${phrase}” is not in any source result`);
+    }
+  }
+
+  if (boundaries.size > 0) {
+    for (const match of prose.matchAll(DRAFT_CLOCK_RE)) {
+      if (AVAILABILITY_CONTEXT.test(prose.slice(0, match.index ?? 0))) continue;
+      const meridiem = match[3]?.toLowerCase();
+      const hour = Number(match[1] ?? match[4]);
+      const minute = Number(match[2] ?? match[5] ?? '0');
+      if (!Number.isFinite(hour) || hour > 23 || minute > 59) continue;
+      const minutes = meridiem
+        ? ((hour % 12) + (meridiem === 'p' ? 12 : 0)) * 60 + minute
+        : hour * 60 + minute;
+      if (!boundaries.has(minutes)) {
+        reasons.push(`${match[0].trim()} is not the start or end of any event that was read`);
+      }
+    }
+  }
+
+  if (events.length > 0 && FALSE_EMPTY_RE.test(prose)) {
+    reasons.push('reports an empty day over a non-empty ledger');
+  }
+
+  // Saying the owner is free somewhere needs a complete view of the window to
+  // rest on. A search that returned the events it was asked for says nothing
+  // about the hours around them.
+  if (FREE_CLAIM_RE.test(prose) && !(request.timeWindow && !incomplete)) {
+    reasons.push('asserts free time without a complete window to read it from');
+  }
+
+  // A row-shaped answer that has more rows than the ledger has items is
+  // inventing one, whatever the invented row happens to be called. This is the
+  // catch for a fabrication too plainly worded to read as a proper noun.
+  const rows = (prose.match(/^[ \t]*(?:[-*+]|\d+\.)[ \t]+\S/gm) ?? []).length;
+  if (rows > events.length + messages.length) {
+    reasons.push(`lists ${rows} items from ${events.length + messages.length} in the ledger`);
+  }
+
+  const opening = prose.split('\n', 1)[0] ?? '';
+  const cardinal = /^\W*(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b/i.exec(opening);
+  const stated = cardinal
+    ? (CARDINALS[cardinal[1]?.toLowerCase() ?? ''] ?? Number(cardinal[1]))
+    : undefined;
+  const available = request.kind === 'email' ? messages.length : events.length + messages.length;
+  if (stated !== undefined && Number.isFinite(stated) && stated > available) {
+    reasons.push(`claims ${stated} items from ${available} in the ledger`);
+  }
+
+  return { grounded: reasons.length === 0, reasons };
+}
+
+/**
  * Calendar/email answers are rendered from the tool ledger instead of model
  * prose. This is intentionally less flexible: a deterministic list of literal
  * fields is preferable to a fluent answer that can add one plausible event.
  */
 function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvidence[]): string {
   const current = currentSuccessfulEvidence(evidence);
+  const where =
+    request.kind === 'email'
+      ? 'the mail'
+      : request.kind === 'calendar'
+        ? 'the calendar'
+        : 'the calendar and mail';
+  const forWindow = request.timeWindow ? ` for ${request.timeWindow.label}` : '';
   const lines = [
     request.verification
-      ? 'I rechecked the earlier claim. These source results are the only facts I can verify:'
-      : 'Here’s what I found in the connected sources:',
+      ? 'I rechecked it — this is everything the sources actually return:'
+      : `Here's what ${where} has${forWindow}:`,
   ];
 
   if (request.kind !== 'email') {
@@ -1135,20 +1544,22 @@ function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvid
           }
         }
       }
-      if (request.timeWindow) {
-        lines.push(
-          `- Calendar range searched: ${request.timeWindow.label} (${request.timeWindow.timeMin} to ${request.timeWindow.timeMax})`,
-        );
-      } else {
-        for (const range of ranges) lines.push(`- Calendar range searched: ${range}`);
+      // The window is already named in the lead-in; echoing its ISO bounds told
+      // the owner nothing they asked for. Without a resolved window the raw
+      // ranges are all there is to show, so those still print.
+      if (!request.timeWindow) {
+        for (const range of ranges) lines.push(`- Searched ${range}`);
       }
       if (events.length === 0) {
         lines.push(
           calendarRows.length > 0
-            ? `- Calendar search returned no matching events${calendars.size > 0 ? ` across ${[...calendars].join(', ')}` : ''}.`
+            ? `Nothing on the calendar — no matching events${calendars.size > 0 ? ` across ${[...calendars].join(', ')}` : ''}.`
             : '- Calendar: no successful event read.',
         );
       } else {
+        const multiDay = spansDays(request.timeWindow);
+        const manyCalendars =
+          new Set(events.map((event) => stringField(event, 'calendar')).filter(Boolean)).size > 1;
         for (const event of events.slice(0, 20)) {
           const summary = stringField(event, 'summary') || '(untitled event)';
           const rawStart = stringField(event, 'start');
@@ -1166,31 +1577,46 @@ function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvid
           }
           const location = stringField(event, 'location');
           const calendar = stringField(event, 'calendar');
-          const organizer = stringField(event, 'organizer');
           const attendees = event.attendees;
           const attendeeText = Array.isArray(attendees)
             ? attendees.filter((value): value is string => typeof value === 'string').join(', ')
             : '';
-          const eventLinks = Array.isArray(event.links)
+          // One link, and the one the owner would actually press: a joining
+          // link beats the "open this in Google Calendar" link every time.
+          const linkList = Array.isArray(event.links)
             ? event.links
                 .map(record)
                 .filter((link): link is Record<string, unknown> => Boolean(link))
-                .map((link) => {
-                  const url = stringField(link, 'url');
-                  const label = stringField(link, 'label') || 'Event link';
-                  return url ? `[${label}](${url})` : '';
-                })
-                .filter(Boolean)
-                .join(', ')
+            : [];
+          const bestLink =
+            linkList.find((link) => stringField(link, 'type') === 'video') ??
+            linkList.find((link) => stringField(link, 'type') !== 'calendar') ??
+            linkList[0];
+          const bestUrl = bestLink ? stringField(bestLink, 'url') : '';
+          const eventLinks = bestUrl
+            ? `[${stringField(bestLink ?? {}, 'label') || 'Event link'}](${bestUrl})`
             : '';
+          // Time first, in the shape the agenda answer uses, so the fallback
+          // still reads like an answer rather than a dump of record fields.
+          const clockStart = clockOnly(rawStart, request.timeZone);
+          const clockEnd = clockOnly(rawEnd, request.timeZone);
+          const datePrefix = multiDay ? shortDate(rawStart, request.timeZone) : '';
+          const when = allDay
+            ? [datePrefix, 'All day'].filter(Boolean).join(' · ')
+            : [datePrefix, clockStart ? `${clockStart}${clockEnd ? `–${clockEnd}` : ''}` : '']
+                .filter(Boolean)
+                .join(' · ');
+          // A window ending on a different day than it started is the one case
+          // the plain clock cannot express on its own.
+          const spanNote = allDay && end && end !== start ? ` (through ${end})` : '';
           lines.push(
-            `- Calendar: ${summary}${start ? ` — ${start}${end ? ` to ${end}` : ''}` : ''}${allDay ? ' — All day' : ''}${location ? ` — ${location}` : ''}${organizer ? ` — organizer: ${organizer}` : ''}${attendeeText ? ` — attendees: ${attendeeText}` : ''}${eventLinks ? ` — ${eventLinks}` : ''}${calendar ? ` (${calendar})` : ''}`,
+            `- **${when || start || '(no time returned)'}** — ${summary}${spanNote}${location ? ` — ${location}` : ''}${attendeeText ? ` — with ${attendeeText}` : ''}${eventLinks ? ` — ${eventLinks}` : ''}${calendar && manyCalendars ? ` (${calendar})` : ''}`,
           );
         }
       }
       if (!complete || unavailable.length > 0) {
         lines.push(
-          `- Calendar coverage was incomplete${unavailable.length > 0 ? `; unavailable: ${[...new Set(unavailable)].join(', ')}` : ''}.`,
+          `Heads up: calendar coverage was incomplete${unavailable.length > 0 ? `; unavailable: ${[...new Set(unavailable)].join(', ')}` : ''}.`,
         );
       }
     }
@@ -1227,41 +1653,46 @@ function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvid
         .map((row) => stringField(record(row.result) ?? {}, 'mailboxSearched'))
         .filter(Boolean),
     );
-    if (queries.size > 0) {
-      lines.push(
-        `- Gmail ${mailboxes.size > 0 ? `(${[...mailboxes].join(', ')}) ` : ''}searched for: ${[...queries].map((query) => `“${query}”`).join(', ')}`,
-      );
-    }
     if (results.length === 0) {
       lines.push(
         searches.length > 0
-          ? '- Gmail: no matching messages were returned.'
+          ? 'Nothing in the mail — no matching messages were returned.'
           : '- Gmail: no successful search.',
       );
     } else {
+      // Sender first, in the rundown shape: who it is from is what decides
+      // whether the owner opens it.
       for (const message of results.slice(0, 10)) {
         const subject = stringField(message, 'subject') || '(no subject)';
         const from = stringField(message, 'from');
         const date = stringField(message, 'date');
         const snippet = stringField(message, 'snippet');
         lines.push(
-          `- Gmail: “${subject}”${from ? ` — from ${from}` : ''}${date ? ` — ${date}` : ''}${snippet ? ` — ${snippet}` : ''}`,
+          `- **${from || '(unknown sender)'}** — ${subject}${date ? ` — ${date}` : ''}${snippet ? ` · ${snippet}` : ''}`,
         );
       }
     }
     for (const message of threadMessages.slice(0, 10)) {
       const subject = stringField(message, 'subject') || '(no subject)';
       const from = stringField(message, 'from');
-      const date = stringField(message, 'date');
       const rawText = rawStringField(message, 'text');
       const excerpt = emailExcerpt(rawText, request.queryTerms);
       const links = literalLinks(rawText);
+      // A thread read hangs off the message it belongs to rather than
+      // repeating the whole header as a second top-level row.
       lines.push(
-        `- Gmail thread: “${subject}”${from ? ` — from ${from}` : ''}${date ? ` — ${date}` : ''}${excerpt ? ` — ${excerpt}` : ''}${links.length > 0 ? ` — links: ${links.join(', ')}` : ''}`,
+        `  ↳ ${subject}${from ? ` (${from})` : ''}${excerpt ? `: ${excerpt}` : ''}${links.length > 0 ? ` — ${links.join(', ')}` : ''}`,
       );
     }
     if (searches.some((row) => record(row.result)?.complete === false)) {
-      lines.push('- Gmail returned more matches than this lookup inspected; coverage was partial.');
+      lines.push('Heads up: there were more matches than this lookup opened.');
+    }
+    // The query goes last: it is how the owner knows what to re-ask, not the
+    // headline of the answer.
+    if (queries.size > 0) {
+      lines.push(
+        `Searched ${mailboxes.size > 0 ? [...mailboxes].join(', ') : 'the mailbox'} for ${[...queries].map((query) => `“${query}”`).join(', ')}.`,
+      );
     }
   }
   return lines.join('\n');
@@ -1270,7 +1701,7 @@ function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvid
 function missingReadResponse(labels: string[], evidence: ActionEvidence[]): string {
   const failures = failureDetails(evidence);
   return [
-    `I couldn't verify this from the required sources, so I’m not going to guess. Missing: ${labels.join('; ')}.`,
+    `That's everything I could actually see. What I couldn't get to: ${labels.join('; ')}. I'd rather tell you that than fill it in from memory.`,
     failures.length > 0 ? `What stopped the lookup: ${failures.join('; ')}.` : '',
   ]
     .filter(Boolean)
@@ -1300,11 +1731,41 @@ export function enforcePersonalReadResponse(
   };
 }
 
+/**
+ * A lookup turn resolves in one of three ways, and only the first is a
+ * failure: a coverage gap is answered from the ledger and blocked, a draft
+ * that cannot be traced to the ledger is quietly answered from it instead,
+ * and a draft that checks out is published — then still held to every other
+ * rule below, because a truthful agenda can also claim it emailed someone.
+ */
 function enforcePersonalReadGrounding(
+  text: string,
   evidence: ActionEvidence[],
   opts?: ResponseContractOptions,
 ): ResponseContractResult | undefined {
-  return opts?.readRequest ? enforcePersonalReadResponse(opts.readRequest, evidence) : undefined;
+  const request = opts?.readRequest;
+  if (!request) return undefined;
+  const gaps = requiredReadGaps(request, evidence);
+  if (gaps.labels.length > 0) {
+    const verified = currentSuccessfulEvidence(evidence).length
+      ? `${verifiedReadResponse(request, evidence)}\n\n`
+      : '';
+    return {
+      text: `${verified}${missingReadResponse(gaps.labels, evidence)}`,
+      blocked: true,
+      unsupported: gaps.unsupported,
+    };
+  }
+  const grounding = groundReadDraft(text, request, evidence, opts?.groundingCorpus ?? '');
+  if (!grounding.grounded) {
+    return {
+      text: verifiedReadResponse(request, evidence),
+      blocked: false,
+      unsupported: [],
+      groundingFallback: grounding.reasons,
+    };
+  }
+  return undefined;
 }
 
 /** Replace unsupported action claims with a deterministic, evidence-based reply. */
@@ -1313,7 +1774,7 @@ export function enforceResponseContract(
   evidence: ActionEvidence[],
   opts?: ResponseContractOptions,
 ): ResponseContractResult {
-  const readGrounding = enforcePersonalReadGrounding(evidence, opts);
+  const readGrounding = enforcePersonalReadGrounding(text, evidence, opts);
   if (readGrounding) return readGrounding;
   const claimed = claimedKinds(text);
   const unsupported = claimed.filter(
@@ -1342,7 +1803,7 @@ export function enforceResponseContract(
   }
   if (unsupported.includes('approval')) {
     return {
-      text: 'I did not create a real approval request, so nothing is waiting on the Approvals page. I stopped instead of showing an unverified approval code.',
+      text: 'No approval request actually exists — I never created one, so nothing is waiting on the Approvals page. I stopped rather than hand you a code that goes nowhere. Tell me to go ahead and I will raise the real one.',
       blocked: true,
       unsupported,
     };

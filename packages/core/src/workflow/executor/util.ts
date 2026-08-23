@@ -11,6 +11,14 @@ import type { ModelMessage } from 'ai';
 const RESULT_CHAR_LIMIT = 8_000;
 const RESULT_CHAR_LIMITS: Readonly<Record<string, number>> = {
   'web.fetch': 24_000,
+  // A lookup answer is now written by the model and checked against the full
+  // result row from the database. Clipping the copy the model reasons over to
+  // 8 KB would hide events it is then required to have mentioned — so a busy
+  // day across several calendars, the exact case where the agenda earns its
+  // keep, would be the one that always fell back to the plain list.
+  'calendar.list_events': 24_000,
+  'calendar.search_events': 24_000,
+  'gmail.search': 24_000,
   'gmail.read_thread': 24_000,
   'docs.get': 24_000,
   'drive.read': 24_000,

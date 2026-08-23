@@ -106,6 +106,15 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(25);
   });
 
+  it('states that a lookup answer is checked against the tool results (v27)', () => {
+    const prompt = buildSystemPrompt(agent, {});
+    expect(prompt).toContain('checked against them before it goes out');
+    expect(prompt).toMatch(/never moved/i);
+    expect(prompt).toMatch(/Never narrate the lookup itself/i);
+    expect(prompt).toMatch(/never print raw record fields/i);
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(27);
+  });
+
   it('gates the companion persona and cue vocabulary to the dashboard channel (v22)', () => {
     const dashboard = buildSystemPrompt(agent, { channel: 'dashboard-chat' });
     expect(dashboard).toContain('Dashboard companion');
