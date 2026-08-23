@@ -100,9 +100,7 @@ final class AppModel: ObservableObject {
     var latestFace: CompanionFace {
         messages.reversed().compactMap(\.face).first ?? .neutral
     }
-    var latestMood: CompanionMood {
-        messages.reversed().compactMap(\.mood).first ?? .default
-    }
+    var latestMood: CompanionMood { CompanionMood.latest(in: messages) }
     var latestQuickReplies: [String] {
         messages.reversed().first(where: { $0.role == .assistant })?.quickReplies ?? []
     }

@@ -25,6 +25,7 @@ export type FaceState = (typeof FACE_STATES)[number];
 
 export const THEME_NAMES = ['default', 'warm_amber', 'soft_rose', 'cool_sky'] as const;
 export type ThemeName = (typeof THEME_NAMES)[number];
+export const THEME_LOOKBACK = 8;
 
 export const MAX_CHIPS = 4;
 export const MAX_CHIP_LABEL = 60;
@@ -97,17 +98,11 @@ export function latestFace(log: UIMessage[]): FaceState {
 }
 
 /**
- * The chat surface's color mood, derived from the newest theme cue still in
- * the loaded log. Deriving (rather than storing) keeps the tint consistent
- * with what is on screen after a reload, and a cue that scrolls out of the
- * loaded window simply expires.
+ * The chat surface's color mood — pinned to 'default'. The owner asked to
+ * keep the mood color unchanged permanently, so this ignores any [theme:]
+ * cue in the log (the dashboard persona no longer emits them, but older
+ * messages can still carry one) rather than deriving a tint from it.
  */
-export function latestTheme(log: UIMessage[]): ThemeName {
-  for (let index = log.length - 1; index >= 0; index -= 1) {
-    const message = log[index];
-    if (!message || message.role !== 'assistant') continue;
-    const name = themeCueOf(message);
-    if (name) return name;
-  }
+export function latestTheme(_log: UIMessage[]): ThemeName {
   return 'default';
 }

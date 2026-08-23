@@ -115,7 +115,10 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * v25: a concrete agenda exemplar (time-first rows, takeaway lead-in, no raw
  * field recital), and open day questions ("what is happening today") read as
  * calendar lookups resolved against the owner's clock and fresh location.
- * v26: lookup answers are written by the model and checked against the tool
+ * v26: the owner asked to keep the dashboard's mood color on default
+ * permanently — the [theme:] cue is dropped from the vocabulary and the
+ * persona now explicitly tells the model never to emit one.
+ * v27: lookup answers are written by the model and checked against the tool
  * ledger rather than replaced by it (see groundReadDraft in
  * workflow/response-contract.ts), so the voice block now states the check,
  * requires every returned event to survive into the answer, allows times to be
@@ -124,7 +127,7 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 26;
+export const PROMPT_VERSION = 27;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is
@@ -140,10 +143,10 @@ export function buildSystemPrompt(
     tainted?: boolean;
     /**
      * The owner-facing dashboard chat gets the companion persona and its
-     * [face:]/[theme:]/[action_chips:] cue vocabulary (v22). Constant for a
-     * task's whole run, so the byte-stable cacheable prefix holds; absent
-     * (email, SMS, goal sessions) the prompt is unchanged and the cue
-     * vocabulary never enters the channel.
+     * [face:]/[action_chips:] cue vocabulary (v22; the [theme:] cue was
+     * dropped in v26). Constant for a task's whole run, so the byte-stable
+     * cacheable prefix holds; absent (email, SMS, goal sessions) the prompt
+     * is unchanged and the cue vocabulary never enters the channel.
      */
     channel?: 'dashboard-chat';
     /**

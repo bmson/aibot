@@ -106,13 +106,13 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(25);
   });
 
-  it('states that a lookup answer is checked against the tool results (v26)', () => {
+  it('states that a lookup answer is checked against the tool results (v27)', () => {
     const prompt = buildSystemPrompt(agent, {});
     expect(prompt).toContain('checked against them before it goes out');
     expect(prompt).toMatch(/never moved/i);
     expect(prompt).toMatch(/Never narrate the lookup itself/i);
     expect(prompt).toMatch(/never print raw record fields/i);
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(26);
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(27);
   });
 
   it('gates the companion persona and cue vocabulary to the dashboard channel (v22)', () => {
@@ -121,10 +121,17 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(dashboard).toContain('Pixar robot');
     expect(dashboard).toContain('[face: <state>]');
     expect(dashboard).toContain('warm_smile');
-    expect(dashboard).toContain('[theme: <name>]');
     expect(dashboard).toContain('[action_chips: "Label" | "Label"]');
     expect(dashboard).toMatch(/Email and SMS keep the professional voice/);
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(22);
+  });
+
+  it('tells the model never to emit a mood-color theme cue (v26)', () => {
+    const dashboard = buildSystemPrompt(agent, { channel: 'dashboard-chat' });
+    expect(dashboard).not.toContain('[theme: <name>]');
+    expect(dashboard).not.toContain("shifts the chat's color mood");
+    expect(dashboard).toMatch(/never emit a \[theme: \.\.\.\] tag/i);
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(26);
   });
 
   it('keeps every other channel free of the cue vocabulary', () => {
