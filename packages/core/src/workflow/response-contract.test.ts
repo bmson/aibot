@@ -808,8 +808,60 @@ describe('response execution contract', () => {
       ];
       const result = enforceResponseContract(text, evidence, { readRequest });
       expect(result.blocked).toBe(false);
+      // The time it states is written verbatim in the thread that was read, so
+      // the answer goes out in the assistant's own words rather than as a
+      // rendering of the ledger it came from.
+      expect(result.text).toBe(text);
+      expect(result.groundingFallback).toBeUndefined();
+    });
+
+    it('falls back to the ledger when the draft moves a time the thread gave it', () => {
+      const readRequest = {
+        kind: 'calendar_email' as const,
+        queryTerms: ['clay', 'interview'],
+        firstToolName: 'calendar.search_events' as const,
+        requiresThreadRead: true,
+      };
+      const evidence = [
+        {
+          toolName: 'calendar.search_events',
+          status: 'succeeded',
+          args: { query: 'clay interview' },
+          result: { complete: true, calendarsSearched: ['Assistant'], events: [] },
+        },
+        {
+          toolName: 'gmail.search',
+          status: 'succeeded',
+          args: { query: 'clay interview' },
+          result: {
+            complete: true,
+            mailboxSearched: 'assistant@example.com',
+            results: [{ threadId: 'thread-1', subject: 'Clay interview details' }],
+          },
+        },
+        {
+          toolName: 'gmail.read_thread',
+          status: 'succeeded',
+          args: { threadId: 'thread-1' },
+          result: {
+            messages: [
+              {
+                subject: 'Clay interview details',
+                text: 'Your Clay interview is Monday, August 17, 2026 at 9:30 AM.',
+              },
+            ],
+          },
+        },
+      ];
+      const result = enforceResponseContract(
+        'Your Clay interview is Monday, August 17, 2026 at 10:30 AM.',
+        evidence,
+        { readRequest },
+      );
+      expect(result.blocked).toBe(false);
       expect(result.text).toContain('Clay interview details');
-      expect(result.text).toContain('Monday, August 17, 2026 at 9:30 AM');
+      expect(result.text).not.toContain('10:30 AM');
+      expect(result.groundingFallback?.join(' ')).toMatch(/10:30/);
     });
 
     it('does not let an unrelated Gmail thread satisfy the lookup', () => {
@@ -971,8 +1023,10 @@ describe('response execution contract', () => {
     });
 
     it('renders all-day end dates using Google Calendar exclusive-end semantics', () => {
+      // A fabricated second event forces the ledger rendering, which is where
+      // the exclusive-end date math lives.
       const result = enforceResponseContract(
-        'School holiday is August 17.',
+        'School holiday is August 17, and Parent Evening runs Tuesday.',
         [
           {
             toolName: 'calendar.list_events',
@@ -1013,6 +1067,7 @@ describe('response execution contract', () => {
       );
       expect(result.text).toContain('School holiday — Monday, August 17, 2026 — All day');
       expect(result.text).not.toContain('Tuesday, August 18');
+      expect(result.text).not.toContain('Parent Evening');
     });
 
     it('treats an empty all-source search as a factual result', () => {
@@ -1047,6 +1102,40 @@ describe('response execution contract', () => {
       ];
       const result = enforceResponseContract(text, evidence, { readRequest });
       expect(result.blocked).toBe(false);
+      expect(result.text).toBe(text);
+    });
+
+    it('renders the empty result from the ledger when the draft invents one', () => {
+      const readRequest = {
+        kind: 'calendar_email' as const,
+        queryTerms: ['clay', 'interview'],
+        firstToolName: 'calendar.search_events' as const,
+        requiresThreadRead: true,
+      };
+      const result = enforceResponseContract(
+        'Your Clay interview is with Marcus Webb on Thursday.',
+        [
+          {
+            toolName: 'calendar.search_events',
+            status: 'succeeded',
+            args: { query: 'clay interview' },
+            result: { complete: true, calendarsSearched: ['Assistant'], events: [] },
+          },
+          {
+            toolName: 'gmail.search',
+            status: 'succeeded',
+            args: { query: 'clay interview' },
+            result: {
+              complete: true,
+              mailboxSearched: 'assistant@example.com',
+              results: [],
+            },
+          },
+        ],
+        { readRequest },
+      );
+      expect(result.blocked).toBe(false);
+      expect(result.text).not.toContain('Marcus Webb');
       expect(result.text).toContain('no matching events');
       expect(result.text).toContain('no matching messages');
     });
@@ -1236,6 +1325,63 @@ describe('enforceUrlProvenance', () => {
       urlCorpus: 'nothing matching',
     });
     expect(result.blocked).toBe(false);
+    expect(result.text).not.toContain('fabricated.example');
+  });
+});
+
+describe('a grounded lookup answer still meets every other rule', () => {
+  const readRequest = {
+    kind: 'calendar' as const,
+    queryTerms: [],
+    firstToolName: 'calendar.list_events' as const,
+    requiresThreadRead: false,
+    timeZone: 'America/Los_Angeles',
+    timeWindow: {
+      label: 'today',
+      timeMin: '2026-08-23T07:00:00.000Z',
+      timeMax: '2026-08-24T07:00:00.000Z',
+    },
+  };
+  const evidence = [
+    {
+      toolName: 'calendar.list_events',
+      status: 'succeeded',
+      args: { timeMin: '2026-08-23T07:00:00.000Z', timeMax: '2026-08-24T07:00:00.000Z' },
+      result: {
+        complete: true,
+        calendarsSearched: ['Family'],
+        events: [
+          {
+            eventId: 'e1',
+            calendar: 'Family',
+            summary: 'Dentist',
+            location: 'Laugavegur 12',
+            start: '2026-08-23T13:00:00-07:00',
+            end: '2026-08-23T14:00:00-07:00',
+          },
+        ],
+      },
+    },
+  ];
+
+  it('blocks a send the agenda tacked on, however true the agenda is', () => {
+    const result = enforceResponseContract(
+      'One thing today:\n- **13:00–14:00** — Dentist — Laugavegur 12\n\nI emailed them to confirm.',
+      evidence,
+      { readRequest },
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.unsupported).toContain('outbound');
+  });
+
+  it('keeps the answer and strips a link it cannot trace', () => {
+    const result = enforceResponseContract(
+      'One thing today:\n- **13:00–14:00** — [Dentist](https://fabricated.example/x) — Laugavegur 12',
+      evidence,
+      { readRequest, urlCorpus: JSON.stringify(evidence) },
+    );
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('Dentist');
     expect(result.text).not.toContain('fabricated.example');
   });
 });

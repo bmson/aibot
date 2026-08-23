@@ -40,12 +40,26 @@ export interface ResponseContractResult {
   text: string;
   blocked: boolean;
   unsupported: ActionKind[];
+  /**
+   * Why a lookup answer was rendered from the ledger instead of published as
+   * the model wrote it. Absent on a published draft and on every non-read
+   * turn. Not a block: the owner still gets a complete, verified answer, just
+   * in a plainer shape, so this is a signal to watch rather than a failure to
+   * surface.
+   */
+  groundingFallback?: string[];
 }
 
 interface ResponseContractOptions {
   urlCorpus?: string;
   /** Deterministically detected from the latest owner turn. */
   readRequest?: PersonalReadRequest | null;
+  /**
+   * Context the turn legitimately supplied that is not itself a tool result —
+   * chiefly the ambient weather/location block, which v25 invites the answer
+   * to close on. Without it a true local aside reads as an invention.
+   */
+  groundingCorpus?: string;
 }
 
 const OUTBOUND_OBJECTS = 'email|message|sms|text|call|outreach|reply|follow-?up';
@@ -1108,6 +1122,14 @@ const GROUNDING_STOPWORDS = new Set([
 const FALSE_EMPTY_RE =
   /\b(?:nothing(?:\s+(?:on|at all|scheduled|happening|else|planned))?|no events?|no meetings?|calendar is (?:clear|empty)|(?:clear|free|empty) (?:all day|today|the whole day))\b/i;
 
+/**
+ * Claims about time the owner does NOT have booked. These cannot be read off
+ * an event the way a start time can — they are an assertion about everything
+ * that is absent, which only a complete view of the window can support.
+ */
+const FREE_CLAIM_RE =
+  /\b(?:free|clear|wide open|nothing (?:on|until|till|after|before)|no conflicts?|available)\b/i;
+
 const CARDINALS: Record<string, number> = {
   one: 1,
   two: 2,
@@ -1127,6 +1149,21 @@ const CARDINALS: Record<string, number> = {
  * enforced above it — the draft falls back instead.
  */
 const MAX_AGENDA_EVENTS = 12;
+
+/** Every wall-clock time stated in a piece of text, as minutes past midnight. */
+function statedClocks(value: string): number[] {
+  const found: number[] = [];
+  for (const match of value.matchAll(DRAFT_CLOCK_RE)) {
+    const meridiem = match[3]?.toLowerCase();
+    const hour = Number(match[1] ?? match[4]);
+    const minute = Number(match[2] ?? match[5] ?? '0');
+    if (!Number.isFinite(hour) || hour > 23 || minute > 59) continue;
+    found.push(
+      meridiem ? ((hour % 12) + (meridiem === 'p' ? 12 : 0)) * 60 + minute : hour * 60 + minute,
+    );
+  }
+  return found;
+}
 
 export interface ReadGrounding {
   grounded: boolean;
@@ -1185,6 +1222,12 @@ export function groundReadDraft(
   // "Are you sure?" is a challenge to the prose itself. The literal ledger is
   // the only answer that settles it, so prose never wins this one.
   if (request.verification) return { grounded: false, reasons: ['verification request'] };
+  // A free/busy answer is a claim about every hour in the window at once, and
+  // getting it wrong double-books the owner. The ledger's explicit busy blocks
+  // and open intervals are the right shape for that question, so it keeps it.
+  if (request.firstToolName === 'calendar.availability') {
+    return { grounded: false, reasons: ['availability lookup'] };
+  }
 
   const current = currentSuccessfulEvidence(evidence);
   const calendarRows = matchingCalendarRows(request, current);
@@ -1247,6 +1290,13 @@ export function groundReadDraft(
       for (const word of groundingWords(stringField(message, key))) vocabulary.add(word);
     }
     for (const word of groundingWords(rawStringField(message, 'text'))) vocabulary.add(word);
+    // A named appointment is often confirmed only in the mail body, so the
+    // times written there are as literal a source as an event's own start.
+    for (const clock of statedClocks(
+      `${stringField(message, 'subject')} ${stringField(message, 'snippet')} ${rawStringField(message, 'text')}`,
+    )) {
+      boundaries.add(clock);
+    }
   }
   for (const term of request.queryTerms) {
     for (const word of groundingWords(term)) vocabulary.add(word);
@@ -1304,6 +1354,21 @@ export function groundReadDraft(
 
   if (events.length > 0 && FALSE_EMPTY_RE.test(prose)) {
     reasons.push('reports an empty day over a non-empty ledger');
+  }
+
+  // Saying the owner is free somewhere needs a complete view of the window to
+  // rest on. A search that returned the events it was asked for says nothing
+  // about the hours around them.
+  if (FREE_CLAIM_RE.test(prose) && !(request.timeWindow && !incomplete)) {
+    reasons.push('asserts free time without a complete window to read it from');
+  }
+
+  // A row-shaped answer that has more rows than the ledger has items is
+  // inventing one, whatever the invented row happens to be called. This is the
+  // catch for a fabrication too plainly worded to read as a proper noun.
+  const rows = (prose.match(/^[ \t]*(?:[-*+]|\d+\.)[ \t]+\S/gm) ?? []).length;
+  if (rows > events.length + messages.length) {
+    reasons.push(`lists ${rows} items from ${events.length + messages.length} in the ledger`);
   }
 
   const opening = prose.split('\n', 1)[0] ?? '';
@@ -1594,11 +1659,41 @@ export function enforcePersonalReadResponse(
   };
 }
 
+/**
+ * A lookup turn resolves in one of three ways, and only the first is a
+ * failure: a coverage gap is answered from the ledger and blocked, a draft
+ * that cannot be traced to the ledger is quietly answered from it instead,
+ * and a draft that checks out is published — then still held to every other
+ * rule below, because a truthful agenda can also claim it emailed someone.
+ */
 function enforcePersonalReadGrounding(
+  text: string,
   evidence: ActionEvidence[],
   opts?: ResponseContractOptions,
 ): ResponseContractResult | undefined {
-  return opts?.readRequest ? enforcePersonalReadResponse(opts.readRequest, evidence) : undefined;
+  const request = opts?.readRequest;
+  if (!request) return undefined;
+  const gaps = requiredReadGaps(request, evidence);
+  if (gaps.labels.length > 0) {
+    const verified = currentSuccessfulEvidence(evidence).length
+      ? `${verifiedReadResponse(request, evidence)}\n\n`
+      : '';
+    return {
+      text: `${verified}${missingReadResponse(gaps.labels, evidence)}`,
+      blocked: true,
+      unsupported: gaps.unsupported,
+    };
+  }
+  const grounding = groundReadDraft(text, request, evidence, opts?.groundingCorpus ?? '');
+  if (!grounding.grounded) {
+    return {
+      text: verifiedReadResponse(request, evidence),
+      blocked: false,
+      unsupported: [],
+      groundingFallback: grounding.reasons,
+    };
+  }
+  return undefined;
 }
 
 /** Replace unsupported action claims with a deterministic, evidence-based reply. */
@@ -1607,7 +1702,7 @@ export function enforceResponseContract(
   evidence: ActionEvidence[],
   opts?: ResponseContractOptions,
 ): ResponseContractResult {
-  const readGrounding = enforcePersonalReadGrounding(evidence, opts);
+  const readGrounding = enforcePersonalReadGrounding(text, evidence, opts);
   if (readGrounding) return readGrounding;
   const claimed = claimedKinds(text);
   const unsupported = claimed.filter(
