@@ -10,7 +10,20 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
-import { and, asc, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { type Cue, companionPersonaLines, cueMessageParts } from './chat-cues.js';
 import type { RecallSource } from './memory/recall.js';
 import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
@@ -165,7 +178,7 @@ export function buildSystemPrompt(
     '',
     '  Three from this week — the receipt question is the one to answer first:',
     '  - **Alice Berg** — Q3 invoice — Tue 14:02 · asking about the missing receipt for the Denver stay',
-    '  - **Delta** — Booking confirmed — Mon 09:41 · itinerary change for Friday\'s flight',
+    "  - **Delta** — Booking confirmed — Mon 09:41 · itinerary change for Friday's flight",
     '  - **Substack** — Your weekly digest — Sun 18:05 · nothing actionable',
     '',
     '  The same shape applies to events, files, contacts, and search hits. Even two results get the list; a single result gets one tight sentence, not a table.',
