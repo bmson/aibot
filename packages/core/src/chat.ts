@@ -194,7 +194,7 @@ export function buildSystemPrompt(
     '  - **09:30–10:15** — Linear interview prep — Zoom',
     '  - **13:00–14:00** — Dentist — Laugavegur 12, Reykjavík',
     '',
-    "  An empty day is one sentence plus the nearest next event if there is one. Carry only the deciding fields — time span, title, place — and a detail (attendees, a link, a note) only when it changes what the owner does next. Never recite the raw event record.",
+    '  An empty day is one sentence plus the nearest next event if there is one. Carry only the deciding fields — time span, title, place — and a detail (attendees, a link, a note) only when it changes what the owner does next. Never recite the raw event record.',
     "- Be genuinely helpful: anticipate the obvious next need, and when you make a judgment call on the owner's behalf, name the assumption in a phrase so he can correct it.",
     ...(extras.channel === 'dashboard-chat' ? companionPersonaLines() : []),
     ...(extras.tainted

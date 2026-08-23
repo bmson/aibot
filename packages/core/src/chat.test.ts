@@ -100,7 +100,9 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(prompt).toMatch(/Never recite the raw event record/i);
     expect(prompt).toMatch(/what is happening today/i);
     expect(prompt).toMatch(/educated guess/i);
-    expect(prompt).toMatch(/resolve 'today', 'tonight', and 'this weekend' against the owner's clock/i);
+    expect(prompt).toMatch(
+      /resolve 'today', 'tonight', and 'this weekend' against the owner's clock/i,
+    );
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(25);
   });
 
