@@ -22,7 +22,11 @@ const components: Components = {
     </a>
   ),
   p: ({ node: _node, className, ...props }) => (
-    <p {...props} className={`my-2 first:mt-0 last:mb-0 ${className ?? ''}`} />
+    // Chat convention, not strict CommonMark: a single line break in a reply
+    // is a real break. react-markdown keeps soft breaks as "\n" in the DOM;
+    // pre-line renders them instead of collapsing structured answers — one
+    // found item per line — into a single block of text.
+    <p {...props} className={`my-2 whitespace-pre-line first:mt-0 last:mb-0 ${className ?? ''}`} />
   ),
   ul: ({ node: _node, className, ...props }) => (
     <ul
@@ -39,7 +43,7 @@ const components: Components = {
   li: ({ node: _node, className, ...props }) => (
     <li
       {...props}
-      className={`pl-0.5 [&.task-list-item]:list-none [&.task-list-item]:pl-0 [&>p]:my-0 ${className ?? ''}`}
+      className={`pl-0.5 whitespace-pre-line [&.task-list-item]:list-none [&.task-list-item]:pl-0 [&>p]:my-0 ${className ?? ''}`}
     />
   ),
   input: ({ node: _node, className, type, ...props }) => (

@@ -94,4 +94,29 @@ final class AssistantMarkdownTests: XCTestCase {
         }
         XCTAssertEqual(nodes.map(\.text), ["lone child"])
     }
+
+    func testParagraphKeepsSoftLineBreaks() {
+        // The chat convention: one found item per line must survive as lines,
+        // not fold into a run-on paragraph.
+        let source = """
+        Found 3 receipts:
+        Amazon — $45.99, yesterday
+        Delta — flight confirmation
+        """
+        let blocks = AssistantMarkdown.blocks(in: source)
+        guard case let .paragraph(text) = blocks.first, blocks.count == 1 else {
+            return XCTFail("expected a single paragraph, got \(blocks)")
+        }
+        XCTAssertEqual(
+            text,
+            "Found 3 receipts:\nAmazon — $45.99, yesterday\nDelta — flight confirmation"
+        )
+        // The bubble renders through AttributedString(markdown:), which folds
+        // soft breaks into spaces — the view's hard-break conversion is what
+        // must keep the newline real.
+        let rendered = try? AttributedString(markdown: AssistantMarkdown.preservingSoftBreaks(text))
+        XCTAssertNotNil(rendered)
+        let plain = rendered.map { String($0.characters) } ?? ""
+        XCTAssertTrue(plain.contains("receipts:\nAmazon"))
+    }
 }

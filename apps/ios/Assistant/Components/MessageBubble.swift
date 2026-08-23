@@ -228,6 +228,14 @@ enum AssistantMarkdown {
         case task(isComplete: Bool)
     }
 
+    /// AttributedString folds CommonMark soft breaks into spaces, but a chat
+    /// reply means a single line break literally — one found email per line
+    /// must not collapse into a block. Convert to GFM hard breaks, which do
+    /// survive the conversion as real newlines.
+    static func preservingSoftBreaks(_ source: String) -> String {
+        source.replacingOccurrences(of: "\n", with: "\\\n")
+    }
+
     struct ListNode: Hashable {
         let marker: ListMarker
         let text: String
@@ -337,7 +345,11 @@ enum AssistantMarkdown {
                 paragraphLines.append(line.trimmingCharacters(in: .whitespaces))
                 index += 1
             }
-            result.append(.paragraph(paragraphLines.joined(separator: " ")))
+            // Chat convention, not strict GFM: a single line break in a reply
+            // is a real break, kept as "\n" here and rendered as one via
+            // preservingSoftBreaks at the view. Folding to a space collapsed
+            // structured answers — one found email per line — into a block.
+            result.append(.paragraph(paragraphLines.joined(separator: "\n")))
         }
 
         return result
@@ -657,8 +669,9 @@ private struct AssistantMarkdownView: View {
         // Table cells use inline-only interpretation: a block-level construct
         // inside a cell (a heading marker, a hard break) would otherwise tear
         // the row layout apart.
+        let withBreaks = inline ? source : AssistantMarkdown.preservingSoftBreaks(source)
         let attributed = (try? AttributedString(
-            markdown: source,
+            markdown: withBreaks,
             options: .init(
                 interpretedSyntax: inline ? .inlineOnlyPreservingWhitespace : .full
             )
