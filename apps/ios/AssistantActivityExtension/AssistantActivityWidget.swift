@@ -73,7 +73,10 @@ struct AssistantActivityWidget: Widget {
     }
 
     private func lockScreenView(_ context: ActivityViewContext<AssistantActivityAttributes>) -> some View {
-        HStack(spacing: 14) {
+        // Two columns, no trailing timer: the lock screen already timestamps
+        // the activity, and the elapsed counter squeezed the text column into
+        // a narrow gutter.
+        HStack(spacing: 12) {
             Image(systemName: phaseSymbolName(for: context.state.thought.tone))
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(tint(for: context.state.thought.tone))
@@ -100,16 +103,7 @@ struct AssistantActivityWidget: Widget {
                     .foregroundStyle(tint(for: .waiting))
                 }
             }
-
-            Spacer(minLength: 8)
-
-            if context.state.thought.tone == .working || context.state.thought.tone == .thinking {
-                Text(context.attributes.startedAt, style: .timer)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.7))
-            } else {
-                phaseSymbol(context.state.thought.tone)
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(16)
         .animation(.smooth(duration: 0.38), value: context.state)
@@ -170,7 +164,8 @@ struct AssistantActivityWidget: Widget {
         case .thinking:
             "sparkles"
         case .working:
-            "ellipsis"
+            // An ellipsis read as three meaningless dots on the lock screen.
+            "bolt.fill"
         case .waiting:
             "hand.raised.fill"
         case .done:
