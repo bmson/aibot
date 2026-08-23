@@ -29,6 +29,7 @@
 		B00000000000000000000013 /* System/AssistantActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000014 /* System/AssistantActivityAttributes.swift */; };
 		B00000000000000000000014 /* System/LiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000015 /* System/LiveActivityManager.swift */; };
 		B00000000000000000000015 /* System/NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000016 /* System/NotificationManager.swift */; };
+		B00000000000000000000051 /* System/LocationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000051 /* System/LocationManager.swift */; };
 		B00000000000000000000016 /* AssistantActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000017 /* AssistantActivityWidget.swift */; };
 		B00000000000000000000017 /* System/AssistantActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000014 /* System/AssistantActivityAttributes.swift */; };
 		B00000000000000000000018 /* AssistantActivityExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = C00000000000000000000019 /* AssistantActivityExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -90,6 +91,7 @@
 		C00000000000000000000014 /* System/AssistantActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/AssistantActivityAttributes.swift; sourceTree = "<group>"; };
 		C00000000000000000000015 /* System/LiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/LiveActivityManager.swift; sourceTree = "<group>"; };
 		C00000000000000000000016 /* System/NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/NotificationManager.swift; sourceTree = "<group>"; };
+		C00000000000000000000051 /* System/LocationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/LocationManager.swift; sourceTree = "<group>"; };
 		C00000000000000000000017 /* AssistantActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantActivityWidget.swift; sourceTree = "<group>"; };
 		C00000000000000000000018 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		C00000000000000000000019 /* AssistantActivityExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AssistantActivityExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -157,6 +159,7 @@
 				C00000000000000000000014 /* System/AssistantActivityAttributes.swift */,
 				C00000000000000000000015 /* System/LiveActivityManager.swift */,
 				C00000000000000000000016 /* System/NotificationManager.swift */,
+				C00000000000000000000051 /* System/LocationManager.swift */,
 				C00000000000000000000007 /* Components/CompanionCapsule.swift */,
 				C00000000000000000000022 /* Components/ActivityCrown.swift */,
 				C00000000000000000000008 /* Components/StatusPill.swift */,
@@ -331,6 +334,7 @@
 				B00000000000000000000013 /* System/AssistantActivityAttributes.swift in Sources */,
 				B00000000000000000000014 /* System/LiveActivityManager.swift in Sources */,
 				B00000000000000000000015 /* System/NotificationManager.swift in Sources */,
+				B00000000000000000000051 /* System/LocationManager.swift in Sources */,
 				B00000000000000000000007 /* Components/CompanionCapsule.swift in Sources */,
 				B00000000000000000000019 /* Components/ActivityCrown.swift in Sources */,
 				B00000000000000000000008 /* Components/StatusPill.swift in Sources */,

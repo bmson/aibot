@@ -6,6 +6,8 @@ struct MoreView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject private var notifications = NotificationManager.shared
     @AppStorage(AssistantAppearance.defaultsKey) private var appearance = AssistantAppearance.dark
+    @AppStorage(AppModel.shareLocationKey) private var shareLocation = false
+    @ObservedObject private var locations = LocationManager.shared
 
     var body: some View {
         List {
@@ -44,6 +46,32 @@ struct MoreView: View {
                 } label: {
                     Label("Assistant server", systemImage: "network")
                 }
+            }
+
+            Section {
+                Toggle(isOn: $shareLocation) {
+                    Label("Share iPhone location", systemImage: "location")
+                }
+                // Turning the intent on is what triggers the permission prompt
+                // — never the app launch.
+                .onChange(of: shareLocation) { _, on in
+                    if on {
+                        locations.requestAccess()
+                        Task { await model.shareLocationIfEnabled(force: true) }
+                    }
+                }
+                if shareLocation && locations.accessDenied {
+                    Button {
+                        notifications.openSystemSettings()
+                    } label: {
+                        Label("Location access is off — open Settings", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
+                    }
+                }
+            } header: {
+                Text("Assistant context")
+            } footer: {
+                Text("Sent to your own server as a short-lived current-position ping (kept a few days, never stored as memory) with this iPhone’s time zone. It powers answers like “what can I eat around here?” — never shared with anyone else.")
             }
 
             // The lower-traffic work areas. The pull-up menu stays at eight

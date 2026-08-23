@@ -90,6 +90,16 @@ struct APIClient: Sendable {
         return try await perform(request, as: ApprovalResult.self)
     }
 
+    /// Fire-and-forget ambient ping; callers use `try?` — a failed post only
+    /// means the next foreground refresh carries the position.
+    func postLocationPing(_ ping: LocationPingBody) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/location"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(ping)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
     func sendMessage(
         conversationId: String,
         text: String,
@@ -176,6 +186,19 @@ struct APIClient: Sendable {
 }
 
 private struct ErrorBody: Decodable { let error: String }
+
+private struct OkPayload: Decodable { let ok: Bool }
+
+/// Matches the server's LocationPingSchema (packages/core/src/memory/location.ts).
+struct LocationPingBody: Encodable {
+    let lat: Double
+    let lng: Double
+    let label: String
+    let accuracyM: Int?
+    let capturedAt: String
+    let timeZone: String
+    let source: String
+}
 
 private struct ChatRequest: Encodable {
     let conversationId: String

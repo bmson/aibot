@@ -115,6 +115,7 @@ struct RootView: View {
                 Task {
                     await NotificationManager.shared.refreshAuthorizationStatus()
                     await model.refreshAll()
+                    await model.shareLocationIfEnabled()
                 }
             }
         }

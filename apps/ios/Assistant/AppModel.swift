@@ -50,6 +50,9 @@ final class AppModel: ObservableObject {
     private let defaults = UserDefaults.standard
     private let serverKey = "assistant.server-url"
     private let configuredKey = "assistant.connection-configured"
+    /// More → Assistant context owns this toggle; the model only reads it.
+    static let shareLocationKey = "assistant.share-location"
+    private var lastLocationPostAt: Date?
 
     init() {
         serverURL = defaults.string(forKey: serverKey) ?? "http://localhost:3000"
@@ -146,11 +149,41 @@ final class AppModel: ObservableObject {
             await reconcileBaselineActivity()
             await syncNotificationBadge()
             startIdlePolling()
+            await shareLocationIfEnabled(force: true)
         } catch {
             errorMessage = error.localizedDescription
             if bootstrap == nil { showingConnection = true }
         }
         isLoading = false
+    }
+
+    /// Sends the phone's current position (and clock zone) to the owner's own
+    /// server for the ambient prompt line. Entirely owner-gated in More →
+    /// Assistant context, off by default, and throttled so foregrounding the
+    /// app refreshes context without turning the radio into a tracker.
+    func shareLocationIfEnabled(force: Bool = false) async {
+        guard defaults.bool(forKey: Self.shareLocationKey), let client else { return }
+        if !force,
+           let last = lastLocationPostAt,
+           Date().timeIntervalSince(last) < 15 * 60 { return }
+        guard let place = await LocationManager.shared.captureCurrentPlace() else { return }
+        let ping = LocationPingBody(
+            lat: place.location.coordinate.latitude,
+            lng: place.location.coordinate.longitude,
+            label: place.label,
+            accuracyM: place.location.horizontalAccuracy >= 0
+                ? Int(place.location.horizontalAccuracy.rounded())
+                : nil,
+            capturedAt: ISO8601DateFormatter().string(from: place.location.timestamp),
+            timeZone: TimeZone.current.identifier,
+            source: "ios-app"
+        )
+        do {
+            try await client.postLocationPing(ping)
+            lastLocationPostAt = Date()
+        } catch {
+            // Fire-and-forget: the next foreground refresh carries it.
+        }
     }
 
     func saveConnection(serverURL: String, token: String) async -> Bool {
