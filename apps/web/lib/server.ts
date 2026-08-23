@@ -37,6 +37,7 @@ import {
   listGoalsDashboard,
   listImprovementProposals,
   purgeImportedSource,
+  recordOwnerLocationPing,
   restoreChatConversation,
   reviewImportedSource,
   setApprovalPolicyEnabled,
@@ -161,6 +162,7 @@ function createApplication() {
       register?: string;
     }) => uploadImport(db, workspace, input),
     getPrimaryConversationId: () => getPrimaryConversationId(db),
+    recordOwnerLocationPing: (body: unknown) => recordOwnerLocationPing(db, body),
     listActivity: (input: {
       archived: boolean;
       filter: 'all' | 'needs-you' | 'working' | 'scheduled' | 'completed';

@@ -1,0 +1,1 @@
+ALTER TABLE "location_pings" ADD COLUMN "time_zone" text;

@@ -1421,6 +1421,8 @@ export const locationPings = pgTable(
     label: text('label').notNull().default(''),
     accuracyM: integer('accuracy_m'),
     source: text('source').notNull().default('shortcut'),
+    /** IANA id of the device's clock when the ping was captured (travel awareness). */
+    timeZone: text('time_zone'),
     capturedAt: timestamp('captured_at', { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

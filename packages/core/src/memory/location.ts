@@ -20,6 +20,8 @@ export const LocationPingSchema = z.object({
   /** ISO timestamp of capture; defaults to receipt time. */
   capturedAt: z.string().datetime().optional(),
   source: z.string().max(40).default('shortcut'),
+  /** IANA time zone id of the sending device — the owner's clock when traveling. */
+  timeZone: z.string().max(64).optional(),
 });
 export type LocationPingInput = z.infer<typeof LocationPingSchema>;
 
@@ -73,6 +75,7 @@ export async function recordLocationPing(
       label: input.label ?? '',
       accuracyM: input.accuracyM,
       source: input.source ?? 'shortcut',
+      timeZone: input.timeZone ?? null,
       capturedAt: input.capturedAt ? new Date(input.capturedAt) : new Date(),
     })
     .returning();
@@ -127,6 +130,8 @@ function ago(from: Date, now: Date): string {
 /**
  * A single ambient line for the owner's system prompt, e.g.
  * "Owner's current location: near Reykjavík (64.1466, -21.9426), as of 12 min ago."
+ * When the ping carries the device's time zone, the line also anchors "what time
+ * is it for me" while the owner travels away from the agent's home zone.
  * Returns undefined when there is no fresh ping.
  */
 export function formatLocationLine(
@@ -136,5 +141,6 @@ export function formatLocationLine(
   if (!ping) return undefined;
   const place = ping.label ? `near ${ping.label} ` : '';
   const coords = `${Number(ping.lat).toFixed(4)}, ${Number(ping.lng).toFixed(4)}`;
-  return `Owner's current location: ${place}(${coords}), as of ${ago(ping.capturedAt, now)}. Use it for "where am I", nearby suggestions, and travel/timezone awareness; it is transient context, not a stored fact.`;
+  const zone = ping.timeZone ? ` The owner's device clock is in ${ping.timeZone}.` : '';
+  return `Owner's current location: ${place}(${coords}), as of ${ago(ping.capturedAt, now)}.${zone} Use it for "where am I", nearby suggestions, and travel/timezone awareness; it is transient context, not a stored fact.`;
 }

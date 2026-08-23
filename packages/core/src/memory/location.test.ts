@@ -58,6 +58,7 @@ describe('location context — pure helpers', () => {
         label: 'Reykjavík',
         accuracyM: 20,
         source: 'shortcut',
+        timeZone: null,
         capturedAt: new Date('2026-07-21T11:48:00Z'),
         createdAt: now,
       },
@@ -66,6 +67,24 @@ describe('location context — pure helpers', () => {
     expect(line).toContain('near Reykjavík');
     expect(line).toContain('64.1466, -21.9426');
     expect(line).toContain('12 min ago');
+  });
+
+  it('names the device time zone when the ping carries one', () => {
+    const now = new Date('2026-07-21T12:00:00Z');
+    const row = {
+      id: 'x',
+      agentId: 'a',
+      lat: '39.739200',
+      lng: '-104.990300',
+      label: '',
+      accuracyM: 20,
+      source: 'ios-app',
+      timeZone: 'America/Denver',
+      capturedAt: now,
+      createdAt: now,
+    };
+    expect(formatLocationLine(row, now)).toContain('device clock is in America/Denver');
+    expect(formatLocationLine({ ...row, timeZone: null }, now)).not.toContain('device clock');
   });
 });
 
@@ -109,12 +128,14 @@ describe('location context — storage', () => {
       lng: -21.9426,
       label: 'Reykjavík',
       source: 'xtest',
+      timeZone: 'Atlantic/Reykjavik',
       capturedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
     });
 
     const latest = await latestLocation(db, agentId, 1);
     expect(latest?.id).toBe(fresh.id);
     expect(latest?.label).toBe('Reykjavík');
+    expect(latest?.timeZone).toBe('Atlantic/Reykjavik');
 
     // With a 1-day window, the 2-day-old ping is stale and purged; the fresh one stays.
     const purged = await purgeStaleLocations(db, 1);

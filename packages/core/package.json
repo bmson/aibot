@@ -19,6 +19,7 @@
     "./memory/health": "./src/memory/health.ts",
     "./memory/import": "./src/memory/import.ts",
     "./memory/import-parsers": "./src/memory/import-parsers.ts",
+    "./memory/location": "./src/memory/location.ts",
     "./memory/occasions": "./src/memory/occasions.ts",
     "./memory/recall": "./src/memory/recall.ts",
     "./memory/skills": "./src/memory/skills.ts",
