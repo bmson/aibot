@@ -93,6 +93,17 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(24);
   });
 
+  it('shows an agenda shape and reads open day questions as schedule lookups (v25)', () => {
+    const prompt = buildSystemPrompt(agent, {});
+    expect(prompt).toContain('Shape a schedule or agenda answer exactly like this');
+    expect(prompt).toMatch(/\*\*09:30–10:15\*\* — Linear interview prep/);
+    expect(prompt).toMatch(/Never recite the raw event record/i);
+    expect(prompt).toMatch(/what is happening today/i);
+    expect(prompt).toMatch(/educated guess/i);
+    expect(prompt).toMatch(/resolve 'today', 'tonight', and 'this weekend' against the owner's clock/i);
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(25);
+  });
+
   it('gates the companion persona and cue vocabulary to the dashboard channel (v22)', () => {
     const dashboard = buildSystemPrompt(agent, { channel: 'dashboard-chat' });
     expect(dashboard).toContain('Dashboard companion');

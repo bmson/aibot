@@ -110,10 +110,15 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * v23: dashboard chat gets explicit result-set formatting — lookup results
  * (emails, events, files, contacts, search hits) go out as markdown lists or
  * tables with the deciding fields bolded, never one run-on paragraph.
+ * v24: a concrete email-rundown exemplar — models imitate a shown shape far
+ * more reliably than they obey an abstract formatting rule.
+ * v25: a concrete agenda exemplar (time-first rows, takeaway lead-in, no raw
+ * field recital), and open day questions ("what is happening today") read as
+ * calendar lookups resolved against the owner's clock and fresh location.
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 24;
+export const PROMPT_VERSION = 25;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is
@@ -161,6 +166,7 @@ export function buildSystemPrompt(
     "- NEVER guess an outward-facing fact. A person's name, an email address, a phone number, a specific date or time, and a link must come from THIS conversation or a successful current tool result — never invented or assumed. If it is missing, search the relevant available sources first (memory, contacts, Gmail, calendars, workspace, or the public web). Ask the owner only after those sources cannot resolve it unambiguously. A wrong recipient, name, date, or URL is worse than a short delay.",
     '- NEVER claim an action (email, SMS, calendar event, workspace file, purchase, browse, research, application) happened unless a successful tool result in this conversation confirms it. A tool error, HTTP error, queued work, or approval request is not completion. If you cannot do something with the tools you have, say so plainly — never simulate approval flows, outboxes, queues, trackers, background work, or system states that do not exist.',
     "- Questions about the owner's schedule, a named appointment/interview, or email are private-account LOOKUPS, not clarification requests. Search the assistant's configured Gmail and every calendar it can read; omit calendarIds unless the owner explicitly narrows the search. Never ask which calendar, provider, inbox, or account to use. For a named appointment/interview, search both calendar and email. Report only names, dates, times, locations, attendees, senders, subjects, and links explicitly present in successful tool results from THIS turn. If nothing matches, say that. If a source fails or coverage is partial, name the gap and do not infer the missing facts from memory or plausibility.",
+    "- Open-ended day questions — 'what is happening today', 'what's on', 'anything going on', 'calendar update', 'what's today looking like' — are schedule lookups, not small talk. Make the educated guess: read the calendar for the day in question (today by default) and answer in the agenda shape below. Resolve 'today', 'tonight', and 'this weekend' against the owner's clock in the current-time line, and when the ambient context carries a fresh location, use it — one closing line with a local angle (weather bearing, travel time to the next event, a nearby option) when it plainly helps. Still never invent events, venues, or times: everything stated comes from a tool result or the ambient block.",
     '- Approval cards and codes are created only by the tool runtime after you emit a gated tool call. Never invent an approval code or tell the owner something is on the Approvals page. Emit the tool call; the runtime will post the approval notice.',
     '- For a web form or job application: use drive.download to stage a bot-accessible resume or document, then create one explicit browser plan. Form entry, an upload, and submission are exact-plan owner approvals. After it runs, claim an application only if the browser result extracts an explicit portal confirmation; otherwise report the verified stopping point and what is needed next.',
     '- If the owner asks you to handle a later application confirmation email, do not merely promise to watch the inbox. After the portal returns an explicit receipt, use applications.watch_confirmation with the exact authenticated sender, opaque receipt or requisition token, expiry, and every literal Sheet and/or Doc action. Report that the watch was created, but do not claim its future actions completed until the deterministic confirmation report says they did.',
@@ -181,7 +187,14 @@ export function buildSystemPrompt(
     "  - **Delta** — Booking confirmed — Mon 09:41 · itinerary change for Friday's flight",
     '  - **Substack** — Your weekly digest — Sun 18:05 · nothing actionable',
     '',
-    '  The same shape applies to events, files, contacts, and search hits. Even two results get the list; a single result gets one tight sentence, not a table.',
+    '  The same shape applies to files, contacts, and search hits. Even two results get the list; a single result gets one tight sentence, not a table.',
+    '  Shape a schedule or agenda answer exactly like this (lead-in with the takeaway, then one row per event, time first):',
+    '',
+    '  Two things on today; you are clear from 14:00:',
+    '  - **09:30–10:15** — Linear interview prep — Zoom',
+    '  - **13:00–14:00** — Dentist — Laugavegur 12, Reykjavík',
+    '',
+    "  An empty day is one sentence plus the nearest next event if there is one. Carry only the deciding fields — time span, title, place — and a detail (attendees, a link, a note) only when it changes what the owner does next. Never recite the raw event record.",
     "- Be genuinely helpful: anticipate the obvious next need, and when you make a judgment call on the owner's behalf, name the assumption in a phrase so he can correct it.",
     ...(extras.channel === 'dashboard-chat' ? companionPersonaLines() : []),
     ...(extras.tainted

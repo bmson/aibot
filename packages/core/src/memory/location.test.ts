@@ -132,7 +132,9 @@ describe('location context — storage', () => {
       capturedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
     });
 
-    const latest = await latestLocation(db, agentId, 1);
+    // Scoped to the test's own source so live pings from a real device cannot
+    // outrank these rows and flake the run.
+    const latest = await latestLocation(db, agentId, 1, 'xtest');
     expect(latest?.id).toBe(fresh.id);
     expect(latest?.label).toBe('Reykjavík');
     expect(latest?.timeZone).toBe('Atlantic/Reykjavik');
@@ -145,7 +147,7 @@ describe('location context — storage', () => {
     expect(rows[0]?.id).toBe(fresh.id);
 
     // Narrowing the window (~1.4 min) past the 10-min-old ping yields nothing.
-    const none = await latestLocation(db, agentId, 0.001);
+    const none = await latestLocation(db, agentId, 0.001, 'xtest');
     expect(none).toBeNull();
   });
 });

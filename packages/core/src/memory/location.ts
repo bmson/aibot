@@ -88,12 +88,20 @@ export async function latestLocation(
   db: Db,
   agentId: string,
   withinDays: number,
+  /** Narrow to one ingest source (tests scope to their own rows this way). */
+  source?: string,
 ): Promise<LocationPingRow | null> {
   const cutoff = new Date(Date.now() - withinDays * 24 * 3600 * 1000);
   const [row] = await db
     .select()
     .from(locationPings)
-    .where(and(eq(locationPings.agentId, agentId), gte(locationPings.capturedAt, cutoff)))
+    .where(
+      and(
+        eq(locationPings.agentId, agentId),
+        gte(locationPings.capturedAt, cutoff),
+        source ? eq(locationPings.source, source) : undefined,
+      ),
+    )
     .orderBy(desc(locationPings.capturedAt))
     .limit(1);
   return row ?? null;
