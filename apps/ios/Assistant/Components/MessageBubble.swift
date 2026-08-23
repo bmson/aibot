@@ -109,18 +109,6 @@ struct MessageBubble: View {
                     radius: 11,
                     y: 5
                 )
-                .overlay(alignment: .bottomTrailing) {
-                    if isStreaming {
-                        ZStack {
-                            Circle()
-                                .fill(AssistantTheme.accent(for: colorScheme).opacity(0.16))
-                                .frame(width: 15, height: 15)
-                            streamingDot
-                        }
-                        .padding(7)
-                        .accessibilityHidden(true)
-                    }
-                }
                 .contextMenu {
                     Button {
                         UIPasteboard.general.string = message.text
@@ -162,31 +150,6 @@ struct MessageBubble: View {
                         Label("Copy message", systemImage: "doc.on.doc")
                     }
                 }
-        }
-    }
-
-    /// The dot that marks a reply as still arriving.
-    ///
-    /// This used to carry `.symbolEffect(.pulse)`, which is declared on `View`
-    /// and so compiles anywhere, but only animates SF Symbol content — on a
-    /// `Circle` it was a silent no-op and the dot never moved. `PhaseAnimator`
-    /// drives it for real, the same way the thinking dots below are driven.
-    @ViewBuilder
-    private var streamingDot: some View {
-        let dot = Circle()
-            .fill(AssistantTheme.accent(for: colorScheme))
-            .frame(width: 5, height: 5)
-
-        if reduceMotion {
-            dot
-        } else {
-            PhaseAnimator([false, true]) { isBright in
-                dot
-                    .scaleEffect(isBright ? 1 : 0.62)
-                    .opacity(isBright ? 1 : 0.5)
-            } animation: { _ in
-                .easeInOut(duration: 0.72)
-            }
         }
     }
 
