@@ -735,7 +735,7 @@ describe('response execution contract', () => {
         },
       );
       expect(result).toMatchObject({ blocked: false, unsupported: [] });
-      expect(result.text).toContain('FIRST DAY OF SCHOOL — Monday, August 17, 2026 — All day');
+      expect(result.text).toContain('**Mon 17 Aug · All day** — FIRST DAY OF SCHOOL');
       expect(result.text).not.toContain('Freyja');
       expect(result.text).not.toContain('3:00 PM');
       expect(result.text).not.toContain('Home');
@@ -1018,7 +1018,9 @@ describe('response execution contract', () => {
           },
         },
       );
-      expect(result.text).toContain('Monday, August 17, 2026 at 3:00 PM PDT');
+      // 22:00Z rendered in the owner's zone, not echoed back as UTC.
+      expect(result.text).toContain('**15:00–16:30** — School prep');
+      expect(result.text).not.toContain('22:00');
       expect(result.text).not.toContain('The event is at 3 PM.');
     });
 
@@ -1065,7 +1067,7 @@ describe('response execution contract', () => {
           },
         },
       );
-      expect(result.text).toContain('School holiday — Monday, August 17, 2026 — All day');
+      expect(result.text).toContain('**All day** — School holiday');
       expect(result.text).not.toContain('Tuesday, August 18');
       expect(result.text).not.toContain('Parent Evening');
     });

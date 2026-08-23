@@ -966,6 +966,49 @@ function calendarTime(value: string, timeZone?: string): string {
   }
 }
 
+/** "09:30" in the owner's zone; empty for a date with no time of day. */
+function clockOnly(value: string, timeZone?: string): string {
+  if (!value || /^\d{4}-\d{2}-\d{2}$/.test(value)) return '';
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) return '';
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: timeZone ?? 'UTC',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(new Date(ms));
+  } catch {
+    return '';
+  }
+}
+
+/** "Mon 17 Aug" — the date prefix a window spanning several days needs. */
+function shortDate(value: string, timeZone?: string): string {
+  if (!value) return '';
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const ms = Date.parse(isDateOnly ? `${value}T12:00:00.000Z` : value);
+  if (Number.isNaN(ms)) return '';
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: isDateOnly ? 'UTC' : (timeZone ?? 'UTC'),
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+    }).format(new Date(ms));
+  } catch {
+    return '';
+  }
+}
+
+/** Does the searched window cover more than one local day? */
+function spansDays(window: PersonalReadRequest['timeWindow']): boolean {
+  if (!window) return true;
+  const from = Date.parse(window.timeMin);
+  const to = Date.parse(window.timeMax);
+  return !Number.isFinite(from) || !Number.isFinite(to) || to - from > 26 * 60 * 60 * 1000;
+}
+
 function calendarFreeIntervals(
   slots: Record<string, unknown>[],
   window: NonNullable<PersonalReadRequest['timeWindow']>,
@@ -1391,10 +1434,17 @@ export function groundReadDraft(
  */
 function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvidence[]): string {
   const current = currentSuccessfulEvidence(evidence);
+  const where =
+    request.kind === 'email'
+      ? 'the mail'
+      : request.kind === 'calendar'
+        ? 'the calendar'
+        : 'the calendar and mail';
+  const forWindow = request.timeWindow ? ` for ${request.timeWindow.label}` : '';
   const lines = [
     request.verification
-      ? 'I rechecked the earlier claim. These source results are the only facts I can verify:'
-      : 'Here’s what I found in the connected sources:',
+      ? 'I rechecked it — this is everything the sources actually return:'
+      : `Here's what ${where} has${forWindow}:`,
   ];
 
   if (request.kind !== 'email') {
@@ -1494,20 +1544,22 @@ function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvid
           }
         }
       }
-      if (request.timeWindow) {
-        lines.push(
-          `- Calendar range searched: ${request.timeWindow.label} (${request.timeWindow.timeMin} to ${request.timeWindow.timeMax})`,
-        );
-      } else {
-        for (const range of ranges) lines.push(`- Calendar range searched: ${range}`);
+      // The window is already named in the lead-in; echoing its ISO bounds told
+      // the owner nothing they asked for. Without a resolved window the raw
+      // ranges are all there is to show, so those still print.
+      if (!request.timeWindow) {
+        for (const range of ranges) lines.push(`- Searched ${range}`);
       }
       if (events.length === 0) {
         lines.push(
           calendarRows.length > 0
-            ? `- Calendar search returned no matching events${calendars.size > 0 ? ` across ${[...calendars].join(', ')}` : ''}.`
+            ? `Nothing on the calendar — no matching events${calendars.size > 0 ? ` across ${[...calendars].join(', ')}` : ''}.`
             : '- Calendar: no successful event read.',
         );
       } else {
+        const multiDay = spansDays(request.timeWindow);
+        const manyCalendars =
+          new Set(events.map((event) => stringField(event, 'calendar')).filter(Boolean)).size > 1;
         for (const event of events.slice(0, 20)) {
           const summary = stringField(event, 'summary') || '(untitled event)';
           const rawStart = stringField(event, 'start');
@@ -1525,31 +1577,46 @@ function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvid
           }
           const location = stringField(event, 'location');
           const calendar = stringField(event, 'calendar');
-          const organizer = stringField(event, 'organizer');
           const attendees = event.attendees;
           const attendeeText = Array.isArray(attendees)
             ? attendees.filter((value): value is string => typeof value === 'string').join(', ')
             : '';
-          const eventLinks = Array.isArray(event.links)
+          // One link, and the one the owner would actually press: a joining
+          // link beats the "open this in Google Calendar" link every time.
+          const linkList = Array.isArray(event.links)
             ? event.links
                 .map(record)
                 .filter((link): link is Record<string, unknown> => Boolean(link))
-                .map((link) => {
-                  const url = stringField(link, 'url');
-                  const label = stringField(link, 'label') || 'Event link';
-                  return url ? `[${label}](${url})` : '';
-                })
-                .filter(Boolean)
-                .join(', ')
+            : [];
+          const bestLink =
+            linkList.find((link) => stringField(link, 'type') === 'video') ??
+            linkList.find((link) => stringField(link, 'type') !== 'calendar') ??
+            linkList[0];
+          const bestUrl = bestLink ? stringField(bestLink, 'url') : '';
+          const eventLinks = bestUrl
+            ? `[${stringField(bestLink ?? {}, 'label') || 'Event link'}](${bestUrl})`
             : '';
+          // Time first, in the shape the agenda answer uses, so the fallback
+          // still reads like an answer rather than a dump of record fields.
+          const clockStart = clockOnly(rawStart, request.timeZone);
+          const clockEnd = clockOnly(rawEnd, request.timeZone);
+          const datePrefix = multiDay ? shortDate(rawStart, request.timeZone) : '';
+          const when = allDay
+            ? [datePrefix, 'All day'].filter(Boolean).join(' · ')
+            : [datePrefix, clockStart ? `${clockStart}${clockEnd ? `–${clockEnd}` : ''}` : '']
+                .filter(Boolean)
+                .join(' · ');
+          // A window ending on a different day than it started is the one case
+          // the plain clock cannot express on its own.
+          const spanNote = allDay && end && end !== start ? ` (through ${end})` : '';
           lines.push(
-            `- Calendar: ${summary}${start ? ` — ${start}${end ? ` to ${end}` : ''}` : ''}${allDay ? ' — All day' : ''}${location ? ` — ${location}` : ''}${organizer ? ` — organizer: ${organizer}` : ''}${attendeeText ? ` — attendees: ${attendeeText}` : ''}${eventLinks ? ` — ${eventLinks}` : ''}${calendar ? ` (${calendar})` : ''}`,
+            `- **${when || start || '(no time returned)'}** — ${summary}${spanNote}${location ? ` — ${location}` : ''}${attendeeText ? ` — with ${attendeeText}` : ''}${eventLinks ? ` — ${eventLinks}` : ''}${calendar && manyCalendars ? ` (${calendar})` : ''}`,
           );
         }
       }
       if (!complete || unavailable.length > 0) {
         lines.push(
-          `- Calendar coverage was incomplete${unavailable.length > 0 ? `; unavailable: ${[...new Set(unavailable)].join(', ')}` : ''}.`,
+          `Heads up: calendar coverage was incomplete${unavailable.length > 0 ? `; unavailable: ${[...new Set(unavailable)].join(', ')}` : ''}.`,
         );
       }
     }
@@ -1586,41 +1653,46 @@ function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvid
         .map((row) => stringField(record(row.result) ?? {}, 'mailboxSearched'))
         .filter(Boolean),
     );
-    if (queries.size > 0) {
-      lines.push(
-        `- Gmail ${mailboxes.size > 0 ? `(${[...mailboxes].join(', ')}) ` : ''}searched for: ${[...queries].map((query) => `“${query}”`).join(', ')}`,
-      );
-    }
     if (results.length === 0) {
       lines.push(
         searches.length > 0
-          ? '- Gmail: no matching messages were returned.'
+          ? 'Nothing in the mail — no matching messages were returned.'
           : '- Gmail: no successful search.',
       );
     } else {
+      // Sender first, in the rundown shape: who it is from is what decides
+      // whether the owner opens it.
       for (const message of results.slice(0, 10)) {
         const subject = stringField(message, 'subject') || '(no subject)';
         const from = stringField(message, 'from');
         const date = stringField(message, 'date');
         const snippet = stringField(message, 'snippet');
         lines.push(
-          `- Gmail: “${subject}”${from ? ` — from ${from}` : ''}${date ? ` — ${date}` : ''}${snippet ? ` — ${snippet}` : ''}`,
+          `- **${from || '(unknown sender)'}** — ${subject}${date ? ` — ${date}` : ''}${snippet ? ` · ${snippet}` : ''}`,
         );
       }
     }
     for (const message of threadMessages.slice(0, 10)) {
       const subject = stringField(message, 'subject') || '(no subject)';
       const from = stringField(message, 'from');
-      const date = stringField(message, 'date');
       const rawText = rawStringField(message, 'text');
       const excerpt = emailExcerpt(rawText, request.queryTerms);
       const links = literalLinks(rawText);
+      // A thread read hangs off the message it belongs to rather than
+      // repeating the whole header as a second top-level row.
       lines.push(
-        `- Gmail thread: “${subject}”${from ? ` — from ${from}` : ''}${date ? ` — ${date}` : ''}${excerpt ? ` — ${excerpt}` : ''}${links.length > 0 ? ` — links: ${links.join(', ')}` : ''}`,
+        `  ↳ ${subject}${from ? ` (${from})` : ''}${excerpt ? `: ${excerpt}` : ''}${links.length > 0 ? ` — ${links.join(', ')}` : ''}`,
       );
     }
     if (searches.some((row) => record(row.result)?.complete === false)) {
-      lines.push('- Gmail returned more matches than this lookup inspected; coverage was partial.');
+      lines.push('Heads up: there were more matches than this lookup opened.');
+    }
+    // The query goes last: it is how the owner knows what to re-ask, not the
+    // headline of the answer.
+    if (queries.size > 0) {
+      lines.push(
+        `Searched ${mailboxes.size > 0 ? [...mailboxes].join(', ') : 'the mailbox'} for ${[...queries].map((query) => `“${query}”`).join(', ')}.`,
+      );
     }
   }
   return lines.join('\n');

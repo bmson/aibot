@@ -137,8 +137,8 @@ describe('golden tasks', () => {
     expect(result.toolNames).toEqual(['calendar.list_events']);
     // The agenda goes out as written, not restated as a field dump.
     expect(result.finalText).toBe(agenda);
-    expect(result.finalText).not.toContain('Here’s what I found in the connected sources');
-    expect(result.finalText).not.toContain('Calendar range searched');
+    expect(result.finalText).not.toContain("Here's what the calendar has");
+    expect(result.finalText).not.toContain('organizer:');
 
     const [check] = await db
       .select()
