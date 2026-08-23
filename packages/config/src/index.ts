@@ -186,6 +186,14 @@ const ConfigSchema = z.object({
    */
   EMAIL_INGEST_IMPORTANCE_THRESHOLD: z.coerce.number().int().min(1).max(5).default(3),
   /**
+   * How important a forwarded message must be (1-5) to interrupt the owner the
+   * moment it lands — a deterministic heads-up that does not wait for the
+   * triage task's own judgment. Default 4: a real commitment, money moving, or
+   * a dated obligation. The deeper triage task still runs at the lower
+   * importance threshold and may follow up with what it found.
+   */
+  EMAIL_INGEST_NOTIFY_THRESHOLD: z.coerce.number().int().min(1).max(5).default(4),
+  /**
    * Daily ceiling on deep triage tasks from forwarded mail. Owner-trust tasks
    * bypass the external-sender flood backstop (`underExternalTaskLimit`), so
    * ingest needs its own brake or one busy day can exhaust the month's budget.

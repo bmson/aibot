@@ -1,9 +1,44 @@
-import { describe, expect, it, vi } from 'vitest';
 import {
+  channelBindings,
+  conversations,
+  createDb,
+  type Db,
+  emailIngest,
+  messages,
+  tasks,
+} from '@assistant/db';
+import { eq, inArray } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  type EmailSyncDeps,
   gmailSenderAuthenticated,
+  importantEmailNotice,
   MailboxSyncCoordinator,
   type MailboxSyncResult,
+  processForwardedIngest,
 } from './email-sync.js';
+
+const DATABASE_URL =
+  process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
+
+let db: Db;
+let dbUp = false;
+let agentId: string;
+
+beforeAll(async () => {
+  db = createDb(DATABASE_URL);
+  try {
+    const { getAgent } = await import('@assistant/core/chat');
+    agentId = (await getAgent(db)).id;
+    dbUp = true;
+  } catch {
+    console.warn('email-sync owner-alert tests: database unreachable — skipping');
+  }
+});
+
+afterAll(async () => {
+  await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -264,5 +299,97 @@ describe('Gmail sender authentication', () => {
         'owner@example.com',
       ),
     ).toBe(false);
+  });
+});
+
+describe('forwarded-ingest owner alerts', () => {
+  it('composes an SMS-safe three-line heads-up', () => {
+    const text = importantEmailNotice('alice@example.com', 'Q3 invoice', {
+      category: 'financial',
+      importance: 5,
+      reason: 'Payment due Friday.',
+      dates: [{ iso: '2026-08-28', what: 'payment due' }],
+    });
+    expect(text).toContain('Important email from alice@example.com');
+    expect(text).toContain('Q3 invoice');
+    expect(text).toContain('Payment due Friday.');
+    expect(text).toContain('payment due (2026-08-28)');
+  });
+
+  it('pings the owner at or above the notify threshold, stays quiet below it', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+
+    const stamp = `${Date.now()}`;
+    const conversationIds: string[] = [];
+    const run = async (importance: number) => {
+      const notified: string[] = [];
+      const deps = {
+        config: {
+          ASSISTANT_MODULES: [] as never[],
+          EMAIL_INGEST_IMPORTANCE_THRESHOLD: 3,
+          EMAIL_INGEST_NOTIFY_THRESHOLD: 4,
+          EMAIL_INGEST_MAX_TRIAGE_PER_DAY: 40,
+        },
+        db,
+        router: {
+          object: async () => ({
+            ok: true,
+            object: {
+              category: 'financial',
+              importance,
+              actionable: true,
+              dates: [],
+              reason: 'A payment is due.',
+            },
+          }),
+        },
+        workspace: {},
+        googleClient: { configured: () => false, api: async () => ({}) },
+        notifyOwner: async ({ text }: { text: string }) => {
+          notified.push(text);
+        },
+        observeInboundEmail: async () => {},
+      } as unknown as EmailSyncDeps;
+
+      const channelMessageId = `gmail:xtest-notify-${stamp}-${importance}`;
+      const outcome = await processForwardedIngest(deps, {
+        agentId,
+        message: { id: `m-${stamp}-${importance}`, threadId: `t-${stamp}-${importance}` },
+        from: 'alice@example.com',
+        subject: `Invoice ${importance}`,
+        text: 'Please pay the attached invoice by Friday.',
+        rfcMessageId: '',
+        authenticated: true,
+        contactTrustByEmail: new Map(),
+        channelMessageId,
+      });
+      const [row] = await db
+        .select({ conversationId: emailIngest.conversationId })
+        .from(emailIngest)
+        .where(eq(emailIngest.channelMessageId, channelMessageId));
+      if (row?.conversationId) conversationIds.push(row.conversationId);
+      return { outcome, notified };
+    };
+
+    try {
+      const high = await run(5);
+      expect(high.outcome).toBe('triaged');
+      expect(high.notified).toHaveLength(1);
+      expect(high.notified[0]).toContain('alice@example.com');
+
+      const low = await run(2);
+      expect(low.outcome).toBe('skipped');
+      expect(low.notified).toHaveLength(0);
+    } finally {
+      if (conversationIds.length > 0) {
+        await db.delete(tasks).where(inArray(tasks.conversationId, conversationIds));
+        await db.delete(emailIngest).where(inArray(emailIngest.conversationId, conversationIds));
+        await db.delete(messages).where(inArray(messages.conversationId, conversationIds));
+        await db
+          .delete(channelBindings)
+          .where(inArray(channelBindings.conversationId, conversationIds));
+        await db.delete(conversations).where(inArray(conversations.id, conversationIds));
+      }
+    }
   });
 });

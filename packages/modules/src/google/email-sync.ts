@@ -509,6 +509,28 @@ interface ForwardedIngestInput {
 }
 
 /**
+ * The deterministic heads-up for important mail, composed to read fine as both
+ * a chat bubble and an SMS: three short lines, no markdown structure.
+ */
+export function importantEmailNotice(
+  from: string,
+  subject: string,
+  score: {
+    category: string;
+    importance: number;
+    reason: string;
+    dates: { iso: string; what: string }[];
+  },
+): string {
+  const lines = [`Important email from ${from}`, `“${subject || '(no subject)'}”`, score.reason];
+  const dates = score.dates.slice(0, 3);
+  if (dates.length > 0) {
+    lines.push(`Dates: ${dates.map((d) => `${d.what} (${d.iso})`).join('; ')}`);
+  }
+  return lines.join('\n');
+}
+
+/**
  * Handle one message in forwarded-ingest mode: keep everything, score it, and
  * spend a triage task only on what earned one.
  *
@@ -522,7 +544,8 @@ interface ForwardedIngestInput {
  * the owner to approve it. Direction and authorship are different axes, and the
  * sender only ever decides the second one.
  */
-async function processForwardedIngest(
+// Exported for tests; the sync loop reaches it through processMessage.
+export async function processForwardedIngest(
   deps: EmailSyncDeps,
   input: ForwardedIngestInput,
 ): Promise<'triaged' | 'skipped'> {
@@ -628,6 +651,24 @@ async function processForwardedIngest(
     );
   }
 
+  // Deterministic heads-up: important mail interrupts the owner on arrival
+  // rather than only when the triage task later judges it worth a ping — and
+  // it still fires when the daily triage ceiling holds the task back, which is
+  // exactly the busy day the owner most needs to hear about. Best-effort: a
+  // notifier outage must not stall the history cursor. A crash between here
+  // and the task's enqueue can replay into a second ping; that rare duplicate
+  // beats a silent loss.
+  let alerted = false;
+  if (score.importance >= deps.config.EMAIL_INGEST_NOTIFY_THRESHOLD) {
+    alerted = await deps
+      .notifyOwner({ text: importantEmailNotice(from, subject, score) })
+      .then(() => true)
+      .catch((err) => {
+        console.error('email-sync: importance alert failed', err);
+        return false;
+      });
+  }
+
   if (score.importance < threshold) {
     console.log(
       `email-sync: ingested ${from} ("${subject.slice(0, 40)}") at importance ${score.importance} — stored without triage`,
@@ -642,6 +683,7 @@ async function processForwardedIngest(
     importance: score.importance,
     category: score.category,
     ingestId: ingested.id,
+    ownerAlerted: alerted,
   });
   return enqueued ? 'triaged' : 'skipped';
 }
@@ -658,6 +700,7 @@ async function enqueueIngestTriage(
     importance: number;
     category: string;
     ingestId: string;
+    ownerAlerted?: boolean;
   },
 ): Promise<boolean> {
   if (!(await underIngestTriageLimit(deps.db, deps.config.EMAIL_INGEST_MAX_TRIAGE_PER_DAY))) {
@@ -696,6 +739,7 @@ async function enqueueIngestTriage(
           authenticated: input.authenticated,
           importance: input.importance,
           category: input.category,
+          ownerAlerted: input.ownerAlerted === true,
         },
       },
     },

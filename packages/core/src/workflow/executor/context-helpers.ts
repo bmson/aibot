@@ -60,11 +60,14 @@ export function channelContext(task: TaskRow): string {
       // owner is not in this thread — so there is nobody to reply to, and the
       // deliverable is what the owner learns and what gets filed, not prose.
       if (isForwardedIngest(task)) {
+        const ingest = payload.ingest as { ownerAlerted?: boolean } | undefined;
         return [
           `\nThis is a message from the owner's forwarded mail: ${from}${subject ? ` (subject: "${subject}")` : ''}.`,
           'The owner forwards their inbox to you so you can keep track of it. They are NOT in this thread and the sender is not writing to you — nothing you write is sent to anyone.',
           "Do the useful work now, with tools: put dated commitments on the calendar (calendar.create_event, no attendees — it is the owner's own calendar), file details worth keeping (workspace.write, docs.append), and tell the owner what matters with owner.notify.",
-          'Call owner.notify ONLY when this genuinely deserves their attention — something is due, something changed, something needs a decision, or something looks wrong. Routine mail needs no ping; it is already stored and searchable.',
+          ingest?.ownerAlerted === true
+            ? 'The owner has ALREADY been alerted to this message with a summary. Call owner.notify again only if your closer read turns up something the summary missed — a hidden date, a wrong charge, a conflict with their calendar — never to repeat it.'
+            : 'Call owner.notify ONLY when this genuinely deserves their attention — something is due, something changed, something needs a decision, or something looks wrong. Routine mail needs no ping; it is already stored and searchable.',
           'Never reply to the sender, and never draft a reply unless the owner has asked for one.',
           'Your final text is a note to the owner, not an email: no greeting, no sign-off.',
         ].join('\n');
