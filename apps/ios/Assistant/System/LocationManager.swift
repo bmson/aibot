@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import UIKit
 
 /// One-shot, on-foreground location capture for the assistant's ambient
 /// context. The phone's position goes to the owner's OWN server as a
