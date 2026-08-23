@@ -1738,9 +1738,12 @@ struct ChatView: View {
     }
 
     private var showsJumpToLatest: Bool {
+        // Visibility tracks the scroll position only. Gating on
+        // `errorMessage` let any transient failure — including a non-fatal
+        // overview refresh — hide the button for as long as the unrelated
+        // banner stayed up, which is why it was sometimes missing.
         !isAtBottom
             && !model.messages.isEmpty
-            && model.errorMessage == nil
     }
 
     private func jumpToLatestButton(action: @escaping () -> Void) -> some View {
@@ -1787,7 +1790,10 @@ struct ChatView: View {
                     )
                 }
                 .glassEffect(
-                    Glass.regular
+                    // Glass.clear, matching the composer: .regular laid a
+                    // milky material over the 0.85 stage fill and read as a
+                    // solid green pill next to the input's liquid glass.
+                    Glass.clear
                         .tint(
                             AssistantTheme.stage(for: colorScheme, mood: model.latestMood)
                                 .opacity(conversationControlGlassTintOpacity)
