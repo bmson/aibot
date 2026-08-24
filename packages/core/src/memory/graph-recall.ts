@@ -82,6 +82,7 @@ function activeGraphWhere(agentId: string) {
     AND source.status = 'ready'
     AND source.content_hash = memory.content_hash
     AND memory.embedding IS NOT NULL
+    AND relation.review_status <> 'rejected'
   `;
 }
 
@@ -96,10 +97,10 @@ async function seedRelations(
       SELECT
         relation.id AS "relationId",
         relation.subject_entity_id AS "subjectEntityId",
-        subject.label AS "subjectLabel",
+        COALESCE(subject.preferred_label, subject.label) AS "subjectLabel",
         relation.predicate,
         relation.object_entity_id AS "objectEntityId",
-        object.label AS "objectLabel",
+        COALESCE(object.preferred_label, object.label) AS "objectLabel",
         relation.source_memory_id AS "sourceMemoryId",
         memory.content,
         memory.created_at AS "createdAt",
@@ -138,10 +139,10 @@ async function connectedRelations(
       SELECT
         relation.id AS "relationId",
         relation.subject_entity_id AS "subjectEntityId",
-        subject.label AS "subjectLabel",
+        COALESCE(subject.preferred_label, subject.label) AS "subjectLabel",
         relation.predicate,
         relation.object_entity_id AS "objectEntityId",
-        object.label AS "objectLabel",
+        COALESCE(object.preferred_label, object.label) AS "objectLabel",
         relation.source_memory_id AS "sourceMemoryId",
         memory.content,
         memory.created_at AS "createdAt",

@@ -358,6 +358,13 @@
       "when": 1787584444757,
       "tag": "0050_uneven_komodo",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1787587400174,
+      "tag": "0051_chubby_terrax",
+      "breakpoints": true
     }
   ]
 }

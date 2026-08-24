@@ -32,7 +32,23 @@ receives.
 Graph retrieval is guarded by both `CHAT_RECALL_ENABLED` and `GRAPH_RAG_ENABLED` (both default
 false), and inherits owner-private, untainted-context gating. Reply provenance carries
 `kind: "knowledge_graph"` and an optional hop count so web and iOS can say when the graph informed a
-response without requiring a graph browser.
+response.
+
+### Owner review and curation
+
+`/profile/knowledge` is the owner-only review surface. It deliberately draws a **local map** around
+one selected entity instead of an unbounded global canvas, then lists the underlying connections with
+their source memory, extraction confidence, source trust, and review time. The owner can:
+
+- confirm an extracted relationship or mark it stale; stale edges remain auditable but are excluded
+  from GraphRAG recall;
+- rename an entity's display label without changing its extraction identity, or merge duplicate
+  entities; an alias records the merged canonical key so future syncs keep using the chosen entity;
+- add a relationship manually only with an owner-written source note. That note is saved as a normal,
+  owner-confirmed durable memory and is the relationship's evidence — never a graph-only assertion.
+
+Relationship review state is keyed to the source-memory relationship fingerprint. Re-extracting a
+changed memory refreshes the direct edge while retaining a matching owner decision.
 
 ## Goal / non-goals
 

@@ -788,6 +788,8 @@ export const knowledgeGraphEntities = pgTable(
     /** `contact:<id>` for people, otherwise `<kind>:<normalized label>`. */
     canonicalKey: text('canonical_key').notNull(),
     label: text('label').notNull(),
+    /** Owner-curated display name; extraction keeps the stable canonical key. */
+    preferredLabel: text('preferred_label'),
     kind: text('kind').notNull(),
     contactId: uuid('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
     ...timestamps,
@@ -799,6 +801,30 @@ export const knowledgeGraphEntities = pgTable(
     ),
     uniqueIndex('knowledge_graph_entities_agent_key_idx').on(t.agentId, t.canonicalKey),
     index('knowledge_graph_entities_contact_idx').on(t.contactId),
+  ],
+);
+
+/**
+ * Canonical keys that the owner merged into another graph entity. Extraction
+ * resolves these aliases before it creates a node, so a curation decision
+ * survives a future source edit or a backfill.
+ */
+export const knowledgeGraphEntityAliases = pgTable(
+  'knowledge_graph_entity_aliases',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    canonicalKey: text('canonical_key').notNull(),
+    entityId: uuid('entity_id')
+      .notNull()
+      .references(() => knowledgeGraphEntities.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('knowledge_graph_entity_aliases_agent_key_idx').on(t.agentId, t.canonicalKey),
+    index('knowledge_graph_entity_aliases_entity_idx').on(t.entityId),
   ],
 );
 
@@ -850,9 +876,14 @@ export const knowledgeGraphRelations = pgTable(
     sourceMemoryId: uuid('source_memory_id')
       .notNull()
       .references(() => memories.id, { onDelete: 'cascade' }),
+    /** Stable endpoint/predicate identity within a source memory. */
+    sourceFingerprint: text('source_fingerprint').notNull(),
     /** The source fact can yield several direct relationships. */
     ordinal: smallint('ordinal').notNull(),
     confidence: numeric('confidence', { precision: 3, scale: 2 }).notNull().default('0.70'),
+    /** Owner curation; rejected edges are excluded from graph recall. */
+    reviewStatus: text('review_status').notNull().default('unreviewed'),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -860,9 +891,17 @@ export const knowledgeGraphRelations = pgTable(
       'knowledge_graph_relations_predicate_check',
       sql`length(${t.predicate}) BETWEEN 1 AND 80`,
     ),
-    uniqueIndex('knowledge_graph_relations_source_ordinal_idx').on(t.sourceMemoryId, t.ordinal),
+    check(
+      'knowledge_graph_relations_review_status_check',
+      sql`${t.reviewStatus} IN ('unreviewed','confirmed','rejected')`,
+    ),
+    uniqueIndex('knowledge_graph_relations_source_fingerprint_idx').on(
+      t.sourceMemoryId,
+      t.sourceFingerprint,
+    ),
     index('knowledge_graph_relations_subject_idx').on(t.agentId, t.subjectEntityId),
     index('knowledge_graph_relations_object_idx').on(t.agentId, t.objectEntityId),
+    index('knowledge_graph_relations_review_idx').on(t.agentId, t.reviewStatus),
   ],
 );
 

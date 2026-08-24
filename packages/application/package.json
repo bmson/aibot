@@ -13,6 +13,7 @@
     "./goals": "./src/goals.ts",
     "./health": "./src/health.ts",
     "./imports": "./src/imports.ts",
+    "./knowledge-graph": "./src/knowledge-graph.ts",
     "./operations": "./src/operations.ts",
     "./profile": "./src/profile.ts",
     "./settings": "./src/settings.ts",

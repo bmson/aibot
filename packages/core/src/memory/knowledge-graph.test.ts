@@ -10,7 +10,11 @@ import { eq, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ModelRouter } from '../model-router/router.js';
 import { recallKnowledgeGraph } from './graph-recall.js';
-import { graphRelationshipIsGrounded, syncKnowledgeGraph } from './knowledge-graph.js';
+import {
+  createOwnerKnowledgeGraphFact,
+  graphRelationshipIsGrounded,
+  syncKnowledgeGraph,
+} from './knowledge-graph.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -185,5 +189,93 @@ describe('knowledge graph sync and recall', () => {
       .where(eq(knowledgeGraphSources.memoryId, memory.id));
     expect(relations).toHaveLength(1);
     expect(source).toEqual({ contentHash: `${MARKER}-edited-replacement`, status: 'ready' });
+  });
+
+  it('keeps an owner-rejected edge out of recall and writes owner facts with evidence', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const saved = await createOwnerKnowledgeGraphFact(
+      {
+        db,
+        agentId,
+        router: {
+          async embed() {
+            return [unit(46)];
+          },
+        },
+      },
+      {
+        subject: { label: `${MARKER} Owner`, kind: 'person' },
+        predicate: 'owns',
+        object: { label: `${MARKER} Manual Project`, kind: 'project' },
+        note: 'I created this project and want it remembered.',
+      },
+    );
+    expect(saved.error).toBeUndefined();
+    if (!saved.memoryId || !saved.relationId) throw new Error('manual graph fact was not saved');
+
+    const [source, relation] = await Promise.all([
+      db
+        .select({ status: knowledgeGraphSources.status })
+        .from(knowledgeGraphSources)
+        .where(eq(knowledgeGraphSources.memoryId, saved.memoryId)),
+      db
+        .select({ reviewStatus: knowledgeGraphRelations.reviewStatus })
+        .from(knowledgeGraphRelations)
+        .where(eq(knowledgeGraphRelations.id, saved.relationId)),
+    ]);
+    expect(source[0]?.status).toBe('ready');
+    expect(relation[0]?.reviewStatus).toBe('confirmed');
+
+    await db
+      .update(knowledgeGraphRelations)
+      .set({ reviewStatus: 'rejected' })
+      .where(eq(knowledgeGraphRelations.id, saved.relationId));
+    const recalled = await recallKnowledgeGraph(db, {
+      agentId,
+      queryText: `${MARKER} manual project`,
+      queryEmbedding: unit(46),
+    });
+    expect(recalled.block).not.toContain(`${MARKER} Manual Project`);
+  });
+
+  it('retains a matching owner decision when its source is re-extracted', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [memory] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} Owner works at ${MARKER} Acme.`,
+        contentHash: `${MARKER}-reviewed-source-v1`,
+        embedding: unit(47),
+        originTrust: 'owner',
+      })
+      .returning({ id: memories.id });
+    if (!memory) throw new Error('test memory was not created');
+    await syncKnowledgeGraph({ db, router }, { agentId });
+    const [edge] = await db
+      .select({ id: knowledgeGraphRelations.id })
+      .from(knowledgeGraphRelations)
+      .where(eq(knowledgeGraphRelations.sourceMemoryId, memory.id));
+    if (!edge) throw new Error('graph relationship was not created');
+    await db
+      .update(knowledgeGraphRelations)
+      .set({ reviewStatus: 'rejected' })
+      .where(eq(knowledgeGraphRelations.id, edge.id));
+
+    await db
+      .update(memories)
+      .set({
+        content: `${MARKER} Owner works at ${MARKER} Acme. This is current.`,
+        contentHash: `${MARKER}-reviewed-source-v2`,
+      })
+      .where(eq(memories.id, memory.id));
+    await syncKnowledgeGraph({ db, router }, { agentId });
+    const [reextracted] = await db
+      .select({ reviewStatus: knowledgeGraphRelations.reviewStatus })
+      .from(knowledgeGraphRelations)
+      .where(eq(knowledgeGraphRelations.sourceMemoryId, memory.id));
+    expect(reextracted?.reviewStatus).toBe('rejected');
   });
 });

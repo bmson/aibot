@@ -1,5 +1,5 @@
 import { getProfileOverview, type MemorySnapshot } from '@assistant/application/profile';
-import { ArrowRight, CheckCircle2, Library, ShieldQuestion } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Library, Network, ShieldQuestion } from 'lucide-react';
 import Link from 'next/link';
 import { AutoRefresh } from '@/app/auto-refresh';
 import { recompileCard } from '@/app/profile/actions';
@@ -124,10 +124,16 @@ export default async function ProfilePage() {
               forget each fact.
             </p>
           </div>
-          <Link href="/profile/memories" className={`${btn.outline} group`}>
-            Browse all
-            <ArrowRight className="size-3.5" aria-hidden="true" />
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link href="/profile/knowledge" className={btn.outline}>
+              <Network className="size-3.5" aria-hidden="true" />
+              Review knowledge graph
+            </Link>
+            <Link href="/profile/memories" className={`${btn.outline} group`}>
+              Browse all
+              <ArrowRight className="size-3.5" aria-hidden="true" />
+            </Link>
+          </div>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <Link
