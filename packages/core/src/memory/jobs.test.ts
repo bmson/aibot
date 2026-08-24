@@ -1,13 +1,14 @@
-import { createDb, type Db, tasks } from '@assistant/db';
+import { createDb, type Db, type TaskRow, tasks } from '@assistant/db';
 import { eq, inArray } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
+import { loadConfig, resetConfigForTest } from '../config.js';
 import type { InboundEvent } from '../events.js';
 import type { ModelRouter } from '../model-router/router.js';
 import type { DispatcherPort } from '../workflow/executor.js';
 import { executeTask } from '../workflow/executor.js';
 import { enqueueTask } from '../workflow/machine.js';
-import { codeJobName } from './jobs.js';
+import { codeJobName, isCodeJobEnabled, runCodeJob } from './jobs.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -58,6 +59,8 @@ afterAll(async () => {
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
 });
 
+afterEach(() => resetConfigForTest());
+
 describe('codeJobName', () => {
   const taskWith = (payload: Record<string, unknown>) =>
     ({ trigger: { source: 'schedule', payload } }) as never;
@@ -75,6 +78,20 @@ describe('codeJobName', () => {
     expect(codeJobName(taskWith({ job: 'rm -rf /' }))).toBeNull();
     expect(codeJobName(taskWith({ instruction: 'do things' }))).toBeNull();
     expect(codeJobName({ trigger: null } as never)).toBeNull();
+  });
+});
+
+describe('feature-gated code jobs', () => {
+  it('skips graph sync until GraphRAG is explicitly enabled', async () => {
+    loadConfig({ GRAPH_RAG_ENABLED: 'false' });
+    expect(isCodeJobEnabled('memory.graph_sync')).toBe(false);
+    expect(isCodeJobEnabled('memory.extract')).toBe(true);
+
+    const result = await runCodeJob({ db: {} as Db, router: fakeRouter }, 'memory.graph_sync', {
+      id: 'unused',
+      agentId: 'unused',
+    } as TaskRow);
+    expect(result).toEqual({ done: true, summary: 'knowledge graph: disabled' });
   });
 });
 

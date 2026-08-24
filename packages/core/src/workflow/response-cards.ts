@@ -115,11 +115,12 @@ export function calendarResponseCards(
 export function weatherResponseCards(ambient?: string): ResponseCard[] {
   if (!ambient) return [];
   const weather =
-    /Weather there:\s*([^,]+),\s*(-?\d+)°C\s*\(today\s*(-?\d+)–(-?\d+)°C,\s*(\d+)% chance of rain, wind\s*(\d+) km\/h\)/i.exec(
+    /Weather there:\s*([^,]+),\s*(-?\d+)°C\s*\(today\s*(-?\d+)–(-?\d+)°C,\s*(\d+)% chance of rain, wind\s*(\d+) km\/h(?:, humidity\s*(\d+)%)?\)/i.exec(
       ambient,
     );
   if (!weather) return [];
-  const [, condition = '', temperature = '', low = '', high = '', rain = '', wind = ''] = weather;
+  const [, condition = '', temperature = '', low = '', high = '', rain = '', wind = '', humidity] =
+    weather;
   const location =
     /Owner's current location:\s*(?:near\s+)?([^,(\n.]+)/i.exec(ambient)?.[1]?.trim() ||
     'Right now';
@@ -130,9 +131,12 @@ export function weatherResponseCards(ambient?: string): ResponseCard[] {
       location,
       condition,
       temperature: `${temperature}°C`,
-      low: `${low}°C`,
-      high: `${high}°C`,
-      detail: `${rain}% rain chance · ${wind} km/h wind`,
+      details: [
+        { label: 'Today', value: `${low}–${high}°C` },
+        { label: 'Wind', value: `${wind} km/h` },
+        ...(humidity ? [{ label: 'Humidity', value: `${humidity}%` }] : []),
+        { label: 'Rain chance', value: `${rain}%` },
+      ],
     },
   ];
 }

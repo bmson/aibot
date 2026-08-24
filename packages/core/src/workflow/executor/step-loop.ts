@@ -11,6 +11,7 @@ import { getAmbientBlock } from '../../memory/ambient.js';
 import { getOwnerCard } from '../../memory/consolidation.js';
 import { recallKnowledgeGraph, recallWithGraphFallback } from '../../memory/graph-recall.js';
 import { recallRelevantContext, recentWindowStart } from '../../memory/recall.js';
+import { recordRecallMetric } from '../../memory/recall-metrics.js';
 import { bumpSkillUse, recallSkills, renderSkillsBlock } from '../../memory/skills.js';
 import type { StepCallOutcome } from '../../model-router/router.js';
 import { deliveredChannels, markApprovalsNotified } from '../approvals.js';
@@ -267,11 +268,31 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
               err,
             );
           },
+          onHistoryError: (err) => {
+            console.error(
+              'executor history recall failed — continuing with graph evidence if available',
+              err,
+            );
+          },
         });
         recallBlock = layered.block || undefined;
         // Provenance for the chat UI affordance; checkpointed so it survives to
         // the (possibly resumed) final-response persist.
         state.recall = layered.sources.length > 0 ? layered.sources : undefined;
+        await recordRecallMetric(db, {
+          agentId: agent.id,
+          taskId: task.id,
+          conversationId,
+          path: 'executor',
+          graphAttempted: loadConfig().GRAPH_RAG_ENABLED,
+          graphFailed: layered.graphFailed,
+          graphCandidates: layered.graph.candidates,
+          graphUsed: layered.graph.used,
+          historyFailed: layered.historyFailed,
+          historyTier: layered.history.tier ?? 'none',
+          historyUsed: layered.history.used ?? layered.history.sources.length,
+          sourceCount: layered.sources.length,
+        }).catch((err) => console.error('executor recall metric failed', err));
       } catch (err) {
         console.error('executor recall failed — continuing without it', err);
       }

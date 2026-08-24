@@ -15,6 +15,7 @@ import { getAmbientBlock } from '@assistant/core/memory/ambient';
 import { getOwnerCard } from '@assistant/core/memory/consolidation';
 import { recallKnowledgeGraph, recallWithGraphFallback } from '@assistant/core/memory/graph-recall';
 import { type RecallSource, recallRelevantContext } from '@assistant/core/memory/recall';
+import { recordRecallMetric } from '@assistant/core/memory/recall-metrics';
 import type { ModelRouter, StreamOutcome } from '@assistant/core/model-router';
 import { buildAutonomyGrant } from '@assistant/core/workflow/autonomy';
 import { enqueueTask } from '@assistant/core/workflow/machine';
@@ -393,9 +394,28 @@ export async function handleChatTurn(
           // graph storage, extraction, or its query embedding is unavailable.
           console.error('knowledge graph recall failed — falling back to chat recall', err);
         },
+        onHistoryError: (err) => {
+          console.error(
+            'chat history recall failed — continuing with graph evidence if available',
+            err,
+          );
+        },
       });
       recallBlock = layered.block || undefined;
       recallSources = layered.sources;
+      void recordRecallMetric(db, {
+        agentId: agent.id,
+        conversationId: conversation.id,
+        path: 'chat',
+        graphAttempted: config.GRAPH_RAG_ENABLED,
+        graphFailed: layered.graphFailed,
+        graphCandidates: layered.graph.candidates,
+        graphUsed: layered.graph.used,
+        historyFailed: layered.historyFailed,
+        historyTier: layered.history.tier ?? 'none',
+        historyUsed: layered.history.used ?? layered.history.sources.length,
+        sourceCount: layered.sources.length,
+      }).catch((err) => console.error('chat recall metric failed', err));
     } catch (err) {
       console.error('chat recall failed — continuing without it', err);
     }

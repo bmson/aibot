@@ -14,6 +14,7 @@ import { Cron } from 'croner';
 import { and, desc, eq, gt, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import { persistMessage } from '../chat.js';
 import { InboundEventSchema } from '../events.js';
+import { isCodeJobEnabled } from '../memory/jobs.js';
 import { type AutonomyGrant, buildAutonomyGrant } from './autonomy.js';
 import { completeTask, enqueueTask, type TaskType } from './machine.js';
 
@@ -537,6 +538,19 @@ export async function runDueSchedules(
       /** A goal created from a tainted session — its firings must start tainted. */
       taintedOrigin?: boolean;
     };
+    // Keep opt-in feature schedules present and ready for a later enable, but
+    // do not create no-op task history or call providers while disabled.
+    if (template.job && !isCodeJobEnabled(template.job)) {
+      await db
+        .update(schedules)
+        .set({
+          lastRunAt: sql`now()`,
+          nextRunAt: nextRun(row.cron, agentTimezone),
+          updatedAt: sql`now()`,
+        })
+        .where(eq(schedules.id, row.id));
+      continue;
+    }
     // A goal in free-range mode arms each of its automatic sessions with a grant
     // so they can consult memory AND act outward without parking every call —
     // the dispatcher's hard floor still holds. Never for a tainted-origin goal.

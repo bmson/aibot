@@ -1,4 +1,5 @@
 import type { Db, TaskRow } from '@assistant/db';
+import { loadConfig } from '../config.js';
 import type { ModelRouter } from '../model-router/router.js';
 import { runAnomalyScan } from '../workflow/anomaly.js';
 import { briefingSummary, runBriefing } from '../workflow/briefing.js';
@@ -63,6 +64,15 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'self.maintain',
   'health.monitor',
 ]);
+
+/**
+ * Feature-gated jobs remain registered so schedules can safely be seeded in
+ * every environment. The scheduler advances a disabled job without creating
+ * task rows, and a manually queued job completes without provider work.
+ */
+export function isCodeJobEnabled(job: string): boolean {
+  return job !== 'memory.graph_sync' || loadConfig().GRAPH_RAG_ENABLED;
+}
 
 export interface CodeJobOutcome {
   done: boolean;
@@ -132,6 +142,9 @@ export async function runCodeJob(
       };
     }
     case 'memory.graph_sync': {
+      if (!isCodeJobEnabled(job)) {
+        return { done: true, summary: 'knowledge graph: disabled' };
+      }
       await deps.heartbeat?.();
       const r = await syncKnowledgeGraph(deps, {
         taskId: task.id,

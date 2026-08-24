@@ -8,6 +8,7 @@ import {
   memories,
   messages,
   modelCalls,
+  recallMetrics,
   toolCache,
   toolCalls,
 } from '@assistant/db';
@@ -27,6 +28,7 @@ let dbUp = false;
 let agentId: string;
 let conversationId: string;
 const messageIds: string[] = [];
+const recallMetricIds: string[] = [];
 let retentionTaskId: string | undefined;
 
 const fakeRouter = {
@@ -66,6 +68,9 @@ afterAll(async () => {
       .delete(conversationSegments)
       .where(eq(conversationSegments.conversationId, conversationId));
     if (messageIds.length) await db.delete(messages).where(inArray(messages.id, messageIds));
+    if (recallMetricIds.length) {
+      await db.delete(recallMetrics).where(inArray(recallMetrics.id, recallMetricIds));
+    }
     await db.delete(conversations).where(eq(conversations.id, conversationId));
     await db.delete(toolCache).where(eq(toolCache.toolName, 'maint.test'));
     await db.delete(memories).where(eq(memories.contentHash, 'maint-test-hash'));
@@ -114,7 +119,7 @@ describe('maintenance (integration)', () => {
     expect(await embeddingOf((short as NonNullable<typeof short>).id)).toBeNull();
   });
 
-  it('purges expired cache rows and memories, keeps live ones', async (ctx) => {
+  it('purges expired cache rows, memories, and aged recall metrics, keeping live rows', async (ctx) => {
     if (!dbUp) return ctx.skip();
     await db.insert(toolCache).values([
       {
@@ -138,13 +143,52 @@ describe('maintenance (integration)', () => {
       contentHash: 'maint-test-hash',
       expiresAt: new Date(Date.now() - 1000),
     });
+    const insertedMetrics = await db
+      .insert(recallMetrics)
+      .values([
+        {
+          agentId,
+          path: 'chat',
+          graphAttempted: true,
+          graphFailed: false,
+          historyFailed: false,
+          graphCandidates: 1,
+          graphUsed: 1,
+          historyTier: 'segment',
+          historyUsed: 1,
+          sourceCount: 2,
+          createdAt: new Date(Date.now() - 91 * 86400e3),
+        },
+        {
+          agentId,
+          path: 'chat',
+          graphAttempted: true,
+          graphFailed: false,
+          historyFailed: false,
+          graphCandidates: 1,
+          graphUsed: 1,
+          historyTier: 'segment',
+          historyUsed: 1,
+          sourceCount: 2,
+        },
+      ])
+      .returning({ id: recallMetrics.id });
+    const [expiredMetric, liveMetric] = insertedMetrics;
+    if (!expiredMetric || !liveMetric) throw new Error('recall metric fixture insert failed');
+    recallMetricIds.push(expiredMetric.id, liveMetric.id);
 
     const purged = await purgeExpired(db);
     expect(purged.cache).toBeGreaterThanOrEqual(1);
     expect(purged.memories).toBeGreaterThanOrEqual(1);
+    expect(purged.recallMetrics).toBeGreaterThanOrEqual(1);
 
     const remaining = await db.select().from(toolCache).where(eq(toolCache.toolName, 'maint.test'));
     expect(remaining.map((r) => r.cacheKey)).toEqual(['maint-live']);
+    const remainingMetrics = await db
+      .select({ id: recallMetrics.id })
+      .from(recallMetrics)
+      .where(inArray(recallMetrics.id, [expiredMetric.id, liveMetric.id]));
+    expect(remainingMetrics).toEqual([{ id: liveMetric.id }]);
   });
 
   it('does nothing when retention is disabled (the default)', async (ctx) => {

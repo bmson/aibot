@@ -13,6 +13,7 @@ import { and, eq, inArray, isNotNull, isNull, lte, notExists, or, sql } from 'dr
 import { loadConfig } from '../config.js';
 import { releaseStaleReservations } from '../cost.js';
 import { purgeStaleLocations } from '../memory/location.js';
+import { purgeStaleRecallMetrics } from '../memory/recall-metrics.js';
 import type { ModelRouter } from '../model-router/router.js';
 import { purgeStaleDreamNotes } from './dream.js';
 
@@ -60,6 +61,7 @@ export async function purgeExpired(
   reservations: number;
   locations: number;
   dreamNotes: number;
+  recallMetrics: number;
 }> {
   const expiredCache = db
     .select({ id: toolCache.cacheKey })
@@ -71,24 +73,31 @@ export async function purgeExpired(
     .from(memories)
     .where(and(isNotNull(memories.expiresAt), lte(memories.expiresAt, sql`now()`)))
     .limit(batch);
-  const [cacheRows, memoryRows, reservations, locations, dreamNotes] = await Promise.all([
-    db
-      .delete(toolCache)
-      .where(inArray(toolCache.cacheKey, expiredCache))
-      .returning({ id: toolCache.cacheKey }),
-    db.delete(memories).where(inArray(memories.id, expiredMemories)).returning({ id: memories.id }),
-    releaseStaleReservations(db, 120, batch),
-    // Phase 15: location pings are transient — purge past the retention window.
-    purgeStaleLocations(db, loadConfig().LOCATION_RETENTION_DAYS, batch),
-    // Phase 20: dream notes are kept 7 days for inspection, then purged.
-    purgeStaleDreamNotes(db, batch),
-  ]);
+  const [cacheRows, memoryRows, reservations, locations, dreamNotes, recallMetrics] =
+    await Promise.all([
+      db
+        .delete(toolCache)
+        .where(inArray(toolCache.cacheKey, expiredCache))
+        .returning({ id: toolCache.cacheKey }),
+      db
+        .delete(memories)
+        .where(inArray(memories.id, expiredMemories))
+        .returning({ id: memories.id }),
+      releaseStaleReservations(db, 120, batch),
+      // Phase 15: location pings are transient — purge past the retention window.
+      purgeStaleLocations(db, loadConfig().LOCATION_RETENTION_DAYS, batch),
+      // Phase 20: dream notes are kept 7 days for inspection, then purged.
+      purgeStaleDreamNotes(db, batch),
+      // Operational counters do not need the owner's long-term history policy.
+      purgeStaleRecallMetrics(db, 90, batch),
+    ]);
   return {
     cache: cacheRows.length,
     memories: memoryRows.length,
     reservations,
     locations,
     dreamNotes,
+    recallMetrics,
   };
 }
 

@@ -14,7 +14,12 @@ function fakeWeatherFetch(code = 3, precip = 90) {
     ({
       ok: true,
       json: async () => ({
-        current: { temperature_2m: 10.8, weather_code: code, wind_speed_10m: 9 },
+        current: {
+          temperature_2m: 10.8,
+          weather_code: code,
+          wind_speed_10m: 9,
+          relative_humidity_2m: 72,
+        },
         daily: {
           weather_code: [63],
           temperature_2m_max: [12.2],
@@ -28,7 +33,14 @@ function fakeWeatherFetch(code = 3, precip = 90) {
 describe('ambient — weather fetch (pure)', () => {
   it('parses current + daily and rounds', async () => {
     const w = await fetchWeather(64, -22, fakeWeatherFetch(3, 40));
-    expect(w).toMatchObject({ tempC: 11, code: 3, description: 'overcast', highC: 12, lowC: 10 });
+    expect(w).toMatchObject({
+      tempC: 11,
+      code: 3,
+      description: 'overcast',
+      highC: 12,
+      lowC: 10,
+      humidity: 72,
+    });
     expect(w?.precipProbabilityMax).toBe(40);
   });
 

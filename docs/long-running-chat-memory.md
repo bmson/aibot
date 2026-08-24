@@ -26,7 +26,9 @@ receives.
 - A transient extraction failure retries after 15 minutes, 1 hour, then 6 hours. A fourth failure
   quarantines that unchanged source instead of spending every scheduler run on it; a source edit or
   extraction-version change starts a fresh attempt. The daily deterministic health check tells the
-  owner about quarantined/stale graph work and recurring final-response quality failures.
+  owner about quarantined/stale graph work, an indexing backlog of two or more sync batches, and
+  recurring final-response quality failures; durable alert state suppresses duplicate daily notices
+  and sends a weekly reminder until resolution.
 - Every recalled direct edge carries a contiguous quote from its source fact proving its endpoints
   and predicate. When this extraction contract changes, sources are versioned and rebuilt offline;
   legacy edges stay out of graph traversal until they have the new evidence.
@@ -35,6 +37,12 @@ receives.
   the original evidence facts and labels every two-hop connection as context, not a conclusion.
 - Graph results and conversation recall share one query embedding and a bounded prompt budget. Any
   graph failure falls through to the existing vector/segment recall path.
+- Both recall entry points emit privacy-preserving counters (graph attempt/failure, candidates used,
+  history availability/tier, and source count), never query text, embeddings, memory text, or recall
+  blocks. A failure in one retrieval layer preserves evidence from the other; the health monitor
+  raises an owner alert when GraphRAG or conversation recall repeatedly falls back within 24 hours.
+  These operational counters are automatically purged after 90 days; they do not follow the owner's
+  conversation-history retention policy.
 
 Graph retrieval is guarded by both `CHAT_RECALL_ENABLED` and `GRAPH_RAG_ENABLED` (both default
 false), and inherits owner-private, untainted-context gating. Reply provenance carries

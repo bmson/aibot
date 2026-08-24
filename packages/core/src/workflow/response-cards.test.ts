@@ -58,10 +58,20 @@ describe('response cards', () => {
   it('turns the fresh ambient weather block into a compact card', () => {
     expect(
       weatherResponseCards(
-        "Right now (ambient context):\nOwner's current location: near San Francisco (37.7749, -122.4194), as of just now.\nWeather there: overcast, 18°C (today 17–19°C, 2% chance of rain, wind 18 km/h).",
+        "Right now (ambient context):\nOwner's current location: near San Francisco (37.7749, -122.4194), as of just now.\nWeather there: overcast, 18°C (today 17–19°C, 2% chance of rain, wind 18 km/h, humidity 70%).",
       ),
     ).toMatchObject([
-      { kind: 'weather', location: 'San Francisco', temperature: '18°C', high: '19°C' },
+      {
+        kind: 'weather',
+        location: 'San Francisco',
+        temperature: '18°C',
+        details: [
+          { label: 'Today', value: '17–19°C' },
+          { label: 'Wind', value: '18 km/h' },
+          { label: 'Humidity', value: '70%' },
+          { label: 'Rain chance', value: '2%' },
+        ],
+      },
     ]);
   });
 });

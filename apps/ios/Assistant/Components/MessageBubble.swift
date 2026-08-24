@@ -227,7 +227,10 @@ struct MessageBubble: View {
     }
 
     private var usesPrimaryCards: Bool {
-        message.role == .assistant && !message.parts.compactMap(MessageResponseCard.init(part:)).isEmpty
+        // The local fallback intentionally has the same ownership as a server
+        // card. Once a reply has a card-shaped presentation, showing the
+        // source prose as a bubble as well creates a duplicate answer.
+        message.role == .assistant && !responseCards.isEmpty
     }
 
     private func decisionCard(_ part: MessagePart) -> some View {
@@ -302,16 +305,22 @@ enum MessageResponseCard: Identifiable {
         var id: String { "\(time)-\(title)" }
     }
 
+    struct WeatherDetail: Identifiable {
+        let label: String
+        let value: String
+        var id: String { label.lowercased() }
+    }
+
     case agenda(title: String, subtitle: String, items: [AgendaItem])
     case event(id: String, time: String, title: String, location: String, attendees: [String], calendars: [String], linkLabel: String?, linkURL: String?)
-    case weather(location: String, temperature: String, condition: String, high: String?, low: String?, detail: String?)
+    case weather(location: String, temperature: String, condition: String, details: [WeatherDetail])
     case duration(title: String, duration: String, detail: String?, confidence: String?)
 
     var id: String {
         switch self {
         case let .agenda(title, _, _): "agenda-\(title)"
         case let .event(id, _, _, _, _, _, _, _): id
-        case let .weather(location, temperature, _, _, _, _): "weather-\(location)-\(temperature)"
+        case let .weather(location, temperature, _, _): "weather-\(location)-\(temperature)"
         case let .duration(title, duration, _, _): "duration-\(title)-\(duration)"
         }
     }
@@ -349,13 +358,12 @@ enum MessageResponseCard: Identifiable {
         case "weather":
             guard let temperature = data["temperature"]?.string,
                   let condition = data["condition"]?.string else { return nil }
+            let details = Self.weatherDetails(from: data)
             self = .weather(
                 location: data["location"]?.string ?? "Right now",
                 temperature: temperature,
                 condition: condition,
-                high: data["high"]?.string,
-                low: data["low"]?.string,
-                detail: data["detail"]?.string
+                details: details
             )
         case "duration", "time-estimate":
             guard let duration = data["duration"]?.string else { return nil }
@@ -406,12 +414,129 @@ enum MessageResponseCard: Identifiable {
               let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let value = Range(match.range(at: 1), in: text),
               let unit = Range(match.range(at: 2), in: text) else { return nil }
-        let temperature = "\(text[value])°\(text[unit].uppercased())"
-        let condition = ["rain", "snow", "cloud", "sun", "wind", "fog", "storm"]
-            .first(where: lower.contains)
-            .map { $0 == "sun" ? "Sunny" : $0.capitalized } ?? "Current conditions"
-        let detail = text.components(separatedBy: .newlines).first { $0.lowercased().contains(condition.lowercased()) || $0.contains("°") }
-        return .weather(location: "Right now", temperature: temperature, condition: condition, high: nil, low: nil, detail: detail)
+        let temperature = weatherField(named: "temperature", in: text)
+            ?? "\(text[value])°\(text[unit].uppercased())"
+        let condition = weatherField(named: "conditions", in: text)
+            ?? ["rain", "snow", "cloud", "sun", "wind", "fog", "storm"]
+                .first(where: lower.contains)
+                .map { $0 == "sun" ? "Sunny" : $0.capitalized }
+            ?? "Current conditions"
+        return .weather(
+            location: weatherLocation(in: text) ?? "Right now",
+            temperature: temperature,
+            condition: condition,
+            details: weatherDetails(in: text)
+        )
+    }
+
+    /// Keep every weather metric the reply provides in the structured surface.
+    /// The primary temperature and current condition already have dedicated
+    /// visual positions, so the list begins with the day's range and secondary
+    /// measurements instead of repeating those two fields.
+    private static func weatherDetails(in text: String) -> [WeatherDetail] {
+        let fields: [(label: String, names: [String])] = [
+            ("Today", ["today's range", "today’s range"]),
+            ("Wind", ["wind"]),
+            ("Humidity", ["humidity"]),
+            ("Rain chance", ["rain chance", "precipitation chance"]),
+            ("Feels like", ["feels like"]),
+            ("Visibility", ["visibility"]),
+            ("UV index", ["uv index", "uv"]),
+            ("Pressure", ["pressure"]),
+            ("Updated", ["as of"]),
+            ("Source", ["source"]),
+        ]
+        let knownDetails: [WeatherDetail] = fields.compactMap { field in
+            guard let value = field.names.lazy.compactMap({ weatherField(named: $0, in: text) }).first else {
+                return nil
+            }
+            return WeatherDetail(label: field.label, value: value)
+        }
+        return knownDetails + markdownWeatherDetails(
+            in: text,
+            excluding: Set(knownDetails.map { $0.label.lowercased() })
+                .union(fields.flatMap(\.names).map { $0.lowercased() })
+                .union(["temperature", "conditions"])
+        )
+    }
+
+    /// New cards carry an explicit list of weather metrics. Older server
+    /// cards remain useful by promoting their range and one legacy detail.
+    private static func weatherDetails(from data: [String: JSONValue]) -> [WeatherDetail] {
+        if case let .array(values)? = data["details"] {
+            let details = values.compactMap { value -> WeatherDetail? in
+                guard case let .object(detail) = value,
+                      let label = detail["label"]?.string,
+                      let value = detail["value"]?.string,
+                      !label.isEmpty, !value.isEmpty else { return nil }
+                return .init(label: label, value: value)
+            }
+            if !details.isEmpty { return details }
+        }
+
+        var details: [WeatherDetail] = []
+        if let low = data["low"]?.string, let high = data["high"]?.string {
+            details.append(.init(label: "Today", value: "\(low)–\(high)"))
+        }
+        if let detail = data["detail"]?.string, !detail.isEmpty {
+            details.append(.init(label: "Details", value: detail))
+        }
+        return details
+    }
+
+    private static func weatherLocation(in text: String) -> String? {
+        let pattern = #"(?i)\bweather\s+for\s+(.+?)(?:\s+as\s+of\b|[\r\n:])"#
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let locationRange = Range(match.range(at: 1), in: text) else { return nil }
+        let location = String(text[locationRange])
+            .replacingOccurrences(of: "**", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return location.isEmpty ? nil : location
+    }
+
+    /// Preserves less-common metrics such as cloud cover or dew point without
+    /// requiring the app to be updated for every weather provider field.
+    private static func markdownWeatherDetails(in text: String, excluding labels: Set<String>) -> [WeatherDetail] {
+        var details: [WeatherDetail] = []
+        for line in text.components(separatedBy: .newlines) where line.contains("**") {
+            guard let colon = line.firstIndex(of: ":"),
+                  let firstLetter = line[..<colon].firstIndex(where: { $0.isLetter }) else { continue }
+            let label = String(line[firstLetter..<colon])
+                .replacingOccurrences(of: "**", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = label.lowercased()
+            let value = String(line[line.index(after: colon)...])
+                .replacingOccurrences(of: "**", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !label.isEmpty, !value.isEmpty, !labels.contains(normalized) else { continue }
+            details.append(.init(label: label, value: value))
+        }
+        return details
+    }
+
+    /// Finds a labeled Markdown field in a conventional assistant response,
+    /// such as `- **Conditions:** Partly cloudy`. The detail itself stays in
+    /// Markdown so the card renderer can preserve its inline emphasis.
+    private static func weatherField(named name: String, in text: String) -> String? {
+        if name == "as of" {
+            let timestampPattern = #"(?i)\bas\s+of\s+(\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)(?:\s+[A-Z]{2,5})?)"#
+            guard let expression = try? NSRegularExpression(pattern: timestampPattern),
+                  let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let valueRange = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[valueRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let pattern = #"(?im)\b\*{0,2}"# + NSRegularExpression.escapedPattern(for: name) + #"\*{0,2}\s*:\s*([^\r\n]+)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let valueRange = Range(match.range(at: 1), in: text) else { return nil }
+        var value = String(text[valueRange])
+            .replacingOccurrences(of: "**", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if name == "source" {
+            value = value.trimmingCharacters(in: CharacterSet(charactersIn: "() "))
+        }
+        return value.isEmpty ? nil : value
     }
 
     private static func inferredDuration(_ text: String, lower: String) -> Self? {
@@ -447,8 +572,8 @@ private struct RichResponseCards: View {
                     agendaCard(title: title, subtitle: subtitle, items: items)
                 case let .event(_, time, title, location, attendees, calendars, linkLabel, linkURL):
                     eventCard(time: time, title: title, location: location, attendees: attendees, calendars: calendars, linkLabel: linkLabel, linkURL: linkURL)
-                case let .weather(location, temperature, condition, high, low, detail):
-                    weatherCard(location: location, temperature: temperature, condition: condition, high: high, low: low, detail: detail)
+                case let .weather(location, temperature, condition, details):
+                    weatherCard(location: location, temperature: temperature, condition: condition, details: details)
                 case let .duration(title, duration, detail, confidence):
                     durationCard(title: title, duration: duration, detail: detail, confidence: confidence)
                 }
@@ -552,9 +677,7 @@ private struct RichResponseCards: View {
         location: String,
         temperature: String,
         condition: String,
-        high: String?,
-        low: String?,
-        detail: String?
+        details: [MessageResponseCard.WeatherDetail]
     ) -> some View {
         VStack(alignment: .leading, spacing: 13) {
             HStack(alignment: .top) {
@@ -573,25 +696,30 @@ private struct RichResponseCards: View {
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(.white)
             }
-            HStack(alignment: .lastTextBaseline, spacing: 14) {
-                Text(temperature)
-                    .font(.system(size: 42, weight: .light, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.white)
-                if high != nil || low != nil {
-                    VStack(alignment: .leading, spacing: 3) {
-                        if let high { Text("High \(high)") }
-                        if let low { Text("Low \(low)") }
+            Text(temperature)
+                .font(.system(size: 42, weight: .light, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+            if !details.isEmpty {
+                LazyVGrid(
+                    columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())],
+                    alignment: .leading,
+                    spacing: 11
+                ) {
+                    ForEach(details) { detail in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(detail.label.uppercased())
+                                .font(.caption2.weight(.bold))
+                                .tracking(0.55)
+                                .foregroundStyle(.white.opacity(0.62))
+                            Text(AssistantMarkdown.inlineAttributed(detail.value))
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.white.opacity(0.9))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.72))
                 }
-            }
-            if let detail, !detail.isEmpty {
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.74))
-                    .lineLimit(2)
             }
         }
         .padding(17)
@@ -603,13 +731,6 @@ private struct RichResponseCards: View {
             ),
             in: RoundedRectangle(cornerRadius: 22, style: .continuous)
         )
-        .overlay(alignment: .topTrailing) {
-            Circle()
-                .fill(.white.opacity(0.09))
-                .frame(width: 92, height: 92)
-                .offset(x: 25, y: -36)
-                .allowsHitTesting(false)
-        }
     }
 
     private func durationCard(title: String, duration: String, detail: String?, confidence: String?) -> some View {
@@ -678,8 +799,8 @@ private enum PresentationCompanion {
         let source = cards.map { card in
             switch card {
             case let .event(_, time, title, location, _, _, _, _): "Event: \(time), \(title), \(location)"
-            case let .weather(location, temperature, condition, high, low, detail):
-                "Weather: \(location), \(condition), \(temperature), high \(high ?? ""), low \(low ?? ""), \(detail ?? "")"
+            case let .weather(location, temperature, condition, details):
+                "Weather: \(location), \(condition), \(temperature), \(details.map { "\($0.label): \($0.value)" }.joined(separator: ", "))"
             case let .duration(title, duration, detail, _): "Estimate: \(title), \(duration), \(detail ?? "")"
             case let .agenda(title, subtitle, items): "Agenda: \(title), \(subtitle), \(items.map(\.title).joined(separator: ", "))"
             }
@@ -713,6 +834,17 @@ private enum PresentationCompanion {
 /// A lightweight GFM-inspired block parser. Keeping this local avoids a dependency while
 /// making partially streamed replies render gracefully as they arrive.
 enum AssistantMarkdown {
+    /// Compact structured cards can still include a short Markdown label from
+    /// a legacy/plain-text reply. Parse that inline fragment instead of
+    /// exposing delimiter characters such as `**` in the card.
+    static func inlineAttributed(_ source: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        return (try? AttributedString(markdown: source, options: options))
+            ?? AttributedString(source)
+    }
+
     enum Block: Hashable {
         case heading(level: Int, text: String)
         case paragraph(String)

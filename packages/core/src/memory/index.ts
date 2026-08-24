@@ -13,6 +13,7 @@ export * from './knowledge-graph.js';
 export * from './location.js';
 export * from './occasions.js';
 export * from './recall.js';
+export * from './recall-metrics.js';
 export * from './segmentation.js';
 export * from './skill-reflect.js';
 export * from './skills.js';

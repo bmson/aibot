@@ -1,0 +1,1 @@
+ALTER TABLE "recall_metrics" ADD COLUMN "history_failed" boolean DEFAULT false NOT NULL;

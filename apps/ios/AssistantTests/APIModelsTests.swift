@@ -110,7 +110,7 @@ final class APIModelsTests: XCTestCase {
         let weather = MessageResponseCard.inferred(
             from: "The weather is sunny and 18°C now. Wind stays light this afternoon."
         )
-        guard case let .weather(_, temperature, condition, _, _, _)? = weather.first else {
+        guard case let .weather(_, temperature, condition, _)? = weather.first else {
             return XCTFail("Expected a weather card")
         }
         XCTAssertEqual(temperature, "18°C")
@@ -124,6 +124,52 @@ final class APIModelsTests: XCTestCase {
         }
         XCTAssertEqual(duration, "45 minutes")
         XCTAssertTrue(MessageResponseCard.inferred(from: "The answer has 45 lines.").isEmpty)
+    }
+
+    func testWeatherCardInferenceUsesMarkdownConditionsInsteadOfRainChance() {
+        let weather = MessageResponseCard.inferred(
+            from: """
+            Here's the weather:
+            - 🌡️ **Temperature:** 19°C (66°F)
+            - ⛅ **Conditions:** Partly cloudy
+            - 💨 **Wind:** 15 km/h (9 mph)
+            - 🌧️ **Rain chance:** 0%
+            """
+        )
+        guard case let .weather(_, temperature, condition, details)? = weather.first else {
+            return XCTFail("Expected a weather card")
+        }
+        XCTAssertEqual(temperature, "19°C (66°F)")
+        XCTAssertEqual(condition, "Partly cloudy")
+        XCTAssertEqual(details.map(\.label), ["Wind", "Rain chance"])
+        XCTAssertEqual(details.first?.value, "15 km/h (9 mph)")
+    }
+
+    func testWeatherCardInferenceKeepsEveryAvailableWeatherMetric() {
+        let weather = MessageResponseCard.inferred(
+            from: """
+            Here's the current weather for San Francisco, CA as of 3:48 PM PDT:
+            - **Temperature:** 19°C (66°F)
+            - **Conditions:** Partly cloudy
+            - **Wind:** 15 km/h (9 mph)
+            - **Humidity:** 68%
+            - **Rain chance:** 0% (dry all day)
+            - **Dew point:** 13°C
+            **Today’s range:** 17–20°C (63–68°F). Mild with a light breeze.
+            (Source: OpenWeatherMap, refreshed at 3:48 PM.)
+            """
+        )
+        guard case let .weather(location, temperature, _, details)? = weather.first else {
+            return XCTFail("Expected a weather card")
+        }
+        XCTAssertEqual(location, "San Francisco, CA")
+        XCTAssertEqual(temperature, "19°C (66°F)")
+        XCTAssertEqual(details.map(\.label), ["Today", "Wind", "Humidity", "Rain chance", "Updated", "Source", "Dew point"])
+        XCTAssertEqual(details[0].value, "17–20°C (63–68°F). Mild with a light breeze.")
+        XCTAssertEqual(details[2].value, "68%")
+        XCTAssertEqual(details[4].value, "3:48 PM PDT")
+        XCTAssertEqual(details[5].value, "OpenWeatherMap, refreshed at 3:48 PM.")
+        XCTAssertEqual(details[6].value, "13°C")
     }
 
     func testIdentifierFormattingDoesNotExposeImplementationPunctuation() {

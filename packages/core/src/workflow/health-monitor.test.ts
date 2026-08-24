@@ -1,16 +1,19 @@
 import {
   agents,
+  assistantHealthAlerts,
   conversations,
   createDb,
   type Db,
   knowledgeGraphSources,
   memories,
   messages,
+  recallMetrics,
   responseChecks,
   tasks,
 } from '@assistant/db';
 import { and, eq, inArray } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { loadConfig, resetConfigForTest } from '../config.js';
 import { runAssistantHealthMonitor } from './health-monitor.js';
 import { enqueueTask } from './machine.js';
 
@@ -40,6 +43,13 @@ beforeAll(async () => {
     console.warn('health-monitor.test: database unreachable — skipping');
   }
 });
+
+beforeEach(() => {
+  resetConfigForTest();
+  loadConfig({ CHAT_RECALL_ENABLED: 'true', GRAPH_RAG_ENABLED: 'true' });
+});
+
+afterEach(() => resetConfigForTest());
 
 afterAll(async () => {
   if (dbUp) {
@@ -111,18 +121,180 @@ describe('assistant health monitor (integration)', () => {
         mustActRetries: 1,
       });
     }
+    await db.insert(recallMetrics).values(
+      Array.from({ length: 3 }, () => ({
+        agentId,
+        path: 'executor',
+        graphAttempted: true,
+        graphFailed: true,
+        historyFailed: true,
+        historyTier: 'message',
+      })),
+    );
 
-    const result = await runAssistantHealthMonitor({ db }, { agentId });
+    const firstNow = new Date();
+    const result = await runAssistantHealthMonitor({ db }, { agentId, now: firstNow });
     expect(result.notified).toBe(true);
-    expect(result.signals).toHaveLength(3);
-    const [notice] = await db
+    expect(result.signals).toHaveLength(5);
+    const notices = await db
       .select({ text: messages.text })
       .from(messages)
       .innerJoin(conversations, eq(conversations.id, messages.conversationId))
       .where(and(eq(conversations.agentId, agentId), eq(conversations.title, 'Notifications')))
       .orderBy(messages.createdAt);
-    expect(notice?.text).toContain('quarantined after bounded retries');
-    expect(notice?.text).toContain('verification was unavailable 2 times');
-    expect(notice?.text).toContain('2 required-action steps');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.text).toContain('quarantined after bounded retries');
+    expect(notices[0]?.text).toContain('verification was unavailable 2 times');
+    expect(notices[0]?.text).toContain('2 required-action steps');
+    expect(notices[0]?.text).toContain('GraphRAG recall was unavailable 3 times');
+    expect(notices[0]?.text).toContain('Conversation memory recall was unavailable 3 times');
+
+    // The next daily pass records fresh observations but does not repeat the
+    // same owner message. A week later an unresolved graph incident is safely
+    // reminded; response-quality rows have aged out by then.
+    const sameIncident = await runAssistantHealthMonitor(
+      { db },
+      { agentId, now: new Date(firstNow.getTime() + 60 * 60 * 1000) },
+    );
+    expect(sameIncident).toMatchObject({ notified: false, signals: expect.any(Array) });
+    const [quarantineAlert] = await db
+      .select({ observations: assistantHealthAlerts.observationCount })
+      .from(assistantHealthAlerts)
+      .where(
+        and(
+          eq(assistantHealthAlerts.agentId, agentId),
+          eq(assistantHealthAlerts.kind, 'graph_quarantined'),
+        ),
+      );
+    expect(quarantineAlert?.observations).toBe(2);
+
+    const reminder = await runAssistantHealthMonitor(
+      { db },
+      { agentId, now: new Date(firstNow.getTime() + 8 * 24 * 60 * 60 * 1000) },
+    );
+    expect(reminder).toMatchObject({
+      notified: true,
+      signals: [expect.stringContaining('quarantined')],
+    });
+    const reminderNotices = await db
+      .select({ text: messages.text })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .where(and(eq(conversations.agentId, agentId), eq(conversations.title, 'Notifications')))
+      .orderBy(messages.createdAt);
+    expect(reminderNotices).toHaveLength(2);
+
+    await db
+      .update(knowledgeGraphSources)
+      .set({ status: 'ready' })
+      .where(eq(knowledgeGraphSources.memoryId, memory.id));
+    const resolved = await runAssistantHealthMonitor(
+      { db },
+      { agentId, now: new Date(firstNow.getTime() + 8 * 24 * 60 * 60 * 1000 + 1) },
+    );
+    expect(resolved).toEqual({ signals: [], notified: false });
+    const unresolved = await db
+      .select({ kind: assistantHealthAlerts.kind })
+      .from(assistantHealthAlerts)
+      .where(
+        and(eq(assistantHealthAlerts.agentId, agentId), eq(assistantHealthAlerts.status, 'open')),
+      );
+    expect(unresolved).toEqual([]);
+
+    // Schedulers may overlap around a deploy. Reopening the alert is claimed
+    // atomically, so concurrent monitors still produce one owner message.
+    await db
+      .update(knowledgeGraphSources)
+      .set({ status: 'quarantined' })
+      .where(eq(knowledgeGraphSources.memoryId, memory.id));
+    const concurrentNow = new Date(firstNow.getTime() + 8 * 24 * 60 * 60 * 1000 + 2);
+    const concurrent = await Promise.all([
+      runAssistantHealthMonitor({ db }, { agentId, now: concurrentNow }),
+      runAssistantHealthMonitor({ db }, { agentId, now: concurrentNow }),
+    ]);
+    expect(concurrent.filter((result) => result.notified)).toHaveLength(1);
+    const concurrentNotices = await db
+      .select({ text: messages.text })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .where(and(eq(conversations.agentId, agentId), eq(conversations.title, 'Notifications')));
+    expect(concurrentNotices).toHaveLength(3);
+  });
+
+  it('resolves graph-only alerts while GraphRAG is disabled', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [memory] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} disabled graph source`,
+        contentHash: `${MARKER}-disabled-graph`,
+        embedding: new Array(1536).fill(0.01),
+        originTrust: 'owner',
+      })
+      .returning({ id: memories.id });
+    if (!memory) throw new Error('test memory was not created');
+    await db.insert(knowledgeGraphSources).values({
+      memoryId: memory.id,
+      contentHash: `${MARKER}-disabled-graph`,
+      status: 'quarantined',
+      attempts: 4,
+      lastError: 'provider outage',
+    });
+    await db.insert(recallMetrics).values(
+      Array.from({ length: 3 }, () => ({
+        agentId,
+        path: 'chat',
+        graphAttempted: true,
+        graphFailed: true,
+        historyFailed: true,
+        historyTier: 'none',
+      })),
+    );
+
+    const enabled = await runAssistantHealthMonitor({ db }, { agentId });
+    expect(enabled.signals.some((signal) => signal.includes('GraphRAG'))).toBe(true);
+    resetConfigForTest();
+    loadConfig({ CHAT_RECALL_ENABLED: 'false', GRAPH_RAG_ENABLED: 'false' });
+    const result = await runAssistantHealthMonitor({ db }, { agentId });
+    expect(result.signals.every((signal) => !signal.includes('GraphRAG'))).toBe(true);
+    const graphAlerts = await db
+      .select({ status: assistantHealthAlerts.status })
+      .from(assistantHealthAlerts)
+      .where(
+        and(
+          eq(assistantHealthAlerts.agentId, agentId),
+          inArray(assistantHealthAlerts.kind, [
+            'graph_quarantined',
+            'graph_stale_pending',
+            'graph_recall_unavailable',
+            'history_recall_unavailable',
+          ]),
+        ),
+      );
+    expect(graphAlerts.every((alert) => alert.status === 'resolved')).toBe(true);
+  });
+
+  it('alerts when graph indexing falls behind more than two sync batches', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    await db.insert(memories).values(
+      Array.from({ length: 50 }, (_, index) => ({
+        agentId,
+        category: 'knowledge' as const,
+        kind: 'fact',
+        content: `${MARKER} graph backlog fact ${index}`,
+        contentHash: `${MARKER}-graph-backlog-${index}`,
+        originTrust: 'owner' as const,
+      })),
+    );
+
+    const result = await runAssistantHealthMonitor({ db }, { agentId });
+    expect(
+      result.signals.some((signal) =>
+        signal.includes('GraphRAG source facts are waiting to be indexed'),
+      ),
+    ).toBe(true);
   });
 });

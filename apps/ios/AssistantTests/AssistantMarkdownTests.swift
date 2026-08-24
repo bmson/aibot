@@ -119,4 +119,9 @@ final class AssistantMarkdownTests: XCTestCase {
         let plain = rendered.map { String($0.characters) } ?? ""
         XCTAssertTrue(plain.contains("receipts:\nAmazon"))
     }
+
+    func testInlineMarkdownForCardDetailsDoesNotExposeDelimiters() {
+        let rendered = AssistantMarkdown.inlineAttributed("- 💨 **Wind:** 15 km/h")
+        XCTAssertEqual(String(rendered.characters), "- 💨 Wind: 15 km/h")
+    }
 }

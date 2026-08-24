@@ -586,6 +586,35 @@ export const anomalies = pgTable(
 );
 
 /**
+ * Deterministic operational alerts for one assistant. Unlike approval
+ * anomalies, these track a currently unhealthy subsystem across monitor runs
+ * so a persistent incident is visible without creating a daily notification
+ * storm.
+ */
+export const assistantHealthAlerts = pgTable(
+  'assistant_health_alerts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    detail: text('detail').notNull().default(''),
+    status: text('status').notNull().default('open'),
+    observationCount: integer('observation_count').notNull().default(1),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    lastNotifiedAt: timestamp('last_notified_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    check('assistant_health_alerts_status_check', sql`${t.status} IN ('open','resolved')`),
+    uniqueIndex('assistant_health_alerts_agent_kind_idx').on(t.agentId, t.kind),
+    index('assistant_health_alerts_open_idx').on(t.agentId, t.status, t.lastSeenAt),
+  ],
+);
+
+/**
  * Skill library (Phase 26): Voyager-style competence memory, kept separate from
  * facts. A post-task reflection distills a named procedure — preconditions,
  * steps (advice, never auto-run code), gotchas, and provenance — from a task
@@ -1757,7 +1786,43 @@ export const responseChecks = pgTable(
   ],
 );
 
+/**
+ * Privacy-preserving recall observability. It stores quality counters only —
+ * never a query, retrieved memory, embedding, or rendered recall block.
+ */
+export const recallMetrics = pgTable(
+  'recall_metrics',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    conversationId: uuid('conversation_id').references(() => conversations.id, {
+      onDelete: 'set null',
+    }),
+    /** Direct chat path or the durable executor path. */
+    path: text('path').notNull(),
+    graphAttempted: boolean('graph_attempted').notNull().default(false),
+    graphFailed: boolean('graph_failed').notNull().default(false),
+    historyFailed: boolean('history_failed').notNull().default(false),
+    graphCandidates: integer('graph_candidates').notNull().default(0),
+    graphUsed: integer('graph_used').notNull().default(0),
+    historyTier: text('history_tier').notNull().default('none'),
+    historyUsed: integer('history_used').notNull().default(0),
+    sourceCount: integer('source_count').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check('recall_metrics_path_check', sql`${t.path} IN ('chat','executor')`),
+    check('recall_metrics_tier_check', sql`${t.historyTier} IN ('segment','message','none')`),
+    index('recall_metrics_agent_created_idx').on(t.agentId, t.createdAt),
+    index('recall_metrics_task_idx').on(t.taskId),
+  ],
+);
+
 export type ResponseCheckRow = typeof responseChecks.$inferSelect;
+export type RecallMetricRow = typeof recallMetrics.$inferSelect;
 
 export type CostEventRow = typeof costEvents.$inferSelect;
 export type CostReservationRow = typeof costReservations.$inferSelect;
@@ -1765,6 +1830,7 @@ export type RateRow = typeof rateTable.$inferSelect;
 export type ContactRow = typeof contacts.$inferSelect;
 export type OccasionRow = typeof occasions.$inferSelect;
 export type AnomalyRow = typeof anomalies.$inferSelect;
+export type AssistantHealthAlertRow = typeof assistantHealthAlerts.$inferSelect;
 export type SkillRow = typeof skills.$inferSelect;
 export type ImprovementProposalRow = typeof improvementProposals.$inferSelect;
 export type FileRow = typeof files.$inferSelect;

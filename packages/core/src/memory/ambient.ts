@@ -62,6 +62,7 @@ export interface WeatherNow {
   code: number;
   description: string;
   windKmh: number;
+  humidity?: number;
   highC: number;
   lowC: number;
   precipProbabilityMax: number;
@@ -77,13 +78,18 @@ export async function fetchWeather(
 ): Promise<WeatherNow | null> {
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}` +
-    '&current=temperature_2m,weather_code,wind_speed_10m' +
+    '&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m' +
     '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max' +
     '&forecast_days=1&timezone=auto';
   const res = await fetchImpl(url, { signal: AbortSignal.timeout(WEATHER_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`weather fetch failed: ${res.status}`);
   const data = (await res.json()) as {
-    current?: { temperature_2m?: number; weather_code?: number; wind_speed_10m?: number };
+    current?: {
+      temperature_2m?: number;
+      weather_code?: number;
+      wind_speed_10m?: number;
+      relative_humidity_2m?: number;
+    };
     daily?: {
       weather_code?: number[];
       temperature_2m_max?: number[];
@@ -99,6 +105,10 @@ export async function fetchWeather(
     code: cur.weather_code ?? day?.weather_code?.[0] ?? 0,
     description: describeWeather(cur.weather_code ?? day?.weather_code?.[0] ?? 0),
     windKmh: Math.round(cur.wind_speed_10m ?? 0),
+    humidity:
+      typeof cur.relative_humidity_2m === 'number'
+        ? Math.round(cur.relative_humidity_2m)
+        : undefined,
     highC: Math.round(day?.temperature_2m_max?.[0] ?? cur.temperature_2m),
     lowC: Math.round(day?.temperature_2m_min?.[0] ?? cur.temperature_2m),
     precipProbabilityMax: day?.precipitation_probability_max?.[0] ?? 0,
@@ -154,7 +164,9 @@ export async function refreshAmbientSnapshot(
     if (weather) {
       lines.push(
         `Weather there: ${weather.description}, ${weather.tempC}°C (today ${weather.lowC}–${weather.highC}°C, ` +
-          `${weather.precipProbabilityMax}% chance of rain, wind ${weather.windKmh} km/h).` +
+          `${weather.precipProbabilityMax}% chance of rain, wind ${weather.windKmh} km/h` +
+          (weather.humidity === undefined ? '' : `, humidity ${weather.humidity}%`) +
+          ').' +
           (flags.raining_soon ? ' Rain is likely today — factor it into anything outdoors.' : ''),
       );
     } else {

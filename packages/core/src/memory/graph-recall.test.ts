@@ -31,6 +31,8 @@ describe('recallWithGraphFallback', () => {
       ...graphResult.sources,
       { date: '2026-08-23', label: 'Chat fact', kind: 'chat' },
     ]);
+    expect(result.graphFailed).toBe(false);
+    expect(result.historyFailed).toBe(false);
   });
 
   it('continues with standard recall when GraphRAG or its embedding fails', async () => {
@@ -56,6 +58,8 @@ describe('recallWithGraphFallback', () => {
     expect(history).toHaveBeenCalledOnce();
     expect(result.block).toBe('Earlier discussion remains available');
     expect(result.graph.used).toBe(0);
+    expect(result.graphFailed).toBe(true);
+    expect(result.historyFailed).toBe(false);
   });
 
   it('does not invoke the graph layer when it is disabled', async () => {
@@ -65,5 +69,29 @@ describe('recallWithGraphFallback', () => {
 
     expect(history).toHaveBeenCalledWith(undefined, expect.objectContaining({ used: 0 }));
     expect(result).toMatchObject({ block: '', sources: [], graph: { used: 0 } });
+    expect(result.graphFailed).toBe(false);
+    expect(result.historyFailed).toBe(false);
+  });
+
+  it('keeps graph evidence and reports telemetry when history recall fails', async () => {
+    const outage = new Error('vector index unavailable');
+    const onHistoryError = vi.fn();
+
+    const result = await recallWithGraphFallback({
+      graph: async () => ({ graph: graphResult, queryEmbedding: [0.1, 0.2] }),
+      history: async () => {
+        throw outage;
+      },
+      onHistoryError,
+    });
+
+    expect(onHistoryError).toHaveBeenCalledWith(outage);
+    expect(result).toMatchObject({
+      block: 'Graph evidence',
+      sources: graphResult.sources,
+      graphFailed: false,
+      historyFailed: true,
+      history: { block: '', sources: [], tier: 'none', used: 0 },
+    });
   });
 });

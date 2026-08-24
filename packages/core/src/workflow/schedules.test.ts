@@ -1,7 +1,8 @@
 import { conversations, createDb, type Db, goals, messages, schedules, tasks } from '@assistant/db';
 import { eq, inArray } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
+import { loadConfig, resetConfigForTest } from '../config.js';
 import {
   cancelQueuedGoalWork,
   GOAL_BLOCKED_PREFIX,
@@ -9,6 +10,7 @@ import {
   goalAutomationGate,
   goalScheduleName,
   runDueSchedules,
+  upsertSchedule,
 } from './schedules.js';
 
 const DATABASE_URL =
@@ -23,6 +25,7 @@ let workChatId = '';
 const createdTaskIds: string[] = [];
 const createdGoalIds: string[] = [];
 const createdChatIds: string[] = [];
+const createdScheduleNames: string[] = [];
 
 async function insertGoalTask(input: {
   type?: string;
@@ -127,6 +130,9 @@ afterAll(async () => {
         .where(inArray(schedules.name, createdGoalIds.map(goalScheduleName)));
       await db.delete(goals).where(inArray(goals.id, createdGoalIds));
     }
+    if (createdScheduleNames.length) {
+      await db.delete(schedules).where(inArray(schedules.name, createdScheduleNames));
+    }
     if (createdChatIds.length) {
       await db.delete(messages).where(inArray(messages.conversationId, createdChatIds));
       await db.delete(conversations).where(inArray(conversations.id, createdChatIds));
@@ -134,6 +140,8 @@ afterAll(async () => {
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
 });
+
+afterEach(() => resetConfigForTest());
 
 describe('goalAutomationGate (integration)', () => {
   it('blocks while an unattended session is genuinely in flight', async (ctx) => {
@@ -229,6 +237,37 @@ describe('goalAutomationGate (integration)', () => {
     await setNextAction('search the next job board');
     const verdict = await goalAutomationGate(db, goalId, workChatId);
     expect(verdict.fire).toBe(true);
+  });
+});
+
+describe('feature-gated schedules (integration)', () => {
+  it('advances a disabled GraphRAG schedule without creating a task', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const restore = await freezeOtherSchedules();
+    try {
+      loadConfig({ GRAPH_RAG_ENABLED: 'false' });
+      const name = `disabled-graph-sync-${Date.now()}-${Math.random()}`;
+      createdScheduleNames.push(name);
+      await upsertSchedule(db, {
+        agentId,
+        name,
+        cron: '* * * * *',
+        timezone,
+        taskTemplate: { type: 'scheduled', job: 'memory.graph_sync' },
+      });
+      await db
+        .update(schedules)
+        .set({ nextRunAt: new Date(Date.now() - 60e3) })
+        .where(eq(schedules.name, name));
+
+      const fired = await runDueSchedules(db, timezone);
+      expect(fired.filter((entry) => entry.schedule === name)).toEqual([]);
+      const [updated] = await db.select().from(schedules).where(eq(schedules.name, name));
+      expect(updated?.lastRunAt).not.toBeNull();
+      expect(updated?.nextRunAt?.getTime()).toBeGreaterThan(Date.now());
+    } finally {
+      await restore();
+    }
   });
 });
 
