@@ -48,14 +48,14 @@
     "@assistant/db": "workspace:^",
     "@assistant/modules": "workspace:*",
     "@assistant/setup": "workspace:*",
-    "@biomejs/biome": "^2.5.8",
+    "@biomejs/biome": "^2.5.10",
     "@types/node": "^26.2.0",
     "drizzle-orm": "^0.45.2",
     "playwright": "^1.62.1",
     "tsx": "^4.23.12",
-    "turbo": "^2.10.10",
+    "turbo": "^2.10.11",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10",
+    "vitest": "^4.1.11",
     "zod": "^4.4.3"
   }
 }

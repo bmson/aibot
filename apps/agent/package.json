@@ -21,10 +21,10 @@
     "@opentelemetry/resources": "^2.10.0",
     "@opentelemetry/sdk-trace-base": "^2.10.0",
     "@opentelemetry/sdk-trace-node": "^2.10.0",
-    "ai": "^7.0.66",
+    "ai": "^7.0.76",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.13.2",
-    "jose": "^6.2.8",
+    "hono": "^4.13.3",
+    "jose": "^6.2.10",
     "zod": "^4.0.0"
   },
   "devDependencies": {
