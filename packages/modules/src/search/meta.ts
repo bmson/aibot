@@ -1,16 +1,21 @@
+import { isModuleEnabled } from '@assistant/config';
 import type { ModuleMeta } from '../contract.js';
 import { searchToolLabels } from './labels.js';
 
 export const searchMeta = {
   name: 'search',
-  title: 'Web search',
-  summary: 'Link-returning web search through a configured provider.',
+  title: 'Search API',
+  summary: 'Direct link-returning search through Brave, Tavily, or Serper.',
   configKeys: ['SEARCH_PROVIDER', 'SEARCH_API_KEY'],
   readiness: (config) => {
     const ready = config.SEARCH_PROVIDER !== 'none' && Boolean(config.SEARCH_API_KEY);
     return {
       ready,
-      detail: ready ? `ready (${config.SEARCH_PROVIDER})` : 'missing search provider or key',
+      detail: ready
+        ? `ready (${config.SEARCH_PROVIDER})`
+        : isModuleEnabled(config, 'browser')
+          ? 'direct search provider missing; browser research is still available'
+          : 'missing search provider or key',
     };
   },
   ui: {

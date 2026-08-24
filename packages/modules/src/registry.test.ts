@@ -70,6 +70,16 @@ describe('module metadata', () => {
     });
   });
 
+  it('distinguishes browser research from the optional direct search API', () => {
+    const config = loadConfig({ ASSISTANT_MODULES: 'browser,search' });
+    expect(moduleDiagnostics(config)).toContainEqual({
+      module: 'search',
+      enabled: true,
+      ready: false,
+      detail: 'direct search provider missing; browser research is still available',
+    });
+  });
+
   it('leaves local installations unvalidated', () => {
     expect(moduleProdProblems(loadConfig({ ASSISTANT_MODULES: 'minimal' }))).toEqual([]);
   });

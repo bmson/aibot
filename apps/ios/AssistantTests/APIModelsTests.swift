@@ -106,6 +106,16 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(item.stuckWaiting, true)
     }
 
+    func testCapabilityStatusDistinguishesUnavailableFromMissingSetup() throws {
+        let unavailableData = #"{"id":"google","title":"Google Workspace","summary":"Workspace tools","enabled":true,"ready":false,"status":"unavailable","detail":"agent readiness unavailable"}"#.data(using: .utf8)!
+        let unavailable = try JSONDecoder().decode(WorkspaceCapability.self, from: unavailableData)
+        XCTAssertEqual(unavailable.statusTitle, "Status unavailable")
+
+        let legacyData = #"{"id":"google","title":"Google Workspace","summary":"Workspace tools","enabled":true,"ready":false,"detail":"missing Google OAuth credentials"}"#.data(using: .utf8)!
+        let legacy = try JSONDecoder().decode(WorkspaceCapability.self, from: legacyData)
+        XCTAssertEqual(legacy.statusTitle, "Setup needed")
+    }
+
     func testActivityTitlesKeepHumanLanguageAndFormatMachineIdentifiers() {
         let generatedTitle = activityItem(title: "document-processing")
         let humanTitle = activityItem(title: "Review the travel plan")

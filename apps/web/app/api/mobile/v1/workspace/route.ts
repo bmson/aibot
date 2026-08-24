@@ -1,6 +1,7 @@
 import { getCostsDashboard, getProfileOverview } from '@assistant/application';
-import { assistantModuleMetas, moduleDiagnostics } from '@assistant/modules/meta';
+import { assistantModuleMetas } from '@assistant/modules/meta';
 import { policyLabels, scheduleLabels } from '@/app/settings/labels';
+import { capabilityStatus, getCapabilityDiagnostics } from '@/lib/capabilities';
 import { getApplication, getDb } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -16,10 +17,8 @@ export async function GET(request: Request): Promise<Response> {
 
   const application = getApplication();
   const db = getDb();
-  const diagnosticsByModule = new Map(
-    moduleDiagnostics().map((diagnostic) => [diagnostic.module, diagnostic]),
-  );
   const [
+    capabilityDiagnostics,
     currentChats,
     archivedChats,
     profile,
@@ -30,6 +29,7 @@ export async function GET(request: Request): Promise<Response> {
     improvements,
     imports,
   ] = await Promise.all([
+    getCapabilityDiagnostics(),
     application.listChatHistory(false),
     application.listChatHistory(true),
     getProfileOverview(db),
@@ -40,6 +40,9 @@ export async function GET(request: Request): Promise<Response> {
     application.listImprovementProposals(),
     application.getImports(),
   ]);
+  const diagnosticsByModule = new Map(
+    capabilityDiagnostics.diagnostics.map((diagnostic) => [diagnostic.module, diagnostic]),
+  );
 
   return mobileJson({
     generatedAt: new Date().toISOString(),
@@ -111,12 +114,15 @@ export async function GET(request: Request): Promise<Response> {
     })),
     capabilities: assistantModuleMetas.map((meta) => {
       const diagnostic = diagnosticsByModule.get(meta.name);
+      const enabled = diagnostic?.enabled ?? false;
+      const ready = diagnostic?.ready ?? false;
       return {
         id: meta.name,
         title: meta.title,
         summary: meta.summary,
-        enabled: diagnostic?.enabled ?? false,
-        ready: diagnostic?.ready ?? false,
+        enabled,
+        ready,
+        status: capabilityStatus({ enabled, ready }, capabilityDiagnostics.statusAvailable),
         detail: diagnostic?.detail ?? 'unavailable',
       };
     }),

@@ -465,11 +465,19 @@ struct WorkspaceCapability: Codable, Identifiable, Sendable {
     let summary: String
     let enabled: Bool
     let ready: Bool
+    let status: String?
     let detail: String
 
     var statusTitle: String {
-        if !enabled { return "Off" }
-        return ready ? "Ready" : "Setup needed"
+        switch status {
+        case "off": return "Off"
+        case "ready": return "Ready"
+        case "setup_needed": return "Setup needed"
+        case "unavailable": return "Status unavailable"
+        default:
+            if !enabled { return "Off" }
+            return ready ? "Ready" : "Setup needed"
+        }
     }
 
     var icon: String {

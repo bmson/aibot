@@ -526,6 +526,8 @@ struct WorkspaceView: View {
                         .secondary
                     } else if capability.ready {
                         AssistantTheme.success(for: colorScheme)
+                    } else if capability.status == "unavailable" {
+                        .secondary
                     } else {
                         AssistantTheme.warning(for: colorScheme)
                     }
@@ -560,7 +562,11 @@ struct WorkspaceView: View {
                             if capability.enabled && !capability.ready {
                                 Text(capability.detail.sentenceCaseIdentifier)
                                     .font(.caption)
-                                    .foregroundStyle(AssistantTheme.warning(for: colorScheme))
+                                    .foregroundStyle(
+                                        capability.status == "unavailable"
+                                            ? Color.secondary
+                                            : AssistantTheme.warning(for: colorScheme)
+                                    )
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
