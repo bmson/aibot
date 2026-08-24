@@ -90,7 +90,7 @@ export function chipsOf(message: UIMessage): string[] {
 export function latestFace(log: UIMessage[]): FaceState {
   for (let index = log.length - 1; index >= 0; index -= 1) {
     const message = log[index];
-    if (!message || message.role !== 'assistant') continue;
+    if (message?.role !== 'assistant') continue;
     const state = faceCueOf(message);
     if (state) return state;
   }

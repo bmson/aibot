@@ -28,8 +28,8 @@ import {
 import { verifyFinalOutput } from '../output-verification.js';
 import { PLANNER_VERSION } from '../planner.js';
 import { detectPersonalReadRequest, type PersonalReadRequest } from '../read-intent.js';
-import { type ActionEvidence, enforceResponseContract } from '../response-contract.js';
 import { responseCardsForFinal } from '../response-cards.js';
+import { type ActionEvidence, enforceResponseContract } from '../response-contract.js';
 import { isUnattendedGoalSession, KNOWN_SENDER_REPLY_KIND } from './context-helpers.js';
 import { notifyOwnerAndConversation, recordGoalBlocked } from './notices.js';
 import { type ExecuteResult, type ExecutorDeps, LOST_LEASE } from './types.js';

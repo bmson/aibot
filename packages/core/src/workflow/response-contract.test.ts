@@ -208,8 +208,8 @@ describe('response execution contract', () => {
     );
     expect(result.blocked).toBe(true);
     expect(result.unsupported).toEqual(expect.arrayContaining(['spreadsheet', 'outbound']));
-    expect(result.text).toContain("Completed: the Google Doc action completed");
-    expect(result.text).toContain("Still needed:");
+    expect(result.text).toContain('Completed: the Google Doc action completed');
+    expect(result.text).toContain('Still needed:');
     expect(result.text).not.toContain("I couldn't complete this because");
   });
 
