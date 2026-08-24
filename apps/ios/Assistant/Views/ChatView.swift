@@ -162,9 +162,10 @@ struct ChatView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
     @ScaledMetric(relativeTo: .body) private var composerFontSize = 16.0
-    // The menu tiles were the one surface in the app on absolute point sizes,
-    // so they stayed put through every Dynamic Type step below accessibility.
-    @ScaledMetric(relativeTo: .caption2) private var menuTileFontSize = 11.0
+    // The directory labels need the same legibility as the content cards.
+    // Scaling from subheadline keeps the two-column sheet readable before it
+    // switches to the dedicated extra-large accessibility layout.
+    @ScaledMetric(relativeTo: .subheadline) private var menuTileFontSize = 16.0
     @ScaledMetric(relativeTo: .caption2) private var menuBadgeFontSize = 9.0
     @State private var draft = ""
     @State private var isAtBottom = true
@@ -175,6 +176,9 @@ struct ChatView: View {
     @State private var hasUnseenMessages = false
     @State private var composerHeight: CGFloat = 0
     @State private var scrollRequest = 0
+    // A direct "Jump to latest" owns the scroll position until it has had a
+    // chance to supersede an automatic scroll that may already be in flight.
+    @State private var latestJumpRequest = 0
     // Unpositioned by default so normal finger scrolling remains authoritative.
     // Jump to latest writes an explicit edge only for that owner action.
     @State private var transcriptScrollPosition = ScrollPosition()
@@ -194,30 +198,36 @@ struct ChatView: View {
     @State private var transcriptScrollPhase: ScrollPhase = .idle
     @State private var sendFeedback = 0
     @State private var jumpFeedback = 0
-    @FocusState private var composerFocused: Bool
+    // `ComposerTextInput` owns a UIKit responder rather than a SwiftUI view
+    // carrying `.focused`. A FocusState without that SwiftUI association is
+    // reconciled back to its default on a body update, which resigns the text
+    // view after each typed character. Keep this as ordinary view state and
+    // let the UIKit delegate report real responder changes instead.
+    @State private var composerFocused = false
 
-    // The menu holds a fixed two-row grid of eight destinations (three rows at
-    // accessibility sizes, one horizontal strip at extra-large). Derive its
-    // reveal from those physical pieces so the sheet stays attached to the
-    // finger even when the header needs more room for enlarged type.
+    // The menu is a short, two-column directory rather than a tiny icon grid.
+    // Its reveal follows the actual rows below so it still tracks the finger
+    // when Dynamic Type gives each destination more breathing room.
     private var menuRevealHeight: CGFloat {
-        26 + 4 + 11 + menuHeaderHeight + 11 + menuActionsHeight
-    }
-
-    private var menuHeaderHeight: CGFloat {
-        if usesExtraLargeAccessibilityMenu { return 150 }
-        return dynamicTypeSize.isAccessibilitySize ? 64 : 40
+        26 + 4 + 11 + menuActionsHeight
     }
 
     private var menuActionsHeight: CGFloat {
-        if usesExtraLargeAccessibilityMenu { return menuButtonHeight }
-        let rowCount: CGFloat = dynamicTypeSize.isAccessibilitySize ? 3 : 2
-        return (rowCount * menuButtonHeight) + ((rowCount - 1) * 8)
+        if usesExtraLargeAccessibilityMenu {
+            return menuButtonHeight + 10 + menuAutonomyHeight
+        }
+        // Four navigation rows, two quiet group dividers, then the autonomy
+        // setting at the bottom of the sheet.
+        return (4 * menuButtonHeight) + 26 + 10 + menuAutonomyHeight
     }
 
     private var menuButtonHeight: CGFloat {
-        if usesExtraLargeAccessibilityMenu { return 112 }
-        return dynamicTypeSize.isAccessibilitySize ? 76 : 68
+        if usesExtraLargeAccessibilityMenu { return 92 }
+        return dynamicTypeSize.isAccessibilitySize ? 76 : 64
+    }
+
+    private var menuAutonomyHeight: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 58 : 50
     }
 
     private var usesExtraLargeAccessibilityMenu: Bool {
@@ -384,7 +394,12 @@ struct ChatView: View {
             // is streaming: the anchor fights a finger on the transcript, and
             // while a reply streams in it force-scrolls the view down with
             // every token instead of letting the text grow below the fold.
-            .defaultScrollAnchor(pinsTranscriptToBottom ? .bottom : nil)
+            // A live transcript belongs at its newest edge. The briefing
+            // cards are a dashboard, though, so their first card should be
+            // the opening view rather than the prompt launcher at the end.
+            .defaultScrollAnchor(
+                model.messages.isEmpty ? .top : (pinsTranscriptToBottom ? .bottom : nil)
+            )
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 let contentFits = geometry.contentSize.height <= geometry.containerSize.height + 1
                 return contentFits || geometry.visibleRect.maxY >= geometry.contentSize.height - 64
@@ -767,33 +782,24 @@ struct ChatView: View {
     }
 
     private var pullMenu: some View {
-        let headerProgress = menuElementProgress(after: 0.08)
-        let headerVisibility = menuVisibilityProgress(after: 0.08)
-        let headerUnfurl = organicProgress(headerProgress)
+        let handleProgress = menuElementProgress(after: 0.08)
+        let handleVisibility = menuVisibilityProgress(after: 0.08)
+        let handleUnfurl = organicProgress(handleProgress)
 
         return VStack(spacing: 11) {
             // The handle advertises that this sheet can be dragged closed.
             // Its recognizer lives on the shared chat/menu container, so the
-            // same downward swipe works from a tile, its header, or the chat
-            // sheet. Its 10pt threshold leaves ordinary taps untouched.
+            // same downward swipe works from a destination or the chat sheet.
+            // Its 10pt threshold leaves ordinary taps untouched.
             Capsule()
                 .fill(AssistantTheme.ink(for: colorScheme).opacity(colorScheme == .dark ? 0.3 : 0.15))
                 .frame(width: 42, height: 4)
                 .scaleEffect(
-                    x: reduceMotion ? 1 : 0.34 + (0.66 * headerUnfurl),
-                    y: reduceMotion ? 1 : 1.7 - (0.7 * headerUnfurl),
+                    x: reduceMotion ? 1 : 0.34 + (0.66 * handleUnfurl),
+                    y: reduceMotion ? 1 : 1.7 - (0.7 * handleUnfurl),
                     anchor: .center
                 )
-                .opacity(headerVisibility)
-
-            pullMenuHeader
-            .frame(height: menuHeaderHeight)
-            .simultaneousGesture(
-                pullMenuCloseGesture,
-                including: menuOpen && usesExtraLargeAccessibilityMenu ? .all : .none
-            )
-            .opacity(headerVisibility)
-            .offset(y: (1 - headerUnfurl) * 12)
+                .opacity(handleVisibility)
 
             pullMenuActions
         }
@@ -841,68 +847,92 @@ struct ChatView: View {
     }
 
     @ViewBuilder
-    private var pullMenuHeader: some View {
-        if usesExtraLargeAccessibilityMenu {
-            VStack(alignment: .leading, spacing: 12) {
-                pullMenuTitle
-                menuAutonomyToggle
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            HStack(spacing: 12) {
-                pullMenuTitle
-                Spacer()
-                menuAutonomyToggle
-            }
-        }
-    }
-
-    private var pullMenuTitle: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text("Menu")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-            Text("Swipe down to close")
-                .font(.caption2)
-                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityElement(children: .combine)
-    }
-
-    @ViewBuilder
     private var pullMenuActions: some View {
         if usesExtraLargeAccessibilityMenu {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    pullMenuActionButtons
+            VStack(spacing: 10) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        pullMenuActionButtons
+                    }
+                    .scrollTargetLayout()
                 }
-                .scrollTargetLayout()
-            }
-            .contentMargins(.horizontal, 1, for: .scrollContent)
-            .scrollTargetBehavior(.viewAligned)
-            .scrollClipDisabled()
-        } else if dynamicTypeSize.isAccessibilitySize {
-            LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3),
-                spacing: 8
-            ) {
-                pullMenuActionButtons
+                .contentMargins(.horizontal, 1, for: .scrollContent)
+                .scrollTargetBehavior(.viewAligned)
+                .scrollClipDisabled()
+
+                menuAutonomyToggle
             }
         } else {
-            LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4),
-                spacing: 8
-            ) {
-                pullMenuActionButtons
+            VStack(spacing: 0) {
+                pullMenuRow {
+                    pullMenuButton("Chat", icon: "bubble.left", isSelected: true, index: 0) {
+                        closePullMenu()
+                    }
+                    pullMenuButton("Activity", icon: "waveform.path.ecg", index: 1) {
+                        openRoute(.activity)
+                    }
+                }
+                pullMenuRow {
+                    pullMenuButton("Goals", icon: "scope", index: 2) {
+                        openRoute(.goals)
+                    }
+                    pullMenuButton(
+                        "Approvals",
+                        icon: "checkmark.shield",
+                        badge: model.pendingApprovalCount,
+                        index: 3
+                    ) {
+                        openRoute(.approvals)
+                    }
+                }
+
+                pullMenuDivider
+
+                pullMenuRow {
+                    pullMenuButton("Chats", icon: "bubble.left.and.bubble.right", index: 4) {
+                        openRoute(.chats)
+                    }
+                    pullMenuButton(
+                        "Memory",
+                        icon: "brain.head.profile",
+                        badge: model.memoryReviewCount,
+                        index: 5
+                    ) {
+                        openRoute(.memory)
+                    }
+                }
+                pullMenuRow {
+                    pullMenuButton("Capabilities", icon: "puzzlepiece.extension", index: 6) {
+                        openRoute(.capabilities)
+                    }
+                    pullMenuButton("More", icon: "ellipsis", index: 7) {
+                        openRoute(.settings)
+                    }
+                }
+
+                pullMenuDivider
+                menuAutonomyToggle
             }
         }
     }
 
-    // Eight primary destinations, two rows of four. The lower-traffic areas
-    // (Documents, Skills, Costs, Anomalies, Improvements) live under More, which
-    // keeps every label here a single scannable word and the grid symmetric.
+    private func pullMenuRow<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(spacing: 8) {
+            content()
+        }
+    }
+
+    private var pullMenuDivider: some View {
+        Divider()
+            .overlay(AssistantTheme.ink(for: colorScheme).opacity(colorScheme == .dark ? 0.14 : 0.09))
+            .padding(.vertical, 6)
+    }
+
+    // Eight primary destinations. The lower-traffic areas (Documents, Skills,
+    // Costs, Anomalies, Improvements) live under More, keeping this directory
+    // focused on the routes people revisit during a conversation.
     @ViewBuilder
     private var pullMenuActionButtons: some View {
         pullMenuButton("Chat", icon: "bubble.left", isSelected: true, index: 0) {
@@ -946,42 +976,28 @@ struct ChatView: View {
             model.nextMessageAutonomous.toggle()
             menuAutonomyFeedback += 1
         } label: {
-            Label(
-                model.nextMessageAutonomous ? "Auto on" : "Auto next",
-                systemImage: model.nextMessageAutonomous ? "bolt.shield.fill" : "bolt.shield"
-            )
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(
-                model.nextMessageAutonomous ? Color.white : AssistantTheme.ink(for: colorScheme)
-            )
-            .lineLimit(1)
-            .padding(.horizontal, 10)
-            .frame(
-                height: usesExtraLargeAccessibilityMenu
-                    ? 58
-                    : (dynamicTypeSize.isAccessibilitySize ? 44 : 34)
-            )
-            .background(
-                model.nextMessageAutonomous
-                    // Adaptive accent is deliberately pale in dark mode for
-                    // icons and links; as a solid fill it loses contrast with
-                    // this white label. The deep brand green is the control
-                    // fill in both appearances.
-                    ? AssistantTheme.accent
-                    : AssistantTheme.sunken(for: colorScheme).opacity(0.72),
-                in: Capsule()
-            )
-            .overlay {
-                Capsule().strokeBorder(
-                    model.nextMessageAutonomous
-                        ? Color.white.opacity(0.16)
-                        : Color.primary.opacity(colorScheme == .dark ? 0.13 : 0.07),
-                    lineWidth: 0.7
-                )
+            HStack(spacing: 12) {
+                Text("Auto next")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                Spacer(minLength: 12)
+                Capsule()
+                    .fill(
+                        model.nextMessageAutonomous
+                            ? AssistantTheme.accent
+                            : AssistantTheme.sunken(for: colorScheme)
+                    )
+                    .frame(width: 50, height: 30)
+                    .overlay(alignment: model.nextMessageAutonomous ? .trailing : .leading) {
+                        Circle()
+                            .fill(AssistantTheme.dashboardPaper(for: colorScheme))
+                            .frame(width: 24, height: 24)
+                            .padding(3)
+                            .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
+                    }
             }
-            // Takes the target to 44pt without growing the capsule, which the
-            // menu's fixed reveal height has no room for.
-            .contentShape(Rectangle().inset(by: -5))
+            .frame(maxWidth: .infinity, minHeight: menuAutonomyHeight, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(
             AssistantTactileButtonStyle(
@@ -1011,56 +1027,42 @@ struct ChatView: View {
 
         return Button(action: action) {
             pullMenuButtonSurface(isSelected: isSelected) {
-                VStack(spacing: 5) {
+                HStack(spacing: 12) {
                     Image(systemName: icon)
                         .font(
                             usesExtraLargeAccessibilityMenu
-                                ? .title3.weight(.semibold)
+                                ? .headline.weight(.semibold)
                                 : .subheadline.weight(.semibold)
                         )
-                        .frame(height: usesExtraLargeAccessibilityMenu ? 30 : 18)
-                        .overlay(alignment: .topTrailing) {
-                            if badge > 0 {
-                                Text(badge > 99 ? "99+" : "\(badge)")
-                                    .font(.system(size: menuBadgeFontSize, weight: .bold, design: .rounded))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 4)
-                                    .frame(minWidth: 14, minHeight: 14)
-                                    .background(
-                                        // This is a solid fill behind 9pt
-                                        // white type, so use the deep warning
-                                        // ink rather than the adaptive golden
-                                        // foreground token.
-                                        AssistantTheme.warningInk,
-                                        in: Capsule()
-                                    )
-                                    .offset(x: 10, y: -8)
-                                    .accessibilityHidden(true)
-                            }
-                        }
+                        // A fixed square slot preserves the same breathing
+                        // room around every SF Symbol, including asymmetric
+                        // marks such as `ellipsis` and `scope`.
+                        .frame(width: 32, height: 32)
                     Text(title)
                         .font(
                             usesExtraLargeAccessibilityMenu
-                                ? .caption.weight(.semibold)
+                                ? .subheadline.weight(.semibold)
                                 : .system(size: menuTileFontSize, weight: .semibold, design: .rounded)
                         )
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
-                }
-                .foregroundStyle(
-                    isSelected ? Color.white : AssistantTheme.ink(for: colorScheme)
-                )
-                .frame(maxWidth: .infinity)
-                .frame(height: menuButtonHeight)
-                .overlay(alignment: .topTrailing) {
-                    if isSelected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.caption.weight(.bold))
+                    Spacer(minLength: 0)
+                    if badge > 0 {
+                        Text(badge > 99 ? "99+" : "\(badge)")
+                            .font(.system(size: menuBadgeFontSize, weight: .bold, design: .rounded))
                             .foregroundStyle(.white)
-                            .padding(8)
+                            .padding(.horizontal, 7)
+                            .frame(minWidth: 24, minHeight: 22)
+                            .background(AssistantTheme.notificationBadge, in: Capsule())
                             .accessibilityHidden(true)
                     }
                 }
+                .foregroundStyle(
+                    isSelected ? AssistantTheme.accent(for: colorScheme) : AssistantTheme.ink(for: colorScheme)
+                )
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity)
+                .frame(height: menuButtonHeight)
             }
         }
         .buttonStyle(
@@ -1089,38 +1091,19 @@ struct ChatView: View {
         isSelected: Bool,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 17, style: .continuous)
+        // This is just one ink wash over the menu canvas: enough to group the
+        // current destination, without introducing a second green surface.
+        let selectedFill = AssistantTheme.ink(for: colorScheme)
+            .opacity(colorScheme == .dark ? 0.14 : 0.055)
 
-        if #available(iOS 26.0, *), !reduceTransparency {
-            content()
-                .background(
-                    isSelected ? AssistantTheme.accent : Color.clear,
-                    in: shape
-                )
-                .glassEffect(
-                    .regular
-                        .tint(
-                            isSelected
-                                ? AssistantTheme.accent.opacity(0.22)
-                                : .white.opacity(0.055)
-                        )
-                        .interactive(),
-                    in: shape
-                )
-        } else {
-            content()
-                .background(
-                    isSelected
-                        ? AssistantTheme.accent
-                        : AssistantTheme.raised(for: colorScheme).opacity(
-                            reduceTransparency ? 1 : 0.5
-                        ),
-                    in: shape
-                )
-                .overlay {
-                    shape.strokeBorder(.primary.opacity(isSelected ? 0 : 0.07), lineWidth: 1)
-                }
-        }
+        content()
+            // The current item is slightly grayer than the paper-like sheet;
+            // its green icon and label remain the unmistakable active cue.
+            .background(
+                isSelected ? selectedFill : Color.clear,
+                in: shape
+            )
     }
 
     private var pullMenuCloseGesture: some Gesture {
@@ -1303,54 +1286,15 @@ struct ChatView: View {
     }
 
     private var emptyConversation: some View {
-        VStack(spacing: 22) {
-            Spacer(minLength: 70)
-            VStack(spacing: 8) {
-                Image(systemName: "sparkle")
-                    .font(.system(size: 26, weight: .light))
-                    .foregroundStyle(.white)
-                Text("What should we move forward?")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.white)
-                Text("Start with an outcome. \(model.agentName) can research, plan, draft, schedule, and keep following up when the work takes time.")
-                    .font(.subheadline)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.white.opacity(0.68))
-                    .frame(maxWidth: 320)
-            }
-            VStack(spacing: 0) {
-                starter("Clear the inbox", prompt: "Summarize my unread email", icon: "tray")
-                Divider().overlay(.white.opacity(0.12))
-                starter("Review the week", prompt: "What’s on my calendar this week?", icon: "calendar")
-                Divider().overlay(.white.opacity(0.12))
-                starter("Plan a trip", prompt: "Draft a plan for my next trip", icon: "map")
-            }
-            .padding(.horizontal, 4)
-            .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
-            .overlay { RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.12)) }
-            Spacer(minLength: 40)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func starter(_ text: String, prompt: String, icon: String) -> some View {
-        Button {
-            sendPreset(prompt)
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: icon).font(.subheadline).frame(width: 22)
-                Text(text).font(.subheadline.weight(.medium))
-                Spacer()
-                Image(systemName: "arrow.up.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.48))
-            }
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-            .padding(.horizontal, 14)
-        }
-        .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.985))
-        .disabled(model.isSending)
+        ChatDashboard(
+            agentName: model.agentName,
+            overview: model.overview,
+            pendingApprovalCount: model.pendingApprovalCount,
+            needsAttentionCount: model.needsAttentionCount,
+            isSending: model.isSending,
+            onRoute: openRoute,
+            onPrompt: sendPreset
+        )
     }
 
     private var composer: some View {
@@ -1364,10 +1308,19 @@ struct ChatView: View {
                             } label: {
                                 Text(reply)
                                     .font(.footnote.weight(.medium))
-                                    .foregroundStyle(AssistantTheme.stageStrong)
+                                    // Suggestions are offered text, not
+                                    // active input. Keep their copy at the
+                                    // same neutral 50% white as the prompt
+                                    // without dimming the glass surface too.
+                                    .foregroundStyle(Color.white.opacity(0.5))
                                     .padding(.horizontal, 14)
                                     .frame(height: 36)
-                                    .modifier(QuickReplySurface())
+                                    .modifier(
+                                        QuickReplySurface(
+                                            backgroundOpacity: conversationControlBackgroundOpacity,
+                                            glassTintOpacity: conversationControlGlassTintOpacity
+                                        )
+                                    )
                                     .padding(.vertical, 4)
                                     .contentShape(Rectangle())
                             }
@@ -1382,7 +1335,6 @@ struct ChatView: View {
                     }
                 }
                 .scrollClipDisabled()
-                .opacity(0.5)
                 .transition(.opacity)
             }
 
@@ -1398,6 +1350,12 @@ struct ChatView: View {
                         minimumDistance: 8
                     )
                 )
+                // The input owns the upward pull that reveals navigation.
+                // A clearly downward swipe while it is focused means the
+                // opposite: get the keyboard out of the way. Keep this
+                // simultaneous so typing, cursor placement, and the pull do
+                // not lose their native gesture handling.
+                .simultaneousGesture(composerKeyboardDismissGesture)
         }
         // The caret and the ready send button are the only surfaces a [theme:]
         // cue moves, so the mood glides here rather than behind the transcript.
@@ -1429,6 +1387,20 @@ struct ChatView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.isSending)
     }
 
+    private var composerKeyboardDismissGesture: some Gesture {
+        DragGesture(minimumDistance: PullMenuMotion.verticalIntentDistance)
+            .onChanged { value in
+                guard composerFocused,
+                      PullMenuMotion.hasClosingIntent(
+                        translationX: value.translation.width,
+                        translationY: value.translation.height
+                      )
+                else { return }
+
+                composerFocused = false
+            }
+    }
+
     private var composerInput: some View {
         composerInputSurface {
             HStack(alignment: .bottom, spacing: 8) {
@@ -1457,26 +1429,24 @@ struct ChatView: View {
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
 
-                TextField(
-                    "",
+                ComposerTextInput(
                     text: $draft,
-                    prompt: Text(composerPrompt).foregroundStyle(composerPlaceholderColor),
-                    axis: .vertical
+                    isFocused: Binding(
+                        get: { composerFocused },
+                        set: { composerFocused = $0 }
+                    ),
+                    prompt: composerPrompt,
+                    fontSize: composerFontSize,
+                    textColor: .white,
+                    placeholderColor: UIColor(composerPlaceholderColor),
+                    cursorColor: UIColor(composerCursorColor),
+                    completionColor: UIColor.white.withAlphaComponent(0.5),
+                    onSubmit: sendDraft
                 )
-                    .lineLimit(1...6)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: composerFontSize, weight: .regular))
-                    .tracking(-0.12)
-                    .lineSpacing(2)
-                    .foregroundStyle(composerTextColor)
-                    .tint(composerCursorColor)
-                    .textInputAutocapitalization(.sentences)
-                    .focused($composerFocused)
-                    .submitLabel(.send)
-                    .onSubmit(sendDraft)
                     .padding(.leading, 6)
                     .padding(.vertical, 10)
                     .frame(minHeight: 44, alignment: .leading)
+                    .layoutPriority(1)
                     // Match the visible capsule instead of leaving its 8pt
                     // top and bottom padding as dead zones. The simultaneous
                     // tap keeps native cursor placement intact while making
@@ -1519,17 +1489,18 @@ struct ChatView: View {
                         }
                     }
                     .foregroundStyle(
-                        !canSend && !model.isSending
-                            ? composerPlaceholderColor
-                            : AssistantTheme.stageDepth
+                        model.isSending
+                            ? AssistantTheme.stageDepth
+                            : (canSend ? AssistantTheme.accent : composerPlaceholderColor)
                     )
                     .frame(width: 44, height: 44)
                     .background(
                         // Readiness is a state change, not a dimmed copy: with
                         // nothing to send the button sits back in the well; a
                         // typed draft lifts it to the solid fill that reads as
-                        // the one bright object on the stage — warm white, or
-                        // the mood tint when a [theme:] cue is active.
+                        // the one bright object on the stage. Its arrow takes
+                        // the brand green so the white circle stays connected
+                        // to the rest of the conversation controls.
                         (canSend && !model.isSending ? sendReadyFill : AssistantTheme.raised(for: colorScheme))
                             .opacity(model.isSending ? 0.28 : (!canSend ? 0.06 : 1)),
                         in: Circle()
@@ -1587,10 +1558,9 @@ struct ChatView: View {
     }
 
     private var composerTextColor: Color {
-        // Typed words sit directly over the translucent stage, so use the
-        // warm white already present in the conversation instead of the
-        // app's dark canvas ink. It stays soft, but remains readable over
-        // every animated stage color.
+        // Auxiliary composer marks (the stop affordance and its rim) use the
+        // warm conversation white. The editable text itself is true white so
+        // its app-owned inline completion can read at an exact 50% opacity.
         AssistantTheme.stageStrong
     }
 
@@ -1600,16 +1570,13 @@ struct ChatView: View {
     }
 
     private var composerPlaceholderColor: Color {
-        // Same warm white as the typed text, quieted to half strength — the
-        // owner asked for the prompt to read as the input color at 50%, not
-        // gray. Increase Contrast keeps its lift so the hint stays legible.
-        composerTextColor.opacity(colorSchemeContrast == .increased ? 0.78 : 0.5)
+        // The hint belongs to the translucent stage, so it uses neutral white
+        // rather than the muted ink reserved for paper cards.
+        Color.white.opacity(0.5)
     }
 
-    /// The ready send button's fill — the one bright object on the stage, and
-    /// the most legible place for a [theme:] cue to show: every mood tint is
-    /// light, so the dark `stageDepth` glyph keeps its contrast on all of them.
-    /// With no cue active this stays the warm white it has always been.
+    /// The ready send button's fill — the one bright object on the stage. With
+    /// no cue active this stays the warm white it has always been.
     private var sendReadyFill: Color {
         model.latestMood == .default
             ? AssistantTheme.stageStrong
@@ -1876,23 +1843,35 @@ struct ChatView: View {
     }
 
     /// A direct owner action is stronger than automatic transcript motion.
-    /// Updating ScrollPosition cancels the ScrollView's active deceleration;
-    /// the reader call targets the explicit spacer in the same non-animated
-    /// transaction so the result is complete before the tap returns.
+    /// Assigning an explicit position cancels any active scroll animation;
+    /// reissuing it on the next run loop ensures it wins if the older command
+    /// had already been scheduled by SwiftUI.
     private func jumpToLatestImmediately(using proxy: ScrollViewProxy) {
+        latestJumpRequest &+= 1
+        let request = latestJumpRequest
+        forceLatestScroll(using: proxy)
+
+        DispatchQueue.main.async {
+            // A subsequent press owns the destination, never a stale tap.
+            guard request == latestJumpRequest else { return }
+            forceLatestScroll(using: proxy)
+
+            // Edge positions stay active as content changes. Release the
+            // override only after both immediate commands have been applied,
+            // so later streaming text does not permanently pin the reader.
+            DispatchQueue.main.async {
+                guard request == latestJumpRequest else { return }
+                transcriptScrollPosition = ScrollPosition()
+            }
+        }
+    }
+
+    private func forceLatestScroll(using proxy: ScrollViewProxy) {
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            transcriptScrollPosition.scrollTo(edge: .bottom)
+            transcriptScrollPosition = ScrollPosition(id: "bottom", anchor: .bottom)
             proxy.scrollTo("bottom", anchor: .bottom)
-            isAtBottom = true
-            hasUnseenMessages = false
-        }
-        // Edge positions are intentionally stable across later content-size
-        // changes. Release it after this immediate command so streaming text
-        // does not become permanently pinned to the bottom.
-        DispatchQueue.main.async {
-            transcriptScrollPosition = ScrollPosition()
         }
     }
 
@@ -1906,29 +1885,309 @@ struct ChatView: View {
 
 }
 
+/// A small UIKit bridge gives the composer ownership of the inline-completion
+/// layer. Apple's stock prediction glyph is always system gray; rendering our
+/// own suffix lets it retain the same white-at-50% treatment as the prompt.
+private struct ComposerTextInput: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+
+    let prompt: String
+    let fontSize: CGFloat
+    let textColor: UIColor
+    let placeholderColor: UIColor
+    let cursorColor: UIColor
+    let completionColor: UIColor
+    let onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIView(context: Context) -> InlineCompletionTextView {
+        let textView = InlineCompletionTextView()
+        textView.delegate = context.coordinator
+        textView.backgroundColor = .clear
+        textView.isOpaque = false
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.autocapitalizationType = .sentences
+        textView.autocorrectionType = .yes
+        textView.spellCheckingType = .yes
+        textView.returnKeyType = .send
+        textView.enablesReturnKeyAutomatically = false
+        textView.isScrollEnabled = false
+        textView.inlinePredictionType = .no
+        textView.accessibilityIdentifier = "assistant.chat.composer"
+        applyConfiguration(to: textView)
+        return textView
+    }
+
+    func updateUIView(_ textView: InlineCompletionTextView, context: Context) {
+        context.coordinator.parent = self
+        applyConfiguration(to: textView)
+
+        if textView.text != text {
+            textView.text = text
+            textView.refreshInlineCompletion()
+        }
+
+        if isFocused, !textView.isFirstResponder, textView.window != nil {
+            textView.becomeFirstResponder()
+        } else if !isFocused, textView.isFirstResponder {
+            textView.resignFirstResponder()
+        }
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        uiView textView: InlineCompletionTextView,
+        context: Context
+    ) -> CGSize? {
+        guard let width = proposal.width, width > 0 else { return nil }
+
+        let fittingSize = textView.sizeThatFits(
+            CGSize(width: width, height: .greatestFiniteMagnitude)
+        )
+        let lineHeight = textView.font?.lineHeight ?? UIFont.systemFont(ofSize: fontSize).lineHeight
+        let maximumHeight = (lineHeight * 6) + textView.textContainerInset.top + textView.textContainerInset.bottom
+        let height = min(max(fittingSize.height, lineHeight), maximumHeight)
+        textView.isScrollEnabled = fittingSize.height > maximumHeight
+        return CGSize(width: width, height: ceil(height))
+    }
+
+    private func applyConfiguration(to textView: InlineCompletionTextView) {
+        let font = UIFont.systemFont(ofSize: fontSize, weight: .regular)
+        textView.font = font
+        textView.textColor = textColor
+        textView.tintColor = cursorColor
+        textView.placeholderText = prompt
+        textView.placeholderColor = placeholderColor
+        textView.completionColor = completionColor
+        textView.accessibilityLabel = prompt
+        textView.refreshInlineCompletion()
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: ComposerTextInput
+
+        init(parent: ComposerTextInput) {
+            self.parent = parent
+        }
+
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            parent.isFocused = true
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            parent.isFocused = false
+        }
+
+        func textViewDidChange(_ textView: UITextView) {
+            parent.text = textView.text
+            (textView as? InlineCompletionTextView)?.refreshInlineCompletion()
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            (textView as? InlineCompletionTextView)?.refreshInlineCompletion()
+        }
+
+        func textView(
+            _ textView: UITextView,
+            shouldChangeTextIn range: NSRange,
+            replacementText replacement: String
+        ) -> Bool {
+            guard replacement == "\n" else { return true }
+            parent.onSubmit()
+            return false
+        }
+    }
+}
+
+private final class InlineCompletionTextView: UITextView {
+    var placeholderText = "" {
+        didSet { placeholderLabel.text = placeholderText }
+    }
+    var placeholderColor: UIColor = .secondaryLabel {
+        didSet { placeholderLabel.textColor = placeholderColor }
+    }
+    var completionColor: UIColor = UIColor.white.withAlphaComponent(0.5) {
+        didSet { completionLabel.textColor = completionColor }
+    }
+
+    private let placeholderLabel = UILabel()
+    private let completionLabel = UILabel()
+    private let checker = UITextChecker()
+
+    override init(frame: CGRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+
+        placeholderLabel.numberOfLines = 1
+        placeholderLabel.lineBreakMode = .byTruncatingTail
+        placeholderLabel.isAccessibilityElement = false
+        addSubview(placeholderLabel)
+
+        completionLabel.numberOfLines = 1
+        completionLabel.isAccessibilityElement = false
+        completionLabel.isUserInteractionEnabled = false
+        addSubview(completionLabel)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var text: String! {
+        didSet {
+            placeholderLabel.isHidden = !text.isEmpty
+            refreshInlineCompletion()
+        }
+    }
+
+    override var font: UIFont? {
+        didSet {
+            placeholderLabel.font = font
+            completionLabel.font = font
+            setNeedsLayout()
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        let inset = textContainerInset
+        let leading = inset.left + textContainer.lineFragmentPadding
+        placeholderLabel.frame = CGRect(
+            x: leading,
+            y: inset.top,
+            width: max(0, bounds.width - leading - inset.right - textContainer.lineFragmentPadding),
+            height: font?.lineHeight ?? 0
+        )
+        refreshInlineCompletion()
+    }
+
+    func refreshInlineCompletion() {
+        placeholderLabel.isHidden = !text.isEmpty
+
+        guard let suffix = suggestedCompletionSuffix(), !suffix.isEmpty else {
+            completionLabel.isHidden = true
+            return
+        }
+
+        let endOfText = endOfDocument
+        let caret = caretRect(for: endOfText)
+        guard caret != .zero else {
+            completionLabel.isHidden = true
+            return
+        }
+
+        completionLabel.text = suffix
+        completionLabel.sizeToFit()
+        let availableWidth = bounds.maxX - textContainerInset.right - caret.maxX
+        guard completionLabel.bounds.width <= availableWidth else {
+            completionLabel.isHidden = true
+            return
+        }
+
+        completionLabel.frame.origin = CGPoint(
+            x: caret.maxX,
+            y: caret.midY - (completionLabel.bounds.height / 2)
+        )
+        completionLabel.isHidden = false
+    }
+
+    private func suggestedCompletionSuffix() -> String? {
+        let currentText = text ?? ""
+        let length = (currentText as NSString).length
+        guard selectedRange.length == 0, selectedRange.location == length, length > 1 else {
+            return nil
+        }
+
+        let source = currentText as NSString
+        let wordCharacters = CharacterSet.letters.union(.decimalDigits)
+        var start = length
+        while start > 0 {
+            guard let scalar = UnicodeScalar(source.character(at: start - 1)), wordCharacters.contains(scalar)
+            else { break }
+            start -= 1
+        }
+
+        let partialRange = NSRange(location: start, length: length - start)
+        guard partialRange.length >= 2 else { return nil }
+
+        let partial = source.substring(with: partialRange)
+        let keyboardLanguage = (textInputMode?.primaryLanguage ?? Locale.current.identifier)
+            .replacingOccurrences(of: "-", with: "_")
+        let language = UITextChecker.availableLanguages.contains(keyboardLanguage)
+            ? keyboardLanguage
+            : (UITextChecker.availableLanguages.first(where: { $0.hasPrefix("en") }) ?? "en_US")
+        let completions = checker.completions(
+            forPartialWordRange: partialRange,
+            in: currentText,
+            language: language
+        ) ?? []
+
+        guard let completion = completions.first(where: {
+            $0.range(of: partial, options: [.anchored, .caseInsensitive]) != nil
+                && $0.count > partial.count
+        }), let prefixRange = completion.range(
+            of: partial,
+            options: [.anchored, .caseInsensitive]
+        )
+        else { return nil }
+
+        return String(completion[prefixRange.upperBound...])
+    }
+}
+
 private struct QuickReplySurface: ViewModifier {
+    let backgroundOpacity: Double
+    let glassTintOpacity: Double
+
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        let shape = Capsule()
+        let stage = AssistantTheme.stage(for: colorScheme)
+        let rimOpacity = colorSchemeContrast == .increased ? 0.5 : 0.28
+        let rimWidth = colorSchemeContrast == .increased ? 1.1 : 0.8
+
         if reduceTransparency {
             content
-                .background(AssistantTheme.companionHousing, in: Capsule())
+                .background(stage, in: shape)
                 .overlay {
-                    Capsule().strokeBorder(.white.opacity(0.24), lineWidth: 0.8)
+                    shape.strokeBorder(.white.opacity(rimOpacity), lineWidth: rimWidth)
                 }
+                .shadow(color: Color(hex: 0x0C2D1B, alpha: 0.11), radius: 11, y: 5)
         } else if #available(iOS 26.0, *) {
             content
+                // Match Jump to latest exactly: each suggestion sits on the
+                // same stage-backed Liquid Glass, so moving paper cards never
+                // make it read as an unanchored, fading label.
+                .background(stage.opacity(backgroundOpacity), in: shape)
                 .glassEffect(
-                    .regular.tint(.white.opacity(0.075)).interactive(),
-                    in: Capsule()
+                    Glass.clear
+                        .tint(stage.opacity(glassTintOpacity))
+                        .interactive(),
+                    in: shape
                 )
+                .shadow(color: Color(hex: 0x0C2D1B, alpha: 0.11), radius: 11, y: 5)
         } else {
             content
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay {
-                    Capsule().strokeBorder(.white.opacity(0.2), lineWidth: 0.7)
+                .background {
+                    shape
+                        .fill(.ultraThinMaterial)
+                        .overlay {
+                            shape.fill(stage.opacity(backgroundOpacity))
+                        }
                 }
+                .overlay {
+                    shape.strokeBorder(.white.opacity(rimOpacity), lineWidth: rimWidth)
+                }
+                .shadow(color: Color(hex: 0x0C2D1B, alpha: 0.11), radius: 11, y: 5)
         }
     }
 }

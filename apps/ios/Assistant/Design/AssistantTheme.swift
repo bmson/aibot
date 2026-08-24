@@ -35,6 +35,12 @@ enum AssistantTheme {
     static let canvasDark = Color(hex: 0x121A15)
     static let raised = Color.white
     static let raisedDark = Color(hex: 0x19241D)
+    // The chat dashboard is intentionally a little warmer and lighter than
+    // the utility cards used elsewhere. On the dark-green stage these read as
+    // sheets of paper with room to scan, echoing the menu sheet without
+    // turning every dashboard section into a floating tile.
+    static let dashboardPaper = Color(hex: 0xFAFBF9)
+    static let dashboardPaperDark = Color(hex: 0x223128)
     static let sunken = Color(hex: 0xE3EDE6)
     static let sunkenDark = Color(hex: 0x243129)
     static let ink = Color(hex: 0x15201A)
@@ -64,6 +70,9 @@ enum AssistantTheme {
     static let warningSurfaceDark = Color(hex: 0x362A18)
     static let warningInk = Color(hex: 0x5C3A0E)
     static let warningInkDark = Color(hex: 0xFFE1A8)
+    // Count pills signal work that needs attention, not a decorative tag.
+    // This stays one alert red in both appearances for instant recognition.
+    static let notificationBadge = Color(hex: 0xC9362C)
     static let errorSurface = Color(hex: 0xFFF0EE)
     static let errorSurfaceDark = Color(hex: 0x3A211F)
     static let errorInk = Color(hex: 0x7A201B)
@@ -81,6 +90,10 @@ enum AssistantTheme {
 
     static func raised(for scheme: ColorScheme) -> Color {
         scheme == .dark ? raisedDark : raised
+    }
+
+    static func dashboardPaper(for scheme: ColorScheme) -> Color {
+        scheme == .dark ? dashboardPaperDark : dashboardPaper
     }
 
     static func sunken(for scheme: ColorScheme) -> Color {

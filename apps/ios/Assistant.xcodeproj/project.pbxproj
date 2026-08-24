@@ -34,6 +34,7 @@
 		B00000000000000000000017 /* System/AssistantActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000014 /* System/AssistantActivityAttributes.swift */; };
 		B00000000000000000000018 /* AssistantActivityExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = C00000000000000000000019 /* AssistantActivityExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B00000000000000000000019 /* Components/ActivityCrown.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000022 /* Components/ActivityCrown.swift */; };
+		B0000000000000000000001B /* Components/ChatDashboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000024 /* Components/ChatDashboard.swift */; };
 		B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000023 /* Views/WorkspaceView.swift */; };
 /* End PBXBuildFile section */
 
@@ -100,6 +101,7 @@
 		C00000000000000000000021 /* AssistantTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AssistantTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C00000000000000000000022 /* Components/ActivityCrown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/ActivityCrown.swift; sourceTree = "<group>"; };
 		C00000000000000000000023 /* Views/WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WorkspaceView.swift; sourceTree = "<group>"; };
+		C00000000000000000000024 /* Components/ChatDashboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/ChatDashboard.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -162,6 +164,7 @@
 				C00000000000000000000051 /* System/LocationManager.swift */,
 				C00000000000000000000007 /* Components/CompanionCapsule.swift */,
 				C00000000000000000000022 /* Components/ActivityCrown.swift */,
+				C00000000000000000000024 /* Components/ChatDashboard.swift */,
 				C00000000000000000000008 /* Components/StatusPill.swift */,
 				C00000000000000000000009 /* Components/MessageBubble.swift */,
 				C0000000000000000000000A /* Views/RootView.swift */,
@@ -337,6 +340,7 @@
 				B00000000000000000000051 /* System/LocationManager.swift in Sources */,
 				B00000000000000000000007 /* Components/CompanionCapsule.swift in Sources */,
 				B00000000000000000000019 /* Components/ActivityCrown.swift in Sources */,
+				B0000000000000000000001B /* Components/ChatDashboard.swift in Sources */,
 				B00000000000000000000008 /* Components/StatusPill.swift in Sources */,
 				B00000000000000000000009 /* Components/MessageBubble.swift in Sources */,
 				B0000000000000000000000A /* Views/RootView.swift in Sources */,
