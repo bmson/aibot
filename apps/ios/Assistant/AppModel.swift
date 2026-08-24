@@ -26,6 +26,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var bootstrap: BootstrapResponse?
     @Published private(set) var overview: OverviewResponse?
     @Published private(set) var workspace: WorkspaceResponse?
+    @Published private(set) var mcpConnections: [McpConnection] = []
     @Published private(set) var messages: [ChatMessage] = []
     @Published private(set) var isLoading = false
     @Published private(set) var isSending = false
@@ -238,6 +239,54 @@ final class AppModel: ObservableObject {
         guard let client else { return }
         do { workspace = try await client.workspace() }
         catch { errorMessage = error.localizedDescription }
+    }
+
+    func refreshMcpConnections() async {
+        guard let client else { return }
+        do {
+            mcpConnections = try await client.mcpConnections().connections
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func createMcpConnection(name: String, endpoint: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.createMcpConnection(name: name, endpoint: endpoint)
+            await refreshMcpConnections()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func updateMcpConnection(id: String, action: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateMcpConnection(id: id, action: action)
+            await refreshMcpConnections()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func deleteMcpConnection(id: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.deleteMcpConnection(id: id)
+            await refreshMcpConnections()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
     }
 
     func send(_ rawText: String, autonomous override: Bool? = nil) {

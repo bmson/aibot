@@ -9,11 +9,13 @@ import {
   changeChatModel,
   checkReadiness,
   createChatConversation,
+  createMcpConnection,
   decideApproval,
   deleteApprovalPolicy,
   deleteAssistantSkill,
   deleteDocument,
   deleteImportedSource,
+  deleteMcpConnection,
   dismissAnomalyRecord,
   dismissImprovementProposal,
   downloadArtifact,
@@ -24,6 +26,7 @@ import {
   getChatUpdates,
   getDocumentsOverview,
   getImportOverview,
+  getMcpConnection,
   getPrimaryConversationId,
   getSettingsOverview,
   getShellStatus,
@@ -36,12 +39,15 @@ import {
   listChatHistory,
   listGoalsDashboard,
   listImprovementProposals,
+  listMcpConnections,
   purgeImportedSource,
   recordOwnerLocationPing,
   restoreChatConversation,
   reviewImportedSource,
+  saveMcpDiscovery,
   setApprovalPolicyEnabled,
   setAssistantSkillDeprecated,
+  setMcpConnectionEnabled,
   setRecurringJobEnabled,
   startWorkspaceImport,
   suspendAnomalyRecord,
@@ -52,6 +58,7 @@ import {
 import { loadConfig, repoRoot } from '@assistant/config';
 import { ModelRouter } from '@assistant/core/model-router';
 import { createDb, type Db } from '@assistant/db';
+import { inspectMcpConnection } from '@assistant/tools/mcp';
 import {
   GcsWorkspaceStore,
   LocalWorkspaceStore,
@@ -119,6 +126,13 @@ export function getWorkspace(): WorkspaceStore {
 function createApplication() {
   const db = getDb();
   const workspace = getWorkspace();
+  const refreshMcpConnection = async (connectionId: string) => {
+    const current = await getMcpConnection(db, connectionId);
+    if (!current) return { error: 'MCP connection not found.' };
+    const discovery = await inspectMcpConnection(current.endpoint);
+    await saveMcpDiscovery(db, connectionId, discovery);
+    return { connectionId, ...discovery };
+  };
   return {
     listAnomalies: () => listAnomalies(db),
     dismissAnomaly: (id: string) => dismissAnomalyRecord(db, id),
@@ -136,6 +150,19 @@ function createApplication() {
     deleteSkill: (id: string) => deleteAssistantSkill(db, id),
     setSkillDeprecated: (id: string, deprecated: boolean) =>
       setAssistantSkillDeprecated(db, id, deprecated),
+    listMcpConnections: () => listMcpConnections(db),
+    addMcpConnection: async (input: { name: string; endpoint: string }) => {
+      const created = await createMcpConnection(db, input);
+      if (!created.connection) return created;
+      return refreshMcpConnection(created.connection.id);
+    },
+    refreshMcpConnection,
+    setMcpConnectionEnabled: async (id: string, enabled: boolean) => {
+      if (!(await setMcpConnectionEnabled(db, id, enabled)))
+        return { error: 'MCP connection not found.' };
+      return enabled ? refreshMcpConnection(id) : { connectionId: id, status: 'disabled' as const };
+    },
+    deleteMcpConnection: (id: string) => deleteMcpConnection(db, id),
     getSettings: () => getSettingsOverview(db),
     updateSettings: (input: { timezone: string; locale: string; signature: string }) =>
       updateAssistantSettings(db, input),

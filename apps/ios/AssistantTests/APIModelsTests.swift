@@ -46,6 +46,52 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(message.text, "Hello")
     }
 
+    func testResponseCardsUseStructuredPartsBeforeTextFallback() {
+        let card = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("calendar"),
+                "title": .string("Today"),
+                "subtitle": .string("Thursday, August 23"),
+                "items": .array([
+                    .object([
+                        "time": .string("9:30 AM"),
+                        "title": .string("Design review"),
+                        "detail": .string("Studio"),
+                    ]),
+                ]),
+            ])
+        )
+
+        guard case let .agenda(title, subtitle, items)? = MessageResponseCard(part: card) else {
+            return XCTFail("Expected a structured agenda card")
+        }
+        XCTAssertEqual(title, "Today")
+        XCTAssertEqual(subtitle, "Thursday, August 23")
+        XCTAssertEqual(items.first?.time, "9:30 AM")
+        XCTAssertEqual(items.first?.title, "Design review")
+    }
+
+    func testResponseCardsInferWeatherAndDurationOnlyFromStrongSignals() {
+        let weather = MessageResponseCard.inferred(
+            from: "The weather is sunny and 18°C now. Wind stays light this afternoon."
+        )
+        guard case let .weather(_, temperature, condition, _, _, _)? = weather.first else {
+            return XCTFail("Expected a weather card")
+        }
+        XCTAssertEqual(temperature, "18°C")
+        XCTAssertEqual(condition, "Sunny")
+
+        let estimate = MessageResponseCard.inferred(
+            from: "This will take about 45 minutes if the source material is ready."
+        )
+        guard case let .duration(_, duration, _, _)? = estimate.first else {
+            return XCTFail("Expected a duration card")
+        }
+        XCTAssertEqual(duration, "45 minutes")
+        XCTAssertTrue(MessageResponseCard.inferred(from: "The answer has 45 lines.").isEmpty)
+    }
+
     func testIdentifierFormattingDoesNotExposeImplementationPunctuation() {
         XCTAssertEqual("web.fetch".sentenceCaseIdentifier, "Web Fetch")
         XCTAssertEqual("adhoc".sentenceCaseIdentifier, "Ad hoc")

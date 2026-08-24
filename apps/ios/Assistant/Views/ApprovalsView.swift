@@ -99,9 +99,11 @@ struct ApprovalsView: View {
         VStack(alignment: .leading, spacing: 14) {
             approvalHeader(item)
             Text(item.approval.summary)
-                .font(.headline)
+                .font(.title3.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
+            Divider()
+                .overlay(AssistantTheme.warning(for: colorScheme).opacity(0.18))
             approvalMetadata(item)
 
             Group {
@@ -112,17 +114,36 @@ struct ApprovalsView: View {
                 }
             }
         }
-        .assistantCard(in: colorScheme)
+        .padding(16)
+        .background(
+            AssistantTheme.warningSurface(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(AssistantTheme.warning(for: colorScheme).opacity(0.32), lineWidth: 1)
+        }
     }
 
     @ViewBuilder
     private func approvalHeader(_ item: PendingApproval) -> some View {
-        let tool = Label(
-            item.toolName.sentenceCaseIdentifier,
-            systemImage: "shield.lefthalf.filled"
-        )
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(AssistantTheme.warning(for: colorScheme))
+        let tool = HStack(spacing: 10) {
+            Image(systemName: "checkmark.shield.fill")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(AssistantTheme.warning(for: colorScheme))
+                .frame(width: 38, height: 38)
+                .background(AssistantTheme.warning(for: colorScheme).opacity(0.13), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Approval needed")
+                    .font(.caption.weight(.bold))
+                    .textCase(.uppercase)
+                    .tracking(0.65)
+                    .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
+                Text(item.toolName.sentenceCaseIdentifier)
+                    .font(.caption)
+                    .foregroundStyle(AssistantTheme.warningInk(for: colorScheme).opacity(0.74))
+            }
+        }
 
         if usesAccessibilityLayout {
             VStack(alignment: .leading, spacing: 10) {
@@ -154,8 +175,8 @@ struct ApprovalsView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
                     .background(
-                        AssistantTheme.sunken(for: colorScheme),
-                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        AssistantTheme.warning(for: colorScheme).opacity(0.12),
+                        in: Capsule()
                     )
             }
         }
@@ -168,24 +189,33 @@ struct ApprovalsView: View {
 
     @ViewBuilder
     private func approvalMetadata(_ item: PendingApproval) -> some View {
+        let labels = [
+            (item.taskType.sentenceCaseIdentifier, "square.stack.3d.up"),
+            (item.taskTrust.sentenceCaseIdentifier, "person.crop.circle"),
+        ]
         if usesAccessibilityLayout {
             VStack(alignment: .leading, spacing: 6) {
-                Text(item.taskType.sentenceCaseIdentifier)
+                ForEach(labels, id: \.0) { label in
+                    Label(label.0, systemImage: label.1)
+                }
                 Text("Requested \(relative(item.approval.requestedAt))")
-                Text(item.taskTrust.sentenceCaseIdentifier)
             }
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(AssistantTheme.warningInk(for: colorScheme).opacity(0.78))
         } else {
-            // Two short lines rather than one dot-joined row: three segments
-            // plus separators wrapped awkwardly on narrow phones, leaving the
-            // trust level stranded mid-line.
-            VStack(alignment: .leading, spacing: 3) {
-                Text("\(item.taskType.sentenceCaseIdentifier) · \(item.taskTrust.sentenceCaseIdentifier)")
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    ForEach(labels, id: \.0) { label in
+                        Label(label.0, systemImage: label.1)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(AssistantTheme.warning(for: colorScheme).opacity(0.1), in: Capsule())
+                    }
+                }
                 Text("Requested \(relative(item.approval.requestedAt))")
             }
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(AssistantTheme.warningInk(for: colorScheme).opacity(0.78))
         }
     }
 

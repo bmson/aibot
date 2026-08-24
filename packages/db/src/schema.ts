@@ -44,6 +44,47 @@ export const agents = pgTable('agents', {
   ...timestamps,
 });
 
+// ── External MCP connections ────────────────────────────────────────────────
+
+/**
+ * Owner-configured remote Model Context Protocol servers. The endpoint and
+ * server-advertised tool metadata are durable; credentials deliberately are
+ * not. An authorization-required server stays visible as such instead of
+ * encouraging the app to persist bearer tokens in the database.
+ */
+export const mcpConnections = pgTable(
+  'mcp_connections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    /** Human name selected by the owner, e.g. "Linear" or "Home Assistant". */
+    name: text('name').notNull(),
+    /** One Streamable HTTP endpoint, normalized and validated before persistence. */
+    endpoint: text('endpoint').notNull(),
+    /** ready | checking | authorization_required | error | disabled */
+    status: text('status').notNull().default('checking'),
+    enabled: boolean('enabled').notNull().default(true),
+    serverName: text('server_name'),
+    serverVersion: text('server_version'),
+    instructions: text('instructions'),
+    /** Sanitized `tools/list` response; never trusted as an instruction source. */
+    tools: jsonb('tools').notNull().default([]),
+    lastCheckedAt: timestamp('last_checked_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      'mcp_connections_status_check',
+      sql`${t.status} IN ('ready','checking','authorization_required','error','disabled')`,
+    ),
+    uniqueIndex('mcp_connections_agent_name_idx').on(t.agentId, t.name),
+    index('mcp_connections_agent_status_idx').on(t.agentId, t.status),
+  ],
+);
+
 // ── Goals & long-horizon work ────────────────────────────────────────────────
 
 export const goals = pgTable(
@@ -1521,6 +1562,7 @@ export const selfMaintenance = pgTable(
 // ── Inferred row types ───────────────────────────────────────────────────────
 
 export type AgentRow = typeof agents.$inferSelect;
+export type McpConnectionRow = typeof mcpConnections.$inferSelect;
 export type GoalRow = typeof goals.$inferSelect;
 export type ConversationRow = typeof conversations.$inferSelect;
 export type MessageRow = typeof messages.$inferSelect;

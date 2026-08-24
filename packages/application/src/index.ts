@@ -8,6 +8,7 @@ export * from './goals.js';
 export * from './health.js';
 export * from './imports.js';
 export * from './location.js';
+export * from './mcp.js';
 export * from './operations.js';
 export * from './profile.js';
 export * from './settings.js';

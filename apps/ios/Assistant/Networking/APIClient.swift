@@ -66,6 +66,36 @@ struct APIClient: Sendable {
         try await get("api/mobile/v1/workspace")
     }
 
+    func mcpConnections() async throws -> McpConnectionsResponse {
+        try await get("api/mobile/v1/mcp")
+    }
+
+    func createMcpConnection(name: String, endpoint: String) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/mcp"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["name": name, "endpoint": endpoint])
+        _ = try await perform(request, as: EmptyPayload.self)
+    }
+
+    func updateMcpConnection(id: String, action: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/mcp/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["action": action])
+        _ = try await perform(request, as: EmptyPayload.self)
+    }
+
+    func deleteMcpConnection(id: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/mcp/\(id)")
+        )
+        request.httpMethod = "DELETE"
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
     func updates(conversationId: String, taskId: String?, cursor: String?) async throws -> ChatUpdates {
         var components = URLComponents(
             url: configuration.baseURL.appending(path: "api/mobile/v1/chat/status"),
@@ -188,6 +218,7 @@ struct APIClient: Sendable {
 private struct ErrorBody: Decodable { let error: String }
 
 private struct OkPayload: Decodable { let ok: Bool }
+private struct EmptyPayload: Decodable {}
 
 /// Matches the server's LocationPingSchema (packages/core/src/memory/location.ts).
 struct LocationPingBody: Encodable {

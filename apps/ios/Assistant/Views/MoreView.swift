@@ -46,6 +46,11 @@ struct MoreView: View {
                 } label: {
                     Label("Assistant server", systemImage: "network")
                 }
+                NavigationLink {
+                    MCPConnectionsView()
+                } label: {
+                    Label("MCP connections", systemImage: "point.3.connected.trianglepath.dotted")
+                }
             }
 
             Section {
@@ -153,6 +158,7 @@ struct MoreView: View {
         .task {
             await notifications.refreshAuthorizationStatus()
             if model.workspace == nil { await model.refreshWorkspace() }
+            await model.refreshMcpConnections()
         }
     }
 
@@ -323,5 +329,355 @@ struct MoreView: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
             .background(tint.opacity(0.11), in: Capsule())
+    }
+}
+
+/// Owner-managed remote tool servers. Connection discovery is intentionally
+/// separate from tool use: a server can describe its tools here, but every
+/// later invocation still becomes a normal approval-backed agent action.
+private struct MCPConnectionsView: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var name = ""
+    @State private var endpoint = ""
+    @State private var isAdding = false
+    @State private var workingConnectionID: String?
+    @FocusState private var focusedField: MCPField?
+
+    private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                introduction
+                addConnection
+
+                if model.mcpConnections.isEmpty {
+                    ContentUnavailableView(
+                        "No MCP connections",
+                        systemImage: "point.3.connected.trianglepath.dotted",
+                        description: Text("Add a remote server to let the agent discover its tools."))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 34)
+                } else {
+                    ForEach(model.mcpConnections) { connection in
+                        connectionCard(connection)
+                    }
+                }
+            }
+            .padding(16)
+            .padding(.bottom, 28)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollDismissesKeyboard(.interactively)
+        .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
+        .navigationTitle("MCP connections")
+        .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
+        .refreshable { await model.refreshMcpConnections() }
+        .task { await model.refreshMcpConnections() }
+    }
+
+    private var introduction: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Tools, with a visible boundary", systemImage: "checkmark.shield")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+            Text("Connect a Streamable HTTP MCP server. The agent can inspect its tools, but it asks before every remote call.")
+                .font(.subheadline)
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var addConnection: some View {
+        VStack(alignment: .leading, spacing: 13) {
+            Text("Add a connection")
+                .font(.headline)
+
+            mcpField("Name", placeholder: "e.g. Home Assistant", text: $name, field: .name)
+            mcpField("MCP endpoint", placeholder: "https://example.com/mcp", text: $endpoint, field: .endpoint)
+
+            Button(action: add) {
+                HStack(spacing: 8) {
+                    if isAdding { ProgressView().controlSize(.small) }
+                    Text(isAdding ? "Checking connection…" : "Add and inspect")
+                    Spacer()
+                    Image(systemName: "arrow.right")
+                        .font(.caption.weight(.bold))
+                }
+                .frame(minHeight: 40)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(AssistantTheme.accent(for: colorScheme))
+            .disabled(isAdding || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.99))
+
+            Text("Only public HTTPS endpoints are accepted in production. Authentication credentials are never stored here.")
+                .font(.caption)
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .assistantCard(in: colorScheme)
+    }
+
+    private func mcpField(
+        _ label: String,
+        placeholder: String,
+        text: Binding<String>,
+        field: MCPField
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            TextField(placeholder, text: text)
+                .textContentType(field == .endpoint ? .URL : .organizationName)
+                .keyboardType(field == .endpoint ? .URL : .default)
+                .textInputAutocapitalization(field == .endpoint ? .never : .words)
+                .autocorrectionDisabled(field == .endpoint)
+                .submitLabel(field == .name ? .next : .go)
+                .focused($focusedField, equals: field)
+                .onSubmit {
+                    if field == .name { focusedField = .endpoint }
+                    else { add() }
+                }
+                .padding(.horizontal, 12)
+                .frame(minHeight: 46)
+                .background(AssistantTheme.sunken(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+
+    private func connectionCard(_ connection: McpConnection) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: connection.statusIcon)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(statusColor(connection))
+                    .frame(width: 44, height: 44)
+                    .background(statusColor(connection).opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(connection.name)
+                        .font(.headline)
+                    Text(connection.serverName.map { version in
+                        connection.serverVersion.map { "\(version) · \($0)" } ?? version
+                    } ?? connection.endpoint)
+                    .font(.caption)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .lineLimit(usesAccessibilityLayout ? nil : 1)
+                }
+                Spacer(minLength: 6)
+                statusTag(connection)
+            }
+
+            if connection.status == "ready" {
+                HStack(spacing: 10) {
+                    Label("\(connection.tools.count) \(connection.tools.count == 1 ? "tool" : "tools")", systemImage: "wrench.and.screwdriver")
+                    if let checked = connection.lastCheckedAt { Text("Checked \(relative(checked))") }
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+
+                if !connection.tools.isEmpty {
+                    FlowLayout(spacing: 6) {
+                        ForEach(connection.tools.prefix(5)) { tool in
+                            Text(tool.name)
+                                .font(.caption2.monospaced().weight(.medium))
+                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(AssistantTheme.accent(for: colorScheme).opacity(0.1), in: Capsule())
+                        }
+                        if connection.tools.count > 5 {
+                            Text("+\(connection.tools.count - 5)")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
+                        }
+                    }
+                }
+            } else if let error = connection.lastError, !error.isEmpty {
+                Label(error, systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(AssistantTheme.errorInk(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            connectionActions(connection)
+        }
+        .assistantCard(in: colorScheme)
+    }
+
+    @ViewBuilder
+    private func connectionActions(_ connection: McpConnection) -> some View {
+        let isWorking = workingConnectionID == connection.id
+        if usesAccessibilityLayout {
+            VStack(spacing: 9) {
+                actionButton("Refresh", icon: "arrow.clockwise", connection: connection, action: "refresh", prominent: true, working: isWorking)
+                actionButton(connection.enabled ? "Pause" : "Enable", icon: connection.enabled ? "pause.fill" : "play.fill", connection: connection, action: connection.enabled ? "disable" : "enable", prominent: false, working: isWorking)
+                deleteButton(connection, working: isWorking)
+            }
+        } else {
+            HStack(spacing: 9) {
+                actionButton("Refresh", icon: "arrow.clockwise", connection: connection, action: "refresh", prominent: true, working: isWorking)
+                actionButton(connection.enabled ? "Pause" : "Enable", icon: connection.enabled ? "pause.fill" : "play.fill", connection: connection, action: connection.enabled ? "disable" : "enable", prominent: false, working: isWorking)
+                deleteButton(connection, working: isWorking)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(
+        _ title: String,
+        icon: String,
+        connection: McpConnection,
+        action: String,
+        prominent: Bool,
+        working: Bool
+    ) -> some View {
+        if prominent {
+            Button { perform(connection, action: action) } label: {
+                actionButtonLabel(title, icon: icon, working: working)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(AssistantTheme.accent(for: colorScheme))
+            .disabled(workingConnectionID != nil)
+        } else {
+            Button { perform(connection, action: action) } label: {
+                actionButtonLabel(title, icon: icon, working: working)
+            }
+            .buttonStyle(.bordered)
+            .tint(AssistantTheme.inkMuted(for: colorScheme))
+            .disabled(workingConnectionID != nil)
+        }
+    }
+
+    private func actionButtonLabel(_ title: String, icon: String, working: Bool) -> some View {
+        HStack(spacing: 6) {
+            if working { ProgressView().controlSize(.small) }
+            else { Image(systemName: icon) }
+            Text(working ? "Working…" : title)
+        }
+        .frame(maxWidth: .infinity, minHeight: 36)
+    }
+
+    private func deleteButton(_ connection: McpConnection, working: Bool) -> some View {
+        Button(role: .destructive) {
+            workingConnectionID = connection.id
+            Task {
+                _ = await model.deleteMcpConnection(id: connection.id)
+                workingConnectionID = nil
+            }
+        } label: {
+            Image(systemName: "trash")
+                .frame(minWidth: 36, minHeight: 36)
+        }
+        .buttonStyle(.bordered)
+        .disabled(workingConnectionID != nil || working)
+        .accessibilityLabel("Remove \(connection.name)")
+    }
+
+    private func statusTag(_ connection: McpConnection) -> some View {
+        Text(connection.statusLabel)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(statusColor(connection))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(statusColor(connection).opacity(0.11), in: Capsule())
+    }
+
+    private func statusColor(_ connection: McpConnection) -> Color {
+        switch connection.status {
+        case "ready": AssistantTheme.success(for: colorScheme)
+        case "checking": AssistantTheme.accent(for: colorScheme)
+        case "disabled": AssistantTheme.inkMuted(for: colorScheme)
+        default: AssistantTheme.warning(for: colorScheme)
+        }
+    }
+
+    private func add() {
+        let candidateName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidateEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isAdding, !candidateName.isEmpty, !candidateEndpoint.isEmpty else { return }
+        focusedField = nil
+        isAdding = true
+        Task {
+            if await model.createMcpConnection(name: candidateName, endpoint: candidateEndpoint) {
+                name = ""
+                endpoint = ""
+            }
+            isAdding = false
+        }
+    }
+
+    private func perform(_ connection: McpConnection, action: String) {
+        workingConnectionID = connection.id
+        Task {
+            _ = await model.updateMcpConnection(id: connection.id, action: action)
+            workingConnectionID = nil
+        }
+    }
+}
+
+private enum MCPField: Hashable {
+    case name
+    case endpoint
+}
+
+/// A wrapping row for compact tool names. Unlike a horizontal scroller, all
+/// discovered capabilities remain visible at once and retain their reading
+/// order when Dynamic Type grows.
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let width = proposal.width ?? .greatestFiniteMagnitude
+        var cursorX: CGFloat = 0
+        var cursorY: CGFloat = 0
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            let nextX = cursorX > 0 ? cursorX + spacing + size.width : size.width
+            if cursorX > 0, nextX > width {
+                cursorX = 0
+                cursorY += lineHeight + spacing
+                lineHeight = 0
+            }
+            cursorX = cursorX > 0 ? cursorX + spacing + size.width : size.width
+            lineHeight = max(lineHeight, size.height)
+        }
+        return CGSize(width: proposal.width ?? cursorX, height: cursorY + lineHeight)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        var cursorX = bounds.minX
+        var cursorY = bounds.minY
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if cursorX > bounds.minX, cursorX + size.width > bounds.maxX {
+                cursorX = bounds.minX
+                cursorY += lineHeight + spacing
+                lineHeight = 0
+            }
+            subview.place(at: CGPoint(x: cursorX, y: cursorY), proposal: .unspecified)
+            cursorX += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
     }
 }

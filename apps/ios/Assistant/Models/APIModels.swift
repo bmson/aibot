@@ -622,6 +622,53 @@ struct WorkspaceImprovement: Codable, Identifiable, Sendable {
     let createdAt: String
 }
 
+struct McpConnectionsResponse: Codable, Sendable {
+    let connections: [McpConnection]
+}
+
+struct McpConnection: Codable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let endpoint: String
+    let status: String
+    let enabled: Bool
+    let serverName: String?
+    let serverVersion: String?
+    let instructions: String?
+    let tools: [McpConnectionTool]
+    let lastCheckedAt: String?
+    let lastError: String?
+
+    var displayServerName: String { serverName?.isEmpty == false ? serverName! : name }
+
+    var statusLabel: String {
+        switch status {
+        case "ready": "Ready"
+        case "checking": "Checking"
+        case "authorization_required": "Authorization needed"
+        case "disabled": "Paused"
+        default: "Needs attention"
+        }
+    }
+
+    var statusIcon: String {
+        switch status {
+        case "ready": "checkmark.seal.fill"
+        case "checking": "arrow.triangle.2.circlepath"
+        case "authorization_required": "lock.trianglebadge.exclamationmark"
+        case "disabled": "pause.circle.fill"
+        default: "exclamationmark.triangle.fill"
+        }
+    }
+}
+
+struct McpConnectionTool: Codable, Identifiable, Sendable {
+    var id: String { name }
+    let name: String
+    let description: String
+    let inputSchema: JSONValue
+}
+
 private extension KeyedDecodingContainer {
     /// PostgreSQL drivers often serialize aggregate `count(*)` columns as
     /// strings, while the mobile API's current contract sends an integer. The

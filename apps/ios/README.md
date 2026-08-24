@@ -55,6 +55,14 @@ The manual path still exists for Cloud Run deployments (where the web process ha
 automatically on first provision when it is missing, and a regular release preserves the web
 service's existing secret binding.
 
+## MCP connections
+
+In **More → MCP connections**, add a public Streamable HTTP MCP endpoint and give it a name.
+Assistant discovers the server's tool list before enabling it. Tool descriptions and results are
+treated as untrusted, and every remote MCP call still stops at the normal approval screen. The
+connection screen deliberately does not accept or store bearer tokens; a server that requires
+OAuth remains visible as needing authorization rather than putting credentials in the database.
+
 ## Verify
 
 ```sh

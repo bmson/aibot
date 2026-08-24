@@ -31,39 +31,13 @@ struct MessageBubble: View {
             ForEach(decisionParts.indices, id: \.self) { index in
                 let part = decisionParts[index]
                 Button(action: openApprovals) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "shield.lefthalf.filled")
-                            .font(.title3)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(part.type == "approval" ? "Approval requested" : "Decision needed")
-                                .font(.caption.weight(.semibold))
-                                .textCase(.uppercase)
-                                .tracking(0.5)
-                            Text(part.summary ?? "Review this action before the assistant continues.")
-                                .font(.subheadline)
-                                .multilineTextAlignment(.leading)
-                                .lineLimit(3)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.bold))
-                    }
-                    .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
-                    .padding(14)
-                    .background(
-                        AssistantTheme.warningSurface(for: colorScheme),
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    )
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(
-                                AssistantTheme.warning(for: colorScheme)
-                                    .opacity(colorSchemeContrast == .increased ? 0.58 : 0.3),
-                                lineWidth: colorSchemeContrast == .increased ? 1.2 : 1
-                            )
-                    }
+                    decisionCard(part)
                 }
                 .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.985))
+            }
+
+            if message.role == .assistant, !responseCards.isEmpty {
+                RichResponseCards(cards: responseCards)
             }
         }
         .accessibilityElement(children: .contain)
@@ -203,6 +177,404 @@ struct MessageBubble: View {
 
     private var decisionParts: [MessagePart] {
         message.parts.filter { ["approval", "budget-request"].contains($0.type) }
+    }
+
+    private var responseCards: [MessageResponseCard] {
+        let explicit = message.parts.compactMap(MessageResponseCard.init(part:))
+        return explicit.isEmpty ? MessageResponseCard.inferred(from: message.text) : explicit
+    }
+
+    private func decisionCard(_ part: MessagePart) -> some View {
+        let isApproval = part.type == "approval"
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 11) {
+                Image(systemName: isApproval ? "checkmark.shield.fill" : "creditcard.trianglebadge.exclamationmark")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 38, height: 38)
+                    .background(AssistantTheme.warning(for: colorScheme).opacity(0.14), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(isApproval ? "Approval needed" : "Budget decision")
+                        .font(.caption.weight(.bold))
+                        .textCase(.uppercase)
+                        .tracking(0.65)
+                    Text(isApproval ? "The assistant is parked until you decide." : "The assistant needs more room to continue.")
+                        .font(.caption)
+                        .foregroundStyle(AssistantTheme.warningInk(for: colorScheme).opacity(0.76))
+                }
+                Spacer(minLength: 4)
+                if let code = part.shortCode, !code.isEmpty {
+                    Text(code)
+                        .font(.caption.monospaced().weight(.bold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(AssistantTheme.warning(for: colorScheme).opacity(0.12), in: Capsule())
+                }
+            }
+
+            Text(part.summary ?? "Review this action before the assistant continues.")
+                .font(.subheadline.weight(.semibold))
+                .multilineTextAlignment(.leading)
+                .lineLimit(4)
+
+            HStack(spacing: 8) {
+                Text("Review decision")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Image(systemName: "arrow.right")
+                    .font(.caption.weight(.bold))
+            }
+            .padding(.top, 1)
+            .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
+        }
+        .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
+        .padding(15)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            AssistantTheme.warningSurface(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(
+                    AssistantTheme.warning(for: colorScheme)
+                        .opacity(colorSchemeContrast == .increased ? 0.58 : 0.3),
+                    lineWidth: colorSchemeContrast == .increased ? 1.2 : 1
+                )
+        }
+    }
+}
+
+/// The chat transport can send a `data-card` part when the result already has
+/// shape. A conservative text fallback covers existing servers while keeping
+/// unrelated prose as prose. Both paths share the same visual system below.
+enum MessageResponseCard: Identifiable {
+    struct AgendaItem: Identifiable {
+        let time: String
+        let title: String
+        let detail: String
+        var id: String { "\(time)-\(title)" }
+    }
+
+    case agenda(title: String, subtitle: String, items: [AgendaItem])
+    case weather(location: String, temperature: String, condition: String, high: String?, low: String?, detail: String?)
+    case duration(title: String, duration: String, detail: String?, confidence: String?)
+
+    var id: String {
+        switch self {
+        case let .agenda(title, _, _): "agenda-\(title)"
+        case let .weather(location, temperature, _, _, _, _): "weather-\(location)-\(temperature)"
+        case let .duration(title, duration, _, _): "duration-\(title)-\(duration)"
+        }
+    }
+
+    init?(part: MessagePart) {
+        guard part.type == "data-card", case let .object(data)? = part.data,
+              let kind = data["kind"]?.string else { return nil }
+        switch kind {
+        case "calendar", "agenda":
+            let items: [AgendaItem] = {
+                guard case let .array(values)? = data["items"] else { return [] }
+                return values.compactMap { value in
+                    guard case let .object(item) = value,
+                          let time = item["time"]?.string,
+                          let title = item["title"]?.string else { return nil }
+                    return .init(time: time, title: title, detail: item["detail"]?.string ?? "")
+                }
+            }()
+            guard !items.isEmpty else { return nil }
+            self = .agenda(
+                title: data["title"]?.string ?? "Today",
+                subtitle: data["subtitle"]?.string ?? "Your schedule",
+                items: Array(items.prefix(6))
+            )
+        case "weather":
+            guard let temperature = data["temperature"]?.string,
+                  let condition = data["condition"]?.string else { return nil }
+            self = .weather(
+                location: data["location"]?.string ?? "Right now",
+                temperature: temperature,
+                condition: condition,
+                high: data["high"]?.string,
+                low: data["low"]?.string,
+                detail: data["detail"]?.string
+            )
+        case "duration", "time-estimate":
+            guard let duration = data["duration"]?.string else { return nil }
+            self = .duration(
+                title: data["title"]?.string ?? "Time estimate",
+                duration: duration,
+                detail: data["detail"]?.string,
+                confidence: data["confidence"]?.string
+            )
+        default:
+            return nil
+        }
+    }
+
+    static func inferred(from text: String) -> [Self] {
+        let lower = text.lowercased()
+        if let agenda = inferredAgenda(text, lower: lower) { return [agenda] }
+        if let weather = inferredWeather(text, lower: lower) { return [weather] }
+        if let duration = inferredDuration(text, lower: lower) { return [duration] }
+        return []
+    }
+
+    private static func inferredAgenda(_ text: String, lower: String) -> Self? {
+        guard ["calendar", "agenda", "schedule", "today"].contains(where: lower.contains) else { return nil }
+        let pattern = #"(?m)^\s*(?:[-•*]|\d+\.)?\s*(\d{1,2}(?::\d{2})?\s?(?:a\.?m\.?|p\.?m\.?)?(?:\s*[–-]\s*\d{1,2}(?::\d{2})?\s?(?:a\.?m\.?|p\.?m\.?)?)?)\s*(?:[—–:-]\s*|\s{2,})(.{3,90})$"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let range = NSRange(text.startIndex..., in: text)
+        let items = expression.matches(in: text, range: range).compactMap { match -> AgendaItem? in
+            guard let timeRange = Range(match.range(at: 1), in: text),
+                  let titleRange = Range(match.range(at: 2), in: text) else { return nil }
+            let rawTitle = String(text[titleRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let components = rawTitle.split(separator: "·", maxSplits: 1).map(String.init)
+            return .init(
+                time: String(text[timeRange]).uppercased(),
+                title: components[0],
+                detail: components.count > 1 ? components[1] : ""
+            )
+        }
+        guard !items.isEmpty else { return nil }
+        return .agenda(title: lower.contains("today") ? "Today" : "Your schedule", subtitle: "What is lined up", items: Array(items.prefix(6)))
+    }
+
+    private static func inferredWeather(_ text: String, lower: String) -> Self? {
+        let weatherTerms = ["weather", "forecast", "sunny", "cloudy", "rain", "snow", "wind", "humidity"]
+        guard weatherTerms.contains(where: lower.contains) else { return nil }
+        let temperaturePattern = #"(?<!\d)(-?\d{1,3})\s*°?\s*([FC])\b"#
+        guard let expression = try? NSRegularExpression(pattern: temperaturePattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let value = Range(match.range(at: 1), in: text),
+              let unit = Range(match.range(at: 2), in: text) else { return nil }
+        let temperature = "\(text[value])°\(text[unit].uppercased())"
+        let condition = ["rain", "snow", "cloud", "sun", "wind", "fog", "storm"]
+            .first(where: lower.contains)
+            .map { $0 == "sun" ? "Sunny" : $0.capitalized } ?? "Current conditions"
+        let detail = text.components(separatedBy: .newlines).first { $0.lowercased().contains(condition.lowercased()) || $0.contains("°") }
+        return .weather(location: "Right now", temperature: temperature, condition: condition, high: nil, low: nil, detail: detail)
+    }
+
+    private static func inferredDuration(_ text: String, lower: String) -> Self? {
+        guard ["take", "takes", "estimate", "estimated", "roughly", "about"].contains(where: lower.contains) else { return nil }
+        let pattern = #"\b(?:about|around|roughly|approximately|estimated?\s*(?:at|time)?\s*(?:of)?|take[s]?\s*)?\s*(\d+(?:\.\d+)?)\s*(minutes?|mins?|hours?|hrs?|days?)\b"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let number = Range(match.range(at: 1), in: text),
+              let unit = Range(match.range(at: 2), in: text) else { return nil }
+        return .duration(
+            title: "Time estimate",
+            duration: "\(text[number]) \(text[unit])",
+            detail: "A practical planning estimate from this response.",
+            confidence: nil
+        )
+    }
+}
+
+private struct RichResponseCards: View {
+    let cards: [MessageResponseCard]
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(cards) { card in
+                switch card {
+                case let .agenda(title, subtitle, items):
+                    agendaCard(title: title, subtitle: subtitle, items: items)
+                case let .weather(location, temperature, condition, high, low, detail):
+                    weatherCard(location: location, temperature: temperature, condition: condition, high: high, low: low, detail: detail)
+                case let .duration(title, duration, detail, confidence):
+                    durationCard(title: title, duration: duration, detail: detail, confidence: confidence)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func agendaCard(title: String, subtitle: String, items: [MessageResponseCard.AgendaItem]) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title.uppercased())
+                        .font(.caption2.weight(.bold))
+                        .tracking(0.8)
+                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                    Text(subtitle)
+                        .font(.headline)
+                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                }
+                Spacer()
+                Text("\(items.count) \(items.count == 1 ? "event" : "events")")
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
+            }
+
+            VStack(spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    HStack(alignment: .top, spacing: 11) {
+                        Text(item.time)
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            .frame(width: usesAccessibilityLayout ? 78 : 67, alignment: .leading)
+
+                        VStack(spacing: 0) {
+                            Circle()
+                                .fill(AssistantTheme.accent(for: colorScheme))
+                                .frame(width: 8, height: 8)
+                                .padding(.top, 5)
+                            if index < items.count - 1 {
+                                Rectangle()
+                                    .fill(AssistantTheme.accent(for: colorScheme).opacity(0.22))
+                                    .frame(width: 1.5)
+                                    .frame(maxHeight: .infinity)
+                                    .padding(.vertical, 4)
+                            }
+                        }
+                        .frame(width: 10)
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(item.title)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                .fixedSize(horizontal: false, vertical: true)
+                            if !item.detail.isEmpty {
+                                Text(item.detail)
+                                    .font(.caption)
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.bottom, index < items.count - 1 ? 13 : 0)
+                }
+            }
+        }
+        .padding(16)
+        .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(AssistantTheme.accent(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.44 : 0.18), lineWidth: 1)
+        }
+    }
+
+    private func weatherCard(
+        location: String,
+        temperature: String,
+        condition: String,
+        high: String?,
+        low: String?,
+        detail: String?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 13) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(location.uppercased())
+                        .font(.caption2.weight(.bold))
+                        .tracking(0.8)
+                        .foregroundStyle(.white.opacity(0.7))
+                    Text(condition)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                }
+                Spacer()
+                Image(systemName: weatherSymbol(condition))
+                    .font(.system(size: 30, weight: .medium))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.white)
+            }
+            HStack(alignment: .lastTextBaseline, spacing: 14) {
+                Text(temperature)
+                    .font(.system(size: 42, weight: .light, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                if high != nil || low != nil {
+                    VStack(alignment: .leading, spacing: 3) {
+                        if let high { Text("High \(high)") }
+                        if let low { Text("Low \(low)") }
+                    }
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.72))
+                }
+            }
+            if let detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.74))
+                    .lineLimit(2)
+            }
+        }
+        .padding(17)
+        .background(
+            LinearGradient(
+                colors: [Color(hex: 0x416F9D), Color(hex: 0x213F5A)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+        )
+        .overlay(alignment: .topTrailing) {
+            Circle()
+                .fill(.white.opacity(0.09))
+                .frame(width: 92, height: 92)
+                .offset(x: 25, y: -36)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func durationCard(title: String, duration: String, detail: String?, confidence: String?) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: "timer")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                .frame(width: 44, height: 44)
+                .background(AssistantTheme.accent(for: colorScheme).opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title.uppercased())
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.7)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                Text(duration)
+                    .font(.title3.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                if let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+            if let confidence, !confidence.isEmpty {
+                Text(confidence)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+            }
+        }
+        .padding(15)
+        .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(.primary.opacity(colorSchemeContrast == .increased ? 0.18 : 0.08), lineWidth: 1)
+        }
+    }
+
+    private func weatherSymbol(_ condition: String) -> String {
+        let lower = condition.lowercased()
+        if lower.contains("rain") || lower.contains("storm") { return "cloud.rain.fill" }
+        if lower.contains("snow") { return "cloud.snow.fill" }
+        if lower.contains("cloud") { return "cloud.fill" }
+        if lower.contains("wind") { return "wind" }
+        return "sun.max.fill"
     }
 }
 

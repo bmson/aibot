@@ -22,6 +22,7 @@ import {
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
 import { registerBuiltinTools } from '@assistant/tools/builtin';
 import { ToolDispatcher } from '@assistant/tools/dispatcher';
+import { registerMcpTools } from '@assistant/tools/mcp';
 import { ToolRegistry } from '@assistant/tools/registry';
 import {
   GcsWorkspaceStore,
@@ -155,10 +156,12 @@ export function buildDeps(): AgentDeps {
   // Built-ins are the base platform: memory, goals, approvals, missions, and
   // workspace tools. Optional provider/worker modules are installed below, and
   // each registers its own tools — the composition root names none of them.
-  const registry = registerBuiltinTools(new ToolRegistry(), {
-    embed: (texts) => router.embed(texts),
-    workspace,
-  });
+  const registry = registerMcpTools(
+    registerBuiltinTools(new ToolRegistry(), {
+      embed: (texts) => router.embed(texts),
+      workspace,
+    }),
+  );
   const modules = installModules(composition.modules, {
     config,
     db,
