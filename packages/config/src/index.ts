@@ -216,6 +216,8 @@ const ConfigSchema = z.object({
   CANARY_ENABLED: booleanString,
   CANARY_MAX_COST_USD: z.coerce.number().min(0.01).max(0.1).default(0.03),
   CHAT_RECALL_ENABLED: booleanString,
+  /** Explicit opt-in: graph-backed personal-memory recall, layered over chat recall. */
+  GRAPH_RAG_ENABLED: booleanString,
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

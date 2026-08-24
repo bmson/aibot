@@ -9,6 +9,31 @@ Status: **All phases (1–4) are implemented** — auto-recall, topic segments, 
 and the "recalled from earlier" transparency affordance. See the rollout section for what shipped
 where.
 
+## GraphRAG extension
+
+GraphRAG adds a second, explainable retrieval path over **durable personal memories**. It does not
+replace conversation segments, message recall, or the memory library: every graph relationship is
+extracted from exactly one active source memory, and the source fact remains the evidence the model
+receives.
+
+- `knowledge_graph_entities` holds canonical people, organizations, projects, places, events, dates,
+  and topics. Person nodes link to existing contacts when names resolve.
+- `knowledge_graph_relations` holds only direct, source-backed triples; it never stores a relationship
+  inferred by traversal. `knowledge_graph_sources` checkpoints the source content hash so edits are
+  re-extracted and forgotten/deleted memories cascade away.
+- The offline `memory.graph_sync` job backfills and reconciles graph sources in small batches. It is
+  never on the response hot path.
+- A recall query first has to clear the existing semantic-similarity threshold against a source memory.
+  Only then can it follow incoming/outgoing relationships up to two hops. The injected block contains
+  the original evidence facts and labels every two-hop connection as context, not a conclusion.
+- Graph results and conversation recall share one query embedding and a bounded prompt budget. Any
+  graph failure falls through to the existing vector/segment recall path.
+
+Graph retrieval is guarded by both `CHAT_RECALL_ENABLED` and `GRAPH_RAG_ENABLED` (both default
+false), and inherits owner-private, untainted-context gating. Reply provenance carries
+`kind: "knowledge_graph"` and an optional hop count so web and iOS can say when the graph informed a
+response without requiring a graph browser.
+
 ## Goal / non-goals
 
 **Goal.** The owner keeps talking in one continuous chat. When the current message relates to

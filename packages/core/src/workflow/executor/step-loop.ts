@@ -9,6 +9,11 @@ import { isForwardedIngest } from '../../email-provenance.js';
 import type { Plan, TaskState, Trust } from '../../events.js';
 import { getAmbientBlock } from '../../memory/ambient.js';
 import { getOwnerCard } from '../../memory/consolidation.js';
+import {
+  combineRecallBlocks,
+  type GraphRecallResult,
+  recallKnowledgeGraph,
+} from '../../memory/graph-recall.js';
 import { recallRelevantContext, recentWindowStart } from '../../memory/recall.js';
 import { bumpSkillUse, recallSkills, renderSkillsBlock } from '../../memory/skills.js';
 import type { StepCallOutcome } from '../../model-router/router.js';
@@ -213,6 +218,23 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       (typeof payload.text === 'string' ? payload.text : '');
     const queryText = `${emailMeta} ${baseText}`.trim();
     if (queryText) {
+      let queryEmbedding: number[] | undefined;
+      let graph: GraphRecallResult = { block: '', used: 0, candidates: 0, sources: [] };
+      if (loadConfig().GRAPH_RAG_ENABLED) {
+        try {
+          [queryEmbedding] = await router.embed([queryText], { taskId: task.id });
+          graph = await recallKnowledgeGraph(db, {
+            agentId: agent.id,
+            queryText,
+            queryEmbedding,
+          });
+        } catch (err) {
+          console.error(
+            'executor knowledge graph recall failed — falling back to chat recall',
+            err,
+          );
+        }
+      }
       try {
         const since = (await recentWindowStart(db, conversationId, 20)) ?? new Date();
         const recall = await recallRelevantContext(
@@ -224,12 +246,13 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
               router.embed(values, { taskId: task.id, ...(embedOpts ?? {}) }),
             exclude: { conversationId, sinceCreatedAt: since },
           },
-          { taskId: task.id },
+          { taskId: task.id, ...(graph.used > 0 ? { maxChars: 1200 } : {}), queryEmbedding },
         );
-        recallBlock = recall.block || undefined;
+        const combined = combineRecallBlocks(graph, recall);
+        recallBlock = combined.block || undefined;
         // Provenance for the chat UI affordance; checkpointed so it survives to
         // the (possibly resumed) final-response persist.
-        state.recall = recall.sources.length > 0 ? recall.sources : undefined;
+        state.recall = combined.sources.length > 0 ? combined.sources : undefined;
       } catch (err) {
         console.error('executor recall failed — continuing without it', err);
       }

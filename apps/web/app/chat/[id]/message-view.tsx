@@ -28,6 +28,8 @@ import { MessageMarkdown } from './markdown';
 export interface RecallSource {
   date: string;
   label: string;
+  kind?: 'chat' | 'knowledge_graph';
+  hops?: 1 | 2;
 }
 
 export function messageText(message: UIMessage): string {
@@ -355,18 +357,25 @@ function friendlyRecallDate(isoDay: string): string {
 /** The "recalled from earlier" affordance: what auto-recall drew on for a turn. */
 export function RecallNote({ sources }: { sources: RecallSource[] }) {
   if (sources.length === 0) return null;
+  const graphSources = sources.filter((source) => source.kind === 'knowledge_graph');
+  const label =
+    graphSources.length === 0
+      ? 'Drawing on'
+      : graphSources.length === sources.length
+        ? 'Drawing on knowledge graph'
+        : 'Drawing on knowledge graph and earlier chats';
   return (
     // Muted by opacity rather than by token: this note appears both on the
     // chat's stage and inside a paper update card, and has to recede against
     // whichever ink it inherits.
     <div className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs opacity-70">
       <History className="size-3 shrink-0" aria-hidden="true" />
-      <span className="font-medium">Drawing on</span>
+      <span className="font-medium">{label}</span>
       {sources.map((source, index) => (
         <span
           key={`${source.date}-${index.toString()}`}
           className="inline-block max-w-56 truncate align-bottom"
-          title={`From ${source.date} — ${source.label}`}
+          title={`From ${source.date}${source.hops ? ` · ${source.hops}-hop connection` : ''} — ${source.label}`}
         >
           {index > 0 ? '· ' : ''}
           {friendlyRecallDate(source.date)} — {source.label}
@@ -385,7 +394,13 @@ export function decodeRecallHeader(value: string | null): RecallSource[] | null 
       (s): s is RecallSource =>
         Boolean(s) &&
         typeof (s as RecallSource).date === 'string' &&
-        typeof (s as RecallSource).label === 'string',
+        typeof (s as RecallSource).label === 'string' &&
+        ((s as RecallSource).kind === undefined ||
+          (s as RecallSource).kind === 'chat' ||
+          (s as RecallSource).kind === 'knowledge_graph') &&
+        ((s as RecallSource).hops === undefined ||
+          (s as RecallSource).hops === 1 ||
+          (s as RecallSource).hops === 2),
     );
     return sources.length > 0 ? sources : null;
   } catch {

@@ -13,6 +13,7 @@ import {
 import { createCueScanner, stripCueTags } from '@assistant/core/chat-cues';
 import { getAmbientBlock } from '@assistant/core/memory/ambient';
 import { getOwnerCard } from '@assistant/core/memory/consolidation';
+import { combineRecallBlocks, recallKnowledgeGraph } from '@assistant/core/memory/graph-recall';
 import { type RecallSource, recallRelevantContext } from '@assistant/core/memory/recall';
 import type { ModelRouter, StreamOutcome } from '@assistant/core/model-router';
 import { buildAutonomyGrant } from '@assistant/core/workflow/autonomy';
@@ -44,7 +45,12 @@ function byteLength(value: string): number {
 
 /** Compact, ASCII-safe recall provenance for the x-recall response header. */
 function encodeRecallHeader(sources: RecallSource[]): string {
-  const trimmed = sources.slice(0, 3).map((s) => ({ date: s.date, label: s.label.slice(0, 60) }));
+  const trimmed = sources.slice(0, 3).map((s) => ({
+    date: s.date,
+    label: s.label.slice(0, 60),
+    ...(s.kind ? { kind: s.kind } : {}),
+    ...(s.hops ? { hops: s.hops } : {}),
+  }));
   return encodeURIComponent(JSON.stringify(trimmed));
 }
 
@@ -350,18 +356,42 @@ export async function handleChatTurn(
   let recallBlock: string | undefined;
   let recallSources: RecallSource[] = [];
   if (config.CHAT_RECALL_ENABLED) {
+    let queryEmbedding: number[] | undefined;
+    let graph = { block: '', used: 0, candidates: 0, sources: [] as RecallSource[] };
+    if (config.GRAPH_RAG_ENABLED) {
+      try {
+        [queryEmbedding] = await router.embed([userText]);
+        graph = await recallKnowledgeGraph(db, {
+          agentId: agent.id,
+          queryText: userText,
+          queryEmbedding,
+        });
+      } catch (err) {
+        // GraphRAG is additive. Existing vector recall must still answer when
+        // graph storage, extraction, or its query embedding is unavailable.
+        console.error('knowledge graph recall failed — falling back to chat recall', err);
+      }
+    }
     try {
-      const recall = await recallRelevantContext(db, {
-        agentId: agent.id,
-        queryText: userText,
-        embed: (values, embedOpts) => router.embed(values, embedOpts ?? {}),
-        exclude: {
-          conversationId: conversation.id,
-          sinceCreatedAt: historyRows[0]?.createdAt ?? persistedUser.createdAt,
+      const recall = await recallRelevantContext(
+        db,
+        {
+          agentId: agent.id,
+          queryText: userText,
+          embed: (values, embedOpts) => router.embed(values, embedOpts ?? {}),
+          exclude: {
+            conversationId: conversation.id,
+            sinceCreatedAt: historyRows[0]?.createdAt ?? persistedUser.createdAt,
+          },
         },
-      });
-      recallBlock = recall.block || undefined;
-      recallSources = recall.sources;
+        {
+          ...(graph.used > 0 ? { maxChars: 1200 } : {}),
+          queryEmbedding,
+        },
+      );
+      const combined = combineRecallBlocks(graph, recall);
+      recallBlock = combined.block || undefined;
+      recallSources = combined.sources;
     } catch (err) {
       console.error('chat recall failed — continuing without it', err);
     }

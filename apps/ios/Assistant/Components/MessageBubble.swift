@@ -21,6 +21,9 @@ struct MessageBubble: View {
                     messageText
                     if message.role == .assistant { Spacer(minLength: 40) }
                 }
+                if message.role == .assistant, !message.recallSources.isEmpty {
+                    recallNote
+                }
             } else if isStreaming {
                 HStack {
                     thinkingIndicator
@@ -169,6 +172,31 @@ struct MessageBubble: View {
 
     private var resolvedBubbleHorizontalInset: CGFloat {
         min(bubbleHorizontalInset, 28)
+    }
+
+    private var recallNote: some View {
+        let sources = message.recallSources
+        let graphCount = sources.filter(\.isKnowledgeGraph).count
+        let title: String
+        if graphCount == 0 {
+            title = "Drawing on earlier chats"
+        } else if graphCount == sources.count {
+            title = "Drawing on knowledge graph"
+        } else {
+            title = "Drawing on graph and earlier chats"
+        }
+        return HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Image(systemName: graphCount > 0 ? "point.3.connected.trianglepath.dotted" : "clock.arrow.circlepath")
+                .font(.caption2.weight(.semibold))
+            Text(title)
+                .font(.caption2.weight(.semibold))
+            Text(sources.prefix(2).map(\.label).joined(separator: " · "))
+                .font(.caption2)
+                .lineLimit(1)
+        }
+        .foregroundStyle(AssistantTheme.stageStrong.opacity(0.72))
+        .padding(.horizontal, 5)
+        .accessibilityLabel("\(title): \(sources.map(\.label).joined(separator: ", "))")
     }
 
     private var resolvedBubbleVerticalInset: CGFloat {

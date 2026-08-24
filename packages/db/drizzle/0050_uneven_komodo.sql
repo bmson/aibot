@@ -1,0 +1,2 @@
+ALTER TABLE "knowledge_graph_sources" ADD COLUMN "subject_contact_id" uuid;--> statement-breakpoint
+ALTER TABLE "knowledge_graph_sources" ADD CONSTRAINT "knowledge_graph_sources_subject_contact_id_contacts_id_fk" FOREIGN KEY ("subject_contact_id") REFERENCES "public"."contacts"("id") ON DELETE set null ON UPDATE no action;

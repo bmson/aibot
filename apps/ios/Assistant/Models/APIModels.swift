@@ -52,6 +52,18 @@ struct MessagePart: Codable, Hashable, Sendable {
     var summary: String?
     var status: String?
     var proposedBudgetUsd: Double?
+    /// Auto-recall provenance. Optional keeps an older server and all prior
+    /// message parts decodable while GraphRAG rolls out.
+    var sources: [MessageRecallSource]? = nil
+}
+
+struct MessageRecallSource: Codable, Hashable, Sendable {
+    let date: String
+    let label: String
+    let kind: String?
+    let hops: Int?
+
+    var isKnowledgeGraph: Bool { kind == "knowledge_graph" }
 }
 
 struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
@@ -96,6 +108,10 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
             return mood
         }
         return nil
+    }
+
+    var recallSources: [MessageRecallSource] {
+        parts.first(where: { $0.type == "recall" })?.sources ?? []
     }
 
     static func optimistic(role: ChatRole, text: String, id: String = "local-\(UUID().uuidString)") -> Self {

@@ -114,6 +114,13 @@ export const PendingFinalSchema = z.object({
 });
 export type PendingFinal = z.infer<typeof PendingFinalSchema>;
 
+const RecallSourceSchema = z.object({
+  date: z.string(),
+  label: z.string(),
+  kind: z.enum(['chat', 'knowledge_graph']).optional(),
+  hops: z.union([z.literal(1), z.literal(2)]).optional(),
+});
+
 export const TaskStateSchema = z.object({
   phase: z.string().default('start'),
   step: z.number().int().default(0),
@@ -127,7 +134,7 @@ export const TaskStateSchema = z.object({
   /** External/tool content has entered the model context; privileged calls are constrained. */
   untrustedContext: z.boolean().default(false),
   /** Earlier discussions auto-recall drew on this turn, for the chat UI affordance (Phase 4). */
-  recall: z.array(z.object({ date: z.string(), label: z.string() })).nullish(),
+  recall: z.array(RecallSourceSchema).nullish(),
   plannerState: z.record(z.string(), z.unknown()).default({}),
   scratchpad: z.string().default(''),
   contextWindow: z.array(z.record(z.string(), z.unknown())).default([]),

@@ -771,6 +771,101 @@ export const contacts = pgTable(
   (t) => [check('contacts_trust_check', sql`${t.trust} IN ('owner','known','unknown')`)],
 );
 
+// ── Knowledge graph ────────────────────────────────────────────────────────
+
+/**
+ * GraphRAG is an explainable index over the existing durable-memory store, not
+ * a second source of truth. A node's canonical key is stable across spelling
+ * and contact-label changes; people also retain a direct link to contacts.
+ */
+export const knowledgeGraphEntities = pgTable(
+  'knowledge_graph_entities',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    /** `contact:<id>` for people, otherwise `<kind>:<normalized label>`. */
+    canonicalKey: text('canonical_key').notNull(),
+    label: text('label').notNull(),
+    kind: text('kind').notNull(),
+    contactId: uuid('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      'knowledge_graph_entities_kind_check',
+      sql`${t.kind} IN ('person','organization','project','place','event','date','topic')`,
+    ),
+    uniqueIndex('knowledge_graph_entities_agent_key_idx').on(t.agentId, t.canonicalKey),
+    index('knowledge_graph_entities_contact_idx').on(t.contactId),
+  ],
+);
+
+/**
+ * Per-memory extraction checkpoint. `content_hash` means edits naturally make
+ * a source dirty without requiring every memory writer to know about GraphRAG.
+ */
+export const knowledgeGraphSources = pgTable(
+  'knowledge_graph_sources',
+  {
+    memoryId: uuid('memory_id')
+      .primaryKey()
+      .references(() => memories.id, { onDelete: 'cascade' }),
+    contentHash: text('content_hash').notNull(),
+    /** Tracks contact reassignment/merges separately from content edits. */
+    subjectContactId: uuid('subject_contact_id').references(() => contacts.id, {
+      onDelete: 'set null',
+    }),
+    status: text('status').notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    ...timestamps,
+  },
+  (t) => [
+    check('knowledge_graph_sources_status_check', sql`${t.status} IN ('pending','ready','failed')`),
+    index('knowledge_graph_sources_status_idx').on(t.status, t.updatedAt),
+  ],
+);
+
+/**
+ * A direct relationship explicitly supported by exactly one memory fact.
+ * Traversal can connect these edges at read time, but never writes inferred
+ * relationships back into the graph.
+ */
+export const knowledgeGraphRelations = pgTable(
+  'knowledge_graph_relations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    subjectEntityId: uuid('subject_entity_id')
+      .notNull()
+      .references(() => knowledgeGraphEntities.id, { onDelete: 'cascade' }),
+    predicate: text('predicate').notNull(),
+    objectEntityId: uuid('object_entity_id')
+      .notNull()
+      .references(() => knowledgeGraphEntities.id, { onDelete: 'cascade' }),
+    sourceMemoryId: uuid('source_memory_id')
+      .notNull()
+      .references(() => memories.id, { onDelete: 'cascade' }),
+    /** The source fact can yield several direct relationships. */
+    ordinal: smallint('ordinal').notNull(),
+    confidence: numeric('confidence', { precision: 3, scale: 2 }).notNull().default('0.70'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      'knowledge_graph_relations_predicate_check',
+      sql`length(${t.predicate}) BETWEEN 1 AND 80`,
+    ),
+    uniqueIndex('knowledge_graph_relations_source_ordinal_idx').on(t.sourceMemoryId, t.ordinal),
+    index('knowledge_graph_relations_subject_idx').on(t.agentId, t.subjectEntityId),
+    index('knowledge_graph_relations_object_idx').on(t.agentId, t.objectEntityId),
+  ],
+);
+
 /**
  * Occasions (Phase 17): recurring dates tied to a contact — birthdays,
  * anniversaries, and custom dates the assistant surfaces at lead time. Month/day

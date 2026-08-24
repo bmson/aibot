@@ -12,6 +12,7 @@ import { runDocumentExtraction } from './documents.js';
 import { pendingEmailExtractionCount, runEmailIngestExtraction } from './email-extraction.js';
 import { runMemoryExtraction } from './extraction.js';
 import { runImportJob, type WorkspaceReader } from './import.js';
+import { pendingKnowledgeGraphSourceCount, syncKnowledgeGraph } from './knowledge-graph.js';
 import { segmentConversations } from './segmentation.js';
 import { runSkillReflection } from './skill-reflect.js';
 import { runVoiceIngest } from './voice-ingest.js';
@@ -28,6 +29,7 @@ export type CodeJobName =
   | 'email.extract'
   | 'briefing.compose'
   | 'memory.consolidate'
+  | 'memory.graph_sync'
   | 'chat.segment'
   | 'import.run'
   | 'voice.ingest'
@@ -45,6 +47,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'email.extract',
   'briefing.compose',
   'memory.consolidate',
+  'memory.graph_sync',
   'chat.segment',
   'import.run',
   'voice.ingest',
@@ -123,6 +126,21 @@ export async function runCodeJob(
       return {
         done: true,
         summary: `consolidation: ${r.memoriesReviewed + r.standaloneReviewed} memories reviewed in ${r.batches} batch(es) across ${r.entities} people, ${r.duplicatesExpired} duplicates expired, ${r.contradictionsResolved} contradictions resolved, ${r.factsUnified} facts unified, ${r.domainsAssigned} domains assigned, ${r.occasionsSaved} occasion(s) found, owner card recompiled`,
+      };
+    }
+    case 'memory.graph_sync': {
+      await deps.heartbeat?.();
+      const r = await syncKnowledgeGraph(deps, {
+        taskId: task.id,
+        agentId: task.agentId,
+        heartbeat: deps.heartbeat,
+      });
+      const pending = await pendingKnowledgeGraphSourceCount(deps.db, task.agentId);
+      return {
+        done: true,
+        summary:
+          `knowledge graph: ${r.relationships} relation(s) from ${r.processed}/${r.candidates} source(s), ` +
+          `${r.failed} failed, ${pending} pending`,
       };
     }
     case 'chat.segment': {

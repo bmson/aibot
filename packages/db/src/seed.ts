@@ -354,6 +354,14 @@ const scheduleSeed = [
     cron: '30 22 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'memory.consolidate' },
   },
+  // GraphRAG: a bounded, idempotent source-fact backfill plus regular
+  // reconciliation. It is offline-only; chat always falls back to vector
+  // recall while a source is still pending.
+  {
+    name: 'knowledge-graph-sync',
+    cron: '15,45 * * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'memory.graph_sync' },
+  },
   // Phase 2 (long-running chat): segment the day's conversations into topic
   // summaries recall can retrieve. A code job like extraction/consolidation;
   // runs before them so summaries reflect the freshest boundaries.
@@ -420,6 +428,7 @@ const scheduleSeed = [
 const SEED_OWNED_SCHEDULES = new Set([
   'memory-extraction',
   'memory-consolidation',
+  'knowledge-graph-sync',
   'chat-segmentation',
   'anomaly-scan',
   'skill-reflection',

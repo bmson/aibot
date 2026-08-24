@@ -46,6 +46,19 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(message.text, "Hello")
     }
 
+    func testKnowledgeGraphRecallProvenanceDecodesFromMessageParts() throws {
+        let data = """
+        {"id":"reply-1","role":"assistant","parts":[
+          {"type":"text","text":"Here is the answer."},
+          {"type":"recall","sources":[{"date":"2026-08-24","label":"Works at Acme","kind":"knowledge_graph","hops":2}]}
+        ]}
+        """.data(using: .utf8)!
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        XCTAssertEqual(message.recallSources.count, 1)
+        XCTAssertTrue(message.recallSources[0].isKnowledgeGraph)
+        XCTAssertEqual(message.recallSources[0].hops, 2)
+    }
+
     func testResponseCardsUseStructuredPartsBeforeTextFallback() {
         let card = MessagePart(
             type: "data-card",

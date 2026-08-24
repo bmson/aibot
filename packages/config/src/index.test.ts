@@ -21,6 +21,7 @@ describe('config', () => {
     expect(config.MOBILE_API_TOKEN).toBe('');
     expect(config.CANARY_ENABLED).toBe(false);
     expect(config.CANARY_MAX_COST_USD).toBe(0.03);
+    expect(config.GRAPH_RAG_ENABLED).toBe(false);
     expect(isModuleEnabled(config, 'google')).toBe(true);
   });
 

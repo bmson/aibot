@@ -64,6 +64,7 @@ describe('codeJobName', () => {
   it('recognizes registered jobs and rejects everything else', () => {
     expect(codeJobName(taskWith({ job: 'memory.extract' }))).toBe('memory.extract');
     expect(codeJobName(taskWith({ job: 'memory.consolidate' }))).toBe('memory.consolidate');
+    expect(codeJobName(taskWith({ job: 'memory.graph_sync' }))).toBe('memory.graph_sync');
     expect(codeJobName(taskWith({ job: 'voice.ingest' }))).toBe('voice.ingest');
     expect(codeJobName(taskWith({ job: 'documents.extract' }))).toBe('documents.extract');
     expect(codeJobName(taskWith({ job: 'documents.process' }))).toBe('documents.process');
