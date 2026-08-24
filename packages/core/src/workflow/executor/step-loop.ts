@@ -9,11 +9,7 @@ import { isForwardedIngest } from '../../email-provenance.js';
 import type { Plan, TaskState, Trust } from '../../events.js';
 import { getAmbientBlock } from '../../memory/ambient.js';
 import { getOwnerCard } from '../../memory/consolidation.js';
-import {
-  combineRecallBlocks,
-  type GraphRecallResult,
-  recallKnowledgeGraph,
-} from '../../memory/graph-recall.js';
+import { recallKnowledgeGraph, recallWithGraphFallback } from '../../memory/graph-recall.js';
 import { recallRelevantContext, recentWindowStart } from '../../memory/recall.js';
 import { bumpSkillUse, recallSkills, renderSkillsBlock } from '../../memory/skills.js';
 import type { StepCallOutcome } from '../../model-router/router.js';
@@ -137,6 +133,21 @@ function readRoutingFailure(request: PersonalReadRequest, toolName: string): str
   return `I couldn't get into ${source} just now — ${toolName} didn't come back, so I have nothing real to tell you yet. Ask me again in a minute and I'll re-run it.`;
 }
 
+/** Preserve the model's progress note when its turn also contains tool calls. */
+function assistantText(content: unknown): string {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => {
+      if (!part || typeof part !== 'object') return '';
+      const value = part as { type?: unknown; text?: unknown };
+      return value.type === 'text' && typeof value.text === 'string' ? value.text : '';
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
 export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<ExecuteResult> {
   const { deps, db, router, dispatcher, task, agent, state, ctx, artifactIntent } = rc;
   const lease = task;
@@ -218,41 +229,49 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       (typeof payload.text === 'string' ? payload.text : '');
     const queryText = `${emailMeta} ${baseText}`.trim();
     if (queryText) {
-      let queryEmbedding: number[] | undefined;
-      let graph: GraphRecallResult = { block: '', used: 0, candidates: 0, sources: [] };
-      if (loadConfig().GRAPH_RAG_ENABLED) {
-        try {
-          [queryEmbedding] = await router.embed([queryText], { taskId: task.id });
-          graph = await recallKnowledgeGraph(db, {
-            agentId: agent.id,
-            queryText,
-            queryEmbedding,
-          });
-        } catch (err) {
-          console.error(
-            'executor knowledge graph recall failed — falling back to chat recall',
-            err,
-          );
-        }
-      }
       try {
         const since = (await recentWindowStart(db, conversationId, 20)) ?? new Date();
-        const recall = await recallRelevantContext(
-          db,
-          {
-            agentId: agent.id,
-            queryText,
-            embed: (values, embedOpts) =>
-              router.embed(values, { taskId: task.id, ...(embedOpts ?? {}) }),
-            exclude: { conversationId, sinceCreatedAt: since },
+        const layered = await recallWithGraphFallback({
+          graph: loadConfig().GRAPH_RAG_ENABLED
+            ? async () => {
+                const [queryEmbedding] = await router.embed([queryText], { taskId: task.id });
+                return {
+                  graph: await recallKnowledgeGraph(db, {
+                    agentId: agent.id,
+                    queryText,
+                    queryEmbedding,
+                  }),
+                  queryEmbedding,
+                };
+              }
+            : undefined,
+          history: (queryEmbedding, graph) =>
+            recallRelevantContext(
+              db,
+              {
+                agentId: agent.id,
+                queryText,
+                embed: (values, embedOpts) =>
+                  router.embed(values, { taskId: task.id, ...(embedOpts ?? {}) }),
+                exclude: { conversationId, sinceCreatedAt: since },
+              },
+              {
+                taskId: task.id,
+                ...(graph.used > 0 ? { maxChars: 1200 } : {}),
+                queryEmbedding,
+              },
+            ),
+          onGraphError: (err) => {
+            console.error(
+              'executor knowledge graph recall failed — falling back to chat recall',
+              err,
+            );
           },
-          { taskId: task.id, ...(graph.used > 0 ? { maxChars: 1200 } : {}), queryEmbedding },
-        );
-        const combined = combineRecallBlocks(graph, recall);
-        recallBlock = combined.block || undefined;
+        });
+        recallBlock = layered.block || undefined;
         // Provenance for the chat UI affordance; checkpointed so it survives to
         // the (possibly resumed) final-response persist.
-        state.recall = combined.sources.length > 0 ? combined.sources : undefined;
+        state.recall = layered.sources.length > 0 ? layered.sources : undefined;
       } catch (err) {
         console.error('executor recall failed — continuing without it', err);
       }
@@ -1095,11 +1114,12 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // log" is the worst possible message at the moment the owner most needs one.
   const lastAssistantText = [...rc.window]
     .reverse()
-    .find((m) => m.role === 'assistant' && typeof m.content === 'string' && m.content.trim());
+    .map((message) => (message.role === 'assistant' ? assistantText(message.content) : ''))
+    .find(Boolean);
   const lastProgress =
     state.scratchpad ||
-    (typeof lastAssistantText?.content === 'string'
-      ? lastAssistantText.content.slice(0, 400)
+    (lastAssistantText
+      ? lastAssistantText.slice(0, 400)
       : 'no summary was recorded — the step-by-step record is on the task page.');
   const stuckMessage = `I ${stuck}. Here's where I got: ${lastProgress}`;
   if (isUnattendedGoalSession(task)) {

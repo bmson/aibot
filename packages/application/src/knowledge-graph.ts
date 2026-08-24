@@ -2,6 +2,7 @@ import { getAgent } from '@assistant/core/chat';
 import {
   createOwnerKnowledgeGraphFact,
   type GraphEntityKind,
+  retryQuarantinedKnowledgeGraphSources as retryQuarantinedSources,
 } from '@assistant/core/memory/knowledge-graph';
 import {
   type Db,
@@ -48,6 +49,7 @@ export interface KnowledgeGraphOverview {
   totalRelations: number;
   unreviewedRelations: number;
   pendingSources: number;
+  quarantinedSources: number;
   entities: KnowledgeGraphEntityView[];
   selected: KnowledgeGraphEntityView | null;
   relations: KnowledgeGraphRelationView[];
@@ -77,55 +79,66 @@ export async function getKnowledgeGraphOverview(
     eq(knowledgeGraphEntities.agentId, agent.id),
     query ? ilike(displayLabel(knowledgeGraphEntities), `%${query}%`) : undefined,
   );
-  const [entityRows, [entityTotal], [relationTotal], [unreviewedTotal], [pendingSources]] =
-    await Promise.all([
-      db
-        .select({
-          id: knowledgeGraphEntities.id,
-          label: displayLabel(knowledgeGraphEntities),
-          kind: knowledgeGraphEntities.kind,
-          canonicalKey: knowledgeGraphEntities.canonicalKey,
-        })
-        .from(knowledgeGraphEntities)
-        .where(entityCondition)
-        .orderBy(asc(displayLabel(knowledgeGraphEntities)))
-        .limit(60),
-      db
-        .select({ value: count() })
-        .from(knowledgeGraphEntities)
-        .where(eq(knowledgeGraphEntities.agentId, agent.id)),
-      db
-        .select({ value: count() })
-        .from(knowledgeGraphRelations)
-        .where(eq(knowledgeGraphRelations.agentId, agent.id)),
-      db
-        .select({ value: count() })
-        .from(knowledgeGraphRelations)
-        .where(
-          and(
-            eq(knowledgeGraphRelations.agentId, agent.id),
-            eq(knowledgeGraphRelations.reviewStatus, 'unreviewed'),
+  const [
+    entityRows,
+    [entityTotal],
+    [relationTotal],
+    [unreviewedTotal],
+    [pendingSources],
+    [quarantinedSources],
+  ] = await Promise.all([
+    db
+      .select({
+        id: knowledgeGraphEntities.id,
+        label: displayLabel(knowledgeGraphEntities),
+        kind: knowledgeGraphEntities.kind,
+        canonicalKey: knowledgeGraphEntities.canonicalKey,
+      })
+      .from(knowledgeGraphEntities)
+      .where(entityCondition)
+      .orderBy(asc(displayLabel(knowledgeGraphEntities)))
+      .limit(60),
+    db
+      .select({ value: count() })
+      .from(knowledgeGraphEntities)
+      .where(eq(knowledgeGraphEntities.agentId, agent.id)),
+    db
+      .select({ value: count() })
+      .from(knowledgeGraphRelations)
+      .where(eq(knowledgeGraphRelations.agentId, agent.id)),
+    db
+      .select({ value: count() })
+      .from(knowledgeGraphRelations)
+      .where(
+        and(
+          eq(knowledgeGraphRelations.agentId, agent.id),
+          eq(knowledgeGraphRelations.reviewStatus, 'unreviewed'),
+        ),
+      ),
+    db
+      .select({ value: count() })
+      .from(memories)
+      .leftJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
+      .where(
+        and(
+          eq(memories.agentId, agent.id),
+          eq(memories.category, 'knowledge'),
+          eq(memories.quarantined, false),
+          or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
+          or(
+            isNull(knowledgeGraphSources.memoryId),
+            sql`${knowledgeGraphSources.contentHash} IS DISTINCT FROM ${memories.contentHash}`,
+            sql`${knowledgeGraphSources.subjectContactId} IS DISTINCT FROM ${memories.subjectContactId}`,
+            eq(knowledgeGraphSources.status, 'failed'),
           ),
         ),
-      db
-        .select({ value: count() })
-        .from(memories)
-        .leftJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
-        .where(
-          and(
-            eq(memories.agentId, agent.id),
-            eq(memories.category, 'knowledge'),
-            eq(memories.quarantined, false),
-            or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-            or(
-              isNull(knowledgeGraphSources.memoryId),
-              sql`${knowledgeGraphSources.contentHash} IS DISTINCT FROM ${memories.contentHash}`,
-              sql`${knowledgeGraphSources.subjectContactId} IS DISTINCT FROM ${memories.subjectContactId}`,
-              eq(knowledgeGraphSources.status, 'failed'),
-            ),
-          ),
-        ),
-    ]);
+      ),
+    db
+      .select({ value: count() })
+      .from(knowledgeGraphSources)
+      .innerJoin(memories, eq(memories.id, knowledgeGraphSources.memoryId))
+      .where(and(eq(memories.agentId, agent.id), eq(knowledgeGraphSources.status, 'quarantined'))),
+  ]);
   const entities = entityRows.map((row) => ({ ...row }));
   const requestedId = input.entityId && UUID_RE.test(input.entityId) ? input.entityId : null;
   const selected =
@@ -156,6 +169,7 @@ export async function getKnowledgeGraphOverview(
       totalRelations: Number(relationTotal?.value ?? 0),
       unreviewedRelations: Number(unreviewedTotal?.value ?? 0),
       pendingSources: Number(pendingSources?.value ?? 0),
+      quarantinedSources: Number(quarantinedSources?.value ?? 0),
       entities,
       selected: null,
       relations: [],
@@ -255,6 +269,7 @@ export async function getKnowledgeGraphOverview(
     totalRelations: Number(relationTotal?.value ?? 0),
     unreviewedRelations: Number(unreviewedTotal?.value ?? 0),
     pendingSources: Number(pendingSources?.value ?? 0),
+    quarantinedSources: Number(quarantinedSources?.value ?? 0),
     entities,
     selected,
     relations,
@@ -349,6 +364,12 @@ export async function reviewKnowledgeGraphRelation(
         eq(knowledgeGraphRelations.agentId, agent.id),
       ),
     );
+}
+
+/** Queue the next normal graph-sync attempt for every source the owner has chosen to retry. */
+export async function retryQuarantinedKnowledgeGraphSources(db: Db): Promise<number> {
+  const agent = await getAgent(db);
+  return retryQuarantinedSources(db, agent.id);
 }
 
 export async function addOwnerKnowledgeGraphFact(

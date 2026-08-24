@@ -30,7 +30,7 @@
     "dev": "turbo dev",
     "up": "docker compose up --build",
     "build": "turbo build",
-    "test": "vitest run",
+    "test": "tsx scripts/test.ts",
     "lint": "biome check . && pnpm check:boundaries",
     "format": "biome format --write .",
     "typecheck": "turbo typecheck && tsc --noEmit -p scripts/tsconfig.json",

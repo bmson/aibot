@@ -1,5 +1,6 @@
 import type { Db } from '@assistant/db';
 import { sql } from 'drizzle-orm';
+import { GRAPH_EXTRACTION_VERSION } from './knowledge-graph.js';
 import type { RecallSource } from './recall.js';
 
 /**
@@ -19,6 +20,23 @@ export interface GraphRecallResult {
   used: number;
   candidates: number;
   sources: RecallSource[];
+}
+
+/**
+ * A graph attempt can share its query embedding with standard recall. Keeping
+ * that hand-off in the fallback primitive prevents an additive GraphRAG
+ * feature from doubling embed cost or changing the availability of chat
+ * recall.
+ */
+export interface GraphRecallAttempt {
+  graph: GraphRecallResult;
+  queryEmbedding: number[] | undefined;
+}
+
+export interface LayeredRecallResult {
+  block: string;
+  sources: RecallSource[];
+  graph: GraphRecallResult;
 }
 
 const DEFAULTS = {
@@ -42,6 +60,7 @@ interface RelationRow {
   objectLabel: string;
   sourceMemoryId: string;
   content: string;
+  evidenceQuote: string | null;
   createdAt: Date;
   confidence: string | number;
   similarity?: number | string;
@@ -81,8 +100,10 @@ function activeGraphWhere(agentId: string) {
     AND (memory.expires_at IS NULL OR memory.expires_at > now())
     AND source.status = 'ready'
     AND source.content_hash = memory.content_hash
+    AND source.extraction_version >= ${GRAPH_EXTRACTION_VERSION}
     AND memory.embedding IS NOT NULL
     AND relation.review_status <> 'rejected'
+    AND relation.evidence_quote IS NOT NULL
   `;
 }
 
@@ -103,6 +124,7 @@ async function seedRelations(
         COALESCE(object.preferred_label, object.label) AS "objectLabel",
         relation.source_memory_id AS "sourceMemoryId",
         memory.content,
+        relation.evidence_quote AS "evidenceQuote",
         memory.created_at AS "createdAt",
         relation.confidence,
         1 - (memory.embedding <=> ${vector}::vector) AS similarity
@@ -145,6 +167,7 @@ async function connectedRelations(
         COALESCE(object.preferred_label, object.label) AS "objectLabel",
         relation.source_memory_id AS "sourceMemoryId",
         memory.content,
+        relation.evidence_quote AS "evidenceQuote",
         memory.created_at AS "createdAt",
         relation.confidence
       FROM knowledge_graph_relations AS relation
@@ -219,7 +242,7 @@ export async function recallKnowledgeGraph(
 
   for (const seed of seeds) {
     if (entries.length >= opts.limit) break;
-    const evidence = `Evidence: ${clip(seed.content, opts.maxEvidenceChars)}.`;
+    const evidence = `Evidence: ${clip(seed.evidenceQuote ?? seed.content, opts.maxEvidenceChars)}.`;
     add(`[1 hop] ${relationPath(seed)}\n  ${evidence}`, [{ row: seed, hops: 1 }]);
   }
   for (const neighbor of neighborRows) {
@@ -233,8 +256,8 @@ export async function recallKnowledgeGraph(
     );
     if (!seed) continue;
     const evidence = [
-      `Evidence: ${clip(seed.content, opts.maxEvidenceChars)}.`,
-      `Connected evidence: ${clip(neighbor.content, opts.maxEvidenceChars)}.`,
+      `Evidence: ${clip(seed.evidenceQuote ?? seed.content, opts.maxEvidenceChars)}.`,
+      `Connected evidence: ${clip(neighbor.evidenceQuote ?? neighbor.content, opts.maxEvidenceChars)}.`,
     ].join(' ');
     add(`[2 hops] ${relationPath(seed)}; ${relationPath(neighbor)}\n  ${evidence}`, [
       { row: seed, hops: 1 },
@@ -261,4 +284,32 @@ export function combineRecallBlocks(
     block: [graph.block, history.block].filter(Boolean).join('\n\n'),
     sources,
   };
+}
+
+/**
+ * Run GraphRAG as an additive, best-effort layer over ordinary conversation
+ * recall. A graph/embed failure is reported but never prevents the history
+ * retrieval callback from running; a history failure deliberately still
+ * reaches its caller so that response paths can retain their existing
+ * best-effort logging and empty-context behavior.
+ */
+export async function recallWithGraphFallback(options: {
+  graph?: () => Promise<GraphRecallAttempt>;
+  history: (
+    queryEmbedding: number[] | undefined,
+    graph: GraphRecallResult,
+  ) => Promise<{ block: string; sources: RecallSource[] }>;
+  onGraphError?: (error: unknown) => void;
+}): Promise<LayeredRecallResult> {
+  let graph = EMPTY;
+  let queryEmbedding: number[] | undefined;
+  if (options.graph) {
+    try {
+      ({ graph, queryEmbedding } = await options.graph());
+    } catch (error) {
+      options.onGraphError?.(error);
+    }
+  }
+  const history = await options.history(queryEmbedding, graph);
+  return { ...combineRecallBlocks(graph, history), graph };
 }

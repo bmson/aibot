@@ -55,6 +55,24 @@ describe('self-reflective output verification', () => {
     ).resolves.toEqual({ text: 'Hi!', attempted: false, revised: false, unavailable: true });
   });
 
+  it('keeps the checked draft when the verifier provider throws', async () => {
+    const router = {
+      object: async () => {
+        throw new Error('rewrite provider unavailable');
+      },
+    };
+
+    await expect(
+      verifyFinalOutput(router as never, {
+        taskId: 'task-1',
+        request: 'Say hi',
+        draft: 'Hi!',
+        evidence: [],
+        critical: true,
+      }),
+    ).resolves.toEqual({ text: 'Hi!', attempted: false, revised: false, unavailable: true });
+  });
+
   it('marks enclosed evidence as data and excludes tool arguments from the verifier prompt', () => {
     const prompt = buildOutputVerificationPrompt({
       request: 'What happened?',

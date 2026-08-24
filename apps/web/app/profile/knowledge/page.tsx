@@ -6,6 +6,7 @@ import {
   mergeKnowledgeEntity,
   rejectKnowledgeRelation,
   renameKnowledgeEntity,
+  retryQuarantinedKnowledgeSources,
 } from '@/app/profile/knowledge/actions';
 import { AddKnowledgeRelation } from '@/app/profile/knowledge/add-relation';
 import { requireOwner } from '@/auth';
@@ -172,11 +173,21 @@ export default async function KnowledgeReviewPage({
         </Card>
         <Card>
           <p className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
-            Waiting to sync
+            Graph sync
           </p>
           <p className="mt-2 font-display text-3xl font-semibold tracking-[-0.04em]">
             {graph.pendingSources.toLocaleString()}
           </p>
+          <p className="mt-1 text-xs text-muted">
+            waiting · {graph.quarantinedSources.toLocaleString()} paused
+          </p>
+          {graph.quarantinedSources > 0 ? (
+            <form action={retryQuarantinedKnowledgeSources} className="mt-3">
+              <SubmitButton size="sm" pendingLabel="Queueing…">
+                Retry paused sources
+              </SubmitButton>
+            </form>
+          ) : null}
         </Card>
       </div>
 

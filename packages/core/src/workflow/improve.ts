@@ -5,14 +5,16 @@ import {
   type ImprovementProposalRow,
   improvementProposals,
   isTombstoned,
+  knowledgeGraphSources,
   memories,
   modelCalls,
   modelRoles,
   models,
+  responseChecks,
   tasks,
   toolCalls,
 } from '@assistant/db';
-import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
 import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
@@ -30,6 +32,8 @@ import { notifyOwnerInNotifications } from './anomaly.js';
 const WINDOW_DAYS = 7;
 const MIN_FAILURES = 2;
 const COST_OUTLIER_USD = 0.1;
+/** Fresh graph work is expected; a ten-minute checkpoint is a health signal. */
+const GRAPH_STALE_PENDING_MS = 10 * 60 * 1000;
 const VALID_ROLES = new Set([
   'plan',
   'classify',
@@ -66,7 +70,7 @@ const ProposalsOutputSchema = z.object({
 });
 
 const IMPROVE_SYSTEM = [
-  "You review the assistant's recent failures, retries, and cost outliers and propose AT MOST 3 concrete, conservative improvements.",
+  "You review the assistant's recent reliability, response-quality, and memory-retrieval health signals and propose AT MOST 3 concrete, conservative improvements.",
   'Kinds: "model_role" (swap a role\'s model — only if a role clearly and repeatedly underperforms; give role + primaryModel), "policy" (a targeted approval rule — rare), "prompt" (advise a wording change — advisory), "note" (a general observation — advisory).',
   'Prefer "note"/"prompt" unless a config change is clearly warranted by the evidence. Each proposal needs a short title and a rationale citing the pattern. If nothing is actionable, return an empty proposals array.',
 ].join('\n');
@@ -77,10 +81,10 @@ export interface SelfImproveResult {
   experienceSaved: boolean;
 }
 
-/** Nightly self-improvement scan for the (single) agent. */
+/** Nightly self-improvement scan for one selected agent. */
 export async function runSelfImprove(
   deps: { db: Db; router: ModelRouter; heartbeat?: () => Promise<void> },
-  opts: { taskId?: string; now?: Date } = {},
+  opts: { agentId?: string; taskId?: string; now?: Date } = {},
 ): Promise<SelfImproveResult> {
   const { db, router } = deps;
   const now = opts.now ?? new Date();
@@ -88,15 +92,24 @@ export async function runSelfImprove(
 
   return withSpan('self.improve', {}, async () => {
     await deps.heartbeat?.();
-    const [agent] = await db.select({ id: agents.id }).from(agents).limit(1);
-    if (!agent) return { patterns: 0, proposalsDrafted: 0, experienceSaved: false };
-    const agentId = agent.id;
+    const [fallbackAgent] = opts.agentId
+      ? []
+      : await db.select({ id: agents.id }).from(agents).limit(1);
+    const agentId = opts.agentId ?? fallbackAgent?.id;
+    if (!agentId) return { patterns: 0, proposalsDrafted: 0, experienceSaved: false };
 
     // 1. Failure patterns by tool + error signature.
     const failedCalls = await db
       .select({ toolName: toolCalls.toolName, error: toolCalls.error })
       .from(toolCalls)
-      .where(and(eq(toolCalls.status, 'failed'), gte(toolCalls.createdAt, since)));
+      .innerJoin(tasks, eq(tasks.id, toolCalls.taskId))
+      .where(
+        and(
+          eq(tasks.agentId, agentId),
+          eq(toolCalls.status, 'failed'),
+          gte(toolCalls.createdAt, since),
+        ),
+      );
     const failureCounts = new Map<string, { toolName: string; sig: string; count: number }>();
     for (const c of failedCalls) {
       const sig = errorSignature(c.error);
@@ -116,6 +129,7 @@ export async function runSelfImprove(
       .from(tasks)
       .where(
         and(
+          eq(tasks.agentId, agentId),
           inArray(tasks.status, ['needs_attention', 'failed']),
           gte(tasks.updatedAt, since),
           gte(tasks.attempt, 2),
@@ -127,13 +141,89 @@ export async function runSelfImprove(
     const outliers = await db
       .select({ taskId: modelCalls.taskId, role: modelCalls.role, cost: modelCalls.costUsd })
       .from(modelCalls)
+      .innerJoin(tasks, eq(tasks.id, modelCalls.taskId))
       .where(
-        and(gte(modelCalls.createdAt, since), gte(modelCalls.costUsd, String(COST_OUTLIER_USD))),
+        and(
+          eq(tasks.agentId, agentId),
+          gte(modelCalls.createdAt, since),
+          gte(modelCalls.costUsd, String(COST_OUTLIER_USD)),
+        ),
       )
       .orderBy(desc(modelCalls.costUsd))
       .limit(5);
 
-    if (topFailures.length === 0 && stuckCount === 0 && outliers.length === 0) {
+    // 4. Response quality. The finalization funnel already persists these
+    // counters, but a stored metric is only useful if the improvement loop
+    // sees it. Aggregate recurring symptoms rather than reacting to one
+    // conservative contract correction.
+    const [quality] = await db
+      .select({
+        contractBlocks: sql<number>`count(*) FILTER (WHERE ${responseChecks.blocked})`,
+        unsupportedClaims: sql<number>`COALESCE(sum(${responseChecks.unsupportedCount}), 0)`,
+        mustActRetries: sql<number>`COALESCE(sum(${responseChecks.mustActRetries}), 0)`,
+        degradedSteps: sql<number>`COALESCE(sum(${responseChecks.degradedSteps}), 0)`,
+        verificationUnavailable: sql<number>`count(*) FILTER (WHERE ${responseChecks.outputVerificationUnavailable})`,
+      })
+      .from(responseChecks)
+      .innerJoin(tasks, eq(tasks.id, responseChecks.taskId))
+      .where(and(eq(tasks.agentId, agentId), gte(responseChecks.createdAt, since)));
+    const contractBlocks = Number(quality?.contractBlocks ?? 0);
+    const unsupportedClaims = Number(quality?.unsupportedClaims ?? 0);
+    const mustActRetries = Number(quality?.mustActRetries ?? 0);
+    const degradedSteps = Number(quality?.degradedSteps ?? 0);
+    const verificationUnavailable = Number(quality?.verificationUnavailable ?? 0);
+    const responseSignals = [
+      contractBlocks >= MIN_FAILURES
+        ? `- response contract corrected ${contractBlocks} response(s) with ${unsupportedClaims} unsupported claim(s)`
+        : '',
+      mustActRetries >= MIN_FAILURES
+        ? `- model loop retried ${mustActRetries} required action step(s) without a tool call`
+        : '',
+      degradedSteps >= MIN_FAILURES ? `- ${degradedSteps} step(s) used fallback models` : '',
+      verificationUnavailable >= MIN_FAILURES
+        ? `- output verification was unavailable for ${verificationUnavailable} final response(s)`
+        : '',
+    ].filter(Boolean);
+
+    // 5. GraphRAG is offline by design. That makes a failed extraction or a
+    // lease that outlives its normal run easy to miss unless it joins the same
+    // owner-visible health review as response regressions.
+    const graphStatusRows = await db
+      .select({ status: knowledgeGraphSources.status, count: sql<number>`count(*)` })
+      .from(knowledgeGraphSources)
+      .innerJoin(memories, eq(memories.id, knowledgeGraphSources.memoryId))
+      .where(eq(memories.agentId, agentId))
+      .groupBy(knowledgeGraphSources.status);
+    const graphCounts = new Map(graphStatusRows.map((row) => [row.status, Number(row.count)]));
+    const failedGraphSources = graphCounts.get('failed') ?? 0;
+    const [staleGraph] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(knowledgeGraphSources)
+      .innerJoin(memories, eq(memories.id, knowledgeGraphSources.memoryId))
+      .where(
+        and(
+          eq(memories.agentId, agentId),
+          eq(knowledgeGraphSources.status, 'pending'),
+          lt(knowledgeGraphSources.updatedAt, new Date(now.getTime() - GRAPH_STALE_PENDING_MS)),
+        ),
+      );
+    const staleGraphPending = Number(staleGraph?.count ?? 0);
+    const graphSignals = [
+      failedGraphSources >= MIN_FAILURES
+        ? `- GraphRAG has ${failedGraphSources} failed source extraction(s)`
+        : '',
+      staleGraphPending > 0
+        ? `- GraphRAG has ${staleGraphPending} source lease(s) pending for over 10 minutes`
+        : '',
+    ].filter(Boolean);
+
+    if (
+      topFailures.length === 0 &&
+      stuckCount === 0 &&
+      outliers.length === 0 &&
+      responseSignals.length === 0 &&
+      graphSignals.length === 0
+    ) {
       return { patterns: 0, proposalsDrafted: 0, experienceSaved: false };
     }
 
@@ -142,6 +232,8 @@ export async function runSelfImprove(
       ...topFailures.map((f) => `- ${f.toolName} failed ${f.count}× — "${f.sig}"`),
       stuckCount > 0 ? `- ${stuckCount} task(s) needed attention after retries` : '',
       ...outliers.map((o) => `- expensive ${o.role} call: $${Number(o.cost).toFixed(3)}`),
+      ...responseSignals,
+      ...graphSignals,
     ]
       .filter(Boolean)
       .join('\n');
@@ -198,7 +290,11 @@ export async function runSelfImprove(
       );
     }
 
-    const evidenceIds = [...new Set(topFailures.map((f) => `${f.toolName}:${f.sig}`))].slice(0, 20);
+    const evidenceIds = [
+      ...topFailures.map((f) => `${f.toolName}:${f.sig}`),
+      ...responseSignals.map((signal) => `response_checks:${signal.slice(2)}`),
+      ...graphSignals.map((signal) => `knowledge_graph_sources:${signal.slice(2)}`),
+    ].slice(0, 20);
     let proposalsDrafted = 0;
     for (const draft of outcome.object.proposals) {
       const change: Record<string, unknown> =
@@ -241,7 +337,16 @@ export async function runSelfImprove(
       ).catch((err) => console.error('self-improve: owner notify failed', err));
     }
 
-    return { patterns: topFailures.length, proposalsDrafted, experienceSaved };
+    return {
+      patterns:
+        topFailures.length +
+        Number(stuckCount > 0) +
+        outliers.length +
+        responseSignals.length +
+        graphSignals.length,
+      proposalsDrafted,
+      experienceSaved,
+    };
   });
 }
 

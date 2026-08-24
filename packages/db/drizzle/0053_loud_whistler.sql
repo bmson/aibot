@@ -1,0 +1,3 @@
+ALTER TABLE "knowledge_graph_sources" DROP CONSTRAINT "knowledge_graph_sources_status_check";--> statement-breakpoint
+ALTER TABLE "knowledge_graph_sources" ADD COLUMN "next_retry_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "knowledge_graph_sources" ADD CONSTRAINT "knowledge_graph_sources_status_check" CHECK ("knowledge_graph_sources"."status" IN ('pending','ready','failed','quarantined'));

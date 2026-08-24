@@ -237,7 +237,10 @@ final class AppModel: ObservableObject {
 
     func refreshOverview() async {
         guard let client else { return }
-        do { overview = try await client.overview() }
+        do {
+            overview = try await client.overview()
+            await reconcileBaselineActivity()
+        }
         catch { errorMessage = error.localizedDescription }
     }
 
@@ -972,18 +975,13 @@ final class AppModel: ObservableObject {
             await LiveActivityManager.shared.finish(
                 thought: .stoppedByYou,
                 detail: detail,
-                succeeded: false,
-                retainsSummary: false
+                succeeded: false
             )
         }
         clearThought(after: 2)
     }
 
     func dismissError() { errorMessage = nil }
-
-    private var isForeground: Bool {
-        UIApplication.shared.applicationState == .active
-    }
 
 #if DEBUG
     func previewActivitySequence() {
@@ -1005,6 +1003,7 @@ final class AppModel: ObservableObject {
             guard !Task.isCancelled else { return }
             self.setActivityThought(.needsYou, proposedDetail: "Review the proposed next step")
             await LiveActivityManager.shared.needsAttention(
+                agentName: agentName,
                 detail: "Review the proposed next step",
                 pendingCount: 1
             )
@@ -1114,6 +1113,7 @@ final class AppModel: ObservableObject {
             let summary = pendingApproval?.approval.summary ?? "Open the assistant to review the next step."
             setActivityThought(.needsYou, proposedDetail: summary)
             await LiveActivityManager.shared.needsAttention(
+                agentName: self.agentName,
                 detail: summary,
                 pendingCount: pendingApprovalCount
             )
@@ -1130,22 +1130,16 @@ final class AppModel: ObservableObject {
             let thought: AssistantThought = succeeded ? .finished : .stopped
             let detail = concise(reply ?? (succeeded ? "Your assistant finished the task." : "Open the conversation for details."))
             setActivityThought(thought, proposedDetail: detail)
-            let notificationDelivered = await notifyOnce(
+            _ = await notifyOnce(
                 key: "\(taskId ?? streamID)-\(finalStatus ?? "reply")",
                 title: succeeded ? "\(agentName) finished" : "\(agentName) stopped",
                 body: succeeded ? "Your result is ready." : "Open the conversation for details.",
                 route: .chat
             )
-            // Hold the activity open as a receipt only when the owner might not
-            // have seen the result. `schedule` returns false whenever the app
-            // is active, so keying off it alone meant every turn watched
-            // on-screen pinned a stale "Finished" card to the island for
-            // fifteen minutes — while the in-app crown cleared it in under two.
             await LiveActivityManager.shared.finish(
                 thought: thought,
                 detail: detail,
-                succeeded: succeeded,
-                retainsSummary: !notificationDelivered && !isForeground
+                succeeded: succeeded
             )
             clearThought(after: succeeded ? 1.8 : 4)
         }
@@ -1249,17 +1243,21 @@ final class AppModel: ObservableObject {
     }
 
     private var baselineThought: AssistantThought? {
-        switch bootstrap?.shell.dashboard.presence {
-        case .working: .backgroundWork
-        case .attention: .needsYou
-        case .idle, nil: nil
+        // The overview is refreshed far more often than bootstrap and carries
+        // the actual approval/task rows. Only a real owner decision earns the
+        // system Island; background work remains in-app.
+        if let overview {
+            return (!overview.approvals.pending.isEmpty || overview.activity.items.contains(where: { $0.status == "needs_attention" }))
+                ? .needsYou
+                : nil
         }
+        return bootstrap?.shell.dashboard.presence == .attention ? .needsYou : nil
     }
 
     private func baselineDetail(for thought: AssistantThought?) -> String? {
         switch thought {
         case .backgroundWork:
-            "Your assistant is continuing a task."
+            nil
         case .needsYou:
             "Open the assistant to review the next step."
         default:
@@ -1276,11 +1274,7 @@ final class AppModel: ObservableObject {
         switch thought {
         case .backgroundWork:
             setActivityThought(thought, proposedDetail: "Your assistant is continuing a task.")
-            await LiveActivityManager.shared.ensure(
-                agentName: agentName,
-                thought: .backgroundWork,
-                detail: "Your assistant is continuing a task."
-            )
+            await LiveActivityManager.shared.dismiss()
         case .needsYou:
             let summary = overview?.approvals.pending.first?.approval.summary
                 ?? "Open the assistant to review the next step."

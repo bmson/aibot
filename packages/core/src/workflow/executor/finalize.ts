@@ -29,6 +29,7 @@ import { verifyFinalOutput } from '../output-verification.js';
 import { PLANNER_VERSION } from '../planner.js';
 import { detectPersonalReadRequest, type PersonalReadRequest } from '../read-intent.js';
 import { type ActionEvidence, enforceResponseContract } from '../response-contract.js';
+import { responseCardsForFinal } from '../response-cards.js';
 import { isUnattendedGoalSession, KNOWN_SENDER_REPLY_KIND } from './context-helpers.js';
 import { notifyOwnerAndConversation, recordGoalBlocked } from './notices.js';
 import { type ExecuteResult, type ExecutorDeps, LOST_LEASE } from './types.js';
@@ -93,6 +94,7 @@ async function persistFinalConversationOnce(
   recall?: RecallSource[],
   contractNotice?: boolean,
   cues?: Cue[],
+  responseCards?: Record<string, unknown>[],
 ): Promise<boolean> {
   let conversationId = task.conversationId;
   let body = text;
@@ -123,7 +125,7 @@ async function persistFinalConversationOnce(
     taskId: task.id,
     role: 'assistant',
     origin: 'assistant',
-    parts: assistantMessageParts(body, recall, { contractNotice, cues }),
+    parts: assistantMessageParts(body, recall, { contractNotice, cues, responseCards }),
     text: body,
   });
   return true;
@@ -145,6 +147,7 @@ export async function finalizePendingResponse(
     recallSources,
     pending.contractNotice,
     pending.cues,
+    pending.responseCards,
   );
 
   // Check cancellation/reclaim immediately before the external side effect.
@@ -368,6 +371,14 @@ export async function stageModelFinalResponse(
     });
   }
   const text = checked.text;
+  // Cards are a view of the same ledger that the response contract used; prose
+  // is deliberately not parsed here, so a fluent answer cannot invent a card.
+  pending.responseCards = responseCardsForFinal({
+    evidence,
+    readRequest: contractOptions.readRequest,
+    ambient: readContext?.groundingCorpus,
+    requestText: latestUserText(window),
+  });
   // Stamp the contract verdict on pending; recordQualitySignals reads it from
   // the single funnel in finalizePendingResponse, so every terminal path — not
   // just this prose-model one — persists its verdict and loop-health counters.

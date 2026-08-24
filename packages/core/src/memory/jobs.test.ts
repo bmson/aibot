@@ -71,6 +71,7 @@ describe('codeJobName', () => {
     expect(codeJobName(taskWith({ job: 'ambient.refresh' }))).toBe('ambient.refresh');
     expect(codeJobName(taskWith({ job: 'dream.run' }))).toBe('dream.run');
     expect(codeJobName(taskWith({ job: 'self.maintain' }))).toBe('self.maintain');
+    expect(codeJobName(taskWith({ job: 'health.monitor' }))).toBe('health.monitor');
     expect(codeJobName(taskWith({ job: 'rm -rf /' }))).toBeNull();
     expect(codeJobName(taskWith({ instruction: 'do things' }))).toBeNull();
     expect(codeJobName({ trigger: null } as never)).toBeNull();

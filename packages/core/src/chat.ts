@@ -38,9 +38,12 @@ import type { ActionEvidence } from './workflow/response-contract.js';
 export function assistantMessageParts(
   text: string,
   recall?: RecallSource[],
-  opts?: { contractNotice?: boolean; cues?: Cue[] },
+  opts?: { contractNotice?: boolean; cues?: Cue[]; responseCards?: Record<string, unknown>[] },
 ): unknown[] {
   const parts: unknown[] = [{ type: 'text', text }];
+  if (opts?.responseCards?.length) {
+    for (const card of opts.responseCards) parts.push({ type: 'data-card', data: card });
+  }
   if (recall && recall.length > 0) parts.push({ type: 'recall', sources: recall });
   // Structured marker (parts are jsonb — no migration): the chat UI styles the
   // message as an honesty-check system notice instead of assistant prose.

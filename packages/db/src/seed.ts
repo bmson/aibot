@@ -413,6 +413,13 @@ const scheduleSeed = [
     cron: '0 1 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'self.maintain' },
   },
+  // Deterministic daily alerting for persistent GraphRAG and final-response
+  // quality failures. This is a code job: no model interprets telemetry.
+  {
+    name: 'assistant-health-monitor',
+    cron: '15 1 * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.02', job: 'health.monitor' },
+  },
   // Document-processor backstop (Phase 14): ingest enqueues a per-document
   // process job immediately, but this sweep relaunches any heavy-format document
   // whose worker run never called back (stale) or was missed. A code job — no
@@ -436,6 +443,7 @@ const SEED_OWNED_SCHEDULES = new Set([
   'ambient-refresh',
   'dream',
   'self-maintain',
+  'assistant-health-monitor',
   'document-processing',
 ]);
 

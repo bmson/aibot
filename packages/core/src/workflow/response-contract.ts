@@ -546,11 +546,8 @@ function failureDetails(evidence: ActionEvidence[]): string[] {
 
 export function transparentFailureResponse(evidence: ActionEvidence[]): string {
   const failures = failureDetails(evidence);
-  const detail = failures.length ? ` What stopped it: ${failures.join('; ')}.` : '';
-  // Keep the opening sentence stable — the web chat matches on it to render
-  // these as system notices (apps/web/lib/chat-notices.ts), alongside the
-  // structured `contractNotice` flag.
-  return `Here's where this actually stands: I couldn't verify this completed, so I'm not claiming it did.${detail} Nothing was sent or changed outside this chat. Say the word and I'll run it again, or point me at another way in.`;
+  const detail = failures.length ? failures.join('; ') : 'no successful tool result was returned';
+  return `I couldn't complete this because ${detail}. No external change was made.`;
 }
 
 const UNSUPPORTED_LABEL: Record<ActionKind, string> = {
@@ -671,9 +668,8 @@ function partialFailureResponse(
   if (verified.length === 0) return undefined;
   const missing = [...new Set(unsupported.map((kind) => UNSUPPORTED_LABEL[kind]))];
   const failures = failureDetails(evidence);
-  const failureDetail = failures.length ? ` What stopped it: ${failures.join('; ')}.` : '';
-  // Opening kept stable for the web chat's notice matcher (chat-notices.ts).
-  return `Here's what I can confirm: ${verified.join('; ')}. The rest — ${missing.join(' or ')} — I can't confirm yet, so I'm leaving it out rather than guessing.${failureDetail}`;
+  const reason = failures.length ? ` Reason: ${failures.join('; ')}.` : '';
+  return `Completed: ${verified.join('; ')}. Still needed: ${missing.join(' or ')}.${reason}`;
 }
 
 // Google surfaces the model legitimately constructs from an id it already has

@@ -96,11 +96,20 @@ describe('suggestions', () => {
     if (!dbUp) return ctx.skip();
     const row = await makeSuggestion('double');
     if (!row) throw new Error('suggestion was not created');
-    const first = await acceptSuggestion(db, row.id);
-    const second = await acceptSuggestion(db, row.id);
-    expect(first.ok).toBe(true);
+    const outcomes = await Promise.all([
+      acceptSuggestion(db, row.id),
+      acceptSuggestion(db, row.id),
+    ]);
     // A double-tap or a second tab must create one task, not two.
-    expect(second.ok).toBe(false);
+    expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(1);
+    expect(outcomes.some((outcome) => !outcome.ok)).toBe(true);
+    const accepted = outcomes.find((outcome) => outcome.ok);
+    if (!accepted?.ok) throw new Error('one concurrent acceptance should succeed');
+    const linked = await db
+      .select({ acceptedTaskId: suggestions.acceptedTaskId })
+      .from(suggestions)
+      .where(eq(suggestions.id, row.id));
+    expect(linked[0]?.acceptedTaskId).toBe(accepted.taskId);
   });
 
   it('dismissing closes it, and a dismissed one cannot be accepted', async (ctx) => {

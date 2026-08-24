@@ -6,6 +6,7 @@ import {
   conversations,
   type Db,
   messages,
+  tasks,
   toolCalls,
 } from '@assistant/db';
 import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
@@ -93,18 +94,20 @@ interface PendingAnomaly {
   subjectKey: string;
 }
 
-/** Run the nightly anomaly scan for the (single) agent, inserting new anomalies and alerting the owner. */
+/** Run the nightly anomaly scan for one selected agent, inserting new anomalies and alerting its owner. */
 export async function runAnomalyScan(
   deps: { db: Db; heartbeat?: () => Promise<void> },
-  opts: { taskId?: string; now?: Date } = {},
+  opts: { agentId?: string; taskId?: string; now?: Date } = {},
 ): Promise<AnomalyScanResult> {
   const { db } = deps;
   const now = opts.now ?? new Date();
   await deps.heartbeat?.();
 
-  const [agent] = await db.select({ id: agents.id }).from(agents).limit(1);
-  if (!agent) return { flagged: 0, byKind: {} };
-  const agentId = agent.id;
+  const [fallbackAgent] = opts.agentId
+    ? []
+    : await db.select({ id: agents.id }).from(agents).limit(1);
+  const agentId = opts.agentId ?? fallbackAgent?.id;
+  if (!agentId) return { flagged: 0, byKind: {} };
 
   const policies = await db
     .select({ id: approvalPolicies.id, toolName: approvalPolicies.toolName })
@@ -124,8 +127,10 @@ export async function runAnomalyScan(
       policyId: sql<string | null>`${toolCalls.decision}->>'policyId'`,
     })
     .from(toolCalls)
+    .innerJoin(tasks, eq(tasks.id, toolCalls.taskId))
     .where(
       and(
+        eq(tasks.agentId, agentId),
         eq(toolCalls.risk, 'autonomous'),
         inArray(toolCalls.status, ['succeeded', 'executing']),
         gte(toolCalls.createdAt, baselineStart),

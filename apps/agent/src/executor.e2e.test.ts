@@ -10,6 +10,7 @@ import {
 import {
   approvalPolicies,
   approvals,
+  conversationSegments,
   conversations,
   createDb,
   type Db,
@@ -168,6 +169,11 @@ afterAll(async () => {
       .delete(approvalPolicies)
       .where(eq(approvalPolicies.templateKey, 'test.exec.outbound.recipient'));
     if (createdConversationIds.length) {
+      // Offline segmentation can create rows that anchor these messages. Clear
+      // those derived rows first so this suite remains isolated.
+      await db
+        .delete(conversationSegments)
+        .where(inArray(conversationSegments.conversationId, createdConversationIds));
       await db.delete(messages).where(inArray(messages.conversationId, createdConversationIds));
     }
     if (createdTaskIds.length) {
@@ -834,7 +840,7 @@ describe('executor end-to-end (integration, scripted model)', () => {
       .select()
       .from(messages)
       .where(sql`${messages.taskId} = ${task.id} and ${messages.role} = 'assistant'`);
-    expect(reply?.text).toContain("I couldn't verify this completed");
+    expect(reply?.text).toContain("I couldn't complete this because");
     expect(reply?.text).not.toContain('I created a shared spreadsheet');
   });
 

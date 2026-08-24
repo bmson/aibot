@@ -167,7 +167,7 @@ OAuth steps.
 ## Development
 
 ```sh
-pnpm test             # unit and integration tests
+pnpm test             # unit and integration tests (recreates an isolated *_test database)
 pnpm lint             # Biome plus architecture boundaries
 pnpm typecheck        # every workspace package
 pnpm build            # production builds

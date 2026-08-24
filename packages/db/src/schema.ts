@@ -844,12 +844,19 @@ export const knowledgeGraphSources = pgTable(
       onDelete: 'set null',
     }),
     status: text('status').notNull().default('pending'),
+    /** Bump when extraction requirements change so old edges are rebuilt safely. */
+    extractionVersion: integer('extraction_version').notNull().default(1),
+    /** Automatic retry deadline after a transient extraction failure. */
+    nextRetryAt: timestamp('next_retry_at', { withTimezone: true }),
     attempts: integer('attempts').notNull().default(0),
     lastError: text('last_error'),
     ...timestamps,
   },
   (t) => [
-    check('knowledge_graph_sources_status_check', sql`${t.status} IN ('pending','ready','failed')`),
+    check(
+      'knowledge_graph_sources_status_check',
+      sql`${t.status} IN ('pending','ready','failed','quarantined')`,
+    ),
     index('knowledge_graph_sources_status_idx').on(t.status, t.updatedAt),
   ],
 );
@@ -876,6 +883,8 @@ export const knowledgeGraphRelations = pgTable(
     sourceMemoryId: uuid('source_memory_id')
       .notNull()
       .references(() => memories.id, { onDelete: 'cascade' }),
+    /** Exact source phrase supplied by the extractor for this direct edge. */
+    evidenceQuote: text('evidence_quote'),
     /** Stable endpoint/predicate identity within a source memory. */
     sourceFingerprint: text('source_fingerprint').notNull(),
     /** The source fact can yield several direct relationships. */

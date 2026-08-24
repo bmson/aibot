@@ -1,5 +1,6 @@
-import { type Db, type SuggestionRow, suggestions } from '@assistant/db';
+import { type Db, type SuggestionRow, suggestions, type TaskRow } from '@assistant/db';
 import { and, asc, eq, gt, isNull, lte, or, sql } from 'drizzle-orm';
+import { getQueueNotifier } from '../queue.js';
 import { enqueueTask } from './machine.js';
 
 /**
@@ -63,6 +64,7 @@ export async function createSuggestion(
 }
 
 export type AcceptOutcome = { ok: true; taskId: string } | { ok: false; reason: string };
+type SuggestionAcceptanceCommit = { outcome: AcceptOutcome; notify?: TaskRow };
 
 /**
  * Promote a suggestion into real work.
@@ -77,49 +79,63 @@ export async function acceptSuggestion(
   opts: { now?: Date } = {},
 ): Promise<AcceptOutcome> {
   const now = opts.now ?? new Date();
-  const [claimed] = await db
-    .update(suggestions)
-    .set({ status: 'accepted', updatedAt: now })
-    .where(
-      and(
-        eq(suggestions.id, suggestionId),
-        or(eq(suggestions.status, 'pending'), eq(suggestions.status, 'snoozed')),
-      ),
-    )
-    .returning();
-  if (!claimed) return { ok: false, reason: 'This suggestion is no longer open.' };
-  if (claimed.expiresAt <= now) {
-    await db
+  const committed = await db.transaction(async (tx): Promise<SuggestionAcceptanceCommit> => {
+    const txDb = tx as unknown as Db;
+    const [claimed] = await txDb
       .update(suggestions)
-      .set({ status: 'expired', updatedAt: now })
-      .where(eq(suggestions.id, suggestionId));
-    return { ok: false, reason: 'This suggestion has expired.' };
-  }
+      .set({ status: 'accepted', updatedAt: now })
+      .where(
+        and(
+          eq(suggestions.id, suggestionId),
+          or(eq(suggestions.status, 'pending'), eq(suggestions.status, 'snoozed')),
+        ),
+      )
+      .returning();
+    if (!claimed) return { outcome: { ok: false, reason: 'This suggestion is no longer open.' } };
+    if (claimed.expiresAt <= now) {
+      await txDb
+        .update(suggestions)
+        .set({ status: 'expired', updatedAt: now })
+        .where(eq(suggestions.id, suggestionId));
+      return { outcome: { ok: false, reason: 'This suggestion has expired.' } };
+    }
 
-  const { task } = await enqueueTask(db, {
-    type: 'adhoc',
-    event: {
-      source: 'internal',
-      externalEventId: `suggestion:${claimed.id}`,
-      agentId: claimed.agentId,
-      conversationId: claimed.conversationId ?? undefined,
-      trust: 'owner',
-      payload: {
-        instruction: claimed.proposedAction,
-        // The proposal was written from third-party content, so the work runs
-        // tainted and every outward call stays gated. Accepting is one
-        // decision, not an exemption.
-        taintedOrigin: true,
-        suggestionId: claimed.id,
+    const { task, created } = await enqueueTask(txDb, {
+      type: 'adhoc',
+      // Queue delivery is deliberately deferred until the transaction commits:
+      // a worker must never see a task whose suggestion link later rolls back.
+      deferNotification: true,
+      event: {
+        source: 'internal',
+        externalEventId: `suggestion:${claimed.id}`,
+        agentId: claimed.agentId,
+        conversationId: claimed.conversationId ?? undefined,
+        trust: 'owner',
+        payload: {
+          instruction: claimed.proposedAction,
+          // The proposal was written from third-party content, so the work runs
+          // tainted and every outward call stays gated. Accepting is one
+          // decision, not an exemption.
+          taintedOrigin: true,
+          suggestionId: claimed.id,
+        },
       },
-    },
+    });
+
+    await txDb
+      .update(suggestions)
+      .set({ acceptedTaskId: task.id, updatedAt: now })
+      .where(eq(suggestions.id, claimed.id));
+    return {
+      outcome: { ok: true, taskId: task.id } as const,
+      notify: created && task.status === 'pending' ? task : undefined,
+    };
   });
 
-  await db
-    .update(suggestions)
-    .set({ acceptedTaskId: task.id, updatedAt: now })
-    .where(eq(suggestions.id, claimed.id));
-  return { ok: true, taskId: task.id };
+  if (committed.notify) {
+    getQueueNotifier().notify(committed.notify.id, committed.notify.queueGeneration);
+  }
+  return committed.outcome;
 }
 
 /** Close a suggestion the owner does not want. Dismissal is permanent. */

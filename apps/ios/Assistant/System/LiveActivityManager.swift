@@ -16,20 +16,23 @@ final class LiveActivityManager {
         detail: String,
         pendingCount: Int = 0
     ) async {
-        if activeActivity() == nil {
-            await start(agentName: agentName, thought: thought, detail: detail)
+        // The system Island belongs to urgent, owner-actionable work only.
+        // Generic progress is shown by the in-app crown and must never keep a
+        // wide/timed Live Activity alive over the system clock.
+        guard Self.shouldPresentSystemActivity(for: thought) else {
+            await dismiss()
+            return
         }
-
-        guard let activity = activeActivity() else { return }
-        await activity.update(Self.content(
-            thought: thought,
-            detail: detail,
-            pendingCount: pendingCount,
-            now: .now
-        ))
+        if current == nil { await start(agentName: agentName, thought: thought, detail: detail) }
+        guard let current else { return }
+        await current.update(Self.content(thought: thought, detail: detail, pendingCount: pendingCount, now: .now))
     }
 
     func start(agentName: String, thought: AssistantThought, detail: String) async {
+        guard Self.shouldPresentSystemActivity(for: thought) else {
+            await dismiss()
+            return
+        }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
         await endAllImmediately()
@@ -49,43 +52,32 @@ final class LiveActivityManager {
     }
 
     func update(thought: AssistantThought, detail: String) async {
-        guard let activity = activeActivity() else { return }
-        await activity.update(Self.content(
-            thought: thought,
-            detail: detail,
-            pendingCount: 0,
-            now: .now
-        ))
+        guard Self.shouldPresentSystemActivity(for: thought) else {
+            await dismiss()
+            return
+        }
+        guard let current else { return }
+        await current.update(Self.content(thought: thought, detail: detail, pendingCount: 0, now: .now))
     }
 
-    func needsAttention(detail: String, pendingCount: Int) async {
-        guard let activity = activeActivity() else { return }
-        await activity.update(Self.content(
-            thought: .needsYou,
-            detail: detail,
-            pendingCount: pendingCount,
-            now: .now
-        ))
+    func needsAttention(agentName: String, detail: String, pendingCount: Int) async {
+        await ensure(agentName: agentName, thought: .needsYou, detail: detail, pendingCount: pendingCount)
     }
 
     func finish(
         thought: AssistantThought,
         detail: String,
-        succeeded: Bool,
-        retainsSummary: Bool = true
+        succeeded _: Bool
     ) async {
-        guard let activity = activeActivity() else { return }
+        guard let current else { return }
         let content = Self.content(
             thought: thought,
             detail: detail,
             pendingCount: 0,
             now: .now
         )
-        let dismissalPolicy: ActivityUIDismissalPolicy = retainsSummary
-            ? .after(.now.addingTimeInterval(succeeded ? 15 * 60 : 30 * 60))
-            : .immediate
-        await activity.end(content, dismissalPolicy: dismissalPolicy)
-        current = nil
+        await current.end(content, dismissalPolicy: .immediate)
+        self.current = nil
         stateObservationTask?.cancel()
     }
 
@@ -112,20 +104,6 @@ final class LiveActivityManager {
         )
     }
 
-    private func activeActivity() -> Activity<AssistantActivityAttributes>? {
-        let activity = current ?? Activity<AssistantActivityAttributes>.activities.first(where: Self.isActive)
-        guard let activity, Self.isActive(activity) else {
-            current = nil
-            stateObservationTask?.cancel()
-            return nil
-        }
-        if current?.id != activity.id {
-            current = activity
-            observeState(of: activity)
-        }
-        return activity
-    }
-
     private func observeState(of activity: Activity<AssistantActivityAttributes>) {
         stateObservationTask?.cancel()
         stateObservationTask = Task { [weak self] in
@@ -148,17 +126,17 @@ final class LiveActivityManager {
         current = nil
     }
 
-    private static func isActive(_ activity: Activity<AssistantActivityAttributes>) -> Bool {
-        activity.activityState == .active || activity.activityState == .stale
-    }
-
     nonisolated private static func staleDate(for thought: AssistantThought, now: Date) -> Date? {
         switch thought.tone {
         case .thinking, .working:
-            now.addingTimeInterval(15 * 60)
+            now.addingTimeInterval(60)
         case .waiting, .done, .failed:
             nil
         }
+    }
+
+    nonisolated static func shouldPresentSystemActivity(for thought: AssistantThought) -> Bool {
+        thought.tone == .waiting
     }
 
     nonisolated private static func relevanceScore(for thought: AssistantThought) -> Double {

@@ -1,4 +1,4 @@
-import { createDb, type Db, dreamNotes, memories, tasks, toolCalls } from '@assistant/db';
+import { agents, createDb, type Db, dreamNotes, memories, tasks, toolCalls } from '@assistant/db';
 import { and, eq, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
@@ -40,6 +40,8 @@ describe('dreaming (offline cognition)', () => {
   let dbUp = false;
   let agentId: string;
   let taskId: string;
+  let foreignAgentId: string | undefined;
+  let foreignTaskId: string | undefined;
 
   async function cleanup() {
     await db.delete(memories).where(like(memories.content, '%xtest-dream%'));
@@ -48,6 +50,13 @@ describe('dreaming (offline cognition)', () => {
       await db.delete(toolCalls).where(eq(toolCalls.taskId, taskId));
       await db.delete(tasks).where(eq(tasks.id, taskId));
     }
+    if (foreignTaskId) {
+      await db.delete(toolCalls).where(eq(toolCalls.taskId, foreignTaskId));
+      await db.delete(tasks).where(eq(tasks.id, foreignTaskId));
+    }
+    if (foreignAgentId) await db.delete(agents).where(eq(agents.id, foreignAgentId));
+    foreignTaskId = undefined;
+    foreignAgentId = undefined;
   }
 
   beforeAll(async () => {
@@ -103,6 +112,68 @@ describe('dreaming (offline cognition)', () => {
     const mine = notes.filter((n) => n.content.includes('xtest-dream'));
     expect(mine.some((n) => n.kind === 'footnote')).toBe(true);
     expect(mine.some((n) => n.kind === 'anticipation')).toBe(true);
+  });
+
+  it("scopes the dream model to the selected agent's task failures", async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [foreign] = await db
+      .insert(agents)
+      .values({
+        name: 'xtest dream foreign agent',
+        email: `xtest-dream-foreign-${Date.now()}@example.com`,
+        workspacePrefix: 'xtest-dream-foreign',
+      })
+      .returning({ id: agents.id });
+    if (!foreign) throw new Error('foreign dream agent fixture was not created');
+    foreignAgentId = foreign.id;
+    const [foreignTask] = await db
+      .insert(tasks)
+      .values({
+        agentId: foreign.id,
+        type: 'adhoc',
+        trust: 'assistant',
+        status: 'failed',
+        progress: 'xtest dream foreign task failed',
+      })
+      .returning({ id: tasks.id });
+    if (!foreignTask) throw new Error('foreign dream task fixture was not created');
+    foreignTaskId = foreignTask.id;
+    await db.insert(toolCalls).values({
+      taskId: foreignTask.id,
+      step: 0,
+      toolName: 'xtest-dream-foreign-tool',
+      args: {},
+      risk: 'autonomous',
+      status: 'failed',
+      error: 'xtest dream foreign provider outage',
+    });
+
+    let prompt = '';
+    const recordingRouter = {
+      async embed(texts: string[]) {
+        return texts.map(() => new Array(1536).fill(0.02));
+      },
+      async object(_role: string, options: { prompt?: string }) {
+        prompt = options.prompt ?? '';
+        return {
+          ok: true as const,
+          modelId: 'fake',
+          degraded: false,
+          object: { footnotes: [], hypotheses: [], anticipations: [] },
+        };
+      },
+    } as unknown as ModelRouter;
+
+    await runDream({ db, router: recordingRouter }, { agentId });
+
+    expect(prompt).not.toContain('xtest dream foreign task failed');
+    expect(prompt).not.toContain('xtest-dream-foreign-tool');
+    expect(prompt).not.toContain('xtest dream foreign provider outage');
+
+    await runDream({ db, router: recordingRouter }, { agentId: foreign.id });
+    expect(prompt).toContain('xtest dream foreign task failed');
+    expect(prompt).toContain('xtest-dream-foreign-tool');
+    expect(prompt).toContain('xtest dream foreign provider outage');
   });
 
   it('purges dream notes past their inspection window', async (ctx) => {

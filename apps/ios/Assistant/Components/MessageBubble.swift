@@ -1,5 +1,8 @@
 import SwiftUI
 import UIKit
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 
 struct MessageBubble: View {
     let message: ChatMessage
@@ -12,10 +15,11 @@ struct MessageBubble: View {
     @ScaledMetric(relativeTo: .body) private var messageFontSize = 14.0
     @ScaledMetric(relativeTo: .body) private var bubbleHorizontalInset: CGFloat = 20
     @ScaledMetric(relativeTo: .body) private var bubbleVerticalInset: CGFloat = 15
+    @State private var localOrientation: String?
 
     var body: some View {
         VStack(alignment: message.role == .assistant ? .leading : .trailing, spacing: 8) {
-            if !message.text.isEmpty {
+            if !message.text.isEmpty && !usesPrimaryCards {
                 HStack {
                     if message.role == .user { Spacer(minLength: 40) }
                     messageText
@@ -40,8 +44,18 @@ struct MessageBubble: View {
             }
 
             if message.role == .assistant, !responseCards.isEmpty {
+                if let localOrientation {
+                    Text(localOrientation)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AssistantTheme.stageStrong.opacity(0.9))
+                        .padding(.horizontal, 6)
+                }
                 RichResponseCards(cards: responseCards)
             }
+        }
+        .task(id: message.id) {
+            guard usesPrimaryCards, responseCards.count > 1 else { return }
+            localOrientation = await PresentationCompanion.orientation(for: responseCards)
         }
         .accessibilityElement(children: .contain)
     }
@@ -212,6 +226,10 @@ struct MessageBubble: View {
         return explicit.isEmpty ? MessageResponseCard.inferred(from: message.text) : explicit
     }
 
+    private var usesPrimaryCards: Bool {
+        message.role == .assistant && !message.parts.compactMap(MessageResponseCard.init(part:)).isEmpty
+    }
+
     private func decisionCard(_ part: MessagePart) -> some View {
         let isApproval = part.type == "approval"
         return VStack(alignment: .leading, spacing: 12) {
@@ -285,12 +303,14 @@ enum MessageResponseCard: Identifiable {
     }
 
     case agenda(title: String, subtitle: String, items: [AgendaItem])
+    case event(id: String, time: String, title: String, location: String, attendees: [String], calendars: [String], linkLabel: String?, linkURL: String?)
     case weather(location: String, temperature: String, condition: String, high: String?, low: String?, detail: String?)
     case duration(title: String, duration: String, detail: String?, confidence: String?)
 
     var id: String {
         switch self {
         case let .agenda(title, _, _): "agenda-\(title)"
+        case let .event(id, _, _, _, _, _, _, _): id
         case let .weather(location, temperature, _, _, _, _): "weather-\(location)-\(temperature)"
         case let .duration(title, duration, _, _): "duration-\(title)-\(duration)"
         }
@@ -300,6 +320,16 @@ enum MessageResponseCard: Identifiable {
         guard part.type == "data-card", case let .object(data)? = part.data,
               let kind = data["kind"]?.string else { return nil }
         switch kind {
+        case "calendar-event":
+            guard let title = data["title"]?.string, let time = data["time"]?.string else { return nil }
+            let attendees = data["attendees"]?.arrayStrings ?? []
+            let calendars = data["calendars"]?.arrayStrings ?? []
+            let link = data["link"]?.objectValue
+            self = .event(
+                id: data["id"]?.string ?? "calendar-\(title)-\(time)", time: time, title: title,
+                location: data["location"]?.string ?? "", attendees: attendees, calendars: calendars,
+                linkLabel: link?["label"]?.string, linkURL: link?["url"]?.string
+            )
         case "calendar", "agenda":
             let items: [AgendaItem] = {
                 guard case let .array(values)? = data["items"] else { return [] }
@@ -415,6 +445,8 @@ private struct RichResponseCards: View {
                 switch card {
                 case let .agenda(title, subtitle, items):
                     agendaCard(title: title, subtitle: subtitle, items: items)
+                case let .event(_, time, title, location, attendees, calendars, linkLabel, linkURL):
+                    eventCard(time: time, title: title, location: location, attendees: attendees, calendars: calendars, linkLabel: linkLabel, linkURL: linkURL)
                 case let .weather(location, temperature, condition, high, low, detail):
                     weatherCard(location: location, temperature: temperature, condition: condition, high: high, low: low, detail: detail)
                 case let .duration(title, duration, detail, confidence):
@@ -424,6 +456,27 @@ private struct RichResponseCards: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
+    }
+
+    private func eventCard(time: String, title: String, location: String, attendees: [String], calendars: [String], linkLabel: String?, linkURL: String?) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(time).font(.caption.monospacedDigit().weight(.bold)).foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                Spacer()
+                if let calendar = calendars.first, !calendar.isEmpty {
+                    Text(calendar).font(.caption2.weight(.semibold)).foregroundStyle(AssistantTheme.inkMuted(for: colorScheme)).lineLimit(1)
+                }
+            }
+            Text(title).font(.headline).foregroundStyle(AssistantTheme.ink(for: colorScheme)).fixedSize(horizontal: false, vertical: true)
+            if !location.isEmpty { Label(location, systemImage: "mappin.and.ellipse").font(.caption).foregroundStyle(AssistantTheme.inkMuted(for: colorScheme)) }
+            if !attendees.isEmpty { Label(attendees.joined(separator: ", "), systemImage: "person.2").font(.caption).foregroundStyle(AssistantTheme.inkMuted(for: colorScheme)).lineLimit(2) }
+            if let linkURL, let url = URL(string: linkURL) {
+                Link(linkLabel ?? "Open event", destination: url).font(.caption.weight(.semibold))
+            }
+        }
+        .padding(16)
+        .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(AssistantTheme.accent(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.44 : 0.18), lineWidth: 1) }
     }
 
     private func agendaCard(title: String, subtitle: String, items: [MessageResponseCard.AgendaItem]) -> some View {
@@ -603,6 +656,57 @@ private struct RichResponseCards: View {
         if lower.contains("cloud") { return "cloud.fill" }
         if lower.contains("wind") { return "wind" }
         return "sun.max.fill"
+    }
+}
+
+private extension JSONValue {
+    var objectValue: [String: JSONValue]? {
+        guard case let .object(value) = self else { return nil }
+        return value
+    }
+
+    var arrayStrings: [String]? {
+        guard case let .array(value) = self else { return nil }
+        return value.compactMap(\.string)
+    }
+}
+
+/// A best-effort local copy pass. It receives only the already-renderable card
+/// labels and disappears on any device/model failure; it cannot affect facts.
+private enum PresentationCompanion {
+    static func orientation(for cards: [MessageResponseCard]) async -> String? {
+        let source = cards.map { card in
+            switch card {
+            case let .event(_, time, title, location, _, _, _, _): "Event: \(time), \(title), \(location)"
+            case let .weather(location, temperature, condition, high, low, detail):
+                "Weather: \(location), \(condition), \(temperature), high \(high ?? ""), low \(low ?? ""), \(detail ?? "")"
+            case let .duration(title, duration, detail, _): "Estimate: \(title), \(duration), \(detail ?? "")"
+            case let .agenda(title, subtitle, items): "Agenda: \(title), \(subtitle), \(items.map(\.title).joined(separator: ", "))"
+            }
+        }.joined(separator: "\n")
+        guard source.count <= 1_200 else { return nil }
+        #if canImport(FoundationModels)
+        guard #available(iOS 26, *), SystemLanguageModel.default.availability == .available else { return nil }
+        do {
+            let session = LanguageModelSession(instructions: "Write one calm planning sentence of at most 120 characters. Use only the supplied facts. Do not add names, numbers, dates, recommendations, links, or claims about actions.")
+            let response = try await session.respond(to: source)
+            return validated(response.content, source: source)
+        } catch {
+            return nil
+        }
+        #else
+        return nil
+        #endif
+    }
+
+    private static func validated(_ candidate: String, source: String) -> String? {
+        let text = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.count <= 120, !text.contains("\n") else { return nil }
+        // Numbers are high-risk in a planning line: every one must be literally
+        // present in the evidence-derived card text.
+        let numbers = text.split { !$0.isNumber }.filter { !$0.isEmpty }
+        guard numbers.allSatisfy({ source.contains($0) }) else { return nil }
+        return text
     }
 }
 

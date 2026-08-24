@@ -26,33 +26,42 @@ export interface GoldenFixture {
   taskType: 'adhoc' | 'chat_turn' | 'email_triage';
   /** Pre-set plan so fixtures do not script the planner too (optional). */
   plan?: Plan;
+  /** Bound a scenario to prove the owner-visible result when work runs out of steps. */
+  maxSteps?: number;
   /** One entry per model step: tool calls to propose and/or final text. */
   script: Array<{
     text?: string;
     toolCalls?: Array<{ toolName: string; input: Record<string, unknown> }>;
   }>;
   /** Optional self-review result after the final scripted model step. */
-  verification?: {
-    decision: 'publish' | 'revise';
-    revisedText?: string;
-    reasons?: Array<
-      | 'does_not_answer_request'
-      | 'unsupported_claim'
-      | 'ungrounded_fact'
-      | 'missing_uncertainty'
-      | 'unsafe_instruction'
-      | 'clarity_or_format'
-    >;
-  };
+  verification?: GoldenVerification;
   /** Tool implementations available to the scripted model. */
   tools: Record<string, { schema: ZodType; execute: (args: unknown) => Promise<unknown> }>;
 }
+
+type GoldenVerification =
+  | {
+      decision: 'publish' | 'revise';
+      revisedText?: string;
+      reasons?: Array<
+        | 'does_not_answer_request'
+        | 'unsupported_claim'
+        | 'ungrounded_fact'
+        | 'missing_uncertainty'
+        | 'unsafe_instruction'
+        | 'clarity_or_format'
+      >;
+    }
+  /** Simulate an unavailable verifier without making the primary response fail. */
+  | { unavailable: true };
 
 export interface GoldenResult {
   /** Canonical tool names in dispatch order, from the durable ledger. */
   toolNames: string[];
   /** The delivered final text (post response-contract). */
   finalText: string;
+  /** The durable terminal task status. */
+  status: string;
   taskId: string;
 }
 
@@ -60,7 +69,7 @@ class ScriptedRouter {
   private index = 0;
   constructor(
     private script: GoldenFixture['script'],
-    private verification: GoldenFixture['verification'] = { decision: 'publish' },
+    private verification: GoldenVerification = { decision: 'publish' },
   ) {}
 
   async step(): Promise<StepCallOutcome> {
@@ -82,6 +91,12 @@ class ScriptedRouter {
 
   async object<T>(role: string): Promise<unknown> {
     if (role === 'rewrite') {
+      if ('unavailable' in this.verification) {
+        return {
+          ok: false,
+          decision: { mode: 'park', reason: 'golden verifier unavailable' },
+        };
+      }
       return {
         ok: true,
         modelId: 'golden/rewrite',
@@ -110,7 +125,27 @@ function fixtureDispatcher(db: Db, fixture: GoldenFixture): DispatcherPort {
     dispatch: async (input) => {
       const tool = fixture.tools[input.toolName];
       if (!tool) throw new Error(`golden fixture has no tool named ${input.toolName}`);
-      const result = await tool.execute(input.args);
+      let result: unknown;
+      try {
+        result = await tool.execute(input.args);
+      } catch (error) {
+        // Match ToolDispatcher's definitive execution-failure contract: record
+        // the failed call, return its error to the model, and let the executor
+        // make its bounded retry / ledger-grounded coverage-gap decision.
+        const message = String(error).slice(0, 2_000);
+        await db.insert(toolCalls).values({
+          taskId: input.task.id,
+          toolName: input.toolName,
+          args: input.args,
+          risk: 'autonomous',
+          status: 'failed',
+          error: message,
+          step: input.step,
+          decision: input.provenance,
+          finishedAt: new Date(),
+        });
+        return { kind: 'rejected' as const, reason: `execution failed: ${message.slice(0, 500)}` };
+      }
       const [row] = await db
         .insert(toolCalls)
         .values({
@@ -145,6 +180,7 @@ export async function runGoldenTask(
     event: { ...fixture.event, agentId } as InboundEvent,
     type: fixture.taskType,
     ...(fixture.plan ? { plan: fixture.plan } : {}),
+    ...(fixture.maxSteps ? { maxSteps: fixture.maxSteps } : {}),
   });
 
   const deps: ExecutorDeps = {
@@ -165,6 +201,7 @@ export async function runGoldenTask(
   return {
     toolNames: rows.map((row) => row.toolName),
     finalText: pendingFinal?.text ?? finished?.progress ?? '',
+    status: finished?.status ?? 'missing',
     taskId: task.id,
   };
 }

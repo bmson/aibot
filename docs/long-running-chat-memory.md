@@ -23,6 +23,13 @@ receives.
   re-extracted and forgotten/deleted memories cascade away.
 - The offline `memory.graph_sync` job backfills and reconciles graph sources in small batches. It is
   never on the response hot path.
+- A transient extraction failure retries after 15 minutes, 1 hour, then 6 hours. A fourth failure
+  quarantines that unchanged source instead of spending every scheduler run on it; a source edit or
+  extraction-version change starts a fresh attempt. The daily deterministic health check tells the
+  owner about quarantined/stale graph work and recurring final-response quality failures.
+- Every recalled direct edge carries a contiguous quote from its source fact proving its endpoints
+  and predicate. When this extraction contract changes, sources are versioned and rebuilt offline;
+  legacy edges stay out of graph traversal until they have the new evidence.
 - A recall query first has to clear the existing semantic-similarity threshold against a source memory.
   Only then can it follow incoming/outgoing relationships up to two hops. The injected block contains
   the original evidence facts and labels every two-hop connection as context, not a conclusion.

@@ -13,6 +13,7 @@ import { recallKnowledgeGraph } from './graph-recall.js';
 import {
   createOwnerKnowledgeGraphFact,
   graphRelationshipIsGrounded,
+  retryQuarantinedKnowledgeGraphSources,
   syncKnowledgeGraph,
 } from './knowledge-graph.js';
 
@@ -41,6 +42,7 @@ const router = {
               subject: { label: `${MARKER} Acme`, kind: 'organization' },
               predicate: 'operates',
               object: { label: `${MARKER} Project Fox`, kind: 'project' },
+              evidenceQuote: `${MARKER} Acme operates ${MARKER} Project Fox.`,
               confidence: 0.9,
             },
           ],
@@ -49,7 +51,9 @@ const router = {
     }
     const employer = input.prompt?.includes('Replacement')
       ? `${MARKER} Replacement`
-      : `${MARKER} Acme`;
+      : input.prompt?.includes('Versioned Employer')
+        ? `${MARKER} Versioned Employer`
+        : `${MARKER} Acme`;
     return {
       ok: true,
       object: {
@@ -58,6 +62,7 @@ const router = {
             subject: { label: `${MARKER} Owner`, kind: 'person' },
             predicate: 'works_at',
             object: { label: employer, kind: 'organization' },
+            evidenceQuote: `${MARKER} Owner works at ${employer}.`,
             confidence: 0.9,
           },
         ],
@@ -98,15 +103,27 @@ describe('knowledge graph sync and recall', () => {
     expect(
       graphRelationshipIsGrounded('Anna works at Acme.', {
         subject: { label: 'Anna' },
+        predicate: 'works_at',
         object: { label: 'Project Fox' },
+        evidenceQuote: 'Anna works at Project Fox.',
       }),
     ).toBe(false);
     expect(
       graphRelationshipIsGrounded('Anna works at Acme.', {
         subject: { label: 'Anna' },
+        predicate: 'works_at',
         object: { label: 'Acme' },
+        evidenceQuote: 'Anna works at Acme.',
       }),
     ).toBe(true);
+    expect(
+      graphRelationshipIsGrounded('Anna visited Acme after working at Orbit.', {
+        subject: { label: 'Anna' },
+        predicate: 'works_at',
+        object: { label: 'Acme' },
+        evidenceQuote: 'Anna visited Acme',
+      }),
+    ).toBe(false);
   });
 
   it('backs facts into direct relations and expands a qualified seed by two hops', async (ctx) => {
@@ -189,6 +206,272 @@ describe('knowledge graph sync and recall', () => {
       .where(eq(knowledgeGraphSources.memoryId, memory.id));
     expect(relations).toHaveLength(1);
     expect(source).toEqual({ contentHash: `${MARKER}-edited-replacement`, status: 'ready' });
+  });
+
+  it('rebuilds legacy edges with quoted predicate evidence before recall uses them', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [memory] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} Owner works at ${MARKER} Versioned Employer.`,
+        contentHash: `${MARKER}-legacy-evidence`,
+        embedding: unit(50),
+        originTrust: 'owner',
+      })
+      .returning({ id: memories.id });
+    if (!memory) throw new Error('test memory was not created');
+    await syncKnowledgeGraph({ db, router }, { agentId });
+    await db
+      .update(knowledgeGraphSources)
+      .set({ extractionVersion: 1 })
+      .where(eq(knowledgeGraphSources.memoryId, memory.id));
+    await db
+      .update(knowledgeGraphRelations)
+      .set({ evidenceQuote: null })
+      .where(eq(knowledgeGraphRelations.sourceMemoryId, memory.id));
+
+    const legacyRecall = await recallKnowledgeGraph(db, {
+      agentId,
+      queryText: `${MARKER} versioned employer`,
+      queryEmbedding: unit(50),
+    });
+    expect(legacyRecall.block).toBe('');
+
+    const synced = await syncKnowledgeGraph({ db, router }, { agentId });
+    expect(synced.processed).toBeGreaterThanOrEqual(1);
+    const [source, relation] = await Promise.all([
+      db
+        .select({ extractionVersion: knowledgeGraphSources.extractionVersion })
+        .from(knowledgeGraphSources)
+        .where(eq(knowledgeGraphSources.memoryId, memory.id)),
+      db
+        .select({ evidenceQuote: knowledgeGraphRelations.evidenceQuote })
+        .from(knowledgeGraphRelations)
+        .where(eq(knowledgeGraphRelations.sourceMemoryId, memory.id)),
+    ]);
+    expect(source[0]?.extractionVersion).toBe(2);
+    expect(relation[0]?.evidenceQuote).toContain(`${MARKER} Owner works at`);
+
+    const recalled = await recallKnowledgeGraph(db, {
+      agentId,
+      queryText: `${MARKER} versioned employer`,
+      queryEmbedding: unit(50),
+    });
+    expect(recalled.block).toContain(`${MARKER} Versioned Employer`);
+  });
+
+  it('recovers a source left pending by an interrupted graph sync', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [memory] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} Owner works at ${MARKER} Recovered Employer.`,
+        contentHash: `${MARKER}-recovered-pending`,
+        embedding: unit(48),
+        originTrust: 'owner',
+      })
+      .returning({ id: memories.id });
+    if (!memory) throw new Error('test memory was not created');
+    await db.insert(knowledgeGraphSources).values({
+      memoryId: memory.id,
+      contentHash: `${MARKER}-recovered-pending`,
+      status: 'pending',
+      extractionVersion: 2,
+      attempts: 1,
+      updatedAt: new Date(Date.now() - 10 * 60 * 1000),
+    });
+
+    const synced = await syncKnowledgeGraph({ db, router }, { agentId });
+    const [source] = await db
+      .select({ status: knowledgeGraphSources.status, attempts: knowledgeGraphSources.attempts })
+      .from(knowledgeGraphSources)
+      .where(eq(knowledgeGraphSources.memoryId, memory.id));
+    expect(synced.processed).toBeGreaterThanOrEqual(1);
+    expect(source).toEqual({ status: 'ready', attempts: 2 });
+  });
+
+  it('backs off transient extraction failures, quarantines a persistent one, and retries after an edit', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [memory] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} Owner works at ${MARKER} Retry Employer.`,
+        contentHash: `${MARKER}-retry-backoff-v1`,
+        embedding: unit(52),
+        originTrust: 'owner',
+      })
+      .returning({ id: memories.id });
+    if (!memory) throw new Error('test memory was not created');
+
+    let calls = 0;
+    const failingRouter = {
+      async object() {
+        calls += 1;
+        throw new Error('temporary extraction provider outage');
+      },
+    } as unknown as ModelRouter;
+
+    const first = await syncKnowledgeGraph({ db, router: failingRouter }, { agentId });
+    expect(first.failed).toBe(1);
+    let [source] = await db
+      .select({
+        status: knowledgeGraphSources.status,
+        attempts: knowledgeGraphSources.attempts,
+        nextRetryAt: knowledgeGraphSources.nextRetryAt,
+      })
+      .from(knowledgeGraphSources)
+      .where(eq(knowledgeGraphSources.memoryId, memory.id));
+    expect(source).toMatchObject({ status: 'failed', attempts: 1 });
+    expect(source?.nextRetryAt?.getTime()).toBeGreaterThan(Date.now());
+
+    // The scheduler runs frequently, but the provider is not retried until the
+    // saved deadline. Force each deadline into the past to test the bounded
+    // retry ladder without waiting for real time.
+    for (let attempt = 2; attempt <= 4; attempt += 1) {
+      await db
+        .update(knowledgeGraphSources)
+        .set({ nextRetryAt: new Date(Date.now() - 1) })
+        .where(eq(knowledgeGraphSources.memoryId, memory.id));
+      const result = await syncKnowledgeGraph({ db, router: failingRouter }, { agentId });
+      [source] = await db
+        .select({
+          status: knowledgeGraphSources.status,
+          attempts: knowledgeGraphSources.attempts,
+          nextRetryAt: knowledgeGraphSources.nextRetryAt,
+        })
+        .from(knowledgeGraphSources)
+        .where(eq(knowledgeGraphSources.memoryId, memory.id));
+      expect(source?.attempts).toBe(attempt);
+      if (attempt < 4) {
+        expect(result.failed).toBe(1);
+        expect(source?.status).toBe('failed');
+        expect(source?.nextRetryAt?.getTime()).toBeGreaterThan(Date.now());
+      } else {
+        expect(result.quarantined).toBe(1);
+        expect(source).toMatchObject({ status: 'quarantined', nextRetryAt: null });
+      }
+    }
+    expect(calls).toBe(4);
+    const paused = await syncKnowledgeGraph({ db, router: failingRouter }, { agentId });
+    expect(paused.candidates).toBe(0);
+    expect(calls).toBe(4);
+
+    // A source edit is a new fact. It clears the terminal checkpoint and gets
+    // one fresh extraction attempt instead of requiring an operator to touch DB.
+    await db
+      .update(memories)
+      .set({
+        content: `${MARKER} Owner works at ${MARKER} Retry Employer Updated.`,
+        contentHash: `${MARKER}-retry-backoff-v2`,
+      })
+      .where(eq(memories.id, memory.id));
+    const recovered = await syncKnowledgeGraph({ db, router }, { agentId });
+    const [recoveredSource] = await db
+      .select({ status: knowledgeGraphSources.status, attempts: knowledgeGraphSources.attempts })
+      .from(knowledgeGraphSources)
+      .where(eq(knowledgeGraphSources.memoryId, memory.id));
+    expect(recovered.processed).toBe(1);
+    expect(recoveredSource).toEqual({ status: 'ready', attempts: 1 });
+  });
+
+  it('lets the owner resume quarantined sources without rewriting the source fact', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [memory] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} Owner works at ${MARKER} Manually Retried Employer.`,
+        contentHash: `${MARKER}-manual-retry`,
+        embedding: unit(53),
+        originTrust: 'owner',
+      })
+      .returning({ id: memories.id });
+    if (!memory) throw new Error('test memory was not created');
+    await db.insert(knowledgeGraphSources).values({
+      memoryId: memory.id,
+      contentHash: `${MARKER}-manual-retry`,
+      extractionVersion: 2,
+      status: 'quarantined',
+      attempts: 4,
+      lastError: 'previous provider outage',
+    });
+
+    expect(await retryQuarantinedKnowledgeGraphSources(db, agentId)).toBe(1);
+    const [requested] = await db
+      .select({
+        status: knowledgeGraphSources.status,
+        attempts: knowledgeGraphSources.attempts,
+        nextRetryAt: knowledgeGraphSources.nextRetryAt,
+      })
+      .from(knowledgeGraphSources)
+      .where(eq(knowledgeGraphSources.memoryId, memory.id));
+    expect(requested).toMatchObject({ status: 'failed', attempts: 0 });
+    expect(requested?.nextRetryAt?.getTime()).toBeLessThanOrEqual(Date.now());
+
+    const synced = await syncKnowledgeGraph({ db, router }, { agentId });
+    const [recovered] = await db
+      .select({ status: knowledgeGraphSources.status, attempts: knowledgeGraphSources.attempts })
+      .from(knowledgeGraphSources)
+      .where(eq(knowledgeGraphSources.memoryId, memory.id));
+    expect(synced.processed).toBe(1);
+    expect(recovered).toEqual({ status: 'ready', attempts: 1 });
+  });
+
+  it('lets one overlapping sync claim a source', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [memory] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} Owner works at ${MARKER} Concurrent Employer.`,
+        contentHash: `${MARKER}-concurrent-claim`,
+        embedding: unit(49),
+        originTrust: 'owner',
+      })
+      .returning({ id: memories.id });
+    if (!memory) throw new Error('test memory was not created');
+
+    let calls = 0;
+    const slowRouter = {
+      async object() {
+        calls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return {
+          ok: true,
+          object: {
+            relationships: [
+              {
+                subject: { label: `${MARKER} Owner`, kind: 'person' },
+                predicate: 'works_at',
+                object: { label: `${MARKER} Concurrent Employer`, kind: 'organization' },
+                evidenceQuote: `${MARKER} Owner works at ${MARKER} Concurrent Employer.`,
+                confidence: 0.9,
+              },
+            ],
+          },
+        };
+      },
+    } as unknown as ModelRouter;
+    const [first, second] = await Promise.all([
+      syncKnowledgeGraph({ db, router: slowRouter }, { agentId }),
+      syncKnowledgeGraph({ db, router: slowRouter }, { agentId }),
+    ]);
+
+    expect(calls).toBe(1);
+    expect(first.processed + second.processed).toBe(1);
   });
 
   it('keeps an owner-rejected edge out of recall and writes owner facts with evidence', async (ctx) => {

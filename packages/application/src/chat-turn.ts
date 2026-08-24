@@ -13,7 +13,7 @@ import {
 import { createCueScanner, stripCueTags } from '@assistant/core/chat-cues';
 import { getAmbientBlock } from '@assistant/core/memory/ambient';
 import { getOwnerCard } from '@assistant/core/memory/consolidation';
-import { combineRecallBlocks, recallKnowledgeGraph } from '@assistant/core/memory/graph-recall';
+import { recallKnowledgeGraph, recallWithGraphFallback } from '@assistant/core/memory/graph-recall';
 import { type RecallSource, recallRelevantContext } from '@assistant/core/memory/recall';
 import type { ModelRouter, StreamOutcome } from '@assistant/core/model-router';
 import { buildAutonomyGrant } from '@assistant/core/workflow/autonomy';
@@ -356,42 +356,46 @@ export async function handleChatTurn(
   let recallBlock: string | undefined;
   let recallSources: RecallSource[] = [];
   if (config.CHAT_RECALL_ENABLED) {
-    let queryEmbedding: number[] | undefined;
-    let graph = { block: '', used: 0, candidates: 0, sources: [] as RecallSource[] };
-    if (config.GRAPH_RAG_ENABLED) {
-      try {
-        [queryEmbedding] = await router.embed([userText]);
-        graph = await recallKnowledgeGraph(db, {
-          agentId: agent.id,
-          queryText: userText,
-          queryEmbedding,
-        });
-      } catch (err) {
-        // GraphRAG is additive. Existing vector recall must still answer when
-        // graph storage, extraction, or its query embedding is unavailable.
-        console.error('knowledge graph recall failed — falling back to chat recall', err);
-      }
-    }
     try {
-      const recall = await recallRelevantContext(
-        db,
-        {
-          agentId: agent.id,
-          queryText: userText,
-          embed: (values, embedOpts) => router.embed(values, embedOpts ?? {}),
-          exclude: {
-            conversationId: conversation.id,
-            sinceCreatedAt: historyRows[0]?.createdAt ?? persistedUser.createdAt,
-          },
+      const layered = await recallWithGraphFallback({
+        graph: config.GRAPH_RAG_ENABLED
+          ? async () => {
+              const [queryEmbedding] = await router.embed([userText]);
+              return {
+                graph: await recallKnowledgeGraph(db, {
+                  agentId: agent.id,
+                  queryText: userText,
+                  queryEmbedding,
+                }),
+                queryEmbedding,
+              };
+            }
+          : undefined,
+        history: (queryEmbedding, graph) =>
+          recallRelevantContext(
+            db,
+            {
+              agentId: agent.id,
+              queryText: userText,
+              embed: (values, embedOpts) => router.embed(values, embedOpts ?? {}),
+              exclude: {
+                conversationId: conversation.id,
+                sinceCreatedAt: historyRows[0]?.createdAt ?? persistedUser.createdAt,
+              },
+            },
+            {
+              ...(graph.used > 0 ? { maxChars: 1200 } : {}),
+              queryEmbedding,
+            },
+          ),
+        onGraphError: (err) => {
+          // GraphRAG is additive. Existing vector recall must still answer when
+          // graph storage, extraction, or its query embedding is unavailable.
+          console.error('knowledge graph recall failed — falling back to chat recall', err);
         },
-        {
-          ...(graph.used > 0 ? { maxChars: 1200 } : {}),
-          queryEmbedding,
-        },
-      );
-      const combined = combineRecallBlocks(graph, recall);
-      recallBlock = combined.block || undefined;
-      recallSources = combined.sources;
+      });
+      recallBlock = layered.block || undefined;
+      recallSources = layered.sources;
     } catch (err) {
       console.error('chat recall failed — continuing without it', err);
     }

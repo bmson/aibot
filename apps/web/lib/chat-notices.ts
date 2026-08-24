@@ -30,6 +30,10 @@ export function isContractNotice(text: string): boolean {
   if (trimmed.startsWith("I couldn't verify this completed, so I'm not claiming it did.")) {
     return true;
   }
+  if (trimmed.startsWith("I couldn't complete this because ") && trimmed.endsWith('No external change was made.')) {
+    return true;
+  }
+  if (trimmed.startsWith('Completed: ') && trimmed.includes('. Still needed: ')) return true;
   if (
     trimmed.startsWith("Here's what I can confirm: ") &&
     trimmed.includes("so I'm not claiming that part")

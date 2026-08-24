@@ -3,6 +3,7 @@ import type { ModelRouter } from '../model-router/router.js';
 import { runAnomalyScan } from '../workflow/anomaly.js';
 import { briefingSummary, runBriefing } from '../workflow/briefing.js';
 import { runDream } from '../workflow/dream.js';
+import { runAssistantHealthMonitor } from '../workflow/health-monitor.js';
 import { runSelfImprove } from '../workflow/improve.js';
 import { runSelfMaintenance } from '../workflow/self-maintenance.js';
 import { refreshAmbientSnapshot } from './ambient.js';
@@ -40,7 +41,8 @@ export type CodeJobName =
   | 'documents.process'
   | 'ambient.refresh'
   | 'dream.run'
-  | 'self.maintain';
+  | 'self.maintain'
+  | 'health.monitor';
 
 const CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.extract',
@@ -59,6 +61,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'ambient.refresh',
   'dream.run',
   'self.maintain',
+  'health.monitor',
 ]);
 
 export interface CodeJobOutcome {
@@ -140,7 +143,7 @@ export async function runCodeJob(
         done: true,
         summary:
           `knowledge graph: ${r.relationships} relation(s) from ${r.processed}/${r.candidates} source(s), ` +
-          `${r.failed} failed, ${pending} pending`,
+          `${r.failed} retrying, ${r.quarantined} quarantined, ${pending} pending`,
       };
     }
     case 'chat.segment': {
@@ -157,7 +160,7 @@ export async function runCodeJob(
       return runVoiceIngest(deps, task);
     case 'anomaly.scan': {
       await deps.heartbeat?.();
-      const r = await runAnomalyScan(deps, { taskId: task.id });
+      const r = await runAnomalyScan(deps, { agentId: task.agentId, taskId: task.id });
       const kinds = Object.entries(r.byKind)
         .map(([k, n]) => `${n} ${k}`)
         .join(', ');
@@ -176,7 +179,7 @@ export async function runCodeJob(
     }
     case 'self.improve': {
       await deps.heartbeat?.();
-      const r = await runSelfImprove(deps, { taskId: task.id });
+      const r = await runSelfImprove(deps, { agentId: task.agentId, taskId: task.id });
       return {
         done: true,
         summary: `self-improve: ${r.proposalsDrafted} proposal(s) from ${r.patterns} failure pattern(s)${r.experienceSaved ? ', experience saved' : ''}`,
@@ -208,7 +211,7 @@ export async function runCodeJob(
     }
     case 'dream.run': {
       await deps.heartbeat?.();
-      const r = await runDream(deps, { taskId: task.id });
+      const r = await runDream(deps, { agentId: task.agentId, taskId: task.id });
       return {
         done: true,
         summary: `dream: ${r.footnotes} footnote(s), ${r.hypotheses} hypothesis(es), ${r.anticipations} anticipation(s)`,
@@ -216,10 +219,23 @@ export async function runCodeJob(
     }
     case 'self.maintain': {
       await deps.heartbeat?.();
-      const r = await runSelfMaintenance(deps, { taskId: task.id });
+      const r = await runSelfMaintenance(deps, { agentId: task.agentId, taskId: task.id });
       return {
         done: true,
         summary: `self-maintain: ${r.backlog} backlog item(s), ${r.blocked} blocked by the fence`,
+      };
+    }
+    case 'health.monitor': {
+      await deps.heartbeat?.();
+      const r = await runAssistantHealthMonitor(
+        { db: deps.db, heartbeat: deps.heartbeat },
+        { agentId: task.agentId, taskId: task.id },
+      );
+      return {
+        done: true,
+        summary: r.notified
+          ? `health monitor: notified owner about ${r.signals.length} signal(s)`
+          : 'health monitor: no active signals',
       };
     }
   }

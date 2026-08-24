@@ -111,6 +111,8 @@ export const PendingFinalSchema = z.object({
    * Additive and optional: old checkpoints parse unchanged.
    */
   cues: z.array(CueSchema).optional(),
+  /** Evidence-derived response surfaces, persisted so retries render identically. */
+  responseCards: z.array(z.record(z.string(), z.unknown())).optional(),
 });
 export type PendingFinal = z.infer<typeof PendingFinalSchema>;
 

@@ -79,10 +79,10 @@ export interface DreamResult {
   anticipations: number;
 }
 
-/** Nightly dream session for the (single) agent. */
+/** Nightly dream session for one selected agent. */
 export async function runDream(
   deps: { db: Db; router: ModelRouter; heartbeat?: () => Promise<void> },
-  opts: { taskId?: string; now?: Date } = {},
+  opts: { agentId?: string; taskId?: string; now?: Date } = {},
 ): Promise<DreamResult> {
   const { db, router } = deps;
   const now = opts.now ?? new Date();
@@ -91,27 +91,44 @@ export async function runDream(
 
   return withSpan('dream.run', {}, async () => {
     await deps.heartbeat?.();
-    const [agent] = await db.select({ id: agents.id }).from(agents).limit(1);
-    if (!agent) return { footnotes: 0, hypotheses: 0, anticipations: 0 };
-    const agentId = agent.id;
+    const [fallbackAgent] = opts.agentId
+      ? []
+      : await db.select({ id: agents.id }).from(agents).limit(1);
+    const agentId = opts.agentId ?? fallbackAgent?.id;
+    if (!agentId) return { footnotes: 0, hypotheses: 0, anticipations: 0 };
 
     // The day's failures (counterfactual fuel).
     const failedTasks = await db
       .select({ id: tasks.id, type: tasks.type, progress: tasks.progress, status: tasks.status })
       .from(tasks)
-      .where(and(inArray(tasks.status, ['needs_attention', 'failed']), gte(tasks.updatedAt, since)))
+      .where(
+        and(
+          eq(tasks.agentId, agentId),
+          inArray(tasks.status, ['needs_attention', 'failed']),
+          gte(tasks.updatedAt, since),
+        ),
+      )
       .limit(20);
     const failedCalls = await db
       .select({ toolName: toolCalls.toolName, error: toolCalls.error })
       .from(toolCalls)
-      .where(and(eq(toolCalls.status, 'failed'), gte(toolCalls.createdAt, since)))
+      .innerJoin(tasks, eq(tasks.id, toolCalls.taskId))
+      .where(
+        and(
+          eq(tasks.agentId, agentId),
+          eq(toolCalls.status, 'failed'),
+          gte(toolCalls.createdAt, since),
+        ),
+      )
       .limit(40);
     // Recent approval decisions (behavioral patterns — repeated approve/deny).
     const decisions = await db
       .select({ summary: approvals.summary, status: approvals.status })
       .from(approvals)
+      .innerJoin(tasks, eq(tasks.id, approvals.taskId))
       .where(
         and(
+          eq(tasks.agentId, agentId),
           gte(approvals.requestedAt, approvalSince),
           inArray(approvals.status, ['approved', 'denied']),
         ),

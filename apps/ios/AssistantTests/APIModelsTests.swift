@@ -85,6 +85,27 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(items.first?.title, "Design review")
     }
 
+    func testCalendarEventCardCarriesOnlyStructuredDetails() {
+        let card = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("calendar-event"), "id": .string("event-1"),
+                "time": .string("2:00 PM–3:00 PM"), "title": .string("Design review"),
+                "location": .string("Studio"), "attendees": .array([.string("Ana")]),
+                "calendars": .array([.string("Work")]),
+            ])
+        )
+        guard case let .event(id, time, title, location, attendees, calendars, _, _)? = MessageResponseCard(part: card) else {
+            return XCTFail("Expected a structured event card")
+        }
+        XCTAssertEqual(id, "event-1")
+        XCTAssertEqual(time, "2:00 PM–3:00 PM")
+        XCTAssertEqual(title, "Design review")
+        XCTAssertEqual(location, "Studio")
+        XCTAssertEqual(attendees, ["Ana"])
+        XCTAssertEqual(calendars, ["Work"])
+    }
+
     func testResponseCardsInferWeatherAndDurationOnlyFromStrongSignals() {
         let weather = MessageResponseCard.inferred(
             from: "The weather is sunny and 18°C now. Wind stays light this afternoon."
@@ -178,7 +199,7 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(task.budgetSummary, "$0.00008 of $0.10")
     }
 
-    func testLiveActivityContentKeepsPromptPrivateAndBecomesStale() {
+    func testLiveActivityContentKeepsPromptPrivateAndExpiresQuickly() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let content = LiveActivityManager.content(
             thought: .thinking,
@@ -188,8 +209,15 @@ final class APIModelsTests: XCTestCase {
         )
 
         XCTAssertEqual(content.state.detail, "Preparing a response")
-        XCTAssertEqual(content.staleDate, now.addingTimeInterval(15 * 60))
+        XCTAssertEqual(content.staleDate, now.addingTimeInterval(60))
         XCTAssertEqual(content.relevanceScore, 0.65)
+    }
+
+    func testOnlyOwnerDecisionsAreEligibleForTheSystemIsland() {
+        XCTAssertFalse(LiveActivityManager.shouldPresentSystemActivity(for: .thinking))
+        XCTAssertFalse(LiveActivityManager.shouldPresentSystemActivity(for: .backgroundWork))
+        XCTAssertFalse(LiveActivityManager.shouldPresentSystemActivity(for: .finished))
+        XCTAssertTrue(LiveActivityManager.shouldPresentSystemActivity(for: .needsYou))
     }
 
     func testAttentionActivityIsGlanceableAndPrioritized() {

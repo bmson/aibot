@@ -1,4 +1,4 @@
-import { createDb, type Db, responseChecks, tasks, toolCalls } from '@assistant/db';
+import { createDb, type Db, messages, responseChecks, tasks, toolCalls } from '@assistant/db';
 import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -32,6 +32,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (dbUp && createdTaskIds.length) {
+    await db.delete(messages).where(inArray(messages.taskId, createdTaskIds));
     await db.delete(toolCalls).where(inArray(toolCalls.taskId, createdTaskIds));
     await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
   }
@@ -201,6 +202,53 @@ describe('golden tasks', () => {
     expect(check?.blocked).toBe(false);
   });
 
+  it('retries a failed private read once, then delivers an explicit coverage gap', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const fixture: GoldenFixture = {
+      name: 'calendar-read-outage-is-honest',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: { text: 'what is happening today?' },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [],
+      tools: {
+        'calendar.list_events': {
+          schema: z.object({}).passthrough(),
+          execute: async () => {
+            throw new Error('calendar provider is temporarily unavailable');
+          },
+        },
+      },
+    };
+    const result = await runGoldenTask(db, agentId, fixture);
+    createdTaskIds.push(result.taskId);
+
+    // The runtime owns private reads, so it retries exactly once without ever
+    // letting the scripted model fill the gap with remembered or guessed events.
+    expect(result.toolNames).toEqual(['calendar.list_events', 'calendar.list_events']);
+    expect(result.finalText).toContain("That's everything I could actually see.");
+    expect(result.finalText).toContain('calendar provider is temporarily unavailable');
+    expect(result.finalText).not.toContain('Done.');
+
+    const [check] = await db
+      .select()
+      .from(responseChecks)
+      .where(eq(responseChecks.taskId, result.taskId));
+    expect(check).toMatchObject({ blocked: true, unsupportedCount: 1 });
+
+    const calls = await db
+      .select({ status: toolCalls.status, error: toolCalls.error })
+      .from(toolCalls)
+      .where(eq(toolCalls.taskId, result.taskId));
+    expect(calls).toEqual([
+      { status: 'failed', error: 'Error: calendar provider is temporarily unavailable' },
+      { status: 'failed', error: 'Error: calendar provider is temporarily unavailable' },
+    ]);
+  });
+
   it('lets the response contract block an action claim with no tool evidence', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const fixture: GoldenFixture = {
@@ -227,6 +275,41 @@ describe('golden tasks', () => {
       .from(responseChecks)
       .where(eq(responseChecks.taskId, result.taskId));
     expect(check?.blocked).toBe(true);
+  });
+
+  it('replaces a completion claim when a proactive action definitively failed', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const fixture: GoldenFixture = {
+      name: 'failed-send-cannot-look-complete',
+      event: { source: 'chat', trust: 'owner', payload: { text: 'Text me the door code.' } },
+      taskType: 'adhoc',
+      plan: workflowPlan,
+      script: [
+        { toolCalls: [{ toolName: 'sms.send', input: { to: 'owner', body: 'Door code: 4821' } }] },
+        { text: "Done — I've sent the text with the door code." },
+      ],
+      tools: {
+        'sms.send': {
+          schema: z.object({ to: z.string(), body: z.string() }),
+          execute: async () => {
+            throw new Error('SMS provider rejected the request');
+          },
+        },
+      },
+    };
+    const result = await runGoldenTask(db, agentId, fixture);
+    createdTaskIds.push(result.taskId);
+
+    expect(result.toolNames).toEqual(['sms.send']);
+    expect(result.finalText).not.toContain("I've sent the text");
+    expect(result.finalText).toContain("I couldn't complete this because");
+    expect(result.finalText).toContain('SMS provider rejected the request');
+
+    const [check] = await db
+      .select()
+      .from(responseChecks)
+      .where(eq(responseChecks.taskId, result.taskId));
+    expect(check).toMatchObject({ blocked: true, unsupportedCount: 1 });
   });
 
   it('records a clean response check for an honest answer', async (ctx) => {
@@ -279,6 +362,34 @@ describe('golden tasks', () => {
       outputVerificationAttempted: true,
       outputVerificationRevised: true,
       outputVerificationUnavailable: false,
+    });
+  });
+
+  it('delivers the checked draft and records a verifier outage without failing the owner response', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const fixture: GoldenFixture = {
+      name: 'self-reflective-verifier-unavailable',
+      event: { source: 'chat', trust: 'owner', payload: { text: 'Say hi.' } },
+      taskType: 'adhoc',
+      plan: { ...workflowPlan, action: 'reply' as const },
+      script: [{ text: 'Hi! What can I do for you?' }],
+      verification: { unavailable: true },
+      tools: {},
+    };
+    const result = await runGoldenTask(db, agentId, fixture);
+    createdTaskIds.push(result.taskId);
+
+    expect(result.finalText).toBe('Hi! What can I do for you?');
+    expect(result.status).toBe('done');
+    const [check] = await db
+      .select()
+      .from(responseChecks)
+      .where(eq(responseChecks.taskId, result.taskId));
+    expect(check).toMatchObject({
+      blocked: false,
+      outputVerificationAttempted: false,
+      outputVerificationRevised: false,
+      outputVerificationUnavailable: true,
     });
   });
 
@@ -410,5 +521,40 @@ describe('golden tasks', () => {
       .where(eq(responseChecks.taskId, result.taskId));
     expect(check?.mustActRetries).toBe(1);
     expect(check?.blocked).toBe(false);
+  });
+
+  it('reports verified progress instead of an opaque failure when proactive work reaches its step cap', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const fixture: GoldenFixture = {
+      name: 'step-cap-progress-summary',
+      event: {
+        source: 'internal',
+        trust: 'assistant',
+        payload: { instruction: 'Find the wifi password and then send it to me.' },
+      },
+      taskType: 'adhoc',
+      plan: workflowPlan,
+      maxSteps: 1,
+      script: [
+        {
+          text: 'I found the wifi password in the workspace notes, but have not sent it yet.',
+          toolCalls: [{ toolName: 'facts.lookup', input: { key: 'wifi' } }],
+        },
+      ],
+      tools: {
+        'facts.lookup': {
+          schema: z.object({ key: z.string() }),
+          execute: async () => ({ value: 'hunter2' }),
+        },
+      },
+    };
+    const result = await runGoldenTask(db, agentId, fixture);
+    createdTaskIds.push(result.taskId);
+
+    expect(result.toolNames).toEqual(['facts.lookup']);
+    expect(result.status).toBe('failed');
+    expect(result.finalText).toContain('stopped after 1 steps without finishing');
+    expect(result.finalText).toContain('found the wifi password');
+    expect(result.finalText).not.toContain('See task log');
   });
 });

@@ -157,14 +157,16 @@ export interface SelfMaintenanceResult {
  */
 export async function runSelfMaintenance(
   deps: { db: Db; router: ModelRouter; heartbeat?: () => Promise<void> },
-  opts: { taskId?: string } = {},
+  opts: { agentId?: string; taskId?: string } = {},
 ): Promise<SelfMaintenanceResult> {
   const { db, router } = deps;
   return withSpan('self.maintain', {}, async () => {
     await deps.heartbeat?.();
-    const [agent] = await db.select({ id: agents.id }).from(agents).limit(1);
-    if (!agent) return { backlog: 0, blocked: 0 };
-    const agentId = agent.id;
+    const [fallbackAgent] = opts.agentId
+      ? []
+      : await db.select({ id: agents.id }).from(agents).limit(1);
+    const agentId = opts.agentId ?? fallbackAgent?.id;
+    if (!agentId) return { backlog: 0, blocked: 0 };
 
     const open = await db
       .select({

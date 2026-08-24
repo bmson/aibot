@@ -29,12 +29,7 @@ struct AssistantActivityWidget: Widget {
                         .contentTransition(.opacity)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    if context.state.thought.tone == .working || context.state.thought.tone == .thinking {
-                        Text(context.attributes.startedAt, style: .timer)
-                            .font(.caption.monospacedDigit())
-                    } else {
-                        phaseSymbol(context.state.thought.tone)
-                    }
+                    phaseSymbol(.waiting)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 7) {
@@ -60,7 +55,9 @@ struct AssistantActivityWidget: Widget {
             } compactLeading: {
                 compactPhaseSymbol(context.state.thought.tone)
             } compactTrailing: {
-                compactTrailing(context.state, startedAt: context.attributes.startedAt)
+                // No timer or trailing label: preserving room around the
+                // system clock matters more than a redundant decision count.
+                EmptyView()
             } minimal: {
                 compactPhaseSymbol(context.state.thought.tone)
             }
@@ -107,29 +104,6 @@ struct AssistantActivityWidget: Widget {
         }
         .padding(16)
         .animation(.smooth(duration: 0.38), value: context.state)
-    }
-
-    @ViewBuilder
-    private func compactTrailing(
-        _ state: AssistantActivityAttributes.ContentState,
-        startedAt: Date
-    ) -> some View {
-        switch state.thought.tone {
-        case .thinking, .working:
-            // Live elapsed time is glanceable information. A second spinner
-            // here next to the leading one read as two meaningless circles.
-            Text(startedAt, style: .timer)
-                .font(.caption2.monospacedDigit().weight(.semibold))
-                .foregroundStyle(tint(for: state.thought.tone))
-                .multilineTextAlignment(.trailing)
-        case .waiting:
-            Text(state.pendingCount > 0 ? "\(state.pendingCount)" : "!")
-                .font(.caption2.monospacedDigit().weight(.bold))
-                .foregroundStyle(tint(for: state.thought.tone))
-                .contentTransition(.numericText())
-        case .done, .failed:
-            phaseSymbol(state.thought.tone)
-        }
     }
 
     /// Compact island slots and the minimal presentation have no room for a
@@ -198,4 +172,3 @@ struct AssistantActivityWidget: Widget {
         URL(string: state.thought.tone == .waiting ? "assistant://approvals" : "assistant://chat")
     }
 }
-

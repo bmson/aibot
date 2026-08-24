@@ -4,6 +4,7 @@ import {
   addOwnerKnowledgeGraphFact,
   mergeKnowledgeGraphEntities,
   renameKnowledgeGraphEntity,
+  retryQuarantinedKnowledgeGraphSources,
   reviewKnowledgeGraphRelation,
 } from '@assistant/application';
 import { revalidatePath } from 'next/cache';
@@ -24,6 +25,12 @@ export async function confirmKnowledgeRelation(relationId: string): Promise<void
 export async function rejectKnowledgeRelation(relationId: string): Promise<void> {
   await requireOwner();
   await reviewKnowledgeGraphRelation(getDb(), relationId, 'rejected');
+  revalidateKnowledgeGraph();
+}
+
+export async function retryQuarantinedKnowledgeSources(): Promise<void> {
+  await requireOwner();
+  await retryQuarantinedKnowledgeGraphSources(getDb());
   revalidateKnowledgeGraph();
 }
 

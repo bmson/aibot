@@ -22,9 +22,10 @@ let agentId: string;
 let conversationId: string;
 const ingestIds: string[] = [];
 const createdSuggestionIds: string[] = [];
+let flightSuggestionId = '';
 
 /** Records what the composer was given, and echoes a fixed digest back. */
-function recordingRouter() {
+function recordingRouter(text = `${MARKER} composed digest`) {
   const prompts: string[] = [];
   const router = {
     async object(_role: string, opts: { prompt?: string }) {
@@ -33,7 +34,7 @@ function recordingRouter() {
         ok: true,
         modelId: 'fake',
         degraded: false,
-        object: { text: `${MARKER} composed digest` },
+        object: { text },
       };
     },
   } as unknown as ModelRouter;
@@ -104,7 +105,7 @@ describe('runBriefing', () => {
     if (!dbUp) return ctx.skip();
     // A daily "nothing to report" trains the owner to ignore the thread the
     // real ones arrive in, so silence is the correct output, not a courtesy.
-    const { router, prompts } = recordingRouter();
+    const { router, prompts } = recordingRouter(`${MARKER} quiet probe`);
     const result = await runBriefing({ db, router });
     if (result.highlights === 0 && result.needsAttention === 0 && result.pendingApprovals === 0) {
       expect(result.delivered).toBe(false);
@@ -145,33 +146,38 @@ describe('runBriefing', () => {
     // Routine mail is counted but not itemised.
     expect(prompt).not.toContain(`${MARKER} Summer sale`);
 
-    const [posted] = await db
-      .select({ text: messages.text })
-      .from(messages)
-      .where(eq(messages.text, `${MARKER} composed digest`));
-    expect(posted).toBeDefined();
-  });
+    const [suggestion] = await db
+      .select({
+        id: suggestions.id,
+        status: suggestions.status,
+        acceptedTaskId: suggestions.acceptedTaskId,
+      })
+      .from(suggestions)
+      .where(eq(suggestions.sourceRef, `gmail:${MARKER}-flight:0`));
+    expect(suggestion?.status).toBe('pending');
+    expect(suggestion?.acceptedTaskId).toBeNull();
+    if (!suggestion) throw new Error('flight briefing did not create its suggestion');
+    flightSuggestionId = suggestion.id;
+    createdSuggestionIds.push(suggestion.id);
 
-  it('proposes the obvious next step, once, as an inert card', async (ctx) => {
-    if (!dbUp) return ctx.skip();
-    // The flight added in the previous case should have produced a calendar
-    // proposal attached to the digest message.
     const [posted] = await db
       .select({ parts: messages.parts })
       .from(messages)
       .where(eq(messages.text, `${MARKER} composed digest`));
     const parts = (posted?.parts ?? []) as Array<{ type?: string; suggestionId?: string }>;
-    const suggestionParts = parts.filter((part) => part.type === 'suggestion');
-    expect(suggestionParts.length).toBeGreaterThanOrEqual(1);
+    expect(
+      parts.some((part) => part.type === 'suggestion' && part.suggestionId === suggestion.id),
+    ).toBe(true);
+  });
 
-    const id = suggestionParts[0]?.suggestionId ?? '';
-    const [row] = await db.select().from(suggestions).where(eq(suggestions.id, id));
+  it('proposes the obvious next step, once, as an inert card', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    if (!flightSuggestionId) throw new Error('the preceding fixture did not create a suggestion');
+    const [row] = await db.select().from(suggestions).where(eq(suggestions.id, flightSuggestionId));
     expect(row?.status).toBe('pending');
     // Inert: nothing is queued until the owner says yes.
     expect(row?.acceptedTaskId).toBeNull();
     expect(row?.proposedAction).toContain('no attendees');
-    if (row) createdSuggestionIds.push(row.id);
-
     // A second run must not re-ask: the source ref is stable per date.
     const { router } = recordingRouter();
     const again = await runBriefing({ db, router });

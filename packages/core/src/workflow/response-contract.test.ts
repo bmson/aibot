@@ -13,7 +13,7 @@ describe('response execution contract', () => {
     );
     expect(result.blocked).toBe(true);
     expect(result.unsupported).toEqual(expect.arrayContaining(['spreadsheet', 'background']));
-    expect(result.text).toContain("I couldn't verify this completed");
+    expect(result.text).toContain("I couldn't complete this because");
   });
 
   it('blocks tracker status reports that have no durable work behind them', () => {
@@ -208,9 +208,9 @@ describe('response execution contract', () => {
     );
     expect(result.blocked).toBe(true);
     expect(result.unsupported).toEqual(expect.arrayContaining(['spreadsheet', 'outbound']));
-    expect(result.text).toContain("Here's what I can confirm: the Google Doc action completed");
-    expect(result.text).toContain("I can't confirm yet");
-    expect(result.text).not.toContain("I couldn't verify this completed");
+    expect(result.text).toContain("Completed: the Google Doc action completed");
+    expect(result.text).toContain("Still needed:");
+    expect(result.text).not.toContain("I couldn't complete this because");
   });
 
   it('preserves a verified submission when a later document claim is unsupported', () => {
@@ -234,9 +234,7 @@ describe('response execution contract', () => {
     );
     expect(result).toMatchObject({ blocked: true, unsupported: ['workspace'] });
     expect(result.text).toContain('portal returned an explicit application confirmation');
-    expect(result.text).toContain(
-      "The rest — the requested document or file action — I can't confirm yet",
-    );
+    expect(result.text).toContain('Still needed: the requested document or file action');
     expect(result.text).not.toContain('I have not submitted');
   });
 
@@ -570,7 +568,7 @@ describe('response execution contract', () => {
       const result = enforceResponseContract(calendarCheck, []);
       expect(result.blocked).toBe(true);
       expect(result.unsupported).toContain('calendar_read');
-      expect(result.text).toContain("I couldn't verify this completed");
+      expect(result.text).toContain("I couldn't complete this because");
     });
 
     it('blocks an inbox-check claim with no gmail tool behind it', () => {
