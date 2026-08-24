@@ -5,6 +5,11 @@ struct GoalsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var showingGoalCreator = false
+    @State private var editingGoal: GoalRecord?
+    @State private var deletingGoal: GoalRecord?
+    @State private var goalActionInFlight: String?
+    @State private var showingArchived = false
 
     var body: some View {
         ScrollView {
@@ -30,13 +35,80 @@ struct GoalsView: View {
         .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("Goals")
         .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    showingArchived.toggle()
+                    if showingArchived { Task { await model.refreshArchivedGoals() } }
+                } label: {
+                    Label(
+                        showingArchived ? "Current goals" : "Archived goals",
+                        systemImage: showingArchived ? "tray.and.arrow.up" : "archivebox"
+                    )
+                }
+                if !showingArchived {
+                    Button {
+                        showingGoalCreator = true
+                    } label: {
+                        Label("Add goal", systemImage: "plus")
+                    }
+                    Menu {
+                        Button("Archive inactive goals", systemImage: "archivebox") {
+                            goalActionInFlight = "archive-inactive"
+                            Task {
+                                _ = await model.archiveInactiveGoals()
+                                goalActionInFlight = nil
+                            }
+                        }
+                    } label: {
+                        Label("More goal actions", systemImage: "ellipsis.circle")
+                    }
+                }
+            }
+        }
         // Navigation back returns to chat; the card-level "Continue in chat"
         // button remains the direct route back into the conversation.
-        .refreshable { await model.refreshAll() }
-        .task { if model.overview == nil { await model.refreshOverview() } }
+        .refreshable {
+            if showingArchived { await model.refreshArchivedGoals() }
+            else { await model.refreshAll() }
+        }
+        .task {
+            if showingArchived { await model.refreshArchivedGoals() }
+            else if model.overview == nil { await model.refreshOverview() }
+        }
+        .sheet(isPresented: $showingGoalCreator) {
+            NavigationStack { GoalEditor(goal: nil) }
+        }
+        .sheet(item: $editingGoal) { goal in
+            NavigationStack { GoalEditor(goal: goal) }
+        }
+        .confirmationDialog(
+            "Delete this goal?",
+            isPresented: Binding(
+                get: { deletingGoal != nil },
+                set: { if !$0 { deletingGoal = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let goal = deletingGoal {
+                Button("Delete goal", role: .destructive) {
+                    goalActionInFlight = goal.id
+                    Task {
+                        _ = await model.deleteGoal(goal)
+                        goalActionInFlight = nil
+                    }
+                    deletingGoal = nil
+                }
+                Button("Cancel", role: .cancel) { deletingGoal = nil }
+            }
+        } message: {
+            Text("This archives the goal from the active list. Its work chat and activity remain available as a record.")
+        }
     }
 
-    private var goals: [GoalDashboardItem] { model.overview?.goals.items ?? [] }
+    private var goals: [GoalDashboardItem] {
+        showingArchived ? model.archivedGoals?.items ?? [] : model.overview?.goals.items ?? []
+    }
 
     private var digest: some View {
         let waiting = goals.filter { !$0.blockedQuestion.isEmpty || $0.stalled }.count
@@ -111,9 +183,98 @@ struct GoalsView: View {
 
             goalCadence(item)
 
-            if item.conversationId != nil {
+            if showingArchived {
                 Button {
-                    model.returnToChat()
+                    goalActionInFlight = item.goal.id
+                    Task {
+                        _ = await model.restoreGoal(item.goal)
+                        goalActionInFlight = nil
+                    }
+                } label: {
+                    if goalActionInFlight == item.goal.id {
+                        HStack(spacing: 7) {
+                            ProgressView().controlSize(.small)
+                            Text("Restoring…")
+                        }
+                    } else {
+                        Label("Restore goal", systemImage: "tray.and.arrow.up")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(goalActionInFlight != nil)
+            } else {
+                HStack(spacing: 10) {
+                    if item.goal.status == "active" {
+                        lifecycleButton(item, title: "Pause", action: "status", status: "paused")
+                    } else if item.goal.status == "paused" {
+                        lifecycleButton(item, title: "Resume", action: "status", status: "active")
+                    } else if item.conversationId == nil {
+                        lifecycleButton(item, title: "Start work", action: "start")
+                    }
+
+                    Button {
+                        editingGoal = item.goal
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(goalActionInFlight != nil)
+
+                    Button(role: .destructive) {
+                        deletingGoal = item.goal
+                    } label: {
+                        if goalActionInFlight == item.goal.id {
+                            HStack(spacing: 7) {
+                                ProgressView().controlSize(.small)
+                                Text("Deleting…")
+                            }
+                        } else {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(item.workActive || goalActionInFlight != nil)
+                    .accessibilityHint(
+                        item.workActive
+                            ? "Finish or cancel active work before deleting this goal"
+                            : "Archives the goal and keeps its work history"
+                    )
+
+                    Menu {
+                        Button(item.goal.autonomy ? "Require approvals" : "Run autonomously") {
+                            updateLifecycle(item, action: "autonomy", enabled: !item.goal.autonomy)
+                        }
+                        .disabled(item.goal.taintedOrigin)
+
+                        if ["active", "paused"].contains(item.goal.status) {
+                            Button("Mark done") {
+                                updateLifecycle(item, action: "status", status: "done")
+                            }
+                        } else {
+                            Button("Reactivate") {
+                                updateLifecycle(item, action: "status", status: "active")
+                            }
+                        }
+
+                        if item.goal.status != "abandoned" {
+                            Button("Stop goal", role: .destructive) {
+                                updateLifecycle(item, action: "status", status: "abandoned")
+                            }
+                        }
+                    } label: {
+                        Label("More", systemImage: "ellipsis.circle")
+                    }
+                    .disabled(goalActionInFlight != nil)
+                }
+            }
+
+            if let conversationId = item.conversationId {
+                Button {
+                    goalActionInFlight = item.goal.id
+                    Task {
+                        _ = await model.openConversation(id: conversationId)
+                        goalActionInFlight = nil
+                    }
                 } label: {
                     Label("Continue in chat", systemImage: "bubble.left")
                         .font(.subheadline.weight(.semibold))
@@ -239,5 +400,132 @@ struct GoalsView: View {
         }
     }
 
+    private func lifecycleButton(
+        _ item: GoalDashboardItem,
+        title: String,
+        action: String,
+        status: String? = nil
+    ) -> some View {
+        Button(title) { updateLifecycle(item, action: action, status: status) }
+            .buttonStyle(.bordered)
+            .disabled(goalActionInFlight != nil)
+    }
+
+    private func updateLifecycle(
+        _ item: GoalDashboardItem,
+        action: String,
+        status: String? = nil,
+        enabled: Bool? = nil
+    ) {
+        goalActionInFlight = item.goal.id
+        Task {
+            _ = await model.updateGoalLifecycle(
+                item.goal,
+                action: action,
+                status: status,
+                enabled: enabled
+            )
+            goalActionInFlight = nil
+        }
+    }
+
     private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
+}
+
+/// The same small goal form handles creation and edits; a new goal starts its
+/// first work session on the server, while an edit only changes its settings.
+private struct GoalEditor: View {
+    let goal: GoalRecord?
+
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var title: String
+    @State private var description: String
+    @State private var priority: Int
+    @State private var targetDate: String
+    @State private var progress: String
+    @State private var nextAction: String
+    @State private var mirrorToPrimary: Bool
+    @State private var isSaving = false
+
+    init(goal: GoalRecord?) {
+        self.goal = goal
+        _title = State(initialValue: goal?.title ?? "")
+        _description = State(initialValue: goal?.description ?? "")
+        _priority = State(initialValue: goal?.priority ?? 3)
+        _targetDate = State(initialValue: goal?.targetDate?.prefix(10).description ?? "")
+        _progress = State(initialValue: goal?.progress ?? "")
+        _nextAction = State(initialValue: goal?.nextAction ?? "")
+        _mirrorToPrimary = State(initialValue: goal?.mirrorToPrimary ?? false)
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("What should the assistant work toward?", text: $title, axis: .vertical)
+                    .lineLimit(1...3)
+                TextField("Context, constraints, definition of done", text: $description, axis: .vertical)
+                    .lineLimit(2...5)
+            } header: {
+                Text("Goal")
+            }
+
+            Section("Pace and target") {
+                Picker("Pace", selection: $priority) {
+                    Text("Fast").tag(1)
+                    Text("Focused").tag(2)
+                    Text("Normal").tag(3)
+                    Text("Gentle").tag(4)
+                    Text("Low").tag(5)
+                }
+                TextField("Target date (YYYY-MM-DD)", text: $targetDate)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.numbersAndPunctuation)
+                Toggle("Show updates in my main chat", isOn: $mirrorToPrimary)
+            }
+
+            Section("Current direction") {
+                TextField("Latest progress", text: $progress, axis: .vertical)
+                    .lineLimit(2...5)
+                TextField("Next action", text: $nextAction, axis: .vertical)
+                    .lineLimit(2...5)
+            }
+        }
+        .navigationTitle(goal == nil ? "New goal" : "Edit goal")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button(isSaving ? "Saving…" : (goal == nil ? "Start" : "Save")) {
+                    save()
+                }
+                .disabled(isSaving || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private func save() {
+        let mutation = GoalMutation(
+            title: title,
+            description: description,
+            priority: priority,
+            targetDate: targetDate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : targetDate,
+            progress: progress,
+            nextAction: nextAction,
+            mirrorToPrimary: mirrorToPrimary
+        )
+        isSaving = true
+        Task {
+            let saved: Bool
+            if let goal {
+                saved = await model.updateGoal(id: goal.id, goal: mutation)
+            } else {
+                saved = await model.createGoal(mutation)
+            }
+            isSaving = false
+            if saved { dismiss() }
+        }
+    }
 }

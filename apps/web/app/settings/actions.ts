@@ -45,6 +45,48 @@ export async function deletePolicy(policyId: string): Promise<void> {
   revalidateSettings();
 }
 
+/** Add and inspect an owner-managed Streamable HTTP MCP server. */
+export async function createMcpConnectionAction(input: {
+  name: string;
+  endpoint: string;
+}): Promise<{ error?: string }> {
+  await requireOwner();
+  const result = await getApplication().addMcpConnection(input);
+  if ('error' in result) return { error: result.error };
+  revalidateSettings();
+  return {};
+}
+
+/** Re-run MCP tool discovery without changing the saved endpoint. */
+export async function refreshMcpConnectionAction(id: string): Promise<{ error?: string }> {
+  await requireOwner();
+  const result = await getApplication().refreshMcpConnection(id);
+  if ('error' in result) return { error: result.error };
+  revalidateSettings();
+  return {};
+}
+
+/** Disable or re-enable a saved MCP connection. Re-enabling inspects it again. */
+export async function setMcpConnectionEnabledAction(
+  id: string,
+  enabled: boolean,
+): Promise<{ error?: string }> {
+  await requireOwner();
+  const result = await getApplication().setMcpConnectionEnabled(id, enabled);
+  if ('error' in result) return { error: result.error };
+  revalidateSettings();
+  return {};
+}
+
+/** Forget a saved MCP endpoint and its discovered tool metadata. */
+export async function deleteMcpConnectionAction(id: string): Promise<{ error?: string }> {
+  await requireOwner();
+  const deleted = await getApplication().deleteMcpConnection(id);
+  if (!deleted) return { error: 'MCP connection not found.' };
+  revalidateSettings();
+  return {};
+}
+
 /**
  * Persist one env value into the repository .env, replacing the existing line
  * when present. Returns false when there is no .env to write — a Cloud Run

@@ -15,6 +15,10 @@ struct ActivityView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var filter: ActivityFilter = .all
+    @State private var showingArchived = false
+    @State private var activityActionInFlight: String?
+    @State private var budgetItem: ActivityItem?
+    @State private var budgetText = ""
 
     var body: some View {
         ScrollView {
@@ -45,8 +49,63 @@ struct ActivityView: View {
         .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("Activity")
         .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
-        .refreshable { await model.refreshAll() }
-        .task { if model.overview == nil { await model.refreshOverview() } }
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    showingArchived.toggle()
+                    if showingArchived { Task { await model.refreshArchivedActivity() } }
+                } label: {
+                    Label(
+                        showingArchived ? "Current activity" : "Archived activity",
+                        systemImage: showingArchived ? "tray.and.arrow.up" : "archivebox"
+                    )
+                }
+                .accessibilityHint(
+                    showingArchived
+                        ? "Shows activity that is still current"
+                        : "Shows hidden completed activity"
+                )
+                if !showingArchived {
+                    Menu {
+                        Button("Archive old activity", systemImage: "archivebox") {
+                            activityActionInFlight = "archive-old"
+                            Task {
+                                _ = await model.archiveOldActivity()
+                                activityActionInFlight = nil
+                            }
+                        }
+                    } label: {
+                        Label("More activity actions", systemImage: "ellipsis.circle")
+                    }
+                }
+            }
+        }
+        .refreshable {
+            if showingArchived { await model.refreshArchivedActivity() }
+            else { await model.refreshOverview() }
+        }
+        .task {
+            if showingArchived { await model.refreshArchivedActivity() }
+            else if model.overview == nil { await model.refreshOverview() }
+        }
+        .alert(
+            "Raise task budget",
+            isPresented: Binding(
+                get: { budgetItem != nil },
+                set: { if !$0 { budgetItem = nil } }
+            )
+        ) {
+            TextField("New limit in USD", text: $budgetText)
+                .keyboardType(.decimalPad)
+            Button("Raise and retry") {
+                guard let item = budgetItem, let amount = Double(budgetText) else { return }
+                updateActivity(item, action: "raise-budget", budgetUsdLimit: amount)
+                budgetItem = nil
+            }
+            Button("Cancel", role: .cancel) { budgetItem = nil }
+        } message: {
+            Text("The task resumes from its saved checkpoint; completed actions are not repeated.")
+        }
         .sensoryFeedback(.selection, trigger: filter)
         .animation(
             reduceMotion ? nil : .snappy(duration: 0.26, extraBounce: 0),
@@ -81,7 +140,9 @@ struct ActivityView: View {
     }
 
     private var filteredItems: [ActivityItem] {
-        let items = model.overview?.activity.items ?? []
+        let items = showingArchived
+            ? model.archivedActivity?.items ?? []
+            : model.overview?.activity.items ?? []
         return items.filter { item in
             switch filter {
             case .all: true
@@ -107,8 +168,122 @@ struct ActivityView: View {
             activityMetadata(item)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
+
+            if showingArchived {
+                Button {
+                    updateActivity(item, action: "restore")
+                } label: {
+                    activityActionLabel(
+                        item,
+                        title: "Restore to activity",
+                        icon: "tray.and.arrow.up"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .disabled(activityActionInFlight != nil)
+            } else {
+                if item.hasPendingApproval {
+                    Button {
+                        model.present(.approvals)
+                    } label: {
+                        Label("Review approval", systemImage: "checkmark.shield")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(AssistantTheme.warning(for: colorScheme))
+                }
+
+                HStack(spacing: 9) {
+                    if isTerminal(item) {
+                        actionButton(item, title: "Archive", icon: "archivebox", action: "archive")
+                    } else {
+                        actionButton(item, title: "Cancel", icon: "xmark.circle", action: "cancel")
+                    }
+
+                    if item.status == "needs_attention" {
+                        if item.progress.hasPrefix("budget: task budget") {
+                            Button {
+                                budgetItem = item
+                                budgetText = suggestedBudget(for: item)
+                            } label: {
+                                Label("Raise budget", systemImage: "dollarsign.arrow.circlepath")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(activityActionInFlight != nil)
+                        } else {
+                            actionButton(item, title: "Retry", icon: "arrow.clockwise", action: "retry")
+                        }
+                    } else if item.stuckWaiting == true {
+                        actionButton(item, title: "Retry", icon: "arrow.clockwise", action: "retry")
+                    }
+
+                    if item.hasActiveAutonomy == true {
+                        actionButton(
+                            item,
+                            title: "Revoke autonomy",
+                            icon: "hand.raised",
+                            action: "revoke-autonomy"
+                        )
+                    }
+                }
+            }
         }
         .assistantCard(in: colorScheme)
+    }
+
+    @ViewBuilder
+    private func activityActionLabel(_ item: ActivityItem, title: String, icon: String) -> some View {
+        if activityActionInFlight == item.id {
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.small)
+                Text("Updating…")
+            }
+        } else {
+            Label(title, systemImage: icon)
+        }
+    }
+
+    private func updateActivity(_ item: ActivityItem, action: String) {
+        activityActionInFlight = item.id
+        Task {
+            _ = await model.updateActivity(item, action: action)
+            activityActionInFlight = nil
+        }
+    }
+
+    private func updateActivity(_ item: ActivityItem, action: String, budgetUsdLimit: Double) {
+        activityActionInFlight = item.id
+        Task {
+            _ = await model.updateActivity(
+                item,
+                action: action,
+                budgetUsdLimit: budgetUsdLimit
+            )
+            activityActionInFlight = nil
+        }
+    }
+
+    private func actionButton(
+        _ item: ActivityItem,
+        title: String,
+        icon: String,
+        action: String
+    ) -> some View {
+        Button { updateActivity(item, action: action) } label: {
+            activityActionLabel(item, title: title, icon: icon)
+        }
+        .buttonStyle(.bordered)
+        .disabled(activityActionInFlight != nil)
+    }
+
+    private func suggestedBudget(for item: ActivityItem) -> String {
+        let current = Double(item.budgetUsdLimit) ?? 0
+        let spent = Double(item.spentUsd) ?? 0
+        let suggested = ceil(max(current * 2, spent + 0.25) * 4) / 4
+        return String(format: "%.2f", suggested)
+    }
+
+    private func isTerminal(_ item: ActivityItem) -> Bool {
+        ["done", "failed", "cancelled"].contains(item.status)
     }
 
     @ViewBuilder

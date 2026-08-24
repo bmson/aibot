@@ -8,12 +8,18 @@ struct MoreView: View {
     @AppStorage(AssistantAppearance.defaultsKey) private var appearance = AssistantAppearance.dark
     @AppStorage(AppModel.shareLocationKey) private var shareLocation = false
     @ObservedObject private var locations = LocationManager.shared
+    @State private var showingAgentSettings = false
+    @State private var settingsActionInFlight: String?
+    @State private var deletingPolicy: WorkspacePolicy?
 
     var body: some View {
         List {
             Section {
                 assistantIdentity
                 .padding(.vertical, 6)
+                Button("Edit assistant settings", systemImage: "pencil") {
+                    showingAgentSettings = true
+                }
                 Text("Identity, notifications, proactive jobs, and approval rules.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -50,6 +56,31 @@ struct MoreView: View {
                     MCPConnectionsView()
                 } label: {
                     Label("MCP connections", systemImage: "point.3.connected.trianglepath.dotted")
+                }
+            }
+
+            if let conversation = model.activeConversation ?? model.bootstrap?.conversation,
+               !conversation.models.isEmpty {
+                Section("Current chat") {
+                    Picker(
+                        "Model",
+                        selection: Binding(
+                            get: { conversation.conversation.modelOverride ?? "" },
+                            set: { value in
+                                settingsActionInFlight = "chat-model"
+                                Task {
+                                    _ = await model.changeConversationModel(value.isEmpty ? nil : value)
+                                    settingsActionInFlight = nil
+                                }
+                            }
+                        )
+                    ) {
+                        Text("Automatic").tag("")
+                        ForEach(conversation.models) { option in
+                            Text(option.label).tag(option.id)
+                        }
+                    }
+                    .disabled(settingsActionInFlight != nil)
                 }
             }
 
@@ -160,6 +191,31 @@ struct MoreView: View {
             if model.workspace == nil { await model.refreshWorkspace() }
             await model.refreshMcpConnections()
         }
+        .sheet(isPresented: $showingAgentSettings) {
+            if let settings = model.workspace?.settings.agent {
+                NavigationStack { AgentSettingsEditor(settings: settings) }
+            }
+        }
+        .confirmationDialog(
+            "Delete this standing approval?",
+            isPresented: Binding(
+                get: { deletingPolicy != nil },
+                set: { if !$0 { deletingPolicy = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let policy = deletingPolicy {
+                Button("Delete rule", role: .destructive) {
+                    settingsActionInFlight = policy.id
+                    Task {
+                        _ = await model.deletePolicy(policy)
+                        settingsActionInFlight = nil
+                    }
+                    deletingPolicy = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { deletingPolicy = nil }
+        }
     }
 
     @ViewBuilder
@@ -265,28 +321,19 @@ struct MoreView: View {
             .foregroundStyle(.secondary)
         }
 
-        if usesAccessibilityLayout {
-            VStack(alignment: .leading, spacing: 8) {
-                detail
-                settingsTag(
-                    schedule.enabled ? "On" : "Paused",
-                    tint: schedule.enabled
-                        ? AssistantTheme.success(for: colorScheme)
-                        : AssistantTheme.warning(for: colorScheme)
-                )
-            }
-        } else {
-            HStack {
-                detail
-                Spacer()
-                settingsTag(
-                    schedule.enabled ? "On" : "Paused",
-                    tint: schedule.enabled
-                        ? AssistantTheme.success(for: colorScheme)
-                        : AssistantTheme.warning(for: colorScheme)
-                )
-            }
-        }
+        Toggle(
+            isOn: Binding(
+                get: { schedule.enabled },
+                set: { enabled in
+                    settingsActionInFlight = schedule.id
+                    Task {
+                        _ = await model.setSchedule(schedule, enabled: enabled)
+                        settingsActionInFlight = nil
+                    }
+                }
+            )
+        ) { detail }
+        .disabled(settingsActionInFlight != nil)
     }
 
     @ViewBuilder
@@ -298,27 +345,25 @@ struct MoreView: View {
                 .foregroundStyle(.secondary)
         }
 
-        if usesAccessibilityLayout {
-            VStack(alignment: .leading, spacing: 8) {
-                detail
-                settingsTag(
-                    policy.enabled ? (policy.effect == "allow" ? "Allowed" : "Blocked") : "Paused",
-                    tint: policy.enabled
-                        ? (policy.effect == "allow" ? AssistantTheme.success(for: colorScheme) : .red)
-                        : AssistantTheme.warning(for: colorScheme)
+        HStack {
+            Toggle(
+                isOn: Binding(
+                    get: { policy.enabled },
+                    set: { enabled in
+                        settingsActionInFlight = policy.id
+                        Task {
+                            _ = await model.setPolicy(policy, enabled: enabled)
+                            settingsActionInFlight = nil
+                        }
+                    }
                 )
+            ) { detail }
+            .disabled(settingsActionInFlight != nil)
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                deletingPolicy = policy
             }
-        } else {
-            HStack {
-                detail
-                Spacer()
-                settingsTag(
-                    policy.enabled ? (policy.effect == "allow" ? "Allowed" : "Blocked") : "Paused",
-                    tint: policy.enabled
-                        ? (policy.effect == "allow" ? AssistantTheme.success(for: colorScheme) : .red)
-                        : AssistantTheme.warning(for: colorScheme)
-                )
-            }
+            .labelStyle(.iconOnly)
+            .disabled(settingsActionInFlight != nil)
         }
     }
 
@@ -329,6 +374,60 @@ struct MoreView: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
             .background(tint.opacity(0.11), in: Capsule())
+    }
+}
+
+private struct AgentSettingsEditor: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var timezone: String
+    @State private var locale: String
+    @State private var signature: String
+    @State private var isSaving = false
+
+    init(settings: WorkspaceAgentSettings) {
+        _timezone = State(initialValue: settings.timezone)
+        _locale = State(initialValue: settings.locale)
+        _signature = State(initialValue: settings.signature)
+    }
+
+    var body: some View {
+        Form {
+            Section("Language and time") {
+                TextField("Timezone", text: $timezone)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Locale", text: $locale)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            Section("Signature") {
+                TextField("Email signature", text: $signature, axis: .vertical)
+                    .lineLimit(2...6)
+            }
+        }
+        .navigationTitle("Assistant settings")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button(isSaving ? "Saving…" : "Save") { save() }
+                    .disabled(isSaving || timezone.isEmpty || locale.isEmpty)
+            }
+        }
+    }
+
+    private func save() {
+        isSaving = true
+        Task {
+            let saved = await model.updateAgentSettings(
+                .init(timezone: timezone, locale: locale, signature: signature)
+            )
+            isSaving = false
+            if saved { dismiss() }
+        }
     }
 }
 

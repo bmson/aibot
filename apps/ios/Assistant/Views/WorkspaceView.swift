@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum WorkspaceArea {
     case chats
@@ -65,6 +66,14 @@ struct WorkspaceView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var showingDocumentImporter = false
+    @State private var showingBackstoryImporter = false
+    @State private var deletingDocument: DocumentRecord?
+    @State private var showingSkillCreator = false
+    @State private var editingSkill: WorkspaceSkill?
+    @State private var deletingSkill: WorkspaceSkill?
+    @State private var showingCostEditor = false
+    @State private var workspaceActionInFlight: String?
 
     var body: some View {
         ScrollView {
@@ -90,6 +99,103 @@ struct WorkspaceView: View {
         .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
         .refreshable { await refresh() }
         .task { await load() }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if area == .documents {
+                    Menu {
+                        Button("Add document", systemImage: "plus") {
+                            showingDocumentImporter = true
+                        }
+                        Button("Import backstory", systemImage: "tray.and.arrow.down") {
+                            showingBackstoryImporter = true
+                        }
+                    } label: {
+                        Label("Document actions", systemImage: "ellipsis.circle")
+                    }
+                } else if area == .skills {
+                    Button("Add skill", systemImage: "plus") { showingSkillCreator = true }
+                } else if area == .costs {
+                    Button("Edit limits", systemImage: "slider.horizontal.3") {
+                        showingCostEditor = true
+                    }
+                }
+            }
+        }
+        .fileImporter(
+            isPresented: $showingDocumentImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case let .success(urls) = result, let url = urls.first else {
+                if case let .failure(error) = result { model.errorMessage = error.localizedDescription }
+                return
+            }
+            uploadDocument(from: url)
+        }
+        .fileImporter(
+            isPresented: $showingBackstoryImporter,
+            allowedContentTypes: [.plainText, .json, .data],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case let .success(urls) = result, let url = urls.first else {
+                if case let .failure(error) = result { model.errorMessage = error.localizedDescription }
+                return
+            }
+            uploadBackstory(from: url)
+        }
+        .sheet(isPresented: $showingSkillCreator) {
+            NavigationStack { SkillEditor(skill: nil) }
+        }
+        .sheet(item: $editingSkill) { skill in
+            NavigationStack { SkillEditor(skill: skill) }
+        }
+        .sheet(isPresented: $showingCostEditor) {
+            if let costs = model.workspace?.costs {
+                NavigationStack { CostLimitsEditor(costs: costs) }
+            }
+        }
+        .confirmationDialog(
+            "Delete this document?",
+            isPresented: Binding(
+                get: { deletingDocument != nil },
+                set: { if !$0 { deletingDocument = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let document = deletingDocument {
+                Button("Delete document", role: .destructive) {
+                    workspaceActionInFlight = document.id
+                    Task {
+                        _ = await model.deleteDocument(document)
+                        workspaceActionInFlight = nil
+                    }
+                    deletingDocument = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { deletingDocument = nil }
+        } message: {
+            Text("This removes the file and its searchable passages.")
+        }
+        .confirmationDialog(
+            "Delete this skill?",
+            isPresented: Binding(
+                get: { deletingSkill != nil },
+                set: { if !$0 { deletingSkill = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let skill = deletingSkill {
+                Button("Delete skill", role: .destructive) {
+                    workspaceActionInFlight = skill.id
+                    Task {
+                        _ = await model.deleteSkill(skill)
+                        workspaceActionInFlight = nil
+                    }
+                    deletingSkill = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { deletingSkill = nil }
+        }
     }
 
     @ViewBuilder
@@ -152,23 +258,67 @@ struct WorkspaceView: View {
 
     private func chats(_ chats: WorkspaceChats) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            sectionHeading("Current chats", count: chats.current.count)
+            HStack {
+                sectionHeading("Current chats", count: chats.current.count)
+                Spacer()
+                Button {
+                    workspaceActionInFlight = "new-chat"
+                    Task {
+                        _ = await model.createConversation()
+                        workspaceActionInFlight = nil
+                    }
+                } label: {
+                    Label("New chat", systemImage: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(workspaceActionInFlight != nil)
+                Menu {
+                    Button("Archive inactive chats", systemImage: "archivebox") {
+                        workspaceActionInFlight = "archive-inactive"
+                        Task {
+                            _ = await model.archiveInactiveConversations()
+                            workspaceActionInFlight = nil
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .disabled(workspaceActionInFlight != nil)
+            }
 
             if chats.current.isEmpty {
                 emptyState("No conversations yet", symbol: "bubble.left")
             } else {
                 ForEach(chats.current) { chat in
                     HStack(spacing: 12) {
-                        Image(systemName: chat.isPrimary ? "bubble.left.fill" : "bubble.left")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                            .frame(width: 38, height: 38)
-                            .background(
-                                AssistantTheme.sunken(for: colorScheme),
-                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            )
-                        chatIdentity(chat)
+                        Button {
+                            openChat(chat)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: chat.isPrimary ? "bubble.left.fill" : "bubble.left")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                                    .frame(width: 38, height: 38)
+                                    .background(
+                                        AssistantTheme.sunken(for: colorScheme),
+                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    )
+                                chatIdentity(chat)
+                            }
+                        }
+                        .buttonStyle(.plain)
                         Spacer(minLength: 0)
+                        if !chat.isPrimary {
+                            Menu {
+                                Button("Archive", systemImage: "archivebox") {
+                                    updateChat(chat, action: "archive")
+                                }
+                                .disabled(chat.active)
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
+                            }
+                            .disabled(workspaceActionInFlight != nil)
+                        }
                     }
                     .assistantCard(in: colorScheme)
                 }
@@ -178,7 +328,8 @@ struct WorkspaceView: View {
                 DisclosureGroup("Archived chats (\(chats.archived.count))") {
                     VStack(spacing: 0) {
                         ForEach(chats.archived) { chat in
-                            Group {
+                            HStack {
+                                Button { openChat(chat) } label: {
                                 if usesAccessibilityLayout {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(chat.displayTitle)
@@ -195,6 +346,14 @@ struct WorkspaceView: View {
                                             .foregroundStyle(.secondary)
                                     }
                                 }
+                                }
+                                .buttonStyle(.plain)
+                                Spacer()
+                                Button("Restore", systemImage: "tray.and.arrow.up") {
+                                    updateChat(chat, action: "restore")
+                                }
+                                .labelStyle(.iconOnly)
+                                .disabled(workspaceActionInFlight != nil)
                             }
                             .padding(.vertical, 10)
                             if chat.id != chats.archived.last?.id { Divider() }
@@ -267,6 +426,10 @@ struct WorkspaceView: View {
                         documentCard(document)
                     }
                 }
+
+                if let imports = model.workspace?.imports {
+                    backstoryImports(imports)
+                }
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, minHeight: 180)
@@ -312,6 +475,29 @@ struct WorkspaceView: View {
                         Text("Used \(skill.useCount) times · \(skill.successCount) successful")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
+                        HStack(spacing: 9) {
+                            Button("Edit", systemImage: "pencil") { editingSkill = skill }
+                                .buttonStyle(.bordered)
+                            Button(
+                                skill.deprecated ? "Restore" : "Retire",
+                                systemImage: skill.deprecated ? "arrow.uturn.backward" : "archivebox"
+                            ) {
+                                workspaceActionInFlight = skill.id
+                                Task {
+                                    _ = await model.setSkillDeprecated(
+                                        skill,
+                                        deprecated: !skill.deprecated
+                                    )
+                                    workspaceActionInFlight = nil
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            Button("Delete", systemImage: "trash", role: .destructive) {
+                                deletingSkill = skill
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .disabled(workspaceActionInFlight != nil)
                     }
                     .opacity(skill.deprecated ? 0.6 : 1)
                     .assistantCard(in: colorScheme)
@@ -429,6 +615,10 @@ struct WorkspaceView: View {
             sectionHeading("Usage this month")
             breakdownCard(title: "By source", rows: costs.bySource.map { ($0.source, $0.usd ?? "0", $0.count) })
             breakdownCard(title: "By model", rows: costs.byModel.map { ($0.model, $0.usd ?? "0", $0.count) })
+            Button("Edit spending limits", systemImage: "slider.horizontal.3") {
+                showingCostEditor = true
+            }
+            .buttonStyle(.bordered)
         }
     }
 
@@ -478,6 +668,19 @@ struct WorkspaceView: View {
                         Text("Observed \(anomaly.observed)× · expected \(anomaly.expected)× · \(anomaly.citationCount) evidence items")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
+                        HStack(spacing: 9) {
+                            if anomaly.hasPolicy {
+                                Button("Suspend policy", systemImage: "pause.circle") {
+                                    updateAnomaly(anomaly, action: "suspend-policy")
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            Button("Dismiss", systemImage: "xmark") {
+                                updateAnomaly(anomaly, action: "dismiss")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .disabled(workspaceActionInFlight != nil)
                     }
                     .assistantCard(in: colorScheme)
                 }
@@ -524,6 +727,20 @@ struct WorkspaceView: View {
                         Text("Based on \(improvement.evidenceCount) \(improvement.evidenceCount == 1 ? "pattern" : "patterns") · \(improvement.applyable ? "Can apply directly" : "Advisory")")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
+                        HStack(spacing: 9) {
+                            Button(
+                                improvement.applyable ? "Apply" : "Acknowledge",
+                                systemImage: "checkmark"
+                            ) {
+                                updateImprovement(improvement, action: "apply")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            Button("Dismiss", systemImage: "xmark") {
+                                updateImprovement(improvement, action: "dismiss")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .disabled(workspaceActionInFlight != nil)
                     }
                     .assistantCard(in: colorScheme)
                 }
@@ -538,16 +755,22 @@ struct WorkspaceView: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
             if document.status == "ready" {
-                Button {
-                    model.returnToChat()
-                    model.send("From my documents, tell me about \"\(document.title)\".")
-                } label: {
-                    Label("Ask about this", systemImage: "bubble.left")
-                        .font(.subheadline.weight(.semibold))
+                HStack(spacing: 9) {
+                    Button {
+                        model.returnToChat()
+                        model.send("From my documents, tell me about \"\(document.title)\".")
+                    } label: {
+                        Label("Ask about this", systemImage: "bubble.left")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(AssistantTheme.accent(for: colorScheme))
+                    .disabled(model.isSending)
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        deletingDocument = document
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
-                .tint(AssistantTheme.accent(for: colorScheme))
-                .disabled(model.isSending)
                 .accessibilityHint(
                     model.isSending
                         ? "Finish or stop the current response first"
@@ -559,8 +782,100 @@ struct WorkspaceView: View {
                     .font(.caption)
                     .foregroundStyle(AssistantTheme.errorInk(for: colorScheme))
             }
+            if document.status != "ready" {
+                Button("Delete", systemImage: "trash", role: .destructive) {
+                    deletingDocument = document
+                }
+                .buttonStyle(.bordered)
+            }
         }
         .assistantCard(in: colorScheme)
+    }
+
+    private func backstoryImports(_ imports: WorkspaceImports) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                sectionHeading("Backstory imports", count: imports.sources.count)
+                Spacer()
+                Button("Upload", systemImage: "tray.and.arrow.down") {
+                    showingBackstoryImporter = true
+                }
+                .buttonStyle(.bordered)
+            }
+            ForEach(imports.unstartedFiles) { file in
+                HStack {
+                    Text(file.name).font(.subheadline).lineLimit(1)
+                    Spacer()
+                    Button("Start") {
+                        updateImport(
+                            action: "start",
+                            source: file.name.replacingOccurrences(
+                                of: #"\.[A-Za-z0-9]+$"#,
+                                with: "",
+                                options: .regularExpression
+                            ).lowercased(),
+                            workspacePath: "import/\(file.name)"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .assistantCard(in: colorScheme)
+            }
+            ForEach(imports.sources) { source in
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(source.source).font(.headline)
+                            Text("\(source.memoriesSaved) saved · \(source.itemsProcessed) processed")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        StatusPill(status: source.status)
+                    }
+                    if source.quarantinedNow > 0 {
+                        Text("\(source.quarantinedNow) memories are waiting for review.")
+                            .font(.caption)
+                            .foregroundStyle(AssistantTheme.warning(for: colorScheme))
+                    }
+                    if let error = source.error, !error.isEmpty {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                    }
+                    HStack(spacing: 8) {
+                        if source.quarantinedNow > 0 {
+                            Button("Approve all") {
+                                updateImport(action: "review", source: source.source, verdict: "approve")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            Button("Reject all") {
+                                updateImport(action: "review", source: source.source, verdict: "reject")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        Menu {
+                            Button("Run again") {
+                                updateImport(
+                                    action: "start",
+                                    source: source.source,
+                                    workspacePath: source.workspacePath
+                                )
+                            }
+                            Button("Purge learned memories", role: .destructive) {
+                                updateImport(action: "purge", source: source.source)
+                            }
+                            Button("Delete source", role: .destructive) {
+                                updateImport(action: "delete", source: source.source)
+                            }
+                        } label: {
+                            Label("More", systemImage: "ellipsis.circle")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .disabled(workspaceActionInFlight != nil)
+                }
+                .assistantCard(in: colorScheme)
+            }
+        }
     }
 
     @ViewBuilder
@@ -896,9 +1211,106 @@ struct WorkspaceView: View {
 
     private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
 
+    private func openChat(_ chat: WorkspaceChat) {
+        workspaceActionInFlight = chat.id
+        Task {
+            _ = await model.openConversation(id: chat.id)
+            workspaceActionInFlight = nil
+        }
+    }
+
+    private func updateChat(_ chat: WorkspaceChat, action: String) {
+        workspaceActionInFlight = chat.id
+        Task {
+            _ = await model.updateConversation(chat, action: action)
+            workspaceActionInFlight = nil
+        }
+    }
+
+    private func updateAnomaly(_ anomaly: WorkspaceAnomaly, action: String) {
+        workspaceActionInFlight = anomaly.id
+        Task {
+            _ = await model.updateAnomaly(anomaly, action: action)
+            workspaceActionInFlight = nil
+        }
+    }
+
+    private func updateImprovement(_ improvement: WorkspaceImprovement, action: String) {
+        workspaceActionInFlight = improvement.id
+        Task {
+            _ = await model.updateImprovement(improvement, action: action)
+            workspaceActionInFlight = nil
+        }
+    }
+
+    private func uploadDocument(from url: URL) {
+        workspaceActionInFlight = "document-upload"
+        Task {
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let data = try Data(contentsOf: url)
+                guard data.count <= 25 * 1024 * 1024 else {
+                    model.errorMessage = "Documents must be 25 MB or smaller."
+                    workspaceActionInFlight = nil
+                    return
+                }
+                let type = UTType(filenameExtension: url.pathExtension)
+                _ = await model.uploadDocument(
+                    data: data,
+                    name: url.lastPathComponent,
+                    title: url.deletingPathExtension().lastPathComponent,
+                    mime: type?.preferredMIMEType ?? "application/octet-stream"
+                )
+            } catch {
+                model.errorMessage = error.localizedDescription
+            }
+            workspaceActionInFlight = nil
+        }
+    }
+
+    private func uploadBackstory(from url: URL) {
+        workspaceActionInFlight = "backstory-upload"
+        Task {
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let data = try Data(contentsOf: url)
+                guard data.count <= 25 * 1024 * 1024 else {
+                    model.errorMessage = "Imports must be 25 MB or smaller."
+                    workspaceActionInFlight = nil
+                    return
+                }
+                _ = await model.uploadImport(data: data, name: url.lastPathComponent)
+            } catch {
+                model.errorMessage = error.localizedDescription
+            }
+            workspaceActionInFlight = nil
+        }
+    }
+
+    private func updateImport(
+        action: String,
+        source: String,
+        verdict: String? = nil,
+        workspacePath: String? = nil
+    ) {
+        workspaceActionInFlight = source
+        Task {
+            _ = await model.updateImport(
+                action: action,
+                source: source,
+                verdict: verdict,
+                workspacePath: workspacePath
+            )
+            workspaceActionInFlight = nil
+        }
+    }
+
     private func load() async {
         if area == .documents {
             if model.overview == nil { await model.refreshOverview() }
+            if model.workspace == nil { await model.refreshWorkspace() }
         } else if model.workspace == nil {
             await model.refreshWorkspace()
         }
@@ -906,9 +1318,131 @@ struct WorkspaceView: View {
 
     private func refresh() async {
         if area == .documents {
-            await model.refreshOverview()
+            async let overviewRefresh: Void = model.refreshOverview()
+            async let workspaceRefresh: Void = model.refreshWorkspace()
+            _ = await (overviewRefresh, workspaceRefresh)
         } else {
             await model.refreshWorkspace()
+        }
+    }
+}
+
+private struct SkillEditor: View {
+    let skill: WorkspaceSkill?
+
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var preconditions: String
+    @State private var steps: String
+    @State private var gotchas: String
+    @State private var isSaving = false
+
+    init(skill: WorkspaceSkill?) {
+        self.skill = skill
+        _name = State(initialValue: skill?.name ?? "")
+        _preconditions = State(initialValue: skill?.preconditions ?? "")
+        _steps = State(initialValue: skill?.steps ?? "")
+        _gotchas = State(initialValue: skill?.gotchas ?? "")
+    }
+
+    var body: some View {
+        Form {
+            Section("Skill") {
+                TextField("Name", text: $name)
+                TextField("When to use it", text: $preconditions, axis: .vertical)
+                    .lineLimit(2...5)
+                TextField("Steps", text: $steps, axis: .vertical)
+                    .lineLimit(4...10)
+                TextField("Gotchas", text: $gotchas, axis: .vertical)
+                    .lineLimit(2...5)
+            }
+        }
+        .navigationTitle(skill == nil ? "New skill" : "Edit skill")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button(isSaving ? "Saving…" : "Save") { save() }
+                    .disabled(
+                        isSaving
+                            || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || steps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+            }
+        }
+    }
+
+    private func save() {
+        isSaving = true
+        Task {
+            let saved = await model.saveSkill(
+                id: skill?.id,
+                mutation: .init(
+                    name: name,
+                    preconditions: preconditions,
+                    steps: steps,
+                    gotchas: gotchas
+                )
+            )
+            isSaving = false
+            if saved { dismiss() }
+        }
+    }
+}
+
+private struct CostLimitsEditor: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var taskDefault: String
+    @State private var daily: String
+    @State private var monthly: String
+    @State private var isSaving = false
+
+    init(costs: WorkspaceCosts) {
+        _taskDefault = State(initialValue: costs.taskDefaultLimit ?? "")
+        _daily = State(initialValue: costs.dailyLimitUsd.map { String($0) } ?? "")
+        _monthly = State(initialValue: costs.monthlyLimitUsd.map { String($0) } ?? "")
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Default task limit", text: $taskDefault)
+                    .keyboardType(.decimalPad)
+                TextField("Daily limit", text: $daily)
+                    .keyboardType(.decimalPad)
+                TextField("Monthly limit", text: $monthly)
+                    .keyboardType(.decimalPad)
+            } header: {
+                Text("Spending limits in USD")
+            } footer: {
+                Text("Limits must be between $0.01 and $10,000. Blank fields keep their current value.")
+            }
+        }
+        .navigationTitle("Spending limits")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button(isSaving ? "Saving…" : "Save") { save() }
+                    .disabled(isSaving)
+            }
+        }
+    }
+
+    private func save() {
+        isSaving = true
+        Task {
+            let saved = await model.updateCostLimits(
+                .init(taskDefault: taskDefault, daily: daily, monthly: monthly)
+            )
+            isSaving = false
+            if saved { dismiss() }
         }
     }
 }

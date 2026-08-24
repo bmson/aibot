@@ -98,6 +98,14 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual("waiting_approval".sentenceCaseIdentifier, "Waiting for approval")
     }
 
+    func testDecodesActivityParityFlags() throws {
+        let data = #"{"id":"1","type":"scheduled","status":"running","title":"Refresh","progress":"Working","trust":"owner","spentUsd":"0","budgetUsdLimit":"1","updatedAt":"2026-01-01T00:00:00Z","archivedAt":null,"hasPendingApproval":false,"hasActiveAutonomy":true,"stuckWaiting":true}"#.data(using: .utf8)!
+        let item = try JSONDecoder().decode(ActivityItem.self, from: data)
+
+        XCTAssertEqual(item.hasActiveAutonomy, true)
+        XCTAssertEqual(item.stuckWaiting, true)
+    }
+
     func testActivityTitlesKeepHumanLanguageAndFormatMachineIdentifiers() {
         let generatedTitle = activityItem(title: "document-processing")
         let humanTitle = activityItem(title: "Review the travel plan")

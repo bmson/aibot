@@ -25,8 +25,12 @@ final class AppModel: ObservableObject {
     @Published var presentedRoute: AssistantRoute?
     @Published private(set) var bootstrap: BootstrapResponse?
     @Published private(set) var overview: OverviewResponse?
+    @Published private(set) var archivedActivity: ActivityList?
+    @Published private(set) var archivedGoals: GoalsDashboard?
     @Published private(set) var workspace: WorkspaceResponse?
     @Published private(set) var mcpConnections: [McpConnection] = []
+    @Published private(set) var activeConversation: ConversationView?
+    @Published private(set) var personProfiles: [String: PersonProfileResponse] = [:]
     @Published private(set) var messages: [ChatMessage] = []
     @Published private(set) var isLoading = false
     @Published private(set) var isSending = false
@@ -97,7 +101,9 @@ final class AppModel: ObservableObject {
     }
     var memoryReviewCount: Int { bootstrap?.shell.memoryHealth.awaitingReview ?? 0 }
     var needsAttentionCount: Int { bootstrap?.shell.dashboard.needsAttention ?? 0 }
-    var conversationId: String? { bootstrap?.conversation.conversation.id }
+    var conversationId: String? {
+        activeConversation?.conversation.id ?? bootstrap?.conversation.conversation.id
+    }
     var latestFace: CompanionFace {
         messages.reversed().compactMap(\.face).first ?? .neutral
     }
@@ -235,10 +241,429 @@ final class AppModel: ObservableObject {
         catch { errorMessage = error.localizedDescription }
     }
 
+    func refreshArchivedActivity() async {
+        guard let client else { return }
+        do { archivedActivity = try await client.activity(archived: true) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func refreshArchivedGoals() async {
+        guard let client else { return }
+        do { archivedGoals = try await client.goals(archived: true) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func updateActivity(_ item: ActivityItem, action: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateActivity(id: item.id, action: action)
+            async let overviewRefresh: Void = refreshOverview()
+            async let archivedRefresh: Void = refreshArchivedActivity()
+            _ = await (overviewRefresh, archivedRefresh)
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func updateActivity(_ item: ActivityItem, action: String, budgetUsdLimit: Double?) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateActivity(
+                id: item.id,
+                action: action,
+                budgetUsdLimit: budgetUsdLimit
+            )
+            await refreshOverview()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func archiveOldActivity() async -> Bool {
+        guard let client else { return false }
+        do {
+            try await client.archiveOldActivity()
+            await refreshOverview()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func createGoal(_ goal: GoalMutation) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.createGoal(goal)
+            await refreshOverview()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func updateGoal(id: String, goal: GoalMutation) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateGoal(id: id, goal: goal)
+            await refreshOverview()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Mobile “delete” matches the web goal UI: archive the goal while
+    /// retaining its work conversation and evidence for later restoration.
+    func deleteGoal(_ goal: GoalRecord) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateGoal(id: goal.id, action: "delete")
+            await refreshOverview()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func restoreGoal(_ goal: GoalRecord) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateGoal(id: goal.id, action: "restore")
+            async let overviewRefresh: Void = refreshOverview()
+            async let archivedRefresh: Void = refreshArchivedGoals()
+            _ = await (overviewRefresh, archivedRefresh)
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func updateGoalLifecycle(
+        _ goal: GoalRecord,
+        action: String,
+        status: String? = nil,
+        enabled: Bool? = nil
+    ) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateGoal(
+                id: goal.id,
+                action: action,
+                status: status,
+                enabled: enabled
+            )
+            await refreshOverview()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func archiveInactiveGoals() async -> Bool {
+        guard let client else { return false }
+        do {
+            try await client.archiveInactiveGoals()
+            await refreshOverview()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func openConversation(id: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            setActiveConversation(try await client.conversation(id: id))
+            returnToChat()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func createConversation() async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            let created = try await client.createChat()
+            return await openConversation(id: created.conversationId)
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func archiveInactiveConversations() async -> Bool {
+        guard let client else { return false }
+        do {
+            try await client.archiveInactiveChats()
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func updateConversation(_ chat: WorkspaceChat, action: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateChat(id: chat.id, action: action)
+            if action == "archive", conversationId == chat.id {
+                activeConversation = nil
+                await refreshAll()
+            }
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func changeConversationModel(_ modelId: String?) async -> Bool {
+        guard let client, let conversationId else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateChat(id: conversationId, action: "change-model", modelId: modelId)
+            setActiveConversation(try await client.conversation(id: conversationId))
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     func refreshWorkspace() async {
         guard let client else { return }
         do { workspace = try await client.workspace() }
         catch { errorMessage = error.localizedDescription }
+    }
+
+    func uploadDocument(data: Data, name: String, title: String, mime: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.uploadDocument(data: data, name: name, title: title, mime: mime)
+            await refreshOverview()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func deleteDocument(_ document: DocumentRecord) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.deleteDocument(id: document.id)
+            await refreshOverview()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func uploadImport(
+        data: Data,
+        name: String,
+        source: String = "",
+        voice: Bool = false,
+        register: String = ""
+    ) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.uploadImport(
+                data: data,
+                name: name,
+                source: source,
+                voice: voice,
+                register: register
+            )
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func updateImport(
+        action: String,
+        source: String,
+        verdict: String? = nil,
+        workspacePath: String? = nil
+    ) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateImport(
+                action: action,
+                source: source,
+                verdict: verdict,
+                workspacePath: workspacePath
+            )
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func saveSkill(id: String? = nil, mutation: SkillMutation) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            if let id { try await client.updateSkill(id: id, skill: mutation) }
+            else { try await client.createSkill(mutation) }
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func setSkillDeprecated(_ skill: WorkspaceSkill, deprecated: Bool) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.setSkillDeprecated(id: skill.id, deprecated: deprecated)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func deleteSkill(_ skill: WorkspaceSkill) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.deleteSkill(id: skill.id)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func updateCostLimits(_ limits: CostLimitsMutation) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateCostLimits(limits)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func updateAnomaly(_ anomaly: WorkspaceAnomaly, action: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateAnomaly(id: anomaly.id, action: action)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func updateImprovement(_ improvement: WorkspaceImprovement, action: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateImprovement(id: improvement.id, action: action)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func updateAgentSettings(_ mutation: AgentSettingsMutation) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateSettings(mutation)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func setSchedule(_ schedule: WorkspaceSchedule, enabled: Bool) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.setScheduleEnabled(id: schedule.id, enabled: enabled)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func setPolicy(_ policy: WorkspacePolicy, enabled: Bool) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.setPolicyEnabled(id: policy.id, enabled: enabled)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func deletePolicy(_ policy: WorkspacePolicy) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.deletePolicy(id: policy.id)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
     }
 
     func refreshMcpConnections() async {
@@ -282,6 +707,140 @@ final class AppModel: ObservableObject {
         do {
             try await client.deleteMcpConnection(id: id)
             await refreshMcpConnections()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func createMemory(_ memory: MemoryMutation) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.createMemory(memory)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func correctMemory(id: String, content: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateMemory(id: id, content: content)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func updateMemory(id: String, action: String, prominence: String? = nil) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateMemory(id: id, action: action, prominence: prominence)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func updateMemoryProfile(action: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateMemoryProfile(action: action)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func savePerson(id: String? = nil, mutation: PersonMutation) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            if let id { try await client.updatePerson(id: id, person: mutation) }
+            else { try await client.createPerson(mutation) }
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func deletePerson(_ person: WorkspacePerson) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.deletePerson(id: person.id)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func loadPersonProfile(id: String) async {
+        guard let client else { return }
+        do { personProfiles[id] = try await client.personProfile(id: id) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func addOccasion(personId: String, mutation: OccasionMutation) async -> Bool {
+        guard let client else { return false }
+        do {
+            try await client.addOccasion(personId: personId, occasion: mutation)
+            await loadPersonProfile(id: personId)
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func reviewOccasion(personId: String, occasion: PersonOccasion, verdict: String) async -> Bool {
+        guard let client else { return false }
+        do {
+            try await client.reviewOccasion(id: occasion.id, verdict: verdict)
+            await loadPersonProfile(id: personId)
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func deleteOccasion(personId: String, occasion: PersonOccasion) async -> Bool {
+        guard let client else { return false }
+        do {
+            try await client.deleteOccasion(id: occasion.id)
+            await loadPersonProfile(id: personId)
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func mergePerson(_ person: WorkspacePerson, targetId: String) async -> Bool {
+        guard let client else { return false }
+        do {
+            try await client.mergePerson(id: person.id, targetId: targetId)
+            personProfiles.removeValue(forKey: person.id)
+            await refreshWorkspace()
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -373,6 +932,32 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func approveAndRemember(_ item: PendingApproval) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            _ = try await client.approveAndRemember(id: item.id)
+            await refreshAll()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func editAndApprove(_ item: PendingApproval, payload: JSONValue) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            _ = try await client.editAndApprove(id: item.id, payload: payload)
+            await refreshAll()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     /// Stops the turn in flight, keeping whatever text has already streamed in.
     func cancelSend() {
         guard isSending else { return }
@@ -429,15 +1014,27 @@ final class AppModel: ObservableObject {
 
     private func apply(_ response: BootstrapResponse, preservingLocalMessages: Bool = false) {
         bootstrap = response
-        cursor = response.conversation.cursor
-        if preservingLocalMessages {
-            merge(response.conversation.messages)
-        } else {
-            messages = response.conversation.messages
+        if activeConversation == nil
+            || activeConversation?.conversation.id == response.conversation.conversation.id {
+            activeConversation = response.conversation
+            cursor = response.conversation.cursor
+            if preservingLocalMessages {
+                merge(response.conversation.messages)
+            } else {
+                messages = response.conversation.messages
+            }
         }
         if !isSending, activityThought == nil || activityThought == .backgroundWork || activityThought == .needsYou {
             setActivityThought(baselineThought, proposedDetail: baselineDetail(for: baselineThought))
         }
+    }
+
+    private func setActiveConversation(_ conversation: ConversationView) {
+        activeConversation = conversation
+        cursor = conversation.cursor
+        messages = conversation.messages
+        toolActivity = []
+        activityThought = nil
     }
 
     private func receive(delta: String, streamID: String) async {

@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { deletePolicy, setPolicyEnabled, setScheduleEnabled } from '@/app/settings/actions';
 import { AgentForm } from '@/app/settings/agent-form';
 import { policyLabels, policyScope, scheduleLabels } from '@/app/settings/labels';
+import { McpConnectionsPanel } from '@/app/settings/mcp-connections';
 import { MobileTokenPanel } from '@/app/settings/mobile-token';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
@@ -70,12 +71,10 @@ function SettingRow({
 export default async function SettingsPage() {
   await requireOwner();
   const now = new Date();
-  const {
-    agent,
-    schedules: directScheduleRows,
-    policies: policyRows,
-    goalAutomationCount,
-  } = await getApplication().getSettings();
+  const [
+    { agent, schedules: directScheduleRows, policies: policyRows, goalAutomationCount },
+    mcpConnections,
+  ] = await Promise.all([getApplication().getSettings(), getApplication().listMcpConnections()]);
 
   // Pairing values for the iOS app. The URL mirrors what the owner is
   // browsing right now — if they reached settings over a LAN IP or the
@@ -130,6 +129,18 @@ export default async function SettingsPage() {
         <SectionHeading title="Mobile app" hint="pair the iPhone app with this server" />
         <Card className="mt-3">
           <MobileTokenPanel maskedToken={maskedToken} serverUrl={serverUrl} canRotate={canRotate} />
+        </Card>
+      </section>
+
+      {/* MCP servers */}
+      <section>
+        <SectionHeading
+          title="MCP connections"
+          count={mcpConnections.length}
+          hint="remote tool servers available to this assistant"
+        />
+        <Card className="mt-3">
+          <McpConnectionsPanel connections={mcpConnections} />
         </Card>
       </section>
 

@@ -215,6 +215,38 @@ struct ActivityItem: Codable, Identifiable, Sendable {
     let updatedAt: String
     let archivedAt: String?
     let hasPendingApproval: Bool
+    let hasActiveAutonomy: Bool?
+    let stuckWaiting: Bool?
+
+    init(
+        id: String,
+        type: String,
+        status: String,
+        title: String?,
+        progress: String,
+        trust: String,
+        spentUsd: String,
+        budgetUsdLimit: String,
+        updatedAt: String,
+        archivedAt: String?,
+        hasPendingApproval: Bool,
+        hasActiveAutonomy: Bool? = nil,
+        stuckWaiting: Bool? = nil
+    ) {
+        self.id = id
+        self.type = type
+        self.status = status
+        self.title = title
+        self.progress = progress
+        self.trust = trust
+        self.spentUsd = spentUsd
+        self.budgetUsdLimit = budgetUsdLimit
+        self.updatedAt = updatedAt
+        self.archivedAt = archivedAt
+        self.hasPendingApproval = hasPendingApproval
+        self.hasActiveAutonomy = hasActiveAutonomy
+        self.stuckWaiting = stuckWaiting
+    }
 
     var displayTitle: String {
         let candidate = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -398,6 +430,33 @@ struct WorkspaceResponse: Codable, Sendable {
     let costs: WorkspaceCosts
     let anomalies: [WorkspaceAnomaly]
     let improvements: [WorkspaceImprovement]
+    let imports: WorkspaceImports?
+}
+
+struct WorkspaceImports: Codable, Sendable {
+    let sources: [WorkspaceImportSource]
+    let unstartedFiles: [WorkspaceImportFile]
+}
+
+struct WorkspaceImportSource: Codable, Identifiable, Sendable {
+    var id: String { source }
+    let source: String
+    let workspacePath: String
+    let kind: String
+    let status: String
+    let itemsTotal: Int?
+    let itemsProcessed: Int
+    let memoriesSaved: Int
+    let quarantinedNow: Int
+    let taskId: String?
+    let error: String?
+    let updatedAt: String
+}
+
+struct WorkspaceImportFile: Codable, Identifiable, Sendable {
+    var id: String { name }
+    let name: String
+    let dir: Bool
 }
 
 struct WorkspaceCapability: Codable, Identifiable, Sendable {
@@ -448,10 +507,74 @@ struct WorkspaceChat: Codable, Identifiable, Sendable {
 
 struct WorkspaceMemory: Codable, Sendable {
     let ownerName: String?
+    /// The owner contact is the subject for facts created from the iPhone.
+    /// Optional keeps an app paired to an older server usable until it refreshes.
+    let ownerContactId: String?
     let health: MemoryHealth
     let facts: [WorkspaceMemoryFact]
     let awaitingReview: [WorkspaceMemoryFact]
     let peopleCount: Int
+    let people: [WorkspacePerson]?
+    let card: WorkspaceMemoryCard?
+    let voiceStats: WorkspaceVoiceStats?
+    let latestOrganizer: WorkspaceMemoryOrganizer?
+}
+
+struct WorkspacePerson: Codable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let aliases: [String]
+    let relationship: String
+    let trust: String
+    let factCount: Int
+}
+
+struct PersonProfileResponse: Codable, Sendable {
+    let contact: PersonProfileContact
+    let occasions: [PersonOccasion]
+    let mergeOptions: [PersonMergeOption]
+}
+
+struct PersonProfileContact: Codable, Sendable {
+    let id: String
+    let name: String
+    let aliases: [String]
+    let relationship: String
+    let trust: String
+}
+
+struct PersonOccasion: Codable, Identifiable, Sendable {
+    let id: String
+    let kind: String
+    let label: String
+    let month: Int
+    let day: Int
+    let year: Int?
+    let notes: String
+    let quarantined: Bool
+}
+
+struct PersonMergeOption: Codable, Identifiable, Sendable {
+    let id: String
+    let label: String
+}
+
+struct WorkspaceMemoryCard: Codable, Sendable {
+    let content: String
+    let compiledAt: String
+}
+
+struct WorkspaceVoiceStats: Codable, Sendable {
+    let total: Int
+    let auto: Int
+    let uploaded: Int
+}
+
+struct WorkspaceMemoryOrganizer: Codable, Sendable {
+    let id: String
+    let status: String
+    let progress: String
+    let updatedAt: String
 }
 
 struct WorkspaceMemoryFact: Codable, Identifiable, Sendable {

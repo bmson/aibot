@@ -19,17 +19,27 @@ export async function GET(request: Request): Promise<Response> {
   const diagnosticsByModule = new Map(
     moduleDiagnostics().map((diagnostic) => [diagnostic.module, diagnostic]),
   );
-  const [currentChats, archivedChats, profile, skills, settings, costs, anomalies, improvements] =
-    await Promise.all([
-      application.listChatHistory(false),
-      application.listChatHistory(true),
-      getProfileOverview(db),
-      application.listSkills(),
-      application.getSettings(),
-      getCostsDashboard(db),
-      application.listAnomalies(),
-      application.listImprovementProposals(),
-    ]);
+  const [
+    currentChats,
+    archivedChats,
+    profile,
+    skills,
+    settings,
+    costs,
+    anomalies,
+    improvements,
+    imports,
+  ] = await Promise.all([
+    application.listChatHistory(false),
+    application.listChatHistory(true),
+    getProfileOverview(db),
+    application.listSkills(),
+    application.getSettings(),
+    getCostsDashboard(db),
+    application.listAnomalies(),
+    application.listImprovementProposals(),
+    application.getImports(),
+  ]);
 
   return mobileJson({
     generatedAt: new Date().toISOString(),
@@ -51,6 +61,7 @@ export async function GET(request: Request): Promise<Response> {
     },
     memory: {
       ownerName: profile.owner?.name ?? null,
+      ownerContactId: profile.owner?.id ?? null,
       health: profile.memoryHealth,
       facts: profile.ownerFacts.slice(0, 80).map((fact) => ({
         id: fact.id,
@@ -73,6 +84,17 @@ export async function GET(request: Request): Promise<Response> {
         createdAt: fact.createdAt,
       })),
       peopleCount: profile.people.length,
+      people: profile.people.map(({ contact, factCount }) => ({
+        id: contact.id,
+        name: contact.name,
+        aliases: contact.aliases,
+        relationship: contact.relationship,
+        trust: contact.trust,
+        factCount,
+      })),
+      card: profile.card,
+      voiceStats: profile.voiceStats,
+      latestOrganizer: profile.latestOrganizer,
     },
     skills: skills.map((skill) => ({
       id: skill.id,
@@ -179,5 +201,21 @@ export async function GET(request: Request): Promise<Response> {
         createdAt: proposal.createdAt,
       };
     }),
+    imports: {
+      sources: imports.sources.map((source) => ({
+        source: source.source,
+        workspacePath: source.workspacePath,
+        kind: source.kind,
+        status: source.status,
+        itemsTotal: source.itemsTotal,
+        itemsProcessed: source.itemsProcessed,
+        memoriesSaved: source.memoriesSaved,
+        quarantinedNow: imports.quarantineBySource[source.source] ?? 0,
+        taskId: source.taskId,
+        error: source.error,
+        updatedAt: source.updatedAt,
+      })),
+      unstartedFiles: imports.unstartedFiles,
+    },
   });
 }

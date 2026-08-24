@@ -163,7 +163,7 @@ struct RootView: View {
             case .activity: ActivityView()
             case .goals: GoalsView()
             case .approvals: ApprovalsView()
-            case .memory: WorkspaceView(area: .memory)
+            case .memory: MemoryView()
             case .documents: WorkspaceView(area: .documents)
             case .skills: WorkspaceView(area: .skills)
             case .capabilities: WorkspaceView(area: .capabilities)

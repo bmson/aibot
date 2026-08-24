@@ -26,6 +26,8 @@ export interface ActivityItem {
   updatedAt: Date;
   archivedAt: Date | null;
   hasPendingApproval: boolean;
+  hasActiveAutonomy: boolean;
+  stuckWaiting: boolean;
 }
 
 export interface ActivityList {
@@ -53,6 +55,7 @@ export async function listActivity(
         budgetUsdLimit: tasks.budgetUsdLimit,
         updatedAt: tasks.updatedAt,
         archivedAt: tasks.archivedAt,
+        autonomyGrant: tasks.autonomyGrant,
       })
       .from(tasks)
       .where(
@@ -84,9 +87,11 @@ export async function listActivity(
   const pendingApprovalTaskIds = new Set(pendingIds.map((row) => row.taskId));
 
   return {
-    items: rows.map((task) => ({
+    items: rows.map(({ autonomyGrant, ...task }) => ({
       ...task,
       hasPendingApproval: pendingApprovalTaskIds.has(task.id),
+      hasActiveAutonomy: activeAutonomyGrant({ ...task, autonomyGrant }, Date.now()) !== null,
+      stuckWaiting: task.status === 'waiting_approval' && !pendingApprovalTaskIds.has(task.id),
     })),
     archivedCount: Number(archivedCountRows[0]?.value ?? 0),
   };

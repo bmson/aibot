@@ -1,0 +1,232 @@
+'use client';
+
+import { Cable, ChevronDown, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react';
+import { useState, useTransition } from 'react';
+import {
+  createMcpConnectionAction,
+  deleteMcpConnectionAction,
+  refreshMcpConnectionAction,
+  setMcpConnectionEnabledAction,
+} from '@/app/settings/actions';
+import { Badge, btn, btnSm, inputClass, labelClass } from '@/lib/ui';
+
+type McpConnection = {
+  id: string;
+  name: string;
+  endpoint: string;
+  status: 'ready' | 'checking' | 'authorization_required' | 'error' | 'disabled';
+  enabled: boolean;
+  serverName: string | null;
+  serverVersion: string | null;
+  instructions: string | null;
+  tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+  lastCheckedAt: Date | null;
+  lastError: string | null;
+};
+
+const STATUS: Record<
+  McpConnection['status'],
+  { label: string; tone: 'green' | 'amber' | 'red' | 'neutral' }
+> = {
+  ready: { label: 'Ready', tone: 'green' },
+  checking: { label: 'Checking', tone: 'amber' },
+  authorization_required: { label: 'Authorization needed', tone: 'amber' },
+  error: { label: 'Needs attention', tone: 'red' },
+  disabled: { label: 'Disabled', tone: 'neutral' },
+};
+
+/**
+ * This intentionally uses the same server actions as the mobile transport:
+ * discovery belongs to the owner-managed connection, not to either client.
+ */
+export function McpConnectionsPanel({ connections }: { connections: McpConnection[] }) {
+  const [name, setName] = useState('');
+  const [endpoint, setEndpoint] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const run = (key: string, action: () => Promise<{ error?: string }>, after?: () => void) => {
+    setError(null);
+    setPendingAction(key);
+    startTransition(async () => {
+      try {
+        const result = await action();
+        if (result.error) setError(result.error);
+        else after?.();
+      } finally {
+        setPendingAction(null);
+      }
+    });
+  };
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div>
+        <p className="text-sm leading-6 text-muted">
+          Connect Streamable HTTP MCP servers here. The assistant can inspect their tools, but every
+          remote call still follows your approval rules.
+        </p>
+      </div>
+
+      <form
+        className="grid gap-3 rounded-2xl bg-sunken/55 p-4 sm:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)_auto] sm:items-end"
+        onSubmit={(event) => {
+          event.preventDefault();
+          run(
+            'create',
+            () => createMcpConnectionAction({ name, endpoint }),
+            () => {
+              setName('');
+              setEndpoint('');
+            },
+          );
+        }}
+      >
+        <label className={`${labelClass} min-w-0`}>
+          Name
+          <input
+            required
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="e.g. Home Assistant"
+            className={inputClass}
+          />
+        </label>
+        <label className={`${labelClass} min-w-0`}>
+          MCP endpoint
+          <input
+            required
+            type="url"
+            value={endpoint}
+            onChange={(event) => setEndpoint(event.target.value)}
+            placeholder="https://example.com/mcp"
+            className={inputClass}
+          />
+        </label>
+        <button type="submit" disabled={pending} className={`${btn.primary} justify-center`}>
+          {pendingAction === 'create' ? (
+            <LoaderCircle className="size-4 motion-safe:animate-spin" />
+          ) : (
+            <Cable className="size-4" />
+          )}
+          {pendingAction === 'create' ? 'Inspecting…' : 'Add'}
+        </button>
+      </form>
+
+      {error ? (
+        <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+          {error}
+        </p>
+      ) : null}
+
+      {connections.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-edge px-4 py-5 text-sm text-muted">
+          No MCP connections yet.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {connections.map((connection) => {
+            const status = STATUS[connection.status];
+            const actionKey = (name: string) => `${name}:${connection.id}`;
+            const isWorking = pending && pendingAction?.endsWith(`:${connection.id}`);
+            return (
+              <article key={connection.id} className="rounded-2xl border border-edge bg-raised p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-medium text-strong">{connection.name}</h3>
+                      <Badge tone={status.tone} size="xs">
+                        {status.label}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 break-all font-mono text-xs leading-5 text-muted">
+                      {connection.endpoint}
+                    </p>
+                    {connection.serverName ? (
+                      <p className="mt-2 text-sm text-muted">
+                        {connection.serverName}
+                        {connection.serverVersion ? ` · ${connection.serverVersion}` : ''}
+                        {` · ${connection.tools.length} ${connection.tools.length === 1 ? 'tool' : 'tools'}`}
+                      </p>
+                    ) : null}
+                    {connection.lastError ? (
+                      <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+                        {connection.lastError}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={isWorking}
+                      onClick={() =>
+                        run(actionKey('refresh'), () => refreshMcpConnectionAction(connection.id))
+                      }
+                      className={btnSm.outline}
+                    >
+                      {pendingAction === actionKey('refresh') ? (
+                        <LoaderCircle className="size-3 motion-safe:animate-spin" />
+                      ) : (
+                        <RefreshCw className="size-3" />
+                      )}
+                      Refresh
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isWorking}
+                      onClick={() =>
+                        run(actionKey('enabled'), () =>
+                          setMcpConnectionEnabledAction(connection.id, !connection.enabled),
+                        )
+                      }
+                      className={btnSm.outline}
+                    >
+                      {pendingAction === actionKey('enabled') ? (
+                        <LoaderCircle className="size-3 motion-safe:animate-spin" />
+                      ) : null}
+                      {connection.enabled ? 'Disable' : 'Enable'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isWorking}
+                      onClick={() => {
+                        if (window.confirm(`Remove ${connection.name}?`)) {
+                          run(actionKey('delete'), () => deleteMcpConnectionAction(connection.id));
+                        }
+                      }}
+                      className={btnSm.dangerOutline}
+                    >
+                      {pendingAction === actionKey('delete') ? (
+                        <LoaderCircle className="size-3 motion-safe:animate-spin" />
+                      ) : (
+                        <Trash2 className="size-3" />
+                      )}
+                      Remove
+                    </button>
+                  </div>
+                </div>
+                {connection.tools.length > 0 ? (
+                  <details className="mt-3 border-t border-edge pt-3">
+                    <summary className="flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-muted">
+                      <ChevronDown className="size-3" aria-hidden="true" />
+                      Discovered tools ({connection.tools.length})
+                    </summary>
+                    <ul className="mt-2 grid gap-1.5 text-xs leading-5 text-muted">
+                      {connection.tools.map((tool) => (
+                        <li key={tool.name}>
+                          <span className="font-mono text-strong">{tool.name}</span>
+                          {tool.description ? ` — ${tool.description}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

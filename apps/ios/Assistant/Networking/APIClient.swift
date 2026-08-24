@@ -62,8 +62,266 @@ struct APIClient: Sendable {
         try await get("api/mobile/v1/overview")
     }
 
+    func activity(archived: Bool) async throws -> ActivityList {
+        var components = URLComponents(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/activity"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [.init(name: "archived", value: archived ? "true" : "false")]
+        guard let url = components?.url else { throw APIError.invalidServerURL }
+        return try await perform(makeRequest(url: url), as: ActivityList.self)
+    }
+
+    func updateActivity(id: String, action: String, budgetUsdLimit: Double? = nil) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/activity/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(
+            ActivityActionBody(action: action, budgetUsdLimit: budgetUsdLimit)
+        )
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func archiveOldActivity() async throws {
+        try await postCollectionAction(path: "activity", action: "archive-old")
+    }
+
+    func createGoal(_ goal: GoalMutation) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/goals"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(goal)
+        _ = try await perform(request, as: GoalCreateReceipt.self)
+    }
+
+    func goals(archived: Bool) async throws -> GoalsDashboard {
+        var components = URLComponents(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/goals"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [.init(name: "archived", value: archived ? "true" : "false")]
+        guard let url = components?.url else { throw APIError.invalidServerURL }
+        return try await perform(makeRequest(url: url), as: GoalsDashboard.self)
+    }
+
+    func updateGoal(id: String, goal: GoalMutation) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/goals/\(id)")
+        )
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(goal)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func updateGoal(id: String, action: String, status: String? = nil, enabled: Bool? = nil) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/goals/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(
+            GoalActionBody(action: action, status: status, enabled: enabled)
+        )
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func archiveInactiveGoals() async throws {
+        try await postCollectionAction(path: "goals", action: "archive-inactive")
+    }
+
+    func createChat() async throws -> ChatCreateReceipt {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/chats"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["action": "create"])
+        return try await perform(request, as: ChatCreateReceipt.self)
+    }
+
+    func archiveInactiveChats() async throws {
+        try await postCollectionAction(path: "chats", action: "archive-inactive")
+    }
+
+    func conversation(id: String) async throws -> ConversationView {
+        try await get("api/mobile/v1/chats/\(id)")
+    }
+
+    func updateChat(id: String, action: String, modelId: String? = nil) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/chats/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(ChatActionBody(action: action, modelId: modelId))
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
     func workspace() async throws -> WorkspaceResponse {
         try await get("api/mobile/v1/workspace")
+    }
+
+    func uploadDocument(data: Data, name: String, title: String, mime: String) async throws {
+        let boundary = "AssistantBoundary-\(UUID().uuidString)"
+        var body = Data()
+        func append(_ text: String) { body.append(Data(text.utf8)) }
+        append("--\(boundary)\r\n")
+        append("Content-Disposition: form-data; name=\"title\"\r\n\r\n")
+        append("\(title)\r\n")
+        append("--\(boundary)\r\n")
+        append("Content-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\n")
+        append("Content-Type: \(mime)\r\n\r\n")
+        body.append(data)
+        append("\r\n--\(boundary)--\r\n")
+
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/documents")
+        )
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "content-type")
+        request.httpBody = body
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func deleteDocument(id: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/documents/\(id)")
+        )
+        request.httpMethod = "DELETE"
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func uploadImport(
+        data: Data,
+        name: String,
+        source: String,
+        voice: Bool,
+        register: String
+    ) async throws {
+        let boundary = "AssistantImportBoundary-\(UUID().uuidString)"
+        var body = Data()
+        func append(_ text: String) { body.append(Data(text.utf8)) }
+        for (field, value) in [
+            ("source", source),
+            ("voice", voice ? "1" : "0"),
+            ("register", register),
+        ] {
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"\(field)\"\r\n\r\n")
+            append("\(value)\r\n")
+        }
+        append("--\(boundary)\r\n")
+        append("Content-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\n")
+        append("Content-Type: text/plain\r\n\r\n")
+        body.append(data)
+        append("\r\n--\(boundary)--\r\n")
+
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/imports")
+        )
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "content-type")
+        request.httpBody = body
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func updateImport(
+        action: String,
+        source: String,
+        verdict: String? = nil,
+        workspacePath: String? = nil
+    ) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/imports"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(
+            ImportActionBody(
+                action: action,
+                source: source,
+                verdict: verdict,
+                workspacePath: workspacePath
+            )
+        )
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func createSkill(_ skill: SkillMutation) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/skills"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(skill)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func updateSkill(id: String, skill: SkillMutation) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/skills/\(id)")
+        )
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(skill)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func setSkillDeprecated(id: String, deprecated: Bool) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/skills/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["deprecated": deprecated])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func deleteSkill(id: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/skills/\(id)")
+        )
+        request.httpMethod = "DELETE"
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func updateCostLimits(_ limits: CostLimitsMutation) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/costs"))
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(limits)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func updateAnomaly(id: String, action: String) async throws {
+        try await postWorkspaceAction(path: "anomalies/\(id)", action: action)
+    }
+
+    func updateImprovement(id: String, action: String) async throws {
+        try await postWorkspaceAction(path: "improvements/\(id)", action: action)
+    }
+
+    func updateSettings(_ settings: AgentSettingsMutation) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/settings"))
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(settings)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func setScheduleEnabled(id: String, enabled: Bool) async throws {
+        try await setEnabled(path: "settings/schedules/\(id)", enabled: enabled)
+    }
+
+    func setPolicyEnabled(id: String, enabled: Bool) async throws {
+        try await setEnabled(path: "settings/policies/\(id)", enabled: enabled)
+    }
+
+    func deletePolicy(id: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/settings/policies/\(id)")
+        )
+        request.httpMethod = "DELETE"
+        _ = try await perform(request, as: OkPayload.self)
     }
 
     func mcpConnections() async throws -> McpConnectionsResponse {
@@ -96,6 +354,114 @@ struct APIClient: Sendable {
         _ = try await perform(request, as: OkPayload.self)
     }
 
+    func createMemory(_ memory: MemoryMutation) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/memory"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(memory)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func updateMemory(id: String, content: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/\(id)")
+        )
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["content": content])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func updateMemory(id: String, action: String, prominence: String? = nil) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        var body: [String: String] = ["action": action]
+        if let prominence { body["prominence"] = prominence }
+        request.httpBody = try JSONEncoder().encode(body)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func updateMemoryProfile(action: String) async throws {
+        try await postWorkspaceAction(path: "memory/profile", action: action)
+    }
+
+    func createPerson(_ person: PersonMutation) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/people")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(person)
+        _ = try await perform(request, as: PersonCreateReceipt.self)
+    }
+
+    func updatePerson(id: String, person: PersonMutation) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/people/\(id)")
+        )
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(person)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func deletePerson(id: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/people/\(id)")
+        )
+        request.httpMethod = "DELETE"
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func personProfile(id: String) async throws -> PersonProfileResponse {
+        try await get("api/mobile/v1/memory/people/\(id)")
+    }
+
+    func addOccasion(personId: String, occasion: OccasionMutation) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(
+                path: "api/mobile/v1/memory/people/\(personId)/occasions"
+            )
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(occasion)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func reviewOccasion(id: String, verdict: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/occasions/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["verdict": verdict])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func deleteOccasion(id: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/occasions/\(id)")
+        )
+        request.httpMethod = "DELETE"
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func mergePerson(id: String, targetId: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/people/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(
+            PersonMergeBody(action: "merge", targetId: targetId)
+        )
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
     func updates(conversationId: String, taskId: String?, cursor: String?) async throws -> ChatUpdates {
         var components = URLComponents(
             url: configuration.baseURL.appending(path: "api/mobile/v1/chat/status"),
@@ -118,6 +484,14 @@ struct APIClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONEncoder().encode(["decision": decision])
         return try await perform(request, as: ApprovalResult.self)
+    }
+
+    func approveAndRemember(id: String) async throws -> ApprovalResult {
+        try await approvalAction(id: id, body: ApprovalActionBody(action: "remember", payload: nil))
+    }
+
+    func editAndApprove(id: String, payload: JSONValue) async throws -> ApprovalResult {
+        try await approvalAction(id: id, body: ApprovalActionBody(action: "edit", payload: payload))
     }
 
     /// Fire-and-forget ambient ping; callers use `try?` — a failed post only
@@ -180,6 +554,40 @@ struct APIClient: Sendable {
         try await perform(makeRequest(url: configuration.baseURL.appending(path: path)), as: T.self)
     }
 
+    private func postWorkspaceAction(path: String, action: String) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/\(path)"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["action": action])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    private func postCollectionAction(path: String, action: String) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/\(path)"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["action": action])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    private func setEnabled(path: String, enabled: Bool) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/\(path)"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["enabled": enabled])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    private func approvalAction(id: String, body: ApprovalActionBody) async throws -> ApprovalResult {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/approvals/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(body)
+        return try await perform(request, as: ApprovalResult.self)
+    }
+
     private func makeRequest(url: URL) -> URLRequest {
         var request = URLRequest(url: url)
         request.timeoutInterval = 60
@@ -220,6 +628,34 @@ private struct ErrorBody: Decodable { let error: String }
 private struct OkPayload: Decodable { let ok: Bool }
 private struct EmptyPayload: Decodable {}
 
+private struct ActivityActionBody: Encodable {
+    let action: String
+    let budgetUsdLimit: Double?
+}
+
+private struct GoalActionBody: Encodable {
+    let action: String
+    let status: String?
+    let enabled: Bool?
+}
+
+private struct ChatActionBody: Encodable {
+    let action: String
+    let modelId: String?
+}
+
+private struct ApprovalActionBody: Encodable {
+    let action: String
+    let payload: JSONValue?
+}
+
+private struct ImportActionBody: Encodable {
+    let action: String
+    let source: String
+    let verdict: String?
+    let workspacePath: String?
+}
+
 /// Matches the server's LocationPingSchema (packages/core/src/memory/location.ts).
 struct LocationPingBody: Encodable {
     let lat: Double
@@ -229,6 +665,78 @@ struct LocationPingBody: Encodable {
     let capturedAt: String
     let timeZone: String
     let source: String
+}
+
+struct GoalMutation: Encodable, Sendable {
+    let title: String
+    let description: String
+    let priority: Int
+    let targetDate: String?
+    let progress: String
+    let nextAction: String
+    let mirrorToPrimary: Bool
+}
+
+struct SkillMutation: Encodable, Sendable {
+    let name: String
+    let preconditions: String
+    let steps: String
+    let gotchas: String
+}
+
+struct CostLimitsMutation: Encodable, Sendable {
+    let taskDefault: String
+    let daily: String
+    let monthly: String
+}
+
+struct AgentSettingsMutation: Encodable, Sendable {
+    let timezone: String
+    let locale: String
+    let signature: String
+}
+
+struct MemoryMutation: Encodable, Sendable {
+    let content: String
+    let domain: String
+    let importance: Int
+    let pinned: Bool
+    let subjectContactId: String
+}
+
+struct PersonMutation: Encodable, Sendable {
+    let name: String
+    let relationship: String
+    let aliases: String
+}
+
+struct OccasionMutation: Encodable, Sendable {
+    let kind: String
+    let label: String
+    let month: String
+    let day: String
+    let year: String
+    let leadDays: String
+    let notes: String
+}
+
+private struct PersonMergeBody: Encodable {
+    let action: String
+    let targetId: String
+}
+
+private struct PersonCreateReceipt: Decodable {
+    let contactId: String?
+}
+
+private struct GoalCreateReceipt: Decodable {
+    let conversationId: String
+    let taskId: String
+    let messageCursor: String
+}
+
+struct ChatCreateReceipt: Decodable, Sendable {
+    let conversationId: String
 }
 
 private struct ChatRequest: Encodable {

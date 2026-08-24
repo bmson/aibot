@@ -138,6 +138,13 @@ const navItems: Array<Omit<NavDestination, 'count'>> = [
     aliases: [],
   },
   {
+    href: '/capabilities',
+    label: 'Capabilities',
+    command: '/capabilities',
+    hint: 'Optional tools and setup status',
+    aliases: ['integrations', 'modules'],
+  },
+  {
     href: '/settings',
     label: 'Settings',
     command: '/settings',

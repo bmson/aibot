@@ -10,6 +10,7 @@ struct ApprovalsView: View {
     @State private var decisionInFlightAction: String?
     @State private var decisionSuccessFeedback = 0
     @State private var decisionErrorFeedback = 0
+    @State private var editingApproval: PendingApproval?
 
     var body: some View {
         ScrollView {
@@ -87,6 +88,9 @@ struct ApprovalsView: View {
         }
         .sensoryFeedback(.success, trigger: decisionSuccessFeedback)
         .sensoryFeedback(.error, trigger: decisionErrorFeedback)
+        .sheet(item: $editingApproval) { item in
+            NavigationStack { ApprovalPayloadEditor(item: item) }
+        }
     }
 
     private var pending: [PendingApproval] { model.overview?.approvals.pending ?? [] }
@@ -235,6 +239,30 @@ struct ApprovalsView: View {
             item: item,
             prominent: true
         )
+
+        Menu {
+            Button("Edit request", systemImage: "pencil") {
+                editingApproval = item
+            }
+            if canRemember(item) {
+                Button("Approve and remember recipient", systemImage: "checkmark.shield") {
+                    decisionInFlightID = item.id
+                    decisionInFlightAction = "remember"
+                    Task {
+                        let succeeded = await model.approveAndRemember(item)
+                        decisionInFlightID = nil
+                        decisionInFlightAction = nil
+                        if succeeded { decisionSuccessFeedback += 1 }
+                        else { decisionErrorFeedback += 1 }
+                    }
+                }
+            }
+        } label: {
+            Label("More", systemImage: "ellipsis.circle")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .disabled(decisionInFlightID != nil)
     }
 
     @ViewBuilder
@@ -313,4 +341,75 @@ struct ApprovalsView: View {
     }
 
     private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    private func canRemember(_ item: PendingApproval) -> Bool {
+        guard item.toolName == "gmail.send",
+              case let .object(payload) = item.approval.payload,
+              case let .array(recipients)? = payload["to"] else { return false }
+        return recipients.compactMap(\.string).filter { !$0.isEmpty }.count == 1
+    }
+}
+
+private struct ApprovalPayloadEditor: View {
+    let item: PendingApproval
+
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var payload: String
+    @State private var error: String?
+    @State private var isSaving = false
+
+    init(item: PendingApproval) {
+        self.item = item
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let data = (try? encoder.encode(item.approval.payload)) ?? Data("{}".utf8)
+        _payload = State(initialValue: String(decoding: data, as: UTF8.self))
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                TextEditor(text: $payload)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(minHeight: 260)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            } header: {
+                Text("Exact request")
+            } footer: {
+                Text("The assistant uses this JSON payload after approval.")
+            }
+            if let error {
+                Section { Text(error).foregroundStyle(.red) }
+            }
+        }
+        .navigationTitle("Edit request")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button(isSaving ? "Approving…" : "Approve") { approve() }
+                    .disabled(isSaving)
+            }
+        }
+    }
+
+    private func approve() {
+        guard let data = payload.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(JSONValue.self, from: data),
+              case .object = decoded else {
+            error = "Payload must be a valid JSON object."
+            return
+        }
+        error = nil
+        isSaving = true
+        Task {
+            let succeeded = await model.editAndApprove(item, payload: decoded)
+            isSaving = false
+            if succeeded { dismiss() }
+        }
+    }
 }

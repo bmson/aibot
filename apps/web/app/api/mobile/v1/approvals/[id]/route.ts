@@ -1,4 +1,5 @@
-import { getApplication } from '@/lib/server';
+import { approveAndRememberApproval, decideApproval } from '@assistant/application/approvals';
+import { getApplication, getDb } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -13,9 +14,32 @@ export async function POST(
   const { id } = await params;
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid approval id' }, { status: 400 });
 
-  const body = (await request.json().catch(() => null)) as { decision?: unknown } | null;
+  const body = (await request.json().catch(() => null)) as {
+    action?: unknown;
+    decision?: unknown;
+    payload?: unknown;
+  } | null;
+  if (body?.action === 'remember') {
+    const result = await approveAndRememberApproval(getDb(), id);
+    return result.ok ? mobileJson(result) : mobileJson({ error: result.reason }, { status: 409 });
+  }
+  if (body?.action === 'edit') {
+    if (!body.payload || typeof body.payload !== 'object' || Array.isArray(body.payload)) {
+      return mobileJson({ error: 'payload must be a JSON object' }, { status: 400 });
+    }
+    const result = await decideApproval(
+      getDb(),
+      id,
+      'approved',
+      body.payload as Record<string, unknown>,
+    );
+    return result.ok ? mobileJson(result) : mobileJson({ error: result.reason }, { status: 409 });
+  }
   if (body?.decision !== 'approved' && body?.decision !== 'denied') {
-    return mobileJson({ error: 'decision must be approved or denied' }, { status: 400 });
+    return mobileJson(
+      { error: 'decision must be approved or denied, or action must be remember or edit' },
+      { status: 400 },
+    );
   }
   const result = await getApplication().decideApproval(id, body.decision);
   return result.ok ? mobileJson(result) : mobileJson({ error: result.reason }, { status: 409 });
