@@ -106,6 +106,121 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(calendars, ["Work"])
     }
 
+    func testOtherStructuredCardsDecodeCompleteToolBackedData() {
+        let reminder = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("reminder"), "id": .string("reminder-1"),
+                "title": .string("**Review** launch plan"), "schedule": .string("0 9 * * 1"),
+                "nextFires": .string("2026-08-31T16:00:00.000Z"), "enabled": .bool(true),
+            ])
+        )
+        guard case let .reminder(id, title, schedule, _, enabled)? = MessageResponseCard(part: reminder) else {
+            return XCTFail("Expected a reminder card")
+        }
+        XCTAssertEqual(id, "reminder-1")
+        XCTAssertEqual(title, "**Review** launch plan")
+        XCTAssertEqual(schedule, "0 9 * * 1")
+        XCTAssertTrue(enabled)
+
+        let emails = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("email-results"), "id": .string("email-1"),
+                "query": .string("launch"), "mailbox": .string("owner@example.com"),
+                "complete": .bool(false), "matchingMessagesEstimate": .number(3),
+                "messages": .array([
+                    .object([
+                        "id": .string("message-1"), "sender": .string("Ada"),
+                        "subject": .string("**Launch** update"), "date": .string("today"),
+                        "snippet": .string("Everything is ready."),
+                    ]),
+                ]),
+            ])
+        )
+        guard case let .emails(_, _, query, mailbox, complete, estimate, messages)? = MessageResponseCard(part: emails) else {
+            return XCTFail("Expected an email results card")
+        }
+        XCTAssertEqual(query, "launch")
+        XCTAssertEqual(mailbox, "owner@example.com")
+        XCTAssertFalse(complete)
+        XCTAssertEqual(estimate, 3)
+        XCTAssertEqual(messages.first?.subject, "**Launch** update")
+
+        let documents = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("document-results"), "query": .string("launch"),
+                "passages": .array([
+                    .object([
+                        "id": .string("passage-1"), "document": .string("Launch brief"),
+                        "source": .string("upload"), "snippet": .string("**Ready** to ship."),
+                        "similarity": .number(0.98),
+                    ]),
+                ]),
+            ])
+        )
+        guard case let .documents(_, _, _, passages)? = MessageResponseCard(part: documents) else {
+            return XCTFail("Expected a document results card")
+        }
+        XCTAssertEqual(passages.first?.document, "Launch brief")
+        XCTAssertEqual(passages.first?.similarity, 0.98)
+
+        let drive = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("drive-results"),
+                "files": .array([
+                    .object([
+                        "id": .string("file-1"), "name": .string("Launch deck"),
+                        "mimeType": .string("application/pdf"), "size": .string("2048"),
+                        "url": .string("https://drive.example.com/launch"),
+                    ]),
+                ]),
+            ])
+        )
+        guard case let .drive(_, _, _, files)? = MessageResponseCard(part: drive) else {
+            return XCTFail("Expected a Drive results card")
+        }
+        XCTAssertEqual(files.first?.name, "Launch deck")
+        XCTAssertEqual(files.first?.url, "https://drive.example.com/launch")
+
+        let resource = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("resource"), "id": .string("doc-1"),
+                "resourceType": .string("document"), "title": .string("**Launch** recap"),
+                "subtitle": .string("Google Doc created"),
+                "details": .array([.object(["label": .string("Shared with"), "value": .string("owner@example.com")])]),
+                "link": .object(["label": .string("Open document"), "url": .string("https://docs.example.com/recap")]),
+            ])
+        )
+        guard case let .resource(_, resourceType, title, _, details, linkLabel, linkURL)? = MessageResponseCard(part: resource) else {
+            return XCTFail("Expected a resource card")
+        }
+        XCTAssertEqual(resourceType, "document")
+        XCTAssertEqual(title, "**Launch** recap")
+        XCTAssertEqual(details.first?.value, "owner@example.com")
+        XCTAssertEqual(linkLabel, "Open document")
+        XCTAssertEqual(linkURL, "https://docs.example.com/recap")
+
+        let status = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("status"), "title": .string("Email draft ready"),
+                "detail": .string("**Launch** recap"), "symbol": .string("envelope.badge.fill"),
+                "details": .array([.object(["label": .string("To"), "value": .string("ada@example.com")])]),
+            ])
+        )
+        guard case let .status(_, statusTitle, detail, symbol, statusDetails)? = MessageResponseCard(part: status) else {
+            return XCTFail("Expected a status card")
+        }
+        XCTAssertEqual(statusTitle, "Email draft ready")
+        XCTAssertEqual(detail, "**Launch** recap")
+        XCTAssertEqual(symbol, "envelope.badge.fill")
+        XCTAssertEqual(statusDetails.first?.value, "ada@example.com")
+    }
+
     func testResponseCardsInferWeatherAndDurationOnlyFromStrongSignals() {
         let weather = MessageResponseCard.inferred(
             from: "The weather is sunny and 18°C now. Wind stays light this afternoon."

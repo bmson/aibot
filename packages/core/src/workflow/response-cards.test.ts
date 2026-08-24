@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { calendarResponseCards, weatherResponseCards } from './response-cards.js';
+import {
+  calendarResponseCards,
+  responseCardsForFinal,
+  weatherResponseCards,
+} from './response-cards.js';
 
 const request = {
   kind: 'calendar' as const,
@@ -73,5 +77,141 @@ describe('response cards', () => {
         ],
       },
     ]);
+  });
+
+  it('builds complete cards for reminders, inbox, documents, Drive, artifacts, and confirmations', () => {
+    const result = responseCardsForFinal({
+      evidence: [
+        {
+          toolName: 'reminder.create',
+          status: 'succeeded',
+          result: {
+            reminderId: 'reminder-1',
+            text: '**Review** the launch plan',
+            cron: '0 9 * * 1',
+            nextFires: '2026-08-31T16:00:00.000Z',
+          },
+        },
+        {
+          toolName: 'gmail.search',
+          status: 'succeeded',
+          args: { query: 'launch' },
+          result: {
+            mailboxSearched: 'owner@example.com',
+            complete: false,
+            matchingMessagesEstimate: 3,
+            results: [
+              {
+                messageId: 'message-1',
+                threadId: 'thread-1',
+                from: 'Ada <ada@example.com>',
+                to: 'owner@example.com',
+                subject: '**Launch** update',
+                date: 'Mon, 24 Aug 2026 09:00:00 -0700',
+                snippet: 'The plan is ready.',
+              },
+            ],
+          },
+        },
+        {
+          toolName: 'documents.search',
+          status: 'succeeded',
+          args: { query: 'launch plan' },
+          result: {
+            passages: [
+              {
+                document: 'Launch brief',
+                source: 'upload',
+                snippet: 'The **launch** is scheduled for Monday.',
+                similarity: 0.982,
+              },
+            ],
+          },
+        },
+        {
+          toolName: 'drive.search',
+          status: 'succeeded',
+          args: { query: 'launch' },
+          result: {
+            files: [
+              {
+                fileId: 'drive-1',
+                name: 'Launch deck',
+                mimeType: 'application/vnd.google-apps.presentation',
+                modifiedTime: '2026-08-24T16:00:00.000Z',
+                size: '2048',
+                url: 'https://drive.example.com/launch',
+              },
+            ],
+          },
+        },
+        {
+          toolName: 'docs.create',
+          status: 'succeeded',
+          args: { title: 'Launch recap' },
+          result: {
+            documentId: 'doc-1',
+            title: 'Launch recap',
+            sharedWith: 'owner@example.com',
+            url: 'https://docs.example.com/launch-recap',
+          },
+        },
+        {
+          toolName: 'gmail.create_draft',
+          status: 'succeeded',
+          args: { to: ['ada@example.com'], subject: '**Launch** recap' },
+          result: { draftId: 'draft-1', to: ['ada@example.com'], subject: '**Launch** recap' },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject([
+      {
+        kind: 'resource',
+        resourceType: 'document',
+        title: 'Launch recap',
+        link: { label: 'Open document', url: 'https://docs.example.com/launch-recap' },
+      },
+      {
+        kind: 'status',
+        title: 'Email draft ready',
+        detail: '**Launch** recap',
+        details: [{ label: 'To', value: 'ada@example.com' }],
+      },
+      {
+        kind: 'reminder',
+        title: '**Review** the launch plan',
+        schedule: '0 9 * * 1',
+      },
+      {
+        kind: 'email-results',
+        complete: false,
+        matchingMessagesEstimate: 3,
+        messages: [{ subject: '**Launch** update', snippet: 'The plan is ready.' }],
+      },
+      {
+        kind: 'document-results',
+        passages: [{ document: 'Launch brief', source: 'upload', similarity: 0.982 }],
+      },
+      {
+        kind: 'drive-results',
+        files: [{ name: 'Launch deck', size: '2048' }],
+      },
+    ]);
+  });
+
+  it('does not revive cards from an earlier task in the conversation', () => {
+    expect(
+      responseCardsForFinal({
+        evidence: [
+          {
+            toolName: 'gmail.send',
+            status: 'succeeded',
+            fromCurrentTask: false,
+            result: { messageId: 'old-message', to: ['person@example.com'] },
+          },
+        ],
+      }),
+    ).toEqual([]);
   });
 });

@@ -311,10 +311,48 @@ enum MessageResponseCard: Identifiable {
         var id: String { label.lowercased() }
     }
 
+    struct Detail: Identifiable {
+        let label: String
+        let value: String
+        var id: String { label.lowercased() }
+    }
+
+    struct EmailResult: Identifiable {
+        let id: String
+        let sender: String
+        let recipient: String
+        let subject: String
+        let date: String
+        let snippet: String
+    }
+
+    struct DocumentPassage: Identifiable {
+        let id: String
+        let document: String
+        let source: String
+        let snippet: String
+        let similarity: Double?
+    }
+
+    struct DriveFile: Identifiable {
+        let id: String
+        let name: String
+        let mimeType: String
+        let modifiedTime: String
+        let size: String
+        let url: String
+    }
+
     case agenda(title: String, subtitle: String, items: [AgendaItem])
     case event(id: String, time: String, title: String, location: String, attendees: [String], calendars: [String], linkLabel: String?, linkURL: String?)
     case weather(location: String, temperature: String, condition: String, details: [WeatherDetail])
     case duration(title: String, duration: String, detail: String?, confidence: String?)
+    case reminder(id: String, title: String, schedule: String, nextFires: String, enabled: Bool)
+    case emails(id: String, title: String, query: String, mailbox: String, complete: Bool, matchingMessagesEstimate: Int?, messages: [EmailResult])
+    case documents(id: String, title: String, query: String, passages: [DocumentPassage])
+    case drive(id: String, title: String, query: String, files: [DriveFile])
+    case resource(id: String, resourceType: String, title: String, subtitle: String, details: [Detail], linkLabel: String?, linkURL: String?)
+    case status(id: String, title: String, detail: String, symbol: String, details: [Detail])
 
     var id: String {
         switch self {
@@ -322,6 +360,12 @@ enum MessageResponseCard: Identifiable {
         case let .event(id, _, _, _, _, _, _, _): id
         case let .weather(location, temperature, _, _): "weather-\(location)-\(temperature)"
         case let .duration(title, duration, _, _): "duration-\(title)-\(duration)"
+        case let .reminder(id, _, _, _, _): id
+        case let .emails(id, _, _, _, _, _, _): id
+        case let .documents(id, _, _, _): id
+        case let .drive(id, _, _, _): id
+        case let .resource(id, _, _, _, _, _, _): id
+        case let .status(id, _, _, _, _): id
         }
     }
 
@@ -372,6 +416,101 @@ enum MessageResponseCard: Identifiable {
                 duration: duration,
                 detail: data["detail"]?.string,
                 confidence: data["confidence"]?.string
+            )
+        case "reminder":
+            guard let title = data["title"]?.string else { return nil }
+            self = .reminder(
+                id: data["id"]?.string ?? "reminder-\(title)",
+                title: title,
+                schedule: data["schedule"]?.string ?? "",
+                nextFires: data["nextFires"]?.string ?? "",
+                enabled: data["enabled"]?.boolValue ?? true
+            )
+        case "email-results":
+            let messages: [EmailResult] = {
+                guard case let .array(values)? = data["messages"] else { return [] }
+                return values.enumerated().compactMap { index, value in
+                    guard case let .object(message) = value else { return nil }
+                    return .init(
+                        id: message["id"]?.string ?? "email-\(index)",
+                        sender: message["sender"]?.string ?? "",
+                        recipient: message["recipient"]?.string ?? "",
+                        subject: message["subject"]?.string ?? "No subject",
+                        date: message["date"]?.string ?? "",
+                        snippet: message["snippet"]?.string ?? ""
+                    )
+                }
+            }()
+            self = .emails(
+                id: data["id"]?.string ?? "email-results",
+                title: data["title"]?.string ?? "Email results",
+                query: data["query"]?.string ?? "",
+                mailbox: data["mailbox"]?.string ?? "",
+                complete: data["complete"]?.boolValue ?? true,
+                matchingMessagesEstimate: data["matchingMessagesEstimate"]?.integerValue,
+                messages: messages
+            )
+        case "document-results":
+            let passages: [DocumentPassage] = {
+                guard case let .array(values)? = data["passages"] else { return [] }
+                return values.enumerated().compactMap { index, value in
+                    guard case let .object(passage) = value else { return nil }
+                    return .init(
+                        id: passage["id"]?.string ?? "passage-\(index)",
+                        document: passage["document"]?.string ?? "Untitled document",
+                        source: passage["source"]?.string ?? "",
+                        snippet: passage["snippet"]?.string ?? "",
+                        similarity: passage["similarity"]?.numberValue
+                    )
+                }
+            }()
+            self = .documents(
+                id: data["id"]?.string ?? "document-results",
+                title: data["title"]?.string ?? "Document matches",
+                query: data["query"]?.string ?? "",
+                passages: passages
+            )
+        case "drive-results":
+            let files: [DriveFile] = {
+                guard case let .array(values)? = data["files"] else { return [] }
+                return values.enumerated().compactMap { index, value in
+                    guard case let .object(file) = value else { return nil }
+                    return .init(
+                        id: file["id"]?.string ?? "file-\(index)",
+                        name: file["name"]?.string ?? "Untitled file",
+                        mimeType: file["mimeType"]?.string ?? "",
+                        modifiedTime: file["modifiedTime"]?.string ?? "",
+                        size: file["size"]?.string ?? "",
+                        url: file["url"]?.string ?? ""
+                    )
+                }
+            }()
+            self = .drive(
+                id: data["id"]?.string ?? "drive-results",
+                title: data["title"]?.string ?? "Drive files",
+                query: data["query"]?.string ?? "",
+                files: files
+            )
+        case "resource":
+            guard let title = data["title"]?.string else { return nil }
+            let link = data["link"]?.objectValue
+            self = .resource(
+                id: data["id"]?.string ?? "resource-\(title)",
+                resourceType: data["resourceType"]?.string ?? "resource",
+                title: title,
+                subtitle: data["subtitle"]?.string ?? "Ready",
+                details: Self.details(from: data),
+                linkLabel: link?["label"]?.string,
+                linkURL: link?["url"]?.string
+            )
+        case "status":
+            guard let title = data["title"]?.string else { return nil }
+            self = .status(
+                id: data["id"]?.string ?? "status-\(title)",
+                title: title,
+                detail: data["detail"]?.string ?? "",
+                symbol: data["symbol"]?.string ?? "checkmark.circle.fill",
+                details: Self.details(from: data)
             )
         default:
             return nil
@@ -484,6 +623,17 @@ enum MessageResponseCard: Identifiable {
         return details
     }
 
+    private static func details(from data: [String: JSONValue]) -> [Detail] {
+        guard case let .array(values)? = data["details"] else { return [] }
+        return values.compactMap { value in
+            guard case let .object(detail) = value,
+                  let label = detail["label"]?.string,
+                  let value = detail["value"]?.string,
+                  !label.isEmpty, !value.isEmpty else { return nil }
+            return .init(label: label, value: value)
+        }
+    }
+
     private static func weatherLocation(in text: String) -> String? {
         let pattern = #"(?i)\bweather\s+for\s+(.+?)(?:\s+as\s+of\b|[\r\n:])"#
         guard let expression = try? NSRegularExpression(pattern: pattern),
@@ -576,6 +726,18 @@ private struct RichResponseCards: View {
                     weatherCard(location: location, temperature: temperature, condition: condition, details: details)
                 case let .duration(title, duration, detail, confidence):
                     durationCard(title: title, duration: duration, detail: detail, confidence: confidence)
+                case let .reminder(_, title, schedule, nextFires, enabled):
+                    reminderCard(title: title, schedule: schedule, nextFires: nextFires, enabled: enabled)
+                case let .emails(_, title, query, mailbox, complete, estimate, messages):
+                    emailResultsCard(title: title, query: query, mailbox: mailbox, complete: complete, estimate: estimate, messages: messages)
+                case let .documents(_, title, query, passages):
+                    documentResultsCard(title: title, query: query, passages: passages)
+                case let .drive(_, title, query, files):
+                    driveResultsCard(title: title, query: query, files: files)
+                case let .resource(_, resourceType, title, subtitle, details, linkLabel, linkURL):
+                    resourceCard(resourceType: resourceType, title: title, subtitle: subtitle, details: details, linkLabel: linkLabel, linkURL: linkURL)
+                case let .status(_, title, detail, symbol, details):
+                    statusCard(title: title, detail: detail, symbol: symbol, details: details)
                 }
             }
         }
@@ -770,6 +932,349 @@ private struct RichResponseCards: View {
         }
     }
 
+    private func reminderCard(title: String, schedule: String, nextFires: String, enabled: Bool) -> some View {
+        HStack(alignment: .top, spacing: 13) {
+            Image(systemName: enabled ? "bell.badge.fill" : "bell.slash.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                .frame(width: 42, height: 42)
+                .background(AssistantTheme.accent(for: colorScheme).opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(enabled ? "REMINDER" : "REMINDER PAUSED")
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.7)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                Text(AssistantMarkdown.inlineAttributed(title))
+                    .font(.headline)
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                if !nextFires.isEmpty {
+                    Label(cardDate(nextFires), systemImage: "clock")
+                        .font(.caption)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                }
+                if !schedule.isEmpty {
+                    Text(schedule)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(15)
+        .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(AssistantTheme.accent(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.44 : 0.18), lineWidth: 1)
+        }
+    }
+
+    private func emailResultsCard(
+        title: String,
+        query: String,
+        mailbox: String,
+        complete: Bool,
+        estimate: Int?,
+        messages: [MessageResponseCard.EmailResult]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 13) {
+            resultHeader(
+                title: title,
+                subtitle: query.isEmpty ? mailbox : query,
+                countLabel: emailCountLabel(messages: messages, estimate: estimate, complete: complete)
+            )
+            if messages.isEmpty {
+                Text("No matching messages.")
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(AssistantMarkdown.inlineAttributed(message.sender.isEmpty ? message.recipient : message.sender))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                    .lineLimit(1)
+                                Spacer(minLength: 4)
+                                if !message.date.isEmpty {
+                                    Text(cardDate(message.date))
+                                        .font(.caption2)
+                                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                        .lineLimit(1)
+                                }
+                            }
+                            Text(AssistantMarkdown.inlineAttributed(message.subject))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                .fixedSize(horizontal: false, vertical: true)
+                            if !message.snippet.isEmpty {
+                                Text(AssistantMarkdown.inlineAttributed(message.snippet))
+                                    .font(.caption)
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(.vertical, index == 0 ? 0 : 12)
+                        if index < messages.count - 1 {
+                            Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                        }
+                    }
+                }
+            }
+        }
+        .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
+    }
+
+    private func documentResultsCard(
+        title: String,
+        query: String,
+        passages: [MessageResponseCard.DocumentPassage]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 13) {
+            resultHeader(title: title, subtitle: query, countLabel: "\(passages.count) \(passages.count == 1 ? "match" : "matches")")
+            if passages.isEmpty {
+                Text("No matching passages.")
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(passages.enumerated()), id: \.element.id) { index, passage in
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(AssistantMarkdown.inlineAttributed(passage.document))
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: 6)
+                                if let similarity = passage.similarity {
+                                    Text("\(Int((similarity * 100).rounded()))% match")
+                                        .font(.caption2.monospacedDigit())
+                                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                }
+                            }
+                            if !passage.source.isEmpty {
+                                Text(AssistantMarkdown.inlineAttributed(passage.source))
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                            }
+                            if !passage.snippet.isEmpty {
+                                Text(AssistantMarkdown.inlineAttributed(passage.snippet))
+                                    .font(.caption)
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(.vertical, index == 0 ? 0 : 12)
+                        if index < passages.count - 1 {
+                            Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                        }
+                    }
+                }
+            }
+        }
+        .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
+    }
+
+    private func driveResultsCard(
+        title: String,
+        query: String,
+        files: [MessageResponseCard.DriveFile]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 13) {
+            resultHeader(title: title, subtitle: query, countLabel: "\(files.count) \(files.count == 1 ? "file" : "files")")
+            if files.isEmpty {
+                Text("No matching files.")
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(files.enumerated()), id: \.element.id) { index, file in
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: fileSymbol(file.mimeType))
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                                .frame(width: 22)
+                            VStack(alignment: .leading, spacing: 4) {
+                                if let url = URL(string: file.url) {
+                                    Link(destination: url) {
+                                        Text(AssistantMarkdown.inlineAttributed(file.name))
+                                            .font(.subheadline.weight(.semibold))
+                                    }
+                                } else {
+                                    Text(AssistantMarkdown.inlineAttributed(file.name))
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                }
+                                let metadata = [file.mimeType, file.size, file.modifiedTime.isEmpty ? "" : cardDate(file.modifiedTime)]
+                                    .filter { !$0.isEmpty }
+                                    .joined(separator: " · ")
+                                if !metadata.isEmpty {
+                                    Text(metadata)
+                                        .font(.caption)
+                                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, index == 0 ? 0 : 12)
+                        if index < files.count - 1 {
+                            Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                        }
+                    }
+                }
+            }
+        }
+        .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
+    }
+
+    private func resourceCard(
+        resourceType: String,
+        title: String,
+        subtitle: String,
+        details: [MessageResponseCard.Detail],
+        linkLabel: String?,
+        linkURL: String?
+    ) -> some View {
+        HStack(alignment: .top, spacing: 13) {
+            Image(systemName: resourceSymbol(resourceType))
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                .frame(width: 42, height: 42)
+                .background(AssistantTheme.accent(for: colorScheme).opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(subtitle.uppercased())
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.7)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                Text(AssistantMarkdown.inlineAttributed(title))
+                    .font(.headline)
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                detailRows(details)
+                if let linkURL, let url = URL(string: linkURL) {
+                    Link(linkLabel ?? "Open", destination: url)
+                        .font(.caption.weight(.semibold))
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(15)
+        .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(AssistantTheme.accent(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.44 : 0.18), lineWidth: 1)
+        }
+    }
+
+    private func statusCard(
+        title: String,
+        detail: String,
+        symbol: String,
+        details: [MessageResponseCard.Detail]
+    ) -> some View {
+        HStack(alignment: .top, spacing: 13) {
+            Image(systemName: symbol)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                .frame(width: 42, height: 42)
+                .background(AssistantTheme.accent(for: colorScheme).opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            VStack(alignment: .leading, spacing: 5) {
+                Text("COMPLETE")
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.7)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                Text(AssistantMarkdown.inlineAttributed(title))
+                    .font(.headline)
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                if !detail.isEmpty {
+                    Text(AssistantMarkdown.inlineAttributed(detail))
+                        .font(.subheadline)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                detailRows(details)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(15)
+        .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(AssistantTheme.accent(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.44 : 0.18), lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func detailRows(_ details: [MessageResponseCard.Detail]) -> some View {
+        if !details.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(details) { detail in
+                    Text("\(detail.label): ")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    + Text(AssistantMarkdown.inlineAttributed(detail.value))
+                        .font(.caption)
+                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                }
+            }
+        }
+    }
+
+    private func resultHeader(title: String, subtitle: String, countLabel: String) -> some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title.uppercased())
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.8)
+                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                if !subtitle.isEmpty {
+                    Text(AssistantMarkdown.inlineAttributed(subtitle))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            Text(countLabel)
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
+        }
+    }
+
+    private func emailCountLabel(messages: [MessageResponseCard.EmailResult], estimate: Int?, complete: Bool) -> String {
+        if !complete { return "Partial · \(estimate ?? messages.count)" }
+        return "\(messages.count) \(messages.count == 1 ? "email" : "emails")"
+    }
+
+    private func cardDate(_ value: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = formatter.date(from: value) ?? fractionalFormatter.date(from: value) else { return value }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private func resourceSymbol(_ resourceType: String) -> String {
+        switch resourceType {
+        case "document": "doc.text.fill"
+        case "spreadsheet": "tablecells.fill"
+        default: "doc.fill"
+        }
+    }
+
+    private func fileSymbol(_ mimeType: String) -> String {
+        let lower = mimeType.lowercased()
+        if lower.contains("pdf") { return "doc.richtext.fill" }
+        if lower.contains("sheet") || lower.contains("spreadsheet") { return "tablecells.fill" }
+        if lower.contains("presentation") || lower.contains("slide") { return "rectangle.on.rectangle.angled" }
+        if lower.contains("image") { return "photo.fill" }
+        return "doc.fill"
+    }
+
     private func weatherSymbol(_ condition: String) -> String {
         let lower = condition.lowercased()
         if lower.contains("rain") || lower.contains("storm") { return "cloud.rain.fill" }
@@ -777,6 +1282,20 @@ private struct RichResponseCards: View {
         if lower.contains("cloud") { return "cloud.fill" }
         if lower.contains("wind") { return "wind" }
         return "sun.max.fill"
+    }
+}
+
+private extension View {
+    func resultCardSurface(colorScheme: ColorScheme, colorSchemeContrast: ColorSchemeContrast) -> some View {
+        padding(16)
+            .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(
+                        AssistantTheme.accent(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.44 : 0.18),
+                        lineWidth: 1
+                    )
+            }
     }
 }
 
@@ -789,6 +1308,21 @@ private extension JSONValue {
     var arrayStrings: [String]? {
         guard case let .array(value) = self else { return nil }
         return value.compactMap(\.string)
+    }
+
+    var boolValue: Bool? {
+        guard case let .bool(value) = self else { return nil }
+        return value
+    }
+
+    var numberValue: Double? {
+        guard case let .number(value) = self else { return nil }
+        return value
+    }
+
+    var integerValue: Int? {
+        guard let numberValue, numberValue.rounded() == numberValue else { return nil }
+        return Int(numberValue)
     }
 }
 
@@ -803,6 +1337,12 @@ private enum PresentationCompanion {
                 "Weather: \(location), \(condition), \(temperature), \(details.map { "\($0.label): \($0.value)" }.joined(separator: ", "))"
             case let .duration(title, duration, detail, _): "Estimate: \(title), \(duration), \(detail ?? "")"
             case let .agenda(title, subtitle, items): "Agenda: \(title), \(subtitle), \(items.map(\.title).joined(separator: ", "))"
+            case let .reminder(_, title, schedule, nextFires, enabled): "Reminder: \(title), \(schedule), \(nextFires), \(enabled ? "active" : "paused")"
+            case let .emails(_, title, query, _, _, _, messages): "Email results: \(title), \(query), \(messages.map(\.subject).joined(separator: ", "))"
+            case let .documents(_, title, query, passages): "Document matches: \(title), \(query), \(passages.map(\.document).joined(separator: ", "))"
+            case let .drive(_, title, query, files): "Drive files: \(title), \(query), \(files.map(\.name).joined(separator: ", "))"
+            case let .resource(_, _, title, subtitle, details, _, _): "Resource: \(subtitle), \(title), \(details.map { "\($0.label): \($0.value)" }.joined(separator: ", "))"
+            case let .status(_, title, detail, _, details): "Status: \(title), \(detail), \(details.map { "\($0.label): \($0.value)" }.joined(separator: ", "))"
             }
         }.joined(separator: "\n")
         guard source.count <= 1_200 else { return nil }
