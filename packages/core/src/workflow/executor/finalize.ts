@@ -25,13 +25,14 @@ import {
   type TaskLease,
   taskState,
 } from '../machine.js';
+import { verifyFinalOutput } from '../output-verification.js';
 import { PLANNER_VERSION } from '../planner.js';
 import { detectPersonalReadRequest, type PersonalReadRequest } from '../read-intent.js';
 import { type ActionEvidence, enforceResponseContract } from '../response-contract.js';
 import { isUnattendedGoalSession, KNOWN_SENDER_REPLY_KIND } from './context-helpers.js';
 import { notifyOwnerAndConversation, recordGoalBlocked } from './notices.js';
 import { type ExecuteResult, type ExecutorDeps, LOST_LEASE } from './types.js';
-import { compact } from './util.js';
+import { compact, latestUserText } from './util.js';
 
 /**
  * Deferred work is only real once a durable row exists. Left to prose the
@@ -240,6 +241,9 @@ async function recordQualitySignals(
       unsupportedCount: pending.contractUnsupportedCount ?? 0,
       mustActRetries: state.mustActRetries,
       degradedSteps: state.degradedSteps,
+      outputVerificationAttempted: pending.outputVerificationAttempted ?? false,
+      outputVerificationRevised: pending.outputVerificationRevised ?? false,
+      outputVerificationUnavailable: pending.outputVerificationUnavailable ?? false,
     })
     .onConflictDoNothing({ target: responseChecks.taskId })
     .returning({ taskId: responseChecks.taskId });
@@ -328,11 +332,35 @@ export async function stageModelFinalResponse(
       .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
       .join('\n'),
   ].join('\n');
-  const checked = enforceResponseContract(pending.text, evidence, {
+  const contractOptions = {
     urlCorpus: sourceCorpus,
     readRequest: readContext ? readContext.readRequest : detectPersonalReadRequest(window),
     groundingCorpus: readContext?.groundingCorpus,
-  });
+  };
+  // Hold the original draft to the deterministic contract before asking a
+  // model to reflect on it. Contract-owned fallbacks (unsupported claims,
+  // grounding recovery, or stripped links) are already the safest available
+  // answer and must not be reworded by a discretionary model call.
+  const initialCheck = enforceResponseContract(pending.text, evidence, contractOptions);
+  const canReflect =
+    !initialCheck.blocked &&
+    initialCheck.text === pending.text &&
+    initialCheck.groundingFallback === undefined;
+  const reflection = canReflect
+    ? await verifyFinalOutput(deps.router, {
+        taskId: task.id,
+        request: latestUserText(window) ?? task.title ?? 'Answer the current request.',
+        draft: initialCheck.text,
+        evidence,
+        critical: task.trust === 'owner',
+      })
+    : { text: initialCheck.text, attempted: false, revised: false, unavailable: false };
+  // A reviser is another generative surface: strip companion tags a second
+  // time, then re-run the same authoritative response contract before publish.
+  const reflectedText = stripCueTags(reflection.text).text;
+  const checked = reflection.revised
+    ? enforceResponseContract(reflectedText, evidence, contractOptions)
+    : initialCheck;
   if (checked.groundingFallback && checked.groundingFallback.length > 0) {
     console.warn('lookup answer fell back to the verified ledger', {
       taskId: task.id,
@@ -345,11 +373,17 @@ export async function stageModelFinalResponse(
   // just this prose-model one — persists its verdict and loop-health counters.
   pending.contractBlocked = checked.blocked;
   pending.contractUnsupportedCount = checked.unsupported.length;
+  pending.outputVerificationAttempted = reflection.attempted || undefined;
+  pending.outputVerificationRevised = reflection.revised || undefined;
+  pending.outputVerificationUnavailable = reflection.unavailable || undefined;
   // When the contract replaces the draft, its deterministic copy carries no
   // emotional register — dropping the cues lets the dashboard fall back to its
   // neutral face instead of grinning through an honesty notice.
   pending.cues =
-    task.type === 'chat_turn' && !checked.blocked && strippedFinal.cues.length > 0
+    task.type === 'chat_turn' &&
+    !checked.blocked &&
+    !reflection.revised &&
+    strippedFinal.cues.length > 0
       ? strippedFinal.cues
       : undefined;
   if (checked.blocked) {

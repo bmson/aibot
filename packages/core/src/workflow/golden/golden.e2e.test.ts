@@ -251,6 +251,67 @@ describe('golden tasks', () => {
     expect(check?.mustActRetries).toBe(0);
   });
 
+  it('self-reviews a clean draft once, records the revision, and still delivers through the contract', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const fixture: GoldenFixture = {
+      name: 'self-reflective-revision',
+      event: { source: 'chat', trust: 'owner', payload: { text: 'Say hi.' } },
+      taskType: 'adhoc',
+      plan: { ...workflowPlan, action: 'reply' as const },
+      script: [{ text: 'Hi.' }],
+      verification: {
+        decision: 'revise',
+        revisedText: 'Hi! What can I help with?',
+        reasons: ['clarity_or_format'],
+      },
+      tools: {},
+    };
+    const result = await runGoldenTask(db, agentId, fixture);
+    createdTaskIds.push(result.taskId);
+
+    expect(result.finalText).toBe('Hi! What can I help with?');
+    const [check] = await db
+      .select()
+      .from(responseChecks)
+      .where(eq(responseChecks.taskId, result.taskId));
+    expect(check).toMatchObject({
+      blocked: false,
+      outputVerificationAttempted: true,
+      outputVerificationRevised: true,
+      outputVerificationUnavailable: false,
+    });
+  });
+
+  it('holds a self-review revision to the same evidence contract before delivery', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const fixture: GoldenFixture = {
+      name: 'self-reflective-revision-is-contract-checked',
+      event: { source: 'chat', trust: 'owner', payload: { text: 'Say hi.' } },
+      taskType: 'adhoc',
+      plan: { ...workflowPlan, action: 'reply' as const },
+      script: [{ text: 'Hi.' }],
+      verification: {
+        decision: 'revise',
+        revisedText: 'Hi — I sent the email to Anna.',
+        reasons: ['unsupported_claim'],
+      },
+      tools: {},
+    };
+    const result = await runGoldenTask(db, agentId, fixture);
+    createdTaskIds.push(result.taskId);
+
+    expect(result.finalText).not.toContain('I sent the email');
+    const [check] = await db
+      .select()
+      .from(responseChecks)
+      .where(eq(responseChecks.taskId, result.taskId));
+    expect(check).toMatchObject({
+      blocked: true,
+      outputVerificationAttempted: true,
+      outputVerificationRevised: true,
+    });
+  });
+
   it('lets an action claim WITH tool evidence through untouched', async (ctx) => {
     if (!dbUp) return ctx.skip();
     // The inverse of the fabricated-claim fixture: the send actually ran, so

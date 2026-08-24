@@ -31,6 +31,19 @@ export interface GoldenFixture {
     text?: string;
     toolCalls?: Array<{ toolName: string; input: Record<string, unknown> }>;
   }>;
+  /** Optional self-review result after the final scripted model step. */
+  verification?: {
+    decision: 'publish' | 'revise';
+    revisedText?: string;
+    reasons?: Array<
+      | 'does_not_answer_request'
+      | 'unsupported_claim'
+      | 'ungrounded_fact'
+      | 'missing_uncertainty'
+      | 'unsafe_instruction'
+      | 'clarity_or_format'
+    >;
+  };
   /** Tool implementations available to the scripted model. */
   tools: Record<string, { schema: ZodType; execute: (args: unknown) => Promise<unknown> }>;
 }
@@ -45,7 +58,10 @@ export interface GoldenResult {
 
 class ScriptedRouter {
   private index = 0;
-  constructor(private script: GoldenFixture['script']) {}
+  constructor(
+    private script: GoldenFixture['script'],
+    private verification: GoldenFixture['verification'] = { decision: 'publish' },
+  ) {}
 
   async step(): Promise<StepCallOutcome> {
     const entry = this.script[this.index] ?? { text: 'Done.' };
@@ -64,7 +80,16 @@ class ScriptedRouter {
     };
   }
 
-  async object() {
+  async object<T>(role: string): Promise<unknown> {
+    if (role === 'rewrite') {
+      return {
+        ok: true,
+        modelId: 'golden/rewrite',
+        degraded: false,
+        object: { reasons: [], ...this.verification } as T,
+        finishReason: 'stop',
+      };
+    }
     throw new Error('golden fixtures pre-set their plan; the planner must not run');
   }
 
@@ -115,7 +140,7 @@ export async function runGoldenTask(
   agentId: string,
   fixture: GoldenFixture,
 ): Promise<GoldenResult> {
-  const router = new ScriptedRouter(fixture.script) as unknown as ModelRouter;
+  const router = new ScriptedRouter(fixture.script, fixture.verification) as unknown as ModelRouter;
   const { task } = await enqueueTask(db, {
     event: { ...fixture.event, agentId } as InboundEvent,
     type: fixture.taskType,

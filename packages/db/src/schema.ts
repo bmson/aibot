@@ -1598,6 +1598,14 @@ export const responseChecks = pgTable(
     mustActRetries: integer('must_act_retries').notNull().default(0),
     /** Steps served by a fallback model (budget degradation or forced). */
     degradedSteps: integer('degraded_steps').notNull().default(0),
+    /** A bounded self-review model call completed before final delivery. */
+    outputVerificationAttempted: boolean('output_verification_attempted').notNull().default(false),
+    /** The self-review supplied a replacement, re-checked by the response contract. */
+    outputVerificationRevised: boolean('output_verification_revised').notNull().default(false),
+    /** The optional review could not run (budget/provider), so the checked draft shipped. */
+    outputVerificationUnavailable: boolean('output_verification_unavailable')
+      .notNull()
+      .default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

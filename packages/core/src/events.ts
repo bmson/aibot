@@ -95,6 +95,10 @@ export const PendingFinalSchema = z.object({
   /** Response-contract verdict, persisted to response_checks at finalize. */
   contractBlocked: z.boolean().optional(),
   contractUnsupportedCount: z.number().int().optional(),
+  /** Best-effort self-review before the final deterministic contract pass. */
+  outputVerificationAttempted: z.boolean().optional(),
+  outputVerificationRevised: z.boolean().optional(),
+  outputVerificationUnavailable: z.boolean().optional(),
   /**
    * The response contract replaced the model's draft with its own honest
    * fallback — the chat UI renders such messages as a compact system notice
