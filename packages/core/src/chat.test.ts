@@ -118,12 +118,22 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
   it('gates the companion persona and cue vocabulary to the dashboard channel (v22)', () => {
     const dashboard = buildSystemPrompt(agent, { channel: 'dashboard-chat' });
     expect(dashboard).toContain('Dashboard companion');
-    expect(dashboard).toContain('Pixar robot');
     expect(dashboard).toContain('[face: <state>]');
     expect(dashboard).toContain('warm_smile');
     expect(dashboard).toContain('[action_chips: "Label" | "Label"]');
     expect(dashboard).toMatch(/Email and SMS keep the professional voice/);
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(22);
+  });
+
+  it('keeps replies plain and conversational — no emojis, no perky readouts (v28)', () => {
+    const prompt = buildSystemPrompt(agent, {});
+    expect(prompt).toMatch(/skip emojis/i);
+    expect(prompt).toMatch(/perky status-report phrasing/i);
+    // The dashboard face owns expression, so the words stay understated.
+    const dashboard = buildSystemPrompt(agent, { channel: 'dashboard-chat' });
+    expect(dashboard).toMatch(/face carry the expression/i);
+    expect(dashboard).not.toContain('Pixar robot');
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(28);
   });
 
   it('tells the model never to emit a mood-color theme cue (v26)', () => {
