@@ -706,6 +706,16 @@ enum MessageResponseCard: Identifiable {
 }
 
 private struct RichResponseCards: View {
+    private struct EventRow: Identifiable {
+        let id: String
+        let time: String
+        let title: String
+        let location: String
+        let attendees: [String]
+        let calendar: String
+        let linkURL: String?
+    }
+
     let cards: [MessageResponseCard]
 
     @Environment(\.colorScheme) private var colorScheme
@@ -714,14 +724,44 @@ private struct RichResponseCards: View {
 
     private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
 
+    /// Calendar responses arrive as individual, durable data cards. Present
+    /// consecutive events as one paper schedule so a weekly answer scans like
+    /// an itinerary instead of a column of unrelated tiles.
+    private var eventRows: [EventRow] {
+        cards.compactMap { card in
+            guard case let .event(id, time, title, location, attendees, calendars, _, linkURL) = card else {
+                return nil
+            }
+            return .init(
+                id: id,
+                time: time,
+                title: title,
+                location: location,
+                attendees: attendees,
+                calendar: calendars.first ?? "",
+                linkURL: linkURL
+            )
+        }
+    }
+
+    private var nonEventCards: [MessageResponseCard] {
+        cards.filter { card in
+            if case .event = card { return false }
+            return true
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(cards) { card in
+            if !eventRows.isEmpty {
+                eventListCard(eventRows)
+            }
+            ForEach(nonEventCards) { card in
                 switch card {
                 case let .agenda(title, subtitle, items):
                     agendaCard(title: title, subtitle: subtitle, items: items)
-                case let .event(_, time, title, location, attendees, calendars, linkLabel, linkURL):
-                    eventCard(time: time, title: title, location: location, attendees: attendees, calendars: calendars, linkLabel: linkLabel, linkURL: linkURL)
+                case .event:
+                    EmptyView()
                 case let .weather(location, temperature, condition, details):
                     weatherCard(location: location, temperature: temperature, condition: condition, details: details)
                 case let .duration(title, duration, detail, confidence):
@@ -745,94 +785,107 @@ private struct RichResponseCards: View {
         .accessibilityElement(children: .contain)
     }
 
-    private func eventCard(time: String, title: String, location: String, attendees: [String], calendars: [String], linkLabel: String?, linkURL: String?) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(time).font(.caption.monospacedDigit().weight(.bold)).foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                Spacer()
-                if let calendar = calendars.first, !calendar.isEmpty {
-                    Text(calendar).font(.caption2.weight(.semibold)).foregroundStyle(AssistantTheme.inkMuted(for: colorScheme)).lineLimit(1)
+    private func eventListCard(_ events: [EventRow]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(event.time)
+                            .font(.subheadline.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                        Spacer(minLength: 12)
+                        if !event.calendar.isEmpty {
+                            Text(event.calendar)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
+                                .lineLimit(1)
+                        }
+                    }
+                    Text(AssistantMarkdown.inlineAttributed(event.title))
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        let detail = [event.location, event.attendees.isEmpty ? "" : event.attendees.joined(separator: ", ")]
+                            .filter { !$0.isEmpty }
+                            .joined(separator: " · ")
+                        if !detail.isEmpty {
+                            Text(AssistantMarkdown.inlineAttributed(detail))
+                                .font(.subheadline)
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 6)
+                        if let linkURL = event.linkURL, let url = URL(string: linkURL) {
+                            Link(destination: url) {
+                                Image(systemName: "arrow.up.right")
+                                    .font(.title3.weight(.medium))
+                                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                            }
+                            .accessibilityLabel("Open \(event.title)")
+                        }
+                    }
+                }
+                .padding(.vertical, index == 0 ? 0 : 21)
+                if index < events.count - 1 {
+                    Divider()
+                        .overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                        .padding(.top, 21)
                 }
             }
-            Text(title).font(.headline).foregroundStyle(AssistantTheme.ink(for: colorScheme)).fixedSize(horizontal: false, vertical: true)
-            if !location.isEmpty { Label(location, systemImage: "mappin.and.ellipse").font(.caption).foregroundStyle(AssistantTheme.inkMuted(for: colorScheme)) }
-            if !attendees.isEmpty { Label(attendees.joined(separator: ", "), systemImage: "person.2").font(.caption).foregroundStyle(AssistantTheme.inkMuted(for: colorScheme)).lineLimit(2) }
-            if let linkURL, let url = URL(string: linkURL) {
-                Link(linkLabel ?? "Open event", destination: url).font(.caption.weight(.semibold))
-            }
         }
-        .padding(16)
-        .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(AssistantTheme.accent(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.44 : 0.18), lineWidth: 1) }
+        .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 24)
     }
 
     private func agendaCard(title: String, subtitle: String, items: [MessageResponseCard.AgendaItem]) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(title.uppercased())
-                        .font(.caption2.weight(.bold))
-                        .tracking(0.8)
-                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                    Text(subtitle)
-                        .font(.headline)
+                    Text(AssistantMarkdown.inlineAttributed(title))
+                        .font(.title3.weight(.semibold))
                         .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    Text(AssistantMarkdown.inlineAttributed(subtitle))
+                        .font(.subheadline)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 }
                 Spacer()
                 Text("\(items.count) \(items.count == 1 ? "event" : "events")")
-                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .font(.caption.monospacedDigit().weight(.medium))
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
                     .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
             }
 
             VStack(spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    HStack(alignment: .top, spacing: 11) {
+                    HStack(alignment: .top, spacing: 12) {
                         Text(item.time)
-                            .font(.caption.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                            .frame(width: usesAccessibilityLayout ? 78 : 67, alignment: .leading)
-
-                        VStack(spacing: 0) {
-                            Circle()
-                                .fill(AssistantTheme.accent(for: colorScheme))
-                                .frame(width: 8, height: 8)
-                                .padding(.top, 5)
-                            if index < items.count - 1 {
-                                Rectangle()
-                                    .fill(AssistantTheme.accent(for: colorScheme).opacity(0.22))
-                                    .frame(width: 1.5)
-                                    .frame(maxHeight: .infinity)
-                                    .padding(.vertical, 4)
-                            }
-                        }
-                        .frame(width: 10)
+                            .font(.subheadline.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                            .frame(width: usesAccessibilityLayout ? 90 : 80, alignment: .leading)
 
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(item.title)
+                            Text(AssistantMarkdown.inlineAttributed(item.title))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                                 .fixedSize(horizontal: false, vertical: true)
                             if !item.detail.isEmpty {
-                                Text(item.detail)
-                                    .font(.caption)
+                                Text(AssistantMarkdown.inlineAttributed(item.detail))
+                                    .font(.subheadline)
                                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(.bottom, index < items.count - 1 ? 13 : 0)
+                    .padding(.bottom, index < items.count - 1 ? 18 : 0)
                 }
             }
         }
-        .padding(16)
-        .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(AssistantTheme.accent(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.44 : 0.18), lineWidth: 1)
-        }
+        .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 24)
     }
 
     private func weatherCard(
@@ -841,42 +894,45 @@ private struct RichResponseCards: View {
         condition: String,
         details: [MessageResponseCard.WeatherDetail]
     ) -> some View {
-        VStack(alignment: .leading, spacing: 13) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(location.uppercased())
-                        .font(.caption2.weight(.bold))
-                        .tracking(0.8)
-                        .foregroundStyle(.white.opacity(0.7))
-                    Text(condition)
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                }
-                Spacer()
+        VStack(alignment: .leading, spacing: 17) {
+            Text(AssistantMarkdown.inlineAttributed(location))
+                .font(.subheadline)
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            HStack(alignment: .center, spacing: 15) {
+                Text(temperature)
+                    .font(.system(size: 47, weight: .regular, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    .minimumScaleFactor(0.76)
+                Text(AssistantMarkdown.inlineAttributed(condition))
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
                 Image(systemName: weatherSymbol(condition))
-                    .font(.system(size: 30, weight: .medium))
+                    .font(.system(size: 29, weight: .medium))
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                    .frame(width: 58, height: 58)
+                    .background(AssistantTheme.sunken(for: colorScheme), in: Circle())
             }
-            Text(temperature)
-                .font(.system(size: 42, weight: .light, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.white)
             if !details.isEmpty {
+                Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
                 LazyVGrid(
-                    columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())],
+                    columns: usesAccessibilityLayout
+                        ? [GridItem(.flexible())]
+                        : [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12), GridItem(.flexible())],
                     alignment: .leading,
-                    spacing: 11
+                    spacing: 12
                 ) {
                     ForEach(details) { detail in
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(detail.label.uppercased())
-                                .font(.caption2.weight(.bold))
-                                .tracking(0.55)
-                                .foregroundStyle(.white.opacity(0.62))
+                            Text(detail.label)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                             Text(AssistantMarkdown.inlineAttributed(detail.value))
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(.white.opacity(0.9))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -884,15 +940,7 @@ private struct RichResponseCards: View {
                 }
             }
         }
-        .padding(17)
-        .background(
-            LinearGradient(
-                colors: [Color(hex: 0x416F9D), Color(hex: 0x213F5A)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-        )
+        .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 24)
     }
 
     private func durationCard(title: String, duration: String, detail: String?, confidence: String?) -> some View {
@@ -924,12 +972,7 @@ private struct RichResponseCards: View {
                     .foregroundStyle(AssistantTheme.accent(for: colorScheme))
             }
         }
-        .padding(15)
-        .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(.primary.opacity(colorSchemeContrast == .increased ? 0.18 : 0.08), lineWidth: 1)
-        }
+        .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
     }
 
     private func reminderCard(title: String, schedule: String, nextFires: String, enabled: Bool) -> some View {
@@ -961,12 +1004,7 @@ private struct RichResponseCards: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(15)
-        .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(AssistantTheme.accent(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.44 : 0.18), lineWidth: 1)
-        }
+        .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
     }
 
     private func emailResultsCard(
@@ -1159,12 +1197,7 @@ private struct RichResponseCards: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(15)
-        .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(AssistantTheme.accent(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.44 : 0.18), lineWidth: 1)
-        }
+        .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
     }
 
     private func statusCard(
@@ -1197,12 +1230,7 @@ private struct RichResponseCards: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(15)
-        .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(AssistantTheme.accent(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.44 : 0.18), lineWidth: 1)
-        }
+        .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
     }
 
     @ViewBuilder
@@ -1286,16 +1314,25 @@ private struct RichResponseCards: View {
 }
 
 private extension View {
-    func resultCardSurface(colorScheme: ColorScheme, colorSchemeContrast: ColorSchemeContrast) -> some View {
-        padding(16)
-            .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    func responseCardSurface(
+        colorScheme: ColorScheme,
+        colorSchemeContrast: ColorSchemeContrast,
+        inset: CGFloat
+    ) -> some View {
+        padding(inset)
+            .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
                     .stroke(
-                        AssistantTheme.accent(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.44 : 0.18),
+                        AssistantTheme.ink(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.22 : 0.09),
                         lineWidth: 1
                     )
             }
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0.16 : 0.07), radius: 14, y: 5)
+    }
+
+    func resultCardSurface(colorScheme: ColorScheme, colorSchemeContrast: ColorSchemeContrast) -> some View {
+        responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 24)
     }
 }
 

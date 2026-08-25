@@ -19,24 +19,36 @@ final class LiveActivityManager {
         // The system Island belongs to urgent, owner-actionable work only.
         // Generic progress is shown by the in-app crown and must never keep a
         // wide/timed Live Activity alive over the system clock.
-        guard Self.shouldPresentSystemActivity(for: thought) else {
+        guard Self.shouldPresentSystemActivity(for: thought, pendingCount: pendingCount) else {
             await dismiss()
             return
         }
-        if current == nil { await start(agentName: agentName, thought: thought, detail: detail) }
+        if current == nil {
+            await start(
+                agentName: agentName,
+                thought: thought,
+                detail: detail,
+                pendingCount: pendingCount
+            )
+        }
         guard let current else { return }
         await current.update(Self.content(thought: thought, detail: detail, pendingCount: pendingCount, now: .now))
     }
 
-    func start(agentName: String, thought: AssistantThought, detail: String) async {
-        guard Self.shouldPresentSystemActivity(for: thought) else {
+    func start(
+        agentName: String,
+        thought: AssistantThought,
+        detail: String,
+        pendingCount: Int = 0
+    ) async {
+        guard Self.shouldPresentSystemActivity(for: thought, pendingCount: pendingCount) else {
             await dismiss()
             return
         }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
         await endAllImmediately()
-        let content = Self.content(thought: thought, detail: detail, pendingCount: 0, now: .now)
+        let content = Self.content(thought: thought, detail: detail, pendingCount: pendingCount, now: .now)
 
         do {
             let activity = try Activity<AssistantActivityAttributes>.request(
@@ -51,13 +63,13 @@ final class LiveActivityManager {
         }
     }
 
-    func update(thought: AssistantThought, detail: String) async {
-        guard Self.shouldPresentSystemActivity(for: thought) else {
+    func update(thought: AssistantThought, detail: String, pendingCount: Int = 0) async {
+        guard Self.shouldPresentSystemActivity(for: thought, pendingCount: pendingCount) else {
             await dismiss()
             return
         }
         guard let current else { return }
-        await current.update(Self.content(thought: thought, detail: detail, pendingCount: 0, now: .now))
+        await current.update(Self.content(thought: thought, detail: detail, pendingCount: pendingCount, now: .now))
     }
 
     func needsAttention(agentName: String, detail: String, pendingCount: Int) async {
@@ -135,8 +147,14 @@ final class LiveActivityManager {
         }
     }
 
-    nonisolated static func shouldPresentSystemActivity(for thought: AssistantThought) -> Bool {
-        thought.tone == .waiting
+    /// The only system Live Activity is a live approval. Generic task failures
+    /// and other attention states belong in Activity, where they cannot be
+    /// mistaken for a decision the owner can make on the Approvals screen.
+    nonisolated static func shouldPresentSystemActivity(
+        for thought: AssistantThought,
+        pendingCount: Int
+    ) -> Bool {
+        thought.tone == .waiting && pendingCount > 0
     }
 
     nonisolated private static func relevanceScore(for thought: AssistantThought) -> Double {

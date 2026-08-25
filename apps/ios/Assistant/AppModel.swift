@@ -1244,14 +1244,13 @@ final class AppModel: ObservableObject {
 
     private var baselineThought: AssistantThought? {
         // The overview is refreshed far more often than bootstrap and carries
-        // the actual approval/task rows. Only a real owner decision earns the
-        // system Island; background work remains in-app.
+        // the actual approval rows. Only a real, currently pending owner
+        // decision earns the system Island; generic attention stays in the
+        // Activity surface so it cannot look like an approval.
         if let overview {
-            return (!overview.approvals.pending.isEmpty || overview.activity.items.contains(where: { $0.status == "needs_attention" }))
-                ? .needsYou
-                : nil
+            return overview.approvals.pending.isEmpty ? nil : .needsYou
         }
-        return bootstrap?.shell.dashboard.presence == .attention ? .needsYou : nil
+        return (bootstrap?.shell.dashboard.pendingApprovals ?? 0) > 0 ? .needsYou : nil
     }
 
     private func baselineDetail(for thought: AssistantThought?) -> String? {

@@ -375,10 +375,11 @@ final class APIModelsTests: XCTestCase {
     }
 
     func testOnlyOwnerDecisionsAreEligibleForTheSystemIsland() {
-        XCTAssertFalse(LiveActivityManager.shouldPresentSystemActivity(for: .thinking))
-        XCTAssertFalse(LiveActivityManager.shouldPresentSystemActivity(for: .backgroundWork))
-        XCTAssertFalse(LiveActivityManager.shouldPresentSystemActivity(for: .finished))
-        XCTAssertTrue(LiveActivityManager.shouldPresentSystemActivity(for: .needsYou))
+        XCTAssertFalse(LiveActivityManager.shouldPresentSystemActivity(for: .thinking, pendingCount: 0))
+        XCTAssertFalse(LiveActivityManager.shouldPresentSystemActivity(for: .backgroundWork, pendingCount: 0))
+        XCTAssertFalse(LiveActivityManager.shouldPresentSystemActivity(for: .finished, pendingCount: 0))
+        XCTAssertFalse(LiveActivityManager.shouldPresentSystemActivity(for: .needsYou, pendingCount: 0))
+        XCTAssertTrue(LiveActivityManager.shouldPresentSystemActivity(for: .needsYou, pendingCount: 1))
     }
 
     func testAttentionActivityIsGlanceableAndPrioritized() {
