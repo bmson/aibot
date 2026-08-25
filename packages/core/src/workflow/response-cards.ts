@@ -709,6 +709,28 @@ export function calendarWriteResponseCards(evidence: ActionEvidence[]): Response
   });
 }
 
+/**
+ * The ambient card only describes right now at the owner's current location,
+ * so it may attach solely when that is exactly the question. A request about
+ * another place ("weather in Palo Alto") or later days ("this weekend",
+ * "tomorrow", "on Saturday") is answered from other context, and a
+ * today-here card would contradict it.
+ */
+function isCurrentLocalWeatherRequest(requestText: string): boolean {
+  if (!/\b(?:weather|forecast|temperature|rain)\b/i.test(requestText)) return false;
+  if (
+    /\b(?:tomorrow|tonight|weekend|this\s+week|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/i.test(
+      requestText,
+    )
+  ) {
+    return false;
+  }
+  // An explicit place ("in Palo Alto", "for Tokyo") is never the ambient
+  // block's location, which is wherever the owner happens to be.
+  if (/\b(?:in|at|for)\s+(?:the\s+)?[A-Z][A-Za-z]/.test(requestText)) return false;
+  return true;
+}
+
 export function responseCardsForFinal(input: {
   evidence: ActionEvidence[];
   readRequest?: PersonalReadRequest | null;
@@ -731,9 +753,10 @@ export function responseCardsForFinal(input: {
   ];
   if (cards.length > 0) return cards;
   // Ambient weather is useful for a conversational/weather answer, but must
-  // never appear as an unrelated result below a tool-backed response.
-  return input.readRequest ||
-    !/\b(?:weather|forecast|temperature|rain)\b/i.test(input.requestText ?? '')
+  // never appear as an unrelated result below a tool-backed response — nor
+  // contradict an answer about another place or later days, which the
+  // location-and-today ambient block cannot describe.
+  return input.readRequest || !isCurrentLocalWeatherRequest(input.requestText ?? '')
     ? []
     : weatherResponseCards(input.ambient);
 }

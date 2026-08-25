@@ -431,6 +431,42 @@ final class APIModelsTests: XCTestCase {
         )
     }
 
+    func testWeatherInferenceDealsEachForecastDayItsOwnCard() {
+        let cards = MessageResponseCard.inferred(
+            from: """
+            Here's the weather for Palo Alto this weekend:
+            - **Saturday:** Sunny, 16–23°C
+            - **Sunday:** Partly cloudy, 14–21°C, 20% chance of rain
+            """
+        )
+        XCTAssertEqual(cards.count, 2)
+        guard case let .weather(location, satTemperature, satCondition, satDetails) = cards[0],
+              case let .weather(_, sunTemperature, sunCondition, sunDetails) = cards[1] else {
+            return XCTFail("Expected one weather card per forecast day")
+        }
+        XCTAssertEqual(location, "Palo Alto this weekend")
+        XCTAssertEqual(satTemperature, "16–23°C")
+        XCTAssertEqual(satCondition, "Sunny")
+        XCTAssertEqual(satDetails.first?.label, "Day")
+        XCTAssertEqual(satDetails.first?.value, "Saturday")
+        XCTAssertEqual(sunTemperature, "14–21°C")
+        XCTAssertEqual(sunCondition, "Partly Cloudy")
+        XCTAssertEqual(sunDetails.first?.value, "Sunday")
+        XCTAssertNotEqual(cards[0].id, cards[1].id)
+    }
+
+    func testWeatherCaptionNamesTheDayOnPerDayForecastCards() {
+        let dayCard = [
+            MessageResponseCard.WeatherDetail(label: "Day", value: "Saturday"),
+            MessageResponseCard.WeatherDetail(label: "Forecast", value: "Sunny, 16–23°C"),
+        ]
+        XCTAssertEqual(WeatherPresentation.caption(details: dayCard, hasForecast: false), "Saturday")
+        XCTAssertEqual(WeatherPresentation.caption(details: [], hasForecast: false), "Today")
+        XCTAssertEqual(WeatherPresentation.caption(details: [], hasForecast: true), "Forecast")
+        let updated = [MessageResponseCard.WeatherDetail(label: "Updated", value: "3:48 PM PDT")]
+        XCTAssertEqual(WeatherPresentation.caption(details: updated, hasForecast: false), "Today · 3:48 PM PDT")
+    }
+
     func testWeatherFactsSplitIntoCurrentAndPerDayForecast() {
         let details = [
             MessageResponseCard.WeatherDetail(label: "Today", value: "17–20°C"),

@@ -375,7 +375,10 @@ enum MessageResponseCard: Identifiable {
         switch self {
         case let .agenda(title, _, _): "agenda-\(title)"
         case let .event(id, _, _, _, _, _, _, _, _): id
-        case let .weather(location, temperature, _, _): "weather-\(location)-\(temperature)"
+        case let .weather(location, temperature, _, details):
+            // Per-day forecast cards share their location and can share a
+            // reading; the day name keeps each card's identity distinct.
+            "weather-\(location)-\(details.first { $0.label.caseInsensitiveCompare("Day") == .orderedSame }?.value ?? "")-\(temperature)"
         case let .duration(title, duration, _, _): "duration-\(title)-\(duration)"
         case let .reminder(id, _, _, _, _): id
         case let .emails(id, _, _, _, _, _, _): id
@@ -647,7 +650,8 @@ enum MessageResponseCard: Identifiable {
     static func inferred(from text: String) -> [Self] {
         let lower = text.lowercased()
         if let agenda = inferredAgenda(text, lower: lower) { return [agenda] }
-        if let weather = inferredWeather(text, lower: lower) { return [weather] }
+        let weather = inferredWeather(text, lower: lower)
+        if !weather.isEmpty { return weather }
         if let duration = inferredDuration(text, lower: lower) { return [duration] }
         return []
     }
@@ -672,14 +676,14 @@ enum MessageResponseCard: Identifiable {
         return .agenda(title: lower.contains("today") ? "Today" : "Your schedule", subtitle: "What is lined up", items: Array(items.prefix(6)))
     }
 
-    private static func inferredWeather(_ text: String, lower: String) -> Self? {
+    private static func inferredWeather(_ text: String, lower: String) -> [Self] {
         let weatherTerms = ["weather", "forecast", "sunny", "cloudy", "rain", "snow", "wind", "humidity"]
-        guard weatherTerms.contains(where: lower.contains) else { return nil }
+        guard weatherTerms.contains(where: lower.contains) else { return [] }
         let temperaturePattern = #"(?<!\d)(-?\d{1,3})\s*°?\s*([FC])\b"#
         guard let expression = try? NSRegularExpression(pattern: temperaturePattern, options: [.caseInsensitive]),
               let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let value = Range(match.range(at: 1), in: text),
-              let unit = Range(match.range(at: 2), in: text) else { return nil }
+              let unit = Range(match.range(at: 2), in: text) else { return [] }
         let temperature = weatherField(named: "temperature", in: text)
             ?? "\(text[value])°\(text[unit].uppercased())"
         let condition = weatherField(named: "conditions", in: text)
@@ -687,12 +691,53 @@ enum MessageResponseCard: Identifiable {
                 .first(where: lower.contains)
                 .map { $0 == "sun" ? "Sunny" : $0.capitalized }
             ?? "Current conditions"
-        return .weather(
-            location: weatherLocation(in: text) ?? "Right now",
-            temperature: temperature,
-            condition: condition,
-            details: weatherDetails(in: text)
-        )
+        let location = weatherLocation(in: text) ?? "Right now"
+        let details = weatherDetails(in: text)
+        let days = WeatherPresentation.split(details).days
+        // A forecast answer names each day it covers; deal every day its own
+        // card so a "Palo Alto this weekend" question reads as a Saturday card
+        // and a Sunday card instead of one today-flavored tile.
+        guard !days.isEmpty else {
+            return [.weather(location: location, temperature: temperature, condition: condition, details: details)]
+        }
+        return days.map { day in
+            .weather(
+                location: location,
+                temperature: forecastTemperature(in: day.facts) ?? temperature,
+                condition: forecastCondition(in: day.facts) ?? condition,
+                details: [WeatherDetail(label: "Day", value: day.day)] + day.facts
+            )
+        }
+    }
+
+    /// The day's own reading ("16–23°C") becomes its card's big number; without
+    /// one, the answer's headline temperature carries over.
+    private static func forecastTemperature(in facts: [WeatherDetail]) -> String? {
+        let pattern = #"-?\d{1,3}(?:\s*[–-]\s*-?\d{1,3})?\s*[°º]\s*[CF]"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        for fact in facts {
+            let range = NSRange(fact.value.startIndex..., in: fact.value)
+            guard let match = expression.firstMatch(in: fact.value, range: range),
+                  let valueRange = Range(match.range, in: fact.value) else { continue }
+            return String(fact.value[valueRange])
+        }
+        return nil
+    }
+
+    /// The first phrase that is not a measurement ("Sunny, 16–23°C" or
+    /// "16–23°C, clear") names the day's sky for the card headline and symbol.
+    private static func forecastCondition(in facts: [WeatherDetail]) -> String? {
+        for fact in facts {
+            for phrase in fact.value.replacingOccurrences(of: "**", with: "").components(separatedBy: ",") {
+                let trimmed = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty,
+                      trimmed.rangeOfCharacter(from: .letters) != nil,
+                      !trimmed.contains("°"),
+                      !trimmed.contains("%") else { continue }
+                return trimmed.capitalized
+            }
+        }
+        return nil
     }
 
     /// Keep weather measurements in the structured surface, while leaving
@@ -973,6 +1018,24 @@ enum WeatherPresentation {
             ))
         }
         return (current, order.map { DayFacts(day: $0, facts: byDay[$0] ?? []) })
+    }
+
+    /// The card's top-right stamp: a per-day forecast card names its day
+    /// ("Saturday"), a current card shows its freshness time, and anything
+    /// else falls back to the plain Today/Forecast label.
+    static func caption(
+        details: [MessageResponseCard.WeatherDetail],
+        hasForecast: Bool
+    ) -> String {
+        if let day = details.first(where: { $0.label.caseInsensitiveCompare("Day") == .orderedSame })?.value,
+           !day.isEmpty {
+            return day
+        }
+        guard let updated = details.first(where: { $0.label.caseInsensitiveCompare("Updated") == .orderedSame })?.value,
+              !updated.isEmpty else {
+            return hasForecast ? "Forecast" : "Today"
+        }
+        return "Today · \(updated)"
     }
 }
 
@@ -1350,7 +1413,7 @@ private struct RichResponseCards: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.82)
                 Spacer(minLength: 8)
-                Text(weatherTimeCaption(details, hasForecast: hasForecast))
+                Text(WeatherPresentation.caption(details: details, hasForecast: hasForecast))
                     .font(.caption.weight(.medium))
                     .monospacedDigit()
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
@@ -1430,14 +1493,6 @@ private struct RichResponseCards: View {
         return (String(localized[valueRange]), "°\(localized[unitRange].uppercased())")
     }
 
-    private func weatherTimeCaption(_ details: [MessageResponseCard.WeatherDetail], hasForecast: Bool) -> String {
-        guard let updated = details.first(where: { $0.label.caseInsensitiveCompare("Updated") == .orderedSame })?.value,
-              !updated.isEmpty else {
-            return hasForecast ? "Forecast" : "Today"
-        }
-        return "Today · \(updated)"
-    }
-
     /// One fact per row keeps longer forecasts (weekend mornings/afternoons)
     /// scannable instead of joining everything into a single run of text.
     private func weatherFacts(_ details: [MessageResponseCard.WeatherDetail], preferFahrenheit: Bool) -> [MessageResponseCard.WeatherDetail] {
@@ -1448,7 +1503,7 @@ private struct RichResponseCards: View {
                 preferFahrenheit: preferFahrenheit
             )
             let normalized = label.lowercased()
-            guard !label.isEmpty, !value.isEmpty, normalized != "updated", normalized != "source" else {
+            guard !label.isEmpty, !value.isEmpty, normalized != "updated", normalized != "source", normalized != "day" else {
                 return nil
             }
             return MessageResponseCard.WeatherDetail(label: label, value: value)

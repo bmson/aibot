@@ -143,6 +143,34 @@ describe('response cards', () => {
     ]);
   });
 
+  it('attaches the ambient card to a plain here-and-now weather question', () => {
+    const result = responseCardsForFinal({
+      evidence: [],
+      ambient:
+        "Right now (ambient context):\nOwner's current location: near San Francisco (37.7749, -122.4194), as of just now.\nWeather there: overcast, 18°C (today 17–19°C, 2% chance of rain, wind 18 km/h).",
+      requestText: "what's the weather like?",
+    });
+
+    expect(result.map((card) => card.kind)).toEqual(['weather']);
+  });
+
+  it.each([
+    "what's the weather in Palo Alto this weekend?",
+    "what's the weather this weekend?",
+    'will it rain tomorrow?',
+    'how hot will it get on Saturday?',
+    'weather for Tokyo next week?',
+  ])('keeps the today-here ambient card off an answer it would contradict: %s', (requestText) => {
+    const result = responseCardsForFinal({
+      evidence: [],
+      ambient:
+        "Right now (ambient context):\nOwner's current location: near San Francisco (37.7749, -122.4194), as of just now.\nWeather there: overcast, 18°C (today 17–19°C, 2% chance of rain, wind 18 km/h).\nComing days: Sat 16–23°C, clear; Sun 14–21°C, light rain.",
+      requestText,
+    });
+
+    expect(result).toEqual([]);
+  });
+
   it('builds complete cards for reminders, inbox, documents, Drive, artifacts, and confirmations', () => {
     const result = responseCardsForFinal({
       evidence: [
