@@ -416,6 +416,37 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(details[5].value, "13°C")
     }
 
+    func testWeatherUnitsCollapsePairsAndConvertToThePreferredUnit() {
+        XCTAssertEqual(WeatherUnits.localized("17°C (63°F)", preferFahrenheit: true), "63°F")
+        XCTAssertEqual(WeatherUnits.localized("17°C (63°F)", preferFahrenheit: false), "17°C")
+        XCTAssertEqual(WeatherUnits.localized("63°F (17°C)", preferFahrenheit: false), "17°C")
+        XCTAssertEqual(WeatherUnits.localized("17–20°C (63–68°F)", preferFahrenheit: true), "63–68°F")
+        XCTAssertEqual(WeatherUnits.localized("18°C", preferFahrenheit: true), "64°F")
+        XCTAssertEqual(WeatherUnits.localized("98°F", preferFahrenheit: false), "37°C")
+        XCTAssertEqual(WeatherUnits.localized("17–19°C", preferFahrenheit: true), "63–66°F")
+        XCTAssertEqual(WeatherUnits.localized("17ºC", preferFahrenheit: false), "17°C")
+        XCTAssertEqual(
+            WeatherUnits.localized("overcast, wind 18 km/h", preferFahrenheit: true),
+            "overcast, wind 18 km/h"
+        )
+    }
+
+    func testWeatherFactsSplitIntoCurrentAndPerDayForecast() {
+        let details = [
+            MessageResponseCard.WeatherDetail(label: "Today", value: "17–20°C"),
+            MessageResponseCard.WeatherDetail(label: "Wind", value: "10 km/h"),
+            MessageResponseCard.WeatherDetail(label: "Saturday morning", value: "Sunny, 17°C"),
+            MessageResponseCard.WeatherDetail(label: "Saturday afternoon", value: "Clear, 22°C"),
+            MessageResponseCard.WeatherDetail(label: "Sun", value: "Rain, 16°C"),
+        ]
+        let (current, days) = WeatherPresentation.split(details)
+        XCTAssertEqual(current.map(\.label), ["Today", "Wind"])
+        XCTAssertEqual(days.map(\.day), ["Saturday", "Sun"])
+        XCTAssertEqual(days[0].facts.map(\.label), ["Morning", "Afternoon"])
+        XCTAssertEqual(days[1].facts.map(\.label), ["Forecast"])
+        XCTAssertEqual(days[1].facts.map(\.value), ["Rain, 16°C"])
+    }
+
     func testIdentifierFormattingDoesNotExposeImplementationPunctuation() {
         XCTAssertEqual("web.fetch".sentenceCaseIdentifier, "Web Fetch")
         XCTAssertEqual("adhoc".sentenceCaseIdentifier, "Ad hoc")

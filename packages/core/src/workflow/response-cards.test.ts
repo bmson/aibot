@@ -124,6 +124,25 @@ describe('response cards', () => {
     ]);
   });
 
+  it('carries the coming days as day-labeled details for the card to group', () => {
+    expect(
+      weatherResponseCards(
+        "Right now (ambient context):\nOwner's current location: near San Francisco (37.7749, -122.4194), as of just now.\nWeather there: overcast, 18°C (today 17–19°C, 2% chance of rain, wind 18 km/h).\nComing days: Tue 16–23°C, clear; Wed 14–21°C, light rain, 80% chance of rain.",
+      ),
+    ).toMatchObject([
+      {
+        kind: 'weather',
+        details: [
+          { label: 'Today', value: '17–19°C' },
+          { label: 'Wind', value: '18 km/h' },
+          { label: 'Rain chance', value: '2%' },
+          { label: 'Tue', value: '16–23°C, clear' },
+          { label: 'Wed', value: '14–21°C, light rain, 80% chance of rain' },
+        ],
+      },
+    ]);
+  });
+
   it('builds complete cards for reminders, inbox, documents, Drive, artifacts, and confirmations', () => {
     const result = responseCardsForFinal({
       evidence: [

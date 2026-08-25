@@ -445,6 +445,7 @@ private struct DashboardCard<Content: View>: View {
             content
         }
         .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(AssistantTheme.dashboardPaper(for: colorScheme), in: shape)
         .overlay {
             shape.strokeBorder(

@@ -177,6 +177,14 @@ export function weatherResponseCards(ambient?: string): ResponseCard[] {
   const location =
     /Owner's current location:\s*(?:near\s+)?([^,(\n.]+)/i.exec(ambient)?.[1]?.trim() ||
     'Right now';
+  // "Coming days: Tue 16–23°C, partly cloudy; Wed ..." becomes one
+  // day-labeled detail per day so the card can group the forecast by day.
+  const coming = /^Coming days:\s*(.+?)\.?\s*$/im.exec(ambient)?.[1] ?? '';
+  const forecast = coming
+    .split(';')
+    .map((entry) => /^(\w+)\s+(.+)$/.exec(entry.trim()))
+    .filter((day): day is RegExpExecArray => day !== null)
+    .map((day) => ({ label: day[1] ?? '', value: day[2] ?? '' }));
   return [
     {
       kind: 'weather',
@@ -189,6 +197,7 @@ export function weatherResponseCards(ambient?: string): ResponseCard[] {
         { label: 'Wind', value: `${wind} km/h` },
         ...(humidity ? [{ label: 'Humidity', value: `${humidity}%` }] : []),
         { label: 'Rain chance', value: `${rain}%` },
+        ...forecast,
       ],
     },
   ];

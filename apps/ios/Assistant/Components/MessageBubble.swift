@@ -1,8 +1,5 @@
 import SwiftUI
 import UIKit
-#if canImport(FoundationModels)
-import FoundationModels
-#endif
 
 struct MessageBubble: View {
     let message: ChatMessage
@@ -15,7 +12,9 @@ struct MessageBubble: View {
     @ScaledMetric(relativeTo: .body) private var messageFontSize = 14.0
     @ScaledMetric(relativeTo: .body) private var bubbleHorizontalInset: CGFloat = 20
     @ScaledMetric(relativeTo: .body) private var bubbleVerticalInset: CGFloat = 15
-    @State private var localOrientation: String?
+    // Orientation lines and lead-ins stay out of the transcript on purpose:
+    // once a reply has cards, the cards are the answer — no prose floats
+    // above or below them.
 
     var body: some View {
         VStack(alignment: message.role == .assistant ? .leading : .trailing, spacing: 8) {
@@ -44,19 +43,10 @@ struct MessageBubble: View {
             }
 
             if message.role == .assistant, !responseCards.isEmpty {
-                if let localOrientation {
-                    Text(localOrientation)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(AssistantTheme.stageStrong.opacity(0.9))
-                        .padding(.horizontal, 6)
-                }
                 RichResponseCards(cards: responseCards)
             }
         }
-        .task(id: message.id) {
-            guard usesPrimaryCards, responseCards.count > 1 else { return }
-            localOrientation = await PresentationCompanion.orientation(for: responseCards)
-        }
+        .frame(maxWidth: .infinity, alignment: message.role == .assistant ? .leading : .trailing)
         .accessibilityElement(children: .contain)
     }
 
@@ -851,6 +841,140 @@ enum MessageResponseCard: Identifiable {
     }
 }
 
+/// The device locale picks the one temperature unit the card shows — "17°C
+/// (63°F)" side by side reads as clutter, not thoroughness. Sources send
+/// Celsius-first strings, so every rendered temperature passes through here.
+enum WeatherUnits {
+    static var prefersFahrenheit: Bool {
+        // The US measurement system is the one that defaults to °F; .uk and
+        // .metric both read weather in Celsius.
+        Locale.current.measurementSystem == .us
+    }
+
+    static func fahrenheit(fromCelsius value: Int) -> Int {
+        Int((Double(value) * 9 / 5 + 32).rounded())
+    }
+
+    static func celsius(fromFahrenheit value: Int) -> Int {
+        Int(((Double(value) - 32) * 5 / 9).rounded())
+    }
+
+    /// Rewrites every temperature in the text to the preferred unit: paired
+    /// readings ("17°C (63°F)") collapse to the preferred side, and bare
+    /// readings ("17–20°C", "17°C") convert when they aren't already in it.
+    static func localized(_ text: String, preferFahrenheit: Bool) -> String {
+        var result = collapsePairs(in: text, celsiusFirst: true, preferFahrenheit: preferFahrenheit)
+        result = collapsePairs(in: result, celsiusFirst: false, preferFahrenheit: preferFahrenheit)
+        result = convertRanges(in: result, preferFahrenheit: preferFahrenheit)
+        return convertSingles(in: result, preferFahrenheit: preferFahrenheit)
+    }
+
+    private static let celsiusToken = #"(-?\d{1,3}(?:\s*[–-]\s*-?\d{1,3})?)\s*[°º]\s*C"#
+    private static let fahrenheitToken = #"(-?\d{1,3}(?:\s*[–-]\s*-?\d{1,3})?)\s*[°º]\s*F"#
+
+    private static func collapsePairs(in text: String, celsiusFirst: Bool, preferFahrenheit: Bool) -> String {
+        let first = celsiusFirst ? celsiusToken : fahrenheitToken
+        let second = celsiusFirst ? fahrenheitToken : celsiusToken
+        return rewrite(text, pattern: first + #"\s*\("# + second + #"\)"#) { match, source in
+            guard let firstRange = Range(match.range(at: 1), in: source),
+                  let secondRange = Range(match.range(at: 2), in: source) else { return nil }
+            let celsius = celsiusFirst ? source[firstRange] : source[secondRange]
+            let fahrenheit = celsiusFirst ? source[secondRange] : source[firstRange]
+            let picked = preferFahrenheit ? fahrenheit : celsius
+            return "\(picked.replacingOccurrences(of: " ", with: ""))°\(preferFahrenheit ? "F" : "C")"
+        }
+    }
+
+    private static func convertRanges(in text: String, preferFahrenheit: Bool) -> String {
+        rewrite(text, pattern: #"(-?\d{1,3})\s*[–-]\s*(-?\d{1,3})\s*[°º]\s*([CF])\b"#) { match, source in
+            guard let lowRange = Range(match.range(at: 1), in: source),
+                  let highRange = Range(match.range(at: 2), in: source),
+                  let unitRange = Range(match.range(at: 3), in: source),
+                  let low = Int(source[lowRange]),
+                  let high = Int(source[highRange]) else { return nil }
+            let convertedLow = converted(low, unit: String(source[unitRange]), preferFahrenheit: preferFahrenheit)
+            let convertedHigh = converted(high, unit: String(source[unitRange]), preferFahrenheit: preferFahrenheit)
+            return "\(convertedLow.value)–\(convertedHigh.value)°\(convertedLow.unit)"
+        }
+    }
+
+    private static func convertSingles(in text: String, preferFahrenheit: Bool) -> String {
+        rewrite(text, pattern: #"(-?\d{1,3})\s*[°º]\s*([CF])\b"#) { match, source in
+            guard let valueRange = Range(match.range(at: 1), in: source),
+                  let unitRange = Range(match.range(at: 2), in: source),
+                  let value = Int(source[valueRange]) else { return nil }
+            let result = converted(value, unit: String(source[unitRange]), preferFahrenheit: preferFahrenheit)
+            return "\(result.value)°\(result.unit)"
+        }
+    }
+
+    private static func converted(_ value: Int, unit: String, preferFahrenheit: Bool) -> (value: Int, unit: String) {
+        let normalized = unit.uppercased()
+        if preferFahrenheit, normalized == "C" { return (fahrenheit(fromCelsius: value), "F") }
+        if !preferFahrenheit, normalized == "F" { return (celsius(fromFahrenheit: value), "C") }
+        return (value, normalized)
+    }
+
+    /// Replacements run against matches in reverse order so earlier ranges
+    /// stay valid while later text shifts underneath them.
+    private static func rewrite(
+        _ text: String,
+        pattern: String,
+        transform: (NSTextCheckingResult, String) -> String?
+    ) -> String {
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return text }
+        var result = text
+        let matches = expression.matches(in: result, range: NSRange(result.startIndex..., in: result))
+        for match in matches.reversed() {
+            guard let full = Range(match.range, in: result),
+                  let replacement = transform(match, result) else { continue }
+            result.replaceSubrange(full, with: replacement)
+        }
+        return result
+    }
+}
+
+/// Splits flat weather facts into current conditions and a per-day forecast:
+/// labels that start with a day name ("Saturday", "Sat", "Tomorrow") leave
+/// the metric list and group under their day instead.
+enum WeatherPresentation {
+    struct DayFacts {
+        let day: String
+        let facts: [MessageResponseCard.WeatherDetail]
+    }
+
+    private static let dayExpression = try? NSRegularExpression(
+        pattern: #"^(saturday|sunday|monday|tuesday|wednesday|thursday|friday|tomorrow|sat|sun|mon|tue|wed|thu|fri)\b[:\s–-]*(.*)$"#,
+        options: [.caseInsensitive]
+    )
+
+    static func split(
+        _ details: [MessageResponseCard.WeatherDetail]
+    ) -> (current: [MessageResponseCard.WeatherDetail], days: [DayFacts]) {
+        guard let expression = dayExpression else { return (details, []) }
+        var current: [MessageResponseCard.WeatherDetail] = []
+        var order: [String] = []
+        var byDay: [String: [MessageResponseCard.WeatherDetail]] = [:]
+        for detail in details {
+            let range = NSRange(detail.label.startIndex..., in: detail.label)
+            guard let match = expression.firstMatch(in: detail.label, range: range),
+                  let dayRange = Range(match.range(at: 1), in: detail.label) else {
+                current.append(detail)
+                continue
+            }
+            let day = String(detail.label[dayRange]).capitalized
+            let rest = Range(match.range(at: 2), in: detail.label)
+                .map { String(detail.label[$0]).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+            if byDay[day] == nil { order.append(day) }
+            byDay[day, default: []].append(.init(
+                label: rest.isEmpty ? "Forecast" : rest.capitalized,
+                value: detail.value
+            ))
+        }
+        return (current, order.map { DayFacts(day: $0, facts: byDay[$0] ?? []) })
+    }
+}
+
 private struct RichResponseCards: View {
     private struct EventRow: Identifiable {
         let id: String
@@ -910,8 +1034,8 @@ private struct RichResponseCards: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if !eventRows.isEmpty {
-                eventListCard(eventRows)
+            ForEach(eventDayGroups) { group in
+                eventDayCard(group)
             }
             ForEach(nonEventCards) { card in
                 switch card {
@@ -950,77 +1074,116 @@ private struct RichResponseCards: View {
         .accessibilityElement(children: .contain)
     }
 
-    private func eventListCard(_ events: [EventRow]) -> some View {
-        VStack(spacing: 0) {
-            ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
-                VStack(alignment: .leading, spacing: 6) {
-                    let date = eventDateCaption(event.start)
-                    let previousDate = index > 0 ? eventDateCaption(events[index - 1].start) : nil
-                    if let date, date != previousDate {
-                        Text(date)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                            .padding(.bottom, 2)
-                    }
+    private struct EventDayGroup: Identifiable {
+        let date: String
+        let events: [EventRow]
 
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(event.time)
-                            .font(.subheadline.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                        calendarEventLabel(event)
-                        Spacer(minLength: 4)
-                        if let meetingLinkURL = event.meetingLinkURL, let url = URL(string: meetingLinkURL) {
-                            Link(destination: url) {
-                                Label("Join", systemImage: "video.fill")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                            }
-                            .accessibilityLabel("Join video meeting for \(event.title)")
-                        }
-                    }
-                    Text(AssistantMarkdown.inlineAttributed(event.title))
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                        .fixedSize(horizontal: false, vertical: true)
+        var id: String { date.isEmpty ? "undated" : date }
+    }
 
-                    if !event.location.isEmpty {
-                        Text(AssistantMarkdown.inlineAttributed(event.location))
-                            .font(.subheadline)
-                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+    /// Multi-day answers read as one card per day rather than a single long
+    /// itinerary: the day owns the card header and only its events live inside.
+    private var eventDayGroups: [EventDayGroup] {
+        var order: [String] = []
+        var byDate: [String: [EventRow]] = [:]
+        for row in eventRows {
+            let key = eventDateCaption(row.start) ?? ""
+            if byDate[key] == nil { order.append(key) }
+            byDate[key, default: []].append(row)
+        }
+        return order.map { EventDayGroup(date: $0, events: byDate[$0] ?? []) }
+    }
 
-                    let attendees = event.attendees.map(eventAttendee)
-                    if !attendees.isEmpty {
-                        VStack(alignment: .leading, spacing: 5) {
-                            ForEach(attendees) { attendee in
-                                HStack(spacing: 6) {
-                                    if let status = attendee.status {
-                                        let presentation = attendeeStatusPresentation(status)
-                                        Image(systemName: presentation.symbol)
-                                            .font(.caption2.weight(.medium))
-                                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                            .accessibilityLabel(presentation.label)
-                                    }
-                                    Text(attendee.name)
-                                        .font(.caption)
-                                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                            }
-                        }
-                    }
+    private func eventDayCard(_ group: EventDayGroup) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if !group.date.isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(group.date)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                    Spacer(minLength: 8)
+                    Text("\(group.events.count) \(group.events.count == 1 ? "event" : "events")")
+                        .font(.caption.monospacedDigit().weight(.medium))
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 }
-                .padding(.top, index == 0 ? 0 : 18)
-                if index < events.count - 1 {
-                    Divider()
-                        .overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
-                        .padding(.top, 18)
-                }
+            }
+            ForEach(group.events) { event in
+                eventRow(event)
             }
         }
         .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 24)
+    }
+
+    private func eventRow(_ event: EventRow) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(event.time)
+                    .font(.subheadline.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                if let imminence = eventImminence(event) {
+                    Text(imminence)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(AssistantTheme.accent(for: colorScheme).opacity(0.12), in: Capsule())
+                        .accessibilityLabel(imminence == "Now" ? "Happening now" : "Starts \(imminence.lowercased())")
+                }
+                calendarEventLabel(event)
+                Spacer(minLength: 4)
+                if let meetingLinkURL = event.meetingLinkURL, let url = URL(string: meetingLinkURL) {
+                    Link(destination: url) {
+                        Label("Join", systemImage: "video.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                    }
+                    .accessibilityLabel("Join video meeting for \(event.title)")
+                }
+            }
+            Text(AssistantMarkdown.inlineAttributed(event.title))
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !event.location.isEmpty {
+                Text(AssistantMarkdown.inlineAttributed(event.location))
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            let attendees = event.attendees.map(eventAttendee)
+            if !attendees.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(attendees) { attendee in
+                        HStack(spacing: 6) {
+                            if let status = attendee.status {
+                                let presentation = attendeeStatusPresentation(status)
+                                Image(systemName: presentation.symbol)
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                    .accessibilityLabel(presentation.label)
+                            }
+                            Text(attendee.name)
+                                .font(.caption)
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The one thing on a schedule that changes what you do next: what is
+    /// happening right now or starts within the hour.
+    private func eventImminence(_ event: EventRow) -> String? {
+        guard let start = cardISO8601Date(event.start) else { return nil }
+        let minutes = Int((start.timeIntervalSinceNow / 60).rounded(.down))
+        if minutes > 0, minutes <= 60 { return "In \(minutes) min" }
+        if minutes <= 0, minutes >= -15 { return "Now" }
+        return nil
     }
 
     /// The owning calendar is useful context, not a headline — a quiet caption
@@ -1173,8 +1336,10 @@ private struct RichResponseCards: View {
         condition: String,
         details: [MessageResponseCard.WeatherDetail]
     ) -> some View {
-        let reading = weatherTemperatureReading(temperature)
-        let facts = weatherFacts(details)
+        let preferFahrenheit = WeatherUnits.prefersFahrenheit
+        let reading = weatherTemperatureReading(temperature, preferFahrenheit: preferFahrenheit)
+        let split = WeatherPresentation.split(weatherFacts(details, preferFahrenheit: preferFahrenheit))
+        let hasForecast = !split.days.isEmpty
 
         return VStack(alignment: .leading, spacing: 15) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -1184,7 +1349,7 @@ private struct RichResponseCards: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.82)
                 Spacer(minLength: 8)
-                Text(weatherTimeCaption(details))
+                Text(weatherTimeCaption(details, hasForecast: hasForecast))
                     .font(.caption.weight(.medium))
                     .monospacedDigit()
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
@@ -1192,20 +1357,18 @@ private struct RichResponseCards: View {
             }
 
             HStack(alignment: .center, spacing: 14) {
-                VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
                     Text(reading.value)
                         .font(.system(size: 52, weight: .regular, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                        .fixedSize(horizontal: true, vertical: false)
-                    if !reading.unitAndConversion.isEmpty {
-                        Text(reading.unitAndConversion)
-                            .font(.subheadline.weight(.medium))
-                            .monospacedDigit()
+                    if !reading.unit.isEmpty {
+                        Text(reading.unit)
+                            .font(.title2.weight(.medium))
                             .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                            .lineLimit(1)
                     }
                 }
+                .fixedSize(horizontal: true, vertical: false)
 
                 Text(AssistantMarkdown.inlineAttributed(condition))
                     .font(.title3.weight(.semibold))
@@ -1223,19 +1386,27 @@ private struct RichResponseCards: View {
                     .background(AssistantTheme.sunken(for: colorScheme), in: Circle())
             }
 
-            if !facts.isEmpty {
+            if !split.current.isEmpty {
                 Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in
-                        HStack(alignment: .firstTextBaseline, spacing: 12) {
-                            Text(fact.label)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                .frame(width: usesAccessibilityLayout ? 104 : 88, alignment: .leading)
-                            Text(AssistantMarkdown.inlineAttributed(fact.value))
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                                .fixedSize(horizontal: false, vertical: true)
+                    ForEach(Array(split.current.enumerated()), id: \.offset) { _, fact in
+                        weatherFactRow(fact)
+                    }
+                }
+            }
+
+            if hasForecast {
+                Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(split.days, id: \.day) { group in
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text(group.day)
+                                .font(.caption.weight(.bold))
+                                .tracking(0.5)
+                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                            ForEach(Array(group.facts.enumerated()), id: \.offset) { _, fact in
+                                weatherFactRow(fact)
+                            }
                         }
                     }
                 }
@@ -1244,54 +1415,55 @@ private struct RichResponseCards: View {
         .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 22)
     }
 
-    private func weatherTemperatureReading(_ temperature: String) -> (value: String, unitAndConversion: String) {
-        let pattern = #"(-?\d{1,3})\s*°\s*([FC])(?:\s*\(([^)]+)\))?"#
+    /// The big reading and its unit sit on one baseline — "63°F", never a
+    /// number on one line and a lone "F" stranded underneath it.
+    private func weatherTemperatureReading(_ temperature: String, preferFahrenheit: Bool) -> (value: String, unit: String) {
+        let localized = WeatherUnits.localized(temperature, preferFahrenheit: preferFahrenheit)
+        let pattern = #"(-?\d{1,3})\s*[°º]\s*([CF])"#
         guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-              let match = expression.firstMatch(in: temperature, range: NSRange(temperature.startIndex..., in: temperature)),
-              let valueRange = Range(match.range(at: 1), in: temperature),
-              let unitRange = Range(match.range(at: 2), in: temperature),
-              let degrees = Int(temperature[valueRange]) else {
-            return (temperature.trimmingCharacters(in: .whitespacesAndNewlines), "")
+              let match = expression.firstMatch(in: localized, range: NSRange(localized.startIndex..., in: localized)),
+              let valueRange = Range(match.range(at: 1), in: localized),
+              let unitRange = Range(match.range(at: 2), in: localized) else {
+            return (localized.trimmingCharacters(in: .whitespacesAndNewlines), "")
         }
-
-        let unit = String(temperature[unitRange]).uppercased()
-        // Sources often carry only one unit, so derive the other locally to
-        // keep the familiar "17° / C · 63°F" reading complete.
-        let conversion = Range(match.range(at: 3), in: temperature).map { String(temperature[$0]) }
-            ?? weatherConvertedTemperature(degrees: degrees, unit: unit)
-        return (
-            "\(degrees)°",
-            [unit, conversion].compactMap { $0 }.joined(separator: " · ")
-        )
+        return (String(localized[valueRange]), "°\(localized[unitRange].uppercased())")
     }
 
-    private func weatherConvertedTemperature(degrees: Int, unit: String) -> String? {
-        switch unit {
-        case "C": "\(Int((Double(degrees) * 9 / 5 + 32).rounded()))°F"
-        case "F": "\(Int(((Double(degrees) - 32) * 5 / 9).rounded()))°C"
-        default: nil
-        }
-    }
-
-    private func weatherTimeCaption(_ details: [MessageResponseCard.WeatherDetail]) -> String {
+    private func weatherTimeCaption(_ details: [MessageResponseCard.WeatherDetail], hasForecast: Bool) -> String {
         guard let updated = details.first(where: { $0.label.caseInsensitiveCompare("Updated") == .orderedSame })?.value,
               !updated.isEmpty else {
-            return "Today"
+            return hasForecast ? "Forecast" : "Today"
         }
         return "Today · \(updated)"
     }
 
     /// One fact per row keeps longer forecasts (weekend mornings/afternoons)
     /// scannable instead of joining everything into a single run of text.
-    private func weatherFacts(_ details: [MessageResponseCard.WeatherDetail]) -> [MessageResponseCard.WeatherDetail] {
+    private func weatherFacts(_ details: [MessageResponseCard.WeatherDetail], preferFahrenheit: Bool) -> [MessageResponseCard.WeatherDetail] {
         details.compactMap { detail in
             let label = detail.label.trimmingCharacters(in: .whitespacesAndNewlines)
-            let value = weatherFirstPhrase(detail.value.replacingOccurrences(of: "**", with: ""))
+            let value = WeatherUnits.localized(
+                weatherFirstPhrase(detail.value.replacingOccurrences(of: "**", with: "")),
+                preferFahrenheit: preferFahrenheit
+            )
             let normalized = label.lowercased()
             guard !label.isEmpty, !value.isEmpty, normalized != "updated", normalized != "source" else {
                 return nil
             }
             return MessageResponseCard.WeatherDetail(label: label, value: value)
+        }
+    }
+
+    private func weatherFactRow(_ fact: MessageResponseCard.WeatherDetail) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(fact.label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                .frame(width: usesAccessibilityLayout ? 104 : 88, alignment: .leading)
+            Text(AssistantMarkdown.inlineAttributed(fact.value))
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -1943,12 +2115,15 @@ private struct RichResponseCards: View {
 }
 
 private extension View {
+    /// Cards always fill the row: a card sized to its content looks broken
+    /// next to full-width siblings, in the transcript and on any other page.
     func responseCardSurface(
         colorScheme: ColorScheme,
         colorSchemeContrast: ColorSchemeContrast,
         inset: CGFloat
     ) -> some View {
         padding(inset)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 28, style: .continuous)
@@ -1989,55 +2164,6 @@ private extension JSONValue {
     var integerValue: Int? {
         guard let numberValue, numberValue.rounded() == numberValue else { return nil }
         return Int(numberValue)
-    }
-}
-
-/// A best-effort local copy pass. It receives only the already-renderable card
-/// labels and disappears on any device/model failure; it cannot affect facts.
-private enum PresentationCompanion {
-    static func orientation(for cards: [MessageResponseCard]) async -> String? {
-        let source = cards.map { card in
-            switch card {
-            case let .event(_, _, time, title, location, _, _, _, _): "Event: \(time), \(title), \(location)"
-            case let .weather(location, temperature, condition, details):
-                "Weather: \(location), \(condition), \(temperature), \(details.map { "\($0.label): \($0.value)" }.joined(separator: ", "))"
-            case let .duration(title, duration, detail, _): "Estimate: \(title), \(duration), \(detail ?? "")"
-            case let .agenda(title, subtitle, items): "Agenda: \(title), \(subtitle), \(items.map(\.title).joined(separator: ", "))"
-            case let .reminder(_, title, schedule, nextFires, enabled): "Reminder: \(title), \(schedule), \(nextFires), \(enabled ? "active" : "paused")"
-            case let .emails(_, title, query, _, _, _, messages): "Email results: \(title), \(query), \(messages.map(\.subject).joined(separator: ", "))"
-            case let .documents(_, title, query, passages): "Document matches: \(title), \(query), \(passages.map(\.document).joined(separator: ", "))"
-            case let .drive(_, title, query, files): "Drive files: \(title), \(query), \(files.map(\.name).joined(separator: ", "))"
-            case let .search(_, title, query, results): "Web results: \(title), \(query), \(results.map(\.title).joined(separator: ", "))"
-            case let .availability(_, timeMin, timeMax, busy, _, complete, _): "Availability: \(timeMin) to \(timeMax), \(busy.count) busy, \(complete ? "complete" : "partial")"
-            case let .thread(_, subject, messageCount, messages): "Email thread: \(subject), \(messageCount) messages, \(messages.map(\.sender).joined(separator: ", "))"
-            case let .sheetRows(_, sheetName, rows, totalRows, _): "Sheet: \(sheetName), \(totalRows) rows, preview \(rows.count) rows"
-            case let .resource(_, _, title, subtitle, details, _, _): "Resource: \(subtitle), \(title), \(details.map { "\($0.label): \($0.value)" }.joined(separator: ", "))"
-            case let .status(_, title, detail, _, details, _, _): "Status: \(title), \(detail), \(details.map { "\($0.label): \($0.value)" }.joined(separator: ", "))"
-            }
-        }.joined(separator: "\n")
-        guard source.count <= 1_200 else { return nil }
-        #if canImport(FoundationModels)
-        guard #available(iOS 26, *), SystemLanguageModel.default.availability == .available else { return nil }
-        do {
-            let session = LanguageModelSession(instructions: "Write one calm planning sentence of at most 120 characters. Use only the supplied facts. Do not add names, numbers, dates, recommendations, links, or claims about actions.")
-            let response = try await session.respond(to: source)
-            return validated(response.content, source: source)
-        } catch {
-            return nil
-        }
-        #else
-        return nil
-        #endif
-    }
-
-    private static func validated(_ candidate: String, source: String) -> String? {
-        let text = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, text.count <= 120, !text.contains("\n") else { return nil }
-        // Numbers are high-risk in a planning line: every one must be literally
-        // present in the evidence-derived card text.
-        let numbers = text.split { !$0.isNumber }.filter { !$0.isEmpty }
-        guard numbers.allSatisfy({ source.contains($0) }) else { return nil }
-        return text
     }
 }
 

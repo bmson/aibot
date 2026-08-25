@@ -30,6 +30,24 @@ function fakeWeatherFetch(code = 3, precip = 90) {
     }) as unknown as Response) as unknown as typeof fetch;
 }
 
+/** Today plus two coming days, so the forecast line has real content. */
+function fakeForecastFetch() {
+  return (async () =>
+    ({
+      ok: true,
+      json: async () => ({
+        current: { temperature_2m: 10.8, weather_code: 3, wind_speed_10m: 9 },
+        daily: {
+          time: ['2026-08-24', '2026-08-25', '2026-08-26'],
+          weather_code: [3, 0, 61],
+          temperature_2m_max: [12.2, 15.6, 13.1],
+          temperature_2m_min: [10.4, 9.2, 8.8],
+          precipitation_probability_max: [10, 0, 80],
+        },
+      }),
+    }) as unknown as Response) as unknown as typeof fetch;
+}
+
 describe('ambient — weather fetch (pure)', () => {
   it('parses current + daily and rounds', async () => {
     const w = await fetchWeather(64, -22, fakeWeatherFetch(3, 40));
@@ -47,6 +65,28 @@ describe('ambient — weather fetch (pure)', () => {
   it('throws on a non-ok response', async () => {
     const bad = (async () => ({ ok: false, status: 503 }) as Response) as unknown as typeof fetch;
     await expect(fetchWeather(64, -22, bad)).rejects.toThrow('weather fetch failed');
+  });
+
+  it('parses the coming days, skipping today and dropping malformed entries', async () => {
+    const w = await fetchWeather(64, -22, fakeForecastFetch());
+    expect(w?.forecast).toEqual([
+      {
+        date: '2026-08-25',
+        code: 0,
+        description: 'clear',
+        lowC: 9,
+        highC: 16,
+        precipProbabilityMax: 0,
+      },
+      {
+        date: '2026-08-26',
+        code: 61,
+        description: 'light rain',
+        lowC: 9,
+        highC: 13,
+        precipProbabilityMax: 80,
+      },
+    ]);
   });
 });
 
@@ -97,6 +137,16 @@ describe('ambient — snapshot refresh + block', () => {
     expect(block).toContain('Reykjavík');
     expect(block).toContain('chance of rain');
     expect(block).toContain('factor it into anything outdoors');
+  });
+
+  it('adds a coming-days line when the forecast reaches beyond today', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    await refreshAmbientSnapshot({ db, fetchImpl: fakeForecastFetch() }, { agentId });
+
+    const block = await getAmbientBlock(db, agentId);
+    expect(block).toContain(
+      'Coming days: Tue 9–16°C, clear; Wed 9–13°C, light rain, 80% chance of rain.',
+    );
   });
 
   it('falls back to the location line when the snapshot is stale', async (ctx) => {
