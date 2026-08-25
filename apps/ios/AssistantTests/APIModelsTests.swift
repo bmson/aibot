@@ -218,13 +218,137 @@ final class APIModelsTests: XCTestCase {
                 "details": .array([.object(["label": .string("To"), "value": .string("ada@example.com")])]),
             ])
         )
-        guard case let .status(_, statusTitle, detail, symbol, statusDetails)? = MessageResponseCard(part: status) else {
+        guard case let .status(_, statusTitle, detail, symbol, statusDetails, statusLinkLabel, statusLinkURL)? = MessageResponseCard(part: status) else {
             return XCTFail("Expected a status card")
         }
         XCTAssertEqual(statusTitle, "Email draft ready")
         XCTAssertEqual(detail, "**Launch** recap")
         XCTAssertEqual(symbol, "envelope.badge.fill")
         XCTAssertEqual(statusDetails.first?.value, "ada@example.com")
+        XCTAssertNil(statusLinkLabel)
+        XCTAssertNil(statusLinkURL)
+    }
+
+    func testResponseCardsDecodeWebSearchResultsAndAvailability() {
+        let search = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("web-search-results"), "id": .string("search-1"),
+                "query": .string("best time to visit Lisbon"),
+                "results": .array([
+                    .object([
+                        "id": .string("result-1"), "title": .string("Lisbon travel guide"),
+                        "url": .string("https://example.com/lisbon"),
+                        "snippet": .string("Late spring is ideal."),
+                    ]),
+                    .object([
+                        "id": .string("result-2"), "title": .string("Dropped without a URL"),
+                        "url": .string(""), "snippet": .string("No link."),
+                    ]),
+                ]),
+            ])
+        )
+        guard case let .search(_, _, query, results)? = MessageResponseCard(part: search) else {
+            return XCTFail("Expected a web search results card")
+        }
+        XCTAssertEqual(query, "best time to visit Lisbon")
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first?.title, "Lisbon travel guide")
+        XCTAssertEqual(results.first?.url, "https://example.com/lisbon")
+        XCTAssertEqual(results.first?.snippet, "Late spring is ideal.")
+
+        let availability = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("availability"), "id": .string("availability-1"),
+                "timeMin": .string("2026-08-24T09:00:00-07:00"),
+                "timeMax": .string("2026-08-24T17:00:00-07:00"),
+                "busy": .array([
+                    .object([
+                        "start": .string("2026-08-24T10:00:00-07:00"),
+                        "end": .string("2026-08-24T11:30:00-07:00"),
+                        "calendar": .string("Work"),
+                    ]),
+                    .object(["start": .string(""), "end": .string(""), "calendar": .string("Dropped")]),
+                ]),
+                "calendarsChecked": .array([.string("Work"), .string("Family")]),
+                "complete": .bool(false),
+                "note": .string("Some calendars did not return free/busy data."),
+            ])
+        )
+        guard case let .availability(_, timeMin, timeMax, busy, calendarsChecked, complete, note)? =
+                MessageResponseCard(part: availability) else {
+            return XCTFail("Expected an availability card")
+        }
+        XCTAssertEqual(timeMin, "2026-08-24T09:00:00-07:00")
+        XCTAssertEqual(timeMax, "2026-08-24T17:00:00-07:00")
+        XCTAssertEqual(busy.count, 1)
+        XCTAssertEqual(busy.first?.calendar, "Work")
+        XCTAssertEqual(calendarsChecked, ["Work", "Family"])
+        XCTAssertFalse(complete)
+        XCTAssertEqual(note, "Some calendars did not return free/busy data.")
+    }
+
+    func testResponseCardsDecodeEmailThreadAndSheetRows() {
+        let thread = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("email-thread"), "id": .string("thread-1"),
+                "subject": .string("Launch recap"), "messageCount": .number(4),
+                "messages": .array([
+                    .object([
+                        "id": .string("m1"), "sender": .string("Ada <ada@example.com>"),
+                        "date": .string("Mon, 24 Aug 2026 09:00:00 -0700"),
+                        "excerpt": .string("The plan is ready."),
+                    ]),
+                ]),
+            ])
+        )
+        guard case let .thread(_, subject, messageCount, messages)? = MessageResponseCard(part: thread) else {
+            return XCTFail("Expected an email thread card")
+        }
+        XCTAssertEqual(subject, "Launch recap")
+        XCTAssertEqual(messageCount, 4)
+        XCTAssertEqual(messages.first?.sender, "Ada <ada@example.com>")
+        XCTAssertEqual(messages.first?.excerpt, "The plan is ready.")
+
+        let sheet = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("sheet-rows"), "id": .string("sheet-1"),
+                "sheetName": .string("Budget"), "totalRows": .number(42),
+                "rows": .array([
+                    .array([.string("Item"), .string("Cost")]),
+                    .array([.string("Flights"), .number(640)]),
+                ]),
+                "link": .object(["label": .string("Open spreadsheet"), "url": .string("https://sheets.example.com/budget")]),
+            ])
+        )
+        guard case let .sheetRows(_, sheetName, rows, totalRows, linkURL)? = MessageResponseCard(part: sheet) else {
+            return XCTFail("Expected a sheet rows card")
+        }
+        XCTAssertEqual(sheetName, "Budget")
+        XCTAssertEqual(totalRows, 42)
+        XCTAssertEqual(rows, [["Item", "Cost"], ["Flights", "640"]])
+        XCTAssertEqual(linkURL, "https://sheets.example.com/budget")
+    }
+
+    func testStatusCardCarriesItsOpenLinkWhenPresent() {
+        let updated = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("status"), "id": .string("sheet-written-1"),
+                "title": .string("Sheet updated"),
+                "detail": .string("3 rows added to Budget."),
+                "symbol": .string("tablecells.fill"),
+                "link": .object(["label": .string("Open spreadsheet"), "url": .string("https://sheets.example.com/budget")]),
+            ])
+        )
+        guard case let .status(_, _, _, _, _, linkLabel, linkURL)? = MessageResponseCard(part: updated) else {
+            return XCTFail("Expected a status card")
+        }
+        XCTAssertEqual(linkLabel, "Open spreadsheet")
+        XCTAssertEqual(linkURL, "https://sheets.example.com/budget")
     }
 
     func testResponseCardsInferWeatherAndDurationOnlyFromStrongSignals() {

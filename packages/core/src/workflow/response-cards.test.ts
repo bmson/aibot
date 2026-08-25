@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  availabilityResponseCards,
   calendarResponseCards,
   responseCardsForFinal,
+  searchResponseCards,
+  sheetRowsResponseCards,
+  statusResponseCards,
+  threadResponseCards,
   weatherResponseCards,
 } from './response-cards.js';
 
@@ -237,6 +242,266 @@ describe('response cards', () => {
         kind: 'drive-results',
         files: [{ name: 'Launch deck', size: '2048' }],
       },
+    ]);
+  });
+
+  it('turns web search hits into a tappable results card', () => {
+    const result = searchResponseCards([
+      {
+        toolName: 'web.search',
+        status: 'succeeded',
+        args: { query: 'best time to visit Lisbon' },
+        result: {
+          query: 'best time to visit Lisbon',
+          results: [
+            {
+              url: 'https://example.com/lisbon',
+              title: 'Lisbon travel guide',
+              snippet: 'Late spring is ideal.',
+            },
+            { url: '', title: 'Dropped without a URL', snippet: 'No link.' },
+          ],
+        },
+      },
+      { toolName: 'web.search', status: 'failed', result: { query: 'ignored', results: [] } },
+    ]);
+
+    expect(result).toMatchObject([
+      {
+        kind: 'web-search-results',
+        query: 'best time to visit Lisbon',
+        results: [
+          {
+            title: 'Lisbon travel guide',
+            url: 'https://example.com/lisbon',
+            snippet: 'Late spring is ideal.',
+          },
+        ],
+      },
+    ]);
+    expect(result[0]?.results).toHaveLength(1);
+  });
+
+  it('turns a free/busy read into an availability card with its coverage', () => {
+    const result = availabilityResponseCards([
+      {
+        toolName: 'calendar.availability',
+        status: 'succeeded',
+        args: { timeMin: '2026-08-24T09:00:00-07:00', timeMax: '2026-08-24T17:00:00-07:00' },
+        result: {
+          busy: [
+            {
+              start: '2026-08-24T10:00:00-07:00',
+              end: '2026-08-24T11:30:00-07:00',
+              calendar: 'Work',
+            },
+            { start: '', end: '', calendar: 'Dropped when malformed' },
+          ],
+          calendarsChecked: ['Work', 'Family'],
+          complete: false,
+          note: 'Some calendars did not return free/busy data.',
+        },
+      },
+    ]);
+
+    expect(result).toMatchObject([
+      {
+        kind: 'availability',
+        timeMin: '2026-08-24T09:00:00-07:00',
+        timeMax: '2026-08-24T17:00:00-07:00',
+        busy: [
+          {
+            start: '2026-08-24T10:00:00-07:00',
+            end: '2026-08-24T11:30:00-07:00',
+            calendar: 'Work',
+          },
+        ],
+        calendarsChecked: ['Work', 'Family'],
+        complete: false,
+        note: 'Some calendars did not return free/busy data.',
+      },
+    ]);
+    expect(result[0]?.busy).toHaveLength(1);
+  });
+
+  it('includes search and availability cards in the final response set', () => {
+    const result = responseCardsForFinal({
+      evidence: [
+        {
+          toolName: 'web.search',
+          status: 'succeeded',
+          args: { query: 'lisbon' },
+          result: {
+            query: 'lisbon',
+            results: [{ url: 'https://example.com', title: 'Example', snippet: 'Hi' }],
+          },
+        },
+        {
+          toolName: 'calendar.availability',
+          status: 'succeeded',
+          args: { timeMin: '2026-08-24T09:00:00-07:00', timeMax: '2026-08-24T17:00:00-07:00' },
+          result: { busy: [], calendarsChecked: ['Work'], complete: true },
+        },
+      ],
+    });
+
+    expect(result.map((card) => card.kind)).toEqual(['availability', 'web-search-results']);
+  });
+
+  it('turns a fetched thread into a compact transcript card', () => {
+    const result = threadResponseCards([
+      {
+        toolName: 'gmail.read_thread',
+        status: 'succeeded',
+        result: {
+          threadId: 'thread-1',
+          messages: [
+            {
+              messageId: 'm1',
+              from: 'Ada <ada@example.com>',
+              date: 'Mon, 24 Aug 2026 09:00:00 -0700',
+              subject: 'Launch recap',
+              text: 'The plan is ready.\n\nEverything reviewed.',
+            },
+            {
+              messageId: 'm2',
+              from: 'owner@example.com',
+              date: 'Mon, 24 Aug 2026 09:15:00 -0700',
+              subject: 'Re: Launch recap',
+              text: 'Thanks!',
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(result).toMatchObject([
+      {
+        kind: 'email-thread',
+        subject: 'Launch recap',
+        messageCount: 2,
+        messages: [
+          {
+            id: 'm1',
+            sender: 'Ada <ada@example.com>',
+            excerpt: 'The plan is ready. Everything reviewed.',
+          },
+          { id: 'm2', excerpt: 'Thanks!' },
+        ],
+      },
+    ]);
+  });
+
+  it('caps sheet previews while keeping the full row count and open link', () => {
+    const wideRow = Array.from({ length: 8 }, (_, index) => `col-${index}`);
+    const result = sheetRowsResponseCards([
+      {
+        toolName: 'sheets.get_rows',
+        status: 'succeeded',
+        result: {
+          spreadsheetId: 'sheet-1',
+          sheetName: 'Budget',
+          url: 'https://sheets.example.com/budget',
+          rows: [wideRow, ['Flights', 640], ...Array.from({ length: 40 }, () => ['x', 1])],
+        },
+      },
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      kind: 'sheet-rows',
+      sheetName: 'Budget',
+      totalRows: 42,
+      link: { label: 'Open spreadsheet', url: 'https://sheets.example.com/budget' },
+    });
+    const rows = result[0]?.rows as string[][];
+    expect(rows).toHaveLength(9);
+    expect(rows[0]).toHaveLength(6);
+    expect(rows[1]).toEqual(['Flights', '640']);
+  });
+
+  it('confirms inbox, document, and sheet writes with links where they exist', () => {
+    const result = statusResponseCards([
+      {
+        toolName: 'gmail.modify',
+        status: 'succeeded',
+        args: { messageId: 'm1', archive: true, markRead: true },
+        result: { id: 'm1', addedLabels: [], removedLabels: ['UNREAD', 'INBOX'] },
+      },
+      {
+        toolName: 'docs.append',
+        status: 'succeeded',
+        result: { documentId: 'doc-1', url: 'https://docs.example.com/1', appended: true },
+      },
+      {
+        toolName: 'docs.replace_text',
+        status: 'succeeded',
+        result: {
+          documentId: 'doc-1',
+          url: 'https://docs.example.com/1',
+          updated: true,
+          replacements: [{ oldText: 'a', newText: 'b' }],
+        },
+      },
+      {
+        toolName: 'docs.share',
+        status: 'succeeded',
+        args: { role: 'commenter' },
+        result: {
+          documentId: 'doc-1',
+          url: 'https://docs.example.com/1',
+          sharedWith: 'ada@example.com',
+        },
+      },
+      {
+        toolName: 'sheets.append_rows',
+        status: 'succeeded',
+        result: {
+          spreadsheetId: 's1',
+          sheetName: 'Budget',
+          url: 'https://sheets.example.com/budget',
+          appendedRows: 3,
+        },
+      },
+      {
+        toolName: 'sheets.write_rows',
+        status: 'succeeded',
+        result: {
+          spreadsheetId: 's1',
+          sheetName: 'Budget',
+          startCell: 'B4',
+          url: 'https://sheets.example.com/budget',
+          writtenRows: 1,
+        },
+      },
+    ]);
+
+    expect(result).toMatchObject([
+      { kind: 'status', title: 'Inbox updated', detail: 'Archived · Marked read' },
+      {
+        kind: 'status',
+        title: 'Document updated',
+        symbol: 'doc.badge.plus',
+        link: { label: 'Open document', url: 'https://docs.example.com/1' },
+      },
+      {
+        kind: 'status',
+        title: 'Document updated',
+        detail: '1 text replacement applied.',
+      },
+      {
+        kind: 'status',
+        title: 'Document shared',
+        detail: 'ada@example.com',
+        details: [{ label: 'Role', value: 'commenter' }],
+      },
+      {
+        kind: 'status',
+        title: 'Sheet updated',
+        detail: '3 rows added to Budget.',
+        link: { label: 'Open spreadsheet', url: 'https://sheets.example.com/budget' },
+      },
+      { kind: 'status', title: 'Sheet updated', detail: '1 row written to Budget.' },
     ]);
   });
 

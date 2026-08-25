@@ -343,6 +343,28 @@ enum MessageResponseCard: Identifiable {
         let url: String
     }
 
+    struct SearchResult: Identifiable {
+        let id: String
+        let title: String
+        let url: String
+        let snippet: String
+    }
+
+    struct BusyBlock: Identifiable {
+        let start: String
+        let end: String
+        let calendar: String
+
+        var id: String { "\(start)-\(end)-\(calendar)" }
+    }
+
+    struct ThreadMessage: Identifiable {
+        let id: String
+        let sender: String
+        let date: String
+        let excerpt: String
+    }
+
     case agenda(title: String, subtitle: String, items: [AgendaItem])
     case event(id: String, start: String, time: String, title: String, location: String, attendees: [String], calendars: [String], calendarLinkURL: String?, meetingLinkURL: String?)
     case weather(location: String, temperature: String, condition: String, details: [WeatherDetail])
@@ -351,8 +373,12 @@ enum MessageResponseCard: Identifiable {
     case emails(id: String, title: String, query: String, mailbox: String, complete: Bool, matchingMessagesEstimate: Int?, messages: [EmailResult])
     case documents(id: String, title: String, query: String, passages: [DocumentPassage])
     case drive(id: String, title: String, query: String, files: [DriveFile])
+    case search(id: String, title: String, query: String, results: [SearchResult])
+    case availability(id: String, timeMin: String, timeMax: String, busy: [BusyBlock], calendarsChecked: [String], complete: Bool, note: String?)
+    case thread(id: String, subject: String, messageCount: Int, messages: [ThreadMessage])
+    case sheetRows(id: String, sheetName: String, rows: [[String]], totalRows: Int, linkURL: String?)
     case resource(id: String, resourceType: String, title: String, subtitle: String, details: [Detail], linkLabel: String?, linkURL: String?)
-    case status(id: String, title: String, detail: String, symbol: String, details: [Detail])
+    case status(id: String, title: String, detail: String, symbol: String, details: [Detail], linkLabel: String?, linkURL: String?)
 
     var id: String {
         switch self {
@@ -364,8 +390,12 @@ enum MessageResponseCard: Identifiable {
         case let .emails(id, _, _, _, _, _, _): id
         case let .documents(id, _, _, _): id
         case let .drive(id, _, _, _): id
+        case let .search(id, _, _, _): id
+        case let .availability(id, _, _, _, _, _, _): id
+        case let .thread(id, _, _, _): id
+        case let .sheetRows(id, _, _, _, _): id
         case let .resource(id, _, _, _, _, _, _): id
-        case let .status(id, _, _, _, _): id
+        case let .status(id, _, _, _, _, _, _): id
         }
     }
 
@@ -497,6 +527,87 @@ enum MessageResponseCard: Identifiable {
                 query: data["query"]?.string ?? "",
                 files: files
             )
+        case "web-search-results":
+            let results: [SearchResult] = {
+                guard case let .array(values)? = data["results"] else { return [] }
+                return values.enumerated().compactMap { index, value in
+                    guard case let .object(result) = value else { return nil }
+                    let url = result["url"]?.string ?? ""
+                    guard !url.isEmpty else { return nil }
+                    return .init(
+                        id: result["id"]?.string ?? "result-\(index)",
+                        title: result["title"]?.string ?? url,
+                        url: url,
+                        snippet: result["snippet"]?.string ?? ""
+                    )
+                }
+            }()
+            self = .search(
+                id: data["id"]?.string ?? "web-search-results",
+                title: data["title"]?.string ?? "Web results",
+                query: data["query"]?.string ?? "",
+                results: results
+            )
+        case "availability":
+            let busy: [BusyBlock] = {
+                guard case let .array(values)? = data["busy"] else { return [] }
+                return values.compactMap { value in
+                    guard case let .object(slot) = value,
+                          let start = slot["start"]?.string, !start.isEmpty,
+                          let end = slot["end"]?.string, !end.isEmpty else { return nil }
+                    return .init(start: start, end: end, calendar: slot["calendar"]?.string ?? "")
+                }
+            }()
+            self = .availability(
+                id: data["id"]?.string ?? "availability",
+                timeMin: data["timeMin"]?.string ?? "",
+                timeMax: data["timeMax"]?.string ?? "",
+                busy: busy,
+                calendarsChecked: data["calendarsChecked"]?.arrayStrings ?? [],
+                complete: data["complete"]?.boolValue ?? true,
+                note: data["note"]?.string
+            )
+        case "email-thread":
+            let messages: [ThreadMessage] = {
+                guard case let .array(values)? = data["messages"] else { return [] }
+                return values.enumerated().compactMap { index, value in
+                    guard case let .object(message) = value else { return nil }
+                    return .init(
+                        id: message["id"]?.string ?? "message-\(index)",
+                        sender: message["sender"]?.string ?? "",
+                        date: message["date"]?.string ?? "",
+                        excerpt: message["excerpt"]?.string ?? ""
+                    )
+                }
+            }()
+            self = .thread(
+                id: data["id"]?.string ?? "email-thread",
+                subject: data["subject"]?.string ?? "Email thread",
+                messageCount: data["messageCount"]?.integerValue ?? messages.count,
+                messages: messages
+            )
+        case "sheet-rows":
+            let rows: [[String]] = {
+                guard case let .array(values)? = data["rows"] else { return [] }
+                return values.compactMap { value in
+                    guard case let .array(cells) = value else { return nil }
+                    return cells.map { cell in
+                        switch cell {
+                        case let .string(text): text
+                        case let .number(value): value.rounded() == value ? String(Int(value)) : String(value)
+                        case let .bool(flag): flag ? "TRUE" : "FALSE"
+                        default: ""
+                        }
+                    }
+                }
+            }()
+            self = .sheetRows(
+                id: data["id"]?.string ?? "sheet-rows",
+                sheetName: data["sheetName"]?.string ?? "Sheet",
+                rows: rows,
+                totalRows: data["totalRows"]?.integerValue ?? rows.count,
+                linkURL: data["link"]?.objectValue?["url"]?.string
+            )
         case "resource":
             guard let title = data["title"]?.string else { return nil }
             let link = data["link"]?.objectValue
@@ -511,12 +622,15 @@ enum MessageResponseCard: Identifiable {
             )
         case "status":
             guard let title = data["title"]?.string else { return nil }
+            let link = data["link"]?.objectValue
             self = .status(
                 id: data["id"]?.string ?? "status-\(title)",
                 title: title,
                 detail: data["detail"]?.string ?? "",
                 symbol: data["symbol"]?.string ?? "checkmark.circle.fill",
-                details: Self.details(from: data)
+                details: Self.details(from: data),
+                linkLabel: link?["label"]?.string,
+                linkURL: link?["url"]?.string
             )
         default:
             return nil
@@ -817,10 +931,18 @@ private struct RichResponseCards: View {
                     documentResultsCard(title: title, query: query, passages: passages)
                 case let .drive(_, title, query, files):
                     driveResultsCard(title: title, query: query, files: files)
+                case let .search(_, title, query, results):
+                    searchResultsCard(title: title, query: query, results: results)
+                case let .availability(_, timeMin, timeMax, busy, calendarsChecked, complete, note):
+                    availabilityCard(timeMin: timeMin, timeMax: timeMax, busy: busy, calendarsChecked: calendarsChecked, complete: complete, note: note)
+                case let .thread(_, subject, messageCount, messages):
+                    threadCard(subject: subject, messageCount: messageCount, messages: messages)
+                case let .sheetRows(_, sheetName, rows, totalRows, linkURL):
+                    sheetRowsCard(sheetName: sheetName, rows: rows, totalRows: totalRows, linkURL: linkURL)
                 case let .resource(_, resourceType, title, subtitle, details, linkLabel, linkURL):
                     resourceCard(resourceType: resourceType, title: title, subtitle: subtitle, details: details, linkLabel: linkLabel, linkURL: linkURL)
-                case let .status(_, title, detail, symbol, details):
-                    statusCard(title: title, detail: detail, symbol: symbol, details: details)
+                case let .status(_, title, detail, symbol, details, linkLabel, linkURL):
+                    statusCard(title: title, detail: detail, symbol: symbol, details: details, linkLabel: linkLabel, linkURL: linkURL)
                 }
             }
         }
@@ -831,7 +953,7 @@ private struct RichResponseCards: View {
     private func eventListCard(_ events: [EventRow]) -> some View {
         VStack(spacing: 0) {
             ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
                     let date = eventDateCaption(event.start)
                     let previousDate = index > 0 ? eventDateCaption(events[index - 1].start) : nil
                     if let date, date != previousDate {
@@ -841,91 +963,80 @@ private struct RichResponseCards: View {
                             .padding(.bottom, 2)
                     }
 
-                    HStack(alignment: .firstTextBaseline) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(event.time)
                             .font(.subheadline.monospacedDigit().weight(.semibold))
                             .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                        Spacer(minLength: 12)
-                        calendarEventPill(event)
+                        calendarEventLabel(event)
+                        Spacer(minLength: 4)
+                        if let meetingLinkURL = event.meetingLinkURL, let url = URL(string: meetingLinkURL) {
+                            Link(destination: url) {
+                                Label("Join", systemImage: "video.fill")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                            }
+                            .accessibilityLabel("Join video meeting for \(event.title)")
+                        }
                     }
                     Text(AssistantMarkdown.inlineAttributed(event.title))
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                         .fixedSize(horizontal: false, vertical: true)
 
-                    if !event.location.isEmpty || event.meetingLinkURL != nil {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            if !event.location.isEmpty {
-                                Text(AssistantMarkdown.inlineAttributed(event.location))
-                                .font(.subheadline)
-                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                .fixedSize(horizontal: false, vertical: true)
-                            }
-                            Spacer(minLength: 6)
-                            if let meetingLinkURL = event.meetingLinkURL, let url = URL(string: meetingLinkURL) {
-                                Link(destination: url) {
-                                    Image(systemName: "video.fill")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                                        .frame(width: 32, height: 32)
-                                        .background(AssistantTheme.sunken(for: colorScheme), in: Circle())
-                                }
-                                .accessibilityLabel("Join video meeting for \(event.title)")
-                            }
-                        }
+                    if !event.location.isEmpty {
+                        Text(AssistantMarkdown.inlineAttributed(event.location))
+                            .font(.subheadline)
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     let attendees = event.attendees.map(eventAttendee)
                     if !attendees.isEmpty {
                         VStack(alignment: .leading, spacing: 5) {
                             ForEach(attendees) { attendee in
-                                HStack(spacing: 7) {
+                                HStack(spacing: 6) {
+                                    if let status = attendee.status {
+                                        let presentation = attendeeStatusPresentation(status)
+                                        Image(systemName: presentation.symbol)
+                                            .font(.caption2.weight(.medium))
+                                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                            .accessibilityLabel(presentation.label)
+                                    }
                                     Text(attendee.name)
                                         .font(.caption)
                                         .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                                         .lineLimit(1)
                                         .truncationMode(.middle)
-                                    if let status = attendee.status {
-                                        attendeeStatusPill(status)
-                                    }
                                 }
                             }
                         }
                     }
                 }
-                .padding(.vertical, index == 0 ? 0 : 21)
+                .padding(.top, index == 0 ? 0 : 18)
                 if index < events.count - 1 {
                     Divider()
                         .overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
-                        .padding(.top, 21)
+                        .padding(.top, 18)
                 }
             }
         }
         .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 24)
     }
 
+    /// The owning calendar is useful context, not a headline — a quiet caption
+    /// beside the time keeps the event itself in focus.
     @ViewBuilder
-    private func calendarEventPill(_ event: EventRow) -> some View {
+    private func calendarEventLabel(_ event: EventRow) -> some View {
         let label = event.calendar.isEmpty ? "Calendar" : event.calendar
+        let content = Label(label, systemImage: "calendar")
+            .font(.caption)
+            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            .lineLimit(1)
         if let calendarLinkURL = event.calendarLinkURL, let url = URL(string: calendarLinkURL) {
-            Link(destination: url) {
-                Label(label, systemImage: "calendar")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
-                    .lineLimit(1)
-            }
-            .accessibilityLabel("Open \(event.title) in calendar")
+            Link(destination: url) { content }
+                .accessibilityLabel("Open \(event.title) in calendar")
         } else if !event.calendar.isEmpty {
-            Text(label)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
-                .lineLimit(1)
+            content
         } else {
             EmptyView()
         }
@@ -958,30 +1069,22 @@ private struct RichResponseCards: View {
         return .init(name: name.isEmpty ? value : name, status: status.isEmpty ? nil : status)
     }
 
-    private func attendeeStatusPill(_ status: String) -> some View {
-        let presentation = attendeeStatusPresentation(status)
-        return Label(presentation.label, systemImage: presentation.symbol)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(presentation.color)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 4)
-            .background(presentation.color.opacity(0.12), in: Capsule())
-    }
-
-    private func attendeeStatusPresentation(_ status: String) -> (label: String, symbol: String, color: Color) {
+    /// RSVP status is a small grayscale glyph next to the name; the spoken
+    /// label keeps VoiceOver users on the same footing without a loud pill.
+    private func attendeeStatusPresentation(_ status: String) -> (label: String, symbol: String) {
         switch status.lowercased().replacingOccurrences(of: " ", with: "") {
         case "accepted":
-            return ("Accepted", "checkmark.circle.fill", AssistantTheme.success(for: colorScheme))
+            ("Accepted", "checkmark.circle.fill")
         case "needsaction", "pending":
-            return ("Needs action", "clock.fill", AssistantTheme.warning(for: colorScheme))
+            ("Needs action", "clock.fill")
         case "denied":
-            return ("Denied", "xmark.circle.fill", .red)
+            ("Denied", "xmark.circle.fill")
         case "declined":
-            return ("Declined", "xmark.circle.fill", .red)
+            ("Declined", "xmark.circle.fill")
         case "tentative":
-            return ("Tentative", "questionmark.circle.fill", AssistantTheme.inkMuted(for: colorScheme))
+            ("Tentative", "questionmark.circle.fill")
         default:
-            return (status, "circle.fill", AssistantTheme.inkMuted(for: colorScheme))
+            (status, "circle.fill")
         }
     }
 
@@ -1071,7 +1174,7 @@ private struct RichResponseCards: View {
         details: [MessageResponseCard.WeatherDetail]
     ) -> some View {
         let reading = weatherTemperatureReading(temperature)
-        let facts = weatherFactRow(details)
+        let facts = weatherFacts(details)
 
         return VStack(alignment: .leading, spacing: 15) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -1122,10 +1225,20 @@ private struct RichResponseCards: View {
 
             if !facts.isEmpty {
                 Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
-                Text(facts.joined(separator: "  ·  "))
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            Text(fact.label)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .frame(width: usesAccessibilityLayout ? 104 : 88, alignment: .leading)
+                            Text(AssistantMarkdown.inlineAttributed(fact.value))
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
             }
         }
         .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 22)
@@ -1136,17 +1249,28 @@ private struct RichResponseCards: View {
         guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
               let match = expression.firstMatch(in: temperature, range: NSRange(temperature.startIndex..., in: temperature)),
               let valueRange = Range(match.range(at: 1), in: temperature),
-              let unitRange = Range(match.range(at: 2), in: temperature) else {
+              let unitRange = Range(match.range(at: 2), in: temperature),
+              let degrees = Int(temperature[valueRange]) else {
             return (temperature.trimmingCharacters(in: .whitespacesAndNewlines), "")
         }
 
+        let unit = String(temperature[unitRange]).uppercased()
+        // Sources often carry only one unit, so derive the other locally to
+        // keep the familiar "17° / C · 63°F" reading complete.
         let conversion = Range(match.range(at: 3), in: temperature).map { String(temperature[$0]) }
+            ?? weatherConvertedTemperature(degrees: degrees, unit: unit)
         return (
-            "\(temperature[valueRange])°",
-            ([String(temperature[unitRange]).uppercased(), conversion]
-                .compactMap { $0 }
-                .joined(separator: " · "))
+            "\(degrees)°",
+            [unit, conversion].compactMap { $0 }.joined(separator: " · ")
         )
+    }
+
+    private func weatherConvertedTemperature(degrees: Int, unit: String) -> String? {
+        switch unit {
+        case "C": "\(Int((Double(degrees) * 9 / 5 + 32).rounded()))°F"
+        case "F": "\(Int(((Double(degrees) - 32) * 5 / 9).rounded()))°C"
+        default: nil
+        }
     }
 
     private func weatherTimeCaption(_ details: [MessageResponseCard.WeatherDetail]) -> String {
@@ -1157,30 +1281,17 @@ private struct RichResponseCards: View {
         return "Today · \(updated)"
     }
 
-    private func weatherFactRow(_ details: [MessageResponseCard.WeatherDetail]) -> [String] {
+    /// One fact per row keeps longer forecasts (weekend mornings/afternoons)
+    /// scannable instead of joining everything into a single run of text.
+    private func weatherFacts(_ details: [MessageResponseCard.WeatherDetail]) -> [MessageResponseCard.WeatherDetail] {
         details.compactMap { detail in
-            let label = detail.label.lowercased()
-            let value = detail.value
-                .replacingOccurrences(of: "**", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            guard !value.isEmpty, label != "updated", label != "source" else { return nil }
-
-            switch label {
-            case "today":
-                return weatherFirstPhrase(value)
-                    .components(separatedBy: "(").first?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-            case "rain chance", "precipitation chance":
-                let chance = weatherFirstPhrase(value)
-                return chance.hasPrefix("0%") || chance.hasPrefix("0 %") ? "No rain" : "\(chance) rain"
-            case "wind":
-                return "\(weatherFirstPhrase(value).components(separatedBy: "(").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? value) wind"
-            case "humidity":
-                return "\(weatherFirstPhrase(value)) humidity"
-            default:
-                return "\(detail.label) \(weatherFirstPhrase(value))"
+            let label = detail.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = weatherFirstPhrase(detail.value.replacingOccurrences(of: "**", with: ""))
+            let normalized = label.lowercased()
+            guard !label.isEmpty, !value.isEmpty, normalized != "updated", normalized != "source" else {
+                return nil
             }
+            return MessageResponseCard.WeatherDetail(label: label, value: value)
         }
     }
 
@@ -1412,6 +1523,263 @@ private struct RichResponseCards: View {
         .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
     }
 
+    private func searchResultsCard(
+        title: String,
+        query: String,
+        results: [MessageResponseCard.SearchResult]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 13) {
+            resultHeader(
+                title: title,
+                subtitle: query,
+                countLabel: "\(results.count) \(results.count == 1 ? "result" : "results")"
+            )
+            if results.isEmpty {
+                Text("No results found.")
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let url = URL(string: result.url) {
+                                Link(destination: url) {
+                                    Text(AssistantMarkdown.inlineAttributed(result.title))
+                                        .font(.subheadline.weight(.semibold))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            } else {
+                                Text(AssistantMarkdown.inlineAttributed(result.title))
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Text(searchResultHost(result.url))
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                                .lineLimit(1)
+                            if !result.snippet.isEmpty {
+                                Text(AssistantMarkdown.inlineAttributed(result.snippet))
+                                    .font(.caption)
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(.vertical, index == 0 ? 0 : 12)
+                        if index < results.count - 1 {
+                            Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                        }
+                    }
+                }
+            }
+        }
+        .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
+    }
+
+    private func searchResultHost(_ url: String) -> String {
+        var host = URL(string: url)?.host ?? url
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        return host
+    }
+
+    private func availabilityCard(
+        timeMin: String,
+        timeMax: String,
+        busy: [MessageResponseCard.BusyBlock],
+        calendarsChecked: [String],
+        complete: Bool,
+        note: String?
+    ) -> some View {
+        let spansMultipleDays = availabilitySpansMultipleDays(timeMin: timeMin, timeMax: timeMax)
+        return VStack(alignment: .leading, spacing: 13) {
+            resultHeader(
+                title: "Availability",
+                subtitle: availabilityWindowCaption(timeMin: timeMin, timeMax: timeMax),
+                countLabel: busy.isEmpty ? "Free" : "\(busy.count) busy"
+            )
+            if busy.isEmpty {
+                Text("Nothing on the calendar in this window.")
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(busy.enumerated()), id: \.element.id) { index, block in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text(availabilityTimeLabel(start: block.start, end: block.end, spansMultipleDays: spansMultipleDays))
+                                .font(.subheadline.monospacedDigit().weight(.semibold))
+                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.82)
+                            Spacer(minLength: 6)
+                            if !block.calendar.isEmpty {
+                                Text(block.calendar)
+                                    .font(.caption)
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                    .lineLimit(1)
+                            }
+                        }
+                        .padding(.vertical, index == 0 ? 0 : 10)
+                        if index < busy.count - 1 {
+                            Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                        }
+                    }
+                }
+            }
+            let coverage = availabilityCoverage(calendarsChecked: calendarsChecked, complete: complete, note: note)
+            if !coverage.isEmpty {
+                Text(coverage)
+                    .font(.caption2)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
+    }
+
+    /// Multi-day windows prefix each block with its weekday so "Tue" never
+    /// reads as if it belonged to the first day of the range.
+    private func availabilityTimeLabel(start: String, end: String, spansMultipleDays: Bool) -> String {
+        let range = "\(cardTime(start))–\(cardTime(end))"
+        guard spansMultipleDays, let date = cardISO8601Date(start) else { return range }
+        return "\(date.formatted(.dateTime.weekday(.abbreviated))) · \(range)"
+    }
+
+    private func availabilityWindowCaption(timeMin: String, timeMax: String) -> String {
+        let start = eventDateCaption(timeMin) ?? timeMin
+        guard availabilitySpansMultipleDays(timeMin: timeMin, timeMax: timeMax),
+              let end = eventDateCaption(timeMax) else {
+            return start
+        }
+        return "\(start) – \(end)"
+    }
+
+    private func availabilitySpansMultipleDays(timeMin: String, timeMax: String) -> Bool {
+        guard let start = cardISO8601Date(timeMin), let end = cardISO8601Date(timeMax) else {
+            return false
+        }
+        return !Calendar.current.isDate(start, inSameDayAs: end)
+    }
+
+    private func availabilityCoverage(calendarsChecked: [String], complete: Bool, note: String?) -> String {
+        var parts: [String] = []
+        if !calendarsChecked.isEmpty {
+            let suffix = complete ? "" : " (partial coverage)"
+            parts.append("Checked \(calendarsChecked.count) \(calendarsChecked.count == 1 ? "calendar" : "calendars")\(suffix)")
+        }
+        if let note, !note.isEmpty { parts.append(note) }
+        return parts.joined(separator: " · ")
+    }
+
+    private func threadCard(
+        subject: String,
+        messageCount: Int,
+        messages: [MessageResponseCard.ThreadMessage]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 13) {
+            resultHeader(
+                title: "Email thread",
+                subtitle: subject,
+                countLabel: "\(messageCount) \(messageCount == 1 ? "message" : "messages")"
+            )
+            if messages.isEmpty {
+                Text("No messages in this thread.")
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(AssistantMarkdown.inlineAttributed(message.sender))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer(minLength: 4)
+                                if !message.date.isEmpty {
+                                    Text(cardDate(message.date))
+                                        .font(.caption2)
+                                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                        .lineLimit(1)
+                                }
+                            }
+                            if !message.excerpt.isEmpty {
+                                Text(AssistantMarkdown.inlineAttributed(message.excerpt))
+                                    .font(.caption)
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                    .lineLimit(usesAccessibilityLayout ? nil : 3)
+                                    .truncationMode(.tail)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(.vertical, index == 0 ? 0 : 12)
+                        if index < messages.count - 1 {
+                            Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                        }
+                    }
+                }
+                if messageCount > messages.count {
+                    Text("Showing the first \(messages.count) messages.")
+                        .font(.caption2)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                }
+            }
+        }
+        .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
+    }
+
+    private func sheetRowsCard(
+        sheetName: String,
+        rows: [[String]],
+        totalRows: Int,
+        linkURL: String?
+    ) -> some View {
+        let visibleRows = rows.filter { row in row.contains { !$0.isEmpty } }
+        return VStack(alignment: .leading, spacing: 13) {
+            resultHeader(
+                title: sheetName,
+                subtitle: "Google Sheet",
+                countLabel: "\(totalRows) \(totalRows == 1 ? "row" : "rows")"
+            )
+            if visibleRows.isEmpty {
+                Text("This sheet is empty.")
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            } else {
+                Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 7) {
+                    ForEach(Array(visibleRows.enumerated()), id: \.offset) { index, row in
+                        GridRow {
+                            ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                                Text(AssistantMarkdown.inlineAttributed(cell))
+                                    .font(index == 0 ? .caption.weight(.semibold) : .caption)
+                                    .foregroundStyle(
+                                        index == 0
+                                            ? AssistantTheme.ink(for: colorScheme)
+                                            : AssistantTheme.inkMuted(for: colorScheme)
+                                    )
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
+                        }
+                        if index == 0, visibleRows.count > 1 {
+                            Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                        }
+                    }
+                }
+                if totalRows > visibleRows.count {
+                    Text("Showing the first \(visibleRows.count) of \(totalRows) rows.")
+                        .font(.caption2)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                }
+                if let linkURL, let url = URL(string: linkURL) {
+                    Link("Open spreadsheet", destination: url)
+                        .font(.caption.weight(.semibold))
+                }
+            }
+        }
+        .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
+    }
+
     private func resourceCard(
         resourceType: String,
         title: String,
@@ -1450,7 +1818,9 @@ private struct RichResponseCards: View {
         title: String,
         detail: String,
         symbol: String,
-        details: [MessageResponseCard.Detail]
+        details: [MessageResponseCard.Detail],
+        linkLabel: String?,
+        linkURL: String?
     ) -> some View {
         HStack(alignment: .top, spacing: 13) {
             Image(systemName: symbol)
@@ -1473,6 +1843,10 @@ private struct RichResponseCards: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 detailRows(details)
+                if let linkURL, let url = URL(string: linkURL) {
+                    Link(linkLabel ?? "Open", destination: url)
+                        .font(.caption.weight(.semibold))
+                }
             }
             Spacer(minLength: 0)
         }
@@ -1525,11 +1899,20 @@ private struct RichResponseCards: View {
     }
 
     private func cardDate(_ value: String) -> String {
+        guard let date = cardISO8601Date(value) else { return value }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private func cardTime(_ value: String) -> String {
+        guard let date = cardISO8601Date(value) else { return value }
+        return date.formatted(date: .omitted, time: .shortened)
+    }
+
+    private func cardISO8601Date(_ value: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         let fractionalFormatter = ISO8601DateFormatter()
         fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = formatter.date(from: value) ?? fractionalFormatter.date(from: value) else { return value }
-        return date.formatted(date: .abbreviated, time: .shortened)
+        return formatter.date(from: value) ?? fractionalFormatter.date(from: value)
     }
 
     private func resourceSymbol(_ resourceType: String) -> String {
@@ -1624,8 +2007,12 @@ private enum PresentationCompanion {
             case let .emails(_, title, query, _, _, _, messages): "Email results: \(title), \(query), \(messages.map(\.subject).joined(separator: ", "))"
             case let .documents(_, title, query, passages): "Document matches: \(title), \(query), \(passages.map(\.document).joined(separator: ", "))"
             case let .drive(_, title, query, files): "Drive files: \(title), \(query), \(files.map(\.name).joined(separator: ", "))"
+            case let .search(_, title, query, results): "Web results: \(title), \(query), \(results.map(\.title).joined(separator: ", "))"
+            case let .availability(_, timeMin, timeMax, busy, _, complete, _): "Availability: \(timeMin) to \(timeMax), \(busy.count) busy, \(complete ? "complete" : "partial")"
+            case let .thread(_, subject, messageCount, messages): "Email thread: \(subject), \(messageCount) messages, \(messages.map(\.sender).joined(separator: ", "))"
+            case let .sheetRows(_, sheetName, rows, totalRows, _): "Sheet: \(sheetName), \(totalRows) rows, preview \(rows.count) rows"
             case let .resource(_, _, title, subtitle, details, _, _): "Resource: \(subtitle), \(title), \(details.map { "\($0.label): \($0.value)" }.joined(separator: ", "))"
-            case let .status(_, title, detail, _, details): "Status: \(title), \(detail), \(details.map { "\($0.label): \($0.value)" }.joined(separator: ", "))"
+            case let .status(_, title, detail, _, details, _, _): "Status: \(title), \(detail), \(details.map { "\($0.label): \($0.value)" }.joined(separator: ", "))"
             }
         }.joined(separator: "\n")
         guard source.count <= 1_200 else { return nil }

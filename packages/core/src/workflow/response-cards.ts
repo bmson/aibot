@@ -12,6 +12,10 @@ export interface ResponseCard {
     | 'email-results'
     | 'document-results'
     | 'drive-results'
+    | 'web-search-results'
+    | 'availability'
+    | 'email-thread'
+    | 'sheet-rows'
     | 'resource'
     | 'status';
   id: string;
@@ -323,6 +327,136 @@ export function driveResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
   });
 }
 
+/** Web search hits stay a flat list of tappable links with provenance visible. */
+export function searchResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
+  return evidence.flatMap((row, index) => {
+    if (!succeeded(row) || row.toolName !== 'web.search') return [];
+    const result = record(row.result);
+    if (!result) return [];
+    const args = record(row.args);
+    const results = Array.isArray(result.results)
+      ? result.results
+          .map(record)
+          .filter((item): item is RecordValue => !!item)
+          .map((item, resultIndex) => ({
+            id: string(item.url) || `result-${index}-${resultIndex}`,
+            title: string(item.title) || string(item.url),
+            url: string(item.url),
+            snippet: string(item.snippet),
+          }))
+          .filter((item) => item.url.length > 0)
+      : [];
+    return [
+      {
+        kind: 'web-search-results' as const,
+        id: `web-search-${index}-${string(result.query) || string(args?.query) || 'search'}`,
+        title: 'Web results',
+        query: string(result.query) || string(args?.query),
+        results,
+      },
+    ];
+  });
+}
+
+/** Free/busy answers render the raw busy blocks; the owner reads the gaps. */
+export function availabilityResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
+  return evidence.flatMap((row, index) => {
+    if (!succeeded(row) || row.toolName !== 'calendar.availability') return [];
+    const result = record(row.result);
+    if (!result) return [];
+    const args = record(row.args);
+    const busy = Array.isArray(result.busy)
+      ? result.busy
+          .map(record)
+          .filter((slot): slot is RecordValue => !!slot)
+          .map((slot) => ({
+            start: string(slot.start),
+            end: string(slot.end),
+            calendar: string(slot.calendar),
+          }))
+          .filter((slot) => slot.start.length > 0 && slot.end.length > 0)
+      : [];
+    const note = string(result.note);
+    return [
+      {
+        kind: 'availability' as const,
+        id: `availability-${index}-${string(args?.timeMin)}`,
+        timeMin: string(args?.timeMin),
+        timeMax: string(args?.timeMax),
+        busy,
+        calendarsChecked: strings(result.calendarsChecked),
+        complete: result.complete !== false,
+        ...(note ? { note } : {}),
+      },
+    ];
+  });
+}
+
+const THREAD_MESSAGE_LIMIT = 8;
+const THREAD_EXCERPT_LIMIT = 280;
+
+/** A fetched thread becomes a compact transcript; excerpts stay short so the card never owns the whole message body. */
+export function threadResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
+  return evidence.flatMap((row, index) => {
+    if (!succeeded(row) || row.toolName !== 'gmail.read_thread') return [];
+    const result = record(row.result);
+    if (!result) return [];
+    const messages = Array.isArray(result.messages)
+      ? result.messages.map(record).filter((message): message is RecordValue => !!message)
+      : [];
+    return [
+      {
+        kind: 'email-thread' as const,
+        id: `email-thread-${string(result.threadId) || index}`,
+        subject: string(messages[0]?.subject) || 'Email thread',
+        messageCount: messages.length,
+        messages: messages.slice(0, THREAD_MESSAGE_LIMIT).map((message, messageIndex) => ({
+          id: string(message.messageId) || `message-${index}-${messageIndex}`,
+          sender: string(message.from),
+          date: string(message.date),
+          excerpt: string(message.text).replace(/\s+/g, ' ').trim().slice(0, THREAD_EXCERPT_LIMIT),
+        })),
+      },
+    ];
+  });
+}
+
+const SHEET_PREVIEW_ROWS = 9;
+const SHEET_PREVIEW_COLUMNS = 6;
+const SHEET_CELL_LIMIT = 60;
+
+function sheetCell(value: unknown): string {
+  if (typeof value === 'string') return value.slice(0, SHEET_CELL_LIMIT);
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '';
+}
+
+/** Sheet reads render as a small preview table; the full row count and the open link carry the rest. */
+export function sheetRowsResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
+  return evidence.flatMap((row, index) => {
+    if (!succeeded(row) || row.toolName !== 'sheets.get_rows') return [];
+    const result = record(row.result);
+    if (!result) return [];
+    const allRows = Array.isArray(result.rows) ? result.rows : [];
+    const rows = allRows
+      .slice(0, SHEET_PREVIEW_ROWS)
+      .map((entry) =>
+        Array.isArray(entry) ? entry.slice(0, SHEET_PREVIEW_COLUMNS).map(sheetCell) : [],
+      );
+    const url = string(result.url);
+    return [
+      {
+        kind: 'sheet-rows' as const,
+        id: `sheet-rows-${string(result.spreadsheetId) || index}-${string(result.sheetName)}`,
+        sheetName: string(result.sheetName) || 'Sheet',
+        totalRows: allRows.length,
+        rows,
+        ...(url ? { link: { label: 'Open spreadsheet', url } } : {}),
+      },
+    ];
+  });
+}
+
 /** Private artifacts deserve a direct, tappable result rather than a prose-only confirmation. */
 export function resourceResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
   return evidence.flatMap((row, index) => {
@@ -433,6 +567,103 @@ export function statusResponseCards(evidence: ActionEvidence[]): ResponseCard[] 
         },
       ];
     }
+    if (row.toolName === 'gmail.modify' && string(result.id)) {
+      const changes = [
+        args?.archive === true ? 'Archived' : '',
+        args?.markRead === true ? 'Marked read' : '',
+        args?.markRead === false ? 'Marked unread' : '',
+        strings(args?.addLabels).length ? `Labeled ${strings(args?.addLabels).join(', ')}` : '',
+        strings(args?.removeLabels).length
+          ? `Removed ${strings(args?.removeLabels).join(', ')}`
+          : '',
+      ].filter(Boolean);
+      return [
+        {
+          kind: 'status' as const,
+          id: `email-modified-${string(result.id)}`,
+          title: 'Inbox updated',
+          detail: changes.join(' · ') || 'Message updated.',
+          symbol: 'tray.full.fill',
+        },
+      ];
+    }
+    if (row.toolName === 'docs.append' && result.appended === true) {
+      return [
+        {
+          kind: 'status' as const,
+          id: `document-appended-${string(result.documentId) || index}`,
+          title: 'Document updated',
+          detail: 'Content added to the end of the document.',
+          symbol: 'doc.badge.plus',
+          link: string(result.url)
+            ? { label: 'Open document', url: string(result.url) }
+            : undefined,
+        },
+      ];
+    }
+    if (row.toolName === 'docs.replace_text' && result.updated === true) {
+      const count = Array.isArray(result.replacements) ? result.replacements.length : 0;
+      return [
+        {
+          kind: 'status' as const,
+          id: `document-replaced-${string(result.documentId) || index}`,
+          title: 'Document updated',
+          detail:
+            count > 0
+              ? `${count} text ${count === 1 ? 'replacement' : 'replacements'} applied.`
+              : 'Text updated.',
+          symbol: 'doc.text.fill',
+          link: string(result.url)
+            ? { label: 'Open document', url: string(result.url) }
+            : undefined,
+        },
+      ];
+    }
+    if (row.toolName === 'docs.share' && string(result.sharedWith)) {
+      return [
+        {
+          kind: 'status' as const,
+          id: `document-shared-${string(result.documentId) || index}-${string(result.sharedWith)}`,
+          title: 'Document shared',
+          detail: string(result.sharedWith),
+          symbol: 'person.crop.circle.badge.checkmark',
+          details: details([['Role', string(args?.role)]]),
+          link: string(result.url)
+            ? { label: 'Open document', url: string(result.url) }
+            : undefined,
+        },
+      ];
+    }
+    if (row.toolName === 'sheets.append_rows' && number(result.appendedRows) !== undefined) {
+      const count = number(result.appendedRows) ?? 0;
+      return [
+        {
+          kind: 'status' as const,
+          id: `sheet-appended-${string(result.spreadsheetId) || index}`,
+          title: 'Sheet updated',
+          detail: `${count} ${count === 1 ? 'row' : 'rows'} added to ${string(result.sheetName) || 'the sheet'}.`,
+          symbol: 'tablecells.fill',
+          link: string(result.url)
+            ? { label: 'Open spreadsheet', url: string(result.url) }
+            : undefined,
+        },
+      ];
+    }
+    if (row.toolName === 'sheets.write_rows' && number(result.writtenRows) !== undefined) {
+      const count = number(result.writtenRows) ?? 0;
+      return [
+        {
+          kind: 'status' as const,
+          id: `sheet-written-${string(result.spreadsheetId) || index}-${string(result.startCell)}`,
+          title: 'Sheet updated',
+          detail: `${count} ${count === 1 ? 'row' : 'rows'} written to ${string(result.sheetName) || 'the sheet'}.`,
+          symbol: 'tablecells.fill',
+          link: string(result.url)
+            ? { label: 'Open spreadsheet', url: string(result.url) }
+            : undefined,
+        },
+      ];
+    }
     return [];
   });
 }
@@ -481,9 +712,13 @@ export function responseCardsForFinal(input: {
     ...calendarWriteResponseCards(input.evidence),
     ...reminderResponseCards(input.evidence),
     ...calendarResponseCards(input.evidence, input.readRequest),
+    ...availabilityResponseCards(input.evidence),
     ...emailResponseCards(input.evidence),
+    ...threadResponseCards(input.evidence),
     ...documentResponseCards(input.evidence),
     ...driveResponseCards(input.evidence),
+    ...sheetRowsResponseCards(input.evidence),
+    ...searchResponseCards(input.evidence),
   ];
   if (cards.length > 0) return cards;
   // Ambient weather is useful for a conversational/weather answer, but must
