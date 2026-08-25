@@ -171,11 +171,7 @@ struct MemoryView: View {
                     .buttonStyle(.bordered)
                     .disabled(profileActionInFlight != nil)
                 }
-                .padding(14)
-                .background(
-                    AssistantTheme.sunken(for: colorScheme),
-                    in: RoundedRectangle(cornerRadius: 17, style: .continuous)
-                )
+                .assistantPanel(in: colorScheme)
             }
 
             if let card = memory.card {
@@ -189,11 +185,7 @@ struct MemoryView: View {
                     .buttonStyle(.bordered)
                     .padding(.top, 8)
                 }
-                .padding(14)
-                .background(
-                    AssistantTheme.sunken(for: colorScheme),
-                    in: RoundedRectangle(cornerRadius: 17, style: .continuous)
-                )
+                .assistantPanel(in: colorScheme)
             }
 
             if !memory.awaitingReview.isEmpty {
@@ -222,12 +214,11 @@ struct MemoryView: View {
             }
 
             if memory.facts.isEmpty {
-                ContentUnavailableView(
+                AssistantEmptyState(
                     "Nothing saved yet",
                     systemImage: "brain",
-                    description: Text("Add a fact the assistant should retain for future conversations."))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 28)
+                    description: "Add a fact the assistant should retain for future conversations."
+                )
             } else {
                 ForEach(memory.facts) { fact in
                     factCard(fact)
@@ -244,8 +235,7 @@ struct MemoryView: View {
                     .buttonStyle(.bordered)
                 }
                 if people.isEmpty {
-                    ContentUnavailableView("No people yet", systemImage: "person.2")
-                        .frame(maxWidth: .infinity, minHeight: 140)
+                    AssistantEmptyState("No people yet", systemImage: "person.2")
                 } else {
                     ForEach(people) { person in
                         personCard(person)
@@ -281,11 +271,7 @@ struct MemoryView: View {
                     }
                     .disabled(profileActionInFlight != nil)
                 }
-                .padding(14)
-                .background(
-                    AssistantTheme.sunken(for: colorScheme),
-                    in: RoundedRectangle(cornerRadius: 17, style: .continuous)
-                )
+                .assistantPanel(in: colorScheme)
             }
         }
     }
@@ -316,17 +302,13 @@ struct MemoryView: View {
                 .buttonStyle(.bordered)
             }
         }
-        .padding(14)
-        .background(
-            AssistantTheme.raised(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: 17, style: .continuous)
-        )
+        .assistantCard(in: colorScheme)
     }
 
     private func reviewCard(_ fact: WorkspaceMemoryFact) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             factIdentity(fact, review: true)
-            HStack(spacing: 10) {
+            HStack(spacing: 9) {
                 Button {
                     perform(fact, action: "approve")
                 } label: {
@@ -344,12 +326,11 @@ struct MemoryView: View {
             }
             .disabled(pendingFactID != nil)
         }
-        .padding(14)
-        .background(AssistantTheme.warningSurface(for: colorScheme), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .stroke(AssistantTheme.warning(for: colorScheme).opacity(0.28), lineWidth: 1)
-        }
+        .assistantCard(
+            in: colorScheme,
+            surface: AssistantTheme.warningSurface(for: colorScheme),
+            strokeTint: AssistantTheme.warning(for: colorScheme)
+        )
     }
 
     private func factCard(_ fact: WorkspaceMemoryFact) -> some View {
@@ -385,12 +366,7 @@ struct MemoryView: View {
             .font(.subheadline)
             .disabled(pendingFactID != nil)
         }
-        .padding(14)
-        .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .stroke(.primary.opacity(colorScheme == .dark ? 0.12 : 0.07), lineWidth: 1)
-        }
+        .assistantCard(in: colorScheme)
     }
 
     private func factIdentity(_ fact: WorkspaceMemoryFact, review: Bool) -> some View {
@@ -490,12 +466,16 @@ struct MemoryView: View {
     private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
 
     private func sectionHeading(_ title: String, count: Int? = nil) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 7) {
             Text(title).font(.headline)
             if let count {
+                // Same capsule the workspace pages use for heading counts.
                 Text("\(count)")
-                    .font(.caption.weight(.semibold))
+                    .font(.caption.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
             }
         }
     }
@@ -520,6 +500,7 @@ struct MemoryView: View {
     private func metricCard(_ metric: (String, Int, String, Color)) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Image(systemName: metric.2)
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(metric.3)
             Text("\(metric.1)")
                 .font(.title3.monospacedDigit().weight(.semibold))
@@ -528,8 +509,7 @@ struct MemoryView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(13)
-        .background(AssistantTheme.sunken(for: colorScheme).opacity(0.72), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .assistantCard(in: colorScheme)
     }
 }
 

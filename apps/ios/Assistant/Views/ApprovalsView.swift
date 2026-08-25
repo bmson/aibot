@@ -16,13 +16,11 @@ struct ApprovalsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 if pending.isEmpty {
-                    ContentUnavailableView(
+                    AssistantEmptyState(
                         "Nothing is waiting",
                         systemImage: "checkmark.shield",
-                        description: Text("The assistant asks here before an action leaves its workspace.")
+                        description: "The assistant asks here before an action leaves its workspace."
                     )
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 72)
                 } else {
                     Text("Review the real-world effect first. Approving resumes the parked task immediately.")
                         .font(.subheadline)
@@ -41,12 +39,12 @@ struct ApprovalsView: View {
                         }
                         .padding(.top, 6)
                     }
-                    .font(.headline)
-                    .padding(16)
-                    .background(AssistantTheme.sunken(for: colorScheme).opacity(0.65), in: RoundedRectangle(cornerRadius: 18))
+                    .font(.subheadline.weight(.semibold))
+                    .assistantPanel(in: colorScheme)
                 }
             }
             .padding(16)
+            .padding(.bottom, 28)
         }
         .scrollBounceBehavior(.basedOnSize)
         .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
@@ -103,7 +101,7 @@ struct ApprovalsView: View {
         VStack(alignment: .leading, spacing: 14) {
             approvalHeader(item)
             Text(item.approval.summary)
-                .font(.title3.weight(.semibold))
+                .font(.headline)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
             Divider()
@@ -112,31 +110,23 @@ struct ApprovalsView: View {
 
             Group {
                 if usesAccessibilityLayout {
-                    VStack(spacing: 10) { approvalActions(item) }
+                    VStack(spacing: 9) { approvalActions(item) }
                 } else {
-                    HStack(spacing: 10) { approvalActions(item) }
+                    HStack(spacing: 9) { approvalActions(item) }
                 }
             }
         }
-        .padding(16)
-        .background(
-            AssistantTheme.warningSurface(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .assistantCard(
+            in: colorScheme,
+            surface: AssistantTheme.warningSurface(for: colorScheme),
+            strokeTint: AssistantTheme.warning(for: colorScheme)
         )
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(AssistantTheme.warning(for: colorScheme).opacity(0.32), lineWidth: 1)
-        }
     }
 
     @ViewBuilder
     private func approvalHeader(_ item: PendingApproval) -> some View {
         let tool = HStack(spacing: 10) {
-            Image(systemName: "checkmark.shield.fill")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(AssistantTheme.warning(for: colorScheme))
-                .frame(width: 38, height: 38)
-                .background(AssistantTheme.warning(for: colorScheme).opacity(0.13), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            AssistantGlyph(systemName: "checkmark.shield.fill", tint: AssistantTheme.warning(for: colorScheme))
             VStack(alignment: .leading, spacing: 3) {
                 Text("Approval needed")
                     .font(.caption.weight(.bold))

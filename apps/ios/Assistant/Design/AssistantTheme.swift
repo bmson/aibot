@@ -184,16 +184,95 @@ extension Color {
 }
 
 extension View {
-    func assistantCard(in scheme: ColorScheme) -> some View {
+    /// The one card spec: 16pt padding, radius 20, hairline stroke. Warning
+    /// cards (memory review, approvals) pass a surface and stroke tint so
+    /// they keep the same geometry instead of hand-rolling a near-copy.
+    func assistantCard(
+        in scheme: ColorScheme,
+        surface: Color? = nil,
+        strokeTint: Color? = nil
+    ) -> some View {
         let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
 
         return self
             .padding(16)
-            .background(AssistantTheme.raised(for: scheme), in: shape)
+            .background(surface ?? AssistantTheme.raised(for: scheme), in: shape)
             .overlay {
                 shape
-                    .stroke(.primary.opacity(scheme == .dark ? 0.12 : 0.07), lineWidth: 1)
+                    .stroke(
+                        strokeTint?.opacity(0.28) ?? Color.primary.opacity(scheme == .dark ? 0.12 : 0.07),
+                        lineWidth: 1
+                    )
             }
+    }
+
+    /// The recessed companion to `assistantCard`, for summary and info
+    /// panels. One spec — these used to drift across four paddings, three
+    /// corner radii, and three opacities between pages.
+    func assistantPanel(in scheme: ColorScheme) -> some View {
+        self
+            .padding(14)
+            .background(
+                AssistantTheme.sunken(for: scheme).opacity(0.72),
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+    }
+}
+
+/// The tinted rounded-square glyph at the head of cards. Exactly two sizes:
+/// `.card` (40pt) for card headers, `.inline` (32pt) for compact callouts —
+/// this motif previously existed in eight size/radius/font combinations.
+struct AssistantGlyph: View {
+    enum Variant {
+        case card
+        case inline
+    }
+
+    let systemName: String
+    let tint: Color
+    var variant: Variant = .card
+    /// Document and chat rows sit the glyph on a neutral sunken tile rather
+    /// than a tint wash.
+    var sunkenBackground = false
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var side: CGFloat { variant == .card ? 40 : 32 }
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(variant == .card ? Font.system(size: 17, weight: .semibold) : Font.subheadline.weight(.semibold))
+            .foregroundStyle(tint)
+            .frame(width: side, height: side)
+            .background(
+                sunkenBackground ? AssistantTheme.sunken(for: colorScheme) : tint.opacity(0.12),
+                in: RoundedRectangle(cornerRadius: variant == .card ? 12 : 10, style: .continuous)
+            )
+    }
+}
+
+/// One empty-state treatment for every page: centered on the canvas at a
+/// fixed minimum height. Pages previously picked their own top padding or
+/// wrapped the state in a raised card, so "nothing here" looked different on
+/// each screen.
+struct AssistantEmptyState: View {
+    let title: String
+    let systemImage: String
+    let description: String?
+
+    init(_ title: String, systemImage: String, description: String? = nil) {
+        self.title = title
+        self.systemImage = systemImage
+        self.description = description
+    }
+
+    var body: some View {
+        ContentUnavailableView(
+            title,
+            systemImage: systemImage,
+            description: description.map { Text($0) }
+        )
+        .frame(maxWidth: .infinity, minHeight: 190)
     }
 }
 

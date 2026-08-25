@@ -15,13 +15,11 @@ struct GoalsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 if goals.isEmpty {
-                    ContentUnavailableView(
+                    AssistantEmptyState(
                         "No goals yet",
                         systemImage: "scope",
-                        description: Text("Give the assistant an outcome in chat and it can keep moving it forward on a schedule.")
+                        description: "Give the assistant an outcome in chat and it can keep moving it forward on a schedule."
                     )
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 72)
                 } else {
                     digest
                     ForEach(goals) { item in
@@ -30,6 +28,7 @@ struct GoalsView: View {
                 }
             }
             .padding(16)
+            .padding(.bottom, 28)
         }
         .scrollBounceBehavior(.basedOnSize)
         .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
@@ -145,11 +144,7 @@ struct GoalsView: View {
                 }
             }
         }
-        .padding(15)
-        .background(
-            AssistantTheme.sunken(for: colorScheme).opacity(0.72),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
+        .assistantPanel(in: colorScheme)
     }
 
     private func metric(value: Int, label: String, color: Color) -> some View {
@@ -203,7 +198,7 @@ struct GoalsView: View {
                 .buttonStyle(.bordered)
                 .disabled(goalActionInFlight != nil)
             } else {
-                HStack(spacing: 10) {
+                HStack(spacing: 9) {
                     if item.goal.status == "active" {
                         lifecycleButton(item, title: "Pause", action: "status", status: "paused")
                     } else if item.goal.status == "paused" {

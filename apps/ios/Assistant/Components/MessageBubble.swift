@@ -17,13 +17,12 @@ struct MessageBubble: View {
     // above or below them.
 
     var body: some View {
-        VStack(alignment: message.role == .assistant ? .leading : .trailing, spacing: 8) {
+        // Bubbles are full-width cards like every other surface in the
+        // stream: a one-word message gets the same width as a paragraph
+        // rather than shrink-wrapping its text.
+        VStack(alignment: .leading, spacing: 8) {
             if !message.text.isEmpty && !usesPrimaryCards {
-                HStack {
-                    if message.role == .user { Spacer(minLength: 40) }
-                    messageText
-                    if message.role == .assistant { Spacer(minLength: 40) }
-                }
+                messageText
                 if message.role == .assistant, !message.recallSources.isEmpty {
                     recallNote
                 }
@@ -46,7 +45,7 @@ struct MessageBubble: View {
                 RichResponseCards(cards: responseCards)
             }
         }
-        .frame(maxWidth: .infinity, alignment: message.role == .assistant ? .leading : .trailing)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
     }
 
@@ -64,6 +63,7 @@ struct MessageBubble: View {
                 .textSelection(.enabled)
                 .padding(.horizontal, resolvedBubbleHorizontalInset)
                 .padding(.vertical, resolvedBubbleVerticalInset)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     AssistantTheme.bubblePaper(for: colorScheme),
                     in: RoundedRectangle(
@@ -107,6 +107,7 @@ struct MessageBubble: View {
                 .lineSpacing(2.5)
                 .padding(.horizontal, resolvedBubbleHorizontalInset)
                 .padding(.vertical, resolvedBubbleVerticalInset)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     .white.opacity(colorScheme == .dark ? 0.08 : 0.045),
                     in: RoundedRectangle(

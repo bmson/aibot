@@ -3,7 +3,6 @@ import UniformTypeIdentifiers
 
 enum WorkspaceArea {
     case chats
-    case memory
     case documents
     case skills
     case capabilities
@@ -14,7 +13,6 @@ enum WorkspaceArea {
     var title: String {
         switch self {
         case .chats: "All chats"
-        case .memory: "Memory"
         case .documents: "Documents"
         case .skills: "Skills"
         case .capabilities: "Capabilities"
@@ -27,7 +25,6 @@ enum WorkspaceArea {
     var icon: String {
         switch self {
         case .chats: "bubble.left.and.bubble.right"
-        case .memory: "brain.head.profile"
         case .documents: "doc.text"
         case .skills: "lightbulb"
         case .capabilities: "puzzlepiece.extension"
@@ -41,8 +38,6 @@ enum WorkspaceArea {
         switch self {
         case .chats:
             "Your main thread, active conversations, and the history you have kept."
-        case .memory:
-            "The durable context the assistant can use, plus anything still waiting for your review."
         case .documents:
             "Files the assistant can search and cite when you ask a question in chat."
         case .skills:
@@ -239,8 +234,6 @@ struct WorkspaceView: View {
         switch area {
         case .chats:
             chats(workspace.chats)
-        case .memory:
-            memory(workspace.memory)
         case .skills:
             skills(workspace.skills)
         case .capabilities:
@@ -295,14 +288,11 @@ struct WorkspaceView: View {
                             openChat(chat)
                         } label: {
                             HStack(spacing: 12) {
-                                Image(systemName: chat.isPrimary ? "bubble.left.fill" : "bubble.left")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                                    .frame(width: 38, height: 38)
-                                    .background(
-                                        AssistantTheme.sunken(for: colorScheme),
-                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    )
+                                AssistantGlyph(
+                                    systemName: chat.isPrimary ? "bubble.left.fill" : "bubble.left",
+                                    tint: AssistantTheme.accent(for: colorScheme),
+                                    sunkenBackground: true
+                                )
                                 chatIdentity(chat)
                             }
                         }
@@ -353,6 +343,8 @@ struct WorkspaceView: View {
                                     updateChat(chat, action: "restore")
                                 }
                                 .labelStyle(.iconOnly)
+                                .frame(minWidth: 44, minHeight: 44)
+                                .contentShape(Rectangle())
                                 .disabled(workspaceActionInFlight != nil)
                             }
                             .padding(.vertical, 10)
@@ -362,49 +354,7 @@ struct WorkspaceView: View {
                     .padding(.top, 8)
                 }
                 .font(.subheadline.weight(.semibold))
-                .padding(16)
-                .background(AssistantTheme.sunken(for: colorScheme).opacity(0.72), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            }
-        }
-    }
-
-    private func memory(_ memory: WorkspaceMemory) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            metricGrid([
-                ("In use", memory.health.totalUsable, "brain.head.profile", AssistantTheme.accent(for: colorScheme)),
-                ("Review", memory.health.awaitingReview, "checklist", AssistantTheme.warning(for: colorScheme)),
-                ("Verified", memory.health.ownerConfirmed, "checkmark.seal", AssistantTheme.success(for: colorScheme)),
-            ])
-
-            if !memory.awaitingReview.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    sectionHeading("Waiting on you", count: memory.awaitingReview.count)
-                    Text("These notes came from an unverified source and are held out of the assistant’s working context.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    ForEach(memory.awaitingReview.prefix(4)) { fact in
-                        factRow(fact, review: true)
-                    }
-                }
-            }
-
-            sectionHeading(
-                memory.ownerName.map { "About \($0)" } ?? "Memory library",
-                count: memory.facts.count
-            )
-
-            if memory.facts.isEmpty {
-                emptyState("Nothing saved yet", symbol: "brain")
-            } else {
-                ForEach(memory.facts.prefix(12)) { fact in
-                    factRow(fact, review: false)
-                }
-                if memory.facts.count > 12 {
-                    Text("Showing the most relevant recent notes.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                }
+                .assistantPanel(in: colorScheme)
             }
         }
     }
@@ -533,11 +483,7 @@ struct WorkspaceView: View {
                     }
 
                     HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: capability.icon)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(tint)
-                            .frame(width: 42, height: 42)
-                            .background(tint.opacity(0.11), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                        AssistantGlyph(systemName: capability.icon, tint: tint)
                             .accessibilityHidden(true)
 
                         VStack(alignment: .leading, spacing: 5) {
@@ -577,12 +523,11 @@ struct WorkspaceView: View {
                 }
             }
         } else {
-            ContentUnavailableView(
+            AssistantEmptyState(
                 "Capabilities unavailable",
                 systemImage: "puzzlepiece.extension",
-                description: Text("Update the assistant server to see installed optional tools.")
+                description: "Update the assistant server to see installed optional tools."
             )
-            .frame(maxWidth: .infinity, minHeight: 220)
         }
     }
 
@@ -847,7 +792,7 @@ struct WorkspaceView: View {
                     if let error = source.error, !error.isEmpty {
                         Text(error).font(.caption).foregroundStyle(.red)
                     }
-                    HStack(spacing: 8) {
+                    HStack(spacing: 9) {
                         if source.quarantinedNow > 0 {
                             Button("Approve all") {
                                 updateImport(action: "review", source: source.source, verdict: "approve")
@@ -906,14 +851,11 @@ struct WorkspaceView: View {
     }
 
     private func documentGlyph(_ document: DocumentRecord) -> some View {
-        Image(systemName: documentIcon(document.mime))
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-            .frame(width: 40, height: 40)
-            .background(
-                AssistantTheme.sunken(for: colorScheme),
-                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-            )
+        AssistantGlyph(
+            systemName: documentIcon(document.mime),
+            tint: AssistantTheme.accent(for: colorScheme),
+            sunkenBackground: true
+        )
     }
 
     private func documentIdentity(_ document: DocumentRecord) -> some View {
@@ -924,51 +866,6 @@ struct WorkspaceView: View {
             Text(document.source == "email" ? "Email attachment" : document.source.sentenceCaseIdentifier)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        }
-    }
-
-    private func factRow(_ fact: WorkspaceMemoryFact, review: Bool) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: review ? "questionmark.circle.fill" : (fact.pinned ? "pin.fill" : "brain"))
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(
-                    review
-                        ? AssistantTheme.warningInk(for: colorScheme)
-                        : AssistantTheme.accent(for: colorScheme)
-                )
-                .frame(width: 32, height: 32)
-                .background(
-                    (
-                        review
-                            ? AssistantTheme.warning(for: colorScheme)
-                            : AssistantTheme.accent(for: colorScheme)
-                    ).opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                )
-            VStack(alignment: .leading, spacing: 4) {
-                Text(fact.content)
-                    .font(.subheadline)
-                    .fixedSize(horizontal: false, vertical: true)
-                if usesAccessibilityLayout {
-                    VStack(alignment: .leading, spacing: 3) {
-                        factMetadata(fact)
-                    }
-                } else {
-                    HStack(spacing: 6) {
-                        factMetadata(fact)
-                    }
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(14)
-        .background(
-            review ? AssistantTheme.warningSurface(for: colorScheme) : AssistantTheme.raised(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: 17, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .stroke(.primary.opacity(colorScheme == .dark ? 0.12 : 0.07), lineWidth: 1)
         }
     }
 
@@ -1083,7 +980,7 @@ struct WorkspaceView: View {
         VStack(alignment: .leading, spacing: usesAccessibilityLayout ? 6 : 3) {
             if usesAccessibilityLayout {
                 Text(chat.displayTitle)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 6) {
                     chatTags(chat)
@@ -1091,7 +988,7 @@ struct WorkspaceView: View {
             } else {
                 HStack(spacing: 6) {
                     Text(chat.displayTitle)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.headline)
                         .lineLimit(1)
                     chatTags(chat)
                 }
@@ -1186,23 +1083,8 @@ struct WorkspaceView: View {
             .background(tint.opacity(0.11), in: Capsule())
     }
 
-    @ViewBuilder
-    private func factMetadata(_ fact: WorkspaceMemoryFact) -> some View {
-        Group {
-            if let domain = fact.domain, !domain.isEmpty {
-                Text(domain.sentenceCaseIdentifier)
-            }
-            Text(relative(fact.createdAt))
-            if fact.ownerConfirmed { Text("Verified") }
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    }
-
     private func emptyState(_ title: String, symbol: String) -> some View {
-        ContentUnavailableView(title, systemImage: symbol)
-            .frame(maxWidth: .infinity, minHeight: 190)
-            .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        AssistantEmptyState(title, systemImage: symbol)
     }
 
     private func documentIcon(_ mime: String) -> String {

@@ -26,15 +26,13 @@ struct ActivityView: View {
                 filterControl
 
                 if filteredItems.isEmpty {
-                    ContentUnavailableView(
+                    AssistantEmptyState(
                         filter == .all ? "No activity yet" : "Nothing here",
                         systemImage: "waveform.path.ecg",
-                        description: Text(filter == .all
+                        description: filter == .all
                             ? "Work you hand off in chat will appear here with its evidence and decisions."
-                            : "Try another activity filter.")
+                            : "Try another activity filter."
                     )
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 56)
                 } else {
                     LazyVStack(spacing: 12) {
                         ForEach(filteredItems) { item in
@@ -44,6 +42,7 @@ struct ActivityView: View {
                 }
             }
             .padding(16)
+            .padding(.bottom, 28)
         }
         .scrollBounceBehavior(.basedOnSize)
         .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
@@ -289,11 +288,7 @@ struct ActivityView: View {
     @ViewBuilder
     private func activityHeader(_ item: ActivityItem) -> some View {
         let identity = HStack(alignment: .top, spacing: 12) {
-                Image(systemName: icon(for: item.status))
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(color(for: item.status))
-                    .frame(width: 44, height: 44)
-                    .background(color(for: item.status).opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                AssistantGlyph(systemName: icon(for: item.status), tint: color(for: item.status))
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.displayTitle)
                         .font(.headline)

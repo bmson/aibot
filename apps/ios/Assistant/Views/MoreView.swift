@@ -363,18 +363,12 @@ struct MoreView: View {
                 deletingPolicy = policy
             }
             .labelStyle(.iconOnly)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
             .disabled(settingsActionInFlight != nil)
         }
     }
 
-    private func settingsTag(_ title: String, tint: Color) -> some View {
-        Text(title)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 4)
-            .background(tint.opacity(0.11), in: Capsule())
-    }
 }
 
 private struct AgentSettingsEditor: View {
@@ -454,12 +448,11 @@ private struct MCPConnectionsView: View {
                 addConnection
 
                 if model.mcpConnections.isEmpty {
-                    ContentUnavailableView(
+                    AssistantEmptyState(
                         "No MCP connections",
                         systemImage: "point.3.connected.trianglepath.dotted",
-                        description: Text("Add a remote server to let the agent discover its tools."))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 34)
+                        description: "Add a remote server to let the agent discover its tools."
+                    )
                 } else {
                     ForEach(model.mcpConnections) { connection in
                         connectionCard(connection)
@@ -552,11 +545,7 @@ private struct MCPConnectionsView: View {
     private func connectionCard(_ connection: McpConnection) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: connection.statusIcon)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(statusColor(connection))
-                    .frame(width: 44, height: 44)
-                    .background(statusColor(connection).opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                AssistantGlyph(systemName: connection.statusIcon, tint: statusColor(connection))
                 VStack(alignment: .leading, spacing: 4) {
                     Text(connection.name)
                         .font(.headline)
@@ -673,7 +662,7 @@ private struct MCPConnectionsView: View {
             }
         } label: {
             Image(systemName: "trash")
-                .frame(minWidth: 36, minHeight: 36)
+                .frame(minWidth: 44, minHeight: 44)
         }
         .buttonStyle(.bordered)
         .disabled(workingConnectionID != nil || working)
