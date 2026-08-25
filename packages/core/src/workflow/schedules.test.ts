@@ -5,6 +5,7 @@ import { getAgent } from '../chat.js';
 import { loadConfig, resetConfigForTest } from '../config.js';
 import {
   cancelQueuedGoalWork,
+  clearGoalBlockedOnOwnerReply,
   GOAL_BLOCKED_PREFIX,
   GOAL_SESSION_SUPERSEDED,
   goalAutomationGate,
@@ -238,6 +239,28 @@ describe('goalAutomationGate (integration)', () => {
     await setNextAction('search the next job board');
     const verdict = await goalAutomationGate(db, goalId, workChatId);
     expect(verdict.fire).toBe(true);
+  });
+
+  it('an owner reply clears the waiting marker without touching other next actions', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const readNextAction = async () =>
+      (
+        await db
+          .select({ nextAction: goals.nextAction })
+          .from(goals)
+          .where(eq(goals.id, goalId))
+          .limit(1)
+      )[0]?.nextAction;
+
+    await setNextAction(`${GOAL_BLOCKED_PREFIX} which cities should I search?`);
+    await clearGoalBlockedOnOwnerReply(db, goalId);
+    expect(await readNextAction()).toBe('');
+
+    // A plain (checkpoint- or owner-written) next action is never the blocked
+    // marker, so a reply must not clobber it.
+    await setNextAction('search the Berlin boards');
+    await clearGoalBlockedOnOwnerReply(db, goalId);
+    expect(await readNextAction()).toBe('search the Berlin boards');
   });
 });
 

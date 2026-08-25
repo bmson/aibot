@@ -20,7 +20,10 @@ import type { ModelRouter, StreamOutcome } from '@assistant/core/model-router';
 import { buildAutonomyGrant } from '@assistant/core/workflow/autonomy';
 import { enqueueTask } from '@assistant/core/workflow/machine';
 import { detectPersonalReadRequest } from '@assistant/core/workflow/read-intent';
-import { goalIdForConversation } from '@assistant/core/workflow/schedules';
+import {
+  clearGoalBlockedOnOwnerReply,
+  goalIdForConversation,
+} from '@assistant/core/workflow/schedules';
 import { conversations, type Db } from '@assistant/db';
 import {
   convertToModelMessages,
@@ -313,6 +316,11 @@ export async function handleChatTurn(
     // The executor persists its answer (or an approval notice) into this
     // conversation; the client polls /api/chat/status until it lands.
     try {
+      // An answer typed into a goal's work chat belongs to that goal, so the
+      // goal's own sessions can see it was answered — and it answers whatever
+      // question had the goal blocked, so the waiting marker comes down now.
+      const goalId = await goalIdForConversation(db, conversation.id);
+      if (goalId) await clearGoalBlockedOnOwnerReply(db, goalId);
       const { task } = await enqueueTask(db, {
         event: {
           source: 'chat',
@@ -322,9 +330,7 @@ export async function handleChatTurn(
           payload: { text: userText },
         },
         type: 'chat_turn',
-        // An answer typed into a goal's work chat belongs to that goal, so the
-        // goal's own sessions can see it was answered.
-        goalId: await goalIdForConversation(db, conversation.id),
+        goalId,
         ...(autonomousRequested
           ? {
               autonomyGrant: buildAutonomyGrant({
@@ -421,10 +427,14 @@ export async function handleChatTurn(
     }
   }
 
+  // Same goal link as the action-routed path above: an owner reply in a goal's
+  // work chat answers its blocked question, so the waiting marker clears now.
+  const goalId = await goalIdForConversation(db, conversation.id);
+  if (goalId) await clearGoalBlockedOnOwnerReply(db, goalId);
   const task = await createChatTask(db, {
     agentId: agent.id,
     conversationId: conversation.id,
-    goalId: await goalIdForConversation(db, conversation.id),
+    goalId,
   });
 
   // Honesty-check scope for guardDraft: everything earlier turns actually did,

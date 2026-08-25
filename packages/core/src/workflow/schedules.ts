@@ -11,7 +11,7 @@ import {
   tasks,
 } from '@assistant/db';
 import { Cron } from 'croner';
-import { and, desc, eq, gt, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, like, lte, notInArray, or, sql } from 'drizzle-orm';
 import { persistMessage } from '../chat.js';
 import { InboundEventSchema } from '../events.js';
 import { isCodeJobEnabled } from '../memory/jobs.js';
@@ -28,6 +28,21 @@ const GOAL_SCHEDULE_PREFIX = 'goal:';
  * it to show a blocked badge instead of a healthy-looking countdown.
  */
 export const GOAL_BLOCKED_PREFIX = 'Waiting on the owner:';
+
+/**
+ * The owner replied in the goal's work chat: whatever question the blocked
+ * marker carried is answered, so drop it now instead of leaving the "waiting
+ * on you" badge up until the next session's checkpoint overwrites it. This
+ * mirrors the gate, which already treats any owner reply as the answer
+ * (ownerRepliedSince). The targeted WHERE keeps it idempotent — a checkpoint
+ * written between the reply and this call is never clobbered.
+ */
+export async function clearGoalBlockedOnOwnerReply(db: Db, goalId: string): Promise<void> {
+  await db
+    .update(goals)
+    .set({ nextAction: '', updatedAt: sql`now()` })
+    .where(and(eq(goals.id, goalId), like(goals.nextAction, `${GOAL_BLOCKED_PREFIX}%`)));
+}
 
 /**
  * Progress marker stamped on a stalled session the gate cancels to make room
@@ -98,6 +113,12 @@ export function goalAutomationCadence(
 
   if (!goal.targetDate) return { cron: baseline.cron, label: baseline.label };
   const hoursUntil = (goal.targetDate.getTime() - now.getTime()) / 3600e3;
+  // A missed target is a state to surface, not a reason to sprint: without
+  // this floor the deadline tiers below pin a past-due goal at its fastest
+  // pace (every 2 hours) forever. The dashboard already flags the goal as
+  // overdue; it keeps its priority pace until the owner re-targets or closes
+  // it.
+  if (hoursUntil < 0) return { cron: baseline.cron, label: baseline.label };
   const deadline =
     hoursUntil <= 24
       ? { cron: '15 */2 * * *', minutes: 2 * 60, label: 'every 2 hours' }

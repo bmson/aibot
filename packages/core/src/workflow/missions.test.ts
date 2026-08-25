@@ -270,6 +270,25 @@ describe('schedules (integration)', () => {
     ).toBe('every 6 hours');
   });
 
+  it('keeps the baseline pace once the target date has passed', () => {
+    const now = new Date('2026-07-17T12:00:00Z');
+    // Regression: a past-due target made hoursUntil negative, so the <= 24h
+    // tier matched and an overdue goal ran every 2 hours forever.
+    const overdue = new Date('2026-07-10T12:00:00Z');
+    expect(goalAutomationCadence({ priority: 1, targetDate: overdue }, now)).toEqual({
+      cron: '15 */6 * * *',
+      label: 'every 6 hours',
+    });
+    expect(goalAutomationCadence({ priority: 3, targetDate: overdue }, now)).toEqual({
+      cron: '15 9 * * 1,4',
+      label: 'twice a week',
+    });
+    // A target exactly at "now" is still a live deadline, not a missed one.
+    expect(goalAutomationCadence({ priority: 3, targetDate: now }, now).label).toBe(
+      'every 2 hours until the target date',
+    );
+  });
+
   it('creates one goal runner and queues its scheduled work for the linked chat', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const [goal] = await db

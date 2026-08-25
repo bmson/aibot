@@ -624,11 +624,18 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       // write-bound to the task's own goal by the dispatcher, so there is no
       // cross-goal injection surface here.
       execute: async (_args, ctx) => {
+        // The description promises active-first; a plain status sort puts
+        // 'abandoned' ahead of 'active' alphabetically. Owner-hidden (archived)
+        // goals are history, not standing context, so they never reach the
+        // model here.
         const rows = await ctx.db
           .select()
           .from(goals)
-          .where(eq(goals.agentId, ctx.agentId))
-          .orderBy(goals.status, goals.priority);
+          .where(and(eq(goals.agentId, ctx.agentId), isNull(goals.archivedAt)))
+          .orderBy(
+            sql`case ${goals.status} when 'active' then 0 when 'paused' then 1 when 'done' then 2 else 3 end`,
+            goals.priority,
+          );
         return {
           goals: rows.map((g) => ({
             id: g.id,
