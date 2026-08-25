@@ -50,6 +50,17 @@ function urlsIn(text: string): string[] {
   );
 }
 
+function isVideoConferenceURL(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return ['zoom.us', 'meet.google.com', 'teams.microsoft.com', 'webex.com'].some(
+      (domain) => host === domain || host.endsWith(`.${domain}`),
+    );
+  } catch {
+    return false;
+  }
+}
+
 function register<S extends z.ZodType, Out>(
   registry: ToolRegistry,
   tool: AssistantTool<S, Out>,
@@ -101,6 +112,13 @@ function normalizeEvent(raw: RawEvent, calendar: CalendarEntry) {
   addLink('video', 'Video meeting', raw.hangoutLink);
   for (const entry of raw.conferenceData?.entryPoints ?? []) {
     addLink(entry.entryPointType ?? 'conference', entry.label ?? 'Conference link', entry.uri);
+  }
+  for (const url of urlsIn(raw.location ?? '')) {
+    addLink(
+      isVideoConferenceURL(url) ? 'video' : 'location',
+      isVideoConferenceURL(url) ? 'Video meeting' : 'Location link',
+      url,
+    );
   }
   for (const url of urlsIn(raw.description ?? '')) addLink('description', 'Event link', url);
 

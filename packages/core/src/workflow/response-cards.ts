@@ -84,6 +84,18 @@ function formatTime(value: string, timeZone?: string): string {
   }).format(date);
 }
 
+function isVideoMeetingLink(link: RecordValue | undefined): boolean {
+  if (string(link?.type) === 'video') return true;
+  try {
+    const host = new URL(string(link?.url)).hostname.toLowerCase();
+    return ['zoom.us', 'meet.google.com', 'teams.microsoft.com', 'webex.com'].some(
+      (domain) => host === domain || host.endsWith(`.${domain}`),
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Build UI data solely from successful calendar tool results; model prose is not an input. */
 export function calendarResponseCards(
   evidence: ActionEvidence[],
@@ -110,7 +122,8 @@ export function calendarResponseCards(
       const start = string(event.start);
       const end = string(event.end);
       const links = Array.isArray(event.links) ? event.links.map(record).filter(Boolean) : [];
-      const bestLink = links.find((link) => string(link?.type) === 'video') ?? links[0];
+      const calendarLink = links.find((link) => string(link?.type) === 'calendar');
+      const meetingLink = links.find(isVideoMeetingLink);
       const calendars = [...new Set(group.map((entry) => string(entry.calendar)).filter(Boolean))];
       return {
         kind: 'calendar-event' as const,
@@ -128,8 +141,19 @@ export function calendarResponseCards(
               .slice(0, 3)
           : [],
         calendars,
-        link: bestLink
-          ? { label: string(bestLink.label) || 'Open event', url: string(bestLink.url) }
+        calendarLink: calendarLink
+          ? { label: string(calendarLink.label) || 'Open event', url: string(calendarLink.url) }
+          : undefined,
+        meetingLink: meetingLink
+          ? {
+              label: string(meetingLink.label) || 'Join video meeting',
+              url: string(meetingLink.url),
+            }
+          : undefined,
+        // Retain the established field for older clients, but never point an
+        // event affordance at the meeting itself.
+        link: calendarLink
+          ? { label: string(calendarLink.label) || 'Open event', url: string(calendarLink.url) }
           : undefined,
       };
     })
@@ -436,6 +460,9 @@ export function calendarWriteResponseCards(evidence: ActionEvidence[]): Response
           ? strings(result.invited)
           : strings(args?.attendees),
         calendars: [],
+        calendarLink: string(result.link)
+          ? { label: 'Open event', url: string(result.link) }
+          : undefined,
         link: string(result.link) ? { label: 'Open event', url: string(result.link) } : undefined,
       },
     ];

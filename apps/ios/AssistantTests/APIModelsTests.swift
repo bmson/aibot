@@ -90,20 +90,26 @@ final class APIModelsTests: XCTestCase {
             type: "data-card",
             data: .object([
                 "kind": .string("calendar-event"), "id": .string("event-1"),
+                "start": .string("2026-08-24T14:00:00-07:00"),
                 "time": .string("2:00 PM–3:00 PM"), "title": .string("Design review"),
                 "location": .string("Studio"), "attendees": .array([.string("Ana")]),
                 "calendars": .array([.string("Work")]),
+                "calendarLink": .object(["url": .string("https://calendar.google.com/event?eid=event-1")]),
+                "meetingLink": .object(["url": .string("https://zoom.us/j/12345")]),
             ])
         )
-        guard case let .event(id, time, title, location, attendees, calendars, _, _)? = MessageResponseCard(part: card) else {
+        guard case let .event(id, start, time, title, location, attendees, calendars, calendarLink, meetingLink)? = MessageResponseCard(part: card) else {
             return XCTFail("Expected a structured event card")
         }
         XCTAssertEqual(id, "event-1")
+        XCTAssertEqual(start, "2026-08-24T14:00:00-07:00")
         XCTAssertEqual(time, "2:00 PM–3:00 PM")
         XCTAssertEqual(title, "Design review")
         XCTAssertEqual(location, "Studio")
         XCTAssertEqual(attendees, ["Ana"])
         XCTAssertEqual(calendars, ["Work"])
+        XCTAssertEqual(calendarLink, "https://calendar.google.com/event?eid=event-1")
+        XCTAssertEqual(meetingLink, "https://zoom.us/j/12345")
     }
 
     func testOtherStructuredCardsDecodeCompleteToolBackedData() {
@@ -260,7 +266,7 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(details.first?.value, "15 km/h (9 mph)")
     }
 
-    func testWeatherCardInferenceKeepsEveryAvailableWeatherMetric() {
+    func testWeatherCardInferenceKeepsWeatherMetricsWithoutProvenance() {
         let weather = MessageResponseCard.inferred(
             from: """
             Here's the current weather for San Francisco, CA as of 3:48 PM PDT:
@@ -279,12 +285,11 @@ final class APIModelsTests: XCTestCase {
         }
         XCTAssertEqual(location, "San Francisco, CA")
         XCTAssertEqual(temperature, "19°C (66°F)")
-        XCTAssertEqual(details.map(\.label), ["Today", "Wind", "Humidity", "Rain chance", "Updated", "Source", "Dew point"])
+        XCTAssertEqual(details.map(\.label), ["Today", "Wind", "Humidity", "Rain chance", "Updated", "Dew point"])
         XCTAssertEqual(details[0].value, "17–20°C (63–68°F). Mild with a light breeze.")
         XCTAssertEqual(details[2].value, "68%")
         XCTAssertEqual(details[4].value, "3:48 PM PDT")
-        XCTAssertEqual(details[5].value, "OpenWeatherMap, refreshed at 3:48 PM.")
-        XCTAssertEqual(details[6].value, "13°C")
+        XCTAssertEqual(details[5].value, "13°C")
     }
 
     func testIdentifierFormattingDoesNotExposeImplementationPunctuation() {

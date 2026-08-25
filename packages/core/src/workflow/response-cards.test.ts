@@ -59,6 +59,46 @@ describe('response cards', () => {
     expect(result[0]?.calendars).toEqual(['Family', 'Work']);
   });
 
+  it('keeps an event calendar link separate from its video meeting link', () => {
+    const result = calendarResponseCards(
+      [
+        {
+          toolName: 'calendar.list_events',
+          status: 'succeeded',
+          result: {
+            events: [
+              {
+                eventId: 'review',
+                calendarId: 'work',
+                calendar: 'Work',
+                summary: 'Design review',
+                start: '2026-08-24T14:00:00-07:00',
+                end: '2026-08-24T15:00:00-07:00',
+                links: [
+                  {
+                    type: 'calendar',
+                    label: 'Open in Google Calendar',
+                    url: 'https://calendar.google.com/event?eid=review',
+                  },
+                  { type: 'video', label: 'Video meeting', url: 'https://zoom.us/j/12345' },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      request,
+    );
+
+    expect(result).toMatchObject([
+      {
+        calendarLink: { url: 'https://calendar.google.com/event?eid=review' },
+        meetingLink: { url: 'https://zoom.us/j/12345' },
+        link: { url: 'https://calendar.google.com/event?eid=review' },
+      },
+    ]);
+  });
+
   it('turns the fresh ambient weather block into a compact card', () => {
     expect(
       weatherResponseCards(

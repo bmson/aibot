@@ -344,7 +344,7 @@ enum MessageResponseCard: Identifiable {
     }
 
     case agenda(title: String, subtitle: String, items: [AgendaItem])
-    case event(id: String, time: String, title: String, location: String, attendees: [String], calendars: [String], linkLabel: String?, linkURL: String?)
+    case event(id: String, start: String, time: String, title: String, location: String, attendees: [String], calendars: [String], calendarLinkURL: String?, meetingLinkURL: String?)
     case weather(location: String, temperature: String, condition: String, details: [WeatherDetail])
     case duration(title: String, duration: String, detail: String?, confidence: String?)
     case reminder(id: String, title: String, schedule: String, nextFires: String, enabled: Bool)
@@ -357,7 +357,7 @@ enum MessageResponseCard: Identifiable {
     var id: String {
         switch self {
         case let .agenda(title, _, _): "agenda-\(title)"
-        case let .event(id, _, _, _, _, _, _, _): id
+        case let .event(id, _, _, _, _, _, _, _, _): id
         case let .weather(location, temperature, _, _): "weather-\(location)-\(temperature)"
         case let .duration(title, duration, _, _): "duration-\(title)-\(duration)"
         case let .reminder(id, _, _, _, _): id
@@ -377,11 +377,17 @@ enum MessageResponseCard: Identifiable {
             guard let title = data["title"]?.string, let time = data["time"]?.string else { return nil }
             let attendees = data["attendees"]?.arrayStrings ?? []
             let calendars = data["calendars"]?.arrayStrings ?? []
-            let link = data["link"]?.objectValue
+            let calendarLink = data["calendarLink"]?.objectValue
+            let meetingLink = data["meetingLink"]?.objectValue
+            let legacyURL = data["link"]?.objectValue?["url"]?.string
             self = .event(
-                id: data["id"]?.string ?? "calendar-\(title)-\(time)", time: time, title: title,
+                id: data["id"]?.string ?? "calendar-\(title)-\(time)",
+                start: data["start"]?.string ?? "", time: time, title: title,
                 location: data["location"]?.string ?? "", attendees: attendees, calendars: calendars,
-                linkLabel: link?["label"]?.string, linkURL: link?["url"]?.string
+                calendarLinkURL: calendarLink?["url"]?.string
+                    ?? (Self.isCalendarEventURL(legacyURL) ? legacyURL : nil),
+                meetingLinkURL: meetingLink?["url"]?.string
+                    ?? (Self.isMeetingURL(legacyURL) ? legacyURL : nil)
             )
         case "calendar", "agenda":
             let items: [AgendaItem] = {
@@ -517,6 +523,22 @@ enum MessageResponseCard: Identifiable {
         }
     }
 
+    private static func isCalendarEventURL(_ value: String?) -> Bool {
+        guard let url = value.flatMap(URL.init(string:)), let host = url.host?.lowercased() else {
+            return false
+        }
+        return host == "calendar.google.com" || host.hasSuffix(".calendar.google.com")
+    }
+
+    private static func isMeetingURL(_ value: String?) -> Bool {
+        guard let url = value.flatMap(URL.init(string:)), let host = url.host?.lowercased() else {
+            return false
+        }
+        return ["zoom.us", "meet.google.com", "teams.microsoft.com", "webex.com"].contains { domain in
+            host == domain || host.hasSuffix(".\(domain)")
+        }
+    }
+
     static func inferred(from text: String) -> [Self] {
         let lower = text.lowercased()
         if let agenda = inferredAgenda(text, lower: lower) { return [agenda] }
@@ -568,10 +590,8 @@ enum MessageResponseCard: Identifiable {
         )
     }
 
-    /// Keep every weather metric the reply provides in the structured surface.
-    /// The primary temperature and current condition already have dedicated
-    /// visual positions, so the list begins with the day's range and secondary
-    /// measurements instead of repeating those two fields.
+    /// Keep weather measurements in the structured surface, while leaving
+    /// conversational boilerplate and provenance out of the card.
     private static func weatherDetails(in text: String) -> [WeatherDetail] {
         let fields: [(label: String, names: [String])] = [
             ("Today", ["today's range", "today’s range"]),
@@ -583,7 +603,6 @@ enum MessageResponseCard: Identifiable {
             ("UV index", ["uv index", "uv"]),
             ("Pressure", ["pressure"]),
             ("Updated", ["as of"]),
-            ("Source", ["source"]),
         ]
         let knownDetails: [WeatherDetail] = fields.compactMap { field in
             guard let value = field.names.lazy.compactMap({ weatherField(named: $0, in: text) }).first else {
@@ -607,7 +626,8 @@ enum MessageResponseCard: Identifiable {
                 guard case let .object(detail) = value,
                       let label = detail["label"]?.string,
                       let value = detail["value"]?.string,
-                      !label.isEmpty, !value.isEmpty else { return nil }
+                      !label.isEmpty, !value.isEmpty,
+                      isWeatherCardDetail(label) else { return nil }
                 return .init(label: label, value: value)
             }
             if !details.isEmpty { return details }
@@ -659,10 +679,22 @@ enum MessageResponseCard: Identifiable {
             let value = String(line[line.index(after: colon)...])
                 .replacingOccurrences(of: "**", with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !label.isEmpty, !value.isEmpty, !labels.contains(normalized) else { continue }
+            guard !label.isEmpty, !value.isEmpty,
+                  !labels.contains(normalized),
+                  isWeatherCardDetail(label) else { continue }
             details.append(.init(label: label, value: value))
         }
         return details
+    }
+
+    private static func isWeatherCardDetail(_ label: String) -> Bool {
+        let normalized = label
+            .lowercased()
+            .replacingOccurrences(of: "’", with: "'")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized != "source"
+            && !normalized.contains("current weather")
+            && !normalized.hasPrefix("here's the weather")
     }
 
     /// Finds a labeled Markdown field in a conventional assistant response,
@@ -708,12 +740,21 @@ enum MessageResponseCard: Identifiable {
 private struct RichResponseCards: View {
     private struct EventRow: Identifiable {
         let id: String
+        let start: String
         let time: String
         let title: String
         let location: String
         let attendees: [String]
         let calendar: String
-        let linkURL: String?
+        let calendarLinkURL: String?
+        let meetingLinkURL: String?
+    }
+
+    private struct EventAttendee: Identifiable {
+        let name: String
+        let status: String?
+
+        var id: String { "\(name)-\(status ?? "")" }
     }
 
     let cards: [MessageResponseCard]
@@ -729,17 +770,19 @@ private struct RichResponseCards: View {
     /// an itinerary instead of a column of unrelated tiles.
     private var eventRows: [EventRow] {
         cards.compactMap { card in
-            guard case let .event(id, time, title, location, attendees, calendars, _, linkURL) = card else {
+            guard case let .event(id, start, time, title, location, attendees, calendars, calendarLinkURL, meetingLinkURL) = card else {
                 return nil
             }
             return .init(
                 id: id,
+                start: start,
                 time: time,
                 title: title,
-                location: location,
+                location: locationWithoutInlineURLs(location),
                 attendees: attendees,
                 calendar: calendars.first ?? "",
-                linkURL: linkURL
+                calendarLinkURL: calendarLinkURL,
+                meetingLinkURL: meetingLinkURL ?? meetingURL(in: location)
             )
         }
     }
@@ -789,43 +832,64 @@ private struct RichResponseCards: View {
         VStack(spacing: 0) {
             ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
                 VStack(alignment: .leading, spacing: 10) {
+                    let date = eventDateCaption(event.start)
+                    let previousDate = index > 0 ? eventDateCaption(events[index - 1].start) : nil
+                    if let date, date != previousDate {
+                        Text(date)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                            .padding(.bottom, 2)
+                    }
+
                     HStack(alignment: .firstTextBaseline) {
                         Text(event.time)
                             .font(.subheadline.monospacedDigit().weight(.semibold))
                             .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                         Spacer(minLength: 12)
-                        if !event.calendar.isEmpty {
-                            Text(event.calendar)
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
-                                .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
-                                .lineLimit(1)
-                        }
+                        calendarEventPill(event)
                     }
                     Text(AssistantMarkdown.inlineAttributed(event.title))
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                         .fixedSize(horizontal: false, vertical: true)
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        let detail = [event.location, event.attendees.isEmpty ? "" : event.attendees.joined(separator: ", ")]
-                            .filter { !$0.isEmpty }
-                            .joined(separator: " · ")
-                        if !detail.isEmpty {
-                            Text(AssistantMarkdown.inlineAttributed(detail))
+
+                    if !event.location.isEmpty || event.meetingLinkURL != nil {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            if !event.location.isEmpty {
+                                Text(AssistantMarkdown.inlineAttributed(event.location))
                                 .font(.subheadline)
                                 .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                                 .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer(minLength: 6)
-                        if let linkURL = event.linkURL, let url = URL(string: linkURL) {
-                            Link(destination: url) {
-                                Image(systemName: "arrow.up.right")
-                                    .font(.title3.weight(.medium))
-                                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                             }
-                            .accessibilityLabel("Open \(event.title)")
+                            Spacer(minLength: 6)
+                            if let meetingLinkURL = event.meetingLinkURL, let url = URL(string: meetingLinkURL) {
+                                Link(destination: url) {
+                                    Image(systemName: "video.fill")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                                        .frame(width: 32, height: 32)
+                                        .background(AssistantTheme.sunken(for: colorScheme), in: Circle())
+                                }
+                                .accessibilityLabel("Join video meeting for \(event.title)")
+                            }
+                        }
+                    }
+
+                    let attendees = event.attendees.map(eventAttendee)
+                    if !attendees.isEmpty {
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(attendees) { attendee in
+                                HStack(spacing: 7) {
+                                    Text(attendee.name)
+                                        .font(.caption)
+                                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    if let status = attendee.status {
+                                        attendeeStatusPill(status)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -838,6 +902,118 @@ private struct RichResponseCards: View {
             }
         }
         .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 24)
+    }
+
+    @ViewBuilder
+    private func calendarEventPill(_ event: EventRow) -> some View {
+        let label = event.calendar.isEmpty ? "Calendar" : event.calendar
+        if let calendarLinkURL = event.calendarLinkURL, let url = URL(string: calendarLinkURL) {
+            Link(destination: url) {
+                Label(label, systemImage: "calendar")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
+                    .lineLimit(1)
+            }
+            .accessibilityLabel("Open \(event.title) in calendar")
+        } else if !event.calendar.isEmpty {
+            Text(label)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
+                .lineLimit(1)
+        } else {
+            EmptyView()
+        }
+    }
+
+    private func eventDateCaption(_ start: String) -> String? {
+        guard !start.isEmpty else { return nil }
+
+        let internetDate = ISO8601DateFormatter()
+        if let date = internetDate.date(from: start) {
+            return date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+        }
+
+        let dateOnly = DateFormatter()
+        dateOnly.locale = Locale(identifier: "en_US_POSIX")
+        dateOnly.timeZone = TimeZone(secondsFromGMT: 0)
+        dateOnly.dateFormat = "yyyy-MM-dd"
+        return dateOnly.date(from: start)?.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+    }
+
+    private func eventAttendee(_ value: String) -> EventAttendee {
+        guard let range = value.range(of: #"\s*\([^()]+\)\s*$"#, options: .regularExpression) else {
+            return .init(name: value, status: nil)
+        }
+        let suffix = String(value[range])
+        let status = suffix
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "()"))
+        let name = String(value[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return .init(name: name.isEmpty ? value : name, status: status.isEmpty ? nil : status)
+    }
+
+    private func attendeeStatusPill(_ status: String) -> some View {
+        let presentation = attendeeStatusPresentation(status)
+        return Label(presentation.label, systemImage: presentation.symbol)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(presentation.color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(presentation.color.opacity(0.12), in: Capsule())
+    }
+
+    private func attendeeStatusPresentation(_ status: String) -> (label: String, symbol: String, color: Color) {
+        switch status.lowercased().replacingOccurrences(of: " ", with: "") {
+        case "accepted":
+            return ("Accepted", "checkmark.circle.fill", AssistantTheme.success(for: colorScheme))
+        case "needsaction", "pending":
+            return ("Needs action", "clock.fill", AssistantTheme.warning(for: colorScheme))
+        case "denied":
+            return ("Denied", "xmark.circle.fill", .red)
+        case "declined":
+            return ("Declined", "xmark.circle.fill", .red)
+        case "tentative":
+            return ("Tentative", "questionmark.circle.fill", AssistantTheme.inkMuted(for: colorScheme))
+        default:
+            return (status, "circle.fill", AssistantTheme.inkMuted(for: colorScheme))
+        }
+    }
+
+    private func meetingURL(in location: String) -> String? {
+        inlineURLs(in: location).first(where: isMeetingURL)
+    }
+
+    private func locationWithoutInlineURLs(_ location: String) -> String {
+        let withoutURLs = inlineURLs(in: location).reduce(location) { result, url in
+            result.replacingOccurrences(of: url, with: "")
+        }
+        return withoutURLs
+            .replacingOccurrences(of: " · ", with: " ")
+            .trimmingCharacters(in: CharacterSet(charactersIn: " ·,\n"))
+    }
+
+    private func inlineURLs(in value: String) -> [String] {
+        let pattern = #"https?://[^\s<>\"']+"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return []
+        }
+        let range = NSRange(value.startIndex..., in: value)
+        return expression.matches(in: value, range: range).compactMap { match in
+            Range(match.range, in: value).map { String(value[$0]) }
+        }
+    }
+
+    private func isMeetingURL(_ value: String) -> Bool {
+        guard let host = URL(string: value)?.host?.lowercased() else { return false }
+        return ["zoom.us", "meet.google.com", "teams.microsoft.com", "webex.com"].contains { domain in
+            host == domain || host.hasSuffix(".\(domain)")
+        }
     }
 
     private func agendaCard(title: String, subtitle: String, items: [MessageResponseCard.AgendaItem]) -> some View {
@@ -894,53 +1070,123 @@ private struct RichResponseCards: View {
         condition: String,
         details: [MessageResponseCard.WeatherDetail]
     ) -> some View {
-        VStack(alignment: .leading, spacing: 17) {
-            Text(AssistantMarkdown.inlineAttributed(location))
-                .font(.subheadline)
-                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-            HStack(alignment: .center, spacing: 15) {
-                Text(temperature)
-                    .font(.system(size: 47, weight: .regular, design: .rounded))
+        let reading = weatherTemperatureReading(temperature)
+        let facts = weatherFactRow(details)
+
+        return VStack(alignment: .leading, spacing: 15) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(AssistantMarkdown.inlineAttributed(location))
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                Spacer(minLength: 8)
+                Text(weatherTimeCaption(details))
+                    .font(.caption.weight(.medium))
                     .monospacedDigit()
-                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                    .minimumScaleFactor(0.76)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .lineLimit(1)
+            }
+
+            HStack(alignment: .center, spacing: 14) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(reading.value)
+                        .font(.system(size: 52, weight: .regular, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                        .fixedSize(horizontal: true, vertical: false)
+                    if !reading.unitAndConversion.isEmpty {
+                        Text(reading.unitAndConversion)
+                            .font(.subheadline.weight(.medium))
+                            .monospacedDigit()
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            .lineLimit(1)
+                    }
+                }
+
                 Text(AssistantMarkdown.inlineAttributed(condition))
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
+
                 Spacer(minLength: 0)
+
                 Image(systemName: weatherSymbol(condition))
-                    .font(.system(size: 29, weight: .medium))
+                    .font(.system(size: 27, weight: .medium))
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                    .frame(width: 58, height: 58)
+                    .frame(width: 54, height: 54)
                     .background(AssistantTheme.sunken(for: colorScheme), in: Circle())
             }
-            if !details.isEmpty {
+
+            if !facts.isEmpty {
                 Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
-                LazyVGrid(
-                    columns: usesAccessibilityLayout
-                        ? [GridItem(.flexible())]
-                        : [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12), GridItem(.flexible())],
-                    alignment: .leading,
-                    spacing: 12
-                ) {
-                    ForEach(details) { detail in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(detail.label)
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                            Text(AssistantMarkdown.inlineAttributed(detail.value))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
+                Text(facts.joined(separator: "  ·  "))
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 24)
+        .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 22)
+    }
+
+    private func weatherTemperatureReading(_ temperature: String) -> (value: String, unitAndConversion: String) {
+        let pattern = #"(-?\d{1,3})\s*°\s*([FC])(?:\s*\(([^)]+)\))?"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(in: temperature, range: NSRange(temperature.startIndex..., in: temperature)),
+              let valueRange = Range(match.range(at: 1), in: temperature),
+              let unitRange = Range(match.range(at: 2), in: temperature) else {
+            return (temperature.trimmingCharacters(in: .whitespacesAndNewlines), "")
+        }
+
+        let conversion = Range(match.range(at: 3), in: temperature).map { String(temperature[$0]) }
+        return (
+            "\(temperature[valueRange])°",
+            ([String(temperature[unitRange]).uppercased(), conversion]
+                .compactMap { $0 }
+                .joined(separator: " · "))
+        )
+    }
+
+    private func weatherTimeCaption(_ details: [MessageResponseCard.WeatherDetail]) -> String {
+        guard let updated = details.first(where: { $0.label.caseInsensitiveCompare("Updated") == .orderedSame })?.value,
+              !updated.isEmpty else {
+            return "Today"
+        }
+        return "Today · \(updated)"
+    }
+
+    private func weatherFactRow(_ details: [MessageResponseCard.WeatherDetail]) -> [String] {
+        details.compactMap { detail in
+            let label = detail.label.lowercased()
+            let value = detail.value
+                .replacingOccurrences(of: "**", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !value.isEmpty, label != "updated", label != "source" else { return nil }
+
+            switch label {
+            case "today":
+                return weatherFirstPhrase(value)
+                    .components(separatedBy: "(").first?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            case "rain chance", "precipitation chance":
+                let chance = weatherFirstPhrase(value)
+                return chance.hasPrefix("0%") || chance.hasPrefix("0 %") ? "No rain" : "\(chance) rain"
+            case "wind":
+                return "\(weatherFirstPhrase(value).components(separatedBy: "(").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? value) wind"
+            case "humidity":
+                return "\(weatherFirstPhrase(value)) humidity"
+            default:
+                return "\(detail.label) \(weatherFirstPhrase(value))"
+            }
+        }
+    }
+
+    private func weatherFirstPhrase(_ value: String) -> String {
+        value.components(separatedBy: ".").first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? value
     }
 
     private func durationCard(title: String, duration: String, detail: String?, confidence: String?) -> some View {
@@ -1369,7 +1615,7 @@ private enum PresentationCompanion {
     static func orientation(for cards: [MessageResponseCard]) async -> String? {
         let source = cards.map { card in
             switch card {
-            case let .event(_, time, title, location, _, _, _, _): "Event: \(time), \(title), \(location)"
+            case let .event(_, _, time, title, location, _, _, _, _): "Event: \(time), \(title), \(location)"
             case let .weather(location, temperature, condition, details):
                 "Weather: \(location), \(condition), \(temperature), \(details.map { "\($0.label): \($0.value)" }.joined(separator: ", "))"
             case let .duration(title, duration, detail, _): "Estimate: \(title), \(duration), \(detail ?? "")"
