@@ -504,6 +504,23 @@ struct APIClient: Sendable {
         _ = try await perform(request, as: OkPayload.self)
     }
 
+    /// Fire-and-forget APNs token registration; the next app launch retries,
+    /// so a failed post only delays proactive pushes until then.
+    func postDeviceToken(_ body: DeviceTokenBody) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/devices"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(body)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    /// Foreground "wake" signal; the server dedupes its own reactions to it.
+    func postForegroundActivity() async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/activity/foreground"))
+        request.httpMethod = "POST"
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
     func sendMessage(
         conversationId: String,
         text: String,
@@ -665,6 +682,21 @@ struct LocationPingBody: Encodable {
     let capturedAt: String
     let timeZone: String
     let source: String
+}
+
+/// Matches the server's DeviceTokenRegistrationSchema
+/// (packages/core/src/push/devices.ts). Development-signed builds mint sandbox
+/// tokens; TestFlight/App Store builds mint production ones.
+struct DeviceTokenBody: Encodable {
+    let token: String
+    let platform: String = "ios"
+    let environment: String = {
+        #if DEBUG
+        return "sandbox"
+        #else
+        return "production"
+        #endif
+    }()
 }
 
 struct GoalMutation: Encodable, Sendable {

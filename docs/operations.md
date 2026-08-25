@@ -86,7 +86,10 @@ authenticated with its existing mobile access key rather than the HMAC secret �
 is installed on the phone. Pings carry the device's IANA time zone (`timeZone`) alongside `lat`/`lng`,
 so the ambient prompt line can anchor the owner's clock while traveling. Sharing is off by default and
 owner-gated (More → Assistant context → Share iPhone location); the app sends a one-shot fix on connect
-and on foreground, throttled to 15 minutes, with no background or continuous tracking.
+and on foreground, throttled to 15 minutes. A separate toggle ("Background arrival nudges") opts into
+the significant-change service: coarse background pings on ~500m moves, which the server screens
+through an arrival gate (new place, one nudge per place per day, 12-hour global cooldown) before any
+proactive note is considered.
 
 ## Release artifacts
 

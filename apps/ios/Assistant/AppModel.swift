@@ -57,7 +57,12 @@ final class AppModel: ObservableObject {
     private let configuredKey = "assistant.connection-configured"
     /// More → Assistant context owns this toggle; the model only reads it.
     static let shareLocationKey = "assistant.share-location"
+    /// The background-arrival toggle; LocationManager owns the monitoring.
+    static let shareLocationBackgroundKey = "assistant.share-location-background"
+    /// One-time notification ask after a successful pairing (APNs opt-in).
+    private let pushPromptedKey = "assistant.push-prompted"
     private var lastLocationPostAt: Date?
+    private var lastForegroundReportAt: Date?
 
     init() {
         serverURL = defaults.string(forKey: serverKey) ?? "http://localhost:3000"
@@ -82,6 +87,28 @@ final class AppModel: ObservableObject {
             } catch {
                 self.errorMessage = error.localizedDescription
             }
+        }
+        // APNs token upload for proactive pushes. A rotation re-fires this;
+        // a failure is retried on the next launch's registration callback.
+        NotificationManager.shared.deviceTokenHandler = { [weak self] token in
+            guard let client = self?.client else { throw APIError.invalidResponse }
+            try await client.postDeviceToken(DeviceTokenBody(token: token))
+        }
+        // Background arrival pings (significant-change wakes). Best-effort —
+        // the server's arrival gate decides whether a nudge is warranted.
+        LocationManager.shared.backgroundHandler = { [weak self] location, label in
+            guard let client = self?.client else { return }
+            try? await client.postLocationPing(LocationPingBody(
+                lat: location.coordinate.latitude,
+                lng: location.coordinate.longitude,
+                label: label,
+                accuracyM: location.horizontalAccuracy >= 0
+                    ? Int(location.horizontalAccuracy.rounded())
+                    : nil,
+                capturedAt: ISO8601DateFormatter().string(from: location.timestamp),
+                timeZone: TimeZone.current.identifier,
+                source: "ios-app-background"
+            ))
         }
     }
 
@@ -155,11 +182,33 @@ final class AppModel: ObservableObject {
             await syncNotificationBadge()
             startIdlePolling()
             await shareLocationIfEnabled(force: true)
+
+            // Proactive outreach needs a way to reach the phone: ask for
+            // notification permission once, right after a pairing succeeds,
+            // and register with APNs whenever permission exists.
+            let notifications = NotificationManager.shared
+            if notifications.authorizationStatus == .notDetermined,
+               !defaults.bool(forKey: pushPromptedKey) {
+                defaults.set(true, forKey: pushPromptedKey)
+                await notifications.requestAuthorization()
+            }
+            await notifications.registerForRemoteNotificationsIfAuthorized()
+            await reportForegroundActivity()
         } catch {
             errorMessage = error.localizedDescription
             if bootstrap == nil { showingConnection = true }
         }
         isLoading = false
+    }
+
+    /// The "woke up" signal the server's wake-up brief listens for. Throttled
+    /// so rapid background/foreground flips stay one cheap POST; the real
+    /// dedupe (once per morning) lives server-side.
+    func reportForegroundActivity() async {
+        guard bootstrap != nil else { return }
+        if let last = lastForegroundReportAt, Date().timeIntervalSince(last) < 30 * 60 { return }
+        lastForegroundReportAt = Date()
+        try? await client?.postForegroundActivity()
     }
 
     /// Sends the phone's current position (and clock zone) to the owner's own

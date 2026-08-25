@@ -41,7 +41,9 @@ import {
   listImprovementProposals,
   listMcpConnections,
   purgeImportedSource,
+  recordOwnerForeground,
   recordOwnerLocationPing,
+  registerDeviceToken,
   restoreChatConversation,
   reviewImportedSource,
   saveMcpDiscovery,
@@ -190,6 +192,8 @@ function createApplication() {
     }) => uploadImport(db, workspace, input),
     getPrimaryConversationId: () => getPrimaryConversationId(db),
     recordOwnerLocationPing: (body: unknown) => recordOwnerLocationPing(db, body),
+    registerDeviceToken: (body: unknown) => registerDeviceToken(db, body),
+    recordOwnerForeground: () => recordOwnerForeground(db),
     listActivity: (input: {
       archived: boolean;
       filter: 'all' | 'needs-you' | 'working' | 'scheduled' | 'completed';

@@ -631,6 +631,131 @@ export async function runDueSchedules(
   return fired;
 }
 
+/** The agent-local calendar date and hour of a moment — dedupe granularity. */
+function zonedParts(timeZone: string, at: Date): { date: string; hour: number } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(at);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  return { date: `${get('year')}-${get('month')}-${get('day')}`, hour: Number(get('hour')) };
+}
+
+/** The tz's offset-from-UTC at a moment, measured through Intl. */
+function zonedOffsetMs(timeZone: string, at: Date): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(at);
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  const asUtc = Date.UTC(
+    get('year'),
+    get('month') - 1,
+    get('day'),
+    get('hour'),
+    get('minute'),
+    get('second'),
+  );
+  return asUtc - Math.floor(at.getTime() / 1000) * 1000;
+}
+
+/** Agent-local midnight of `at`'s calendar day, as a Date (DST-edge tolerant). */
+function startOfZonedDay(timeZone: string, at: Date): Date {
+  const { date } = zonedParts(timeZone, at);
+  const guess = Date.parse(`${date}T00:00:00Z`);
+  let start = guess - zonedOffsetMs(timeZone, new Date(guess));
+  start = guess - zonedOffsetMs(timeZone, new Date(start));
+  return new Date(start);
+}
+
+/** The schedule a wake-up app-open fires early. */
+export const WAKE_BRIEF_SCHEDULE = 'morning-brief';
+/** Before this local hour an app open is insomnia, not waking up. */
+const WAKE_BRIEF_EARLIEST_HOUR = 4;
+
+/**
+ * "Day overview when I wake up": the owner's first app-open of the morning
+ * fires the morning brief early instead of at its fixed cron time. The cron
+ * row doubles as the dedupe marker — a wake firing stamps last_run_at and
+ * moves next_run_at past today's instance, so the sweep does not send a
+ * second brief later. At-least-once safe via the same externalEventId
+ * idempotency as the cron path.
+ */
+export async function maybeFireWakeBrief(
+  db: Db,
+  agent: { id: string; timezone: string },
+  now: Date = new Date(),
+): Promise<boolean> {
+  const [row] = await db
+    .select()
+    .from(schedules)
+    .where(
+      and(
+        eq(schedules.agentId, agent.id),
+        eq(schedules.name, WAKE_BRIEF_SCHEDULE),
+        eq(schedules.enabled, true),
+      ),
+    )
+    .limit(1);
+  if (!row) return false;
+
+  const localNow = zonedParts(agent.timezone, now);
+  if (localNow.hour < WAKE_BRIEF_EARLIEST_HOUR) return false;
+  // Already briefed today — wake-fired earlier, or the cron ran.
+  if (row.lastRunAt && zonedParts(agent.timezone, row.lastRunAt).date === localNow.date) {
+    return false;
+  }
+  // Today's instance (if the cron has one today). Once it is reached the
+  // sweep owns the brief; the wake path only runs *before* it.
+  const candidate = new Cron(row.cron, { timezone: agent.timezone }).nextRun(
+    startOfZonedDay(agent.timezone, now),
+  );
+  const todaysRun =
+    candidate && zonedParts(agent.timezone, candidate).date === localNow.date ? candidate : null;
+  if (!todaysRun || now >= todaysRun) return false;
+
+  const template = (row.taskTemplate ?? {}) as {
+    type?: TaskType;
+    instruction?: string;
+    budgetUsdLimit?: string;
+    maxSteps?: number;
+  };
+  const event = InboundEventSchema.parse({
+    source: 'schedule',
+    externalEventId: `schedule:${row.id}:wake:${localNow.date}`,
+    agentId: row.agentId,
+    trust: 'assistant',
+    payload: { schedule: row.name, instruction: template.instruction ?? row.name },
+  });
+  const { created } = await enqueueTask(db, {
+    event,
+    type: template.type ?? 'scheduled',
+    budgetUsdLimit: template.budgetUsdLimit,
+    maxSteps: template.maxSteps,
+  });
+  // Briefed for today either way: a lost enqueue race still means the task
+  // exists. Moving next_run_at past today's instance keeps the cron quiet.
+  await db
+    .update(schedules)
+    .set({
+      lastRunAt: now,
+      nextRunAt: nextRun(row.cron, agent.timezone, todaysRun),
+      updatedAt: sql`now()`,
+    })
+    .where(eq(schedules.id, row.id));
+  return created;
+}
+
 /** Convenience for seeding/creating schedules with a computed first firing. */
 export async function upsertSchedule(
   db: Db,

@@ -15,7 +15,12 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     /// notification without opening the app into the Approvals sheet first.
     var approvalDecisionHandler: (@MainActor (String, String) async -> Void)?
 
+    /// Wired up by AppModel: uploads the APNs device token to the owner's
+    /// server so proactive notices reach the phone when the app is closed.
+    var deviceTokenHandler: (@MainActor (String) async throws -> Void)?
+
     private let center = UNUserNotificationCenter.current()
+    private let uploadedTokenKey = "assistant.push-token-uploaded"
 
     static let attentionCategory = "ASSISTANT_ATTENTION"
     static let updateCategory = "ASSISTANT_UPDATE"
@@ -44,6 +49,35 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
     func refreshAuthorizationStatus() async {
         authorizationStatus = await center.notificationSettings().authorizationStatus
+    }
+
+    /// APNs registration only makes sense once the owner has allowed
+    /// notifications; call on connect and foreground. Registration is cheap
+    /// and idempotent, and repeating it is how a rotated token reaches us.
+    func registerForRemoteNotificationsIfAuthorized() async {
+        await refreshAuthorizationStatus()
+        guard authorizationStatus == .authorized || authorizationStatus == .provisional else {
+            return
+        }
+        UIApplication.shared.registerForRemoteNotifications()
+    }
+
+    /// The AppDelegate's token callback. Uploads are deduplicated so the
+    /// per-launch callback doesn't spam the server, and the token is marked
+    /// uploaded only after the server accepted it — a failed upload retries on
+    /// the next registration callback (e.g. tomorrow's launch).
+    func handleDeviceToken(_ data: Data) {
+        let token = data.map { String(format: "%02x", $0) }.joined()
+        guard token != UserDefaults.standard.string(forKey: uploadedTokenKey) else { return }
+        Task { @MainActor in
+            guard let handler = deviceTokenHandler else { return }
+            do {
+                try await handler(token)
+                UserDefaults.standard.set(token, forKey: uploadedTokenKey)
+            } catch {
+                // Retry on the next registration callback.
+            }
+        }
     }
 
     @discardableResult

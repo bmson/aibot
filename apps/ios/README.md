@@ -31,13 +31,21 @@ Long-running turns start a Live Activity automatically. Tool progress updates it
 line, approval waits remain visible in amber, and completed work settles briefly before the activity
 closes. Tapping an attention activity opens the Approvals sheet through `assistant://approvals`.
 
-Notifications are opt-in under Settings. Approval requests carry inline **Approve** / **Deny**
+Notifications are opt-in. Approval requests carry inline **Approve** / **Deny**
 actions (device unlock required) and may banner even while the app is open; routine updates post
 only while the app is inactive, avoiding duplicate banners while the conversation is visible.
-The app icon badge mirrors the pending-approval count. These are device-local notifications for
-turns the app is able to observe. Delivery after the app has been force-quit requires a future
-APNs provider integration and Apple signing credentials; no provider credential is embedded in
-the client.
+The app icon badge mirrors the pending-approval count. Two delivery paths exist:
+
+- **Local notifications**, raised by the app's own polling for turns it can observe while running.
+- **Remote push (APNs)** for proactive notices and approval pings when the app is closed. The app
+  asks once after pairing, registers its device token with `POST /api/mobile/v1/devices`, and the
+  server-side `push` module (gated on `APNS_*` settings) sends the alerts. Tapping a push opens the
+  chat; an approval ping opens the Approvals sheet.
+
+Opt-in background arrival nudges (More → Assistant context) use the coarse significant-change
+location service: iOS wakes the app on ~500m moves, the app posts one throttled ping per wake, and
+the server's arrival gate decides whether a nudge (e.g. lunch picks in a new area) is warranted.
+Requires Always location access, which the app requests only when the toggle is switched on.
 
 ## Connect a deployed server
 

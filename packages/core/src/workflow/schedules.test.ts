@@ -1,5 +1,5 @@
 import { conversations, createDb, type Db, goals, messages, schedules, tasks } from '@assistant/db';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import { loadConfig, resetConfigForTest } from '../config.js';
@@ -9,6 +9,7 @@ import {
   GOAL_SESSION_SUPERSEDED,
   goalAutomationGate,
   goalScheduleName,
+  maybeFireWakeBrief,
   runDueSchedules,
   upsertSchedule,
 } from './schedules.js';
@@ -434,5 +435,151 @@ describe('cancelQueuedGoalWork (integration)', () => {
       .from(tasks)
       .where(eq(tasks.id, mine));
     expect(cancelled?.status).toBe('cancelled');
+  });
+});
+
+describe('maybeFireWakeBrief (integration)', () => {
+  // The function under test owns the single 'morning-brief' row by name, so
+  // the seeded row (when present) is parked for the duration and restored.
+  let parkedBrief: (typeof schedules.$inferSelect)[] = [];
+
+  function localDateString(at: Date): string {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(at);
+  }
+
+  function tzOffsetMs(at: Date): number {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(at);
+    const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+    const asUtc = Date.UTC(
+      get('year'),
+      get('month') - 1,
+      get('day'),
+      get('hour'),
+      get('minute'),
+      get('second'),
+    );
+    return asUtc - Math.floor(at.getTime() / 1000) * 1000;
+  }
+
+  /** The Date that is `hour:minute` on `base`'s calendar day in the agent tz. */
+  function atLocal(hour: number, minute: number, base: Date): Date {
+    const date = localDateString(base);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const guessUtc = Date.parse(`${date}T${pad(hour)}:${pad(minute)}:00Z`);
+    let at = guessUtc - tzOffsetMs(new Date(guessUtc));
+    at = guessUtc - tzOffsetMs(new Date(at));
+    return new Date(at);
+  }
+
+  async function insertBriefSchedule(lastRunAt: Date | null): Promise<void> {
+    await db.insert(schedules).values({
+      agentId,
+      name: 'morning-brief',
+      cron: '30 7 * * *',
+      taskTemplate: { type: 'scheduled', instruction: 'test wake brief' },
+      enabled: true,
+      nextRunAt: atLocal(7, 30, new Date()),
+      ...(lastRunAt ? { lastRunAt } : {}),
+    });
+  }
+
+  async function briefRow() {
+    const [row] = await db
+      .select()
+      .from(schedules)
+      .where(and(eq(schedules.agentId, agentId), eq(schedules.name, 'morning-brief')))
+      .limit(1);
+    return row;
+  }
+
+  beforeAll(async () => {
+    if (!dbUp) return;
+    parkedBrief = await db
+      .select()
+      .from(schedules)
+      .where(and(eq(schedules.agentId, agentId), eq(schedules.name, 'morning-brief')));
+    await db
+      .delete(schedules)
+      .where(and(eq(schedules.agentId, agentId), eq(schedules.name, 'morning-brief')));
+  });
+
+  afterEach(async () => {
+    if (!dbUp) return;
+    await db.delete(tasks).where(sql`${tasks.externalEventId} like 'schedule:%:wake:%'`);
+    await db
+      .delete(schedules)
+      .where(and(eq(schedules.agentId, agentId), eq(schedules.name, 'morning-brief')));
+  });
+
+  afterAll(async () => {
+    if (!dbUp) return;
+    if (parkedBrief.length) await db.insert(schedules).values(parkedBrief);
+  });
+
+  it('fires the brief early on the first morning app-open, then stands down', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const now = atLocal(6, 0, new Date());
+    await insertBriefSchedule(null);
+
+    expect(await maybeFireWakeBrief(db, { id: agentId, timezone }, now)).toBe(true);
+
+    const row = await briefRow();
+    if (!row) throw new Error('wake brief row missing');
+    expect(row.lastRunAt?.getTime()).toBe(now.getTime());
+    // Today's 07:30 instance is skipped — the cron owns tomorrow again.
+    expect(row.nextRunAt?.getTime()).toBe(
+      atLocal(7, 30, new Date(now.getTime() + 86400e3)).getTime(),
+    );
+
+    const [enqueued] = await db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(sql`${tasks.externalEventId} = ${`schedule:${row.id}:wake:${localDateString(now)}`}`);
+    expect(enqueued).toBeDefined();
+
+    // A second open the same morning is a no-op.
+    expect(
+      await maybeFireWakeBrief(db, { id: agentId, timezone }, atLocal(6, 45, new Date())),
+    ).toBe(false);
+  });
+
+  it('leaves the brief to the cron once the scheduled time is reached', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    await insertBriefSchedule(null);
+    expect(await maybeFireWakeBrief(db, { id: agentId, timezone }, atLocal(9, 0, new Date()))).toBe(
+      false,
+    );
+    expect((await briefRow())?.lastRunAt).toBeNull();
+  });
+
+  it('ignores a pre-dawn open', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    await insertBriefSchedule(null);
+    expect(
+      await maybeFireWakeBrief(db, { id: agentId, timezone }, atLocal(2, 30, new Date())),
+    ).toBe(false);
+    expect((await briefRow())?.lastRunAt).toBeNull();
+  });
+
+  it('does not refire when the cron already briefed today', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    await insertBriefSchedule(atLocal(7, 30, new Date()));
+    expect(
+      await maybeFireWakeBrief(db, { id: agentId, timezone }, atLocal(8, 30, new Date())),
+    ).toBe(false);
   });
 });

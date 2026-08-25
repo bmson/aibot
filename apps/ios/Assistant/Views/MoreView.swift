@@ -7,6 +7,7 @@ struct MoreView: View {
     @ObservedObject private var notifications = NotificationManager.shared
     @AppStorage(AssistantAppearance.defaultsKey) private var appearance = AssistantAppearance.dark
     @AppStorage(AppModel.shareLocationKey) private var shareLocation = false
+    @AppStorage(AppModel.shareLocationBackgroundKey) private var shareLocationBackground = false
     @ObservedObject private var locations = LocationManager.shared
     @State private var showingAgentSettings = false
     @State private var settingsActionInFlight: String?
@@ -94,6 +95,9 @@ struct MoreView: View {
                     if on {
                         locations.requestAccess()
                         Task { await model.shareLocationIfEnabled(force: true) }
+                    } else {
+                        shareLocationBackground = false
+                        locations.setBackgroundMonitoring(false)
                     }
                 }
                 if shareLocation && locations.accessDenied {
@@ -104,10 +108,22 @@ struct MoreView: View {
                             .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
                     }
                 }
+                Toggle(isOn: $shareLocationBackground) {
+                    Label("Background arrival nudges", systemImage: "mappin.and.ellipse")
+                }
+                .disabled(!shareLocation)
+                .onChange(of: shareLocationBackground) { _, on in
+                    locations.setBackgroundMonitoring(on)
+                }
+                if shareLocationBackground && !locations.hasAlwaysAccess {
+                    Text("iOS will ask for Always location access; until then, arrivals are noticed only while the app is open.")
+                        .font(.caption)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                }
             } header: {
                 Text("Assistant context")
             } footer: {
-                Text("Sent to your own server as a short-lived current-position ping (kept a few days, never stored as memory) with this iPhone’s time zone. It powers answers like “what can I eat around here?” — never shared with anyone else.")
+                Text("Sent to your own server as a short-lived current-position ping (kept a few days, never stored as memory) with this iPhone’s time zone. It powers answers like “what can I eat around here?” — never shared with anyone else. Background nudges use coarse significant-change updates only, so a move can earn one considered tip (a lunch spot in a new area) — at most a few pings a day.")
             }
 
             // The lower-traffic work areas. The pull-up menu stays at eight

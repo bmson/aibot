@@ -13,7 +13,7 @@ describe('deploymentPlan', () => {
   it('builds every worker image for a full installation', () => {
     const plan = planFor('all');
     expect(plan.workers).toEqual({ browser: true, code: true, processor: true });
-    expect(plan.modules).toHaveLength(8);
+    expect(plan.modules).toHaveLength(9);
   });
 
   it('keeps every worker key present so a disabled module is an explicit false', () => {

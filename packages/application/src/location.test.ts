@@ -1,5 +1,5 @@
-import { createDb, type Db, locationPings } from '@assistant/db';
-import { eq } from 'drizzle-orm';
+import { createDb, type Db, locationPings, tasks } from '@assistant/db';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { recordOwnerLocationPing } from './location.js';
 
@@ -22,6 +22,11 @@ describe('recordOwnerLocationPing (integration)', () => {
 
   afterAll(async () => {
     if (dbUp) await db.delete(locationPings).where(eq(locationPings.source, 'xtest-app'));
+    // The ping ingest path also runs the arrival hook — drop any nudge task
+    // a test ping happened to arm.
+    if (dbUp) {
+      await db.delete(tasks).where(sql`${tasks.externalEventId} like 'arrival:%'`);
+    }
     await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
   });
 

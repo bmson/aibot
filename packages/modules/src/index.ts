@@ -28,6 +28,7 @@ export { googleModule } from './google/module.js';
 export * from './install.js';
 export * from './meta.js';
 export * from './platform.js';
+export { pushModule } from './push/module.js';
 export { remindersModule } from './reminders/module.js';
 export { searchModule } from './search/module.js';
 export {

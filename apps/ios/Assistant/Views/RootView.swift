@@ -114,7 +114,9 @@ struct RootView: View {
             if phase == .active, model.bootstrap != nil {
                 Task {
                     await NotificationManager.shared.refreshAuthorizationStatus()
+                    await NotificationManager.shared.registerForRemoteNotificationsIfAuthorized()
                     await model.refreshAll()
+                    await model.reportForegroundActivity()
                     await model.shareLocationIfEnabled()
                 }
             }

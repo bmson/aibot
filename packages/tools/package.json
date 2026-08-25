@@ -12,6 +12,7 @@
     "./documents": "./src/documents.ts",
     "./mcp": "./src/mcp.ts",
     "./modules/google": "./src/modules/google.ts",
+    "./modules/push": "./src/modules/push.ts",
     "./modules/sms": "./src/modules/sms.ts",
     "./registry": "./src/registry.ts",
     "./reminders": "./src/reminders.ts",

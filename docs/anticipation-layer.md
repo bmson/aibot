@@ -17,6 +17,20 @@ model drafting a suggestion from a watch hit) remains proposed; today's producer
 and its proposals are deterministic rather than model-authored. Phases 3–4 are otherwise unchanged.
 This document is the source of truth for the design.
 
+**Shipped since:** the proactive surfaces grew past the briefing. The `push`
+module (`packages/modules/src/push`) delivers owner notices and approval pings
+over APNs to the iOS app (`POST /api/mobile/v1/devices` registers tokens; the
+module composes into the owner-notifier fan-out next to SMS). A wake-up path
+fires the `morning-brief` schedule early on the first app-open of the day
+(`maybeFireWakeBrief` in `packages/core/src/workflow/schedules.ts`, triggered
+by `POST /api/mobile/v1/activity`). A seeded `tomorrow-check` schedule (19:30)
+looks one day ahead for calendar surprises and dated email obligations. And a
+background location ping can arm the arrival hook
+(`packages/core/src/proactive/arrival.ts`) — somewhere genuinely new, at most
+one nudge per place per day and one per 12 hours overall. All of it obeys the
+same rule as the briefing: proactive work surfaces to the owner (a notice),
+and anything outward still goes through the approval spine.
+
 > **One deliberate deviation from the invariant below.** Forwarded-mail ingest
 > (`EMAIL_INGEST_MODE=forwarded`) lets an email-triggered task create a calendar event with **zero
 > attendees** without an approval, via a predicate form of the `ownerVisibleOnly` flag

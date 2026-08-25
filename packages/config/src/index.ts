@@ -134,6 +134,16 @@ const ConfigSchema = z.object({
   LOCATION_PING_SECRET: z.string().default(''),
   LOCATION_RETENTION_DAYS: z.coerce.number().min(1).max(90).default(3),
   /**
+   * APNs token auth for owner-facing push. All four together enable the push
+   * module; any missing and it stands down. APNS_PRIVATE_KEY is the .p8 file
+   * contents (base64-encoded so it fits one env line).
+   */
+  APNS_KEY_ID: z.string().default(''),
+  APNS_TEAM_ID: z.string().default(''),
+  APNS_PRIVATE_KEY: z.string().default(''),
+  /** The iOS app's bundle id, which is the APNs topic. */
+  APNS_BUNDLE_ID: z.string().default(''),
+  /**
    * Age-based pruning of conversation/tool/model history. 0 (the default)
    * keeps everything forever — deleting history is an owner policy decision,
    * so the platform ships the machinery and leaves the knob off. A positive

@@ -349,6 +349,20 @@ const scheduleSeed = [
     cron: '45 7 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'briefing.compose' },
   },
+  // The evening counterpart to the morning brief: looks at TOMORROW while
+  // there is still time to react — a closed school, a cancelled standing
+  // event, a dated obligation sitting in email but not on the calendar.
+  // Self-silencing like the briefing: routine evenings produce no message.
+  {
+    name: 'tomorrow-check',
+    cron: '30 19 * * *',
+    taskTemplate: {
+      type: 'scheduled',
+      budgetUsdLimit: '0.10',
+      instruction:
+        "Do a short look-ahead at TOMORROW for the owner while there is still time to react tonight. Check: (1) tomorrow's events across every calendar you can read (calendar.list_events) — flag anything unexpected for the day of week: a school day with no school, a holiday or closure, a cancelled recurring event, an unusual gap or a conflict; (2) recent email (gmail.search newer_than:2d) for anything that names tomorrow or the next few days — a deadline, a form due, a pickup, a booking — that is NOT already on the calendar; (3) the ambient weather block when tomorrow involves outdoor plans. If something is genuinely worth knowing tonight, send ONE concise heads-up via owner.notify: what it is, which day it concerns, and the sensible next step. Most evenings tomorrow is routine — then send nothing and finish with an empty reply; no message is the right answer when there is nothing to say.",
+    },
+  },
   {
     name: 'memory-consolidation',
     cron: '30 22 * * *',

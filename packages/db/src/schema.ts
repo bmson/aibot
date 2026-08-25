@@ -1692,6 +1692,37 @@ export const dreamNotes = pgTable(
   (t) => [index('dream_notes_agent_idx').on(t.agentId, t.createdAt)],
 );
 
+// ── Push delivery ────────────────────────────────────────────────────────────
+
+/**
+ * APNs device tokens for the owner's devices, written by the iOS app on launch
+ * (POST /api/mobile/v1/devices) and read by the push module's owner-notifier
+ * leg. A token APNs rejects as Unregistered is marked invalidated in place —
+ * never deleted — so a stale install re-registering later simply revives it.
+ * Carries no content: pushes render the same text the dashboard notice posts.
+ */
+export const deviceTokens = pgTable(
+  'device_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    /** The APNs-issued token for one app install (hex string). */
+    token: text('token').notNull(),
+    platform: text('platform').notNull().default('ios'),
+    /** APNs host the token was minted for; sending to the wrong one fails. */
+    environment: text('environment').notNull().default('production'),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    invalidatedAt: timestamp('invalidated_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('device_tokens_token_idx').on(t.token),
+    index('device_tokens_agent_idx').on(t.agentId),
+  ],
+);
+
 /**
  * Self-maintenance backlog (Phase 21). Code-shaped findings the bot proposes to
  * fix in its OWN repo. Hard fences live in code (see workflow/self-maintenance.ts):

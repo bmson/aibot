@@ -38,6 +38,12 @@
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Your current position is sent to your own assistant server so it can answer nearby questions, like what to eat around you. It is kept only as a short-lived current-location ping and never stored as memory.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Only while "Background arrival nudges" is on: significant moves wake the app so your assistant can notice an arrival (a new city, a neighbourhood at lunchtime) and send one considered tip to your own server. No continuous tracking — a coarse, throttled ping, kept a few days and never stored as memory.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UILaunchScreen</key>

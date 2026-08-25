@@ -12,6 +12,7 @@ export const assistantModuleNames = [
   'code',
   'documents',
   'google',
+  'push',
   'reminders',
   'search',
   'sms',

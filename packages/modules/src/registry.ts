@@ -3,6 +3,7 @@ import { codeMeta } from './code/meta.js';
 import type { ModuleMeta } from './contract.js';
 import { documentsMeta } from './documents/meta.js';
 import { googleMeta } from './google/meta.js';
+import { pushMeta } from './push/meta.js';
 import { remindersMeta } from './reminders/meta.js';
 import { searchMeta } from './search/meta.js';
 import { smsMeta } from './sms/meta.js';
@@ -18,6 +19,7 @@ export const assistantModuleMetas: readonly ModuleMeta[] = [
   codeMeta,
   documentsMeta,
   googleMeta,
+  pushMeta,
   remindersMeta,
   searchMeta,
   smsMeta,

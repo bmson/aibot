@@ -2,26 +2,45 @@ import CoreLocation
 import Foundation
 import UIKit
 
-/// One-shot, on-foreground location capture for the assistant's ambient
-/// context. The phone's position goes to the owner's OWN server as a
-/// transient ping (it ages out with LOCATION_RETENTION_DAYS and never enters
-/// memory) — no continuous tracking, no significant-change monitoring, no
-/// background updates. Hundred-meter accuracy is plenty for "what can I eat
-/// around here" and keeps the fix fast and battery-neutral.
+/// Location for the assistant's ambient context, in two gears:
+///
+/// - Foreground one-shot fixes (`captureCurrentPlace`) — the phone's position
+///   goes to the owner's OWN server as a transient ping (it ages out with
+///   LOCATION_RETENTION_DAYS and never enters memory). Hundred-meter accuracy
+///   is plenty for "what can I eat around here" and keeps the fix fast.
+/// - Background arrival awareness (`setBackgroundMonitoring`) — the
+///   significant-change service wakes the app on ~500m moves so the server can
+///   notice an arrival and consider one nudge. Coarse by design: no continuous
+///   tracking, and pings are throttled below what the service could deliver.
 @MainActor
 final class LocationManager: NSObject, ObservableObject {
     static let shared = LocationManager()
 
     @Published private(set) var authorizationStatus: CLAuthorizationStatus
+    @Published private(set) var backgroundMonitoring = false
+
+    /// Wired by AppModel: post one background ping per wake. The server applies
+    /// its own arrival logic — the app only reports movement.
+    var backgroundHandler: (@MainActor (CLLocation, String) async -> Void)?
 
     private let manager = CLLocationManager()
     private var locationContinuation: CheckedContinuation<CLLocation?, Never>?
+    private let defaults = UserDefaults.standard
+    private let backgroundEnabledKey = "assistant.share-location-background"
+    private let lastBackgroundPostKey = "assistant.background-location-posted"
 
     private override init() {
         authorizationStatus = manager.authorizationStatus
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        // A background relaunch (iOS waking the app for a significant change)
+        // re-runs this init: resume monitoring when the owner left it on.
+        if defaults.bool(forKey: backgroundEnabledKey),
+           manager.authorizationStatus == .authorizedAlways {
+            backgroundMonitoring = true
+            manager.startMonitoringSignificantLocationChanges()
+        }
     }
 
     var isAuthorized: Bool {
@@ -32,8 +51,31 @@ final class LocationManager: NSObject, ObservableObject {
         authorizationStatus == .denied || authorizationStatus == .restricted
     }
 
+    var hasAlwaysAccess: Bool {
+        authorizationStatus == .authorizedAlways
+    }
+
     func requestAccess() {
         manager.requestWhenInUseAuthorization()
+    }
+
+    /// The toggle in More → Assistant context. Enabling asks iOS for Always
+    /// access (the prompt belongs to the intent, never to app launch); without
+    /// it the app keeps foreground-only sharing and says so in the UI.
+    func setBackgroundMonitoring(_ enabled: Bool) {
+        defaults.set(enabled, forKey: backgroundEnabledKey)
+        if enabled {
+            if manager.authorizationStatus != .authorizedAlways {
+                manager.requestAlwaysAuthorization()
+                // Did the owner already decline Always? Keep the honest state.
+                if manager.authorizationStatus != .authorizedAlways { return }
+            }
+            backgroundMonitoring = true
+            manager.startMonitoringSignificantLocationChanges()
+        } else {
+            backgroundMonitoring = false
+            manager.stopMonitoringSignificantLocationChanges()
+        }
     }
 
     /// This app's page in iOS Settings, for recovering from a denied permission.
@@ -74,14 +116,36 @@ extension LocationManager: CLLocationManagerDelegate {
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         Task { @MainActor in
             authorizationStatus = manager.authorizationStatus
+            // A granted Always upgrade completes the pending toggle intent.
+            if defaults.bool(forKey: backgroundEnabledKey),
+               authorizationStatus == .authorizedAlways,
+               !backgroundMonitoring {
+                backgroundMonitoring = true
+                manager.startMonitoringSignificantLocationChanges()
+            }
+            if authorizationStatus != .authorizedAlways, backgroundMonitoring {
+                backgroundMonitoring = false
+                manager.stopMonitoringSignificantLocationChanges()
+            }
         }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         Task { @MainActor in
-            let continuation = locationContinuation
-            locationContinuation = nil
-            continuation?.resume(returning: locations.last)
+            if let continuation = locationContinuation {
+                locationContinuation = nil
+                continuation.resume(returning: locations.last)
+                return
+            }
+            // A significant-change wake: post one ping per wake, throttled so
+            // a day of moving stays a handful of radio hits (and the server's
+            // arrival gate does the real dedupe).
+            guard backgroundMonitoring, let location = locations.last else { return }
+            let lastPost = defaults.double(forKey: lastBackgroundPostKey)
+            guard Date().timeIntervalSince1970 - lastPost > 15 * 60 else { return }
+            defaults.set(Date().timeIntervalSince1970, forKey: lastBackgroundPostKey)
+            let label = await reverseGeocodeLabel(for: location)
+            await backgroundHandler?(location, label)
         }
     }
 
