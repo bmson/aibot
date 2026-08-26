@@ -230,6 +230,14 @@ const ConfigSchema = z.object({
   CHAT_RECALL_ENABLED: booleanString,
   /** Explicit opt-in: graph-backed personal-memory recall, layered over chat recall. */
   GRAPH_RAG_ENABLED: booleanString,
+  /**
+   * Source memories the offline graph sync extracts per run. This, not the
+   * budget, is what actually paces a backfill: at two runs an hour the default
+   * drains ~1,200 sources a day, well inside the run's own task cap. Raise it
+   * to clear a backlog sooner and lower it again afterwards; the per-run budget
+   * stays the safety net either way, since exhausting it ends the batch.
+   */
+  GRAPH_SYNC_BATCH_LIMIT: z.coerce.number().int().min(1).max(500).default(25),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

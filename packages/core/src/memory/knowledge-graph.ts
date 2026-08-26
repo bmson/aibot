@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { loadConfig } from '@assistant/config';
 import {
   contacts,
   type Db,
@@ -8,8 +9,9 @@ import {
   knowledgeGraphRelations,
   knowledgeGraphSources,
   memories,
+  modelCalls,
 } from '@assistant/db';
-import { and, eq, gt, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getAgent } from '../chat.js';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
@@ -72,6 +74,11 @@ export interface GraphSyncResult {
   quarantined: number;
 }
 
+/**
+ * Fallback batch size when nothing is configured. `GRAPH_SYNC_BATCH_LIMIT` is
+ * the real control; this keeps callers that construct a sync without a parsed
+ * config (tests, one-off scripts) on the documented default.
+ */
 const DEFAULT_LIMIT = 25;
 /** Version 2 requires a directly quoted predicate proof for every extracted edge. */
 export const GRAPH_EXTRACTION_VERSION = 2;
@@ -100,6 +107,18 @@ interface ContactLite {
   id: string;
   name: string;
   aliases: string[];
+}
+
+/**
+ * Batch size for one sync run. Read per run rather than captured at module load
+ * so a deployment can widen a backfill and narrow it again without a rebuild.
+ */
+function graphSyncBatchLimit(): number {
+  try {
+    return loadConfig().GRAPH_SYNC_BATCH_LIMIT;
+  } catch {
+    return DEFAULT_LIMIT;
+  }
 }
 
 function normalized(value: string): string {
@@ -557,7 +576,7 @@ export async function syncKnowledgeGraph(
   deps: { db: Db; router: ModelRouter },
   options: GraphSyncOptions = {},
 ): Promise<GraphSyncResult> {
-  const limit = options.limit ?? DEFAULT_LIMIT;
+  const limit = options.limit ?? graphSyncBatchLimit();
   const { db, router } = deps;
   return withSpan('memory.graph_sync', { limit, agentId: options.agentId ?? 'all' }, async () => {
     await hydrateContactLabels(db);
@@ -739,6 +758,38 @@ export async function createOwnerKnowledgeGraphFact(
     { status: 'ready', lastError: null },
   );
   return { memoryId: memory.id, relationId: relation?.id };
+}
+
+/**
+ * What one graph-sync run actually spent, from the authoritative per-call cost
+ * the router records. The job summary reported how much work it did but never
+ * what it cost, which left the only observable answer to "what is this backfill
+ * charging me?" on the costs page, disconnected from the backlog driving it.
+ */
+export async function graphSyncSpendUsd(db: Db, taskId: string): Promise<number> {
+  const [row] = await db
+    .select({ value: sql<string>`COALESCE(SUM(${modelCalls.costUsd}), 0)` })
+    .from(modelCalls)
+    .where(eq(modelCalls.taskId, taskId));
+  return Number(row?.value ?? 0);
+}
+
+/**
+ * Mean cost of one extraction, measured rather than assumed. A hardcoded
+ * constant would silently lie the moment the `extract` role is pointed at a
+ * different model; this self-calibrates. Returns null until there is enough
+ * history to say anything, so callers can decline to guess.
+ */
+export async function meanExtractionCostUsd(db: Db, sample = 200): Promise<number | null> {
+  const rows = await db
+    .select({ cost: modelCalls.costUsd })
+    .from(modelCalls)
+    .where(eq(modelCalls.role, 'extract'))
+    .orderBy(desc(modelCalls.createdAt))
+    .limit(sample);
+  if (rows.length < 10) return null;
+  const total = rows.reduce((sum, row) => sum + Number(row.cost), 0);
+  return total > 0 ? total / rows.length : null;
 }
 
 /** Returns whether there are source memories still waiting to be graph-indexed. */

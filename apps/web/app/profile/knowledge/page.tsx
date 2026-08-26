@@ -23,7 +23,7 @@ import { AddKnowledgeRelation } from '@/app/profile/knowledge/add-relation';
 import { MergeEntity, RenameEntity } from '@/app/profile/knowledge/entity-forms';
 import { LocalMap, type LocalMapEdge } from '@/app/profile/knowledge/local-map';
 import { requireOwner } from '@/auth';
-import { formatFriendlyDateTime, relativeTime } from '@/lib/format';
+import { formatFriendlyDateTime, formatUsd, relativeTime } from '@/lib/format';
 import { entityKindLabel, humanizePredicate } from '@/lib/knowledge';
 import { getDb } from '@/lib/server';
 import {
@@ -52,6 +52,18 @@ function hrefFor(opts: { q?: string; entity?: string; page?: number }): string {
   if (opts.page && opts.page > 1) params.set('page', String(opts.page));
   const search = params.toString();
   return search ? `/profile/knowledge?${search}` : '/profile/knowledge';
+}
+
+/**
+ * The sync runs twice an hour, so a backlog is more legible as elapsed time
+ * than as a run count once it stops being a handful of runs.
+ */
+function drainLabel(runs: number): string {
+  if (runs <= 1) return 'one sync run';
+  const hours = runs / 2;
+  if (hours < 1.5) return `${runs} sync runs`;
+  if (hours < 48) return `${Math.round(hours)} hours`;
+  return `${Math.round(hours / 24)} days`;
 }
 
 function relationTone(status: KnowledgeGraphRelationView['reviewStatus']) {
@@ -214,6 +226,20 @@ export default async function KnowledgeReviewPage({
           <p className="mt-1 text-xs text-muted">
             waiting · {graph.quarantinedSources.toLocaleString()} paused
           </p>
+          {/* The backlog drains through a metered model call per source, so the
+              count alone does not say what it will cost. Priced from recent
+              actuals; omitted rather than guessed when history is too thin. */}
+          {graph.pendingSources > 0 ? (
+            <p className="mt-1 text-xs text-muted">
+              {graph.pendingCostUsd === null
+                ? `about ${graph.pendingRuns.toLocaleString()} sync run${
+                    graph.pendingRuns === 1 ? '' : 's'
+                  } to clear`
+                : `~${formatUsd(String(graph.pendingCostUsd))} to clear, about ${drainLabel(
+                    graph.pendingRuns,
+                  )}`}
+            </p>
+          ) : null}
           {graph.quarantinedSources > 0 ? (
             <form action={retryQuarantinedKnowledgeSources} className="mt-3">
               <SubmitButton size="sm" pendingLabel="Queueing…">

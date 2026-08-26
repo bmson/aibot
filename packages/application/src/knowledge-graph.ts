@@ -1,8 +1,10 @@
+import { loadConfig } from '@assistant/config';
 import { getAgent } from '@assistant/core/chat';
 import {
   createOwnerKnowledgeGraphFact,
   GRAPH_ENTITY_KINDS,
   type GraphEntityKind,
+  meanExtractionCostUsd,
   retryQuarantinedKnowledgeGraphSources as retryQuarantinedSources,
 } from '@assistant/core/memory/knowledge-graph';
 import {
@@ -60,6 +62,14 @@ export interface KnowledgeGraphOverview {
   unreviewedRelations: number;
   pendingSources: number;
   quarantinedSources: number;
+  /**
+   * What the pending backlog is expected to cost to extract, priced from recent
+   * actuals, and roughly how long it takes to drain at the configured batch
+   * size. Null when there is too little history to price honestly — a guess
+   * dressed as a number is worse than no number.
+   */
+  pendingCostUsd: number | null;
+  pendingRuns: number;
   entities: KnowledgeGraphEntityView[];
   /** Entities matching the current search — the true count, not the page size. */
   matchingEntities: number;
@@ -188,6 +198,11 @@ export async function getKnowledgeGraphOverview(
       .where(and(eq(memories.agentId, agent.id), eq(knowledgeGraphSources.status, 'quarantined'))),
   ]);
   const entities = entityRows.map((row) => ({ ...row }));
+  const pending = Number(pendingSources?.value ?? 0);
+  const meanCost = pending > 0 ? await meanExtractionCostUsd(db) : null;
+  const pendingCostUsd = meanCost === null ? null : pending * meanCost;
+  const batchLimit = loadConfig().GRAPH_SYNC_BATCH_LIMIT;
+  const pendingRuns = Math.ceil(pending / batchLimit);
   const requestedId = input.entityId && UUID_RE.test(input.entityId) ? input.entityId : null;
   const selected =
     (requestedId
@@ -216,8 +231,10 @@ export async function getKnowledgeGraphOverview(
       totalEntities: Number(entityTotal?.value ?? 0),
       totalRelations: Number(relationTotal?.value ?? 0),
       unreviewedRelations: Number(unreviewedTotal?.value ?? 0),
-      pendingSources: Number(pendingSources?.value ?? 0),
+      pendingSources: pending,
       quarantinedSources: Number(quarantinedSources?.value ?? 0),
+      pendingCostUsd,
+      pendingRuns,
       entities,
       matchingEntities,
       entityPage,
@@ -305,8 +322,10 @@ export async function getKnowledgeGraphOverview(
     totalEntities: Number(entityTotal?.value ?? 0),
     totalRelations: Number(relationTotal?.value ?? 0),
     unreviewedRelations: Number(unreviewedTotal?.value ?? 0),
-    pendingSources: Number(pendingSources?.value ?? 0),
+    pendingSources: pending,
     quarantinedSources: Number(quarantinedSources?.value ?? 0),
+    pendingCostUsd,
+    pendingRuns,
     entities,
     matchingEntities,
     entityPage,

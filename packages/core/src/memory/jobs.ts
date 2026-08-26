@@ -16,7 +16,11 @@ import { runDocumentExtraction } from './documents.js';
 import { pendingEmailExtractionCount, runEmailIngestExtraction } from './email-extraction.js';
 import { runMemoryExtraction } from './extraction.js';
 import { runImportJob, type WorkspaceReader } from './import.js';
-import { pendingKnowledgeGraphSourceCount, syncKnowledgeGraph } from './knowledge-graph.js';
+import {
+  graphSyncSpendUsd,
+  pendingKnowledgeGraphSourceCount,
+  syncKnowledgeGraph,
+} from './knowledge-graph.js';
 import { segmentConversations } from './segmentation.js';
 import { runSkillReflection } from './skill-reflect.js';
 import { runVoiceIngest } from './voice-ingest.js';
@@ -166,12 +170,16 @@ export async function runCodeJob(
         agentId: task.agentId,
         heartbeat: deps.heartbeat,
       });
-      const pending = await pendingKnowledgeGraphSourceCount(deps.db, task.agentId);
+      const [pending, spentUsd] = await Promise.all([
+        pendingKnowledgeGraphSourceCount(deps.db, task.agentId),
+        graphSyncSpendUsd(deps.db, task.id),
+      ]);
       return {
         done: true,
         summary:
           `knowledge graph: ${r.relationships} relation(s) from ${r.processed}/${r.candidates} source(s), ` +
-          `${r.failed} retrying, ${r.quarantined} quarantined, ${pending} pending`,
+          `${r.failed} retrying, ${r.quarantined} quarantined, ${pending} pending, ` +
+          `$${spentUsd.toFixed(4)} spent`,
       };
     }
     case 'chat.segment': {
