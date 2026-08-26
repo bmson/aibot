@@ -21,7 +21,12 @@ const createdTaskIds: string[] = [];
 /** Extraction with no extractable conversations returns empty — the fake never gets called for facts. */
 const fakeRouter = {
   async object() {
-    return { ok: true, modelId: 'fake', degraded: false, object: { facts: [] } };
+    return {
+      ok: true,
+      modelId: 'fake',
+      degraded: false,
+      object: { facts: [], commitments: [], resolvedTitles: [] },
+    };
   },
   async embed(texts: string[]) {
     return texts.map(() => new Array(1536).fill(0.01));
