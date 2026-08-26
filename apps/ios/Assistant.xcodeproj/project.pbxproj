@@ -16,6 +16,7 @@
 		B00000000000000000000007 /* Components/CompanionCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000007 /* Components/CompanionCapsule.swift */; };
 		B00000000000000000000008 /* Components/StatusPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000008 /* Components/StatusPill.swift */; };
 		B00000000000000000000009 /* Components/MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000009 /* Components/MessageBubble.swift */; };
+		B00000000000000000000052 /* Components/OnDeviceCardParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000053 /* Components/OnDeviceCardParser.swift */; };
 		B0000000000000000000000A /* Views/RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000A /* Views/RootView.swift */; };
 		B0000000000000000000000B /* Views/ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000B /* Views/ChatView.swift */; };
 		B0000000000000000000000C /* Views/ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000C /* Views/ActivityView.swift */; };
@@ -80,6 +81,7 @@
 		C00000000000000000000007 /* Components/CompanionCapsule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/CompanionCapsule.swift; sourceTree = "<group>"; };
 		C00000000000000000000008 /* Components/StatusPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/StatusPill.swift; sourceTree = "<group>"; };
 		C00000000000000000000009 /* Components/MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/MessageBubble.swift; sourceTree = "<group>"; };
+		C00000000000000000000053 /* Components/OnDeviceCardParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/OnDeviceCardParser.swift; sourceTree = "<group>"; };
 		C0000000000000000000000A /* Views/RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/RootView.swift; sourceTree = "<group>"; };
 		C0000000000000000000000B /* Views/ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ChatView.swift; sourceTree = "<group>"; };
 		C0000000000000000000000C /* Views/ActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ActivityView.swift; sourceTree = "<group>"; };
@@ -170,6 +172,7 @@
 				C00000000000000000000024 /* Components/ChatDashboard.swift */,
 				C00000000000000000000008 /* Components/StatusPill.swift */,
 				C00000000000000000000009 /* Components/MessageBubble.swift */,
+				C00000000000000000000053 /* Components/OnDeviceCardParser.swift */,
 				C0000000000000000000000A /* Views/RootView.swift */,
 				C0000000000000000000000B /* Views/ChatView.swift */,
 				C0000000000000000000000C /* Views/ActivityView.swift */,
@@ -348,6 +351,7 @@
 				B0000000000000000000001B /* Components/ChatDashboard.swift in Sources */,
 				B00000000000000000000008 /* Components/StatusPill.swift in Sources */,
 				B00000000000000000000009 /* Components/MessageBubble.swift in Sources */,
+				B00000000000000000000052 /* Components/OnDeviceCardParser.swift in Sources */,
 				B0000000000000000000000A /* Views/RootView.swift in Sources */,
 				B0000000000000000000000B /* Views/ChatView.swift in Sources */,
 				B0000000000000000000000C /* Views/ActivityView.swift in Sources */,
@@ -438,7 +442,7 @@
 				DEVELOPMENT_TEAM = LY7X52447Z;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Assistant/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -465,7 +469,7 @@
 				DEVELOPMENT_TEAM = LY7X52447Z;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Assistant/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -487,7 +491,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
@@ -502,7 +506,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.baldvinsmarason.assistant.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
@@ -520,7 +524,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AssistantActivityExtension/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../../Frameworks",
@@ -545,7 +549,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AssistantActivityExtension/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../../Frameworks",

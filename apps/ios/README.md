@@ -23,7 +23,9 @@ Open findings on the visual and interaction layer are tracked in
 4. Connect to `http://localhost:3000`. With source development's explicit `AUTH_DEV_BYPASS=true`,
    the access-key field can remain empty.
 
-The project targets iOS 18 and contains no third-party iOS dependencies.
+The project targets iOS 26 and uses Apple Foundation Models for an optional
+on-device card-relevance pass on supported devices. It contains no third-party
+iOS dependencies.
 
 ## System surfaces
 

@@ -371,6 +371,19 @@ final class APIModelsTests: XCTestCase {
         XCTAssertTrue(MessageResponseCard.inferred(from: "The answer has 45 lines.").isEmpty)
     }
 
+    func testDirectionsPromptDoesNotEnableIncidentalWeatherCardFallback() {
+        let directions = "Directions to Palo Alto field"
+        let response = """
+        Here are directions to Mayfield Soccer Complex.
+        **Parking:** Free lot on-site.
+        (Weather reminder: Sunny, 22°C (72°F) at match time.)
+        """
+
+        XCTAssertFalse(MessageResponseCard.requestLooksLikeWeather(directions))
+        XCTAssertTrue(MessageResponseCard.inferred(from: response, cardKind: "weather").isEmpty == false)
+        XCTAssertFalse(OnDeviceCardParser.requestAllows(kind: "weather", request: directions))
+    }
+
     func testWeatherCardInferenceUsesMarkdownConditionsInsteadOfRainChance() {
         let weather = MessageResponseCard.inferred(
             from: """

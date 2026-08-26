@@ -3,8 +3,11 @@ import UIKit
 
 struct MessageBubble: View {
     let message: ChatMessage
+    let userPrompt: String?
     let isStreaming: Bool
     let openApprovals: () -> Void
+
+    @State private var onDeviceCardAnalysis: OnDeviceCardAnalysis?
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -47,6 +50,19 @@ struct MessageBubble: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
+        .task(id: "\(message.id)-\(isStreaming)") {
+            onDeviceCardAnalysis = nil
+            guard message.role == .assistant,
+                  !isStreaming,
+                  message.parts.compactMap(MessageResponseCard.init(part:)).isEmpty,
+                  let userPrompt,
+                  MessageResponseCard.hasCardSignals(in: message.text) else { return }
+            guard #available(iOS 26.0, *) else { return }
+            onDeviceCardAnalysis = await OnDeviceCardParser.analyze(
+                request: userPrompt,
+                response: message.text
+            )
+        }
     }
 
     @ViewBuilder
@@ -225,7 +241,22 @@ struct MessageBubble: View {
 
     private var responseCards: [MessageResponseCard] {
         let explicit = message.parts.compactMap(MessageResponseCard.init(part:))
-        return explicit.isEmpty ? MessageResponseCard.inferred(from: message.text) : explicit
+        guard explicit.isEmpty else { return explicit }
+
+        if #available(iOS 26.0, *),
+           let analysis = onDeviceCardAnalysis,
+           let userPrompt,
+           OnDeviceCardParser.accepts(analysis, request: userPrompt, response: message.text) {
+            return MessageResponseCard.inferred(from: message.text, cardKind: analysis.cardKind)
+        }
+
+        // The deterministic fallback is intentionally request-gated. This
+        // keeps older/plain-text weather answers usable without allowing a
+        // directions response containing a weather reminder to become a
+        // weather card.
+        guard let userPrompt,
+              MessageResponseCard.requestLooksLikeWeather(userPrompt) else { return [] }
+        return MessageResponseCard.inferred(from: message.text, cardKind: "weather")
     }
 
     private var usesPrimaryCards: Bool {
@@ -658,13 +689,44 @@ enum MessageResponseCard: Identifiable {
         }
     }
 
-    static func inferred(from text: String) -> [Self] {
+    static func inferred(from text: String, cardKind: String? = nil) -> [Self] {
         let lower = text.lowercased()
-        if let agenda = inferredAgenda(text, lower: lower) { return [agenda] }
-        let weather = inferredWeather(text, lower: lower)
-        if !weather.isEmpty { return weather }
-        if let duration = inferredDuration(text, lower: lower) { return [duration] }
+        if cardKind == nil || normalizedCardKind(cardKind) == "agenda" {
+            if let agenda = inferredAgenda(text, lower: lower) { return [agenda] }
+        }
+        if cardKind == nil || normalizedCardKind(cardKind) == "weather" {
+            let weather = inferredWeather(text, lower: lower)
+            if !weather.isEmpty { return weather }
+        }
+        if cardKind == nil || normalizedCardKind(cardKind) == "duration" {
+            if let duration = inferredDuration(text, lower: lower) { return [duration] }
+        }
         return []
+    }
+
+    static func hasCardSignals(in text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.range(of: #"-?\d{1,3}\s*[°º]?[cf]\b"#, options: .regularExpression) != nil
+            || lower.range(of: #"\b\d+(?:\.\d+)?\s*(?:minutes?|mins?|hours?|hrs?|days?)\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+            || lower.contains("calendar")
+            || lower.contains("agenda")
+            || lower.contains("schedule")
+    }
+
+    static func requestLooksLikeWeather(_ request: String) -> Bool {
+        let lower = request.lowercased()
+        return ["weather", "forecast", "temperature", "rain", "sunny", "cloudy", "snow"].contains {
+            lower.contains($0)
+        }
+    }
+
+    private static func normalizedCardKind(_ value: String?) -> String {
+        switch value?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "weather", "forecast", "temperature": return "weather"
+        case "agenda", "calendar", "schedule": return "agenda"
+        case "duration", "time-estimate", "time estimate": return "duration"
+        default: return "none"
+        }
     }
 
     private static func inferredAgenda(_ text: String, lower: String) -> Self? {

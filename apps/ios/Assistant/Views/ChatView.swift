@@ -591,6 +591,7 @@ struct ChatView: View {
         // pixels at the clipped edges instead, which works for any height.
         MessageBubble(
             message: message,
+            userPrompt: model.messages[..<index].reversed().first(where: { $0.role == .user })?.text,
             isStreaming: message.id.hasPrefix("stream-") && model.isSending,
             openApprovals: { model.present(.approvals) }
         )
