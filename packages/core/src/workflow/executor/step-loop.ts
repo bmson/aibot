@@ -150,6 +150,24 @@ function assistantText(content: unknown): string {
     .trim();
 }
 
+/**
+ * Progress for a step-capped task must come from THIS owner turn. Looking at
+ * the last assistant line in the whole compacted conversation can pick up the
+ * preceding task's own "I stopped..." notice, wrap it in another stop notice,
+ * and recursively grow the transcript on every retry.
+ */
+export function latestCurrentTaskAssistantText(window: ModelMessage[]): string {
+  const lastUserIndex = window.findLastIndex((message) => message.role === 'user');
+  if (lastUserIndex < 0) return '';
+  return (
+    window
+      .slice(lastUserIndex + 1)
+      .reverse()
+      .map((message) => (message.role === 'assistant' ? assistantText(message.content) : ''))
+      .find(Boolean) ?? ''
+  );
+}
+
 export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<ExecuteResult> {
   const { deps, db, router, dispatcher, task, agent, state, ctx, artifactIntent } = rc;
   const lease = task;
@@ -1149,16 +1167,13 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // The scratchpad is only written by mission.update, so for every other task
   // type the best available summary is the model's own last words. "See task
   // log" is the worst possible message at the moment the owner most needs one.
-  const lastAssistantText = [...rc.window]
-    .reverse()
-    .map((message) => (message.role === 'assistant' ? assistantText(message.content) : ''))
-    .find(Boolean);
+  const lastAssistantText = latestCurrentTaskAssistantText(rc.window);
   const lastProgress =
     state.scratchpad ||
     (lastAssistantText
       ? lastAssistantText.slice(0, 400)
-      : 'no summary was recorded — the step-by-step record is on the task page.');
-  const stuckMessage = `I ${stuck}. Here's where I got: ${lastProgress}`;
+      : "I didn't get far enough to record a useful result.");
+  const stuckMessage = `I ${stuck}. Here's where I got:\n\n${lastProgress}`;
   if (isUnattendedGoalSession(task)) {
     const goalToolEvidence = await db
       .select({

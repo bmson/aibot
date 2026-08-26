@@ -123,8 +123,106 @@ function detailValue(value: unknown): string {
  * Accepts the base row shape: listMessages rows carry an extra microsecond
  * cursor column that UI mapping has no use for.
  */
-function toUiMessages(rows: (typeof messages.$inferSelect)[]): UIMessage[] {
-  return rows
+type PersistedMessage = typeof messages.$inferSelect;
+
+function persistedParts(row: PersistedMessage): unknown[] {
+  return Array.isArray(row.parts) ? row.parts : [];
+}
+
+function hasPart(row: PersistedMessage, type: string): boolean {
+  return persistedParts(row).some(
+    (part) =>
+      Boolean(part) && typeof part === 'object' && (part as { type?: unknown }).type === type,
+  );
+}
+
+function noticeMarker(row: PersistedMessage): string | undefined {
+  for (const part of persistedParts(row)) {
+    if (!part || typeof part !== 'object') continue;
+    const value = part as { type?: unknown; notice?: unknown };
+    if (value.type === 'notice' && typeof value.notice === 'string') return value.notice;
+  }
+  return undefined;
+}
+
+function approvalIds(row: PersistedMessage): string[] {
+  return persistedParts(row)
+    .filter(isApprovalPart)
+    .map((part) => part.approvalId)
+    .sort();
+}
+
+/**
+ * Runtime notices are state projections, not separate conversational turns.
+ * Older workers could write one into the task's thread and then mirror a
+ * second prose copy into that same primary thread. A crash between write and
+ * stamp could also re-emit the same task state. Keep the richest, newest row
+ * for each runtime state family while leaving ordinary repeated conversation
+ * untouched.
+ */
+export function collapseRuntimeMessageDuplicates<T extends PersistedMessage>(rows: T[]): T[] {
+  const structuredApprovalTasks = new Set(
+    rows.filter((row) => row.taskId && hasPart(row, 'approval')).map((row) => row.taskId as string),
+  );
+  const dropped = new Set<string>();
+  const families = new Map<string, T[]>();
+
+  for (const row of rows) {
+    if (!row.taskId || row.role !== 'assistant') continue;
+    const text = row.text.trim();
+    if (
+      structuredApprovalTasks.has(row.taskId) &&
+      (text.startsWith('Something needs your approval:') ||
+        /^\d+ things need your approval:/u.test(text))
+    ) {
+      dropped.add(row.id);
+      continue;
+    }
+
+    const approvalsInRow = approvalIds(row);
+    const marker = noticeMarker(row);
+    let family: string | undefined;
+    if (approvalsInRow.length > 0) family = `approval:${approvalsInRow.join(',')}`;
+    else if (hasPart(row, 'budget-request')) family = 'budget-request';
+    else if (marker === 'parked' || marker === 'needs-attention') family = marker;
+    else if (
+      text.startsWith("I couldn't complete this after repeated attempts and stopped.") ||
+      text.startsWith('A task stopped and needs you')
+    ) {
+      family = 'needs-attention';
+    }
+    if (!family) continue;
+    const key = `${row.taskId}:${family}`;
+    const group = families.get(key) ?? [];
+    group.push(row);
+    families.set(key, group);
+  }
+
+  const kept = new Set<string>();
+  for (const group of families.values()) {
+    // Prefer a structured state row over its dashboard prose mirror, then the
+    // newest structured row when a later retry changed the details.
+    const structured = group.filter(
+      (row) =>
+        noticeMarker(row) !== undefined ||
+        hasPart(row, 'approval') ||
+        hasPart(row, 'budget-request'),
+    );
+    const candidates = structured.length > 0 ? structured : group;
+    const winner = candidates.reduce((latest, row) =>
+      row.createdAt > latest.createdAt ? row : latest,
+    );
+    kept.add(winner.id);
+    for (const row of group) {
+      if (row.id !== winner.id) dropped.add(row.id);
+    }
+  }
+
+  return rows.filter((row) => !dropped.has(row.id) || kept.has(row.id));
+}
+
+function toUiMessages(rows: PersistedMessage[]): UIMessage[] {
+  return collapseRuntimeMessageDuplicates(rows)
     .filter((row) => row.role === 'user' || row.role === 'assistant')
     .map((row) => ({
       id: row.id,

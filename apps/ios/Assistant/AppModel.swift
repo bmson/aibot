@@ -1137,7 +1137,8 @@ final class AppModel: ObservableObject {
                 let updates = try await client.updates(
                     conversationId: conversationId,
                     taskId: taskId,
-                    cursor: cursor
+                    cursor: cursor,
+                    refreshIds: unresolvedDecisionMessageIDs
                 )
                 let assistantBefore = messages.filter { !$0.id.hasPrefix("stream-") && $0.role == .assistant }.count
                 merge(updates.messages)
@@ -1245,7 +1246,8 @@ final class AppModel: ObservableObject {
                 if let updates = try? await client.updates(
                     conversationId: conversationId,
                     taskId: nil,
-                    cursor: self.cursor
+                    cursor: self.cursor,
+                    refreshIds: self.unresolvedDecisionMessageIDs
                 ) {
                     let assistantBefore = self.messages.filter { $0.role == .assistant }.count
                     self.merge(updates.messages)
@@ -1263,6 +1265,17 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Decision state lives in approvals/tasks rather than in the persisted
+    /// message row. Re-read the newest visible cards during ordinary polling
+    /// so a decision made on desktop changes into a receipt on the phone
+    /// without requiring a reload.
+    private var unresolvedDecisionMessageIDs: [String] {
+        messages.reversed()
+            .filter(\.hasPendingDecision)
+            .prefix(10)
+            .map(\.id)
     }
 
     private func notifyOnce(key: String, title: String, body: String, route: AssistantRoute?, approvalId: String? = nil) async -> Bool {

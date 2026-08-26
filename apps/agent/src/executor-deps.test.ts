@@ -1,7 +1,7 @@
 import type { TaskRow } from '@assistant/db';
 import type { InstalledModuleSet, ModuleChannel } from '@assistant/modules';
 import { describe, expect, it } from 'vitest';
-import type { AgentDeps } from './deps.js';
+import { type AgentDeps, shouldMirrorIntoPrimary } from './deps.js';
 import { approvalNoticeEmail, executorDeps } from './executor-deps.js';
 
 describe('approvalNoticeEmail', () => {
@@ -35,6 +35,17 @@ describe('approvalNoticeEmail', () => {
     ]);
     expect(many).toContain('[A8] first');
     expect(many).toContain('[A9] second');
+  });
+});
+
+describe('dashboard notice mirroring', () => {
+  it('does not mirror a notice back into the primary conversation that already owns it', () => {
+    expect(shouldMirrorIntoPrimary('primary-chat', 'primary-chat')).toBe(false);
+  });
+
+  it('still mirrors background and work-thread notices into the primary conversation', () => {
+    expect(shouldMirrorIntoPrimary('work-chat', 'primary-chat')).toBe(true);
+    expect(shouldMirrorIntoPrimary(null, 'primary-chat')).toBe(true);
   });
 });
 

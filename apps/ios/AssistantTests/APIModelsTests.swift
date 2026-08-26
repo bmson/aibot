@@ -84,6 +84,39 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(message.text, "Hello")
     }
 
+    func testDecisionMessageUsesOnlyItsStructuredCardAndTracksResolution() throws {
+        let pendingData = """
+        {"id":"approval-message","role":"assistant","parts":[
+          {"type":"text","text":"This needs your approval before I act: A7"},
+          {"type":"approval","approvalId":"approval-1","shortCode":"A7","summary":"Search the web","status":"pending"}
+        ]}
+        """.data(using: .utf8)!
+        let pending = try JSONDecoder().decode(ChatMessage.self, from: pendingData)
+        XCTAssertEqual(pending.decisionParts.count, 1)
+        XCTAssertTrue(pending.visibleTextBubbles.isEmpty)
+        XCTAssertTrue(pending.hasPendingDecision)
+
+        let approvedData = """
+        {"id":"approval-message","role":"assistant","parts":[
+          {"type":"text","text":"This needs your approval before I act: A7"},
+          {"type":"approval","approvalId":"approval-1","shortCode":"A7","summary":"Search the web","status":"approved"}
+        ]}
+        """.data(using: .utf8)!
+        let approved = try JSONDecoder().decode(ChatMessage.self, from: approvedData)
+        XCTAssertFalse(approved.hasPendingDecision)
+    }
+
+    func testStructuredTaskNoticeDecodesForCardPresentation() throws {
+        let data = """
+        {"id":"notice-1","role":"assistant","parts":[
+          {"type":"text","text":"The task stopped."},
+          {"type":"notice","notice":"needs-attention"}
+        ]}
+        """.data(using: .utf8)!
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        XCTAssertEqual(message.noticeKind, .needsAttention)
+    }
+
     func testKnowledgeGraphRecallProvenanceDecodesFromMessageParts() throws {
         let data = """
         {"id":"reply-1","role":"assistant","parts":[

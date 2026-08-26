@@ -24,7 +24,12 @@ struct MessageBubble: View {
         // stream: a one-word message gets the same width as a paragraph
         // rather than shrink-wrapping its text.
         VStack(alignment: .leading, spacing: 8) {
-            if !message.text.isEmpty && !usesPrimaryCards {
+            if let noticeKind = message.noticeKind,
+               message.role == .assistant,
+               decisionParts.isEmpty,
+               !message.text.isEmpty {
+                noticeCard(noticeKind, text: message.text)
+            } else if !message.text.isEmpty && !usesPrimaryCards && !message.visibleTextBubbles.isEmpty {
                 messageText
                 if message.role == .assistant, !message.recallSources.isEmpty {
                     recallNote
@@ -38,10 +43,14 @@ struct MessageBubble: View {
 
             ForEach(decisionParts.indices, id: \.self) { index in
                 let part = decisionParts[index]
-                Button(action: openApprovals) {
-                    decisionCard(part)
+                if isPendingDecision(part) {
+                    Button(action: openApprovals) {
+                        decisionCard(part)
+                    }
+                    .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.985))
+                } else {
+                    settledDecisionReceipt(part)
                 }
-                .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.985))
             }
 
             if message.role == .assistant, !responseCards.isEmpty {
@@ -54,6 +63,8 @@ struct MessageBubble: View {
             onDeviceCardAnalysis = nil
             guard message.role == .assistant,
                   !isStreaming,
+                  message.noticeKind == nil,
+                  message.decisionParts.isEmpty,
                   message.parts.compactMap(MessageResponseCard.init(part:)).isEmpty,
                   let userPrompt,
                   MessageResponseCard.hasCardSignals(in: message.text) else { return }
@@ -71,7 +82,7 @@ struct MessageBubble: View {
             // A reply split by [break] cues stacks as separate sheets, the way
             // separate texts from a person stack — one paper bubble per text
             // part, copy still takes the whole reply.
-            ForEach(Array(message.textBubbles.enumerated()), id: \.offset) { _, bubble in
+            ForEach(Array(message.visibleTextBubbles.enumerated()), id: \.offset) { _, bubble in
                 assistantBubble(bubble)
             }
         } else {
@@ -236,7 +247,7 @@ struct MessageBubble: View {
     }
 
     private var decisionParts: [MessagePart] {
-        message.parts.filter { ["approval", "budget-request"].contains($0.type) }
+        message.decisionParts
     }
 
     private var responseCards: [MessageResponseCard] {
@@ -323,6 +334,145 @@ struct MessageBubble: View {
                         .opacity(colorSchemeContrast == .increased ? 0.58 : 0.3),
                     lineWidth: colorSchemeContrast == .increased ? 1.2 : 1
                 )
+        }
+    }
+
+    private func isPendingDecision(_ part: MessagePart) -> Bool {
+        part.status == nil || part.status == "pending" || part.status == "snoozed"
+    }
+
+    private func settledDecisionReceipt(_ part: MessagePart) -> some View {
+        let presentation = settledDecisionPresentation(part)
+        return HStack(alignment: .top, spacing: 11) {
+            Image(systemName: presentation.symbol)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(presentation.tint)
+                .frame(width: 34, height: 34)
+                .background(
+                    presentation.tint.opacity(0.11),
+                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                )
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(presentation.title)
+                        .font(.caption.weight(.bold))
+                        .textCase(.uppercase)
+                        .tracking(0.55)
+                    Spacer(minLength: 4)
+                    if let code = part.shortCode, !code.isEmpty {
+                        Text(code)
+                            .font(.caption2.monospaced().weight(.semibold))
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    }
+                }
+                Text(part.summary ?? presentation.detail)
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    .lineLimit(2)
+                Text(presentation.detail)
+                    .font(.caption)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            }
+        }
+        .padding(13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            AssistantTheme.bubblePaper(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(presentation.tint.opacity(0.22), lineWidth: 0.8)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func settledDecisionPresentation(
+        _ part: MessagePart
+    ) -> (title: String, detail: String, symbol: String, tint: Color) {
+        switch part.status {
+        case "approved":
+            return (
+                part.type == "budget-request" ? "Budget approved" : "Approved",
+                part.type == "budget-request"
+                    ? "The budget change was approved."
+                    : "This request was approved.",
+                "checkmark.circle.fill",
+                AssistantTheme.success(for: colorScheme)
+            )
+        case "denied":
+            return (
+                "Declined",
+                "No action was taken from this request.",
+                "xmark.circle.fill",
+                AssistantTheme.errorInk(for: colorScheme)
+            )
+        case "expired":
+            return (
+                "Expired",
+                "This decision is no longer waiting for a response.",
+                "clock.badge.exclamationmark.fill",
+                AssistantTheme.inkMuted(for: colorScheme)
+            )
+        default:
+            return (
+                "Closed",
+                "This decision is no longer available.",
+                "minus.circle.fill",
+                AssistantTheme.inkMuted(for: colorScheme)
+            )
+        }
+    }
+
+    private func noticeCard(_ kind: ChatNoticeKind, text: String) -> some View {
+        let presentation: (title: String, symbol: String, tint: Color) = switch kind {
+        case .responseContract:
+            (
+                "Checked result",
+                "checkmark.shield.fill",
+                AssistantTheme.accent(for: colorScheme)
+            )
+        case .parked:
+            (
+                "Paused",
+                "pause.circle.fill",
+                AssistantTheme.warning(for: colorScheme)
+            )
+        case .needsAttention:
+            (
+                "Needs your attention",
+                "exclamationmark.triangle.fill",
+                AssistantTheme.warning(for: colorScheme)
+            )
+        }
+        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        return VStack(alignment: .leading, spacing: 10) {
+            Label(presentation.title, systemImage: presentation.symbol)
+                .font(.caption.weight(.bold))
+                .textCase(.uppercase)
+                .tracking(0.6)
+                .foregroundStyle(presentation.tint)
+            AssistantMarkdownView(
+                source: text,
+                baseFontSize: messageFontSize,
+                ink: AssistantTheme.ink(for: colorScheme),
+                mutedInk: AssistantTheme.inkMuted(for: colorScheme),
+                codeSurface: AssistantTheme.sunken(for: colorScheme),
+                accent: AssistantTheme.accent(for: colorScheme)
+            )
+            .textSelection(.enabled)
+        }
+        .padding(15)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AssistantTheme.bubblePaper(for: colorScheme), in: shape)
+        .overlay { shape.strokeBorder(presentation.tint.opacity(0.25), lineWidth: 0.9) }
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = text
+            } label: {
+                Label("Copy notice", systemImage: "doc.on.doc")
+            }
         }
     }
 }

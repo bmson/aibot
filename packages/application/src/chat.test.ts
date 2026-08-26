@@ -1,7 +1,24 @@
-import type { Db } from '@assistant/db';
+import type { Db, messages as messageTable } from '@assistant/db';
 import type { UIMessage } from 'ai';
 import { describe, expect, it, vi } from 'vitest';
-import { hydrateChatApprovals } from './chat.js';
+import { collapseRuntimeMessageDuplicates, hydrateChatApprovals } from './chat.js';
+
+type MessageRow = typeof messageTable.$inferSelect;
+
+function row(id: string, text: string, parts: unknown[], createdAt: string): MessageRow {
+  return {
+    id,
+    conversationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    taskId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    role: 'assistant',
+    parts,
+    text,
+    origin: 'assistant',
+    channelMessageId: null,
+    embedding: null,
+    createdAt: new Date(createdAt),
+  };
+}
 
 describe('hydrateChatApprovals', () => {
   it('hydrates custom approval parts with one batched query', async () => {
@@ -112,5 +129,83 @@ describe('hydrateChatApprovals', () => {
     ] satisfies UIMessage[];
     const hydrated = await hydrateChatApprovals(db, messages);
     expect(hydrated[0]?.parts).toMatchObject([{ type: 'budget-request', status: 'approved' }]);
+  });
+});
+
+describe('collapseRuntimeMessageDuplicates', () => {
+  it('drops the dashboard approval nudge when the same task has its real card', () => {
+    const card = row(
+      '11111111-1111-4111-8111-111111111111',
+      'This needs your approval before I act: A7',
+      [
+        { type: 'text', text: 'This needs your approval before I act: A7' },
+        { type: 'approval', approvalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+      ],
+      '2026-08-26T08:00:00.000Z',
+    );
+    const nudge = row(
+      '22222222-2222-4222-8222-222222222222',
+      'Something needs your approval:\nA7: Search the web',
+      [{ type: 'text', text: 'Something needs your approval:\nA7: Search the web' }],
+      '2026-08-26T08:00:00.010Z',
+    );
+
+    expect(collapseRuntimeMessageDuplicates([card, nudge]).map((message) => message.id)).toEqual([
+      card.id,
+    ]);
+  });
+
+  it('keeps one structured, current needs-attention state for a task', () => {
+    const first = row(
+      '33333333-3333-4333-8333-333333333333',
+      "I couldn't complete this after repeated attempts and stopped. Last error: 2302 tokens",
+      [
+        {
+          type: 'text',
+          text: "I couldn't complete this after repeated attempts and stopped. Last error: 2302 tokens",
+        },
+        { type: 'notice', notice: 'needs-attention' },
+      ],
+      '2026-08-26T08:01:00.000Z',
+    );
+    const mirror = row(
+      '44444444-4444-4444-8444-444444444444',
+      first.text,
+      [{ type: 'text', text: first.text }],
+      '2026-08-26T08:01:00.010Z',
+    );
+    const latest = row(
+      '55555555-5555-4555-8555-555555555555',
+      "I couldn't complete this after repeated attempts and stopped. Last error: 2277 tokens",
+      [
+        {
+          type: 'text',
+          text: "I couldn't complete this after repeated attempts and stopped. Last error: 2277 tokens",
+        },
+        { type: 'notice', notice: 'needs-attention' },
+      ],
+      '2026-08-26T09:00:00.000Z',
+    );
+
+    expect(
+      collapseRuntimeMessageDuplicates([first, mirror, latest]).map((message) => message.id),
+    ).toEqual([latest.id]);
+  });
+
+  it('does not collapse ordinary repeated conversation', () => {
+    const first = row(
+      '66666666-6666-4666-8666-666666666666',
+      'Still here.',
+      [{ type: 'text', text: 'Still here.' }],
+      '2026-08-26T08:00:00.000Z',
+    );
+    const second = row(
+      '77777777-7777-4777-8777-777777777777',
+      'Still here.',
+      [{ type: 'text', text: 'Still here.' }],
+      '2026-08-26T08:01:00.000Z',
+    );
+
+    expect(collapseRuntimeMessageDuplicates([first, second])).toHaveLength(2);
   });
 });

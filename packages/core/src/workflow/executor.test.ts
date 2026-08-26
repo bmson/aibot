@@ -2,6 +2,7 @@ import type { TaskRow } from '@assistant/db';
 import { modelMessageSchema } from 'ai';
 import { describe, expect, it } from 'vitest';
 import type { Plan } from '../events.js';
+import { latestCurrentTaskAssistantText } from './executor/step-loop.js';
 import {
   goalStopReason,
   replaceToolResultMessage,
@@ -203,5 +204,52 @@ describe('goalStopReason', () => {
     expect(goalStopReason({ status: 'active', archivedAt: null })).toBeNull();
     expect(goalStopReason({ status: 'done', archivedAt: null })).toBeNull();
     expect(goalStopReason(undefined)).toBeNull();
+  });
+});
+
+describe('latestCurrentTaskAssistantText', () => {
+  it('never reuses the previous turn stop notice as new progress', () => {
+    const window = [
+      { role: 'user' as const, content: 'first request' },
+      {
+        role: 'assistant' as const,
+        content: "I stopped after 3 steps without finishing. Here's where I got: old result",
+      },
+      { role: 'user' as const, content: 'try a different search' },
+      {
+        role: 'assistant' as const,
+        content: [
+          {
+            type: 'tool-call' as const,
+            toolCallId: 'call-1',
+            toolName: 'web.search',
+            input: { query: 'new search' },
+          },
+        ],
+      },
+    ];
+
+    expect(latestCurrentTaskAssistantText(window)).toBe('');
+  });
+
+  it('keeps a progress note produced after the current user turn', () => {
+    const window = [
+      { role: 'assistant' as const, content: 'older conversation' },
+      { role: 'user' as const, content: 'current request' },
+      {
+        role: 'assistant' as const,
+        content: [
+          { type: 'text' as const, text: 'I found the current result.' },
+          {
+            type: 'tool-call' as const,
+            toolCallId: 'call-2',
+            toolName: 'web.fetch',
+            input: { url: 'https://example.com' },
+          },
+        ],
+      },
+    ];
+
+    expect(latestCurrentTaskAssistantText(window)).toBe('I found the current result.');
   });
 });

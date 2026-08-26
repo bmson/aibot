@@ -49,11 +49,19 @@ export interface OwnerNotifier {
   notifyOwner(input: {
     text: string;
     taskId?: string;
+    /**
+     * The dashboard thread that already owns this notice, when one exists.
+     * The dashboard notifier uses it to avoid mirroring a second copy into
+     * the same primary conversation; phone/SMS notifiers ignore it.
+     */
+    conversationId?: string | null;
     urgency?: OwnerNoticeUrgency;
   }): Promise<void>;
   notifyApprovals(
     approvals: ReadonlyArray<{
       taskId: string;
+      /** See notifyOwner.conversationId. */
+      conversationId?: string | null;
       shortCode: string;
       summary: string;
       toolName?: string;

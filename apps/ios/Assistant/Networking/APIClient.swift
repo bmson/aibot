@@ -464,7 +464,12 @@ struct APIClient: Sendable {
         _ = try await perform(request, as: OkPayload.self)
     }
 
-    func updates(conversationId: String, taskId: String?, cursor: String?) async throws -> ChatUpdates {
+    func updates(
+        conversationId: String,
+        taskId: String?,
+        cursor: String?,
+        refreshIds: [String] = []
+    ) async throws -> ChatUpdates {
         var components = URLComponents(
             url: configuration.baseURL.appending(path: "api/mobile/v1/chat/status"),
             resolvingAgainstBaseURL: false
@@ -472,7 +477,10 @@ struct APIClient: Sendable {
         components?.queryItems = [
             .init(name: "conversationId", value: conversationId),
             taskId.map { .init(name: "taskId", value: $0) },
-            cursor.map { .init(name: "cursor", value: $0) }
+            cursor.map { .init(name: "cursor", value: $0) },
+            refreshIds.isEmpty
+                ? nil
+                : .init(name: "refresh", value: refreshIds.prefix(10).joined(separator: ","))
         ].compactMap { $0 }
         guard let url = components?.url else { throw APIError.invalidServerURL }
         return try await perform(makeRequest(url: url), as: ChatUpdates.self)

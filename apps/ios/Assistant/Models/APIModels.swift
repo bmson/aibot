@@ -45,6 +45,7 @@ struct MessagePart: Codable, Hashable, Sendable {
     let type: String
     var text: String?
     var data: JSONValue?
+    var notice: String?
     var approvalId: String?
     var taskId: String?
     var suggestionId: String?
@@ -125,9 +126,39 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         parts.first(where: { $0.type == "recall" })?.sources ?? []
     }
 
+    var decisionParts: [MessagePart] {
+        parts.filter { ["approval", "budget-request"].contains($0.type) }
+    }
+
+    /// Runtime decision prose and the structured card say the same thing.
+    /// Keep one visual object in the transcript: the card, whose live status
+    /// can change after the message itself was persisted.
+    var visibleTextBubbles: [String] {
+        decisionParts.isEmpty ? textBubbles : []
+    }
+
+    var noticeKind: ChatNoticeKind? {
+        parts.lazy
+            .filter { $0.type == "notice" }
+            .compactMap { $0.notice.flatMap(ChatNoticeKind.init(rawValue:)) }
+            .first
+    }
+
+    var hasPendingDecision: Bool {
+        decisionParts.contains { part in
+            part.status == nil || part.status == "pending" || part.status == "snoozed"
+        }
+    }
+
     static func optimistic(role: ChatRole, text: String, id: String = "local-\(UUID().uuidString)") -> Self {
         .init(id: id, role: role, parts: [.init(type: "text", text: text)])
     }
+}
+
+enum ChatNoticeKind: String, Codable, Sendable {
+    case responseContract = "response-contract"
+    case parked
+    case needsAttention = "needs-attention"
 }
 
 enum CompanionFace: String, Codable, Sendable {

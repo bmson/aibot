@@ -370,7 +370,7 @@ struct ChatView: View {
                         }
                     }
                     Color.clear
-                        .frame(height: composerHeight + 18)
+                        .frame(height: 18)
                         .id("bottom")
                 }
                 .padding(.horizontal, 16)
@@ -526,7 +526,12 @@ struct ChatView: View {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
             }
-            .overlay(alignment: .bottom) {
+            // The composer owns real layout space. An overlay plus a spacer at
+            // only the very end let every intermediate scroll position paint
+            // message text underneath the translucent field, which made the
+            // bottom of long cards unreadable. A safe-area inset shortens the
+            // transcript viewport itself while preserving keyboard behavior.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
                 composer
                     .safeAreaPadding(.bottom)
                     .offset(y: menuPullActive ? menuPullComposerOffset : 0)

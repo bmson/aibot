@@ -2,6 +2,7 @@ import path from 'node:path';
 import { type Config, loadConfig, repoRoot } from '@assistant/config';
 import {
   type DocumentProcessorConfig,
+  findPrimaryConversation,
   getAgent,
   ModelRouter,
   postOwnerNotice,
@@ -89,24 +90,42 @@ export function smsDeps(deps: AgentDeps): SmsChannelDeps {
  * best-effort and independent, so a Twilio outage cannot swallow the dashboard
  * copy, and vice versa.
  */
+export function shouldMirrorIntoPrimary(
+  sourceConversationId: string | null | undefined,
+  primaryConversationId: string | null | undefined,
+): boolean {
+  return !sourceConversationId || sourceConversationId !== primaryConversationId;
+}
+
 function dashboardOwnerNotifier(deps: AgentDeps): OwnerNotifier {
-  const post = async (text: string, taskId?: string) => {
+  const post = async (text: string, taskId?: string, sourceConversationId?: string | null) => {
     const agent = await getAgent(deps.db);
+    const primary = await findPrimaryConversation(deps.db, agent.id);
+    // Executor notices are already persisted into their owning conversation.
+    // Mirroring one whose owner IS the primary chat creates the exact pair the
+    // reader used to see: a structured card followed by a prose restatement.
+    if (!shouldMirrorIntoPrimary(sourceConversationId, primary?.id)) return;
     await postOwnerNotice(deps.db, { agentId: agent.id, text, ...(taskId ? { taskId } : {}) });
   };
   return {
-    notifyOwner: async ({ text, taskId }) => {
-      await post(text, taskId);
+    notifyOwner: async ({ text, taskId, conversationId }) => {
+      await post(text, taskId, conversationId);
     },
     // Approval cards are already posted into the originating conversation by the
     // executor; this is the out-of-band nudge for an owner who is not looking at
     // that thread, so it names the codes without repeating the full card.
     notifyApprovals: async (pending) => {
       if (pending.length === 0) return;
-      const lines = pending.map((approval) => `${approval.shortCode}: ${approval.summary}`);
+      const agent = await getAgent(deps.db);
+      const primary = await findPrimaryConversation(deps.db, agent.id);
+      const notices = pending.filter((approval) =>
+        shouldMirrorIntoPrimary(approval.conversationId, primary?.id),
+      );
+      if (notices.length === 0) return;
+      const lines = notices.map((approval) => `${approval.shortCode}: ${approval.summary}`);
       await post(
-        `${pending.length === 1 ? 'Something needs' : `${pending.length} things need`} your approval:\n${lines.join('\n')}`,
-        pending[0]?.taskId,
+        `${notices.length === 1 ? 'Something needs' : `${notices.length} things need`} your approval:\n${lines.join('\n')}`,
+        notices[0]?.taskId,
       );
     },
   };

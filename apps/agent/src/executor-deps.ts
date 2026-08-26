@@ -80,11 +80,17 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
     // email-triggered request from going silent. Each notice deliverer guards
     // on its own channel, so this is a no-op for every non-email task.
     notifyApproval: async (task, approvals) => {
-      await services.ownerNotifier.notifyApprovals(approvals);
+      await services.ownerNotifier.notifyApprovals(
+        approvals.map((approval) => ({
+          ...approval,
+          conversationId: task.conversationId,
+        })),
+      );
       for (const channel of channels) {
         await channel.deliverApprovalNotice?.(services, task, approvalNoticeEmail(approvals));
       }
     },
-    notifyOwner: ({ taskId, text }) => services.ownerNotifier.notifyOwner({ taskId, text }),
+    notifyOwner: ({ taskId, conversationId, text }) =>
+      services.ownerNotifier.notifyOwner({ taskId, conversationId, text }),
   };
 }
