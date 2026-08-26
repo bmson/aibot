@@ -54,7 +54,10 @@ const nextConfig: NextConfig = {
       "connect-src 'self' https://jelly-ui.com",
       "object-src 'none'",
       "base-uri 'self'",
-      "form-action 'self'",
+      // Auth.js emits an absolute form action for provider sign-in. Chrome can
+      // reject that action under 'self' behind the Cloud Run domain mapping,
+      // so allow the canonical production origin explicitly as well.
+      "form-action 'self' https://bot.bmson.com",
       "frame-ancestors 'none'",
     ].join('; ');
     return [
