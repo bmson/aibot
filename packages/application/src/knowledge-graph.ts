@@ -1,6 +1,7 @@
 import { getAgent } from '@assistant/core/chat';
 import {
   createOwnerKnowledgeGraphFact,
+  GRAPH_ENTITY_KINDS,
   type GraphEntityKind,
   retryQuarantinedKnowledgeGraphSources as retryQuarantinedSources,
 } from '@assistant/core/memory/knowledge-graph';
@@ -11,6 +12,7 @@ import {
   knowledgeGraphRelations,
   knowledgeGraphSources,
   memories,
+  namePrefixMatch,
 } from '@assistant/db';
 import { and, asc, count, desc, eq, gt, ilike, isNull, ne, or, sql } from 'drizzle-orm';
 import { type AnyPgColumn, alias } from 'drizzle-orm/pg-core';
@@ -44,6 +46,14 @@ export interface KnowledgeGraphRelationView {
   };
 }
 
+/** An advisory merge hint, mirroring the contact-level duplicate suggestions. */
+export interface KnowledgeGraphDuplicate {
+  targetId: string;
+  label: string;
+  kind: string;
+  reason: string;
+}
+
 export interface KnowledgeGraphOverview {
   totalEntities: number;
   totalRelations: number;
@@ -51,14 +61,39 @@ export interface KnowledgeGraphOverview {
   pendingSources: number;
   quarantinedSources: number;
   entities: KnowledgeGraphEntityView[];
+  /** Entities matching the current search — the true count, not the page size. */
+  matchingEntities: number;
+  entityPage: number;
+  entityPages: number;
   selected: KnowledgeGraphEntityView | null;
   relations: KnowledgeGraphRelationView[];
-  mergeOptions: KnowledgeGraphEntityView[];
+  /**
+   * Every edge incident to the selected entity, including the ones past the
+   * page cap. The header used to print `relations.length`, which silently
+   * reported the cap as the degree.
+   */
+  selectedRelationTotal: number;
+  duplicates: KnowledgeGraphDuplicate[];
 }
 
 function displayLabel<T extends { preferredLabel: AnyPgColumn; label: AnyPgColumn }>(entity: T) {
   return sql<string>`COALESCE(${entity.preferredLabel}, ${entity.label})`;
 }
+
+/**
+ * Sort key for owner-facing entity lists. Ordering on the raw label leaves the
+ * result at the mercy of the deployment's Postgres collation — under `C` an
+ * uppercase "Zebra" sorts before a lowercase "apple" — so the case is folded
+ * here rather than assumed away.
+ */
+function sortLabel<T extends { preferredLabel: AnyPgColumn; label: AnyPgColumn }>(entity: T) {
+  return sql`LOWER(${displayLabel(entity)})`;
+}
+
+/** One page of the entity sidebar. Matches listMemoryLibrary's page size. */
+const ENTITY_PAGE_SIZE = 60;
+/** Edges rendered for the selected entity before the list is capped. */
+const RELATION_LIMIT = 80;
 
 function cleanSearch(query: string): string {
   return query.trim().slice(0, 120).replaceAll('%', '\\%').replaceAll('_', '\\_');
@@ -71,14 +106,26 @@ function asReviewStatus(value: string): KnowledgeGraphReviewStatus {
 /** Owner-facing, bounded graph inspection. It reads only source-backed edges. */
 export async function getKnowledgeGraphOverview(
   db: Db,
-  input: { query?: string; entityId?: string } = {},
+  input: { query?: string; entityId?: string; page?: number; pageSize?: number } = {},
 ): Promise<KnowledgeGraphOverview> {
   const agent = await getAgent(db);
   const query = cleanSearch(input.query ?? '');
+  const pageSize = input.pageSize ?? ENTITY_PAGE_SIZE;
   const entityCondition = and(
     eq(knowledgeGraphEntities.agentId, agent.id),
     query ? ilike(displayLabel(knowledgeGraphEntities), `%${query}%`) : undefined,
   );
+  // The match count has to be known before the page can be clamped, so it is
+  // resolved first rather than alongside the row fetch.
+  const [matchingRow] = await db
+    .select({ value: count() })
+    .from(knowledgeGraphEntities)
+    .where(entityCondition);
+  const matchingEntities = Number(matchingRow?.value ?? 0);
+  const entityPages = Math.max(1, Math.ceil(matchingEntities / pageSize));
+  const requestedPage =
+    Number.isFinite(input.page) && (input.page ?? 0) > 0 ? (input.page ?? 1) : 1;
+  const entityPage = Math.min(requestedPage, entityPages);
   const [
     entityRows,
     [entityTotal],
@@ -96,8 +143,9 @@ export async function getKnowledgeGraphOverview(
       })
       .from(knowledgeGraphEntities)
       .where(entityCondition)
-      .orderBy(asc(displayLabel(knowledgeGraphEntities)))
-      .limit(60),
+      .orderBy(asc(sortLabel(knowledgeGraphEntities)))
+      .limit(pageSize)
+      .offset((entityPage - 1) * pageSize),
     db
       .select({ value: count() })
       .from(knowledgeGraphEntities)
@@ -171,15 +219,26 @@ export async function getKnowledgeGraphOverview(
       pendingSources: Number(pendingSources?.value ?? 0),
       quarantinedSources: Number(quarantinedSources?.value ?? 0),
       entities,
+      matchingEntities,
+      entityPage,
+      entityPages,
       selected: null,
       relations: [],
-      mergeOptions: [],
+      selectedRelationTotal: 0,
+      duplicates: [],
     };
   }
 
   const subject = alias(knowledgeGraphEntities, 'knowledge_graph_subject');
   const object = alias(knowledgeGraphEntities, 'knowledge_graph_object');
-  const [relationRows, mergeRows] = await Promise.all([
+  const incidentToSelected = and(
+    eq(knowledgeGraphRelations.agentId, agent.id),
+    or(
+      eq(knowledgeGraphRelations.subjectEntityId, selected.id),
+      eq(knowledgeGraphRelations.objectEntityId, selected.id),
+    ),
+  );
+  const [relationRows, [selectedRelationRow], duplicates] = await Promise.all([
     db
       .select({
         id: knowledgeGraphRelations.id,
@@ -205,38 +264,16 @@ export async function getKnowledgeGraphOverview(
       .innerJoin(subject, eq(knowledgeGraphRelations.subjectEntityId, subject.id))
       .innerJoin(object, eq(knowledgeGraphRelations.objectEntityId, object.id))
       .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
-      .where(
-        and(
-          eq(knowledgeGraphRelations.agentId, agent.id),
-          or(
-            eq(knowledgeGraphRelations.subjectEntityId, selected.id),
-            eq(knowledgeGraphRelations.objectEntityId, selected.id),
-          ),
-        ),
-      )
+      .where(incidentToSelected)
       .orderBy(
         asc(
           sql`CASE ${knowledgeGraphRelations.reviewStatus} WHEN 'unreviewed' THEN 0 WHEN 'confirmed' THEN 1 ELSE 2 END`,
         ),
         desc(knowledgeGraphRelations.createdAt),
       )
-      .limit(80),
-    db
-      .select({
-        id: knowledgeGraphEntities.id,
-        label: displayLabel(knowledgeGraphEntities),
-        kind: knowledgeGraphEntities.kind,
-        canonicalKey: knowledgeGraphEntities.canonicalKey,
-      })
-      .from(knowledgeGraphEntities)
-      .where(
-        and(
-          eq(knowledgeGraphEntities.agentId, agent.id),
-          ne(knowledgeGraphEntities.id, selected.id),
-        ),
-      )
-      .orderBy(asc(displayLabel(knowledgeGraphEntities)))
-      .limit(200),
+      .limit(RELATION_LIMIT),
+    db.select({ value: count() }).from(knowledgeGraphRelations).where(incidentToSelected),
+    findDuplicateKnowledgeGraphEntities(db, selected),
   ]);
   const relations = relationRows.map((row) => ({
     id: row.id,
@@ -271,10 +308,86 @@ export async function getKnowledgeGraphOverview(
     pendingSources: Number(pendingSources?.value ?? 0),
     quarantinedSources: Number(quarantinedSources?.value ?? 0),
     entities,
+    matchingEntities,
+    entityPage,
+    entityPages,
     selected,
     relations,
-    mergeOptions: mergeRows,
+    selectedRelationTotal: Number(selectedRelationRow?.value ?? 0),
+    duplicates,
   };
+}
+
+/**
+ * Type-ahead over every entity, replacing the old 200-row `<select>` payload.
+ * The cap here bounds one dropdown's worth of results, not the reachable set:
+ * anything can be found by narrowing the query, which is what the fixed list
+ * could not do.
+ */
+export async function searchKnowledgeGraphEntities(
+  db: Db,
+  input: { query: string; excludeId?: string; kind?: string; limit?: number },
+): Promise<KnowledgeGraphEntityView[]> {
+  const agent = await getAgent(db);
+  const query = cleanSearch(input.query);
+  const excludeId = input.excludeId && UUID_RE.test(input.excludeId) ? input.excludeId : null;
+  return db
+    .select({
+      id: knowledgeGraphEntities.id,
+      label: displayLabel(knowledgeGraphEntities),
+      kind: knowledgeGraphEntities.kind,
+      canonicalKey: knowledgeGraphEntities.canonicalKey,
+    })
+    .from(knowledgeGraphEntities)
+    .where(
+      and(
+        eq(knowledgeGraphEntities.agentId, agent.id),
+        excludeId ? ne(knowledgeGraphEntities.id, excludeId) : undefined,
+        input.kind ? eq(knowledgeGraphEntities.kind, input.kind) : undefined,
+        query ? ilike(displayLabel(knowledgeGraphEntities), `%${query}%`) : undefined,
+      ),
+    )
+    .orderBy(asc(sortLabel(knowledgeGraphEntities)))
+    .limit(Math.min(input.limit ?? 20, 50));
+}
+
+/**
+ * Advisory merge hints for one entity — never an automatic merge. Scoped to the
+ * same kind and to a name-prefix relationship ("Anna" / "Anna Jónsdóttir"),
+ * which is the same conservative rule `findDuplicateContactSuggestions` applies
+ * to contacts. Candidates are bounded because the comparison is per-pair.
+ */
+export async function findDuplicateKnowledgeGraphEntities(
+  db: Db,
+  entity: KnowledgeGraphEntityView,
+): Promise<KnowledgeGraphDuplicate[]> {
+  const agent = await getAgent(db);
+  const candidates = await db
+    .select({
+      id: knowledgeGraphEntities.id,
+      label: displayLabel(knowledgeGraphEntities),
+      kind: knowledgeGraphEntities.kind,
+    })
+    .from(knowledgeGraphEntities)
+    .where(
+      and(
+        eq(knowledgeGraphEntities.agentId, agent.id),
+        eq(knowledgeGraphEntities.kind, entity.kind),
+        ne(knowledgeGraphEntities.id, entity.id),
+      ),
+    )
+    .orderBy(asc(sortLabel(knowledgeGraphEntities)))
+    .limit(500);
+  const source = entity.label.toLocaleLowerCase();
+  return candidates
+    .filter((row) => namePrefixMatch(source, row.label.toLocaleLowerCase()))
+    .slice(0, 5)
+    .map((row) => ({
+      targetId: row.id,
+      label: row.label,
+      kind: row.kind,
+      reason: 'matching name',
+    }));
 }
 
 async function agentEntity(db: Db, entityId: string): Promise<KnowledgeGraphEntityView | null> {
@@ -384,26 +497,17 @@ export async function addOwnerKnowledgeGraphFact(
     note: string;
   },
 ): Promise<{ error?: string }> {
-  const kinds: readonly GraphEntityKind[] = [
-    'person',
-    'organization',
-    'project',
-    'place',
-    'event',
-    'date',
-    'topic',
-  ];
-  if (!kinds.includes(input.subjectKind as GraphEntityKind))
-    return { error: 'Choose a valid source type.' };
-  if (!kinds.includes(input.objectKind as GraphEntityKind)) {
-    return { error: 'Choose a valid target type.' };
-  }
+  // The domain owns the kind list; re-declaring it here let the two drift.
+  const isKind = (value: string): value is GraphEntityKind =>
+    (GRAPH_ENTITY_KINDS as readonly string[]).includes(value);
+  if (!isKind(input.subjectKind)) return { error: 'Choose a valid source type.' };
+  if (!isKind(input.objectKind)) return { error: 'Choose a valid target type.' };
   return createOwnerKnowledgeGraphFact(
     { db, router },
     {
-      subject: { label: input.subjectLabel, kind: input.subjectKind as GraphEntityKind },
+      subject: { label: input.subjectLabel, kind: input.subjectKind },
       predicate: input.predicate,
-      object: { label: input.objectLabel, kind: input.objectKind as GraphEntityKind },
+      object: { label: input.objectLabel, kind: input.objectKind },
       note: input.note,
     },
   );

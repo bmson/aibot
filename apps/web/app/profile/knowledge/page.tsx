@@ -1,19 +1,34 @@
-import { getKnowledgeGraphOverview, type KnowledgeGraphRelationView } from '@assistant/application';
-import { ArrowRightLeft, Check, CircleAlert, GitFork, Network, Search, X } from 'lucide-react';
+import {
+  getAssistantTimezone,
+  getKnowledgeGraphOverview,
+  type KnowledgeGraphRelationView,
+} from '@assistant/application';
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  CircleAlert,
+  GitFork,
+  Network,
+  Search,
+  X,
+} from 'lucide-react';
 import Link from 'next/link';
 import {
   confirmKnowledgeRelation,
-  mergeKnowledgeEntity,
   rejectKnowledgeRelation,
-  renameKnowledgeEntity,
   retryQuarantinedKnowledgeSources,
 } from '@/app/profile/knowledge/actions';
 import { AddKnowledgeRelation } from '@/app/profile/knowledge/add-relation';
+import { MergeEntity, RenameEntity } from '@/app/profile/knowledge/entity-forms';
+import { LocalMap, type LocalMapEdge } from '@/app/profile/knowledge/local-map';
 import { requireOwner } from '@/auth';
-import { relativeTime } from '@/lib/format';
+import { formatFriendlyDateTime, relativeTime } from '@/lib/format';
+import { entityKindLabel, humanizePredicate } from '@/lib/knowledge';
 import { getDb } from '@/lib/server';
 import {
   Badge,
+  btn,
   btnSm,
   Card,
   cardFooterClass,
@@ -21,26 +36,22 @@ import {
   cardTitleClass,
   EmptyState,
   inputClass,
-  labelClass,
+  microLabelClass,
   PageHeader,
   PageShell,
-  selectClass,
 } from '@/lib/ui';
 import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 
 export const metadata = { title: 'Knowledge review' };
 export const dynamic = 'force-dynamic';
 
-function hrefFor(query: string, entityId?: string): string {
+function hrefFor(opts: { q?: string; entity?: string; page?: number }): string {
   const params = new URLSearchParams();
-  if (query) params.set('q', query);
-  if (entityId) params.set('entity', entityId);
+  if (opts.q) params.set('q', opts.q);
+  if (opts.entity) params.set('entity', opts.entity);
+  if (opts.page && opts.page > 1) params.set('page', String(opts.page));
   const search = params.toString();
   return search ? `/profile/knowledge?${search}` : '/profile/knowledge';
-}
-
-function readablePredicate(predicate: string): string {
-  return predicate.replaceAll('_', ' ');
 }
 
 function relationTone(status: KnowledgeGraphRelationView['reviewStatus']) {
@@ -53,9 +64,7 @@ function RelationPath({ relation }: { relation: KnowledgeGraphRelationView }) {
   return (
     <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm leading-6">
       <span className="font-semibold text-strong">{relation.subject.label}</span>
-      <span className="font-mono text-xs tracking-[0.06em] text-muted">
-        {readablePredicate(relation.predicate)}
-      </span>
+      <span className="text-xs text-muted">{humanizePredicate(relation.predicate)}</span>
       <span aria-hidden="true" className="text-muted">
         →
       </span>
@@ -64,7 +73,15 @@ function RelationPath({ relation }: { relation: KnowledgeGraphRelationView }) {
   );
 }
 
-function ReviewRelation({ relation, now }: { relation: KnowledgeGraphRelationView; now: Date }) {
+function ReviewRelation({
+  relation,
+  now,
+  timeZone,
+}: {
+  relation: KnowledgeGraphRelationView;
+  now: Date;
+  timeZone: string;
+}) {
   const status = relationTone(relation.reviewStatus);
   const sourceQuery = relation.source.content.slice(0, 120);
   return (
@@ -77,18 +94,26 @@ function ReviewRelation({ relation, now }: { relation: KnowledgeGraphRelationVie
           </Badge>
         </div>
         <div className="rounded-lg bg-sunken/60 p-3 text-sm leading-6 text-strong">
-          <p className="font-mono text-[0.68rem] font-medium tracking-[0.08em] text-muted uppercase">
-            Source memory
-          </p>
+          <p className={`${microLabelClass} text-muted`}>Source memory</p>
           <p className="mt-1 whitespace-pre-wrap">{relation.source.content}</p>
         </div>
+        {/* Relative time answers "recent or not?" at a glance; the calendar date
+            beside it answers "which one?". Relative alone used to read "612d
+            ago", which answers neither. */}
         <p className="text-xs leading-5 text-muted">
           {Math.round(relation.confidence * 100)}% extraction confidence · saved{' '}
           {relativeTime(relation.source.createdAt, now)} ·{' '}
+          {formatFriendlyDateTime(relation.source.createdAt, timeZone, now)} ·{' '}
           {relation.source.ownerConfirmed
             ? 'owner verified source'
             : `${relation.source.originTrust} source`}
-          {relation.reviewedAt ? ` · reviewed ${relativeTime(relation.reviewedAt, now)}` : ''}
+          {relation.reviewedAt
+            ? ` · reviewed ${relativeTime(relation.reviewedAt, now)} (${formatFriendlyDateTime(
+                relation.reviewedAt,
+                timeZone,
+                now,
+              )})`
+            : ''}
         </p>
       </div>
       <footer className={cardFooterClass}>
@@ -127,16 +152,32 @@ function ReviewRelation({ relation, now }: { relation: KnowledgeGraphRelationVie
 export default async function KnowledgeReviewPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; entity?: string }>;
+  searchParams: Promise<{ q?: string; entity?: string; page?: string }>;
 }) {
   await requireOwner();
   const params = await searchParams;
   const query = (params.q ?? '').trim().slice(0, 120);
-  const graph = await getKnowledgeGraphOverview(getDb(), { query, entityId: params.entity });
+  const requestedPage = Number.parseInt(params.page ?? '1', 10);
+  const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  const db = getDb();
+  const [graph, timeZone] = await Promise.all([
+    getKnowledgeGraphOverview(db, { query, entityId: params.entity, page }),
+    getAssistantTimezone(db),
+  ]);
   const now = new Date();
-  const localEdges = graph.relations
-    .filter((relation) => relation.reviewStatus !== 'rejected')
-    .slice(0, 12);
+  const activeRelations = graph.relations.filter(
+    (relation) => relation.reviewStatus !== 'rejected',
+  );
+  const mapEdges: LocalMapEdge[] = activeRelations.map((relation) => {
+    const outbound = relation.subject.id === graph.selected?.id;
+    return {
+      id: relation.id,
+      predicate: relation.predicate,
+      outbound,
+      reviewStatus: relation.reviewStatus,
+      other: outbound ? relation.object : relation.subject,
+    };
+  });
 
   return (
     <PageShell size="wide">
@@ -148,33 +189,25 @@ export default async function KnowledgeReviewPage({
 
       <div className="mt-6 grid gap-3 sm:grid-cols-4">
         <Card>
-          <p className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
-            Entities
-          </p>
+          <p className={`${microLabelClass} text-muted`}>Entities</p>
           <p className="mt-2 font-display text-3xl font-semibold tracking-[-0.04em]">
             {graph.totalEntities.toLocaleString()}
           </p>
         </Card>
         <Card>
-          <p className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
-            Connections
-          </p>
+          <p className={`${microLabelClass} text-muted`}>Connections</p>
           <p className="mt-2 font-display text-3xl font-semibold tracking-[-0.04em]">
             {graph.totalRelations.toLocaleString()}
           </p>
         </Card>
         <Card>
-          <p className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
-            Needs review
-          </p>
+          <p className={`${microLabelClass} text-muted`}>Needs review</p>
           <p className="mt-2 font-display text-3xl font-semibold tracking-[-0.04em] text-amber-700 dark:text-amber-300">
             {graph.unreviewedRelations.toLocaleString()}
           </p>
         </Card>
         <Card>
-          <p className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
-            Graph sync
-          </p>
+          <p className={`${microLabelClass} text-muted`}>Graph sync</p>
           <p className="mt-2 font-display text-3xl font-semibold tracking-[-0.04em]">
             {graph.pendingSources.toLocaleString()}
           </p>
@@ -206,8 +239,16 @@ export default async function KnowledgeReviewPage({
               className={`${inputClass} w-full pl-9`}
             />
           </form>
+          {/* The stat card above prints the true entity count, so this list has
+              to say how much of it is on screen — the two silently disagreeing
+              is what made the page feel like it was hiding things. */}
+          <p className="mt-2 px-1 text-xs text-muted">
+            {graph.matchingEntities.toLocaleString()}
+            {query ? ' matching' : ''} item{graph.matchingEntities === 1 ? '' : 's'}
+            {graph.entityPages > 1 ? ` · page ${graph.entityPage} of ${graph.entityPages}` : ''}
+          </p>
           <nav
-            className="mt-3 max-h-[calc(100dvh-13rem)] space-y-1 overflow-y-auto rounded-xl bg-sunken/40 p-1.5"
+            className="mt-2 max-h-[calc(100dvh-16rem)] space-y-1 overflow-y-auto rounded-xl bg-sunken/40 p-1.5"
             aria-label="Knowledge items"
           >
             {graph.entities.length === 0 ? (
@@ -218,8 +259,9 @@ export default async function KnowledgeReviewPage({
               graph.entities.map((entity) => (
                 <Link
                   key={entity.id}
-                  href={hrefFor(query, entity.id)}
+                  href={hrefFor({ q: query, entity: entity.id, page: graph.entityPage })}
                   aria-current={entity.id === graph.selected?.id ? 'page' : undefined}
+                  title={entity.label}
                   className={`block rounded-lg px-3 py-2.5 motion-safe:transition-colors ${
                     entity.id === graph.selected?.id
                       ? 'bg-raised text-strong ring-1 ring-edge/80'
@@ -227,13 +269,37 @@ export default async function KnowledgeReviewPage({
                   }`}
                 >
                   <span className="block truncate text-sm font-medium">{entity.label}</span>
-                  <span className="mt-0.5 block font-mono text-[0.68rem] tracking-[0.08em] uppercase opacity-70">
-                    {entity.kind}
+                  <span className="mt-0.5 block text-[0.68rem] opacity-70">
+                    {entityKindLabel(entity.kind)}
                   </span>
                 </Link>
               ))
             )}
           </nav>
+          {graph.entityPages > 1 ? (
+            <nav className="mt-3 flex items-center justify-between gap-2" aria-label="Item pages">
+              {graph.entityPage > 1 ? (
+                <Link
+                  href={hrefFor({ q: query, page: graph.entityPage - 1 })}
+                  className={btn.outline}
+                >
+                  <ChevronLeft className="size-4" aria-hidden="true" />
+                  Previous
+                </Link>
+              ) : (
+                <span />
+              )}
+              {graph.entityPage < graph.entityPages ? (
+                <Link
+                  href={hrefFor({ q: query, page: graph.entityPage + 1 })}
+                  className={btn.outline}
+                >
+                  Next
+                  <ChevronRight className="size-4" aria-hidden="true" />
+                </Link>
+              ) : null}
+            </nav>
+          ) : null}
         </aside>
 
         <main className="min-w-0">
@@ -254,71 +320,29 @@ export default async function KnowledgeReviewPage({
               <section className={`${cardShellClass} p-4 sm:p-5`}>
                 <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <p className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
-                      {graph.selected.kind}
+                    <p className={`${microLabelClass} text-muted`}>
+                      {entityKindLabel(graph.selected.kind)}
                     </p>
-                    <h2 className="mt-1 truncate font-display text-2xl font-semibold tracking-[-0.025em]">
+                    <h2
+                      className="mt-1 truncate font-display text-2xl font-semibold tracking-[-0.025em]"
+                      title={graph.selected.label}
+                    >
                       {graph.selected.label}
                     </h2>
                     <p className="mt-1 text-sm text-muted">
-                      {graph.relations.length} source-backed connection
-                      {graph.relations.length === 1 ? '' : 's'}
+                      {graph.selectedRelationTotal.toLocaleString()} source-backed connection
+                      {graph.selectedRelationTotal === 1 ? '' : 's'}
+                      {graph.relations.length < graph.selectedRelationTotal
+                        ? ` · showing the first ${graph.relations.length}`
+                        : ''}
                     </p>
                   </div>
                   <AddKnowledgeRelation selected={graph.selected} />
                 </div>
 
-                <div className="mt-5 grid gap-3 border-t border-edge pt-4 sm:grid-cols-2">
-                  <form
-                    action={renameKnowledgeEntity.bind(null, graph.selected.id)}
-                    className="grid gap-2"
-                  >
-                    <label className={`grid gap-1 ${labelClass}`}>
-                      Display name
-                      <input
-                        name="label"
-                        required
-                        minLength={1}
-                        maxLength={160}
-                        defaultValue={graph.selected.label}
-                        className={inputClass}
-                      />
-                    </label>
-                    <div>
-                      <SubmitButton size="sm" pendingLabel="Saving…">
-                        Rename display
-                      </SubmitButton>
-                    </div>
-                  </form>
-                  <form
-                    action={mergeKnowledgeEntity.bind(null, graph.selected.id)}
-                    className="grid gap-2"
-                  >
-                    <label className={`grid gap-1 ${labelClass}`}>
-                      Merge this into
-                      <select name="targetId" required defaultValue="" className={selectClass}>
-                        <option value="" disabled>
-                          Choose a matching item…
-                        </option>
-                        {graph.mergeOptions.map((option) => (
-                          <option key={option.id} value={option.id}>
-                            {option.label} ({option.kind})
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <div>
-                      <ConfirmButton
-                        size="sm"
-                        pendingLabel="Merging…"
-                        confirmLabel="Merge items?"
-                        title="Preserves all sources and routes future extractions to the remaining item."
-                      >
-                        <ArrowRightLeft className="size-3.5" aria-hidden="true" />
-                        Merge entity
-                      </ConfirmButton>
-                    </div>
-                  </form>
+                <div className="mt-5 grid gap-4 border-t border-edge pt-4 sm:grid-cols-2">
+                  <RenameEntity entity={graph.selected} />
+                  <MergeEntity entity={graph.selected} duplicates={graph.duplicates} />
                 </div>
               </section>
 
@@ -328,54 +352,22 @@ export default async function KnowledgeReviewPage({
                     <h2 className={cardTitleClass}>Local map</h2>
                     <p className="mt-1 text-sm text-muted">
                       A focused view keeps the graph readable. Only non-stale, directly sourced
-                      edges appear here.
+                      edges appear here — select any neighbour to re-centre on it.
                     </p>
                   </div>
                   <span className="inline-flex items-center gap-1 text-xs text-muted">
                     <GitFork className="size-3.5" aria-hidden="true" />
-                    {localEdges.length} visible edge{localEdges.length === 1 ? '' : 's'}
+                    {mapEdges.length.toLocaleString()} active edge
+                    {mapEdges.length === 1 ? '' : 's'}
                   </span>
                 </div>
-                <div className="mt-3 overflow-hidden rounded-xl border border-edge bg-[radial-gradient(circle_at_center,rgba(81,143,106,0.12),transparent_48%)] p-4 sm:p-6">
-                  <div className="mx-auto flex max-w-xs justify-center">
-                    <div className="rounded-full border border-accent/30 bg-accent/10 px-5 py-3 text-center ring-4 ring-accent/5">
-                      <p className="font-mono text-[0.65rem] font-medium tracking-[0.09em] text-accent uppercase">
-                        {graph.selected.kind}
-                      </p>
-                      <p className="mt-0.5 text-sm font-semibold text-strong">
-                        {graph.selected.label}
-                      </p>
-                    </div>
-                  </div>
-                  {localEdges.length === 0 ? (
-                    <p className="mt-5 text-center text-sm text-muted">
-                      No active connections to draw yet.
-                    </p>
-                  ) : (
-                    <div className="mx-auto mt-5 grid max-w-3xl gap-2 sm:grid-cols-2">
-                      {localEdges.map((relation) => {
-                        const outbound = relation.subject.id === graph.selected?.id;
-                        const other = outbound ? relation.object : relation.subject;
-                        return (
-                          <div
-                            key={relation.id}
-                            className="rounded-lg border border-edge/70 bg-raised/80 px-3 py-2.5"
-                          >
-                            <p className="text-xs text-muted">
-                              {outbound ? 'outgoing' : 'incoming'} ·{' '}
-                              {readablePredicate(relation.predicate)}
-                            </p>
-                            <p className="mt-1 flex items-center gap-1.5 text-sm font-medium text-strong">
-                              <span aria-hidden="true" className="text-accent">
-                                {outbound ? '→' : '←'}
-                              </span>
-                              <span className="truncate">{other.label}</span>
-                            </p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                <div className="mt-3">
+                  <LocalMap
+                    selected={graph.selected}
+                    edges={mapEdges}
+                    totalEdges={mapEdges.length}
+                    hrefForEntity={(entityId) => hrefFor({ q: query, entity: entityId })}
+                  />
                 </div>
               </section>
 
@@ -403,7 +395,12 @@ export default async function KnowledgeReviewPage({
                 ) : (
                   <div className="mt-3 grid gap-3">
                     {graph.relations.map((relation) => (
-                      <ReviewRelation key={relation.id} relation={relation} now={now} />
+                      <ReviewRelation
+                        key={relation.id}
+                        relation={relation}
+                        now={now}
+                        timeZone={timeZone}
+                      />
                     ))}
                   </div>
                 )}

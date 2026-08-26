@@ -78,6 +78,26 @@ describe('existing helpers stay stable', () => {
     expect(relativeTime(new Date(NOW.getTime() - 3 * 60_000), NOW)).toBe('3m ago');
   });
 
+  // Days used to run on forever, so a fact saved in 2024 read "612d ago" — a
+  // number you have to divide before it means anything.
+  it('relativeTime rolls days up into months and years', () => {
+    const daysAgo = (n: number) => new Date(NOW.getTime() - n * 86_400_000);
+    expect(relativeTime(daysAgo(29), NOW)).toBe('29d ago');
+    expect(relativeTime(daysAgo(45), NOW)).toBe('2mo ago');
+    expect(relativeTime(daysAgo(200), NOW)).toBe('7mo ago');
+    expect(relativeTime(daysAgo(612), NOW)).toBe('2y ago');
+  });
+
+  // 350 days is still under a year but rounds to 12 months; a "12mo" reading
+  // would sit awkwardly next to "1y", so months stop at 11.
+  it('relativeTime never reports twelve months', () => {
+    expect(relativeTime(new Date(NOW.getTime() - 350 * 86_400_000), NOW)).toBe('11mo ago');
+  });
+
+  it('relativeTime keeps the future direction across the new units', () => {
+    expect(relativeTime(new Date(NOW.getTime() + 400 * 86_400_000), NOW)).toBe('in 1y');
+  });
+
   it('truncate appends a single ellipsis character', () => {
     expect(truncate('abcdef', 4)).toBe('abc…');
   });

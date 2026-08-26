@@ -344,13 +344,24 @@ export function recallSourcesOf(message: UIMessage): RecallSource[] {
   return [];
 }
 
-/** "2026-07-12" → "Jul 12" (falls back to the raw string on parse failure). */
-function friendlyRecallDate(isoDay: string): string {
-  const date = new Date(`${isoDay}T00:00:00`);
+/**
+ * "2026-07-12" → "Jul 12" (falls back to the raw string on parse failure).
+ *
+ * The source day is produced UTC-side (`isoDate` in memory/graph-recall.ts), so
+ * it is read back with an explicit `Z` and formatted in UTC. Parsing it as local
+ * time and formatting in the viewer's zone shifted every source back a day for
+ * anyone west of UTC. The year appears once it differs from the current one —
+ * without it a two-year-old memory was indistinguishable from last week's.
+ */
+function friendlyRecallDate(isoDay: string, now: Date = new Date()): string {
+  const date = new Date(`${isoDay}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) return isoDay;
+  const sameYear = date.getUTCFullYear() === now.getUTCFullYear();
   return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC',
     month: 'short',
     day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
   }).format(date);
 }
 
