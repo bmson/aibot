@@ -299,25 +299,7 @@ struct MoreView: View {
                 .lineLimit(usesAccessibilityLayout ? 2 : 1)
         }
 
-        if usesAccessibilityLayout {
-            VStack(alignment: .leading, spacing: 12) {
-                CompanionCapsule(
-                    presence: model.presence,
-                    face: model.latestFace,
-                    name: model.agentName
-                )
-                details
-            }
-        } else {
-            HStack(spacing: 14) {
-                CompanionCapsule(
-                    presence: model.presence,
-                    face: model.latestFace,
-                    name: model.agentName
-                )
-                details
-            }
-        }
+        details
     }
 
     private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }

@@ -119,8 +119,8 @@ struct AssistantActivityWidget: Widget {
 
     @ViewBuilder
     private func phaseGlyph(_ tone: AssistantActivityTone) -> some View {
-        // Simple SF Symbols only — the earlier paired-capsule "eyes" read as
-        // noise at Dynamic Island sizes.
+        // Simple SF Symbols keep the Dynamic Island status clear at compact
+        // sizes.
         if tone == .working || tone == .thinking {
             ProgressView()
                 .controlSize(.mini)

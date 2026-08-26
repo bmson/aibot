@@ -83,10 +83,13 @@ export function DecisionCard({
     // page's own ink and accent — see conversation.css. Everything the
     // assistant PLACES in the log is paper; only its speech is stage-side.
     <section
-      className={`paper ${CARD_WIDTH} overflow-hidden rounded-xl border bg-raised ${styles.edge}`}
+      data-decision-card="true"
+      data-tone={tone}
+      className={`paper ${CARD_WIDTH} overflow-hidden rounded-[1.125rem] border bg-raised ${styles.edge}`}
     >
       <div
-        className={`flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5 ${styles.band}`}
+        data-decision-card-header="true"
+        className={`flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 sm:px-5 ${styles.band}`}
       >
         <p className={`flex min-w-0 items-center gap-2.5 ${microLabelClass} ${styles.label}`}>
           <span
@@ -98,7 +101,9 @@ export function DecisionCard({
         </p>
         {action}
       </div>
-      <div className="min-w-0 px-4 py-3">{children}</div>
+      <div data-decision-card-body="true" className="min-w-0 px-4 py-4 sm:px-5">
+        {children}
+      </div>
     </section>
   );
 }

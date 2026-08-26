@@ -11,10 +11,9 @@
    in sync from this one block.
 
    Two grounds share the family. Regular pages sit on the quiet green paper
-   (--surface); the chat sits on the stage (--stage) — the saturated green the
-   companion's world is painted in — with its own text pair, because ink that
-   reads on paper does not read on the stage. --ink is the companion's housing:
-   the notch it lives in and the mark it opens an empty chat with. */
+   (--surface); the chat sits on the stage (--stage) — a deeper green with its
+   own text pair, because ink that reads on paper does not read on the stage.
+   --ink is the dark utility surface used by the status notch and opening mark. */
 :root {
   --surface: #eef5f0; /* Canvas — green paper */
   --surface-raised: #ffffff; /* Panel */
@@ -33,7 +32,7 @@
      white because the accent is dark in one scheme and light in the other —
      white on the light one is barely 2:1. */
   --on-accent: #ffffff;
-  --ink: #131d17; /* The companion's housing: the notch, the opening mark */
+  --ink: #131d17; /* Dark utility surface: the status notch and opening mark */
   --stage: #2b8253; /* The chat's canvas */
   --stage-strong: #f4faf5; /* Ink for text sitting directly on the stage */
   --stage-muted: rgb(234 246 238 / 0.72);

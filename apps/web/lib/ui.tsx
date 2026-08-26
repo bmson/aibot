@@ -409,17 +409,19 @@ export function MetaLine({
   segments: ReactNode[];
   className?: string;
 }) {
+  const metaSegmentClass =
+    'flex min-w-0 max-w-full items-center gap-x-2 break-words whitespace-normal';
   const visible = segments.filter(
     (segment) => segment !== null && segment !== undefined && segment !== false && segment !== '',
   );
   if (visible.length === 0) return null;
   return (
     <p
-      className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs leading-5 text-muted ${className}`}
+      className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted ${className}`}
     >
       {visible.map((segment, index) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: segments are positional
-        <span key={index} className="flex min-w-0 items-center gap-x-2 whitespace-nowrap">
+        <span key={index} className={metaSegmentClass}>
           {index > 0 ? (
             <span aria-hidden="true" className="text-muted/60">
               ·

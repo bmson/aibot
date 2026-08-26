@@ -21,7 +21,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } 
 import { signOutAction } from '@/app/actions';
 import { destinationIcon, formatBadgeCount, useNavCommands } from '@/app/nav-commands';
 import { cancelTask } from '@/app/tasks/actions';
-import { chipsOf, latestFace, latestTheme } from '@/lib/chat-cues';
+import { chipsOf, latestTheme } from '@/lib/chat-cues';
 import {
   isAsyncAcknowledgement,
   isContractNotice,
@@ -39,7 +39,6 @@ import { toolLabel } from '@/lib/views';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
 import { ActionChips } from './action-chips';
 import { ApprovalGroup } from './approval-group';
-import { CompanionFace } from './companion-face';
 import type { InlineApprovalPart } from './inline-approval';
 import { InlineBudgetRequest, type InlineBudgetRequestPart } from './inline-budget-request';
 import { type InlineSuggestionPart, SuggestionCard } from './inline-suggestion';
@@ -103,6 +102,7 @@ const PARKED_TASK_STATUSES = new Set(['waiting_approval', 'waiting_budget', 'nee
  * park that legitimately has no card (plain needs_attention prose) still ends.
  */
 const PARK_GRACE_TICKS = 4;
+const EMPTY_SERVER_IDS = new Set<string>();
 
 /** An approval or budget card — the thing a parked task is waiting on. */
 function hasDecisionPart(message: UIMessage): boolean {
@@ -253,12 +253,18 @@ export function ChatClient({
   const [composerHeight, setComposerHeight] = useState(112);
   const stickToBottomRef = useRef(true);
   const previousMessageCountRef = useRef(initialMessages.length);
-  const previousTranscriptLengthRef = useRef(
-    initialMessages.reduce((total, message) => total + messageText(message).length, 0),
-  );
+  const previousTranscriptLengthRef = useRef<number | null>(null);
+  if (previousTranscriptLengthRef.current === null) {
+    previousTranscriptLengthRef.current = initialMessages.reduce(
+      (total, message) => total + messageText(message).length,
+      0,
+    );
+  }
   /** Messages present at mount render static; only genuinely new ones animate in. */
   const initialMessageIdsRef = useRef<Set<string> | null>(null);
-  initialMessageIdsRef.current ??= new Set(initialMessages.map((message) => message.id));
+  if (initialMessageIdsRef.current === null) {
+    initialMessageIdsRef.current = new Set(initialMessages.map((message) => message.id));
+  }
   /**
    * Where each message came into the log. Only the client's own messages need
    * it — they carry no send time to sort on — but it is assigned to every id so
@@ -278,7 +284,10 @@ export function ChatClient({
    * optimistic user turn, a reply still streaming — is not in here, which is
    * how the merge tells its own provisional copies from durable ones.
    */
-  const serverIdsRef = useRef<Set<string>>(new Set(initialMessages.map((message) => message.id)));
+  const serverIdsRef = useRef<Set<string> | null>(null);
+  if (serverIdsRef.current === null) {
+    serverIdsRef.current = new Set(initialMessages.map((message) => message.id));
+  }
   /** Read inside the poll loop, which must not re-subscribe when these change. */
   const asyncTurnRef = useRef<{ taskId: string; cursor: string } | null>(initialAsyncTurn ?? null);
   const statusRef = useRef<string>('ready');
@@ -356,7 +365,7 @@ export function ChatClient({
       orderChatLog(
         messages.filter(
           (message) =>
-            serverIdsRef.current.has(message.id) || !isAsyncAcknowledgement(messageText(message)),
+            serverIdsRef.current?.has(message.id) || !isAsyncAcknowledgement(messageText(message)),
         ),
         arrivalOrderRef.current,
       ),
@@ -397,7 +406,7 @@ export function ChatClient({
     // appends cannot disagree about where a message goes.
     const mergeMessages = (incoming: UIMessage[], refreshed: UIMessage[]) => {
       const arriving = [...incoming, ...refreshed];
-      for (const message of arriving) serverIdsRef.current.add(message.id);
+      for (const message of arriving) serverIdsRef.current?.add(message.id);
       // A reply still streaming has no persisted twin yet, so leave replies
       // alone until it finishes. Reconciling the user's own turn is always safe
       // — it only ever removes a duplicate of something already on screen, and
@@ -415,8 +424,9 @@ export function ChatClient({
             merged[index] = message;
           }
         }
-        let reconciled = retireProvisionalUserTurns(merged, serverIdsRef.current);
-        if (!streaming) reconciled = retireProvisionalReplies(reconciled, serverIdsRef.current);
+        const serverIds = serverIdsRef.current ?? EMPTY_SERVER_IDS;
+        let reconciled = retireProvisionalUserTurns(merged, serverIds);
+        if (!streaming) reconciled = retireProvisionalReplies(reconciled, serverIds);
         // Reconciliation reads the whole log rather than one page, so an idle
         // tick can still finish what a tick during a stream could not. Hand
         // back the same array when nothing moved so React skips the re-render.
@@ -433,7 +443,7 @@ export function ChatClient({
       turnRef.current = null;
     };
 
-    const tick = async () => {
+    const poll = async () => {
       if (cancelled) return;
       const turn = asyncTurnRef.current;
       // Nothing to catch up on while the tab is hidden, and a background tab
@@ -516,6 +526,29 @@ export function ChatClient({
       schedule(asyncTurnRef.current);
     };
 
+    // A visibility change or a newly handed-off task can wake the loop while
+    // the previous request is still in flight. Queue one follow-up instead of
+    // allowing responses to race and move the cursor out of order.
+    let pollInFlight = false;
+    let pollQueued = false;
+    const tick = async () => {
+      if (pollInFlight) {
+        pollQueued = true;
+        return;
+      }
+      pollInFlight = true;
+      try {
+        await poll();
+      } finally {
+        pollInFlight = false;
+        if (pollQueued && !cancelled) {
+          pollQueued = false;
+          window.clearTimeout(timer);
+          timer = window.setTimeout(tick, 0);
+        }
+      }
+    };
+
     const schedule = (turn: { taskId: string } | null) => {
       if (cancelled) return;
       timer = window.setTimeout(tick, turn ? ACTIVE_POLL_MS : IDLE_POLL_MS);
@@ -551,9 +584,6 @@ export function ChatClient({
   const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
 
   const chatTheme = useMemo(() => latestTheme(log), [log]);
-  // The face the reply cues asked for — the same vocabulary the iOS capsule
-  // renders, now shown on the dashboard too.
-  const companionFace = useMemo(() => latestFace(log), [log]);
   const companionActivity: CompanionActivity =
     status === 'submitted'
       ? 'thinking'
@@ -799,7 +829,7 @@ export function ChatClient({
   useEffect(() => {
     const addedMessages = Math.max(0, log.length - previousMessageCountRef.current);
     const transcriptLength = log.reduce((total, message) => total + messageText(message).length, 0);
-    const streamedTextGrew = transcriptLength > previousTranscriptLengthRef.current;
+    const streamedTextGrew = transcriptLength > (previousTranscriptLengthRef.current ?? 0);
     if (!stickToBottomRef.current && (addedMessages > 0 || streamedTextGrew)) {
       setUnseenCount((count) => (addedMessages > 0 ? count + addedMessages : Math.max(count, 1)));
     }
@@ -998,12 +1028,6 @@ export function ChatClient({
         </div>
       ) : null}
 
-      {/* The companion's face, resting at the thread's edge — expression only;
-          activity stays with the island and words carry the meaning. */}
-      <div className="pointer-events-none absolute top-4 left-5 z-10">
-        <CompanionFace face={companionFace} />
-      </div>
-
       <div
         ref={messageScrollerRef}
         role="log"
@@ -1160,6 +1184,9 @@ export function ChatClient({
                     className={`flex min-w-0 flex-col gap-2 first:mt-0 ${startsRun ? 'mt-7' : 'mt-2'} ${
                       isNewMessage ? 'motion-safe:animate-[message-in_220ms_ease-out]' : ''
                     }`}
+                    data-message-block="true"
+                    data-role={message.role}
+                    data-run-start={startsRun}
                   >
                     {noticeKind !== null ? (
                       <NoticeCard kind={noticeKind} text={fullText} />

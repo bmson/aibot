@@ -6,7 +6,6 @@ struct ConnectionView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let isOnboarding: Bool
     let showsDoneButton: Bool
 
@@ -167,9 +166,6 @@ struct ConnectionView: View {
 
     private var introduction: some View {
         VStack(alignment: .leading, spacing: 14) {
-            CompanionCapsule(presence: .idle, face: .warmSmile, name: "Assistant")
-                .scaleEffect(dynamicTypeSize.isAccessibilitySize ? 1 : 1.25, anchor: .leading)
-                .padding(.bottom, 5)
             Text("Your assistant, at home on iPhone.")
                 .font(.largeTitle.bold())
             Text("Chat, follow long-running work, manage goals, and approve real-world actions from a native interface. Your data and agent stay on the server you control.")

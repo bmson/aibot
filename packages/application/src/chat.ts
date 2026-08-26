@@ -566,10 +566,12 @@ export async function getChatUpdates(
   const refreshIds = (input.refreshIds ?? [])
     .filter((id) => UUID_RE.test(id))
     .slice(0, MAX_REFRESH_IDS);
-  const refreshed = await hydrateChatApprovals(
-    db,
-    toUiMessages(await listMessagesByIds(db, input.conversationId, refreshIds)),
-  );
+  const refreshed = refreshIds.length
+    ? await hydrateChatApprovals(
+        db,
+        toUiMessages(await listMessagesByIds(db, input.conversationId, refreshIds)),
+      )
+    : [];
   const nextCursor = advanceCursor(page, cursor, hasMore, input.now ?? new Date());
   const taskId = input.taskId;
   const activity =

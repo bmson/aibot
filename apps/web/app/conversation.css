@@ -1,10 +1,10 @@
 /* Conversation (chat) styling
  *
- * The chat is the companion's own room. Where every other page sits on the
- * quiet green paper, the chat sits on the stage — the saturated green the
- * creature in the notch lives in — and the two voices are cut from materials
+ * The chat is the assistant's workbench. Where every other page sits on the
+ * quiet green paper, the chat sits on the stage — a deeper green that gives
+ * the transcript its own room — and the two voices are cut from materials
  * that say who is speaking without a label: the assistant speaks in --ink, the
- * same body the notch housing is made of, and the owner speaks in paper.
+ * same dark utility material as the status notch, and the owner speaks in paper.
  *
  * Selectors intentionally build on the existing semantic structure so behavior
  * and accessibility remain unchanged.
@@ -106,8 +106,8 @@ body:has(.chat-viewport) {
   padding-inline: clamp(0.5rem, 4vw, 2rem);
 }
 
-/* The greeting's mark echoes the companion's housing: same ink, same soft
-   square, so the first thing on an empty screen is recognisably its face. */
+/* The opening mark gives the empty state one quiet anchor without competing
+   with the prompt or the suggested actions. */
 .scroll-subtle .my-auto > span:first-child {
   position: relative;
   border-radius: 1.25rem;
@@ -181,9 +181,9 @@ body:has(.chat-viewport) {
 /* ── The two voices ───────────────────────────────────────────────────────────
    The assistant speaks on paper and you speak on the stage itself. That is the
    whole distinction: one voice brings a material with it, the other is drawn
-   directly on the green with a hairline and needs none. Both bubbles carry the
-   same radius on all four corners — a tail corner pointed at the speaker, and
-   nothing else on the screen has an asymmetric corner to answer it. */
+   directly on the green with a hairline and needs none. Each bubble has one
+   quiet asymmetric corner toward its speaker, so the exchange has direction
+   without adding labels. */
 .bubble-assistant {
   /* The paper's own palette, re-pointed onto the page tokens the markdown
      renderer uses (bg-sunken, border-edge, text-muted, text-accent). Without
@@ -198,6 +198,8 @@ body:has(.chat-viewport) {
   --accent-hover: var(--bubble-paper-accent-hover);
   background: var(--bubble-paper);
   color: var(--bubble-paper-ink);
+  border: 1px solid var(--bubble-paper-edge);
+  border-top-left-radius: 0.625rem;
   box-shadow: 0 8px 22px rgb(0 0 0 / 0.12);
 }
 
@@ -213,12 +215,56 @@ body:has(.chat-viewport) {
    shadow with nothing casting it. */
 .bubble-owner {
   border: 1px solid rgb(255 255 255 / 0.25);
-  background: transparent;
+  background: color-mix(in srgb, var(--stage-strong) 5%, transparent);
   /* A shade under full strength. Your own words are the half of the thread you
      already know; letting them sit back a step puts the reply in front without
      changing the size or the position of anything. */
   color: color-mix(in srgb, var(--stage-strong) 90%, transparent);
   box-shadow: none;
+  border-bottom-right-radius: 0.625rem;
+}
+
+/* Cards are records placed into the thread, not another speaking bubble. A
+   restrained lift lets their paper plane separate from both voices while the
+   header band keeps the state readable at a glance. */
+[data-decision-card="true"] {
+  position: relative;
+  box-shadow: 0 10px 26px rgb(0 0 0 / 0.08);
+}
+
+[data-decision-card="true"]::before {
+  position: absolute;
+  z-index: 1;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--accent-paper);
+  content: "";
+  opacity: 0.45;
+}
+
+[data-decision-card="true"][data-tone="waiting"]::before {
+  background: #d97706;
+  opacity: 0.7;
+}
+
+/* Consecutive turns from one speaker are one thought, not a pile of unrelated
+   cards. Close the seam and soften the outer corner after the first block. */
+[data-message-block="true"][data-run-start="false"] .bubble-assistant {
+  border-top-left-radius: 1rem;
+}
+
+[data-message-block="true"][data-run-start="false"] .bubble-owner {
+  border-bottom-right-radius: 1rem;
+}
+
+/* Tables are compact evidence displays inside a reply. Alternating rows make
+   long lookups scannable without adding another boxed panel to the message. */
+.bubble-assistant table tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--bubble-paper-sunken) 42%, transparent);
+}
+
+.bubble-assistant table th {
+  white-space: nowrap;
 }
 
 /* Quick-reply chips (action-chips.tsx) sit in a row under a reply and read as

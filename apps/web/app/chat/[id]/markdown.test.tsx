@@ -10,7 +10,9 @@ describe('MessageMarkdown', () => {
       />,
     );
 
-    expect(html).toContain('<h1 class="mt-6 mb-2 text-lg leading-6 font-semibold first:mt-0">');
+    expect(html).toContain(
+      '<h1 class="mt-6 mb-2 text-lg leading-6 font-semibold text-balance first:mt-0">',
+    );
     expect(html).toContain('<strong class="font-semibold ">important</strong>');
     expect(html).toContain('<em class="italic ">qualified</em>');
     expect(html).toContain('<del class="decoration-muted/70 ">superseded</del>');
@@ -37,5 +39,15 @@ describe('MessageMarkdown', () => {
     // folding it to a space is what produced a single block of text.
     expect(html).toContain('whitespace-pre-line');
     expect(html).toContain('receipts:\nAmazon');
+  });
+
+  it('keeps lookup tables compact and scannable', () => {
+    const html = renderToStaticMarkup(
+      <MessageMarkdown text={'| Item | Count |\n| :--- | ---: |\n| Receipts | 12 |'} />,
+    );
+
+    expect(html).toContain('[font-variant-numeric:tabular-nums]');
+    expect(html).toContain('align-top');
+    expect(html).toContain('Receipts');
   });
 });

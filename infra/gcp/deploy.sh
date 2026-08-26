@@ -85,6 +85,10 @@ SEARCH_PROVIDER="${SEARCH_PROVIDER:-none}"
 SEARCH_API_KEY="$(envval SEARCH_API_KEY)"
 GITHUB_TOKEN="$(envval GITHUB_TOKEN)"
 GITHUB_REPO="$(envval GITHUB_REPO)"
+APNS_KEY_ID="$(envval APNS_KEY_ID)"
+APNS_TEAM_ID="$(envval APNS_TEAM_ID)"
+APNS_PRIVATE_KEY="$(envval APNS_PRIVATE_KEY)"
+APNS_BUNDLE_ID="$(envval APNS_BUNDLE_ID)"
 
 [ -n "$PROD_DATABASE_URL" ] || { echo "PROD_DATABASE_URL missing from .env"; exit 1; }
 [ -n "$OPENROUTER_API_KEY" ] || { echo "OPENROUTER_API_KEY missing from .env"; exit 1; }
@@ -309,6 +313,7 @@ make_secret twilio-auth-token "$TWILIO_AUTH_TOKEN"
 make_secret profile-enc-key "$PROFILE_ENC_KEY"
 make_secret search-api-key "$SEARCH_API_KEY"
 make_secret github-token "$GITHUB_TOKEN"
+make_secret apns-private-key "$APNS_PRIVATE_KEY"
 
 # Explicit per-runtime secret grants. In particular, the browser can read only
 # its profile key and never receives database, model, OAuth, or Twilio secrets.
@@ -319,6 +324,7 @@ grant_secret bot-google-refresh-token "$AGENT_SA"
 grant_secret twilio-auth-token "$AGENT_SA"
 grant_secret search-api-key "$AGENT_SA"
 grant_secret github-token "$AGENT_SA"
+grant_secret apns-private-key "$AGENT_SA"
 for secret in database-url openrouter-api-key google-oauth-client-id google-oauth-client-secret auth-secret mobile-api-token; do
   grant_secret "$secret" "$WEB_SA"
 done
@@ -327,7 +333,7 @@ if module_enabled browser; then
 fi
 for secret in database-url openrouter-api-key google-oauth-client-id google-oauth-client-secret \
   bot-google-refresh-token internal-api-secret auth-secret twilio-auth-token profile-enc-key \
-  search-api-key github-token mobile-api-token; do
+  search-api-key github-token mobile-api-token apns-private-key; do
   revoke_legacy_secret_access "$secret"
 done
 
@@ -366,6 +372,9 @@ fi
 if [ -n "$GITHUB_TOKEN" ]; then
   AGENT_SECRETS="${AGENT_SECRETS},GITHUB_TOKEN=github-token:latest"
 fi
+if [ -n "$APNS_PRIVATE_KEY" ]; then
+  AGENT_SECRETS="${AGENT_SECRETS},APNS_PRIVATE_KEY=apns-private-key:latest"
+fi
 CANARY_VALUE="$(envval CANARY_ENABLED)"
 if [ -z "$CANARY_VALUE" ]; then
   if module_enabled google && module_enabled browser; then
@@ -386,7 +395,7 @@ gcloud run deploy assistant-agent \
   --image "${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/agent:latest" \
   --region "$REGION" --allow-unauthenticated --service-account "$AGENT_SA" \
   --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3 --concurrency 4 --timeout 900 \
-  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|GMAIL_PUBSUB_TOPIC=${GMAIL_TOPIC_VALUE}|GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_IDENTITY}|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|BROWSER_DRIVER=cloudrun|BROWSER_JOB_NAME=assistant-browser|CODE_DRIVER=cloudrun|CODE_JOB_NAME=assistant-code|PROCESSOR_DRIVER=cloudrun|PROCESSOR_JOB_NAME=assistant-processor|TRACES_BUCKET=${TRACES_BUCKET}|CANARY_ENABLED=${CANARY_VALUE}|CANARY_MAX_COST_USD=0.03|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none${SEARCH_ENV}${GITHUB_ENV}${TWILIO_ENV}${SELF_URL_ENV}" \
+  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|GMAIL_PUBSUB_TOPIC=${GMAIL_TOPIC_VALUE}|GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_IDENTITY}|APNS_KEY_ID=${APNS_KEY_ID}|APNS_TEAM_ID=${APNS_TEAM_ID}|APNS_BUNDLE_ID=${APNS_BUNDLE_ID}|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|BROWSER_DRIVER=cloudrun|BROWSER_JOB_NAME=assistant-browser|CODE_DRIVER=cloudrun|CODE_JOB_NAME=assistant-code|PROCESSOR_DRIVER=cloudrun|PROCESSOR_JOB_NAME=assistant-processor|TRACES_BUCKET=${TRACES_BUCKET}|CANARY_ENABLED=${CANARY_VALUE}|CANARY_MAX_COST_USD=0.03|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none${SEARCH_ENV}${GITHUB_ENV}${TWILIO_ENV}${SELF_URL_ENV}" \
   --set-secrets "$AGENT_SECRETS" \
   --quiet
 

@@ -2,7 +2,7 @@
 
 The native SwiftUI client keeps the agent runtime on the existing Assistant server. It provides:
 
-- streamed chat with the companion expression and color cues;
+- streamed chat with live activity cues;
 - background polling for long-running turns and proactive updates;
 - native Activity, Goals, Approvals, Documents, and memory summaries;
 - a chat-first shell with no persistent navigation chrome; pull beyond the latest message to reveal controls;

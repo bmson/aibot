@@ -86,7 +86,7 @@ export function chipsOf(message: UIMessage): string[] {
   return [];
 }
 
-/** The companion's resting expression: the newest cue in the visible log. */
+/** The newest legacy face cue in the visible log. Kept for old messages. */
 export function latestFace(log: UIMessage[]): FaceState {
   for (let index = log.length - 1; index >= 0; index -= 1) {
     const message = log[index];

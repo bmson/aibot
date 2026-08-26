@@ -250,8 +250,6 @@ struct RootView: View {
             .ignoresSafeArea()
 
             VStack(spacing: 18) {
-                CompanionCapsule(presence: .working, face: .focused, name: "Assistant")
-                    .scaleEffect(dynamicTypeSize.isAccessibilitySize ? 1 : 1.25)
                 Text("Waking your assistant")
                     .font(.headline)
                 ProgressView().tint(AssistantTheme.accent(for: colorScheme))

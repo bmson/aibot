@@ -132,18 +132,19 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * requires every returned event to survive into the answer, allows times to be
  * reformatted but never moved, and bans narrating the lookup or reciting raw
  * record fields.
- * v28: chat replies drop emojis and perky status-report phrasing — the
- * dashboard companion lets the animated face carry the expression while the
- * words themselves stay plain and conversational.
+ * v28: chat replies drop emojis and perky status-report phrasing; the words
+ * themselves stay plain and conversational.
  * v29: conversational rules — engage with small talk directly instead of
  * deflecting to capabilities, and follow up like a person (one natural
  * question on an open loop, never a stock closer on a closed one).
  * v30: the [break] cue joins the dashboard vocabulary — a reply can split
  * into separate chat bubbles at natural beats (see chat-cues.ts).
+ * v31: the dashboard no longer renders the companion face, so the prompt no
+ * longer asks the model to emit facial-expression cues.
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 30;
+export const PROMPT_VERSION = 31;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is

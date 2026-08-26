@@ -13,7 +13,6 @@
 		B00000000000000000000004 /* Models/APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000004 /* Models/APIModels.swift */; };
 		B00000000000000000000005 /* Networking/KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000005 /* Networking/KeychainStore.swift */; };
 		B00000000000000000000006 /* Networking/APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000006 /* Networking/APIClient.swift */; };
-		B00000000000000000000007 /* Components/CompanionCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000007 /* Components/CompanionCapsule.swift */; };
 		B00000000000000000000008 /* Components/StatusPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000008 /* Components/StatusPill.swift */; };
 		B00000000000000000000009 /* Components/MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000009 /* Components/MessageBubble.swift */; };
 		B00000000000000000000052 /* Components/OnDeviceCardParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000053 /* Components/OnDeviceCardParser.swift */; };
@@ -78,7 +77,6 @@
 		C00000000000000000000004 /* Models/APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/APIModels.swift; sourceTree = "<group>"; };
 		C00000000000000000000005 /* Networking/KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Networking/KeychainStore.swift; sourceTree = "<group>"; };
 		C00000000000000000000006 /* Networking/APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Networking/APIClient.swift; sourceTree = "<group>"; };
-		C00000000000000000000007 /* Components/CompanionCapsule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/CompanionCapsule.swift; sourceTree = "<group>"; };
 		C00000000000000000000008 /* Components/StatusPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/StatusPill.swift; sourceTree = "<group>"; };
 		C00000000000000000000009 /* Components/MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/MessageBubble.swift; sourceTree = "<group>"; };
 		C00000000000000000000053 /* Components/OnDeviceCardParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/OnDeviceCardParser.swift; sourceTree = "<group>"; };
@@ -167,7 +165,6 @@
 				C00000000000000000000015 /* System/LiveActivityManager.swift */,
 				C00000000000000000000016 /* System/NotificationManager.swift */,
 				C00000000000000000000051 /* System/LocationManager.swift */,
-				C00000000000000000000007 /* Components/CompanionCapsule.swift */,
 				C00000000000000000000022 /* Components/ActivityCrown.swift */,
 				C00000000000000000000024 /* Components/ChatDashboard.swift */,
 				C00000000000000000000008 /* Components/StatusPill.swift */,
@@ -346,7 +343,6 @@
 				B00000000000000000000014 /* System/LiveActivityManager.swift in Sources */,
 				B00000000000000000000015 /* System/NotificationManager.swift in Sources */,
 				B00000000000000000000051 /* System/LocationManager.swift in Sources */,
-				B00000000000000000000007 /* Components/CompanionCapsule.swift in Sources */,
 				B00000000000000000000019 /* Components/ActivityCrown.swift in Sources */,
 				B0000000000000000000001B /* Components/ChatDashboard.swift in Sources */,
 				B00000000000000000000008 /* Components/StatusPill.swift in Sources */,
