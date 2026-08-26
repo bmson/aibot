@@ -48,9 +48,9 @@ export const agents = pgTable('agents', {
 
 /**
  * Owner-configured remote Model Context Protocol servers. The endpoint and
- * server-advertised tool metadata are durable; credentials deliberately are
- * not. An authorization-required server stays visible as such instead of
- * encouraging the app to persist bearer tokens in the database.
+ * server-advertised tool metadata are durable; bearer credentials are stored
+ * separately as authenticated encryption and are never selected for UI/model
+ * summaries.
  */
 export const mcpConnections = pgTable(
   'mcp_connections',
@@ -63,6 +63,8 @@ export const mcpConnections = pgTable(
     name: text('name').notNull(),
     /** One Streamable HTTP endpoint, normalized and validated before persistence. */
     endpoint: text('endpoint').notNull(),
+    /** AES-GCM payload for the optional bearer token; never expose this field. */
+    bearerTokenEncrypted: text('bearer_token_encrypted'),
     /** ready | checking | authorization_required | error | disabled */
     status: text('status').notNull().default('checking'),
     enabled: boolean('enabled').notNull().default(true),
@@ -223,6 +225,56 @@ export const messages = pgTable(
         sql`${t.embedding} IS NULL AND ${t.role} IN ('user','assistant') AND length(${t.text}) > 20`,
       ),
     index('messages_embedding_idx').using('hnsw', t.embedding.op('vector_cosine_ops')),
+  ],
+);
+
+/**
+ * Explicit conversational open loops. These are owner-private continuity
+ * records, not instructions: extraction may create or update them, but only
+ * the normal task/approval machinery may perform work.
+ */
+export const commitments = pgTable(
+  'commitments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    sourceMessageId: uuid('source_message_id').references(() => messages.id, {
+      onDelete: 'set null',
+    }),
+    sourceTaskId: uuid('source_task_id').references((): AnyPgColumn => tasks.id, {
+      onDelete: 'set null',
+    }),
+    kind: text('kind').notNull(),
+    title: text('title').notNull(),
+    details: text('details').notNull().default(''),
+    nextAction: text('next_action').notNull().default(''),
+    status: text('status').notNull().default('open'),
+    dueAt: timestamp('due_at', { withTimezone: true }),
+    snoozedUntil: timestamp('snoozed_until', { withTimezone: true }),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    resolution: text('resolution'),
+    confidence: numeric('confidence', { precision: 3, scale: 2 }).notNull().default('0.9'),
+    contentHash: text('content_hash').notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      'commitments_kind_check',
+      sql`${t.kind} IN ('decision','question','promise','waiting_on')`,
+    ),
+    check(
+      'commitments_status_check',
+      sql`${t.status} IN ('open','resolved','snoozed','dismissed','stale')`,
+    ),
+    check('commitments_confidence_check', sql`${t.confidence} >= 0 AND ${t.confidence} <= 1`),
+    uniqueIndex('commitments_agent_hash_idx').on(t.agentId, t.contentHash),
+    index('commitments_agent_status_idx').on(t.agentId, t.status, t.updatedAt),
+    index('commitments_conversation_idx').on(t.conversationId, t.status, t.createdAt),
   ],
 );
 
@@ -1831,6 +1883,7 @@ export type McpConnectionRow = typeof mcpConnections.$inferSelect;
 export type GoalRow = typeof goals.$inferSelect;
 export type ConversationRow = typeof conversations.$inferSelect;
 export type MessageRow = typeof messages.$inferSelect;
+export type CommitmentRow = typeof commitments.$inferSelect;
 export type ConversationSegmentRow = typeof conversationSegments.$inferSelect;
 export type TaskRow = typeof tasks.$inferSelect;
 export type ToolCallRow = typeof toolCalls.$inferSelect;

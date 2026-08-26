@@ -421,6 +421,20 @@
       "when": 1787700736099,
       "tag": "0059_omniscient_sway",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1787719978946,
+      "tag": "0060_loose_betty_ross",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1787720000000,
+      "tag": "0061_bearer_mcp_credentials",
+      "breakpoints": true
     }
   ]
 }

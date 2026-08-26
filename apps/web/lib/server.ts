@@ -8,6 +8,7 @@ import {
   archiveInactiveChats,
   changeChatModel,
   checkReadiness,
+  correctOwnerCommitment,
   createChatConversation,
   createMcpConnection,
   decideApproval,
@@ -18,6 +19,7 @@ import {
   deleteMcpConnection,
   dismissAnomalyRecord,
   dismissImprovementProposal,
+  dismissOwnerCommitment,
   downloadArtifact,
   editAssistantSkill,
   getAssistantIdentity,
@@ -37,6 +39,7 @@ import {
   listApprovalInbox,
   listAssistantSkills,
   listChatHistory,
+  listCommitmentOverview,
   listGoalsDashboard,
   listImprovementProposals,
   listMcpConnections,
@@ -44,6 +47,7 @@ import {
   recordOwnerForeground,
   recordOwnerLocationPing,
   registerDeviceToken,
+  resolveOwnerCommitment,
   restoreChatConversation,
   reviewImportedSource,
   saveMcpDiscovery,
@@ -51,6 +55,7 @@ import {
   setAssistantSkillDeprecated,
   setMcpConnectionEnabled,
   setRecurringJobEnabled,
+  snoozeOwnerCommitment,
   startWorkspaceImport,
   suspendAnomalyRecord,
   updateAssistantSettings,
@@ -132,7 +137,9 @@ function createApplication() {
   const refreshMcpConnection = async (connectionId: string) => {
     const current = await getMcpConnection(db, connectionId);
     if (!current) return { error: 'MCP connection not found.' };
-    const discovery = await inspectMcpConnection(current.endpoint);
+    const discovery = await inspectMcpConnection(current.endpoint, {
+      bearerTokenEncrypted: current.bearerTokenEncrypted,
+    });
     await saveMcpDiscovery(db, connectionId, discovery);
     return { connectionId, ...discovery };
   };
@@ -154,7 +161,7 @@ function createApplication() {
     setSkillDeprecated: (id: string, deprecated: boolean) =>
       setAssistantSkillDeprecated(db, id, deprecated),
     listMcpConnections: () => listMcpConnections(db),
-    addMcpConnection: async (input: { name: string; endpoint: string }) => {
+    addMcpConnection: async (input: { name: string; endpoint: string; bearerToken?: string }) => {
       const created = await createMcpConnection(db, input);
       if (!created.connection) return created;
       return refreshMcpConnection(created.connection.id);
@@ -205,6 +212,15 @@ function createApplication() {
       filter: 'all' | 'needs-you' | 'working' | 'scheduled' | 'completed';
       limit?: number;
     }) => listActivity(db, input),
+    listCommitments: () => listCommitmentOverview(db),
+    resolveCommitment: (id: string, resolution: string) =>
+      resolveOwnerCommitment(db, id, resolution),
+    snoozeCommitment: (id: string, until: Date) => snoozeOwnerCommitment(db, id, until),
+    dismissCommitment: (id: string) => dismissOwnerCommitment(db, id),
+    correctCommitment: (
+      id: string,
+      patch: { title: string; details?: string; nextAction?: string },
+    ) => correctOwnerCommitment(db, id, patch),
     listGoals: (archived: boolean) => listGoalsDashboard(db, archived),
     listApprovals: () => listApprovalInbox(db),
     decideApproval: (approvalId: string, decision: 'approved' | 'denied') =>

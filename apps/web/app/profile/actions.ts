@@ -25,12 +25,50 @@ import {
 } from '@assistant/application/profile';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getDb, getRouter, getWorkspace } from '@/lib/server';
+import { getApplication, getDb, getRouter, getWorkspace } from '@/lib/server';
 
 export type { OrganizeMemoryState, ProminenceLevel } from '@assistant/application/profile';
 
 function revalidateProfile(): void {
   revalidatePath('/profile', 'layout');
+}
+
+export async function resolveCommitmentAction(id: string): Promise<void> {
+  await requireOwner();
+  await getApplication().resolveCommitment(id, 'Owner confirmed this loop is resolved.');
+  revalidateProfile();
+}
+
+export async function dismissCommitmentAction(id: string): Promise<void> {
+  await requireOwner();
+  await getApplication().dismissCommitment(id);
+  revalidateProfile();
+}
+
+export async function snoozeCommitmentAction(id: string): Promise<void> {
+  await requireOwner();
+  await getApplication().snoozeCommitment(id, new Date(Date.now() + 24 * 3600 * 1000));
+  revalidateProfile();
+}
+
+export async function correctCommitmentAction(
+  id: string,
+  title: string,
+  details: string,
+  nextAction: string,
+): Promise<void> {
+  await requireOwner();
+  await getApplication().correctCommitment(id, { title, details, nextAction });
+  revalidateProfile();
+}
+
+export async function correctCommitmentFormAction(id: string, formData: FormData): Promise<void> {
+  await correctCommitmentAction(
+    id,
+    String(formData.get('title') ?? ''),
+    String(formData.get('details') ?? ''),
+    String(formData.get('nextAction') ?? ''),
+  );
 }
 
 export async function confirmFact(memoryId: string): Promise<void> {

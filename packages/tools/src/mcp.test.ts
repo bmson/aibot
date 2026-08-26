@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { encryptMcpBearerToken } from '@assistant/core/mcp-secrets';
 import { checkedMcpEndpoint, inspectMcpConnection } from './mcp.js';
 
 describe('MCP Streamable HTTP client', () => {
@@ -56,6 +57,33 @@ describe('MCP Streamable HTTP client', () => {
       status: 'authorization_required',
       tools: [],
     });
+  });
+
+  it('sends an encrypted bearer credential on discovery requests without exposing it', async () => {
+    process.env.MCP_ENC_KEY = 'test-mcp-encryption-key';
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          { jsonrpc: '2.0', id: 1, result: { serverInfo: { name: 'Private MCP' } } },
+          { headers: { 'Mcp-Session-Id': 'session-1' } },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 202 }))
+      .mockResolvedValueOnce(
+        Response.json({ jsonrpc: '2.0', id: 2, result: { tools: [] } }),
+      );
+
+    const discovery = await inspectMcpConnection('http://localhost:3010/mcp', {
+      fetchImpl,
+      bearerTokenEncrypted: encryptMcpBearerToken('secret-token'),
+    });
+
+    expect(discovery.status).toBe('ready');
+    expect(fetchImpl.mock.calls[0]?.[1]?.headers).toMatchObject({
+      Authorization: 'Bearer secret-token',
+    });
+    expect(JSON.stringify(discovery)).not.toContain('secret-token');
   });
 
   it('rejects non-local HTTP before it can become an outbound request', async () => {

@@ -21,6 +21,7 @@ struct GoalsView: View {
                         description: "Give the assistant an outcome in chat and it can keep moving it forward on a schedule."
                     )
                 } else {
+                    goalOverviewLabel
                     digest
                     ForEach(goals) { item in
                         goalCard(item)
@@ -30,10 +31,8 @@ struct GoalsView: View {
             .padding(16)
             .padding(.bottom, 28)
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("Goals")
-        .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
+        .assistantSubmenuChrome()
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
@@ -147,6 +146,23 @@ struct GoalsView: View {
         .assistantPanel(in: colorScheme)
     }
 
+    private var goalOverviewLabel: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(showingArchived ? "Archived goals" : "Your active outcomes")
+                    .font(.headline)
+                Text("Progress stays here between conversations.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Text("\(goals.count)")
+                .font(.title3.monospacedDigit().weight(.semibold))
+                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+        }
+        .assistantPanel(in: colorScheme)
+    }
+
     private func metric(value: Int, label: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("\(value)")
@@ -198,7 +214,7 @@ struct GoalsView: View {
                 .buttonStyle(.bordered)
                 .disabled(goalActionInFlight != nil)
             } else {
-                HStack(spacing: 9) {
+                AssistantFlowLayout(spacing: 9) {
                     if item.goal.status == "active" {
                         lifecycleButton(item, title: "Pause", action: "status", status: "paused")
                     } else if item.goal.status == "paused" {

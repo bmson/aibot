@@ -121,6 +121,8 @@ const ConfigSchema = z.object({
   TWILIO_AUTH_TOKEN: z.string().default(''),
   TWILIO_FROM_NUMBER: z.string().default(''),
   PROFILE_ENC_KEY: z.string().default(''),
+  /** Encryption key for owner-managed MCP bearer credentials. */
+  MCP_ENC_KEY: z.string().default(''),
   /** local = detached child process; cloudrun = Cloud Run Job execution. */
   BROWSER_DRIVER: z.enum(['local', 'cloudrun']).default('local'),
   BROWSER_JOB_NAME: z.string().default('assistant-browser'),

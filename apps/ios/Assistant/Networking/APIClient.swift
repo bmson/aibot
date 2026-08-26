@@ -328,11 +328,13 @@ struct APIClient: Sendable {
         try await get("api/mobile/v1/mcp")
     }
 
-    func createMcpConnection(name: String, endpoint: String) async throws {
+    func createMcpConnection(name: String, endpoint: String, bearerToken: String?) async throws {
         var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/mcp"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = try JSONEncoder().encode(["name": name, "endpoint": endpoint])
+        var body = ["name": name, "endpoint": endpoint]
+        if let bearerToken, !bearerToken.isEmpty { body["bearerToken"] = bearerToken }
+        request.httpBody = try JSONEncoder().encode(body)
         _ = try await perform(request, as: EmptyPayload.self)
     }
 

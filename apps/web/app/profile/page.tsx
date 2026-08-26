@@ -1,3 +1,4 @@
+import { listCommitmentOverview } from '@assistant/application/commitments';
 import { getProfileOverview, type MemorySnapshot } from '@assistant/application/profile';
 import { ArrowRight, CheckCircle2, Library, Network, ShieldQuestion } from 'lucide-react';
 import Link from 'next/link';
@@ -5,6 +6,7 @@ import { AutoRefresh } from '@/app/auto-refresh';
 import { recompileCard } from '@/app/profile/actions';
 import { AddFact } from '@/app/profile/add-fact';
 import { AddPerson } from '@/app/profile/add-person';
+import { CommitmentsPanel } from '@/app/profile/commitments-panel';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { MemoryOrganizer } from '@/app/profile/memory-organizer';
 import { type VoiceImportView, VoiceSamplesPanel } from '@/app/profile/voice-samples';
@@ -81,6 +83,7 @@ export default async function ProfilePage() {
     card,
     cardFactIds: selectedCardFactIds,
   } = await getProfileOverview(db);
+  const openCommitments = await listCommitmentOverview(db);
   const voiceImportViews: VoiceImportView[] = voiceImports.map((row) => ({
     source: row.source,
     status: row.status,
@@ -115,6 +118,8 @@ export default async function ProfilePage() {
         title="What I remember"
         intro={`See what shapes the assistant’s understanding of ${owner?.name ?? 'you'}, what still needs care, and what stays available for recall.`}
       />
+
+      <CommitmentsPanel rows={openCommitments} />
 
       <section className="mt-8">
         <div className="flex flex-wrap items-end justify-between gap-3">

@@ -62,6 +62,7 @@ export async function deletePolicy(policyId: string): Promise<void> {
 export async function createMcpConnectionAction(input: {
   name: string;
   endpoint: string;
+  bearerToken?: string;
 }): Promise<{ error?: string }> {
   await requireOwner();
   const result = await getApplication().addMcpConnection(input);

@@ -1,4 +1,5 @@
 import { getAgent } from '@assistant/core/chat';
+import { encryptMcpBearerToken } from '@assistant/core/mcp-secrets';
 import { type Db, mcpConnections } from '@assistant/db';
 import { and, asc, eq, sql } from 'drizzle-orm';
 
@@ -12,6 +13,7 @@ export type McpConnectionStatus =
 export interface McpConnectionInput {
   name: string;
   endpoint: string;
+  bearerToken?: string;
 }
 
 export interface McpConnectionDiscovery {
@@ -56,6 +58,7 @@ export async function listMcpConnections(db: Db) {
     serverVersion: row.serverVersion,
     instructions: row.instructions,
     tools: row.tools as McpConnectionDiscovery['tools'],
+    hasBearerToken: Boolean(row.bearerTokenEncrypted),
     lastCheckedAt: row.lastCheckedAt,
     lastError: row.lastError,
   }));
@@ -71,11 +74,19 @@ export async function createMcpConnection(
   if (!name) return { error: 'Give this MCP connection a name.' };
   if (!endpoint)
     return { error: 'Enter an HTTP or HTTPS MCP endpoint without embedded credentials.' };
+  const bearerToken = input.bearerToken?.trim();
+  if (bearerToken && bearerToken.length > 8_192) return { error: 'Bearer token is too long.' };
+  let bearerTokenEncrypted: string | null = null;
+  try {
+    bearerTokenEncrypted = bearerToken ? encryptMcpBearerToken(bearerToken) : null;
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Unable to protect bearer token.' };
+  }
   const agent = await getAgent(db);
   try {
     const [connection] = await db
       .insert(mcpConnections)
-      .values({ agentId: agent.id, name, endpoint, status: 'checking' })
+      .values({ agentId: agent.id, name, endpoint, bearerTokenEncrypted, status: 'checking' })
       .returning();
     return { connection };
   } catch (error) {

@@ -8,6 +8,7 @@ import { loadConfig } from '../../config.js';
 import { isForwardedIngest } from '../../email-provenance.js';
 import type { Plan, TaskState, Trust } from '../../events.js';
 import { getAmbientBlock } from '../../memory/ambient.js';
+import { listOpenCommitments, renderOpenCommitments } from '../../memory/commitments.js';
 import { getOwnerCard } from '../../memory/consolidation.js';
 import { recallKnowledgeGraph, recallWithGraphFallback } from '../../memory/graph-recall.js';
 import { recallRelevantContext, recentWindowStart } from '../../memory/recall.js';
@@ -210,6 +211,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // best-effort by design. A forwarded (tainted) email skips this — the model
   // can still use contacts.lookup / memory.recall there.
   let recallBlock: string | undefined;
+  let openLoops: string | undefined;
   if (
     loadConfig().CHAT_RECALL_ENABLED &&
     !readRequest &&
@@ -296,6 +298,19 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       } catch (err) {
         console.error('executor recall failed — continuing without it', err);
       }
+    }
+  }
+
+  if (privilegedTask && !state.untrustedContext && task.conversationId) {
+    try {
+      const lastUser = [...rc.window].reverse().find((m) => m.role === 'user');
+      const query = typeof lastUser?.content === 'string' ? lastUser.content : '';
+      openLoops =
+        renderOpenCommitments(
+          await listOpenCommitments(db, { agentId: agent.id, query, limit: 6 }),
+        ) || undefined;
+    } catch (err) {
+      console.error('executor open-loop context failed — continuing without it', err);
     }
   }
 
@@ -418,6 +433,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       buildSystemPrompt(agent, {
         ownerCard: !state.untrustedContext ? ownerCard : undefined,
         recall: !state.untrustedContext ? recallBlock : undefined,
+        openLoops: !state.untrustedContext ? openLoops : undefined,
         skills: !state.untrustedContext ? skillsBlock : undefined,
         ambient: !state.untrustedContext ? ambientBlock : undefined,
         tainted: state.untrustedContext,

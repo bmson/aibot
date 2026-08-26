@@ -24,6 +24,7 @@ struct ActivityView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 filterControl
+                activitySummary
 
                 if filteredItems.isEmpty {
                     AssistantEmptyState(
@@ -44,10 +45,8 @@ struct ActivityView: View {
             .padding(16)
             .padding(.bottom, 28)
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("Activity")
-        .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
+        .assistantSubmenuChrome()
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
@@ -135,6 +134,38 @@ struct ActivityView: View {
                 ForEach(ActivityFilter.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
+            .padding(10)
+            .background(AssistantTheme.sunken(for: colorScheme), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+
+    private var activitySummary: some View {
+        let needsYou = (showingArchived ? model.archivedActivity?.items ?? [] : model.overview?.activity.items ?? [])
+            .filter { ["waiting_approval", "waiting_budget", "needs_attention"].contains($0.status) }
+            .count
+        let active = (showingArchived ? model.archivedActivity?.items ?? [] : model.overview?.activity.items ?? [])
+            .filter { ["pending", "running"].contains($0.status) }
+            .count
+
+        return HStack(spacing: 10) {
+            activitySummaryMetric("Needs you", value: needsYou, tint: needsYou > 0 ? AssistantTheme.warning(for: colorScheme) : .secondary)
+            Divider().frame(height: 30)
+            activitySummaryMetric("In progress", value: active, tint: AssistantTheme.accent(for: colorScheme))
+            Spacer(minLength: 0)
+        }
+        .assistantPanel(in: colorScheme)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(needsYou) activities need you, \(active) in progress")
+    }
+
+    private func activitySummaryMetric(_ label: String, value: Int, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(value)")
+                .font(.title3.monospacedDigit().weight(.semibold))
+                .foregroundStyle(tint)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -191,7 +222,7 @@ struct ActivityView: View {
                     .tint(AssistantTheme.warning(for: colorScheme))
                 }
 
-                HStack(spacing: 9) {
+                AssistantFlowLayout(spacing: 9) {
                     if isTerminal(item) {
                         actionButton(item, title: "Archive", icon: "archivebox", action: "archive")
                     } else {

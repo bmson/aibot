@@ -12,6 +12,7 @@ import {
 } from '@assistant/core/chat';
 import { createCueScanner, stripCueTags } from '@assistant/core/chat-cues';
 import { getAmbientBlock } from '@assistant/core/memory/ambient';
+import { listOpenCommitments, renderOpenCommitments } from '@assistant/core/memory/commitments';
 import { getOwnerCard } from '@assistant/core/memory/consolidation';
 import { recallKnowledgeGraph, recallWithGraphFallback } from '@assistant/core/memory/graph-recall';
 import { type RecallSource, recallRelevantContext } from '@assistant/core/memory/recall';
@@ -362,6 +363,7 @@ export async function handleChatTurn(
   // the live window. Best-effort — a recall failure must never fail the chat.
   let recallBlock: string | undefined;
   let recallSources: RecallSource[] = [];
+  let openLoops: string | undefined;
   if (config.CHAT_RECALL_ENABLED) {
     try {
       const layered = await recallWithGraphFallback({
@@ -427,6 +429,15 @@ export async function handleChatTurn(
     }
   }
 
+  try {
+    openLoops =
+      renderOpenCommitments(
+        await listOpenCommitments(db, { agentId: agent.id, query: userText, limit: 6 }),
+      ) || undefined;
+  } catch (err) {
+    console.error('open-loop context failed — continuing without it', err);
+  }
+
   // Same goal link as the action-routed path above: an owner reply in a goal's
   // work chat answers its blocked question, so the waiting marker clears now.
   const goalId = await goalIdForConversation(db, conversation.id);
@@ -453,6 +464,7 @@ export async function handleChatTurn(
         buildSystemPrompt(agent, {
           ownerCard: await getOwnerCard(db),
           recall: recallBlock,
+          openLoops,
           // Owner chat is always owner-trust and untainted here, so the fused
           // "right now" block (location + weather) is available — "where am I?"
           // and "should I go for a run?" answer without a mid-task tool call.

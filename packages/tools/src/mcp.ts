@@ -1,6 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { mcpConnections } from '@assistant/db';
+import { decryptMcpBearerToken } from '@assistant/core/mcp-secrets';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { register } from './register.js';
@@ -34,6 +35,7 @@ interface McpSession {
   endpoint: URL;
   sessionId?: string;
   fetchImpl: FetchImplementation;
+  bearerToken?: string;
 }
 
 interface JsonRpcResponse {
@@ -171,6 +173,7 @@ async function rpc(
     Accept: 'application/json, text/event-stream',
     'Content-Type': 'application/json',
   };
+  if (session.bearerToken) headers.Authorization = `Bearer ${session.bearerToken}`;
   if (session.sessionId) headers['Mcp-Session-Id'] = session.sessionId;
   const response = await session.fetchImpl(endpoint, {
     method: 'POST',
@@ -213,11 +216,12 @@ function resultOf(response: JsonRpcResponse | undefined, method: string): Record
 async function openMcpSession(
   endpoint: URL,
   fetchImpl: FetchImplementation = fetch,
+  bearerToken?: string,
 ): Promise<{
   session: McpSession;
   initialize: Record<string, unknown>;
 }> {
-  const session: McpSession = { endpoint, fetchImpl };
+  const session: McpSession = { endpoint, fetchImpl, bearerToken };
   const initialized = await rpc(session, {
     id: 1,
     method: 'initialize',
@@ -258,11 +262,14 @@ function sanitizedTools(value: unknown): McpListedTool[] {
 /** Check a connection and return a bounded, display-safe discovery snapshot. */
 export async function inspectMcpConnection(
   endpointValue: string,
-  options: { fetchImpl?: FetchImplementation } = {},
+  options: { fetchImpl?: FetchImplementation; bearerTokenEncrypted?: string | null } = {},
 ): Promise<McpInspection> {
   try {
     const endpoint = await checkedMcpEndpoint(endpointValue);
-    const { session, initialize } = await openMcpSession(endpoint, options.fetchImpl);
+    const bearerToken = options.bearerTokenEncrypted
+      ? decryptMcpBearerToken(options.bearerTokenEncrypted)
+      : undefined;
+    const { session, initialize } = await openMcpSession(endpoint, options.fetchImpl, bearerToken);
     const listed = await rpc(session, { id: 2, method: 'tools/list', params: {} });
     const result = resultOf(listed.response, 'tools/list');
     const serverInfo =
@@ -292,10 +299,12 @@ async function invokeMcpTool(
   endpointValue: string,
   toolName: string,
   input: Record<string, unknown>,
+  bearerTokenEncrypted: string | null | undefined,
   fetchImpl: FetchImplementation = fetch,
 ): Promise<Record<string, unknown>> {
   const endpoint = await checkedMcpEndpoint(endpointValue);
-  const { session } = await openMcpSession(endpoint, fetchImpl);
+  const bearerToken = bearerTokenEncrypted ? decryptMcpBearerToken(bearerTokenEncrypted) : undefined;
+  const { session } = await openMcpSession(endpoint, fetchImpl, bearerToken);
   const response = await rpc(session, {
     id: 2,
     method: 'tools/call',
@@ -406,6 +415,7 @@ export function registerMcpTools(registry: ToolRegistry): ToolRegistry {
             status: mcpConnections.status,
             enabled: mcpConnections.enabled,
             tools: mcpConnections.tools,
+            bearerTokenEncrypted: mcpConnections.bearerTokenEncrypted,
           })
           .from(mcpConnections)
           .where(
@@ -423,7 +433,12 @@ export function registerMcpTools(registry: ToolRegistry): ToolRegistry {
         return {
           connection: connection.name,
           tool: args.toolName,
-          result: await invokeMcpTool(connection.endpoint, args.toolName, args.arguments),
+          result: await invokeMcpTool(
+            connection.endpoint,
+            args.toolName,
+            args.arguments,
+            connection.bearerTokenEncrypted,
+          ),
         };
       },
     },

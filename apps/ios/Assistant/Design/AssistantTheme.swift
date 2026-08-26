@@ -184,6 +184,13 @@ extension Color {
 }
 
 extension View {
+    /// Shared shell for pages revealed from the pull-up directory. Keeping the
+    /// canvas, navigation treatment, tint, and scrolling behavior here prevents
+    /// submenu pages from slowly becoming a collection of unrelated mini-apps.
+    func assistantSubmenuChrome() -> some View {
+        modifier(AssistantSubmenuChrome())
+    }
+
     /// The one card spec: 16pt padding, radius 20, hairline stroke. Warning
     /// cards (memory review, approvals) pass a surface and stroke tint so
     /// they keep the same geometry instead of hand-rolling a near-copy.
@@ -216,6 +223,67 @@ extension View {
                 AssistantTheme.sunken(for: scheme).opacity(0.72),
                 in: RoundedRectangle(cornerRadius: 16, style: .continuous)
             )
+    }
+}
+
+/// Wraps compact controls instead of forcing them into a clipped horizontal row.
+struct AssistantFlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .greatestFiniteMagnitude
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            let nextX = x == 0 ? size.width : x + spacing + size.width
+            if x > 0, nextX > width {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            x = x == 0 ? size.width : x + spacing + size.width
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: proposal.width ?? x, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            let usedWidth = x - bounds.minX
+            if x > bounds.minX, usedWidth + spacing + size.width > bounds.width {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += (x == bounds.minX ? 0 : spacing) + size.width
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+private struct AssistantSubmenuChrome: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    func body(content: Content) -> some View {
+        content
+            .scrollBounceBehavior(.basedOnSize)
+            .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
+            .tint(AssistantTheme.accent(for: colorScheme))
+            .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
+            .toolbarBackground(AssistantTheme.canvas(for: colorScheme), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
     }
 }
 

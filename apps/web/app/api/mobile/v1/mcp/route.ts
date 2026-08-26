@@ -14,6 +14,7 @@ export async function POST(request: Request): Promise<Response> {
   const body = (await request.json().catch(() => null)) as {
     name?: unknown;
     endpoint?: unknown;
+    bearerToken?: unknown;
   } | null;
   if (typeof body?.name !== 'string' || typeof body.endpoint !== 'string') {
     return mobileJson({ error: 'name and endpoint are required' }, { status: 400 });
@@ -21,6 +22,7 @@ export async function POST(request: Request): Promise<Response> {
   const result = await getApplication().addMcpConnection({
     name: body.name,
     endpoint: body.endpoint,
+    bearerToken: typeof body.bearerToken === 'string' ? body.bearerToken : undefined,
   });
   return 'error' in result
     ? mobileJson(

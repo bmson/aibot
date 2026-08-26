@@ -88,10 +88,8 @@ struct WorkspaceView: View {
             .padding(16)
             .padding(.bottom, 28)
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle(area.title)
-        .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
+        .assistantSubmenuChrome()
         .refreshable { await refresh() }
         .task { await load() }
         .toolbar {
@@ -200,14 +198,16 @@ struct WorkspaceView: View {
                 headerIcon
                 headerIntroduction
             }
-            .padding(.vertical, 3)
+            .padding(14)
+            .assistantPanel(in: colorScheme)
         } else {
             HStack(alignment: .top, spacing: 13) {
                 headerIcon
                 headerIntroduction
                 Spacer(minLength: 0)
             }
-            .padding(.vertical, 3)
+            .padding(14)
+            .assistantPanel(in: colorScheme)
         }
     }
 
@@ -329,7 +329,9 @@ struct WorkspaceView: View {
                                     }
                                 } else {
                                     HStack {
-                                        Text(chat.displayTitle).lineLimit(1)
+                                        Text(chat.displayTitle)
+                                            .lineLimit(2)
+                                            .fixedSize(horizontal: false, vertical: true)
                                         Spacer()
                                         Text(relative(chat.updatedAt))
                                             .font(.caption)
@@ -425,7 +427,7 @@ struct WorkspaceView: View {
                         Text("Used \(skill.useCount) times · \(skill.successCount) successful")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
-                        HStack(spacing: 9) {
+                        AssistantFlowLayout(spacing: 9) {
                             Button("Edit", systemImage: "pencil") { editingSkill = skill }
                                 .buttonStyle(.bordered)
                             Button(
@@ -619,7 +621,7 @@ struct WorkspaceView: View {
                         Text("Observed \(anomaly.observed)× · expected \(anomaly.expected)× · \(anomaly.citationCount) evidence items")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
-                        HStack(spacing: 9) {
+                        AssistantFlowLayout(spacing: 9) {
                             if anomaly.hasPolicy {
                                 Button("Suspend policy", systemImage: "pause.circle") {
                                     updateAnomaly(anomaly, action: "suspend-policy")
@@ -678,7 +680,7 @@ struct WorkspaceView: View {
                         Text("Based on \(improvement.evidenceCount) \(improvement.evidenceCount == 1 ? "pattern" : "patterns") · \(improvement.applyable ? "Can apply directly" : "Advisory")")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
-                        HStack(spacing: 9) {
+                        AssistantFlowLayout(spacing: 9) {
                             Button(
                                 improvement.applyable ? "Apply" : "Acknowledge",
                                 systemImage: "checkmark"
@@ -755,7 +757,10 @@ struct WorkspaceView: View {
             }
             ForEach(imports.unstartedFiles) { file in
                 HStack {
-                    Text(file.name).font(.subheadline).lineLimit(1)
+                    Text(file.name)
+                        .font(.subheadline)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     Button("Start") {
                         updateImport(
@@ -792,7 +797,7 @@ struct WorkspaceView: View {
                     if let error = source.error, !error.isEmpty {
                         Text(error).font(.caption).foregroundStyle(.red)
                     }
-                    HStack(spacing: 9) {
+                    AssistantFlowLayout(spacing: 9) {
                         if source.quarantinedNow > 0 {
                             Button("Approve all") {
                                 updateImport(action: "review", source: source.source, verdict: "approve")
@@ -913,7 +918,9 @@ struct WorkspaceView: View {
                         .padding(.vertical, 5)
                     } else {
                         HStack(spacing: 9) {
-                            Text(row.0).lineLimit(1)
+                            Text(row.0)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 8)
                             Text("\(row.2)×").foregroundStyle(.secondary)
                             Text(currency(Double(row.1) ?? 0)).font(.caption.monospacedDigit())
@@ -937,14 +944,11 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private func metricGrid(_ metrics: [(String, Int, String, Color)]) -> some View {
-        if usesAccessibilityLayout {
-            VStack(spacing: 8) {
-                metricCards(metrics)
-            }
-        } else {
-            HStack(spacing: 8) {
-                metricCards(metrics)
-            }
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: usesAccessibilityLayout ? 1 : min(metrics.count, 3)),
+            spacing: 8
+        ) {
+            metricCards(metrics)
         }
     }
 

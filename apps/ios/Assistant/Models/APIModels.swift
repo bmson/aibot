@@ -790,6 +790,7 @@ struct McpConnection: Codable, Identifiable, Sendable {
     let endpoint: String
     let status: String
     let enabled: Bool
+    let hasBearerToken: Bool
     let serverName: String?
     let serverVersion: String?
     let instructions: String?

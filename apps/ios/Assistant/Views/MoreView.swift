@@ -193,10 +193,10 @@ struct MoreView: View {
                 }
             }
         }
+        .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("More")
-        .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
+        .assistantSubmenuChrome()
         .refreshable {
             async let overviewRefresh: Void = model.refreshAll()
             async let workspaceRefresh: Void = model.refreshWorkspace()
@@ -289,17 +289,19 @@ struct MoreView: View {
 
     @ViewBuilder
     private var assistantIdentity: some View {
-        let details = VStack(alignment: .leading, spacing: 3) {
-            Text(model.agentName)
-                .font(.headline)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(model.serverURL)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(usesAccessibilityLayout ? 2 : 1)
+        HStack(spacing: 12) {
+            AssistantGlyph(systemName: "slider.horizontal.3", tint: AssistantTheme.accent(for: colorScheme))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(model.agentName)
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(model.serverURL)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(usesAccessibilityLayout ? 2 : 1)
+            }
+            Spacer(minLength: 0)
         }
-
-        details
     }
 
     private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
@@ -433,6 +435,7 @@ private struct MCPConnectionsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var name = ""
     @State private var endpoint = ""
+    @State private var bearerToken = ""
     @State private var isAdding = false
     @State private var workingConnectionID: String?
     @FocusState private var focusedField: MCPField?
@@ -489,6 +492,13 @@ private struct MCPConnectionsView: View {
 
             mcpField("Name", placeholder: "e.g. Home Assistant", text: $name, field: .name)
             mcpField("MCP endpoint", placeholder: "https://example.com/mcp", text: $endpoint, field: .endpoint)
+            SecureField("Bearer token (optional)", text: $bearerToken)
+                .textContentType(.password)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .padding(.horizontal, 12)
+                .frame(minHeight: 46)
+                .background(AssistantTheme.sunken(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             Button(action: add) {
                 HStack(spacing: 8) {
@@ -505,7 +515,7 @@ private struct MCPConnectionsView: View {
             .disabled(isAdding || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.99))
 
-            Text("Only public HTTPS endpoints are accepted in production. Authentication credentials are never stored here.")
+            Text("Only public HTTPS endpoints are accepted in production. Bearer tokens are encrypted on the server and never shown again.")
                 .font(.caption)
                 .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 .fixedSize(horizontal: false, vertical: true)
@@ -692,9 +702,10 @@ private struct MCPConnectionsView: View {
         focusedField = nil
         isAdding = true
         Task {
-            if await model.createMcpConnection(name: candidateName, endpoint: candidateEndpoint) {
+            if await model.createMcpConnection(name: candidateName, endpoint: candidateEndpoint, bearerToken: bearerToken.isEmpty ? nil : bearerToken) {
                 name = ""
                 endpoint = ""
+                bearerToken = ""
             }
             isAdding = false
         }

@@ -724,11 +724,11 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func createMcpConnection(name: String, endpoint: String) async -> Bool {
+    func createMcpConnection(name: String, endpoint: String, bearerToken: String?) async -> Bool {
         guard let client else { return false }
         errorMessage = nil
         do {
-            try await client.createMcpConnection(name: name, endpoint: endpoint)
+            try await client.createMcpConnection(name: name, endpoint: endpoint, bearerToken: bearerToken)
             await refreshMcpConnections()
             return true
         } catch {

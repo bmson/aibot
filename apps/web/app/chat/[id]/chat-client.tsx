@@ -232,6 +232,9 @@ export function ChatClient({
     cursor: string;
   } | null>(initialAsyncTurn ?? null);
   const [asyncNote, setAsyncNote] = useState<string | null>(null);
+  const [asyncTaskStatus, setAsyncTaskStatus] = useState<string | null>(
+    initialAsyncTurn ? 'pending' : null,
+  );
   const [asyncActionError, setAsyncActionError] = useState<string | null>(null);
   const [isCancellingAsync, startCancelTransition] = useTransition();
   const [activity, setActivity] = useState<
@@ -439,6 +442,7 @@ export function ChatClient({
       if (cancelled) return;
       setAsyncNote(note);
       setAsyncTurn(null);
+      setAsyncTaskStatus(null);
       setActivity([]);
       turnRef.current = null;
     };
@@ -477,6 +481,7 @@ export function ChatClient({
             activity?: Array<{ toolName: string; status: string; step: number }>;
           };
           if (turn) setActivity(data.activity ?? []);
+          if (turn && data.taskStatus) setAsyncTaskStatus(data.taskStatus);
           // `refreshed` is deliberately kept out of the settle checks below: a
           // re-read of a card already on screen is not this turn producing an
           // answer.
@@ -897,6 +902,7 @@ export function ChatClient({
     setAtBottom(true);
     setUnseenCount(0);
     setLastSubmittedText(text);
+    setAsyncTaskStatus('pending');
     if (clearComposer) setInput('');
     setFallbackNote(null);
     setModelError(null);
@@ -946,6 +952,7 @@ export function ChatClient({
         await cancelTask(taskId);
         setAsyncNote('Stopped by you.');
         setAsyncTurn(null);
+        setAsyncTaskStatus('cancelled');
         setActivity([]);
       } catch {
         setAsyncActionError('Could not stop this task. Try again or open Activity.');
@@ -1298,6 +1305,29 @@ export function ChatClient({
                 <p role="alert" className="mt-6 text-xs text-red-200">
                   {asyncActionError}
                 </p>
+              ) : null}
+              {asyncTurn && asyncTaskStatus ? (
+                <div
+                  role="status"
+                  className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-stage-muted"
+                >
+                  <span className="font-medium text-stage-strong">
+                    {asyncTaskStatus === 'waiting_approval'
+                      ? 'Waiting for your approval'
+                      : asyncTaskStatus === 'waiting_budget'
+                        ? 'Waiting for spending permission'
+                        : asyncTaskStatus === 'needs_attention'
+                          ? 'Needs your attention'
+                          : asyncTaskStatus === 'failed'
+                            ? 'Work ended unsuccessfully'
+                            : asyncTaskStatus === 'running'
+                              ? 'Working'
+                              : 'Starting the work'}
+                  </span>
+                  <Link href="/tasks" className="font-medium underline underline-offset-2">
+                    Open Activity
+                  </Link>
+                </div>
               ) : null}
               {asyncNote ? (
                 <p role="status" className="mt-3 text-xs text-stage-muted">

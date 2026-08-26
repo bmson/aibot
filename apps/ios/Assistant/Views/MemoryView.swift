@@ -35,10 +35,8 @@ struct MemoryView: View {
             .padding(16)
             .padding(.bottom, 28)
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("Memory")
-        .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
+        .assistantSubmenuChrome()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -149,6 +147,7 @@ struct MemoryView: View {
 
     private func memoryContent(_ memory: WorkspaceMemory) -> some View {
         VStack(alignment: .leading, spacing: 16) {
+            memoryOverview(memory)
             metricGrid([
                 ("In use", memory.health.totalUsable, "brain.head.profile", AssistantTheme.accent(for: colorScheme)),
                 ("Review", memory.health.awaitingReview, "checklist", AssistantTheme.warning(for: colorScheme)),
@@ -226,6 +225,7 @@ struct MemoryView: View {
             }
 
             if let people = memory.people {
+            ViewThatFits(in: .horizontal) {
                 HStack {
                     sectionHeading("People", count: people.count)
                     Spacer()
@@ -234,6 +234,14 @@ struct MemoryView: View {
                     }
                     .buttonStyle(.bordered)
                 }
+                VStack(alignment: .leading, spacing: 8) {
+                    sectionHeading("People", count: people.count)
+                    Button("Add", systemImage: "person.badge.plus") {
+                        showingPersonCreator = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
                 if people.isEmpty {
                     AssistantEmptyState("No people yet", systemImage: "person.2")
                 } else {
@@ -257,7 +265,7 @@ struct MemoryView: View {
                         Text("Text messages").tag("sms")
                         Text("Chat").tag("chat")
                     }
-                    HStack(spacing: 9) {
+                    AssistantFlowLayout(spacing: 9) {
                         Button("Upload sent messages", systemImage: "square.and.arrow.up") {
                             showingVoiceImporter = true
                         }
@@ -276,20 +284,35 @@ struct MemoryView: View {
         }
     }
 
+    private func memoryOverview(_ memory: WorkspaceMemory) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            AssistantGlyph(systemName: "brain.head.profile", tint: AssistantTheme.accent(for: colorScheme))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(memory.ownerName.map { "\($0)'s memory" } ?? "Memory library")
+                    .font(.headline)
+                Text("Only verified, relevant facts are used in future conversations.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .assistantPanel(in: colorScheme)
+    }
+
     private func personCard(_ person: WorkspacePerson) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
+            AssistantFlowLayout(spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(person.name).font(.headline)
                     Text(person.relationship.isEmpty ? "Relationship not set" : person.relationship)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Spacer()
                 memoryTag("\(person.factCount) facts")
                 if person.trust == "unknown" { memoryTag("Unverified") }
             }
-            HStack(spacing: 9) {
+            AssistantFlowLayout(spacing: 9) {
                 Button("Manage", systemImage: "person.crop.circle") { managingPerson = person }
                     .buttonStyle(.borderedProminent)
                 Button("Add fact", systemImage: "plus") { addingFactForPerson = person }
@@ -308,7 +331,7 @@ struct MemoryView: View {
     private func reviewCard(_ fact: WorkspaceMemoryFact) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             factIdentity(fact, review: true)
-            HStack(spacing: 9) {
+            AssistantFlowLayout(spacing: 9) {
                 Button {
                     perform(fact, action: "approve")
                 } label: {
@@ -336,7 +359,7 @@ struct MemoryView: View {
     private func factCard(_ fact: WorkspaceMemoryFact) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             factIdentity(fact, review: false)
-            HStack(spacing: 9) {
+            AssistantFlowLayout(spacing: 9) {
                 if !fact.ownerConfirmed {
                     Button {
                         perform(fact, action: "confirm")
@@ -383,7 +406,7 @@ struct MemoryView: View {
                 Text(fact.content)
                     .font(.subheadline)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 6) {
+                AssistantFlowLayout(spacing: 6) {
                     memoryTag(fact.domain?.sentenceCaseIdentifier ?? "General")
                     if fact.pinned { memoryTag("In profile") }
                     if fact.ownerConfirmed { memoryTag("Verified") }
@@ -482,17 +505,12 @@ struct MemoryView: View {
 
     @ViewBuilder
     private func metricGrid(_ metrics: [(String, Int, String, Color)]) -> some View {
-        if usesAccessibilityLayout {
-            VStack(spacing: 10) {
-                ForEach(Array(metrics.enumerated()), id: \.offset) { _, metric in
-                    metricCard(metric)
-                }
-            }
-        } else {
-            HStack(spacing: 10) {
-                ForEach(Array(metrics.enumerated()), id: \.offset) { _, metric in
-                    metricCard(metric)
-                }
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: usesAccessibilityLayout ? 1 : 3),
+            spacing: 10
+        ) {
+            ForEach(Array(metrics.enumerated()), id: \.offset) { _, metric in
+                metricCard(metric)
             }
         }
     }

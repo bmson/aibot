@@ -9,6 +9,7 @@ import { runSelfImprove } from '../workflow/improve.js';
 import { runSelfMaintenance } from '../workflow/self-maintenance.js';
 import { runWatchSuggest } from '../workflow/watch-suggest.js';
 import { refreshAmbientSnapshot } from './ambient.js';
+import { extractCommitments, markStaleCommitments } from './commitments.js';
 import { runMemoryConsolidation } from './consolidation.js';
 import { type DocumentProcessorConfig, runDocumentProcessing } from './document-processor.js';
 import { runDocumentExtraction } from './documents.js';
@@ -118,9 +119,15 @@ export async function runCodeJob(
     case 'memory.extract': {
       await deps.heartbeat?.();
       const r = await runMemoryExtraction(deps, { taskId: task.id });
+      const loops = await extractCommitments(deps, { agentId: task.agentId, taskId: task.id });
+      await markStaleCommitments(
+        deps.db,
+        task.agentId,
+        new Date(Date.now() - 90 * 24 * 3600 * 1000),
+      );
       return {
         done: true,
-        summary: `extraction: ${r.saved} saved (${r.quarantined} quarantined, ${r.contactsCreated} new people), ${r.duplicates} duplicate, ${r.tombstoned} tombstoned, ${r.occasionsSaved} occasion(s), from ${r.conversationsScanned} conversation(s)`,
+        summary: `extraction: ${r.saved} saved (${r.quarantined} quarantined, ${r.contactsCreated} new people), ${r.duplicates} duplicate, ${r.tombstoned} tombstoned, ${r.occasionsSaved} occasion(s), from ${r.conversationsScanned} conversation(s); open loops ${loops.saved} saved (${loops.duplicates} duplicate)`,
       };
     }
     case 'email.extract': {

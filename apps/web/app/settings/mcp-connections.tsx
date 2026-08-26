@@ -16,6 +16,7 @@ type McpConnection = {
   endpoint: string;
   status: 'ready' | 'checking' | 'authorization_required' | 'error' | 'disabled';
   enabled: boolean;
+  hasBearerToken: boolean;
   serverName: string | null;
   serverVersion: string | null;
   instructions: string | null;
@@ -42,6 +43,7 @@ const STATUS: Record<
 export function McpConnectionsPanel({ connections }: { connections: McpConnection[] }) {
   const [name, setName] = useState('');
   const [endpoint, setEndpoint] = useState('');
+  const [bearerToken, setBearerToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -75,10 +77,11 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
           event.preventDefault();
           run(
             'create',
-            () => createMcpConnectionAction({ name, endpoint }),
+            () => createMcpConnectionAction({ name, endpoint, bearerToken: bearerToken || undefined }),
             () => {
               setName('');
               setEndpoint('');
+              setBearerToken('');
             },
           );
         }}
@@ -91,6 +94,17 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
             onChange={(event) => setName(event.target.value)}
             placeholder="e.g. Home Assistant"
             className={inputClass}
+          />
+        </label>
+        <label className={`${labelClass} min-w-0 sm:col-span-2`}>
+          Bearer token <span className="font-normal normal-case text-muted">(optional)</span>
+          <input
+            type="password"
+            value={bearerToken}
+            onChange={(event) => setBearerToken(event.target.value)}
+            placeholder="Stored encrypted; never shown again"
+            className={inputClass}
+            autoComplete="off"
           />
         </label>
         <label className={`${labelClass} min-w-0`}>
@@ -143,6 +157,9 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
                     <p className="mt-1 break-all font-mono text-xs leading-5 text-muted">
                       {connection.endpoint}
                     </p>
+                    {connection.hasBearerToken ? (
+                      <p className="mt-1 text-xs text-muted">Bearer authentication configured</p>
+                    ) : null}
                     {connection.serverName ? (
                       <p className="mt-2 text-sm text-muted">
                         {connection.serverName}

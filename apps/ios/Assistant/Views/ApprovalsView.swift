@@ -15,6 +15,7 @@ struct ApprovalsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                approvalSummary
                 if pending.isEmpty {
                     AssistantEmptyState(
                         "Nothing is waiting",
@@ -46,10 +47,8 @@ struct ApprovalsView: View {
             .padding(16)
             .padding(.bottom, 28)
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("Approvals")
-        .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
+        .assistantSubmenuChrome()
         .refreshable { await model.refreshAll() }
         .task { if model.overview == nil { await model.refreshOverview() } }
         .confirmationDialog(
@@ -97,6 +96,28 @@ struct ApprovalsView: View {
         pendingDecision?.1 == "approved" ? "Approve this action?" : "Deny this action?"
     }
 
+    private var approvalSummary: some View {
+        HStack(alignment: .top, spacing: 12) {
+            AssistantGlyph(
+                systemName: pending.isEmpty ? "checkmark.shield.fill" : "hand.raised.fill",
+                tint: pending.isEmpty ? AssistantTheme.success(for: colorScheme) : AssistantTheme.warning(for: colorScheme)
+            )
+            VStack(alignment: .leading, spacing: 4) {
+                Text(pending.isEmpty ? "All clear" : "Your attention is needed")
+                    .font(.headline)
+                Text(
+                    pending.isEmpty
+                        ? "No actions are waiting for a decision."
+                        : "\(pending.count) \(pending.count == 1 ? "action is" : "actions are") parked until you decide."
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .assistantPanel(in: colorScheme)
+    }
+
     private func approvalCard(_ item: PendingApproval) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             approvalHeader(item)
@@ -112,7 +133,7 @@ struct ApprovalsView: View {
                 if usesAccessibilityLayout {
                     VStack(spacing: 9) { approvalActions(item) }
                 } else {
-                    HStack(spacing: 9) { approvalActions(item) }
+                    AssistantFlowLayout(spacing: 9) { approvalActions(item) }
                 }
             }
         }
@@ -198,7 +219,7 @@ struct ApprovalsView: View {
             .foregroundStyle(AssistantTheme.warningInk(for: colorScheme).opacity(0.78))
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
+                AssistantFlowLayout(spacing: 6) {
                     ForEach(labels, id: \.0) { label in
                         Label(label.0, systemImage: label.1)
                             .padding(.horizontal, 8)
