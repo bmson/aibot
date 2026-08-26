@@ -46,7 +46,8 @@ const nextConfig: NextConfig = {
       // so the page never hydrates. Production keeps the tighter policy.
       `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === 'development' ? " 'unsafe-eval'" : ''} https://jelly-ui.com`,
       "style-src 'self' 'unsafe-inline' https://jelly-ui.com",
-      "img-src 'self' data: blob:",
+      // Auth.js renders the Google provider's official icon from its CDN.
+      "img-src 'self' data: blob: https://authjs.dev",
       "font-src 'self' data:",
       // script-src covers jelly-ui's module imports; connect-src covers any
       // fetch() the widget makes back to its own origin for assets.
