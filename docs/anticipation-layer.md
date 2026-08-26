@@ -9,12 +9,13 @@ Design for the assistant acting *before* it is asked. Two capabilities, one shar
 
 Status: **Phase 1 shipped** — notify-tier email watchers (the `watches`/`watch_fires` tables, the
 `watch.create`/`watch.list`/`watch.cancel` tools, the `matchEmailWatches` pass on the inbound-mail
-hook, and the expiry reaper). **Phase 2 partly shipped**: the briefing exists as the
-`briefing.compose` code job (`packages/core/src/workflow/briefing.ts`), on a daily schedule and
-self-silencing on a quiet day, and the **`suggestions` table and surface are built** — the briefing
-proposes, and accepting creates ordinary approval-gated work. The `suggest` TIER of watchers (a
-model drafting a suggestion from a watch hit) remains proposed; today's producer is the briefing,
-and its proposals are deterministic rather than model-authored. Phases 3–4 are otherwise unchanged.
+hook, and the expiry reaper). **Phase 2 shipped**: the briefing exists as the `briefing.compose`
+code job (`packages/core/src/workflow/briefing.ts`), on a daily schedule and self-silencing on a
+quiet day; the **`suggestions` table and surface are built** — the briefing proposes, and accepting
+creates ordinary approval-gated work; and the **`suggest` tier of watchers is built** — a firing
+email watch hands a bounded trigger excerpt (`watch_fires.excerpt`) to the `watch.suggest` code job
+(`packages/core/src/workflow/watch-suggest.ts`), which drafts the proposal with one model call
+holding no tools at all. Phases 3–4 are otherwise unchanged.
 This document is the source of truth for the design.
 
 **Shipped since:** the proactive surfaces grew past the briefing. The `push`
@@ -23,13 +24,27 @@ over APNs to the iOS app (`POST /api/mobile/v1/devices` registers tokens; the
 module composes into the owner-notifier fan-out next to SMS). A wake-up path
 fires the `morning-brief` schedule early on the first app-open of the day
 (`maybeFireWakeBrief` in `packages/core/src/workflow/schedules.ts`, triggered
-by `POST /api/mobile/v1/activity`). A seeded `tomorrow-check` schedule (19:30)
-looks one day ahead for calendar surprises and dated email obligations. And a
-background location ping can arm the arrival hook
+by `POST /api/mobile/v1/activity/foreground`). A seeded `tomorrow-check`
+schedule (19:30) looks one day ahead for calendar surprises and dated email
+obligations. And a background location ping can arm the arrival hook
 (`packages/core/src/proactive/arrival.ts`) — somewhere genuinely new, at most
-one nudge per place per day and one per 12 hours overall. All of it obeys the
-same rule as the briefing: proactive work surfaces to the owner (a notice),
-and anything outward still goes through the approval spine.
+one nudge per place per day and one per 12 hours overall — from either ingest
+path (the app's `POST /api/mobile/v1/location` or the HMAC'd
+`POST /webhooks/location` an iOS Shortcut calls); the nudge now reaches the
+phone, via `owner.notify`'s `ping` flag. All of it obeys the same rule as the
+briefing: proactive work surfaces to the owner (a notice), and anything
+outward still goes through the approval spine.
+
+**The nudge policy (shipped).** Every out-of-band ping carries an urgency:
+`ambient` (a briefing, a watch hit, an arrival nudge — things the owner did
+not just ask for) or `interrupt` (an approval waiting, a stall in requested
+work). Ambient pings pass through quiet hours and a daily cap
+(`notification_prefs` + the `proactive_pings` ledger;
+`packages/core/src/proactive/nudge-policy.ts`), enforced at one choke point on
+the phone legs in the agent's composition root. Interrupt pings are never
+gated — the owner is the one waiting on them — and a held notice still posts
+to the dashboard, so suppression is never loss. Both knobs are off by default
+and set in Settings → Notifications.
 
 > **One deliberate deviation from the invariant below.** Forwarded-mail ingest
 > (`EMAIL_INGEST_MODE=forwarded`) lets an email-triggered task create a calendar event with **zero
@@ -181,6 +196,8 @@ change.
 - **`suggest`** → one bounded model call, **reduced registry (read + `owner.notify` only), taint
   flag on**, trigger content injected as *reference data, never instructions* (the
   `sessionInstruction` framing, `missions.ts:94`). Output is a **suggestion**, not an action.
+  **Shipped** with the registry guarantee obtained structurally instead: `watch.suggest` is a code
+  job and holds no tools whatsoever (same precedent as the briefing).
 
 ### The suggestion surface
 
@@ -197,7 +214,8 @@ change.
 > decision, not an exemption: an event on the owner's own calendar goes through, and anything
 > reaching a person still stops for approval.
 >
-> Not built: snooze is implemented in core but has no button yet, and there is no standalone
+> Snooze shipped as the card's "Later" button (default +24h; the core `snoozeSuggestion`
+> carries the expiry out with it, so "later" means later). There is still no standalone
 > dashboard page — suggestions live where they are raised.
 
 `suggest`-tier watchers and the briefing both need to say "I noticed X — want me to Y?" and have
@@ -216,13 +234,16 @@ call" meaning that the executor and SMS `YES A7` flow rely on.)
 > **Status: built.** `runBriefing` (`packages/core/src/workflow/briefing.ts`) runs as the
 > `briefing.compose` code job on the seeded `daily-briefing` schedule. Deltas from the design below:
 > its inputs are the `email_ingest` ledger (what arrived and how the importance pass scored it),
-> upcoming dates lifted from those rows, `needs_attention` tasks, and pending approvals — calendar
-> conflicts, mission/goal deltas, watcher hits and suggestions are not wired in yet. Voice rewrite is
-> not applied; the composer writes in the assistant's voice directly. It is seeded **enabled** rather
-> than off, which is safe precisely because of the no-fabricated-urgency rule below: with nothing to
-> report it delivers nothing, and while mail ingest is off there is nothing to report at all. The
-> "composed under a reduced registry" guarantee is obtained more strongly than designed — a code job
-> holds no tools whatsoever.
+> upcoming dates lifted from those rows, `needs_attention` tasks, pending approvals, the next 36
+> hours of calendar with deterministic conflict pairs (via a `calendarReader` the composition root
+> supplies from the google module — absent without it), goal deltas in the window, watcher hits, and
+> still-open suggestions. Routine calendar events and open suggestions are context, never a reason
+> to deliver (`briefingHasNews` is the pure predicate); a conflict is. Voice rewrite is deliberately
+> not applied: the assistant is its own identity, so the briefing speaks in the assistant's voice,
+> not the owner's. It is seeded **enabled** rather than off, which is safe precisely because of the
+> no-fabricated-urgency rule below: with nothing to report it delivers nothing, and while mail
+> ingest is off there is nothing to report at all. The "composed under a reduced registry" guarantee
+> is obtained more strongly than designed — a code job holds no tools whatsoever.
 
 A per-agent standing **schedule** whose `taskTemplate.job = 'briefing.compose'` — a new
 `CodeJobName` (`memory/jobs.ts:29`). It reuses everything: idempotent firing
@@ -280,8 +301,10 @@ Cadence comes from an owner setting (default: weekday morning in `agent.timezone
   existing inbound-mail hook (side-effect only — it never short-circuits normal triage), and an
   expiry reaper on the sweep. Zero autonomous action ⇒ lowest risk, immediate "it noticed" value.
   Firing is idempotent per (watch, message) via the `watch_fires` unique index.
-- **Phase 2 — the briefing + suggestion surface.** `briefing.compose` code-job, per-agent cadence
-  setting, `suggestions` table and dashboard surface, `suggest`-tier watchers.
+- **Phase 2 — the briefing + suggestion surface. ✅ Shipped.** `briefing.compose` code-job,
+  `suggestions` table and inline surface (with snooze), and `suggest`-tier email watchers
+  (`watch.suggest` code job; `watch_fires.excerpt` carries the bounded trigger text). The
+  per-agent cadence setting remains owner-side schedule editing (pause/resume in Settings).
 - **Phase 3 — web-change watchers.** `watch.poll_web` code-job over sandboxed `web.fetch` with
   polite polling.
 - **Phase 4 — `frozen_action` tier, generalized.** Lift the application-confirmation execution

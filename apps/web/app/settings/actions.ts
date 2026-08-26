@@ -31,6 +31,19 @@ export async function setScheduleEnabled(scheduleId: string, enabled: boolean): 
   revalidateSettings();
 }
 
+/** Quiet hours and the daily ambient-ping cap — when the assistant may buzz the phone. */
+export async function updateNotificationSettings(input: {
+  quietStart: string;
+  quietEnd: string;
+  ambientDailyCap: string;
+}): Promise<{ error?: string }> {
+  await requireOwner();
+  const result = await getApplication().updateNotificationPrefs(input);
+  if (result.error) return result;
+  revalidateSettings();
+  return {};
+}
+
 /** Enable/disable a standing approval rule. */
 export async function setPolicyEnabled(policyId: string, enabled: boolean): Promise<void> {
   await requireOwner();

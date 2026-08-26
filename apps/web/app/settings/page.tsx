@@ -9,6 +9,7 @@ import { AgentForm } from '@/app/settings/agent-form';
 import { policyLabels, policyScope, scheduleLabels } from '@/app/settings/labels';
 import { McpConnectionsPanel } from '@/app/settings/mcp-connections';
 import { MobileTokenPanel } from '@/app/settings/mobile-token';
+import { NotificationForm } from '@/app/settings/notification-form';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { getApplication } from '@/lib/server';
@@ -72,7 +73,13 @@ export default async function SettingsPage() {
   await requireOwner();
   const now = new Date();
   const [
-    { agent, schedules: directScheduleRows, policies: policyRows, goalAutomationCount },
+    {
+      agent,
+      schedules: directScheduleRows,
+      policies: policyRows,
+      goalAutomationCount,
+      notificationPrefs,
+    },
     mcpConnections,
   ] = await Promise.all([getApplication().getSettings(), getApplication().listMcpConnections()]);
 
@@ -129,6 +136,33 @@ export default async function SettingsPage() {
         <SectionHeading title="Mobile app" hint="pair the iPhone app with this server" />
         <Card className="mt-3">
           <MobileTokenPanel maskedToken={maskedToken} serverUrl={serverUrl} canRotate={canRotate} />
+        </Card>
+      </section>
+
+      {/* Notifications — when proactive work may interrupt vs. only post to chat */}
+      <section>
+        <SectionHeading
+          title="Notifications"
+          hint={
+            notificationPrefs.heldLast24h.quietHours + notificationPrefs.heldLast24h.dailyCap > 0
+              ? `held ${notificationPrefs.heldLast24h.quietHours + notificationPrefs.heldLast24h.dailyCap} ping${
+                  notificationPrefs.heldLast24h.quietHours +
+                    notificationPrefs.heldLast24h.dailyCap ===
+                  1
+                    ? ''
+                    : 's'
+                } in the last day`
+              : 'when the assistant may buzz your phone'
+          }
+        />
+        <Card className="mt-3">
+          <NotificationForm
+            initial={{
+              quietStart: notificationPrefs.quietStart,
+              quietEnd: notificationPrefs.quietEnd,
+              ambientDailyCap: notificationPrefs.ambientDailyCap,
+            }}
+          />
         </Card>
       </section>
 

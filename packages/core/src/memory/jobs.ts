@@ -2,11 +2,12 @@ import type { Db, TaskRow } from '@assistant/db';
 import { loadConfig } from '../config.js';
 import type { ModelRouter } from '../model-router/router.js';
 import { runAnomalyScan } from '../workflow/anomaly.js';
-import { briefingSummary, runBriefing } from '../workflow/briefing.js';
+import { type BriefingCalendarReader, briefingSummary, runBriefing } from '../workflow/briefing.js';
 import { runDream } from '../workflow/dream.js';
 import { runAssistantHealthMonitor } from '../workflow/health-monitor.js';
 import { runSelfImprove } from '../workflow/improve.js';
 import { runSelfMaintenance } from '../workflow/self-maintenance.js';
+import { runWatchSuggest } from '../workflow/watch-suggest.js';
 import { refreshAmbientSnapshot } from './ambient.js';
 import { runMemoryConsolidation } from './consolidation.js';
 import { type DocumentProcessorConfig, runDocumentProcessing } from './document-processor.js';
@@ -43,7 +44,8 @@ export type CodeJobName =
   | 'ambient.refresh'
   | 'dream.run'
   | 'self.maintain'
-  | 'health.monitor';
+  | 'health.monitor'
+  | 'watch.suggest';
 
 const CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.extract',
@@ -63,6 +65,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'dream.run',
   'self.maintain',
   'health.monitor',
+  'watch.suggest',
 ]);
 
 /**
@@ -92,6 +95,11 @@ export async function runCodeJob(
     router: ModelRouter;
     workspace?: WorkspaceReader;
     documentProcessor?: DocumentProcessorConfig;
+    /**
+     * Calendar read for the briefing, injected by the composition root when
+     * the google module is installed (core holds no provider credentials).
+     */
+    calendarReader?: BriefingCalendarReader;
     heartbeat?: () => Promise<void>;
     /**
      * Supplied by the composition root: returns a completion summary when the
@@ -250,6 +258,20 @@ export async function runCodeJob(
           ? `health monitor: notified owner about ${r.signals.length} signal(s)`
           : 'health monitor: no active signals',
       };
+    }
+    case 'watch.suggest': {
+      await deps.heartbeat?.();
+      const payload = (
+        task.trigger as { payload?: { watchId?: unknown; triggerRef?: unknown } } | null
+      )?.payload;
+      if (typeof payload?.watchId !== 'string' || typeof payload?.triggerRef !== 'string') {
+        return { done: true, summary: 'watch.suggest: malformed payload' };
+      }
+      const r = await runWatchSuggest(
+        { db: deps.db, router: deps.router, heartbeat: deps.heartbeat },
+        { taskId: task.id, watchId: payload.watchId, triggerRef: payload.triggerRef },
+      );
+      return { done: true, summary: r.summary };
     }
   }
 }

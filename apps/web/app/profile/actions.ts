@@ -21,6 +21,7 @@ import {
   setMemoryProminence,
   updatePersonIdentity,
   updatePersonRelationship,
+  updateVoiceProfile,
 } from '@assistant/application/profile';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
@@ -122,6 +123,20 @@ export async function purgeVoiceSamplesAction(): Promise<void> {
   await requireOwner();
   await purgeProfileVoiceSamples(getDb(), getWorkspace());
   revalidateProfile();
+}
+
+/** Edit the distilled voice profile (description, do's, don'ts, signature). */
+export async function updateVoiceProfileAction(input: {
+  description: string;
+  dos: string;
+  donts: string;
+  signature: string;
+}): Promise<{ error?: string }> {
+  await requireOwner();
+  const result = await updateVoiceProfile(getDb(), input);
+  if (result.error) return result;
+  revalidateProfile();
+  return {};
 }
 
 export async function createPersonAction(input: {

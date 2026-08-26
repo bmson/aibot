@@ -1,3 +1,4 @@
+import { enqueueTask, InboundEventSchema } from '@assistant/core';
 import { type WatchRow, watches } from '@assistant/db';
 import { emailWatchMatches } from '@assistant/tools';
 import { and, eq, gt, lte } from 'drizzle-orm';
@@ -84,10 +85,33 @@ export async function matchEmailWatches(
         triggerRef,
         text: noticeText(watch, input),
         channelMessageId: `watch-fire:${watch.id}:${input.messageId}`,
+        // The suggest tier composes from the trigger; captured here, at fire
+        // time, because nothing downstream can re-read the message body.
+        excerpt: `Subject: ${input.subject}\n\n${input.body}`,
       },
       now,
     );
-    if (didFire) fired.push(watch.id);
+    if (!didFire) continue;
+    fired.push(watch.id);
+
+    // Suggest tier: hand the fire to the compose job (a code job — no tools,
+    // so the untrusted excerpt can inform a proposal but never act). The
+    // externalEventId makes redelivery and sweep replays enqueue nothing twice.
+    if (watch.tier === 'suggest') {
+      const event = InboundEventSchema.parse({
+        source: 'internal',
+        externalEventId: `watch-suggest:${watch.id}:${input.messageId}`,
+        agentId: input.agentId,
+        trust: 'assistant',
+        payload: { job: 'watch.suggest', watchId: watch.id, triggerRef },
+      });
+      await enqueueTask(deps.db, {
+        event,
+        type: 'adhoc',
+        budgetUsdLimit: '0.06',
+        maxSteps: 2,
+      }).catch((err) => console.error('watch suggest enqueue failed', err));
+    }
   }
   return { fired };
 }

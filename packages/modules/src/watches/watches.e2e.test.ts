@@ -1,4 +1,12 @@
-import { conversations, createDb, type Db, messages, watches, watchFires } from '@assistant/db';
+import {
+  conversations,
+  createDb,
+  type Db,
+  messages,
+  tasks,
+  watches,
+  watchFires,
+} from '@assistant/db';
 import { and, eq, inArray, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { noopOwnerNotifier } from '../platform.js';
@@ -19,6 +27,7 @@ interface WatchInput {
   keywords?: string[];
   maxFires?: number | null;
   expiresAt?: Date;
+  tier?: 'notify' | 'suggest';
 }
 
 async function createEmailWatch(name: string, input: WatchInput = {}) {
@@ -33,7 +42,7 @@ async function createEmailWatch(name: string, input: WatchInput = {}) {
       agentId,
       conversationId: conversation.id,
       kind: 'email',
-      tier: 'notify',
+      tier: input.tier ?? 'notify',
       name: `${RUN} ${name}`,
       match: {
         expectedSenderEmails: input.senders ?? ['recruiter@acme.example'],
@@ -87,6 +96,9 @@ afterAll(async () => {
     .where(like(watches.name, `${RUN}%`));
   const ids = rows.map((row) => row.id);
   if (ids.length) await db.delete(watchFires).where(inArray(watchFires.watchId, ids));
+  for (const id of ids) {
+    await db.delete(tasks).where(like(tasks.externalEventId, `watch-suggest:${id}:%`));
+  }
   const convos = await db
     .select({ id: conversations.id })
     .from(conversations)
@@ -155,5 +167,53 @@ describe('inbox watchers (notify tier)', () => {
     expect(reaped).toBeGreaterThanOrEqual(1);
     await matchEmailWatches(deps, email({ messageId: `${RUN}-late` }));
     expect(await fireCountFor(watch.id)).toMatchObject({ status: 'expired', fireCount: 0 });
+  });
+});
+
+describe('inbox watchers (suggest tier)', () => {
+  it('stores a bounded excerpt and hands the fire to the suggest job', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { watch } = await createEmailWatch('suggestive', { tier: 'suggest' });
+    const result = await matchEmailWatches(
+      deps,
+      email({ messageId: `${RUN}-suggest`, body: 'Can you do Thursday? '.repeat(400) }),
+    );
+    expect(result.fired).toContain(watch.id);
+
+    const [fire] = await db.select().from(watchFires).where(eq(watchFires.watchId, watch.id));
+    // Bounded at write time: the compose step never sees more than this.
+    expect(fire?.excerpt.length).toBeLessThanOrEqual(2048);
+    expect(fire?.excerpt).toContain('Subject: Your interview');
+
+    const [job] = await db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.externalEventId, `watch-suggest:${watch.id}:${RUN}-suggest`));
+    expect(job?.type).toBe('adhoc');
+    expect((job?.trigger as { payload?: { job?: string } } | null)?.payload?.job).toBe(
+      'watch.suggest',
+    );
+
+    // A replayed message enqueues nothing twice.
+    await matchEmailWatches(deps, email({ messageId: `${RUN}-suggest` }));
+    const jobs = await db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.externalEventId, `watch-suggest:${watch.id}:${RUN}-suggest`));
+    expect(jobs).toHaveLength(1);
+  });
+
+  it('keeps the plain notice behavior: one heads-up, no model in the fire path', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { conversationId } = await createEmailWatch('suggest-notice', {
+      tier: 'suggest',
+    });
+    await matchEmailWatches(deps, email({ messageId: `${RUN}-sn` }));
+    const notices = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.conversationId, conversationId), eq(messages.origin, 'assistant')));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.text).toContain('suggest-notice');
   });
 });

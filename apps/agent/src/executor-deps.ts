@@ -1,4 +1,6 @@
 import type { ExecutorDeps } from '@assistant/core';
+import { googleModule } from '@assistant/modules';
+import { listEventsInWindow } from '@assistant/tools/modules/google';
 import { type AgentDeps, agentServices } from './deps.js';
 
 /**
@@ -35,6 +37,24 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
     dispatcher: deps.dispatcher,
     workspace: deps.workspace,
     documentProcessor: deps.documentProcessor,
+    // The briefing's calendar input. The google module's absent value is a
+    // client whose configured() is false, so an installation without Google
+    // simply briefs without a calendar section.
+    calendarReader: async ({ timeMin, timeMax }) => {
+      const client = deps.modules.requireExports(googleModule);
+      if (!client.configured()) return { events: [], complete: true };
+      const res = await listEventsInWindow(client, { timeMin, timeMax, maxResults: 50 });
+      return {
+        events: res.events.map((event) => ({
+          summary: event.summary,
+          start: event.start,
+          end: event.end,
+          calendar: event.calendar,
+          allDay: event.allDay,
+        })),
+        complete: res.complete,
+      };
+    },
     jobUnavailable: (job) => deps.modules.jobUnavailable(job),
     deliverFinal: async (task, text) => {
       // An owner-facing task whose owning channel module is UNINSTALLED has no

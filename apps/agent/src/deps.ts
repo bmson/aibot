@@ -6,6 +6,7 @@ import {
   ModelRouter,
   postOwnerNotice,
 } from '@assistant/core';
+import { evaluateOutOfBandPing } from '@assistant/core/proactive/nudge-policy';
 import { createDb, type Db } from '@assistant/db';
 import {
   browserModule,
@@ -15,6 +16,7 @@ import {
   installModules,
   type ModuleMeta,
   type ModuleServices,
+  noopOwnerNotifier,
   type OwnerNotifier,
   type SmsChannelDeps,
   smsModule,
@@ -46,6 +48,8 @@ export interface AgentDeps {
   workspace: WorkspaceStore;
   /** Installed capabilities, for code that asks a module what it produced. */
   modules: InstalledModuleSet;
+  /** The modules' owner notifier behind the nudge policy — the phone legs only. */
+  outOfBandNotifier: OwnerNotifier;
   browserLauncher?: BrowserJobLauncher;
   documentProcessor?: DocumentProcessorConfig;
 }
@@ -108,6 +112,28 @@ function dashboardOwnerNotifier(deps: AgentDeps): OwnerNotifier {
   };
 }
 
+/**
+ * The nudge-policy gate on the out-of-band legs (SMS/push). Ambient notices
+ * consult quiet hours and the daily cap here — one choke point every module
+ * notifier passes through, so no producer has to know the others exist. A
+ * held notice is recorded in the ping ledger and still posts to the dashboard
+ * leg, which is composed separately and never gated. Approvals bypass the
+ * policy entirely: the owner is the one waiting on them.
+ */
+function policyGatedOutOfBand(db: Db, inner: OwnerNotifier): OwnerNotifier {
+  return {
+    notifyOwner: async (input) => {
+      const agent = await getAgent(db);
+      const decision = await evaluateOutOfBandPing(db, agent, {
+        urgency: input.urgency ?? 'interrupt',
+      });
+      if (!decision.deliver) return;
+      await inner.notifyOwner(input);
+    },
+    notifyApprovals: (pending) => inner.notifyApprovals(pending),
+  };
+}
+
 /** Fan a notice out to every notifier, so one failing channel cannot silence the rest. */
 function composeOwnerNotifiers(notifiers: readonly OwnerNotifier[]): OwnerNotifier {
   const each = async (run: (notifier: OwnerNotifier) => Promise<void>) => {
@@ -130,10 +156,7 @@ export function agentServices(deps: AgentDeps): ModuleServices {
     registry: deps.registry,
     dispatcher: deps.dispatcher,
     workspace: deps.workspace,
-    ownerNotifier: composeOwnerNotifiers([
-      dashboardOwnerNotifier(deps),
-      deps.modules.ownerNotifier,
-    ]),
+    ownerNotifier: composeOwnerNotifiers([dashboardOwnerNotifier(deps), deps.outOfBandNotifier]),
     emailObservers: deps.modules.emailObservers,
   };
 }
@@ -153,6 +176,12 @@ export function buildDeps(): AgentDeps {
       ? new GcsWorkspaceStore(config.WORKSPACE_BUCKET, workspacePrefix)
       : new LocalWorkspaceStore(workspaceRoot);
 
+  // The policy-gated out-of-band notifier is a late binding: built-in tools
+  // register BEFORE modules are installed, so the owner.notify `ping` leg
+  // reaches the (by then assigned) gated aggregate through this closure.
+  // Until then it no-ops — a ping during boot has nowhere to go anyway.
+  let outOfBandNotifier: OwnerNotifier = noopOwnerNotifier;
+
   // Built-ins are the base platform: memory, goals, approvals, missions, and
   // workspace tools. Optional provider/worker modules are installed below, and
   // each registers its own tools — the composition root names none of them.
@@ -160,6 +189,7 @@ export function buildDeps(): AgentDeps {
     registerBuiltinTools(new ToolRegistry(), {
       embed: (texts) => router.embed(texts),
       workspace,
+      notifyOwner: (input) => outOfBandNotifier.notifyOwner(input),
     }),
   );
   const modules = installModules(composition.modules, {
@@ -172,6 +202,7 @@ export function buildDeps(): AgentDeps {
     workspacePrefix,
     workspaceRoot,
   });
+  outOfBandNotifier = policyGatedOutOfBand(db, modules.ownerNotifier);
 
   const browserLauncher = modules.exportsOf(browserModule);
   const documentProcessor = modules.exportsOf(documentsModule);
@@ -183,6 +214,7 @@ export function buildDeps(): AgentDeps {
     dispatcher: new ToolDispatcher(db, registry),
     workspace,
     modules,
+    outOfBandNotifier,
     ...(browserLauncher ? { browserLauncher } : {}),
     ...(documentProcessor ? { documentProcessor } : {}),
   };

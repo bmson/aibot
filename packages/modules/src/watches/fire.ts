@@ -21,7 +21,7 @@ export interface WatchFireDeps {
 export async function recordWatchFire(
   deps: WatchFireDeps,
   watch: WatchRow,
-  fire: { triggerRef: string; text: string; channelMessageId: string },
+  fire: { triggerRef: string; text: string; channelMessageId: string; excerpt?: string },
   now: Date,
 ): Promise<boolean> {
   const [recorded] = await deps.db
@@ -31,6 +31,9 @@ export async function recordWatchFire(
       agentId: watch.agentId,
       triggerRef: fire.triggerRef,
       summary: fire.text,
+      // Bounded trigger text for the suggest tier's compose step — tainted
+      // reference data, never owner-facing raw.
+      excerpt: (fire.excerpt ?? '').slice(0, 2048),
     })
     .onConflictDoNothing({ target: [watchFires.watchId, watchFires.triggerRef] })
     .returning({ id: watchFires.id });
@@ -59,8 +62,10 @@ export async function recordWatchFire(
       channelMessageId: fire.channelMessageId,
     }).catch((err) => console.error('watch notice failed', err));
   }
+  // A watch hit is ambient: the owner asked to know, but not necessarily at
+  // 3am — quiet hours and the daily cap govern the phone legs.
   await deps
-    .notifyOwner({ text: fire.text })
+    .notifyOwner({ text: fire.text, urgency: 'ambient' })
     .catch((err) => console.error('watch owner notification failed', err));
   return true;
 }

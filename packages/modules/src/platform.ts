@@ -34,8 +34,23 @@ export interface ModulePlatformContext {
  * consumes it through `ModuleServices`. Best-effort: when no installed module
  * provides one, the platform substitutes a no-op.
  */
+/**
+ * How hard a notice may push. 'ambient' (a briefing, a watch hit, an arrival
+ * nudge — things the owner did not just ask for) is governed by the nudge
+ * policy: quiet hours and the daily cap can hold its out-of-band legs while
+ * the dashboard copy still posts. 'interrupt' — the default — always goes
+ * through: it names things the owner is actively waiting on (an approval, a
+ * stall in work they asked for), and gating those would hide a question they
+ * already said yes to answering.
+ */
+export type OwnerNoticeUrgency = 'ambient' | 'interrupt';
+
 export interface OwnerNotifier {
-  notifyOwner(input: { text: string; taskId?: string }): Promise<void>;
+  notifyOwner(input: {
+    text: string;
+    taskId?: string;
+    urgency?: OwnerNoticeUrgency;
+  }): Promise<void>;
   notifyApprovals(
     approvals: ReadonlyArray<{
       taskId: string;

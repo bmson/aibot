@@ -3,14 +3,17 @@ import {
   createDb,
   type Db,
   emailIngest,
+  goals,
   messages,
   suggestions,
+  watches,
+  watchFires,
 } from '@assistant/db';
 import { eq, inArray, like } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import type { ModelRouter } from '../model-router/router.js';
-import { runBriefing } from './briefing.js';
+import { briefingHasNews, runBriefing } from './briefing.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -107,7 +110,14 @@ describe('runBriefing', () => {
     // real ones arrive in, so silence is the correct output, not a courtesy.
     const { router, prompts } = recordingRouter(`${MARKER} quiet probe`);
     const result = await runBriefing({ db, router });
-    if (result.highlights === 0 && result.needsAttention === 0 && result.pendingApprovals === 0) {
+    if (
+      result.highlights === 0 &&
+      result.needsAttention === 0 &&
+      result.pendingApprovals === 0 &&
+      result.calendarConflicts === 0 &&
+      result.goalDeltas === 0 &&
+      result.watchHits === 0
+    ) {
       expect(result.delivered).toBe(false);
       expect(prompts).toHaveLength(0);
     } else {
@@ -224,5 +234,144 @@ describe('runBriefing', () => {
       .where(like(messages.text, `%${MARKER} Your itinerary%`));
     // The raw notes went out, carrying the same items the composed version had.
     expect(posted.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('runBriefing — richer inputs', () => {
+  const watchIds: string[] = [];
+  const goalIds: string[] = [];
+
+  afterEach(async () => {
+    if (!dbUp) return;
+    if (watchIds.length) {
+      await db.delete(watchFires).where(inArray(watchFires.watchId, watchIds));
+      await db.delete(watches).where(inArray(watches.id, watchIds));
+      watchIds.length = 0;
+    }
+    if (goalIds.length) {
+      await db.delete(goals).where(inArray(goals.id, goalIds));
+      goalIds.length = 0;
+    }
+  });
+
+  function calendarReturning(events: Array<Record<string, unknown>>) {
+    return (async () => ({
+      events: events.map((event) => ({
+        summary: '',
+        start: '',
+        end: '',
+        calendar: 'primary',
+        allDay: false,
+        ...event,
+      })),
+      complete: true,
+    })) as NonNullable<Parameters<typeof runBriefing>[0]['calendarReader']>;
+  }
+
+  it('surfaces a calendar conflict even on an otherwise quiet day', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const day = new Date(Date.now() + 24 * 3600 * 1000);
+    const at = (h: number) => new Date(day.getTime() + h * 3600 * 1000).toISOString();
+    const { router, prompts } = recordingRouter();
+    const result = await runBriefing({
+      db,
+      router,
+      calendarReader: calendarReturning([
+        { summary: `${MARKER} Dentist`, start: at(9), end: at(10) },
+        { summary: `${MARKER} Interview`, start: at(9.5), end: at(11) },
+      ]),
+    });
+    expect(result.calendarConflicts).toBe(1);
+    expect(result.delivered).toBe(true);
+    const prompt = prompts[0] ?? '';
+    expect(prompt).toContain(`${MARKER} Dentist`);
+    expect(prompt).toContain('overlaps');
+  });
+
+  it('counts a routine calendar as context, never as news', () => {
+    // The silence rule, pinned without a database: events alone never deliver.
+    expect(
+      briefingHasNews({
+        highlights: 0,
+        upcoming: 0,
+        needsAttention: 0,
+        pendingApprovals: 0,
+        calendarConflicts: 0,
+        goalDeltas: 0,
+        watchHits: 0,
+      }),
+    ).toBe(false);
+    // ...but each genuine signal flips it on its own.
+    const quiet = {
+      highlights: 0,
+      upcoming: 0,
+      needsAttention: 0,
+      pendingApprovals: 0,
+      calendarConflicts: 0,
+      goalDeltas: 0,
+      watchHits: 0,
+    };
+    expect(briefingHasNews({ ...quiet, calendarConflicts: 1 })).toBe(true);
+    expect(briefingHasNews({ ...quiet, goalDeltas: 1 })).toBe(true);
+    expect(briefingHasNews({ ...quiet, watchHits: 1 })).toBe(true);
+    expect(briefingHasNews({ ...quiet, highlights: 1 })).toBe(true);
+  });
+
+  it('includes goal deltas, watch hits, and open suggestions in the notes', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [goal] = await db
+      .insert(goals)
+      .values({ agentId, title: `${MARKER} learn Icelandic`, nextAction: 'book a class' })
+      .returning({ id: goals.id });
+    if (!goal) throw new Error('goal fixture failed');
+    goalIds.push(goal.id);
+
+    const [watch] = await db
+      .insert(watches)
+      .values({ agentId, name: `${MARKER} watch`, expiresAt: new Date(Date.now() + 86400e3) })
+      .returning({ id: watches.id });
+    if (!watch) throw new Error('watch fixture failed');
+    watchIds.push(watch.id);
+    await db.insert(watchFires).values({
+      watchId: watch.id,
+      agentId,
+      triggerRef: `gmail:${MARKER}-fire`,
+      summary: `${MARKER} the watched sender wrote in`,
+    });
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        agentId,
+        conversationId,
+        summary: `${MARKER} an earlier proposal`,
+        proposedAction: 'do the thing',
+        sourceRef: `gmail:${MARKER}-open:0`,
+        expiresAt: new Date(Date.now() + 7 * 86400e3),
+      })
+      .returning({ id: suggestions.id });
+    if (!suggestion) throw new Error('suggestion fixture failed');
+    createdSuggestionIds.push(suggestion.id);
+
+    const { router, prompts } = recordingRouter();
+    const result = await runBriefing({ db, router });
+    expect(result.delivered).toBe(true);
+    expect(result.goalDeltas).toBeGreaterThanOrEqual(1);
+    expect(result.watchHits).toBeGreaterThanOrEqual(1);
+    const prompt = prompts[0] ?? '';
+    expect(prompt).toContain(`${MARKER} learn Icelandic`);
+    expect(prompt).toContain(`${MARKER} the watched sender wrote in`);
+    expect(prompt).toContain(`${MARKER} an earlier proposal`);
+  });
+
+  it('briefs without a calendar section when no reader is wired', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { router, prompts } = recordingRouter();
+    const result = await runBriefing({ db, router });
+    expect(result.calendarEvents).toBe(0);
+    expect(result.calendarConflicts).toBe(0);
+    if (result.delivered) {
+      expect(prompts[0] ?? '').not.toContain('On the calendar');
+    }
   });
 });

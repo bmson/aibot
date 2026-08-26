@@ -61,6 +61,16 @@ describe('executorDeps channel composition', () => {
   ): AgentDeps =>
     ({
       db: {},
+      // The composition root hands agentServices the policy-gated phone legs
+      // as a unit; the fixture stands in for it directly.
+      outOfBandNotifier: {
+        notifyOwner: async () => {
+          calls.push('ping:owner');
+        },
+        notifyApprovals: async () => {
+          calls.push('ping:approvals');
+        },
+      },
       modules: {
         channels,
         ownerNotifier: {

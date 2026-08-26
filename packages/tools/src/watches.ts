@@ -79,6 +79,12 @@ const createSchema = z.object({
     .transform((values) =>
       values?.length ? [...new Set(values.map((value) => value.toLowerCase()))] : undefined,
     ),
+  /**
+   * notify (default): ping the owner when matching mail arrives. suggest: also
+   * draft a one-tap next step from the message. Neither tier takes an outward
+   * action on its own — accepting a suggestion runs the normal approval path.
+   */
+  tier: z.enum(['notify', 'suggest']).default('notify'),
   expiresInDays: z.number().int().min(1).max(MAX_WATCH_DAYS).default(DEFAULT_WATCH_DAYS),
   maxFires: z.number().int().min(1).max(MAX_FIRES_CAP).optional(),
 });
@@ -128,10 +134,12 @@ function register<S extends z.ZodType, Out>(
 }
 
 /**
- * Anticipation-layer watchers (Phase 1: email, notify-only). Creating, listing,
- * and cancelling a watch takes no outward action, so all three are autonomous;
- * they are private-owner tools and are stripped from any external/untrusted
- * task registry. See docs/anticipation-layer.md.
+ * Anticipation-layer watchers (email + web; notify tier, plus the suggest
+ * tier for email). Creating, listing, and cancelling a watch takes no outward
+ * action, so all three are autonomous; they are private-owner tools and are
+ * stripped from any external/untrusted task registry. A suggest-tier watch
+ * only drafts an inert proposal from the trigger — accepting it runs the
+ * normal approval path. See docs/anticipation-layer.md.
  */
 export function registerWatchTools(registry: ToolRegistry): ToolRegistry {
   register(
@@ -139,7 +147,7 @@ export function registerWatchTools(registry: ToolRegistry): ToolRegistry {
     {
       name: 'watch.create',
       description:
-        'Watch the bot inbox for future email from specific senders and notify the owner when it arrives ("tell me if X emails me"). Only authenticated mail from the named senders fires it; optional keywords further narrow it to messages mentioning any of them. This only notifies the owner — it never sends, replies, or takes any outward action. Autonomous; no approval needed.',
+        'Watch the bot inbox for future email from specific senders and notify the owner when it arrives ("tell me if X emails me"). Only authenticated mail from the named senders fires it; optional keywords further narrow it to messages mentioning any of them. tier "notify" (default) pings the owner; tier "suggest" also drafts a one-tap next step from the message for the owner to accept or dismiss. Neither tier sends, replies, or takes any outward action by itself. Autonomous; no approval needed.',
       inputSchema: createSchema,
       risk: 'autonomous',
       acceptsUntrustedInput: false,
@@ -174,7 +182,7 @@ export function registerWatchTools(registry: ToolRegistry): ToolRegistry {
             agentId: ctx.agentId,
             conversationId,
             kind: 'email',
-            tier: 'notify',
+            tier: args.tier,
             name: args.name,
             match,
             maxFires: args.maxFires ?? null,
@@ -185,6 +193,7 @@ export function registerWatchTools(registry: ToolRegistry): ToolRegistry {
         return {
           watchId: record.id,
           name: record.name,
+          tier: record.tier,
           matching: matchSummary(match),
           expectedSenderEmails: match.expectedSenderEmails,
           keywords: match.keywords ?? [],

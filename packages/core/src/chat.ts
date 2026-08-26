@@ -24,7 +24,7 @@ import {
   or,
   sql,
 } from 'drizzle-orm';
-import { type Cue, companionPersonaLines, cueMessageParts } from './chat-cues.js';
+import { type Cue, companionPersonaLines, cueMessageParts, splitAtBreaks } from './chat-cues.js';
 import type { RecallSource } from './memory/recall.js';
 import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
 import type { ActionEvidence } from './workflow/response-contract.js';
@@ -40,7 +40,12 @@ export function assistantMessageParts(
   recall?: RecallSource[],
   opts?: { contractNotice?: boolean; cues?: Cue[]; responseCards?: Record<string, unknown>[] },
 ): unknown[] {
-  const parts: unknown[] = [{ type: 'text', text }];
+  // A reply carrying [break] cues persists as one TEXT part per bubble, split
+  // at the scanner-recorded offsets — verbatim slices, so the concatenation
+  // stays identical to the streamed message the client's dedupe matches on.
+  const breakAts = (opts?.cues ?? []).flatMap((cue) => (cue.kind === 'break' ? [cue.at] : []));
+  const segments = breakAts.length > 0 ? splitAtBreaks(text, breakAts) : [text];
+  const parts: unknown[] = segments.map((segment) => ({ type: 'text', text: segment }));
   if (opts?.responseCards?.length) {
     for (const card of opts.responseCards) parts.push({ type: 'data-card', data: card });
   }
@@ -49,7 +54,7 @@ export function assistantMessageParts(
   // message as an honesty-check system notice instead of assistant prose.
   if (opts?.contractNotice) parts.push({ type: 'notice', notice: 'response-contract' });
   // Companion cues stripped from the reply text; the dashboard reads them to
-  // animate its face, tint the chat surface, and offer quick-reply chips.
+  // animate its face and offer quick-reply chips.
   if (opts?.cues && opts.cues.length > 0) parts.push(...cueMessageParts(opts.cues));
   return parts;
 }
@@ -130,10 +135,15 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * v28: chat replies drop emojis and perky status-report phrasing — the
  * dashboard companion lets the animated face carry the expression while the
  * words themselves stay plain and conversational.
+ * v29: conversational rules — engage with small talk directly instead of
+ * deflecting to capabilities, and follow up like a person (one natural
+ * question on an open loop, never a stock closer on a closed one).
+ * v30: the [break] cue joins the dashboard vocabulary — a reply can split
+ * into separate chat bubbles at natural beats (see chat-cues.ts).
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 28;
+export const PROMPT_VERSION = 30;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is
@@ -196,6 +206,8 @@ export function buildSystemPrompt(
     '- Skip emojis. Plain words carry the tone; a single mirrored emoji is acceptable only when the owner uses them first.',
     '- Sound like a person texting a colleague, not a readout: vary sentence length, and skip perky status-report phrasing ("Great news!", "All set!", "On it!") and narrating your own reactions — just say the thing.',
     '- Warm does not mean wordy. Say the useful thing plainly, add a human touch when it fits, and stop. Match the channel register (the channel note below tells you which): SMS is one or two plain sentences; email opens with a short greeting and ends with a brief sign-off as yourself; dashboard chat is conversational in tone but structured in layout.',
+    '- Chat is a conversation, not a ticket queue: when the owner just talks — thinking aloud, sharing news, asking what you make of something — engage with it directly and briefly, the way a colleague would, instead of deflecting to what you can do for them.',
+    '- Follow up like a person. When a reply closes the question, stop there — never tack on a stock "anything else?". When the owner opens a loop they plainly mean to continue (a dilemma, news in progress, plans not yet settled), ask the one natural next question and mean it — one question, not a checklist.',
     '- Dashboard chat formatting: prose for conversation, markdown for data. A result set — emails, events, files, contacts, search hits, receipts — is never one run-on paragraph: one short lead-in sentence, then a markdown list or table whose rows carry the deciding fields (**sender**, subject, date for email; **title**, time, place for events). One item per line, real list syntax — the chat surfaces render bold, lists, and tables, and a wall of text is always the wrong shape for lookup results.',
     '  Shape an email rundown exactly like this (lead-in, then one row per item):',
     '',

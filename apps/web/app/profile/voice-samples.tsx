@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { purgeVoiceSamplesAction } from '@/app/profile/actions';
+import { VoiceProfileForm } from '@/app/profile/voice-profile-form';
 import {
   btn,
   CountBadge,
@@ -51,11 +52,13 @@ export function VoiceSamplesPanel({
   auto,
   uploaded,
   imports,
+  profile,
 }: {
   total: number;
   auto: number;
   uploaded: number;
   imports: VoiceImportView[];
+  profile: { description: string; dos: string[]; donts: string[]; signature: string };
 }) {
   const [pending, startTransition] = useTransition();
   const [confirming, setConfirming] = useState(false);
@@ -86,6 +89,16 @@ export function VoiceSamplesPanel({
             ]}
           />
         ) : null}
+
+        {/* The distilled profile the samples taught — owner-editable. */}
+        <div className="rounded-xl bg-sunken/55 p-3">
+          <p className="text-sm font-semibold text-strong">The voice it learned</p>
+          <p className="mt-1 mb-3 text-xs leading-5 text-muted">
+            What outbound drafts are rewritten to sound like. Re-ingesting samples rewrites this —
+            make edits after an ingest.
+          </p>
+          <VoiceProfileForm initial={profile} />
+        </div>
 
         {/* Upload */}
         <form

@@ -1092,13 +1092,22 @@ final class AppModel: ObservableObject {
 
     private func append(delta: String, to id: String) {
         guard let index = messages.firstIndex(where: { $0.id == id }) else { return }
-        if let partIndex = messages[index].parts.firstIndex(where: { $0.type == "text" }) {
+        // The LAST text part is the live bubble: a data-break cue starts a
+        // fresh one, and everything after it belongs to the new bubble.
+        if let partIndex = messages[index].parts.lastIndex(where: { $0.type == "text" }) {
             messages[index].parts[partIndex].text = (messages[index].parts[partIndex].text ?? "") + delta
         }
     }
 
     private func append(cue: MessagePart, to id: String) {
         guard let index = messages.firstIndex(where: { $0.id == id }) else { return }
+        // A bubble boundary, not overlay data: the reply's remaining text
+        // belongs to a fresh bubble. Persisted twins arrive already split, so
+        // this only mirrors the boundary into the in-flight stream message.
+        if cue.type == "data-break" {
+            messages[index].parts.append(MessagePart(type: "text", text: ""))
+            return
+        }
         messages[index].parts.append(cue)
     }
 

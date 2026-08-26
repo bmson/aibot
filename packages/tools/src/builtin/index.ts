@@ -30,6 +30,16 @@ export interface BuiltinDeps {
   embed: (texts: string[]) => Promise<number[][]>;
   /** Workspace file store: local FS in dev, GCS in prod. */
   workspace: WorkspaceStore;
+  /**
+   * Out-of-band owner ping (SMS/push), injected by the composition root and
+   * already behind the nudge policy. Absent in tests and minimal installs:
+   * a `ping` then resolves to the chat message only.
+   */
+  notifyOwner?: (input: {
+    text: string;
+    taskId?: string;
+    urgency?: 'ambient' | 'interrupt';
+  }) => Promise<void>;
 }
 
 export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps): ToolRegistry {
@@ -473,8 +483,16 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     {
       name: 'owner.notify',
       description:
-        'Leave a message for the owner. It appears in the current conversation (or the Notifications conversation) and on the dashboard.',
-      inputSchema: z.object({ message: z.string().min(1).max(4000) }),
+        "Leave a message for the owner. It appears in the current conversation (or the Notifications conversation) and on the dashboard. Set ping=true to also buzz their phone (SMS/push) — reserved for proactive, time-sensitive notes; the owner's quiet hours and daily ping limit still govern it.",
+      inputSchema: z.object({
+        message: z.string().min(1).max(4000),
+        ping: z
+          .boolean()
+          .optional()
+          .describe(
+            'Also notify out-of-band (SMS/push). For proactive, time-sensitive notes only — not for replies to something the owner just asked.',
+          ),
+      }),
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (args, ctx) => {
@@ -489,7 +507,21 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
           parts: [{ type: 'text', text: args.message }],
           text: args.message,
         });
-        return { notified: true, conversationId };
+        // The ping leg is ambient by construction: it only ever accompanies
+        // an owner-destined message, and the policy gate downstream decides
+        // whether the phone actually buzzes. Best-effort — the chat message
+        // above is the record and must not fail with the radio.
+        let pinged = false;
+        if (args.ping && deps.notifyOwner) {
+          pinged = await deps
+            .notifyOwner({ text: args.message, taskId: ctx.taskId, urgency: 'ambient' })
+            .then(() => true)
+            .catch((err) => {
+              console.error('owner.notify ping failed', err);
+              return false;
+            });
+        }
+        return { notified: true, conversationId, pinged };
       },
     },
     // Sink is hardwired to the owner's own conversation (ctx.conversationId) or

@@ -1,6 +1,10 @@
 'use server';
 
-import { decideSuggestion, type SuggestionDecision } from '@assistant/application/suggestions';
+import {
+  decideSuggestion,
+  type SuggestionDecision,
+  snoozeSuggestionUntil,
+} from '@assistant/application/suggestions';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
 import { getDb } from '@/lib/server';
@@ -24,4 +28,18 @@ export async function decideSuggestionInline(
   return result.ok
     ? { ok: true, ...(result.taskId ? { taskId: result.taskId } : {}) }
     : { ok: false, error: result.reason };
+}
+
+/**
+ * Put a suggestion down until tomorrow without answering it. "Later" means
+ * later: the core snooze carries the expiry out with it, and the hydrated
+ * card reads as a settled receipt until the snooze elapses.
+ */
+export async function snoozeSuggestionInline(
+  suggestionId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  await requireOwner();
+  const result = await snoozeSuggestionUntil(getDb(), suggestionId);
+  revalidatePath('/chat', 'layout');
+  return result.ok ? { ok: true } : { ok: false, error: result.reason };
 }

@@ -229,6 +229,36 @@ async function collectEvents(
   };
 }
 
+/**
+ * The calendar read for NON-tool callers — the daily briefing's code job
+ * composes from structured inputs and holds no tools, so it reaches the same
+ * fan-out and merge through here. Only the client is used, hence the bare
+ * deps. The result carries event content verbatim from Google; callers treat
+ * it as data, never instructions.
+ */
+export async function listEventsInWindow(
+  client: GoogleClient,
+  opts: { timeMin: Date; timeMax: Date; maxResults?: number },
+) {
+  const maxResults = Math.min(Math.max(opts.maxResults ?? 20, 1), 50);
+  return collectEvents(
+    { client, botEmail: '', ownerEmail: '' },
+    {
+      maxResults,
+      query: (calendarId) => {
+        const params = new URLSearchParams({
+          timeMin: opts.timeMin.toISOString(),
+          timeMax: opts.timeMax.toISOString(),
+          maxResults: String(maxResults),
+          singleEvents: 'true',
+          orderBy: 'startTime',
+        });
+        return `${CAL}/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`;
+      },
+    },
+  );
+}
+
 export function registerCalendarTools(
   registry: ToolRegistry,
   deps: CalendarToolDeps,

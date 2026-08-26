@@ -6,6 +6,7 @@ import {
   recordLocationPing,
   verifyLocationSignature,
 } from '@assistant/core';
+import { maybeEnqueueArrivalNudge } from '@assistant/core/proactive/arrival';
 import type { ModuleWebhookRequest } from '@assistant/modules';
 import { validateTwilioSignature } from '@assistant/tools';
 import { Hono } from 'hono';
@@ -59,6 +60,16 @@ webhooks.post('/location', async (c) => {
   const deps = buildDeps();
   const agent = await getAgent(deps.db);
   await recordLocationPing(deps.db, agent.id, parsed.data);
+  // Same arrival hook as the app's own ingest: a Shortcut ping is the same
+  // evidence, so it earns the same one-considered-nudge look. Best-effort —
+  // the ping is the payload, the nudge a bonus.
+  await maybeEnqueueArrivalNudge(deps.db, agent, {
+    lat: parsed.data.lat,
+    lng: parsed.data.lng,
+    label: parsed.data.label,
+    accuracyM: parsed.data.accuracyM,
+    capturedAt: new Date(parsed.data.capturedAt ?? Date.now()),
+  }).catch((err) => console.error('location: arrival hook failed', err));
   return c.json({ ok: true });
 });
 

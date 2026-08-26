@@ -15,6 +15,7 @@ import { releaseStaleReservations } from '../cost.js';
 import { purgeStaleLocations } from '../memory/location.js';
 import { purgeStaleRecallMetrics } from '../memory/recall-metrics.js';
 import type { ModelRouter } from '../model-router/router.js';
+import { purgeStaleProactivePings } from '../proactive/nudge-policy.js';
 import { purgeStaleDreamNotes } from './dream.js';
 
 /**
@@ -62,6 +63,7 @@ export async function purgeExpired(
   locations: number;
   dreamNotes: number;
   recallMetrics: number;
+  proactivePings: number;
 }> {
   const expiredCache = db
     .select({ id: toolCache.cacheKey })
@@ -73,7 +75,7 @@ export async function purgeExpired(
     .from(memories)
     .where(and(isNotNull(memories.expiresAt), lte(memories.expiresAt, sql`now()`)))
     .limit(batch);
-  const [cacheRows, memoryRows, reservations, locations, dreamNotes, recallMetrics] =
+  const [cacheRows, memoryRows, reservations, locations, dreamNotes, recallMetrics, pingLedger] =
     await Promise.all([
       db
         .delete(toolCache)
@@ -90,6 +92,8 @@ export async function purgeExpired(
       purgeStaleDreamNotes(db, batch),
       // Operational counters do not need the owner's long-term history policy.
       purgeStaleRecallMetrics(db, 90, batch),
+      // The nudge-policy ledger is telemetry, not history — same 90 days.
+      purgeStaleProactivePings(db, 90, batch),
     ]);
   return {
     cache: cacheRows.length,
@@ -98,6 +102,7 @@ export async function purgeExpired(
     locations,
     dreamNotes,
     recallMetrics,
+    proactivePings: pingLedger,
   };
 }
 

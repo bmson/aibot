@@ -5,6 +5,7 @@ import type { Trust } from '../../events.js';
 import type { DocumentProcessorConfig } from '../../memory/document-processor.js';
 import type { WorkspaceReader } from '../../memory/import.js';
 import type { ModelRouter } from '../../model-router/router.js';
+import type { BriefingCalendarReader } from '../briefing.js';
 
 /** Structural port implemented by @assistant/tools' ToolDispatcher — keeps core free of a package cycle. */
 export interface DispatcherPort {
@@ -78,6 +79,12 @@ export interface ExecutorDeps {
   workspace?: WorkspaceReader;
   /** Document-processor launcher + callback URL (Phase 14). Absent = feature inert. */
   documentProcessor?: DocumentProcessorConfig;
+  /**
+   * Calendar read for the briefing code job, supplied by the composition root
+   * from the google module's client. Absent without that module — the briefing
+   * then has no calendar section.
+   */
+  calendarReader?: BriefingCalendarReader;
   /**
    * Returns a completion summary when a code job belongs to a module this
    * installation does not have, so the job completes instead of failing.

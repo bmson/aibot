@@ -75,6 +75,7 @@ export default async function ProfilePage() {
     quarantined,
     voiceStats,
     voiceImports,
+    voiceProfile,
     memoryHealth,
     latestOrganizer,
     card,
@@ -326,12 +327,14 @@ export default async function ProfilePage() {
         </details>
       </Panel>
 
-      {/* Writing voice — sample corpus + one-time batch upload */}
+      {/* Writing voice — the distilled profile, then the sample corpus it
+          was learned from */}
       <VoiceSamplesPanel
         total={voiceStats.total}
         auto={voiceStats.auto}
         uploaded={voiceStats.uploaded}
         imports={voiceImportViews}
+        profile={voiceProfile}
       />
 
       {/* People — one collapsed card per person */}

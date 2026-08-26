@@ -4,6 +4,8 @@
 
 export const scheduleLabels: Record<string, string> = {
   'morning-brief': 'Morning brief',
+  'daily-briefing': 'Daily briefing',
+  'tomorrow-check': 'Evening look at tomorrow',
   'memory-extraction': 'Remember useful details from today',
   'memory-consolidation': 'Organize saved memory',
   'chat-segmentation': 'Organize conversation history',

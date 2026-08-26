@@ -1,27 +1,101 @@
 import { getAgent } from '@assistant/core/chat';
-import { agents, approvalPolicies, type Db, schedules } from '@assistant/db';
+import { countHeldPings } from '@assistant/core/proactive/nudge-policy';
+import { agents, approvalPolicies, type Db, notificationPrefs, schedules } from '@assistant/db';
 import { asc, eq, sql } from 'drizzle-orm';
+
+export interface NotificationPrefsView {
+  /** "HH:MM" owner-local, or empty when quiet hours are off. */
+  quietStart: string;
+  quietEnd: string;
+  /** Empty when there is no cap. */
+  ambientDailyCap: string;
+  /** Pings the policy held back over the last day, by reason. */
+  heldLast24h: { quietHours: number; dailyCap: number };
+}
 
 export interface SettingsOverview {
   agent: Awaited<ReturnType<typeof getAgent>>;
   schedules: Array<typeof schedules.$inferSelect>;
   policies: Array<typeof approvalPolicies.$inferSelect>;
   goalAutomationCount: number;
+  notificationPrefs: NotificationPrefsView;
+}
+
+function minutesToHHMM(minutes: number | null): string {
+  if (minutes == null) return '';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/** "HH:MM" → minutes after midnight; empty string → null (field off). */
+function parseHHMM(value: string): { ok: true; minutes: number | null } | { ok: false } {
+  const trimmed = value.trim();
+  if (trimmed === '') return { ok: true, minutes: null };
+  const match = /^(\d{1,2}):(\d{2})$/.exec(trimmed);
+  if (!match) return { ok: false };
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return { ok: false };
+  return { ok: true, minutes: hours * 60 + minutes };
 }
 
 export async function getSettingsOverview(db: Db): Promise<SettingsOverview> {
-  const [agent, scheduleRows, policies] = await Promise.all([
+  const [agent, scheduleRows, policies, prefsRows] = await Promise.all([
     getAgent(db),
     db.select().from(schedules).orderBy(asc(schedules.name)),
     db.select().from(approvalPolicies).orderBy(asc(approvalPolicies.toolName)),
+    db.select().from(notificationPrefs),
   ]);
   const directSchedules = scheduleRows.filter((schedule) => !schedule.name.startsWith('goal:'));
+  const prefs = prefsRows.find((row) => row.agentId === agent.id);
+  const heldLast24h = await countHeldPings(db, agent.id, new Date(Date.now() - 24 * 3600 * 1000));
   return {
     agent,
     schedules: directSchedules,
     policies,
     goalAutomationCount: scheduleRows.length - directSchedules.length,
+    notificationPrefs: {
+      quietStart: minutesToHHMM(prefs?.quietStartMin ?? null),
+      quietEnd: minutesToHHMM(prefs?.quietEndMin ?? null),
+      ambientDailyCap: prefs?.ambientDailyCap != null ? String(prefs.ambientDailyCap) : '',
+      heldLast24h,
+    },
   };
+}
+
+export async function updateNotificationPrefs(
+  db: Db,
+  input: { quietStart: string; quietEnd: string; ambientDailyCap: string },
+): Promise<{ error?: string }> {
+  const start = parseHHMM(input.quietStart);
+  const end = parseHHMM(input.quietEnd);
+  if (!start.ok || !end.ok) return { error: 'Quiet hours need HH:MM times, or be left empty.' };
+  // Half a window is off, not an accident: treat either side empty as no
+  // quiet hours at all rather than guessing a 00:00 boundary.
+  const quietStartMin = start.minutes != null && end.minutes != null ? start.minutes : null;
+  const quietEndMin = start.minutes != null && end.minutes != null ? end.minutes : null;
+
+  const capRaw = input.ambientDailyCap.trim();
+  let ambientDailyCap: number | null = null;
+  if (capRaw !== '') {
+    const parsed = Number(capRaw);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
+      return { error: 'The daily ping limit must be a whole number between 1 and 100.' };
+    }
+    ambientDailyCap = parsed;
+  }
+
+  const [agent] = await db.select({ id: agents.id }).from(agents).limit(1);
+  if (!agent) return { error: 'No agent configured.' };
+  await db
+    .insert(notificationPrefs)
+    .values({ agentId: agent.id, quietStartMin, quietEndMin, ambientDailyCap })
+    .onConflictDoUpdate({
+      target: notificationPrefs.agentId,
+      set: { quietStartMin, quietEndMin, ambientDailyCap, updatedAt: sql`now()` },
+    });
+  return {};
 }
 
 function isValidTimezone(timezone: string): boolean {

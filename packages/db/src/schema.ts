@@ -1396,11 +1396,11 @@ export const schedules = pgTable(
 
 /**
  * An owner-defined condition the assistant waits on ("tell me if X emails").
- * See docs/anticipation-layer.md. Phase 1 is deliberately narrow — enforced by
- * the CHECKs below, not by prompt: kind='email' and tier='notify', so a match
- * only *informs* the owner and takes no outward action. Untrusted trigger
- * content selects a watch; it never authors an action. Later phases widen the
- * enums by migration.
+ * See docs/anticipation-layer.md. The tiers are enforced by the CHECK below,
+ * not by prompt: 'notify' only *informs* the owner; 'suggest' additionally
+ * drafts a one-tap proposal from the trigger — as reference data, through a
+ * model step holding no tools, so untrusted content still never authors an
+ * outward action. 'frozen_action' remains unbuilt.
  */
 export const watches = pgTable(
   'watches',
@@ -1440,7 +1440,7 @@ export const watches = pgTable(
   },
   (t) => [
     check('watches_kind_check', sql`${t.kind} IN ('email','web')`),
-    check('watches_tier_check', sql`${t.tier} IN ('notify')`),
+    check('watches_tier_check', sql`${t.tier} IN ('notify','suggest')`),
     check('watches_status_check', sql`${t.status} IN ('active','fired','expired','cancelled')`),
     index('watches_active_idx').on(t.agentId, t.status, t.kind, t.expiresAt),
     // The web-watch poller's due-selection/claim query.
@@ -1466,9 +1466,71 @@ export const watchFires = pgTable(
     /** Dedupe key for the triggering event, e.g. 'gmail:<messageId>'. */
     triggerRef: text('trigger_ref').notNull(),
     summary: text('summary').notNull().default(''),
+    /**
+     * Bounded excerpt of the trigger content (subject + first ~2 KB of body),
+     * captured at fire time for the suggest tier's compose step. Tainted by
+     * construction: it is third-party text, only ever read as reference data
+     * by a model step that holds no tools, and never shown raw to the owner.
+     */
+    excerpt: text('excerpt').notNull().default(''),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('watch_fires_watch_trigger_idx').on(t.watchId, t.triggerRef)],
+);
+
+// ── Proactive delivery policy ────────────────────────────────────────────────
+
+/**
+ * When the assistant may INTERRUPT the owner (SMS/push) versus only post to
+ * the dashboard. Singleton per agent; an absent row means no quiet hours and
+ * no cap — the shipped default, so nothing changes until the owner opts in.
+ *
+ * Quiet hours are minutes after midnight in the agent's timezone; a start
+ * after the end means an overnight window (22:00→07:00). Both null = off.
+ */
+export const notificationPrefs = pgTable(
+  'notification_prefs',
+  {
+    agentId: uuid('agent_id')
+      .primaryKey()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    quietStartMin: integer('quiet_start_min'),
+    quietEndMin: integer('quiet_end_min'),
+    /** Most ambient pings allowed out-of-band per owner-local day; null = no cap. */
+    ambientDailyCap: integer('ambient_daily_cap'),
+    ...timestamps,
+  },
+  (t) => [
+    check('notification_prefs_quiet_start_range', sql`${t.quietStartMin} between 0 and 1439`),
+    check('notification_prefs_quiet_end_range', sql`${t.quietEndMin} between 0 and 1439`),
+    check('notification_prefs_cap_positive', sql`${t.ambientDailyCap} > 0`),
+  ],
+);
+
+/**
+ * One row per out-of-band ping the policy evaluated, delivered or suppressed.
+ * The cap counts delivered rows from this ledger, and the owner-facing "what
+ * was held" line reads the suppressed ones. Purged after 90 days like the
+ * other operational counters — it is telemetry, not history.
+ */
+export const proactivePings = pgTable(
+  'proactive_pings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    urgency: text('urgency').notNull(),
+    channel: text('channel').notNull(),
+    delivered: boolean('delivered').notNull(),
+    /** Suppression reason ('quiet-hours' | 'daily-cap') when not delivered. */
+    reason: text('reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check('proactive_pings_urgency_check', sql`${t.urgency} IN ('ambient','interrupt')`),
+    index('proactive_pings_agent_created_idx').on(t.agentId, t.createdAt),
+  ],
 );
 
 /** Durable, machine-readable health checks for deployed channel integrations. */

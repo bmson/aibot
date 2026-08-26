@@ -187,6 +187,7 @@ export async function hydrateChatApprovals(
             id: suggestions.id,
             status: suggestions.status,
             expiresAt: suggestions.expiresAt,
+            snoozedUntil: suggestions.snoozedUntil,
             acceptedTaskId: suggestions.acceptedTaskId,
           })
           .from(suggestions)
@@ -217,11 +218,18 @@ export async function hydrateChatApprovals(
         if (!suggestion) return { ...part, status: 'missing' };
         // A suggestion nobody answered goes quiet on its own, so an elapsed
         // deadline reads as expired rather than as a live question.
+        // A snooze is folded the same way: still sleeping reads as snoozed
+        // (a settled receipt, not a live question), and a snooze whose time
+        // has come reads as pending again so the card re-opens.
         const status =
           (suggestion.status === 'pending' || suggestion.status === 'snoozed') &&
           suggestion.expiresAt <= now
             ? 'expired'
-            : suggestion.status;
+            : suggestion.status === 'snoozed'
+              ? suggestion.snoozedUntil && suggestion.snoozedUntil > now
+                ? 'snoozed'
+                : 'pending'
+              : suggestion.status;
         return { ...part, status, acceptedTaskId: suggestion.acceptedTaskId ?? undefined };
       }
       if (!isApprovalPart(part)) return part;

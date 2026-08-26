@@ -112,7 +112,7 @@ export async function maybeEnqueueArrivalNudge(
         'In an unfamiliar city or neighbourhood, one concrete orientation tip is welcome. ' +
         'If it is neither mealtime nor somewhere worth remarking on, or the search finds nothing solid, send nothing and ' +
         'finish with an empty reply — no message is the right answer most of the time. ' +
-        'When you do reach out, send ONE short message via owner.notify naming the area and the pick(s), and stop.',
+        'When you do reach out, send ONE short message via owner.notify with ping=true naming the area and the pick(s), and stop.',
     },
   });
   const { created } = await enqueueTask(db, {

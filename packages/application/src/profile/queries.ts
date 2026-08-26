@@ -14,6 +14,7 @@ import {
   memories,
   ownerCard,
   tasks,
+  voiceProfile,
 } from '@assistant/db';
 import {
   and,
@@ -63,6 +64,8 @@ export interface ProfileOverview {
   card: { content: string; compiledAt: Date } | null;
   cardFactIds: string[];
   voiceStats: VoiceSampleStats;
+  /** The distilled voice the rewriter imitates — owner-editable on Profile. */
+  voiceProfile: { description: string; dos: string[]; donts: string[]; signature: string };
   voiceImports: Array<{
     source: string;
     status: string;
@@ -103,6 +106,7 @@ export async function getProfileOverview(db: Db): Promise<ProfileOverview> {
     voiceImports,
     memoryHealth,
     latestOrganizerRows,
+    [voice],
   ] = await Promise.all([
     db.select().from(contacts).orderBy(contacts.name).limit(PROFILE_CONTACT_LIMIT),
     db
@@ -143,6 +147,7 @@ export async function getProfileOverview(db: Db): Promise<ProfileOverview> {
       )
       .orderBy(desc(tasks.createdAt))
       .limit(1),
+    db.select().from(voiceProfile).where(eq(voiceProfile.id, 1)).limit(1),
   ]);
 
   const owner = allContacts.find((contact) => contact.trust === 'owner');
@@ -195,6 +200,16 @@ export async function getProfileOverview(db: Db): Promise<ProfileOverview> {
     card: card ? { content: card.content, compiledAt: card.compiledAt } : null,
     cardFactIds: [...cardFactIds],
     voiceStats,
+    voiceProfile: {
+      description: voice?.description ?? '',
+      dos: Array.isArray(voice?.dos)
+        ? voice.dos.filter((d): d is string => typeof d === 'string')
+        : [],
+      donts: Array.isArray(voice?.donts)
+        ? voice.donts.filter((d): d is string => typeof d === 'string')
+        : [],
+      signature: voice?.signature ?? '',
+    },
     voiceImports: voiceImports.map((row) => ({
       source: row.source,
       status: row.status,

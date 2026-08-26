@@ -660,8 +660,10 @@ export async function processForwardedIngest(
   // beats a silent loss.
   let alerted = false;
   if (score.importance >= deps.config.EMAIL_INGEST_NOTIFY_THRESHOLD) {
+    // Ambient urgency: it still lands the moment it arrives, but quiet hours
+    // and the daily cap govern whether the phone buzzes for it.
     alerted = await deps
-      .notifyOwner({ text: importantEmailNotice(from, subject, score) })
+      .notifyOwner({ text: importantEmailNotice(from, subject, score), urgency: 'ambient' })
       .then(() => true)
       .catch((err) => {
         console.error('email-sync: importance alert failed', err);

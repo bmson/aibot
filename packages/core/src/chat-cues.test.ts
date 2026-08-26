@@ -4,6 +4,7 @@ import {
   cueMessageParts,
   FACE_STATES,
   MAX_TAG_LEN,
+  splitAtBreaks,
   stripCueTags,
   THEME_LOOKBACK,
   THEME_NAMES,
@@ -139,6 +140,9 @@ describe('createCueScanner streaming behavior', () => {
       'Mixed [face: happy_squint] with a [link](https://example.com) and [1] citations.',
       'Unknown [face: mystery] value and [mood: off] keyword and [theme: warm_amber] mood.',
       'Edge [ bracket [f [face [face: [face: gentle_nod] done',
+      'One bubble.\n[break]\nAnd another.\n[break]\nA third, with [face: gentle_nod] feeling.',
+      'Inline[break]break with no newlines around it.',
+      '[break]A leading break is a no-op.',
     ];
     for (const whole of corpus) {
       const expected = stripCueTags(whole);
@@ -154,6 +158,46 @@ describe('createCueScanner streaming behavior', () => {
         }
       }
     }
+  });
+});
+
+describe('[break] boundaries', () => {
+  it('records the exact output offset a break fired at', () => {
+    expect(stripCueTags('One bubble.\n[break]\nAnd another.')).toEqual({
+      text: 'One bubble.\nAnd another.',
+      cues: [{ kind: 'break', at: 12 }],
+    });
+  });
+
+  it('never glues words on an inline break', () => {
+    expect(stripCueTags('Inline[break]break')).toEqual({
+      text: 'Inline\nbreak',
+      cues: [{ kind: 'break', at: 6 }],
+    });
+  });
+
+  it('treats a leading break as a no-op', () => {
+    expect(stripCueTags('[break]Hello.')).toEqual({ text: 'Hello.', cues: [] });
+  });
+
+  it('does not mistake a longer word for the tag', () => {
+    expect(stripCueTags('Take a [breakfast] nook.')).toEqual({
+      text: 'Take a [breakfast] nook.',
+      cues: [],
+    });
+  });
+
+  it('splits at the recorded offsets, verbatim', () => {
+    const { text, cues } = stripCueTags('One bubble.\n[break]\nAnd another.\n[break]\nA third.');
+    const ats = cues.flatMap((cue) => (cue.kind === 'break' ? [cue.at] : []));
+    const segments = splitAtBreaks(text, ats);
+    expect(segments).toEqual(['One bubble.\n', 'And another.\n', 'A third.']);
+    // The dedupe contract: slices re-join into exactly the stripped text.
+    expect(segments.join('')).toBe(text);
+  });
+
+  it('keeps cue parts free of boundaries (they become text parts)', () => {
+    expect(cueMessageParts([{ kind: 'break', at: 4 }])).toEqual([]);
   });
 });
 

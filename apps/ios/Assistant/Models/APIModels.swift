@@ -76,6 +76,17 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         parts.compactMap { $0.type == "text" ? $0.text : nil }.joined()
     }
 
+    /// One entry per chat bubble: a reply split by the assistant's [break]
+    /// cue persists as several text parts and streams the same way (a
+    /// data-break part starts a new text part). Whitespace-only parts are a
+    /// split point's residue — they join into `text` but render as nothing.
+    var textBubbles: [String] {
+        parts
+            .filter { $0.type == "text" }
+            .compactMap(\.text)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
     var createdAt: Date? {
         guard let raw = metadata?["createdAt"]?.string else { return nil }
         return ISO8601DateFormatter.assistant.date(from: raw)

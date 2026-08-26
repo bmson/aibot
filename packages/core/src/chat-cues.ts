@@ -1,15 +1,22 @@
 import { z } from 'zod';
 
 /**
- * Companion cue vocabulary for the dashboard chat (prompt v22).
+ * Companion cue vocabulary for the dashboard chat (prompt v22; v30 added
+ * `[break]`).
  *
- * The model embeds `[face: ...]`, `[theme: ...]`, and `[action_chips: ...]`
- * tags in its reply text; the streaming pump and the executor's finalize step
- * strip them with the scanner below and re-emit them as structured message
- * parts, so the tags never reach the reader, `messages.text` (and with it the
- * rebuilt model history, SMS, and email bodies) stays clean, and the streamed
- * text remains byte-identical to the persisted text that client-side
- * dedupe matches on.
+ * The model embeds `[face: ...]`, `[theme: ...]`, `[action_chips: ...]`, and
+ * `[break]` tags in its reply text; the streaming pump and the executor's
+ * finalize step strip them with the scanner below and re-emit them as
+ * structured message parts, so the tags never reach the reader,
+ * `messages.text` (and with it the rebuilt model history, SMS, and email
+ * bodies) stays clean, and the streamed text remains byte-identical to the
+ * persisted text that client-side dedupe matches on.
+ *
+ * `[break]` is the one POSITIONAL cue: it splits the reply into separate chat
+ * bubbles at the exact point the tag appears. The scanner records the output
+ * offset it fired at (`at`), so the live pump and the persisted parts split
+ * at the same byte positions — both sides keep every slice verbatim
+ * (whitespace-only slices included) so the concatenated text stays identical.
  *
  * The client keeps its own copy of these value lists in
  * `apps/web/lib/chat-cues.ts` (the boundary rules bar the web app from
@@ -56,10 +63,16 @@ export const CueSchema = z.discriminatedUnion('kind', [
     kind: z.literal('chips'),
     labels: z.array(z.string().min(1).max(MAX_CHIP_LABEL)).min(1).max(MAX_CHIPS),
   }),
+  // Positional: `at` is the byte offset in the stripped output where the
+  // bubble boundary fell. Not parsed out of the tag — the scanner stamps it.
+  z.object({ kind: z.literal('break'), at: z.number().int().nonnegative() }),
 ]);
 export type Cue = z.infer<typeof CueSchema>;
 
-const OPENERS = ['[face:', '[theme:', '[action_chips:'] as const;
+/** The break tag is a fixed literal with no value — the only self-closing cue. */
+const BREAK_TAG = '[break]';
+
+const OPENERS = ['[face:', '[theme:', '[action_chips:', BREAK_TAG] as const;
 
 const FACE_TAG = /^\[face:[ \t]*([a-z_]{1,32})[ \t]*\]$/;
 const THEME_TAG = /^\[theme:[ \t]*([a-z_]{1,32})[ \t]*\]$/;
@@ -126,6 +139,10 @@ export function createCueScanner(): CueScanner {
   let skip: 'none' | 'spaces' | 'line' = 'none';
   // Last emitted character ('' at start of stream) — picks the repair mode.
   let last = '';
+  // Total text emitted across ALL pushes — a break cue's `at` is in these
+  // cumulative coordinates, so chunked streaming and whole-text stripping
+  // record identical positions.
+  let emittedTotal = 0;
 
   const scan = (work: string): { text: string; cues: Cue[] } => {
     held = '';
@@ -136,6 +153,7 @@ export function createCueScanner(): CueScanner {
     const emit = (piece: string) => {
       if (piece.length === 0) return;
       out += piece;
+      emittedTotal += piece.length;
       last = piece[piece.length - 1] as string;
     };
 
@@ -174,6 +192,20 @@ export function createCueScanner(): CueScanner {
         }
         emit(ch);
         i += 1;
+        continue;
+      }
+
+      // [break] carries no value: it marks a bubble boundary at this exact
+      // output position. A break before any text is a no-op; an inline one
+      // (no newline before the tag) still never glues words in the plain
+      // text that history and SMS read.
+      if (opener === BREAK_TAG) {
+        if (emittedTotal > 0) {
+          cues.push({ kind: 'break', at: emittedTotal });
+          if (last !== '\n') emit('\n');
+        }
+        skip = 'line';
+        i += BREAK_TAG.length;
         continue;
       }
 
@@ -228,15 +260,40 @@ export function stripCueTags(text: string): { text: string; cues: Cue[] } {
  * shape (not the repo's bare-name idiom like `recall`), so the client reads
  * one shape whether a part arrived live over the UI message stream or was
  * loaded from `messages.parts` (jsonb — no migration).
+ *
+ * Break cues are excluded: a boundary becomes separate TEXT parts (see
+ * `splitAtBreaks`), not an overlay part riding alongside one.
  */
 export function cueMessageParts(cues: Cue[]): unknown[] {
-  return cues.map((cue) =>
+  return cues.flatMap((cue): unknown[] =>
     cue.kind === 'face'
-      ? { type: 'data-face', data: { state: cue.state } }
+      ? [{ type: 'data-face', data: { state: cue.state } }]
       : cue.kind === 'theme'
-        ? { type: 'data-theme', data: { name: cue.name } }
-        : { type: 'data-chips', data: { labels: cue.labels } },
+        ? [{ type: 'data-theme', data: { name: cue.name } }]
+        : cue.kind === 'chips'
+          ? [{ type: 'data-chips', data: { labels: cue.labels } }]
+          : [],
   );
+}
+
+/**
+ * Split a stripped reply at the recorded break offsets, in the scanner's
+ * cumulative coordinates. Every slice is kept VERBATIM — including
+ * whitespace-only ones — because the streamed message parts split at the
+ * same positions and the client's exact-text dedupe compares the two
+ * concatenations. Renderers skip whitespace-only text parts.
+ */
+export function splitAtBreaks(text: string, breaks: number[]): string[] {
+  const sorted = [...breaks].filter((at) => Number.isFinite(at)).sort((a, b) => a - b);
+  const segments: string[] = [];
+  let prev = 0;
+  for (const raw of sorted) {
+    const at = Math.min(Math.max(raw, prev), text.length);
+    segments.push(text.slice(prev, at));
+    prev = at;
+  }
+  segments.push(text.slice(prev));
+  return segments;
 }
 
 /**
@@ -254,6 +311,7 @@ export function companionPersonaLines(): string[] {
     '',
     'Expression cues (dashboard chat only): the dashboard shows an animated face and tappable quick-reply chips, driven by cue tags you embed in your reply text. The interface strips the tags before the owner sees the text — never mention, explain, or quote them, and never use one anywhere but this dashboard conversation.',
     `- [face: <state>] sets your facial expression. States: ${FACE_STATES.join(', ')}. Use one to three per reply, at genuine emotional beats (an opening smile, a thoughtful pause before a tricky answer, real delight at a find). Keep each tag on a single line.`,
+    '- [break] splits your reply into separate chat bubbles at the exact point the tag appears — the way a person sends two or three short texts instead of one block. At most two per reply, on its own line, only at a natural beat (a greeting, then the substance; an answer, then the follow-up question). Never inside a list, a table, or a code block, and never around one: a lookup result set is ONE message.',
     `- [action_chips: "Label" | "Label"] offers quick replies. At most one per reply, at the very end, with two to four short labels (under ${MAX_CHIP_LABEL} characters each), and only when clear follow-ups exist. Each label must read as a message the owner could send you word-for-word.`,
     '- Never emit a [theme: ...] tag. The chat stays on its default color at all times — the owner has asked that the mood color never change.',
   ];

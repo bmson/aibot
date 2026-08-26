@@ -30,6 +30,7 @@
     "./model-router": "./src/model-router/index.ts",
     "./otel": "./src/otel.ts",
     "./proactive/arrival": "./src/proactive/arrival.ts",
+    "./proactive/nudge-policy": "./src/proactive/nudge-policy.ts",
     "./push/devices": "./src/push/devices.ts",
     "./queue": "./src/queue.ts",
     "./workflow/anomaly": "./src/workflow/anomaly.ts",

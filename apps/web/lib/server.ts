@@ -54,6 +54,7 @@ import {
   startWorkspaceImport,
   suspendAnomalyRecord,
   updateAssistantSettings,
+  updateNotificationPrefs,
   uploadDocument,
   uploadImport,
 } from '@assistant/application';
@@ -168,6 +169,11 @@ function createApplication() {
     getSettings: () => getSettingsOverview(db),
     updateSettings: (input: { timezone: string; locale: string; signature: string }) =>
       updateAssistantSettings(db, input),
+    updateNotificationPrefs: (input: {
+      quietStart: string;
+      quietEnd: string;
+      ambientDailyCap: string;
+    }) => updateNotificationPrefs(db, input),
     setScheduleEnabled: (id: string, enabled: boolean) => setRecurringJobEnabled(db, id, enabled),
     setPolicyEnabled: (id: string, enabled: boolean) => setApprovalPolicyEnabled(db, id, enabled),
     deletePolicy: (id: string) => deleteApprovalPolicy(db, id),

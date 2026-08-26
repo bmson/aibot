@@ -84,4 +84,42 @@ describe('pumpWithCues', () => {
       expect(cues).toEqual(whole.cues);
     }
   });
+
+  it('splits the text block at a [break] and moves the rest to a fresh bubble', async () => {
+    const { written, cues } = await pump(['Hello there.\n[break]\nOne ', 'more thing.']);
+    expect(written).toEqual([
+      { type: 'text-start', id: 't1' },
+      { type: 'text-delta', id: 't1', delta: 'Hello there.\n' },
+      { type: 'text-end', id: 't1' },
+      { type: 'text-start', id: 't1:break-1' },
+      { type: 'data-break', data: {} },
+      { type: 'text-delta', id: 't1:break-1', delta: 'One ' },
+      { type: 'text-delta', id: 't1:break-1', delta: 'more thing.' },
+      // The stream's own trailing text-end closes the continuation block.
+      { type: 'text-end', id: 't1:break-1' },
+    ]);
+    expect(cues).toEqual([{ kind: 'break', at: 13 }]);
+  });
+
+  it('stays byte-identical to stripCueTags when breaks split the draft', async () => {
+    const draft =
+      'Sure — two minutes.\n[break]\nFirst, the short version: it shipped.\n[break]\nWant the details?\n[action_chips: "Tell me more" | "Later"]';
+    for (const size of [1, 3, 7, draft.length]) {
+      const deltas: string[] = [];
+      for (let i = 0; i < draft.length; i += size) deltas.push(draft.slice(i, i + size));
+      const { written, cues } = await pump(deltas);
+      const streamedText = written
+        .filter((chunk) => chunk.type === 'text-delta')
+        .map((chunk) => chunk.delta)
+        .join('');
+      const whole = stripCueTags(draft);
+      expect(streamedText).toBe(whole.text);
+      expect(cues).toEqual(whole.cues);
+      // Every break produced exactly one block handoff pair.
+      const ends = written.filter((chunk) => chunk.type === 'text-end');
+      const starts = written.filter((chunk) => chunk.type === 'text-start');
+      expect(starts).toHaveLength(3);
+      expect(ends).toHaveLength(3);
+    }
+  });
 });

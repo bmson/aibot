@@ -21,7 +21,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } 
 import { signOutAction } from '@/app/actions';
 import { destinationIcon, formatBadgeCount, useNavCommands } from '@/app/nav-commands';
 import { cancelTask } from '@/app/tasks/actions';
-import { chipsOf, latestTheme } from '@/lib/chat-cues';
+import { chipsOf, latestFace, latestTheme } from '@/lib/chat-cues';
 import {
   isAsyncAcknowledgement,
   isContractNotice,
@@ -39,6 +39,7 @@ import { toolLabel } from '@/lib/views';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
 import { ActionChips } from './action-chips';
 import { ApprovalGroup } from './approval-group';
+import { CompanionFace } from './companion-face';
 import type { InlineApprovalPart } from './inline-approval';
 import { InlineBudgetRequest, type InlineBudgetRequestPart } from './inline-budget-request';
 import { type InlineSuggestionPart, SuggestionCard } from './inline-suggestion';
@@ -550,6 +551,9 @@ export function ChatClient({
   const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
 
   const chatTheme = useMemo(() => latestTheme(log), [log]);
+  // The face the reply cues asked for — the same vocabulary the iOS capsule
+  // renders, now shown on the dashboard too.
+  const companionFace = useMemo(() => latestFace(log), [log]);
   const companionActivity: CompanionActivity =
     status === 'submitted'
       ? 'thinking'
@@ -994,6 +998,12 @@ export function ChatClient({
         </div>
       ) : null}
 
+      {/* The companion's face, resting at the thread's edge — expression only;
+          activity stays with the island and words carry the meaning. */}
+      <div className="pointer-events-none absolute top-4 left-5 z-10">
+        <CompanionFace face={companionFace} />
+      </div>
+
       <div
         ref={messageScrollerRef}
         role="log"
@@ -1103,6 +1113,12 @@ export function ChatClient({
                   approvalParts.length > 0 || budgetParts.length > 0
                     ? textParts.filter((part) => !isDecisionProseNotice(part.text))
                     : textParts;
+                // Whitespace-only text parts are the residue of a [break]
+                // split point — they join into the message text (dedupe
+                // relies on that) but render as nothing.
+                const renderedTextParts = visibleTextParts.filter(
+                  (part) => part.text.trim().length > 0,
+                );
                 const fullText = visibleTextParts
                   .map((part) => part.text)
                   .join('')
@@ -1127,7 +1143,7 @@ export function ChatClient({
                 // Notifications keeps them.
                 const showTime = date !== null && notificationMode;
                 const recallSources = recallSourcesOf(message);
-                const hasText = visibleTextParts.length > 0 && noticeKind === null;
+                const hasText = renderedTextParts.length > 0 && noticeKind === null;
                 const isNewMessage = !initialMessageIdsRef.current?.has(message.id);
                 const previousMessage = messageIndex > 0 ? log[messageIndex - 1] : undefined;
                 // A "run" is a streak of turns from the same speaker. Handing
@@ -1161,19 +1177,24 @@ export function ChatClient({
                           // the thread and so reads as the thing that was
                           // brought to you. The raised-card treatment stays
                           // reserved for objects it places in the thread (an
-                          // approval, a budget ask).
+                          // approval, a budget ask). A reply split by [break]
+                          // cues arrives as several text parts — each renders
+                          // as its own sheet, the way separate texts from a
+                          // person stack.
                           <div className="group/msg min-w-0 max-w-[88%] sm:max-w-[min(76%,42rem)]">
                             <RecallNote sources={recallSources} />
-                            <div
-                              className={`bubble-assistant min-w-0 max-w-full rounded-[1.375rem] px-4 py-3 text-sm leading-6 ${
-                                streamingCaret ? 'chat-caret' : ''
-                              }`}
-                            >
-                              {visibleTextParts.map((part, index) => (
-                                <MessageMarkdown
+                            <div className="flex min-w-0 flex-col gap-2">
+                              {renderedTextParts.map((part, index) => (
+                                <div
                                   key={`${message.id}-${index.toString()}`}
-                                  text={part.text}
-                                />
+                                  className={`bubble-assistant min-w-0 max-w-full rounded-[1.375rem] px-4 py-3 text-sm leading-6 ${
+                                    streamingCaret && index === renderedTextParts.length - 1
+                                      ? 'chat-caret'
+                                      : ''
+                                  }`}
+                                >
+                                  <MessageMarkdown text={part.text} />
+                                </div>
                               ))}
                             </div>
                             <MessageActions

@@ -18,6 +18,7 @@ import {
   occasions,
   tasks,
   updateContactIdentity,
+  voiceProfile,
 } from '@assistant/db';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 
@@ -233,6 +234,47 @@ export function purgeProfileVoiceSamples(
   workspace: WorkspaceDeletePort,
 ): Promise<{ deleted: number }> {
   return purgeVoiceSamples(db, workspace);
+}
+
+/**
+ * Edit the distilled voice profile the rewriter imitates. The lists arrive as
+ * one entry per line from the form; blank lines drop. Bounds match the
+ * ingest-time profile, so an owner edit can never smuggle a prompt's worth of
+ * prose into the rewrite step.
+ */
+export async function updateVoiceProfile(
+  db: Db,
+  input: { description: string; dos: string; donts: string; signature: string },
+): Promise<{ error?: string }> {
+  const description = input.description.trim().slice(0, 2000);
+  if (!description) return { error: 'The voice description is required.' };
+  const lines = (raw: string) =>
+    raw
+      .split('\n')
+      .map((line) => line.trim().slice(0, 300))
+      .filter((line) => line.length > 0)
+      .slice(0, 12);
+  await db
+    .insert(voiceProfile)
+    .values({
+      id: 1,
+      description,
+      dos: lines(input.dos),
+      donts: lines(input.donts),
+      signature: input.signature.trim().slice(0, 300),
+      updatedAt: sql`now()`,
+    })
+    .onConflictDoUpdate({
+      target: voiceProfile.id,
+      set: {
+        description,
+        dos: lines(input.dos),
+        donts: lines(input.donts),
+        signature: input.signature.trim().slice(0, 300),
+        updatedAt: sql`now()`,
+      },
+    });
+  return {};
 }
 
 export async function createPerson(

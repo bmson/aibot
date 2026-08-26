@@ -52,51 +52,12 @@ struct MessageBubble: View {
     @ViewBuilder
     private var messageText: some View {
         if message.role == .assistant {
-            AssistantMarkdownView(
-                source: message.text,
-                baseFontSize: messageFontSize,
-                ink: AssistantTheme.bubblePaperInk(for: colorScheme),
-                mutedInk: AssistantTheme.inkMuted(for: colorScheme),
-                codeSurface: AssistantTheme.sunken(for: colorScheme),
-                accent: AssistantTheme.accent(for: colorScheme)
-            )
-                .textSelection(.enabled)
-                .padding(.horizontal, resolvedBubbleHorizontalInset)
-                .padding(.vertical, resolvedBubbleVerticalInset)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    AssistantTheme.bubblePaper(for: colorScheme),
-                    in: RoundedRectangle(
-                        cornerRadius: AssistantTheme.conversationCornerRadius,
-                        style: .continuous
-                    )
-                )
-                .overlay {
-                    RoundedRectangle(
-                        cornerRadius: AssistantTheme.conversationCornerRadius,
-                        style: .continuous
-                    )
-                    .strokeBorder(
-                        .white.opacity(
-                            colorSchemeContrast == .increased
-                                ? (colorScheme == .dark ? 0.34 : 0.86)
-                                : (colorScheme == .dark ? 0.14 : 0.6)
-                        ),
-                        lineWidth: colorSchemeContrast == .increased ? 1.05 : 0.7
-                    )
-                }
-                .shadow(
-                    color: AssistantTheme.stageDepth.opacity(colorScheme == .dark ? 0.24 : 0.1),
-                    radius: 11,
-                    y: 5
-                )
-                .contextMenu {
-                    Button {
-                        UIPasteboard.general.string = message.text
-                    } label: {
-                        Label("Copy reply", systemImage: "doc.on.doc")
-                    }
-                }
+            // A reply split by [break] cues stacks as separate sheets, the way
+            // separate texts from a person stack — one paper bubble per text
+            // part, copy still takes the whole reply.
+            ForEach(Array(message.textBubbles.enumerated()), id: \.offset) { _, bubble in
+                assistantBubble(bubble)
+            }
         } else {
             Text(message.text)
                 .font(.system(size: messageFontSize, weight: .regular))
@@ -177,6 +138,56 @@ struct MessageBubble: View {
 
     private var resolvedBubbleHorizontalInset: CGFloat {
         min(bubbleHorizontalInset, 28)
+    }
+
+    /// One assistant bubble's worth of paper. The whole reply remains the
+    /// copy unit no matter how many bubbles it was split into.
+    private func assistantBubble(_ text: String) -> some View {
+        AssistantMarkdownView(
+            source: text,
+            baseFontSize: messageFontSize,
+            ink: AssistantTheme.bubblePaperInk(for: colorScheme),
+            mutedInk: AssistantTheme.inkMuted(for: colorScheme),
+            codeSurface: AssistantTheme.sunken(for: colorScheme),
+            accent: AssistantTheme.accent(for: colorScheme)
+        )
+            .textSelection(.enabled)
+            .padding(.horizontal, resolvedBubbleHorizontalInset)
+            .padding(.vertical, resolvedBubbleVerticalInset)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                AssistantTheme.bubblePaper(for: colorScheme),
+                in: RoundedRectangle(
+                    cornerRadius: AssistantTheme.conversationCornerRadius,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: AssistantTheme.conversationCornerRadius,
+                    style: .continuous
+                )
+                .strokeBorder(
+                    .white.opacity(
+                        colorSchemeContrast == .increased
+                            ? (colorScheme == .dark ? 0.34 : 0.86)
+                            : (colorScheme == .dark ? 0.14 : 0.6)
+                    ),
+                    lineWidth: colorSchemeContrast == .increased ? 1.05 : 0.7
+                )
+            }
+            .shadow(
+                color: AssistantTheme.stageDepth.opacity(colorScheme == .dark ? 0.24 : 0.1),
+                radius: 11,
+                y: 5
+            )
+            .contextMenu {
+                Button {
+                    UIPasteboard.general.string = message.text
+                } label: {
+                    Label("Copy reply", systemImage: "doc.on.doc")
+                }
+            }
     }
 
     private var recallNote: some View {

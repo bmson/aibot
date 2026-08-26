@@ -3,7 +3,7 @@
 import { Lightbulb, LoaderCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
-import { decideSuggestionInline } from '@/app/suggestions/actions';
+import { decideSuggestionInline, snoozeSuggestionInline } from '@/app/suggestions/actions';
 import { btnSm } from '@/lib/ui';
 import { DecisionActions, DecisionCard, DecisionReceipt, DecisionReceipts } from './decision-card';
 
@@ -68,12 +68,32 @@ export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
     });
   };
 
+  const snooze = (suggestionId: string) => {
+    if (busy) return;
+    setActive(suggestionId);
+    startTransition(async () => {
+      try {
+        const result = await snoozeSuggestionInline(suggestionId);
+        if (result.ok) {
+          setResolved((prev) => ({ ...prev, [suggestionId]: 'snoozed' }));
+          setError(null);
+        } else {
+          setError(result.error ?? 'This suggestion could not be updated.');
+        }
+      } catch {
+        setError('This suggestion could not be updated. Try again.');
+      } finally {
+        setActive(null);
+      }
+    });
+  };
+
   if (parts.length === 0) return null;
 
-  const isOpen = (part: InlineSuggestionPart) => {
-    const status = statusOf(part);
-    return status === 'pending' || status === 'snoozed';
-  };
+  // Only a live question renders open. A hydrated 'snoozed' means the snooze
+  // is still sleeping (an elapsed one already came back as 'pending'), so it
+  // settles to a receipt instead of re-asking what the owner just put down.
+  const isOpen = (part: InlineSuggestionPart) => statusOf(part) === 'pending';
   const openParts = parts.filter(isOpen);
 
   const receiptOf = (part: InlineSuggestionPart) => {
@@ -91,9 +111,11 @@ export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
               ? 'Working on it'
               : status === 'dismissed'
                 ? 'Dismissed'
-                : status === 'expired'
-                  ? 'Expired'
-                  : 'No longer available'
+                : status === 'snoozed'
+                  ? 'Snoozed'
+                  : status === 'expired'
+                    ? 'Expired'
+                    : 'No longer available'
           }
           live={resolved[part.suggestionId] !== undefined}
         />
@@ -140,6 +162,14 @@ export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
                     />
                   ) : null}
                   Yes, do it
+                </button>
+                <button
+                  type="button"
+                  className={btnSm.outline}
+                  disabled={busy}
+                  onClick={() => snooze(part.suggestionId)}
+                >
+                  Later
                 </button>
                 <button
                   type="button"
