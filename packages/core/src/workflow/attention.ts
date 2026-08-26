@@ -67,7 +67,14 @@ export async function renotifyStalledAttention(
           taskId: task.id,
           role: 'assistant',
           origin: 'assistant',
-          parts: [{ type: 'text', text }],
+          // The structured marker renders this as a "Needs you" card rather
+          // than assistant prose, and keys the runtime-state collapse by part
+          // instead of by the text's opening (NEEDS_ATTENTION_PREFIXES stays
+          // for rows written before this marker existed).
+          parts: [
+            { type: 'text', text },
+            { type: 'notice', notice: 'needs-attention' },
+          ],
           text,
         });
         notified = true;

@@ -98,16 +98,16 @@ export function noticeKindOf(parts: unknown[]): NoticeKind | null {
 }
 
 /**
- * The executor writes each decision twice: once as prose, and once as the
- * structured part the card is built from (step-loop.ts and notices.ts in core).
- * Where the card carries the same information — and better — the duplicated
- * prose is suppressed in the chat render, so a decision reads as one object
- * rather than a paragraph followed by a restatement of itself. Only the render
- * is affected; the persisted text is untouched, and core's
- * isSimulatedApprovalNotice depends on it.
+ * Decisions written before parts went card-only carry the same content twice:
+ * once as a prose text part, and once as the structured part the card is built
+ * from (step-loop.ts and notices.ts in core). New writes carry no prose part —
+ * the prose lives only in the row's `text` column for model history — so this
+ * filter exists for historical rows: where the card carries the same
+ * information, the duplicated prose is suppressed and a decision reads as one
+ * object rather than a paragraph followed by a restatement of itself.
  *
  * Matched on their stable openings, because historical messages persist the
- * exact strings forever — update alongside any core copy change.
+ * exact strings forever — the patterns only ever need to cover the past.
  */
 export function isDecisionProseNotice(text: string): boolean {
   const trimmed = text.trim();

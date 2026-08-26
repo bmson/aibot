@@ -249,15 +249,14 @@ export async function renotifyStalledApprovals(
           taskId: task.id,
           role: 'assistant',
           origin: 'assistant',
-          parts: [
-            { type: 'text', text },
-            ...notices.map((approval) => ({
-              type: 'approval',
-              approvalId: approval.id,
-              shortCode: approval.shortCode,
-              summary: approval.summary,
-            })),
-          ],
+          // The approval cards render themselves; the prose lives only in the
+          // `text` column for model history (see carriesOwnCard in notices.ts).
+          parts: notices.map((approval) => ({
+            type: 'approval',
+            approvalId: approval.id,
+            shortCode: approval.shortCode,
+            summary: approval.summary,
+          })),
           text,
         });
       }

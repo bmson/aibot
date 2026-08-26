@@ -617,6 +617,18 @@ export async function getChatConversationView(
       ),
     );
   if (!conversation) return null;
+  // Every load of this view is the owner opening the thread — the dashboard
+  // page and both mobile reads funnel here — so it doubles as the read
+  // cursor. The chat list marks a thread unread when activity lands after
+  // this stamp. Best-effort: a failed stamp costs a dot, not the page.
+  try {
+    await db
+      .update(conversations)
+      .set({ lastReadAt: input.now ?? new Date() })
+      .where(eq(conversations.id, conversation.id));
+  } catch (err) {
+    console.error('conversation read stamp failed', err);
+  }
   const goalId = goalIdFromMetadata(conversation.metadata);
   const requestedTaskId = input.taskId && UUID_RE.test(input.taskId) ? input.taskId : undefined;
   const requestedCursor = decodeMessageCursor(input.cursor);

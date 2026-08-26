@@ -105,61 +105,78 @@ export default async function ChatListPage({
               heavier than it is, and gave the scroll-reveal fifty animations to
               drive instead of one. */}
           <ul className={`${cardShellClass} mt-6`}>
-            {chatRows.map((conversation, index) => (
-              <li
-                key={conversation.id}
-                className={`grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2 ${
-                  index > 0 ? 'border-t border-edge' : ''
-                }`}
-              >
-                <Link
-                  href={`/chat/${conversation.id}`}
-                  data-mobile-touch-target="true"
-                  className={`mobile-touch-target flex min-w-0 items-center gap-3 rounded-xl px-2 py-2 motion-safe:transition-colors hover:bg-sunken/65 ${
-                    conversation.isPrimary ? 'col-span-2' : ''
+            {chatRows.map((conversation, index) => {
+              // Unread = activity since the owner last opened the thread (the
+              // read stamp lives on the conversation). A never-opened thread
+              // falls back to its creation time so history doesn't light up at
+              // once.
+              const unread =
+                !archived &&
+                conversation.updatedAt > (conversation.lastReadAt ?? conversation.createdAt);
+              return (
+                <li
+                  key={conversation.id}
+                  className={`grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2 ${
+                    index > 0 ? 'border-t border-edge' : ''
                   }`}
                 >
-                  <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-sunken text-muted">
-                    <MessageSquareText className="size-4" aria-hidden="true" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className={`truncate ${cardTitleClass}`}>
-                        {conversation.title && conversation.title !== 'Untitled'
-                          ? conversation.title
-                          : 'New conversation'}
-                      </span>
-                      {conversation.isPrimary ? (
-                        <Badge tone="neutral" size="xs" uppercase>
-                          Main
-                        </Badge>
-                      ) : activeConversationIds.has(conversation.id) ? (
-                        // Same word and tone the goal cards use for live work.
-                        <Badge tone="accent" size="xs">
-                          Working
-                        </Badge>
+                  <Link
+                    href={`/chat/${conversation.id}`}
+                    data-mobile-touch-target="true"
+                    className={`mobile-touch-target flex min-w-0 items-center gap-3 rounded-xl px-2 py-2 motion-safe:transition-colors hover:bg-sunken/65 ${
+                      conversation.isPrimary ? 'col-span-2' : ''
+                    }`}
+                  >
+                    <span className="relative inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-sunken text-muted">
+                      <MessageSquareText className="size-4" aria-hidden="true" />
+                      {unread ? (
+                        <span
+                          role="img"
+                          aria-label="Unread activity"
+                          title="Unread activity"
+                          className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full bg-accent ring-2 ring-raised"
+                        />
                       ) : null}
                     </span>
-                    <span className="mt-0.5 block text-xs text-muted">
-                      Last active {relativeTime(conversation.updatedAt, now)}
+                    <span className="min-w-0 flex-1">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className={`truncate ${cardTitleClass}`}>
+                          {conversation.title && conversation.title !== 'Untitled'
+                            ? conversation.title
+                            : 'New conversation'}
+                        </span>
+                        {conversation.isPrimary ? (
+                          <Badge tone="neutral" size="xs" uppercase>
+                            Main
+                          </Badge>
+                        ) : activeConversationIds.has(conversation.id) ? (
+                          // Same word and tone the goal cards use for live work.
+                          <Badge tone="accent" size="xs">
+                            Working
+                          </Badge>
+                        ) : null}
+                      </span>
+                      <span className="mt-0.5 block text-xs text-muted">
+                        Last active {relativeTime(conversation.updatedAt, now)}
+                      </span>
                     </span>
-                  </span>
-                </Link>
-                {conversation.isPrimary ? null : archived ? (
-                  <form action={restoreConversation.bind(null, conversation.id)}>
-                    <SubmitButton variant="outline" size="sm" pendingLabel="Restoring…">
-                      Restore
-                    </SubmitButton>
-                  </form>
-                ) : activeConversationIds.has(conversation.id) ? null : (
-                  <form action={archiveConversation.bind(null, conversation.id)}>
-                    <SubmitButton variant="outline" size="sm" pendingLabel="Archiving…">
-                      Archive
-                    </SubmitButton>
-                  </form>
-                )}
-              </li>
-            ))}
+                  </Link>
+                  {conversation.isPrimary ? null : archived ? (
+                    <form action={restoreConversation.bind(null, conversation.id)}>
+                      <SubmitButton variant="outline" size="sm" pendingLabel="Restoring…">
+                        Restore
+                      </SubmitButton>
+                    </form>
+                  ) : activeConversationIds.has(conversation.id) ? null : (
+                    <form action={archiveConversation.bind(null, conversation.id)}>
+                      <SubmitButton variant="outline" size="sm" pendingLabel="Archiving…">
+                        Archive
+                      </SubmitButton>
+                    </form>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </>
       )}

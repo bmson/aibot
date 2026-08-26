@@ -157,6 +157,13 @@ export const conversations = pgTable(
     isPrimary: boolean('is_primary').notNull().default(false),
     metadata: jsonb('metadata').notNull().default({}),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
+    /**
+     * The owner's read cursor: when they last opened this thread. Drives the
+     * unread marker in the chat list (activity newer than this). Null means
+     * "never opened" — the list falls back to createdAt so old threads don't
+     * all light up on migration day.
+     */
+    lastReadAt: timestamp('last_read_at', { withTimezone: true }),
     ...timestamps,
   },
   (t) => [
