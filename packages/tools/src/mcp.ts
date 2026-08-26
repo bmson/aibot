@@ -1,7 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import { mcpConnections } from '@assistant/db';
 import { decryptMcpBearerToken } from '@assistant/core/mcp-secrets';
+import { mcpConnections } from '@assistant/db';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { register } from './register.js';
@@ -303,7 +303,9 @@ async function invokeMcpTool(
   fetchImpl: FetchImplementation = fetch,
 ): Promise<Record<string, unknown>> {
   const endpoint = await checkedMcpEndpoint(endpointValue);
-  const bearerToken = bearerTokenEncrypted ? decryptMcpBearerToken(bearerTokenEncrypted) : undefined;
+  const bearerToken = bearerTokenEncrypted
+    ? decryptMcpBearerToken(bearerTokenEncrypted)
+    : undefined;
   const { session } = await openMcpSession(endpoint, fetchImpl, bearerToken);
   const response = await rpc(session, {
     id: 2,

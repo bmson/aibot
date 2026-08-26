@@ -77,7 +77,8 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
           event.preventDefault();
           run(
             'create',
-            () => createMcpConnectionAction({ name, endpoint, bearerToken: bearerToken || undefined }),
+            () =>
+              createMcpConnectionAction({ name, endpoint, bearerToken: bearerToken || undefined }),
             () => {
               setName('');
               setEndpoint('');

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
 import { encryptMcpBearerToken } from '@assistant/core/mcp-secrets';
+import { describe, expect, it, vi } from 'vitest';
 import { checkedMcpEndpoint, inspectMcpConnection } from './mcp.js';
 
 describe('MCP Streamable HTTP client', () => {
@@ -70,9 +70,7 @@ describe('MCP Streamable HTTP client', () => {
         ),
       )
       .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        Response.json({ jsonrpc: '2.0', id: 2, result: { tools: [] } }),
-      );
+      .mockResolvedValueOnce(Response.json({ jsonrpc: '2.0', id: 2, result: { tools: [] } }));
 
     const discovery = await inspectMcpConnection('http://localhost:3010/mcp', {
       fetchImpl,

@@ -18,7 +18,12 @@ export function encryptMcpBearerToken(token: string): string {
   const cipher = createCipheriv(ALGORITHM, encryptionKey(), iv);
   const ciphertext = Buffer.concat([cipher.update(token, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
-  return [VERSION, iv.toString('base64url'), tag.toString('base64url'), ciphertext.toString('base64url')].join('.');
+  return [
+    VERSION,
+    iv.toString('base64url'),
+    tag.toString('base64url'),
+    ciphertext.toString('base64url'),
+  ].join('.');
 }
 
 /** Decrypt only at the network boundary immediately before an MCP request. */
