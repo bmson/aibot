@@ -16,7 +16,7 @@ export function isOccasionKind(value: unknown): value is OccasionKind {
 }
 
 /** Clamp a day to a plausible value; the DB check also enforces 1–31. */
-function validMonthDay(month: number, day: number): boolean {
+export function validMonthDay(month: number, day: number): boolean {
   return (
     Number.isInteger(month) &&
     Number.isInteger(day) &&
@@ -27,7 +27,12 @@ function validMonthDay(month: number, day: number): boolean {
   );
 }
 
-const MONTH_NAMES: Record<string, number> = {
+/**
+ * Month vocabulary, shared with the knowledge graph's date canonicalizer so the
+ * two agree on what counts as a month name rather than keeping two drifting
+ * copies of the same list.
+ */
+export const MONTH_NAMES: Record<string, number> = {
   january: 1,
   february: 2,
   march: 3,
@@ -53,7 +58,7 @@ const MONTH_NAMES: Record<string, number> = {
   nov: 11,
   dec: 12,
 };
-const MONTH_ALT = Object.keys(MONTH_NAMES).join('|');
+export const MONTH_ALT = Object.keys(MONTH_NAMES).join('|');
 // "14 March" / "14th of March"
 const DAY_MONTH_RE = new RegExp(
   `\\b(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\s+(?:of\\s+)?(${MONTH_ALT})\\b`,

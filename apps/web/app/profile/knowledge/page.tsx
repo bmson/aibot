@@ -16,6 +16,7 @@ import {
 import Link from 'next/link';
 import {
   confirmKnowledgeRelation,
+  reextractDatedSources,
   rejectKnowledgeRelation,
   retryQuarantinedKnowledgeSources,
 } from '@/app/profile/knowledge/actions';
@@ -244,6 +245,21 @@ export default async function KnowledgeReviewPage({
             <form action={retryQuarantinedKnowledgeSources} className="mt-3">
               <SubmitButton size="sm" pendingLabel="Queueing…">
                 Retry paused sources
+              </SubmitButton>
+            </form>
+          ) : null}
+          {/* The nightly backfill already re-canonicalized every date it could
+              read for free. What is left needs a model call each, so it is
+              offered with its price rather than queued behind the owner's back. */}
+          {graph.relativeDateSources > 0 ? (
+            <form action={reextractDatedSources} className="mt-3">
+              <p className="mb-1.5 text-xs leading-5 text-muted">
+                {graph.relativeDateSources.toLocaleString()} source
+                {graph.relativeDateSources === 1 ? '' : 's'} still date things relative to when they
+                were written.
+              </p>
+              <SubmitButton size="sm" pendingLabel="Queueing…">
+                Re-read their dates
               </SubmitButton>
             </form>
           ) : null}

@@ -2,16 +2,20 @@ import {
   agents,
   createDb,
   type Db,
+  knowledgeGraphEntities,
   knowledgeGraphRelations,
   knowledgeGraphSources,
   memories,
 } from '@assistant/db';
-import { eq, like } from 'drizzle-orm';
+import { and, eq, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ModelRouter } from '../model-router/router.js';
 import { recallKnowledgeGraph } from './graph-recall.js';
 import {
+  backfillKnowledgeGraphDates,
+  countRelativeDateSources,
   createOwnerKnowledgeGraphFact,
+  GRAPH_EXTRACTION_VERSION,
   graphRelationshipIsGrounded,
   retryQuarantinedKnowledgeGraphSources,
   syncKnowledgeGraph,
@@ -20,6 +24,14 @@ import {
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
 const MARKER = `xtest-graph-${Date.now()}`;
+
+/** Mirrors the core normalizer closely enough for fixture key construction. */
+function normalizedKey(value: string): string {
+  return value
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
 
 function unit(index: number): number[] {
   const vector = new Array(1536).fill(0);
@@ -560,5 +572,274 @@ describe('knowledge graph sync and recall', () => {
       .from(knowledgeGraphRelations)
       .where(eq(knowledgeGraphRelations.sourceMemoryId, memory.id));
     expect(reextracted?.reviewStatus).toBe('rejected');
+  });
+
+  // Date entities used to be whatever the extractor said, so "Friday", "next
+  // Friday" and "2026-03-06" were three permanent, unmergeable nodes.
+  it('collapses differently worded dates onto one canonical entity', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const recordedAt = new Date('2026-03-04T12:00:00Z');
+    const content = `${MARKER} Dana meets the board on Friday.`;
+    const [memory] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content,
+        contentHash: `${MARKER}-date-1`,
+        embedding: unit(60),
+        confidence: '0.90',
+        createdAt: recordedAt,
+      })
+      .returning({ id: memories.id });
+    if (!memory) throw new Error('fixture memory was not created');
+
+    const dateRouter = {
+      async object() {
+        return {
+          ok: true,
+          object: {
+            relationships: [
+              {
+                subject: { label: `${MARKER} Dana`, kind: 'person' },
+                predicate: 'meets_the_board_on',
+                object: { label: 'Friday', kind: 'date' },
+                evidenceQuote: `${MARKER} Dana meets the board on Friday`,
+                confidence: 0.9,
+              },
+            ],
+          },
+        };
+      },
+    } as unknown as ModelRouter;
+    await syncKnowledgeGraph({ db, router: dateRouter }, { agentId, limit: 5 });
+
+    const [dateEntity] = await db
+      .select({ key: knowledgeGraphEntities.canonicalKey, label: knowledgeGraphEntities.label })
+      .from(knowledgeGraphEntities)
+      .where(
+        and(eq(knowledgeGraphEntities.agentId, agentId), eq(knowledgeGraphEntities.kind, 'date')),
+      );
+    // Resolved against the memory's own timestamp, not against "now".
+    expect(dateEntity?.key).toBe('date:2026-03-06');
+    expect(dateEntity?.label).not.toBe('Friday');
+  });
+
+  it('drops an edge whose date cannot be pinned down rather than storing the wording', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const content = `${MARKER} Ezra ships the rewrite eventually.`;
+    await db.insert(memories).values({
+      agentId,
+      category: 'knowledge',
+      kind: 'fact',
+      content,
+      contentHash: `${MARKER}-date-2`,
+      embedding: unit(61),
+      confidence: '0.90',
+    });
+    const vagueRouter = {
+      async object() {
+        return {
+          ok: true,
+          object: {
+            relationships: [
+              {
+                subject: { label: `${MARKER} Ezra`, kind: 'person' },
+                predicate: 'ships_the_rewrite',
+                object: { label: 'eventually', kind: 'date' },
+                evidenceQuote: `${MARKER} Ezra ships the rewrite eventually`,
+                confidence: 0.9,
+              },
+            ],
+          },
+        };
+      },
+    } as unknown as ModelRouter;
+    await syncKnowledgeGraph({ db, router: vagueRouter }, { agentId, limit: 5 });
+
+    const stored = await db
+      .select({ label: knowledgeGraphEntities.label })
+      .from(knowledgeGraphEntities)
+      .where(
+        and(eq(knowledgeGraphEntities.agentId, agentId), eq(knowledgeGraphEntities.kind, 'date')),
+      );
+    expect(stored.map((row) => row.label)).not.toContain('eventually');
+  });
+
+  // The label was rewritten on every extraction, so the displayed name changed
+  // with whichever run happened last while the identity underneath never did.
+  it('keeps the better-cased label when a re-extraction spells it differently', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const content = `${MARKER} Fern works at ${MARKER} Northwind.`;
+    await db.insert(memories).values({
+      agentId,
+      category: 'knowledge',
+      kind: 'fact',
+      content,
+      contentHash: `${MARKER}-case-1`,
+      embedding: unit(62),
+      confidence: '0.90',
+    });
+    const casedRouter = (label: string) =>
+      ({
+        async object() {
+          return {
+            ok: true,
+            object: {
+              relationships: [
+                {
+                  subject: { label: `${MARKER} Fern`, kind: 'person' },
+                  predicate: 'works_at',
+                  object: { label, kind: 'organization' },
+                  evidenceQuote: `${MARKER} Fern works at ${MARKER} Northwind`,
+                  confidence: 0.9,
+                },
+              ],
+            },
+          };
+        },
+      }) as unknown as ModelRouter;
+
+    await syncKnowledgeGraph({ db, router: casedRouter(`${MARKER} Northwind`) }, { agentId });
+    // Force a re-extraction of the same source with a worse spelling.
+    const [cased] = await db
+      .select({ id: memories.id })
+      .from(memories)
+      .where(eq(memories.contentHash, `${MARKER}-case-1`))
+      .limit(1);
+    if (!cased) throw new Error('fixture memory was not found');
+    await db
+      .update(knowledgeGraphSources)
+      .set({ status: 'failed', nextRetryAt: new Date(), attempts: 0 })
+      .where(eq(knowledgeGraphSources.memoryId, cased.id));
+    await syncKnowledgeGraph(
+      { db, router: casedRouter(`${MARKER.toLowerCase()} northwind`) },
+      { agentId },
+    );
+
+    const [org] = await db
+      .select({ label: knowledgeGraphEntities.label })
+      .from(knowledgeGraphEntities)
+      .where(
+        and(
+          eq(knowledgeGraphEntities.agentId, agentId),
+          eq(
+            knowledgeGraphEntities.canonicalKey,
+            `organization:${normalizedKey(MARKER)} northwind`,
+          ),
+        ),
+      );
+    expect(org?.label).toBe(`${MARKER} Northwind`);
+  });
+
+  it('canonicalizes existing date entities without calling a model', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // backfillKnowledgeGraphDates takes no router at all — being unable to make
+    // a model call is a property of its signature, not of this fixture.
+    const recordedAt = new Date('2026-03-04T12:00:00Z');
+    const [memory] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} Gale lands on 2026-03-06.`,
+        contentHash: `${MARKER}-backfill-1`,
+        embedding: unit(63),
+        confidence: '0.90',
+        createdAt: recordedAt,
+      })
+      .returning({ id: memories.id });
+    if (!memory) throw new Error('fixture memory was not created');
+
+    // Two spellings of the same day, as the old extractor would have left them.
+    const [legacy] = await db
+      .insert(knowledgeGraphEntities)
+      .values({
+        agentId,
+        canonicalKey: 'date:friday',
+        label: 'Friday',
+        kind: 'date',
+      })
+      .returning({ id: knowledgeGraphEntities.id });
+    const [iso] = await db
+      .insert(knowledgeGraphEntities)
+      .values({
+        agentId,
+        canonicalKey: 'date:6 march 2026',
+        label: '6 March 2026',
+        kind: 'date',
+      })
+      .returning({ id: knowledgeGraphEntities.id });
+    const [person] = await db
+      .insert(knowledgeGraphEntities)
+      .values({
+        agentId,
+        canonicalKey: `person:${MARKER.toLowerCase()} gale`,
+        label: `${MARKER} Gale`,
+        kind: 'person',
+      })
+      .returning({ id: knowledgeGraphEntities.id });
+    if (!legacy || !iso || !person) throw new Error('fixture entities were not created');
+
+    for (const [index, target] of [legacy, iso].entries()) {
+      await db.insert(knowledgeGraphRelations).values({
+        agentId,
+        subjectEntityId: person.id,
+        predicate: 'lands_on',
+        objectEntityId: target.id,
+        sourceMemoryId: memory.id,
+        evidenceQuote: `${MARKER} Gale lands on 2026-03-06`,
+        sourceFingerprint: `${MARKER}-backfill-fp-${index}`,
+        ordinal: index + 1,
+        confidence: '0.90',
+      });
+    }
+
+    const result = await backfillKnowledgeGraphDates(db, { agentId });
+    expect(result.scanned).toBeGreaterThanOrEqual(2);
+    expect(result.merged).toBeGreaterThanOrEqual(1);
+
+    const dates = await db
+      .select({ key: knowledgeGraphEntities.canonicalKey })
+      .from(knowledgeGraphEntities)
+      .where(
+        and(eq(knowledgeGraphEntities.agentId, agentId), eq(knowledgeGraphEntities.kind, 'date')),
+      );
+    // Both spellings now point at the same canonical day.
+    expect(dates.filter((row) => row.key === 'date:2026-03-06')).toHaveLength(1);
+    expect(dates.map((row) => row.key)).not.toContain('date:friday');
+  });
+
+  // The paid pass is only worth offering for sources the free one could not
+  // fix, so a source that already carries a canonical date must not be counted.
+  it('counts only the sources whose dates the free backfill could not fix', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const before = await countRelativeDateSources(db, agentId);
+
+    const [stranded] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} Hana said she would call next week.`,
+        contentHash: `${MARKER}-relative-1`,
+        embedding: unit(64),
+        confidence: '0.90',
+      })
+      .returning({ id: memories.id });
+    if (!stranded) throw new Error('fixture memory was not created');
+    // A ready checkpoint with no date entity behind it — exactly the shape the
+    // anchored prompt exists to rescue.
+    await db.insert(knowledgeGraphSources).values({
+      memoryId: stranded.id,
+      contentHash: `${MARKER}-relative-1`,
+      extractionVersion: GRAPH_EXTRACTION_VERSION,
+      status: 'ready',
+    });
+
+    expect(await countRelativeDateSources(db, agentId)).toBe(before + 1);
   });
 });

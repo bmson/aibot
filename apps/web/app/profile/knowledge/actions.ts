@@ -4,6 +4,7 @@ import {
   addOwnerKnowledgeGraphFact,
   type KnowledgeGraphEntityView,
   mergeKnowledgeGraphEntities,
+  reextractRelativeDateSources,
   renameKnowledgeGraphEntity,
   retryQuarantinedKnowledgeGraphSources,
   reviewKnowledgeGraphRelation,
@@ -51,6 +52,16 @@ export async function retryQuarantinedKnowledgeSources(): Promise<void> {
  * dropped on the floor, so a rejected merge was indistinguishable from a
  * successful one — the page simply re-rendered unchanged.
  */
+/**
+ * Costs one model call per source, so it is a button rather than a schedule.
+ * The nightly backfill has already taken the free share of this work.
+ */
+export async function reextractDatedSources(): Promise<void> {
+  await requireOwner();
+  await reextractRelativeDateSources(getDb());
+  revalidateKnowledgeGraph();
+}
+
 export async function renameKnowledgeEntity(
   entityId: string,
   _previous: KnowledgeActionState,

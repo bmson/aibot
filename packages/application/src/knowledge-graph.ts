@@ -1,16 +1,18 @@
 import { loadConfig } from '@assistant/config';
 import { getAgent } from '@assistant/core/chat';
 import {
+  countRelativeDateSources,
   createOwnerKnowledgeGraphFact,
   GRAPH_ENTITY_KINDS,
   type GraphEntityKind,
   meanExtractionCostUsd,
+  mergeGraphEntities,
+  requeueRelativeDateSources,
   retryQuarantinedKnowledgeGraphSources as retryQuarantinedSources,
 } from '@assistant/core/memory/knowledge-graph';
 import {
   type Db,
   knowledgeGraphEntities,
-  knowledgeGraphEntityAliases,
   knowledgeGraphRelations,
   knowledgeGraphSources,
   memories,
@@ -70,6 +72,12 @@ export interface KnowledgeGraphOverview {
    */
   pendingCostUsd: number | null;
   pendingRuns: number;
+  /**
+   * Sources still carrying relative date wording that the free backfill could
+   * not resolve. Re-extracting them costs money, so it is surfaced as a choice
+   * rather than queued automatically.
+   */
+  relativeDateSources: number;
   entities: KnowledgeGraphEntityView[];
   /** Entities matching the current search — the true count, not the page size. */
   matchingEntities: number;
@@ -203,6 +211,7 @@ export async function getKnowledgeGraphOverview(
   const pendingCostUsd = meanCost === null ? null : pending * meanCost;
   const batchLimit = loadConfig().GRAPH_SYNC_BATCH_LIMIT;
   const pendingRuns = Math.ceil(pending / batchLimit);
+  const relativeDateSources = await countRelativeDateSources(db, agent.id);
   const requestedId = input.entityId && UUID_RE.test(input.entityId) ? input.entityId : null;
   const selected =
     (requestedId
@@ -235,6 +244,7 @@ export async function getKnowledgeGraphOverview(
       quarantinedSources: Number(quarantinedSources?.value ?? 0),
       pendingCostUsd,
       pendingRuns,
+      relativeDateSources,
       entities,
       matchingEntities,
       entityPage,
@@ -326,6 +336,7 @@ export async function getKnowledgeGraphOverview(
     quarantinedSources: Number(quarantinedSources?.value ?? 0),
     pendingCostUsd,
     pendingRuns,
+    relativeDateSources,
     entities,
     matchingEntities,
     entityPage,
@@ -455,28 +466,7 @@ export async function mergeKnowledgeGraphEntities(
   ]);
   if (!source || !target) return { error: 'One of those knowledge items no longer exists.' };
   const agent = await getAgent(db);
-  await db.transaction(async (tx) => {
-    await tx
-      .update(knowledgeGraphRelations)
-      .set({ subjectEntityId: target.id })
-      .where(eq(knowledgeGraphRelations.subjectEntityId, source.id));
-    await tx
-      .update(knowledgeGraphRelations)
-      .set({ objectEntityId: target.id })
-      .where(eq(knowledgeGraphRelations.objectEntityId, source.id));
-    await tx
-      .insert(knowledgeGraphEntityAliases)
-      .values({ agentId: agent.id, canonicalKey: source.canonicalKey, entityId: target.id })
-      .onConflictDoUpdate({
-        target: [knowledgeGraphEntityAliases.agentId, knowledgeGraphEntityAliases.canonicalKey],
-        set: { entityId: target.id },
-      });
-    await tx
-      .update(knowledgeGraphEntityAliases)
-      .set({ entityId: target.id })
-      .where(eq(knowledgeGraphEntityAliases.entityId, source.id));
-    await tx.delete(knowledgeGraphEntities).where(eq(knowledgeGraphEntities.id, source.id));
-  });
+  await mergeGraphEntities(db, agent.id, source.id, target.id);
   return {};
 }
 
@@ -496,6 +486,17 @@ export async function reviewKnowledgeGraphRelation(
         eq(knowledgeGraphRelations.agentId, agent.id),
       ),
     );
+}
+
+/**
+ * Re-extract the sources whose dates only a date-anchored prompt can resolve.
+ * Unlike the nightly backfill this spends money — one metered model call per
+ * source — so it is an explicit owner action rather than something that happens
+ * on a schedule.
+ */
+export async function reextractRelativeDateSources(db: Db): Promise<number> {
+  const agent = await getAgent(db);
+  return requeueRelativeDateSources(db, agent.id);
 }
 
 /** Queue the next normal graph-sync attempt for every source the owner has chosen to retry. */
