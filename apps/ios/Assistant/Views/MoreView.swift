@@ -438,6 +438,7 @@ private struct MCPConnectionsView: View {
     @State private var bearerToken = ""
     @State private var isAdding = false
     @State private var workingConnectionID: String?
+    @State private var pendingDeletionID: String?
     @FocusState private var focusedField: MCPField?
 
     private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
@@ -496,6 +497,9 @@ private struct MCPConnectionsView: View {
                 .textContentType(.password)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .submitLabel(.go)
+                .focused($focusedField, equals: .bearer)
+                .onSubmit(add)
                 .padding(.horizontal, 12)
                 .frame(minHeight: 46)
                 .background(AssistantTheme.sunken(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -538,11 +542,11 @@ private struct MCPConnectionsView: View {
                 .keyboardType(field == .endpoint ? .URL : .default)
                 .textInputAutocapitalization(field == .endpoint ? .never : .words)
                 .autocorrectionDisabled(field == .endpoint)
-                .submitLabel(field == .name ? .next : .go)
+                .submitLabel(.next)
                 .focused($focusedField, equals: field)
                 .onSubmit {
                     if field == .name { focusedField = .endpoint }
-                    else { add() }
+                    else { focusedField = .bearer }
                 }
                 .padding(.horizontal, 12)
                 .frame(minHeight: 46)
@@ -663,11 +667,7 @@ private struct MCPConnectionsView: View {
 
     private func deleteButton(_ connection: McpConnection, working: Bool) -> some View {
         Button(role: .destructive) {
-            workingConnectionID = connection.id
-            Task {
-                _ = await model.deleteMcpConnection(id: connection.id)
-                workingConnectionID = nil
-            }
+            pendingDeletionID = connection.id
         } label: {
             Image(systemName: "trash")
                 .frame(minWidth: 44, minHeight: 44)
@@ -675,6 +675,26 @@ private struct MCPConnectionsView: View {
         .buttonStyle(.bordered)
         .disabled(workingConnectionID != nil || working)
         .accessibilityLabel("Remove \(connection.name)")
+        .confirmationDialog(
+            "Remove \(connection.name)?",
+            isPresented: Binding(
+                get: { pendingDeletionID == connection.id },
+                set: { if !$0 { pendingDeletionID = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove connection", role: .destructive) {
+                workingConnectionID = connection.id
+                pendingDeletionID = nil
+                Task {
+                    _ = await model.deleteMcpConnection(id: connection.id)
+                    workingConnectionID = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingDeletionID = nil }
+        } message: {
+            Text("The endpoint, discovered tools, and saved bearer credential will be deleted.")
+        }
     }
 
     private func statusTag(_ connection: McpConnection) -> some View {
@@ -691,6 +711,7 @@ private struct MCPConnectionsView: View {
         case "ready": AssistantTheme.success(for: colorScheme)
         case "checking": AssistantTheme.accent(for: colorScheme)
         case "disabled": AssistantTheme.inkMuted(for: colorScheme)
+        case "error": AssistantTheme.errorInk(for: colorScheme)
         default: AssistantTheme.warning(for: colorScheme)
         }
     }
@@ -723,6 +744,7 @@ private struct MCPConnectionsView: View {
 private enum MCPField: Hashable {
     case name
     case endpoint
+    case bearer
 }
 
 /// A wrapping row for compact tool names. Unlike a horizontal scroller, all

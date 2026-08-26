@@ -28,15 +28,18 @@ export async function listCommitmentOverview(db: Db): Promise<CommitmentView[]> 
 }
 
 export async function resolveOwnerCommitment(db: Db, id: string, resolution: string) {
-  await resolveCommitment(db, id, resolution);
+  const agent = await getAgent(db);
+  return resolveCommitment(db, agent.id, id, resolution);
 }
 
 export async function snoozeOwnerCommitment(db: Db, id: string, until: Date) {
-  await snoozeCommitment(db, id, until);
+  const agent = await getAgent(db);
+  return snoozeCommitment(db, agent.id, id, until);
 }
 
 export async function dismissOwnerCommitment(db: Db, id: string) {
-  await dismissCommitment(db, id);
+  const agent = await getAgent(db);
+  return dismissCommitment(db, agent.id, id);
 }
 
 export async function correctOwnerCommitment(
@@ -44,5 +47,6 @@ export async function correctOwnerCommitment(
   id: string,
   patch: { title: string; details?: string; nextAction?: string },
 ) {
-  await correctCommitment(db, id, patch);
+  const agent = await getAgent(db);
+  return correctCommitment(db, agent.id, id, patch);
 }

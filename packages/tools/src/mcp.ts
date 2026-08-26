@@ -1,5 +1,8 @@
 import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import { Agent as HttpAgent, request as httpRequest } from 'node:http';
+import { Agent as HttpsAgent, request as httpsRequest } from 'node:https';
+import { BlockList, isIP, type LookupFunction } from 'node:net';
+import { Readable } from 'node:stream';
 import { decryptMcpBearerToken } from '@assistant/core/mcp-secrets';
 import { mcpConnections } from '@assistant/db';
 import { and, asc, eq } from 'drizzle-orm';
@@ -33,6 +36,7 @@ type FetchImplementation = typeof fetch;
 
 interface McpSession {
   endpoint: URL;
+  agent: HttpAgent | HttpsAgent;
   sessionId?: string;
   fetchImpl: FetchImplementation;
   bearerToken?: string;
@@ -47,45 +51,70 @@ function clip(value: unknown, max: number): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '';
 }
 
-function isLocalAddress(address: string): boolean {
+const blockedAddresses = new BlockList();
+const publicIpv6Addresses = new BlockList();
+publicIpv6Addresses.addSubnet('2000::', 3, 'ipv6');
+for (const [network, prefix] of [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+] as const) {
+  blockedAddresses.addSubnet(network, prefix, 'ipv4');
+}
+for (const [network, prefix] of [
+  ['::', 96],
+  ['::ffff:0:0', 96],
+  ['64:ff9b::', 96],
+  ['64:ff9b:1::', 48],
+  ['100::', 64],
+  ['2001:2::', 48],
+  ['2001:db8::', 32],
+  ['fc00::', 7],
+  ['fe80::', 10],
+  ['fec0::', 10],
+  ['ff00::', 8],
+] as const) {
+  blockedAddresses.addSubnet(network, prefix, 'ipv6');
+}
+
+function isNonPublicAddress(address: string): boolean {
   const family = isIP(address);
-  if (family === 4) {
-    const parts = address.split('.').map(Number);
-    const a = parts[0] ?? -1;
-    const b = parts[1] ?? -1;
-    return (
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      a >= 224
-    );
-  }
-  if (family === 6) {
-    const lower = address.toLowerCase();
-    return (
-      lower === '::1' ||
-      lower === '::' ||
-      lower.startsWith('fc') ||
-      lower.startsWith('fd') ||
-      lower.startsWith('fe80:') ||
-      lower.startsWith('::ffff:127.') ||
-      lower.startsWith('::ffff:10.') ||
-      lower.startsWith('::ffff:192.168.')
-    );
-  }
-  return true;
+  return family === 4
+    ? blockedAddresses.check(address, 'ipv4')
+    : family === 6
+      ? blockedAddresses.check(address, 'ipv6') || !publicIpv6Addresses.check(address, 'ipv6')
+      : true;
+}
+
+function isLoopbackAddress(address: string): boolean {
+  const family = isIP(address);
+  return family === 4 ? address.startsWith('127.') : family === 6 && address === '::1';
+}
+
+interface ResolvedMcpEndpoint {
+  endpoint: URL;
+  address: string;
+  family: 4 | 6;
 }
 
 /**
  * Only public HTTPS endpoints are usable in production. This prevents an MCP
  * URL from becoming an SSRF route into the database, metadata service, or a
- * private provider — and is re-run before every request to avoid DNS rebinding.
+ * private provider. A session pins one validated address into its keep-alive
+ * agent so DNS cannot change between validation and the outbound request.
  */
-export async function checkedMcpEndpoint(value: string): Promise<URL> {
+async function resolveMcpEndpoint(value: string): Promise<ResolvedMcpEndpoint> {
   let endpoint: URL;
   try {
     endpoint = new URL(value.trim());
@@ -93,10 +122,11 @@ export async function checkedMcpEndpoint(value: string): Promise<URL> {
     throw new Error('Enter a valid MCP endpoint URL.');
   }
 
+  const host = endpoint.hostname.replace(/^\[|\]$/g, '');
   const localDevelopment = process.env.NODE_ENV !== 'production';
   const isHttp = endpoint.protocol === 'http:';
   const isHttps = endpoint.protocol === 'https:';
-  const localHost = endpoint.hostname === 'localhost' || endpoint.hostname === '127.0.0.1';
+  const localHost = host === 'localhost' || isLoopbackAddress(host);
   if (
     (!isHttps && !(localDevelopment && isHttp && localHost)) ||
     endpoint.username ||
@@ -107,24 +137,83 @@ export async function checkedMcpEndpoint(value: string): Promise<URL> {
     );
   }
 
-  const host = endpoint.hostname.replace(/^\[|\]$/g, '');
-  if (localDevelopment && localHost) return endpoint;
-  if (isIP(host)) {
-    if (isLocalAddress(host))
-      throw new Error('MCP endpoints cannot point at a private network address.');
-    return endpoint;
-  }
-
-  let resolved: Array<{ address: string }>;
+  let resolved: Array<{ address: string; family: number }>;
   try {
-    resolved = await lookup(host, { all: true, verbatim: true });
+    resolved = isIP(host)
+      ? [{ address: host, family: isIP(host) }]
+      : await lookup(host, { all: true, verbatim: true });
   } catch {
     throw new Error('The MCP endpoint hostname could not be resolved.');
   }
-  if (resolved.length === 0 || resolved.some((record) => isLocalAddress(record.address))) {
+  if (resolved.length === 0) throw new Error('The MCP endpoint hostname could not be resolved.');
+  if (localDevelopment && localHost) {
+    if (resolved.some((record) => !isLoopbackAddress(record.address))) {
+      throw new Error('Local MCP endpoints must resolve only to the loopback interface.');
+    }
+  } else if (resolved.some((record) => isNonPublicAddress(record.address))) {
     throw new Error('MCP endpoints cannot resolve to a private network address.');
   }
-  return endpoint;
+  const selected = resolved[0];
+  if (!selected || (selected.family !== 4 && selected.family !== 6)) {
+    throw new Error('The MCP endpoint hostname resolved to an unsupported address.');
+  }
+  return { endpoint, address: selected.address, family: selected.family };
+}
+
+export async function checkedMcpEndpoint(value: string): Promise<URL> {
+  return (await resolveMcpEndpoint(value)).endpoint;
+}
+
+function pinnedLookup(address: string, family: 4 | 6): LookupFunction {
+  return ((_hostname: string, options: unknown, callback: (...args: unknown[]) => void) => {
+    if (typeof options === 'object' && options && 'all' in options && options.all) {
+      callback(null, [{ address, family }]);
+      return;
+    }
+    callback(null, address, family);
+  }) as LookupFunction;
+}
+
+function pinnedAgent(target: ResolvedMcpEndpoint): HttpAgent | HttpsAgent {
+  const options = {
+    keepAlive: true,
+    maxSockets: 1,
+    lookup: pinnedLookup(target.address, target.family),
+  };
+  return target.endpoint.protocol === 'https:' ? new HttpsAgent(options) : new HttpAgent(options);
+}
+
+function pinnedRequest(session: McpSession, init: RequestInit): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const request = (session.endpoint.protocol === 'https:' ? httpsRequest : httpRequest)(
+      session.endpoint,
+      {
+        agent: session.agent,
+        headers: init.headers as Record<string, string>,
+        method: init.method,
+        signal: init.signal ?? undefined,
+      },
+      (incoming) => {
+        const headers = new Headers();
+        for (const [name, value] of Object.entries(incoming.headers)) {
+          if (Array.isArray(value)) for (const item of value) headers.append(name, item);
+          else if (value !== undefined) headers.set(name, value);
+        }
+        const status = incoming.statusCode ?? 500;
+        const hasBody = ![101, 204, 205, 304].includes(status);
+        resolve(
+          new Response(hasBody ? (Readable.toWeb(incoming) as ReadableStream<Uint8Array>) : null, {
+            status,
+            statusText: incoming.statusMessage,
+            headers,
+          }),
+        );
+      },
+    );
+    request.on('error', reject);
+    if (typeof init.body === 'string' || init.body instanceof Uint8Array) request.write(init.body);
+    request.end();
+  });
 }
 
 function parsedSse(body: string): unknown {
@@ -148,8 +237,22 @@ function parsedSse(body: string): unknown {
 async function readRpcResponse(response: Response): Promise<JsonRpcResponse> {
   const contentLength = Number(response.headers.get('content-length') ?? 0);
   if (contentLength > MAX_RESPONSE_BYTES) throw new Error('MCP response is too large.');
-  const body = await response.text();
-  if (body.length > MAX_RESPONSE_BYTES) throw new Error('MCP response is too large.');
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error('MCP response is too large.');
+      }
+      chunks.push(value);
+    }
+  }
+  const body = Buffer.concat(chunks, bytes).toString('utf8');
   const contentType = response.headers.get('content-type') ?? '';
   try {
     return (
@@ -166,22 +269,23 @@ async function rpc(
   payload: Record<string, unknown>,
   expectsReply = true,
 ): Promise<{ response?: JsonRpcResponse; sessionId?: string }> {
-  // Resolve just before the network operation, not only when an owner saves
-  // the connection. A later DNS change must fail closed.
-  const endpoint = await checkedMcpEndpoint(session.endpoint.toString());
   const headers: Record<string, string> = {
     Accept: 'application/json, text/event-stream',
     'Content-Type': 'application/json',
   };
   if (session.bearerToken) headers.Authorization = `Bearer ${session.bearerToken}`;
   if (session.sessionId) headers['Mcp-Session-Id'] = session.sessionId;
-  const response = await session.fetchImpl(endpoint, {
+  const init: RequestInit = {
     method: 'POST',
     headers,
     body: JSON.stringify({ jsonrpc: '2.0', ...payload }),
     redirect: 'error',
     signal: AbortSignal.timeout(20_000),
-  });
+  };
+  const response =
+    session.fetchImpl === fetch
+      ? await pinnedRequest(session, init)
+      : await session.fetchImpl(session.endpoint, init);
   if (response.status === 401) throw new McpAuthorizationError();
   if (!response.ok && response.status !== 202) {
     throw new Error(`MCP server responded with HTTP ${response.status}.`);
@@ -214,27 +318,38 @@ function resultOf(response: JsonRpcResponse | undefined, method: string): Record
 }
 
 async function openMcpSession(
-  endpoint: URL,
+  endpointValue: string,
   fetchImpl: FetchImplementation = fetch,
   bearerToken?: string,
 ): Promise<{
   session: McpSession;
   initialize: Record<string, unknown>;
 }> {
-  const session: McpSession = { endpoint, fetchImpl, bearerToken };
-  const initialized = await rpc(session, {
-    id: 1,
-    method: 'initialize',
-    params: {
-      protocolVersion: PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: CLIENT_INFO,
-    },
-  });
-  session.sessionId = initialized.sessionId;
-  const initialize = resultOf(initialized.response, 'initialize');
-  await rpc(session, { method: 'notifications/initialized', params: {} }, false);
-  return { session, initialize };
+  const target = await resolveMcpEndpoint(endpointValue);
+  const session: McpSession = {
+    endpoint: target.endpoint,
+    agent: pinnedAgent(target),
+    fetchImpl,
+    bearerToken,
+  };
+  try {
+    const initialized = await rpc(session, {
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: CLIENT_INFO,
+      },
+    });
+    session.sessionId = initialized.sessionId;
+    const initialize = resultOf(initialized.response, 'initialize');
+    await rpc(session, { method: 'notifications/initialized', params: {} }, false);
+    return { session, initialize };
+  } catch (error) {
+    session.agent.destroy();
+    throw error;
+  }
 }
 
 function sanitizedTools(value: unknown): McpListedTool[] {
@@ -264,12 +379,14 @@ export async function inspectMcpConnection(
   endpointValue: string,
   options: { fetchImpl?: FetchImplementation; bearerTokenEncrypted?: string | null } = {},
 ): Promise<McpInspection> {
+  let session: McpSession | undefined;
   try {
-    const endpoint = await checkedMcpEndpoint(endpointValue);
     const bearerToken = options.bearerTokenEncrypted
       ? decryptMcpBearerToken(options.bearerTokenEncrypted)
       : undefined;
-    const { session, initialize } = await openMcpSession(endpoint, options.fetchImpl, bearerToken);
+    const opened = await openMcpSession(endpointValue, options.fetchImpl, bearerToken);
+    session = opened.session;
+    const { initialize } = opened;
     const listed = await rpc(session, { id: 2, method: 'tools/list', params: {} });
     const result = resultOf(listed.response, 'tools/list');
     const serverInfo =
@@ -292,6 +409,8 @@ export async function inspectMcpConnection(
       tools: [],
       error: error instanceof Error ? clip(error.message, 500) : 'MCP discovery failed.',
     };
+  } finally {
+    session?.agent.destroy();
   }
 }
 
@@ -302,17 +421,20 @@ async function invokeMcpTool(
   bearerTokenEncrypted: string | null | undefined,
   fetchImpl: FetchImplementation = fetch,
 ): Promise<Record<string, unknown>> {
-  const endpoint = await checkedMcpEndpoint(endpointValue);
   const bearerToken = bearerTokenEncrypted
     ? decryptMcpBearerToken(bearerTokenEncrypted)
     : undefined;
-  const { session } = await openMcpSession(endpoint, fetchImpl, bearerToken);
-  const response = await rpc(session, {
-    id: 2,
-    method: 'tools/call',
-    params: { name: toolName, arguments: input },
-  });
-  return resultOf(response.response, 'tools/call');
+  const { session } = await openMcpSession(endpointValue, fetchImpl, bearerToken);
+  try {
+    const response = await rpc(session, {
+      id: 2,
+      method: 'tools/call',
+      params: { name: toolName, arguments: input },
+    });
+    return resultOf(response.response, 'tools/call');
+  } finally {
+    session.agent.destroy();
+  }
 }
 
 /**

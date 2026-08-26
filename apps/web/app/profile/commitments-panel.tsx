@@ -6,7 +6,7 @@ import {
   resolveCommitmentAction,
   snoozeCommitmentAction,
 } from '@/app/profile/actions';
-import { btn, cardShellClass } from '@/lib/ui';
+import { btn, cardShellClass, focusRing, inputClass, microLabelClass } from '@/lib/ui';
 
 export function CommitmentsPanel({ rows }: { rows: CommitmentView[] }) {
   return (
@@ -26,50 +26,56 @@ export function CommitmentsPanel({ rows }: { rows: CommitmentView[] }) {
           {rows.map((row) => (
             <div key={row.id} className="flex flex-col gap-3 px-5 py-4 sm:px-6">
               <div>
-                <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted">
-                  {row.kind}
-                </p>
+                <p className={`${microLabelClass} text-muted`}>{row.kind}</p>
                 <p className="mt-1 text-sm font-medium text-strong">{row.title}</p>
                 {row.nextAction ? (
                   <p className="mt-1 text-xs text-muted">Next: {row.nextAction}</p>
                 ) : null}
               </div>
               <details className="text-xs">
-                <summary className="cursor-pointer text-muted">Correct this loop</summary>
+                <summary
+                  className={`w-fit cursor-pointer rounded text-muted hover:text-strong ${focusRing}`}
+                >
+                  Correct this loop
+                </summary>
                 <form
                   action={correctCommitmentFormAction.bind(null, row.id)}
                   className="mt-2 grid gap-2 sm:grid-cols-3"
                 >
                   <input
-                    className="rounded-lg border border-edge bg-raised px-2 py-1.5"
+                    className={inputClass}
                     name="title"
                     defaultValue={row.title}
                     aria-label="Commitment title"
+                    required
+                    maxLength={180}
                   />
                   <input
-                    className="rounded-lg border border-edge bg-raised px-2 py-1.5"
+                    className={inputClass}
                     name="details"
                     defaultValue={row.details}
                     placeholder="Details"
                     aria-label="Commitment details"
+                    maxLength={500}
                   />
                   <div className="flex gap-2">
                     <input
-                      className="min-w-0 flex-1 rounded-lg border border-edge bg-raised px-2 py-1.5"
+                      className={`${inputClass} min-w-0 flex-1`}
                       name="nextAction"
                       defaultValue={row.nextAction}
                       placeholder="Next action"
                       aria-label="Next action"
+                      maxLength={240}
                     />
-                    <button type="submit" className={btn.outline}>
-                      Save
+                    <button type="submit" className={btn.primary}>
+                      Save changes
                     </button>
                   </div>
                 </form>
               </details>
               <div className="flex flex-wrap gap-2">
                 <form action={resolveCommitmentAction.bind(null, row.id)}>
-                  <button type="submit" className={btn.outline}>
+                  <button type="submit" className={btn.success}>
                     <Check className="size-3.5" aria-hidden="true" /> Done
                   </button>
                 </form>
@@ -79,7 +85,7 @@ export function CommitmentsPanel({ rows }: { rows: CommitmentView[] }) {
                   </button>
                 </form>
                 <form action={dismissCommitmentAction.bind(null, row.id)}>
-                  <button type="submit" className={btn.outline}>
+                  <button type="submit" className={btn.dangerOutline}>
                     <X className="size-3.5" aria-hidden="true" /> Not relevant
                   </button>
                 </form>

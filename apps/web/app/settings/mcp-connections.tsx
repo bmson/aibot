@@ -56,6 +56,8 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
         const result = await action();
         if (result.error) setError(result.error);
         else after?.();
+      } catch {
+        setError('Unable to update the MCP connection. Try again.');
       } finally {
         setPendingAction(null);
       }
@@ -95,6 +97,7 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
             onChange={(event) => setName(event.target.value)}
             placeholder="e.g. Home Assistant"
             className={inputClass}
+            maxLength={80}
           />
         </label>
         <label className={`${labelClass} min-w-0 sm:col-span-2`}>
@@ -106,9 +109,12 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
             placeholder="Stored encrypted; never shown again"
             className={inputClass}
             autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            maxLength={8_192}
           />
         </label>
-        <label className={`${labelClass} min-w-0`}>
+        <label className={`${labelClass} min-w-0 sm:col-span-2`}>
           MCP endpoint
           <input
             required
@@ -117,6 +123,8 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
             onChange={(event) => setEndpoint(event.target.value)}
             placeholder="https://example.com/mcp"
             className={inputClass}
+            autoCapitalize="none"
+            spellCheck={false}
           />
         </label>
         <button type="submit" disabled={pending} className={`${btn.primary} justify-center`}>
@@ -144,7 +152,6 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
           {connections.map((connection) => {
             const status = STATUS[connection.status];
             const actionKey = (name: string) => `${name}:${connection.id}`;
-            const isWorking = pending && pendingAction?.endsWith(`:${connection.id}`);
             return (
               <article key={connection.id} className="rounded-2xl border border-edge bg-raised p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -177,7 +184,7 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
                   <div className="flex shrink-0 flex-wrap gap-2">
                     <button
                       type="button"
-                      disabled={isWorking}
+                      disabled={pending}
                       onClick={() =>
                         run(actionKey('refresh'), () => refreshMcpConnectionAction(connection.id))
                       }
@@ -192,7 +199,7 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
                     </button>
                     <button
                       type="button"
-                      disabled={isWorking}
+                      disabled={pending}
                       onClick={() =>
                         run(actionKey('enabled'), () =>
                           setMcpConnectionEnabledAction(connection.id, !connection.enabled),
@@ -207,7 +214,7 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
                     </button>
                     <button
                       type="button"
-                      disabled={isWorking}
+                      disabled={pending}
                       onClick={() => {
                         if (window.confirm(`Remove ${connection.name}?`)) {
                           run(actionKey('delete'), () => deleteMcpConnectionAction(connection.id));

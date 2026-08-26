@@ -40,11 +40,32 @@ function cleanEndpoint(value: string): string | null {
   }
 }
 
+function hasInvalidBearerTokenCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint <= 0x1f || codePoint === 0x7f || /\s/u.test(character)) return true;
+  }
+  return false;
+}
+
 /** Owner-facing MCP connection summaries; credentials never enter this model. */
 export async function listMcpConnections(db: Db) {
   const agent = await getAgent(db);
   const rows = await db
-    .select()
+    .select({
+      id: mcpConnections.id,
+      name: mcpConnections.name,
+      endpoint: mcpConnections.endpoint,
+      status: mcpConnections.status,
+      enabled: mcpConnections.enabled,
+      serverName: mcpConnections.serverName,
+      serverVersion: mcpConnections.serverVersion,
+      instructions: mcpConnections.instructions,
+      tools: mcpConnections.tools,
+      hasBearerToken: sql<boolean>`${mcpConnections.bearerTokenEncrypted} IS NOT NULL`,
+      lastCheckedAt: mcpConnections.lastCheckedAt,
+      lastError: mcpConnections.lastError,
+    })
     .from(mcpConnections)
     .where(eq(mcpConnections.agentId, agent.id))
     .orderBy(asc(mcpConnections.name));
@@ -58,7 +79,7 @@ export async function listMcpConnections(db: Db) {
     serverVersion: row.serverVersion,
     instructions: row.instructions,
     tools: row.tools as McpConnectionDiscovery['tools'],
-    hasBearerToken: Boolean(row.bearerTokenEncrypted),
+    hasBearerToken: row.hasBearerToken,
     lastCheckedAt: row.lastCheckedAt,
     lastError: row.lastError,
   }));
@@ -68,7 +89,7 @@ export async function listMcpConnections(db: Db) {
 export async function createMcpConnection(
   db: Db,
   input: McpConnectionInput,
-): Promise<{ connection?: typeof mcpConnections.$inferSelect; error?: string }> {
+): Promise<{ connectionId?: string; error?: string }> {
   const name = cleanName(input.name);
   const endpoint = cleanEndpoint(input.endpoint);
   if (!name) return { error: 'Give this MCP connection a name.' };
@@ -76,6 +97,9 @@ export async function createMcpConnection(
     return { error: 'Enter an HTTP or HTTPS MCP endpoint without embedded credentials.' };
   const bearerToken = input.bearerToken?.trim();
   if (bearerToken && bearerToken.length > 8_192) return { error: 'Bearer token is too long.' };
+  if (bearerToken && hasInvalidBearerTokenCharacter(bearerToken)) {
+    return { error: 'Bearer token cannot contain whitespace or control characters.' };
+  }
   let bearerTokenEncrypted: string | null = null;
   try {
     bearerTokenEncrypted = bearerToken ? encryptMcpBearerToken(bearerToken) : null;
@@ -87,8 +111,8 @@ export async function createMcpConnection(
     const [connection] = await db
       .insert(mcpConnections)
       .values({ agentId: agent.id, name, endpoint, bearerTokenEncrypted, status: 'checking' })
-      .returning();
-    return { connection };
+      .returning({ id: mcpConnections.id });
+    return connection ? { connectionId: connection.id } : { error: 'Unable to save connection.' };
   } catch (error) {
     const detail = error instanceof Error ? error.message : '';
     if (detail.includes('mcp_connections_agent_name_idx')) {
@@ -102,8 +126,9 @@ export async function saveMcpDiscovery(
   db: Db,
   connectionId: string,
   discovery: McpConnectionDiscovery,
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const agent = await getAgent(db);
+  const rows = await db
     .update(mcpConnections)
     .set({
       status: discovery.status,
@@ -115,13 +140,19 @@ export async function saveMcpDiscovery(
       lastError: discovery.error ?? null,
       updatedAt: sql`now()`,
     })
-    .where(eq(mcpConnections.id, connectionId));
+    .where(and(eq(mcpConnections.id, connectionId), eq(mcpConnections.agentId, agent.id)))
+    .returning({ id: mcpConnections.id });
+  return rows.length === 1;
 }
 
 export async function getMcpConnection(db: Db, connectionId: string) {
   const agent = await getAgent(db);
   const [connection] = await db
-    .select()
+    .select({
+      id: mcpConnections.id,
+      endpoint: mcpConnections.endpoint,
+      bearerTokenEncrypted: mcpConnections.bearerTokenEncrypted,
+    })
     .from(mcpConnections)
     .where(and(eq(mcpConnections.id, connectionId), eq(mcpConnections.agentId, agent.id)));
   return connection ?? null;

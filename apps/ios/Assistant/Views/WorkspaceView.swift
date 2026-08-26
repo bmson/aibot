@@ -263,7 +263,7 @@ struct WorkspaceView: View {
                 } label: {
                     Label("New chat", systemImage: "plus")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(AssistantActionButtonStyle(kind: .primary))
                 .disabled(workspaceActionInFlight != nil)
                 Menu {
                     Button("Archive inactive chats", systemImage: "archivebox") {
@@ -276,6 +276,7 @@ struct WorkspaceView: View {
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
+                .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
                 .disabled(workspaceActionInFlight != nil)
             }
 
@@ -307,6 +308,7 @@ struct WorkspaceView: View {
                             } label: {
                                 Image(systemName: "ellipsis.circle")
                             }
+                            .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
                             .disabled(workspaceActionInFlight != nil)
                         }
                     }
@@ -345,8 +347,7 @@ struct WorkspaceView: View {
                                     updateChat(chat, action: "restore")
                                 }
                                 .labelStyle(.iconOnly)
-                                .frame(minWidth: 44, minHeight: 44)
-                                .contentShape(Rectangle())
+                                .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
                                 .disabled(workspaceActionInFlight != nil)
                             }
                             .padding(.vertical, 10)
@@ -390,69 +391,30 @@ struct WorkspaceView: View {
     }
 
     private func skills(_ skills: [WorkspaceSkill]) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            sectionHeading("Learned procedures", count: skills.count)
+        let active = skills
+            .filter { !$0.deprecated }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let retired = skills
+            .filter(\.deprecated)
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
 
+        return VStack(alignment: .leading, spacing: 16) {
             if skills.isEmpty {
-                emptyState("No skills yet", symbol: "lightbulb")
+                skillEmptyState
             } else {
-                ForEach(skills) { skill in
-                    VStack(alignment: .leading, spacing: 11) {
-                        if usesAccessibilityLayout {
-                            VStack(alignment: .leading, spacing: 7) {
-                                skillIdentity(skill)
-                                if skill.deprecated { workspaceTag("Retired", tint: .secondary) }
-                            }
-                        } else {
-                            HStack(alignment: .top) {
-                                skillIdentity(skill)
-                                Spacer()
-                                if skill.deprecated { workspaceTag("Retired", tint: .secondary) }
-                            }
-                        }
-                        Text(skill.steps)
-                            .font(.subheadline)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if !skill.preconditions.isEmpty || !skill.gotchas.isEmpty {
-                            if usesAccessibilityLayout {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    skillDetailPills(skill)
-                                }
-                            } else {
-                                HStack(alignment: .top, spacing: 8) {
-                                    skillDetailPills(skill)
-                                }
-                            }
-                        }
-                        Text("Used \(skill.useCount) times · \(skill.successCount) successful")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                        AssistantFlowLayout(spacing: 9) {
-                            Button("Edit", systemImage: "pencil") { editingSkill = skill }
-                                .buttonStyle(.bordered)
-                            Button(
-                                skill.deprecated ? "Restore" : "Retire",
-                                systemImage: skill.deprecated ? "arrow.uturn.backward" : "archivebox"
-                            ) {
-                                workspaceActionInFlight = skill.id
-                                Task {
-                                    _ = await model.setSkillDeprecated(
-                                        skill,
-                                        deprecated: !skill.deprecated
-                                    )
-                                    workspaceActionInFlight = nil
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            Button("Delete", systemImage: "trash", role: .destructive) {
-                                deletingSkill = skill
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        .disabled(workspaceActionInFlight != nil)
+                skillLibrarySummary(skills, activeCount: active.count)
+
+                sectionHeading("Ready to use", count: active.count)
+                if active.isEmpty {
+                    compactSkillEmptyState
+                } else {
+                    ForEach(active) { skill in
+                        skillCard(skill)
                     }
-                    .opacity(skill.deprecated ? 0.6 : 1)
-                    .assistantCard(in: colorScheme)
+                }
+
+                if !retired.isEmpty {
+                    retiredSkills(retired)
                 }
             }
         }
@@ -571,7 +533,7 @@ struct WorkspaceView: View {
             Button("Edit spending limits", systemImage: "slider.horizontal.3") {
                 showingCostEditor = true
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
         }
     }
 
@@ -626,12 +588,12 @@ struct WorkspaceView: View {
                                 Button("Suspend policy", systemImage: "pause.circle") {
                                     updateAnomaly(anomaly, action: "suspend-policy")
                                 }
-                                .buttonStyle(.borderedProminent)
+                                .buttonStyle(AssistantActionButtonStyle(kind: .primary))
                             }
                             Button("Dismiss", systemImage: "xmark") {
                                 updateAnomaly(anomaly, action: "dismiss")
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                         }
                         .disabled(workspaceActionInFlight != nil)
                     }
@@ -642,63 +604,254 @@ struct WorkspaceView: View {
     }
 
     private func improvements(_ improvements: [WorkspaceImprovement]) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            sectionHeading("Open proposals", count: improvements.count)
+        let directlyApplyable = improvements.filter(\.applyable)
+        let advisory = improvements.filter { !$0.applyable }
+
+        return VStack(alignment: .leading, spacing: 16) {
             if improvements.isEmpty {
-                emptyState("No open proposals", symbol: "checkmark.circle")
+                improvementEmptyState
             } else {
-                ForEach(improvements) { improvement in
-                    VStack(alignment: .leading, spacing: 11) {
-                        if usesAccessibilityLayout {
-                            VStack(alignment: .leading, spacing: 4) {
-                                workspaceTag(improvement.kind.sentenceCaseIdentifier, tint: AssistantTheme.accent(for: colorScheme))
-                                Text(inlineMarkdown(improvement.title)).font(.headline)
-                                Text(relative(improvement.createdAt))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        } else {
-                            HStack(alignment: .top) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    workspaceTag(improvement.kind.sentenceCaseIdentifier, tint: AssistantTheme.accent(for: colorScheme))
-                                    Text(inlineMarkdown(improvement.title)).font(.headline)
-                                }
-                                Spacer()
-                                Text(relative(improvement.createdAt))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        if !improvement.rationale.isEmpty {
-                            Text(inlineMarkdown(improvement.rationale))
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        if !improvement.suggestion.isEmpty {
-                            detailPill("Proposed change", detail: improvement.suggestion, tint: AssistantTheme.sunken(for: colorScheme))
-                        }
-                        Text("Based on \(improvement.evidenceCount) \(improvement.evidenceCount == 1 ? "pattern" : "patterns") · \(improvement.applyable ? "Can apply directly" : "Advisory")")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                        AssistantFlowLayout(spacing: 9) {
-                            Button(
-                                improvement.applyable ? "Apply" : "Acknowledge",
-                                systemImage: "checkmark"
-                            ) {
-                                updateImprovement(improvement, action: "apply")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            Button("Dismiss", systemImage: "xmark") {
-                                updateImprovement(improvement, action: "dismiss")
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        .disabled(workspaceActionInFlight != nil)
+                improvementReviewSummary(improvements, applyableCount: directlyApplyable.count)
+
+                if !directlyApplyable.isEmpty {
+                    sectionHeading("Ready to apply", count: directlyApplyable.count)
+                    ForEach(directlyApplyable) { improvement in
+                        improvementCard(improvement)
                     }
-                    .assistantCard(in: colorScheme)
+                }
+
+                if !advisory.isEmpty {
+                    sectionHeading("For your review", count: advisory.count)
+                    ForEach(advisory) { improvement in
+                        improvementCard(improvement)
+                    }
                 }
             }
         }
+    }
+
+    private var improvementEmptyState: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            AssistantGlyph(
+                systemName: "checkmark.seal",
+                tint: AssistantTheme.success(for: colorScheme)
+            )
+            VStack(alignment: .leading, spacing: 4) {
+                Text("All caught up")
+                    .font(.headline)
+                Text("New proposals will appear after the assistant finds a repeatable way to improve reliability or cost.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Label("Pull down to check again", systemImage: "arrow.down")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .assistantPanel(in: colorScheme)
+    }
+
+    private func improvementReviewSummary(
+        _ improvements: [WorkspaceImprovement],
+        applyableCount: Int
+    ) -> some View {
+        let evidenceCount = improvements.reduce(0) { $0 + max(0, $1.evidenceCount) }
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 11) {
+                AssistantGlyph(
+                    systemName: "arrow.triangle.2.circlepath.circle.fill",
+                    tint: AssistantTheme.accent(for: colorScheme)
+                )
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Review queue")
+                        .font(.headline)
+                    Text("Evidence-backed changes waiting for your decision.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+
+            if usesAccessibilityLayout {
+                VStack(alignment: .leading, spacing: 11) {
+                    summaryMetric(
+                        "\(improvements.count)",
+                        label: "open",
+                        tint: AssistantTheme.ink(for: colorScheme)
+                    )
+                    Divider()
+                    summaryMetric(
+                        "\(applyableCount)",
+                        label: "ready to apply",
+                        tint: AssistantTheme.success(for: colorScheme)
+                    )
+                    Divider()
+                    summaryMetric(
+                        "\(evidenceCount)",
+                        label: "evidence signals",
+                        tint: AssistantTheme.accent(for: colorScheme)
+                    )
+                }
+            } else {
+                HStack(spacing: 14) {
+                    summaryMetric(
+                        "\(improvements.count)",
+                        label: "open",
+                        tint: AssistantTheme.ink(for: colorScheme)
+                    )
+                    Divider().frame(height: 34)
+                    summaryMetric(
+                        "\(applyableCount)",
+                        label: "ready",
+                        tint: AssistantTheme.success(for: colorScheme)
+                    )
+                    Divider().frame(height: 34)
+                    summaryMetric(
+                        "\(evidenceCount)",
+                        label: "signals",
+                        tint: AssistantTheme.accent(for: colorScheme)
+                    )
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .assistantPanel(in: colorScheme)
+    }
+
+    private func improvementCard(_ improvement: WorkspaceImprovement) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            improvementCardHeader(improvement)
+
+            if !improvement.rationale.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Why this surfaced", systemImage: "scope")
+                        .font(.caption.weight(.bold))
+                        .textCase(.uppercase)
+                        .tracking(0.55)
+                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                    Text(inlineMarkdown(improvement.rationale))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if !improvement.suggestion.isEmpty {
+                detailPill(
+                    improvement.applyable ? "Change to apply" : "Suggested direction",
+                    systemImage: improvement.applyable ? "wand.and.stars" : "lightbulb",
+                    detail: improvement.suggestion,
+                    tint: improvement.applyable
+                        ? AssistantTheme.accent(for: colorScheme).opacity(0.09)
+                        : AssistantTheme.sunken(for: colorScheme)
+                )
+            }
+
+            improvementEvidenceLedger(improvement)
+            improvementActions(improvement)
+        }
+        .assistantCard(in: colorScheme)
+    }
+
+    @ViewBuilder
+    private func improvementCardHeader(_ improvement: WorkspaceImprovement) -> some View {
+        let identity = HStack(alignment: .top, spacing: 11) {
+            AssistantGlyph(
+                systemName: improvement.applyable ? "wrench.and.screwdriver" : "text.magnifyingglass",
+                tint: improvement.applyable
+                    ? AssistantTheme.success(for: colorScheme)
+                    : AssistantTheme.accent(for: colorScheme)
+            )
+            VStack(alignment: .leading, spacing: 5) {
+                workspaceTag(
+                    improvement.kind.sentenceCaseIdentifier,
+                    tint: AssistantTheme.accent(for: colorScheme)
+                )
+                Text(inlineMarkdown(improvement.title))
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+
+        if usesAccessibilityLayout {
+            VStack(alignment: .leading, spacing: 9) {
+                identity
+                improvementStatus(improvement)
+            }
+        } else {
+            HStack(alignment: .top, spacing: 10) {
+                identity
+                Spacer(minLength: 6)
+                improvementStatus(improvement)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func improvementStatus(_ improvement: WorkspaceImprovement) -> some View {
+        if workspaceActionInFlight == improvement.id {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Updating")
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .combine)
+        } else {
+            workspaceTag(
+                improvement.applyable ? "Ready to apply" : "Review only",
+                tint: improvement.applyable
+                    ? AssistantTheme.success(for: colorScheme)
+                    : .secondary
+            )
+        }
+    }
+
+    private func improvementEvidenceLedger(_ improvement: WorkspaceImprovement) -> some View {
+        let count = max(0, improvement.evidenceCount)
+
+        return AssistantFlowLayout(spacing: 10) {
+            Label(
+                "\(count) \(count == 1 ? "evidence signal" : "evidence signals")",
+                systemImage: "point.3.connected.trianglepath.dotted"
+            )
+            Label(
+                improvement.applyable ? "Direct change" : "Guidance only",
+                systemImage: improvement.applyable ? "bolt" : "doc.text"
+            )
+            Text("Proposed \(relative(improvement.createdAt))")
+        }
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(
+            AssistantTheme.sunken(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+    }
+
+    private func improvementActions(_ improvement: WorkspaceImprovement) -> some View {
+        AssistantFlowLayout(spacing: 9) {
+            Button {
+                updateImprovement(improvement, action: "apply")
+            } label: {
+                Label(
+                    improvement.applyable ? "Apply change" : "Mark reviewed",
+                    systemImage: improvement.applyable ? "checkmark.circle.fill" : "checkmark"
+                )
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .primary))
+
+            Button("Dismiss", systemImage: "xmark") {
+                updateImprovement(improvement, action: "dismiss")
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+        }
+        .disabled(workspaceActionInFlight != nil)
     }
 
     private func documentCard(_ document: DocumentRecord) -> some View {
@@ -708,7 +861,7 @@ struct WorkspaceView: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
             if document.status == "ready" {
-                HStack(spacing: 9) {
+                AssistantFlowLayout(spacing: 9) {
                     Button {
                         model.returnToChat()
                         model.send("From my documents, tell me about \"\(document.title)\".")
@@ -716,13 +869,12 @@ struct WorkspaceView: View {
                         Label("Ask about this", systemImage: "bubble.left")
                             .font(.subheadline.weight(.semibold))
                     }
-                    .buttonStyle(.bordered)
-                    .tint(AssistantTheme.accent(for: colorScheme))
+                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                     .disabled(model.isSending)
                     Button("Delete", systemImage: "trash", role: .destructive) {
                         deletingDocument = document
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(AssistantActionButtonStyle(kind: .destructive))
                 }
                 .accessibilityHint(
                     model.isSending
@@ -739,7 +891,7 @@ struct WorkspaceView: View {
                 Button("Delete", systemImage: "trash", role: .destructive) {
                     deletingDocument = document
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(AssistantActionButtonStyle(kind: .destructive))
             }
         }
         .assistantCard(in: colorScheme)
@@ -753,7 +905,7 @@ struct WorkspaceView: View {
                 Button("Upload", systemImage: "tray.and.arrow.down") {
                     showingBackstoryImporter = true
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
             }
             ForEach(imports.unstartedFiles) { file in
                 HStack {
@@ -773,7 +925,7 @@ struct WorkspaceView: View {
                             workspacePath: "import/\(file.name)"
                         )
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                 }
                 .assistantCard(in: colorScheme)
             }
@@ -802,11 +954,11 @@ struct WorkspaceView: View {
                             Button("Approve all") {
                                 updateImport(action: "review", source: source.source, verdict: "approve")
                             }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(AssistantActionButtonStyle(kind: .primary))
                             Button("Reject all") {
                                 updateImport(action: "review", source: source.source, verdict: "reject")
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                         }
                         Menu {
                             Button("Run again") {
@@ -825,7 +977,7 @@ struct WorkspaceView: View {
                         } label: {
                             Label("More", systemImage: "ellipsis.circle")
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                     }
                     .disabled(workspaceActionInFlight != nil)
                 }
@@ -1013,6 +1165,164 @@ struct WorkspaceView: View {
         }
     }
 
+    private var skillEmptyState: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            AssistantGlyph(
+                systemName: "book.pages",
+                tint: AssistantTheme.accent(for: colorScheme)
+            )
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Build a procedure library")
+                    .font(.headline)
+                Text("Add a repeatable way of working, or let the assistant learn one from completed work.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button("Add your first skill", systemImage: "plus") {
+                showingSkillCreator = true
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .primary))
+        }
+        .assistantPanel(in: colorScheme)
+    }
+
+    private var compactSkillEmptyState: some View {
+        HStack(alignment: .top, spacing: 12) {
+            AssistantGlyph(systemName: "archivebox", tint: .secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("No active procedures")
+                    .font(.subheadline.weight(.semibold))
+                Text("Restore one from the retired section or add a new skill.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .assistantPanel(in: colorScheme)
+    }
+
+    private func skillLibrarySummary(_ skills: [WorkspaceSkill], activeCount: Int) -> some View {
+        let totalRuns = skills.reduce(0) { $0 + max(0, $1.useCount) }
+        let successes = skills.reduce(0) { $0 + max(0, $1.successCount) }
+        let evaluatedRuns = skills.reduce(0) {
+            $0 + max(0, $1.successCount) + max(0, $1.failureCount)
+        }
+        let successRate = evaluatedRuns > 0
+            ? "\(Int((Double(successes) / Double(evaluatedRuns) * 100).rounded()))%"
+            : "—"
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 11) {
+                AssistantGlyph(
+                    systemName: "book.pages.fill",
+                    tint: AssistantTheme.accent(for: colorScheme)
+                )
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Procedure library")
+                        .font(.headline)
+                    Text("A quick read on what can guide the assistant today.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+
+            if usesAccessibilityLayout {
+                VStack(alignment: .leading, spacing: 11) {
+                    summaryMetric("\(activeCount)", label: "active", tint: AssistantTheme.accent(for: colorScheme))
+                    Divider()
+                    summaryMetric("\(totalRuns)", label: "uses", tint: AssistantTheme.ink(for: colorScheme))
+                    Divider()
+                    summaryMetric(successRate, label: "successful", tint: AssistantTheme.success(for: colorScheme))
+                }
+            } else {
+                HStack(spacing: 14) {
+                    summaryMetric("\(activeCount)", label: "active", tint: AssistantTheme.accent(for: colorScheme))
+                    Divider().frame(height: 34)
+                    summaryMetric("\(totalRuns)", label: "uses", tint: AssistantTheme.ink(for: colorScheme))
+                    Divider().frame(height: 34)
+                    summaryMetric(successRate, label: "successful", tint: AssistantTheme.success(for: colorScheme))
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .assistantPanel(in: colorScheme)
+    }
+
+    private func summaryMetric(_ value: String, label: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.title3.monospacedDigit().weight(.semibold))
+                .foregroundStyle(tint)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label), \(value)")
+    }
+
+    private func skillCard(_ skill: WorkspaceSkill) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            skillCardHeader(skill)
+
+            VStack(alignment: .leading, spacing: 7) {
+                Label("Procedure", systemImage: "list.bullet.rectangle")
+                    .font(.caption.weight(.bold))
+                    .textCase(.uppercase)
+                    .tracking(0.55)
+                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                Text(skill.steps)
+                    .font(.subheadline)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !skill.preconditions.isEmpty || !skill.gotchas.isEmpty {
+                if usesAccessibilityLayout {
+                    VStack(alignment: .leading, spacing: 8) {
+                        skillDetailPills(skill)
+                    }
+                } else {
+                    HStack(alignment: .top, spacing: 8) {
+                        skillDetailPills(skill)
+                    }
+                }
+            }
+
+            skillUsageLedger(skill)
+            skillActions(skill)
+        }
+        .assistantCard(in: colorScheme)
+    }
+
+    @ViewBuilder
+    private func skillCardHeader(_ skill: WorkspaceSkill) -> some View {
+        let identity = HStack(alignment: .top, spacing: 11) {
+            AssistantGlyph(
+                systemName: skill.ownerAuthored ? "person.crop.circle.badge.checkmark" : "sparkles",
+                tint: AssistantTheme.accent(for: colorScheme)
+            )
+            skillIdentity(skill)
+        }
+
+        if usesAccessibilityLayout {
+            VStack(alignment: .leading, spacing: 9) {
+                identity
+                skillStatus(skill)
+            }
+        } else {
+            HStack(alignment: .top, spacing: 10) {
+                identity
+                Spacer(minLength: 6)
+                skillStatus(skill)
+            }
+        }
+    }
+
     private func skillIdentity(_ skill: WorkspaceSkill) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(skill.name)
@@ -1025,10 +1335,23 @@ struct WorkspaceView: View {
     }
 
     @ViewBuilder
+    private func skillStatus(_ skill: WorkspaceSkill) -> some View {
+        if workspaceActionInFlight == skill.id {
+            ProgressView()
+                .controlSize(.small)
+                .frame(minWidth: 44, minHeight: 28)
+                .accessibilityLabel("Updating \(skill.name)")
+        } else {
+            workspaceTag("Ready", tint: AssistantTheme.success(for: colorScheme))
+        }
+    }
+
+    @ViewBuilder
     private func skillDetailPills(_ skill: WorkspaceSkill) -> some View {
         if !skill.preconditions.isEmpty {
             detailPill(
-                "When to use",
+                "Use when",
+                systemImage: "scope",
                 detail: skill.preconditions,
                 tint: AssistantTheme.sunken(for: colorScheme)
             )
@@ -1036,20 +1359,160 @@ struct WorkspaceView: View {
         if !skill.gotchas.isEmpty {
             detailPill(
                 "Watch for",
+                systemImage: "exclamationmark.triangle",
                 detail: skill.gotchas,
                 tint: AssistantTheme.warningSurface(for: colorScheme)
             )
         }
     }
 
-    private func detailPill(_ title: String, detail: String, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            Text(detail).font(.caption).fixedSize(horizontal: false, vertical: true)
+    private func detailPill(
+        _ title: String,
+        systemImage: String = "arrow.triangle.2.circlepath",
+        detail: String,
+        tint: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label(title, systemImage: systemImage)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
+            Text(detail)
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(tint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func skillUsageLedger(_ skill: WorkspaceSkill) -> some View {
+        let evaluatedRuns = max(0, skill.successCount) + max(0, skill.failureCount)
+        let rate = evaluatedRuns > 0
+            ? Int((Double(max(0, skill.successCount)) / Double(evaluatedRuns) * 100).rounded())
+            : nil
+
+        return AssistantFlowLayout(spacing: 10) {
+            Label(
+                skill.useCount == 0 ? "Not used yet" : "\(skill.useCount) uses",
+                systemImage: "arrow.triangle.2.circlepath"
+            )
+            if let rate {
+                Label("\(rate)% successful", systemImage: "checkmark.circle")
+                    .foregroundStyle(AssistantTheme.success(for: colorScheme))
+            }
+            Text("Updated \(relative(skill.updatedAt))")
+        }
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(
+            AssistantTheme.sunken(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+    }
+
+    private func skillActions(_ skill: WorkspaceSkill) -> some View {
+        AssistantFlowLayout(spacing: 9) {
+            Button("Edit skill", systemImage: "pencil") {
+                editingSkill = skill
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+
+            Menu {
+                Button("Retire skill", systemImage: "archivebox") {
+                    setSkill(skill, deprecated: true)
+                }
+                Divider()
+                Button("Delete skill", systemImage: "trash", role: .destructive) {
+                    deletingSkill = skill
+                }
+            } label: {
+                Label("More", systemImage: "ellipsis.circle")
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+        }
+        .disabled(workspaceActionInFlight != nil)
+    }
+
+    private func retiredSkills(_ skills: [WorkspaceSkill]) -> some View {
+        DisclosureGroup {
+            VStack(spacing: 0) {
+                ForEach(skills) { skill in
+                    retiredSkillRow(skill)
+                    if skill.id != skills.last?.id { Divider() }
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: "archivebox")
+                    .foregroundStyle(.secondary)
+                Text("Retired procedures")
+                    .font(.subheadline.weight(.semibold))
+                Spacer(minLength: 0)
+                countTag(skills.count)
+            }
+        }
+        .assistantPanel(in: colorScheme)
+    }
+
+    @ViewBuilder
+    private func retiredSkillRow(_ skill: WorkspaceSkill) -> some View {
+        if usesAccessibilityLayout {
+            VStack(alignment: .leading, spacing: 10) {
+                retiredSkillIdentity(skill)
+                retiredSkillActions(skill)
+            }
+            .padding(.vertical, 10)
+        } else {
+            HStack(alignment: .center, spacing: 12) {
+                retiredSkillIdentity(skill)
+                Spacer(minLength: 8)
+                retiredSkillActions(skill)
+            }
+            .padding(.vertical, 10)
+        }
+    }
+
+    private func retiredSkillIdentity(_ skill: WorkspaceSkill) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(skill.name)
+                .font(.subheadline.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            Text("\(skill.useCount) uses · updated \(relative(skill.updatedAt))")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func retiredSkillActions(_ skill: WorkspaceSkill) -> some View {
+        AssistantFlowLayout(spacing: 7) {
+            Button("Restore", systemImage: "arrow.uturn.backward") {
+                setSkill(skill, deprecated: false)
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+
+            Menu {
+                Button("Edit skill", systemImage: "pencil") { editingSkill = skill }
+                Button("Delete skill", systemImage: "trash", role: .destructive) {
+                    deletingSkill = skill
+                }
+            } label: {
+                Label("More", systemImage: "ellipsis.circle")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
+        }
+        .disabled(workspaceActionInFlight != nil)
+    }
+
+    private func setSkill(_ skill: WorkspaceSkill, deprecated: Bool) {
+        workspaceActionInFlight = skill.id
+        Task {
+            _ = await model.setSkillDeprecated(skill, deprecated: deprecated)
+            workspaceActionInFlight = nil
+        }
     }
 
     @ViewBuilder
@@ -1229,6 +1692,7 @@ private struct SkillEditor: View {
     @State private var steps: String
     @State private var gotchas: String
     @State private var isSaving = false
+    @FocusState private var focusedField: SkillEditorField?
 
     init(skill: WorkspaceSkill?) {
         self.skill = skill
@@ -1240,24 +1704,79 @@ private struct SkillEditor: View {
 
     var body: some View {
         Form {
-            Section("Skill") {
-                TextField("Name", text: $name)
-                TextField("When to use it", text: $preconditions, axis: .vertical)
-                    .lineLimit(2...5)
-                TextField("Steps", text: $steps, axis: .vertical)
-                    .lineLimit(4...10)
-                TextField("Gotchas", text: $gotchas, axis: .vertical)
-                    .lineLimit(2...5)
+            Section {
+                TextField("e.g. Prepare a project brief", text: $name)
+                    .textInputAutocapitalization(.words)
+                    .submitLabel(.next)
+                    .focused($focusedField, equals: .name)
+                    .onSubmit { focusedField = .preconditions }
+            } header: {
+                Label("Name", systemImage: "tag")
+            } footer: {
+                Text("Use a short name that describes the repeatable outcome.")
+            }
+
+            Section {
+                TextField(
+                    "Describe the situation that should trigger this procedure.",
+                    text: $preconditions,
+                    axis: .vertical
+                )
+                .lineLimit(3...7)
+                .focused($focusedField, equals: .preconditions)
+            } header: {
+                Label("Use when", systemImage: "scope")
+            } footer: {
+                Text("Optional. This helps the assistant choose the skill at the right moment.")
+            }
+
+            Section {
+                TextField(
+                    "Write the procedure in the order it should be followed.",
+                    text: $steps,
+                    axis: .vertical
+                )
+                .lineLimit(5...12)
+                .focused($focusedField, equals: .steps)
+            } header: {
+                Label("Procedure", systemImage: "list.bullet.rectangle")
+            } footer: {
+                Text("Required. Keep decisions and checkpoints explicit.")
+            }
+
+            Section {
+                TextField(
+                    "Add failure modes, exceptions, or checks worth remembering.",
+                    text: $gotchas,
+                    axis: .vertical
+                )
+                .lineLimit(3...8)
+                .focused($focusedField, equals: .gotchas)
+            } header: {
+                Label("Watch for", systemImage: "exclamationmark.triangle")
+            } footer: {
+                Text("Optional. Name the edge cases that make this procedure safer.")
             }
         }
+        .disabled(isSaving)
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle(skill == nil ? "New skill" : "Edit skill")
         .navigationBarTitleDisplayMode(.inline)
+        .interactiveDismissDisabled(isSaving)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button(isSaving ? "Saving…" : "Save") { save() }
+                Button { save() } label: {
+                    if isSaving {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel("Saving skill")
+                    } else {
+                        Text(skill == nil ? "Add" : "Save")
+                    }
+                }
                     .disabled(
                         isSaving
                             || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1283,6 +1802,13 @@ private struct SkillEditor: View {
             if saved { dismiss() }
         }
     }
+}
+
+private enum SkillEditorField: Hashable {
+    case name
+    case preconditions
+    case steps
+    case gotchas
 }
 
 private struct CostLimitsEditor: View {

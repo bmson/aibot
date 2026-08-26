@@ -111,6 +111,11 @@ if [ -z "$PROFILE_ENC_KEY" ]; then
   PROFILE_ENC_KEY="$(openssl rand -hex 32)"
   printf 'PROD_PROFILE_ENC_KEY=%s\n' "$PROFILE_ENC_KEY" >> "$ENV_FILE"
 fi
+MCP_ENC_KEY="$(envval PROD_MCP_ENC_KEY)"
+if [ -z "$MCP_ENC_KEY" ]; then
+  MCP_ENC_KEY="$(openssl rand -hex 32)"
+  printf 'PROD_MCP_ENC_KEY=%s\n' "$MCP_ENC_KEY" >> "$ENV_FILE"
+fi
 
 # ── database schema (idempotent: drizzle journal skips applied migrations; seed upserts) ──
 echo "── migrating prod database"
@@ -311,6 +316,7 @@ make_secret auth-secret "$AUTH_SECRET"
 make_secret mobile-api-token "$MOBILE_API_TOKEN"
 make_secret twilio-auth-token "$TWILIO_AUTH_TOKEN"
 make_secret profile-enc-key "$PROFILE_ENC_KEY"
+make_secret mcp-enc-key "$MCP_ENC_KEY"
 make_secret search-api-key "$SEARCH_API_KEY"
 make_secret github-token "$GITHUB_TOKEN"
 make_secret apns-private-key "$APNS_PRIVATE_KEY"
@@ -325,14 +331,16 @@ grant_secret twilio-auth-token "$AGENT_SA"
 grant_secret search-api-key "$AGENT_SA"
 grant_secret github-token "$AGENT_SA"
 grant_secret apns-private-key "$AGENT_SA"
+grant_secret mcp-enc-key "$AGENT_SA"
 for secret in database-url openrouter-api-key google-oauth-client-id google-oauth-client-secret auth-secret mobile-api-token; do
   grant_secret "$secret" "$WEB_SA"
 done
+grant_secret mcp-enc-key "$WEB_SA"
 if module_enabled browser; then
   grant_secret profile-enc-key "$BROWSER_SA"
 fi
 for secret in database-url openrouter-api-key google-oauth-client-id google-oauth-client-secret \
-  bot-google-refresh-token internal-api-secret auth-secret twilio-auth-token profile-enc-key \
+  bot-google-refresh-token internal-api-secret auth-secret twilio-auth-token profile-enc-key mcp-enc-key \
   search-api-key github-token mobile-api-token apns-private-key; do
   revoke_legacy_secret_access "$secret"
 done
@@ -356,7 +364,7 @@ SELF_URL="$(gcloud run services describe assistant-agent --region "$REGION" --fo
 SELF_URL_ENV=""
 [ -n "$SELF_URL" ] && SELF_URL_ENV="|AGENT_URL=${SELF_URL}|PUBLIC_URL=${SELF_URL}|INTERNAL_OIDC_AUDIENCE=${SELF_URL}"
 TWILIO_ENV=""
-AGENT_SECRETS="DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,GOOGLE_OAUTH_CLIENT_ID=google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,BOT_GOOGLE_REFRESH_TOKEN=bot-google-refresh-token:latest"
+AGENT_SECRETS="DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,GOOGLE_OAUTH_CLIENT_ID=google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,BOT_GOOGLE_REFRESH_TOKEN=bot-google-refresh-token:latest,MCP_ENC_KEY=mcp-enc-key:latest"
 if [ -n "$TWILIO_ACCOUNT_SID" ] && [ -n "$TWILIO_AUTH_TOKEN" ]; then
   TWILIO_ENV="|TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}|TWILIO_FROM_NUMBER=${TWILIO_FROM_NUMBER}|OWNER_PHONE=${OWNER_PHONE}"
   AGENT_SECRETS="${AGENT_SECRETS},TWILIO_AUTH_TOKEN=twilio-auth-token:latest"
@@ -535,7 +543,7 @@ gcloud run deploy assistant-web \
   --region "$REGION" --allow-unauthenticated --service-account "$WEB_SA" \
   --memory 1Gi --cpu 1 --min-instances 0 --max-instances 2 --timeout 300 \
   --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|AUTH_TRUST_HOST=true|AUTH_DEV_BYPASS=false|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none" \
-  --set-secrets "DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,AUTH_SECRET=auth-secret:latest,AUTH_GOOGLE_ID=google-oauth-client-id:latest,AUTH_GOOGLE_SECRET=google-oauth-client-secret:latest,MOBILE_API_TOKEN=mobile-api-token:latest" \
+  --set-secrets "DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,AUTH_SECRET=auth-secret:latest,AUTH_GOOGLE_ID=google-oauth-client-id:latest,AUTH_GOOGLE_SECRET=google-oauth-client-secret:latest,MOBILE_API_TOKEN=mobile-api-token:latest,MCP_ENC_KEY=mcp-enc-key:latest" \
   --quiet
 
 WEB_URL="$(gcloud run services describe assistant-web --region "$REGION" --format='value(status.url)')"

@@ -28,6 +28,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var archivedActivity: ActivityList?
     @Published private(set) var archivedGoals: GoalsDashboard?
     @Published private(set) var workspace: WorkspaceResponse?
+    @Published private(set) var memoryReviewCount = 0
     @Published private(set) var mcpConnections: [McpConnection] = []
     @Published private(set) var activeConversation: ConversationView?
     @Published private(set) var personProfiles: [String: PersonProfileResponse] = [:]
@@ -126,7 +127,6 @@ final class AppModel: ObservableObject {
     var pendingApprovalCount: Int {
         overview?.approvals.pending.count ?? bootstrap?.shell.dashboard.pendingApprovals ?? 0
     }
-    var memoryReviewCount: Int { bootstrap?.shell.memoryHealth.awaitingReview ?? 0 }
     var needsAttentionCount: Int { bootstrap?.shell.dashboard.needsAttention ?? 0 }
     var conversationId: String? {
         activeConversation?.conversation.id ?? bootstrap?.conversation.conversation.id
@@ -506,8 +506,13 @@ final class AppModel: ObservableObject {
 
     func refreshWorkspace() async {
         guard let client else { return }
-        do { workspace = try await client.workspace() }
-        catch { errorMessage = error.localizedDescription }
+        do {
+            let loaded = try await client.workspace()
+            workspace = loaded
+            applyMemoryHealth(loaded.memory.health)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func uploadDocument(data: Data, name: String, title: String, mime: String) async -> Bool {
@@ -1059,6 +1064,7 @@ final class AppModel: ObservableObject {
 
     private func apply(_ response: BootstrapResponse, preservingLocalMessages: Bool = false) {
         bootstrap = response
+        applyMemoryHealth(response.shell.memoryHealth)
         if activeConversation == nil
             || activeConversation?.conversation.id == response.conversation.conversation.id {
             activeConversation = response.conversation
@@ -1072,6 +1078,14 @@ final class AppModel: ObservableObject {
         if !isSending, activityThought == nil || activityThought == .backgroundWork || activityThought == .needsYou {
             setActivityThought(baselineThought, proposedDetail: baselineDetail(for: baselineThought))
         }
+    }
+
+    /// The badge appears in the chat directory while review mutations refresh
+    /// the workspace projection. Keep it synchronized with whichever current
+    /// server projection arrived most recently instead of pinning it to the
+    /// cold-launch bootstrap response.
+    func applyMemoryHealth(_ health: MemoryHealth) {
+        memoryReviewCount = max(0, health.awaitingReview)
     }
 
     private func setActiveConversation(_ conversation: ConversationView) {

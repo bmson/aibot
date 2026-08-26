@@ -231,42 +231,55 @@ struct AssistantFlowLayout: Layout {
     var spacing: CGFloat = 8
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? .greatestFiniteMagnitude
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            let nextX = x == 0 ? size.width : x + spacing + size.width
-            if x > 0, nextX > width {
-                x = 0
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            x = x == 0 ? size.width : x + spacing + size.width
-            rowHeight = max(rowHeight, size.height)
-        }
-        return CGSize(width: proposal.width ?? x, height: y + rowHeight)
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let metrics = Self.metrics(
+            sizes: sizes,
+            availableWidth: proposal.width ?? .greatestFiniteMagnitude,
+            spacing: spacing
+        )
+        return CGSize(width: proposal.width ?? metrics.size.width, height: metrics.size.height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let metrics = Self.metrics(sizes: sizes, availableWidth: bounds.width, spacing: spacing)
+        for (index, subview) in subviews.enumerated() {
+            let origin = metrics.origins[index]
+            subview.place(
+                at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(sizes[index])
+            )
+        }
+    }
 
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            let usedWidth = x - bounds.minX
-            if x > bounds.minX, usedWidth + spacing + size.width > bounds.width {
-                x = bounds.minX
+    struct Metrics {
+        let size: CGSize
+        let origins: [CGPoint]
+    }
+
+    static func metrics(sizes: [CGSize], availableWidth: CGFloat, spacing: CGFloat) -> Metrics {
+        var origins: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var contentWidth: CGFloat = 0
+
+        for size in sizes {
+            let proposedX = x == 0 ? 0 : x + spacing
+            if x > 0, proposedX + size.width > availableWidth {
+                x = 0
                 y += rowHeight + spacing
                 rowHeight = 0
+            } else {
+                x = proposedX
             }
-            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
-            x += (x == bounds.minX ? 0 : spacing) + size.width
+            origins.append(CGPoint(x: x, y: y))
+            x += size.width
             rowHeight = max(rowHeight, size.height)
+            contentWidth = max(contentWidth, x)
         }
+        return Metrics(size: CGSize(width: contentWidth, height: y + rowHeight), origins: origins)
     }
 }
 
@@ -357,5 +370,78 @@ struct AssistantTactileButtonStyle: ButtonStyle {
                 reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.8),
                 value: configuration.isPressed
             )
+    }
+}
+
+enum AssistantActionButtonKind {
+    case primary
+    case secondary
+    case destructive
+}
+
+/// The action language for assistant submenu pages. These controls use the
+/// same recessed paper and rounded geometry as the cards they sit inside,
+/// while keeping every target at least 44 points tall.
+struct AssistantActionButtonStyle: ButtonStyle {
+    let kind: AssistantActionButtonKind
+    var compact = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .padding(.horizontal, compact ? 0 : 14)
+            .frame(minWidth: compact ? 44 : nil, minHeight: 44)
+            .foregroundStyle(foregroundColor)
+            .background(backgroundColor, in: shape)
+            .overlay {
+                shape.stroke(strokeColor, lineWidth: 1)
+            }
+            .contentShape(shape)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.975 : 1)
+            .brightness(configuration.isPressed ? -0.025 : 0)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.9 : 1) : 0.48)
+            .animation(
+                reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.82),
+                value: configuration.isPressed
+            )
+    }
+
+    private var foregroundColor: Color {
+        switch kind {
+        case .primary:
+            colorScheme == .dark ? AssistantTheme.stageDepth : .white
+        case .secondary:
+            AssistantTheme.accent(for: colorScheme)
+        case .destructive:
+            AssistantTheme.errorInk(for: colorScheme)
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch kind {
+        case .primary:
+            AssistantTheme.accent(for: colorScheme)
+        case .secondary:
+            AssistantTheme.sunken(for: colorScheme)
+        case .destructive:
+            AssistantTheme.errorSurface(for: colorScheme)
+        }
+    }
+
+    private var strokeColor: Color {
+        switch kind {
+        case .primary:
+            Color.primary.opacity(colorScheme == .dark ? 0.16 : 0.08)
+        case .secondary:
+            AssistantTheme.accent(for: colorScheme).opacity(0.22)
+        case .destructive:
+            AssistantTheme.errorInk(for: colorScheme).opacity(0.22)
+        }
     }
 }

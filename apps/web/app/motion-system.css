@@ -169,9 +169,11 @@ textarea {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* biome-ignore lint/style/noDescendingSpecificity: This accessibility override intentionally follows every animated component selector. */
   *,
   *::before,
   *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: User motion preferences must override component-level scroll behavior. */
     scroll-behavior: auto !important;
   }
 
@@ -183,10 +185,12 @@ textarea {
   [role="menu"][data-state="open"],
   [data-action-menu][data-state="open"],
   [popover]:popover-open {
+    /* biome-ignore lint/complexity/noImportantStyles: User motion preferences must override component-level animations. */
     animation: none !important;
   }
 
   [popover] {
+    /* biome-ignore lint/complexity/noImportantStyles: User motion preferences must override component-level transitions. */
     transition: none !important;
   }
 }

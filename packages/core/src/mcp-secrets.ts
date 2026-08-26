@@ -1,15 +1,23 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { loadConfig } from '@assistant/config';
 
-const VERSION = 'v1';
+const VERSION = 'v2';
+const LEGACY_VERSION = 'v1';
 const ALGORITHM = 'aes-256-gcm';
 
-function encryptionKey(): Buffer {
+function encryptionKey(version = VERSION): Buffer {
   const configured = loadConfig().MCP_ENC_KEY;
   if (!configured) {
     throw new Error('MCP_ENC_KEY is required to store or use bearer credentials.');
   }
-  return createHash('sha256').update(configured, 'utf8').digest();
+  // v1 derived a key from an arbitrary string. Keep that read path so credentials
+  // saved during the initial rollout remain usable while all new writes require
+  // an explicit, high-entropy 256-bit key.
+  if (version === LEGACY_VERSION) return createHash('sha256').update(configured, 'utf8').digest();
+  if (!/^[0-9a-f]{64}$/i.test(configured)) {
+    throw new Error('MCP_ENC_KEY must be 32 random bytes encoded as 64 hex characters.');
+  }
+  return Buffer.from(configured, 'hex');
 }
 
 /** Encrypt an MCP credential for database storage. The plaintext never leaves this module. */
@@ -29,10 +37,19 @@ export function encryptMcpBearerToken(token: string): string {
 /** Decrypt only at the network boundary immediately before an MCP request. */
 export function decryptMcpBearerToken(payload: string): string {
   const [version, ivValue, tagValue, ciphertextValue] = payload.split('.');
-  if (version !== VERSION || !ivValue || !tagValue || !ciphertextValue) {
+  if (
+    (version !== VERSION && version !== LEGACY_VERSION) ||
+    !ivValue ||
+    !tagValue ||
+    !ciphertextValue
+  ) {
     throw new Error('Stored MCP credential has an unsupported format.');
   }
-  const decipher = createDecipheriv(ALGORITHM, encryptionKey(), Buffer.from(ivValue, 'base64url'));
+  const decipher = createDecipheriv(
+    ALGORITHM,
+    encryptionKey(version),
+    Buffer.from(ivValue, 'base64url'),
+  );
   decipher.setAuthTag(Buffer.from(tagValue, 'base64url'));
   return Buffer.concat([
     decipher.update(Buffer.from(ciphertextValue, 'base64url')),

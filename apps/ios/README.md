@@ -69,9 +69,9 @@ service's existing secret binding.
 
 In **More → MCP connections**, add a public Streamable HTTP MCP endpoint and give it a name.
 Assistant discovers the server's tool list before enabling it. Tool descriptions and results are
-treated as untrusted, and every remote MCP call still stops at the normal approval screen. The
-connection screen deliberately does not accept or store bearer tokens; a server that requires
-OAuth remains visible as needing authorization rather than putting credentials in the database.
+treated as untrusted, and every remote MCP call still stops at the normal approval screen. An
+optional bearer token is encrypted on the server with `MCP_ENC_KEY`, decrypted only at the network
+boundary, and never returned to the phone or shown again. OAuth authorization is not yet available.
 
 ## Verify
 

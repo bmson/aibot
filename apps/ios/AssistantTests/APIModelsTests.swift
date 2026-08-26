@@ -2,6 +2,44 @@ import XCTest
 @testable import Assistant
 
 final class APIModelsTests: XCTestCase {
+    @MainActor
+    func testMemoryReviewBadgeFollowsLatestServerProjection() {
+        let model = AppModel()
+        let health = { (awaitingReview: Int) in
+            MemoryHealth(
+                totalUsable: 12,
+                notYetOrganized: 2,
+                awaitingReview: awaitingReview,
+                ownerConfirmed: 4,
+                lastOrganizedAt: nil
+            )
+        }
+
+        model.applyMemoryHealth(health(1))
+        XCTAssertEqual(model.memoryReviewCount, 1)
+
+        model.applyMemoryHealth(health(0))
+        XCTAssertEqual(model.memoryReviewCount, 0)
+    }
+
+    func testAssistantFlowLayoutUsesConsistentSpacingAndWrapping() {
+        let metrics = AssistantFlowLayout.metrics(
+            sizes: [
+                CGSize(width: 50, height: 20),
+                CGSize(width: 40, height: 30),
+                CGSize(width: 30, height: 10),
+            ],
+            availableWidth: 100,
+            spacing: 8
+        )
+
+        XCTAssertEqual(
+            metrics.origins,
+            [CGPoint(x: 0, y: 0), CGPoint(x: 58, y: 0), CGPoint(x: 0, y: 38)]
+        )
+        XCTAssertEqual(metrics.size, CGSize(width: 98, height: 48))
+    }
+
     func testDecodesCompanionCuesAndQuickReplies() throws {
         let data = #"{"id":"1","role":"assistant","parts":[{"type":"text","text":"Ready."},{"type":"data-face","data":{"state":"warm_smile"}},{"type":"data-theme","data":{"name":"cool_sky"}},{"type":"data-chips","data":{"labels":["Show me","Continue"]}}]}"#.data(using: .utf8)!
         let message = try JSONDecoder().decode(ChatMessage.self, from: data)

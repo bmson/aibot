@@ -272,7 +272,9 @@ export const commitments = pgTable(
       sql`${t.status} IN ('open','resolved','snoozed','dismissed','stale')`,
     ),
     check('commitments_confidence_check', sql`${t.confidence} >= 0 AND ${t.confidence} <= 1`),
-    uniqueIndex('commitments_agent_hash_idx').on(t.agentId, t.contentHash),
+    uniqueIndex('commitments_agent_hash_idx')
+      .on(t.agentId, t.contentHash)
+      .where(sql`${t.status} IN ('open','snoozed')`),
     index('commitments_agent_status_idx').on(t.agentId, t.status, t.updatedAt),
     index('commitments_conversation_idx').on(t.conversationId, t.status, t.createdAt),
   ],

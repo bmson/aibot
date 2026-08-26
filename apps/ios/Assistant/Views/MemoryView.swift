@@ -225,23 +225,23 @@ struct MemoryView: View {
             }
 
             if let people = memory.people {
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    sectionHeading("People", count: people.count)
-                    Spacer()
-                    Button("Add", systemImage: "person.badge.plus") {
-                        showingPersonCreator = true
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        sectionHeading("People", count: people.count)
+                        Spacer()
+                        Button("Add", systemImage: "person.badge.plus") {
+                            showingPersonCreator = true
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    sectionHeading("People", count: people.count)
-                    Button("Add", systemImage: "person.badge.plus") {
-                        showingPersonCreator = true
+                    VStack(alignment: .leading, spacing: 8) {
+                        sectionHeading("People", count: people.count)
+                        Button("Add", systemImage: "person.badge.plus") {
+                            showingPersonCreator = true
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
                 }
-            }
                 if people.isEmpty {
                     AssistantEmptyState("No people yet", systemImage: "person.2")
                 } else {

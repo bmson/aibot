@@ -140,7 +140,9 @@ function createApplication() {
     const discovery = await inspectMcpConnection(current.endpoint, {
       bearerTokenEncrypted: current.bearerTokenEncrypted,
     });
-    await saveMcpDiscovery(db, connectionId, discovery);
+    if (!(await saveMcpDiscovery(db, connectionId, discovery))) {
+      return { error: 'MCP connection not found.' };
+    }
     return { connectionId, ...discovery };
   };
   return {
@@ -163,8 +165,8 @@ function createApplication() {
     listMcpConnections: () => listMcpConnections(db),
     addMcpConnection: async (input: { name: string; endpoint: string; bearerToken?: string }) => {
       const created = await createMcpConnection(db, input);
-      if (!created.connection) return created;
-      return refreshMcpConnection(created.connection.id);
+      if (!created.connectionId) return created;
+      return refreshMcpConnection(created.connectionId);
     },
     refreshMcpConnection,
     setMcpConnectionEnabled: async (id: string, enabled: boolean) => {

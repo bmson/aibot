@@ -1,8 +1,23 @@
+import { createServer } from 'node:http';
+import { reloadConfig } from '@assistant/config';
 import { encryptMcpBearerToken } from '@assistant/core/mcp-secrets';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { checkedMcpEndpoint, inspectMcpConnection } from './mcp.js';
 
+const ORIGINAL_MCP_ENC_KEY = process.env.MCP_ENC_KEY;
+
 describe('MCP Streamable HTTP client', () => {
+  beforeEach(() => {
+    process.env.MCP_ENC_KEY = '11'.repeat(32);
+    reloadConfig();
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_MCP_ENC_KEY === undefined) delete process.env.MCP_ENC_KEY;
+    else process.env.MCP_ENC_KEY = ORIGINAL_MCP_ENC_KEY;
+    reloadConfig();
+  });
+
   it('discovers a bounded tool list after the initialize handshake', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
@@ -59,8 +74,30 @@ describe('MCP Streamable HTTP client', () => {
     });
   });
 
+  it('stops reading a chunked response after the byte limit', async () => {
+    const oversizedBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(200_000));
+        controller.enqueue(new Uint8Array(200_000));
+        controller.close();
+      },
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({ jsonrpc: '2.0', id: 1, result: { serverInfo: { name: 'Large MCP' } } }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 202 }))
+      .mockResolvedValueOnce(
+        new Response(oversizedBody, { headers: { 'content-type': 'application/json' } }),
+      );
+
+    await expect(
+      inspectMcpConnection('http://localhost:3010/mcp', { fetchImpl }),
+    ).resolves.toMatchObject({ status: 'error', error: 'MCP response is too large.' });
+  });
+
   it('sends an encrypted bearer credential on discovery requests without exposing it', async () => {
-    process.env.MCP_ENC_KEY = 'test-mcp-encryption-key';
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -86,5 +123,63 @@ describe('MCP Streamable HTTP client', () => {
 
   it('rejects non-local HTTP before it can become an outbound request', async () => {
     await expect(checkedMcpEndpoint('http://example.com/mcp')).rejects.toThrow(/public HTTPS/);
+  });
+
+  it.each([
+    'https://[::ffff:127.0.0.1]/mcp',
+    'https://[::ffff:169.254.169.254]/mcp',
+    'https://[::ffff:172.16.0.1]/mcp',
+    'https://[4000::1]/mcp',
+  ])('rejects private or non-public IPv6 endpoints: %s', async (endpoint) => {
+    await expect(checkedMcpEndpoint(endpoint)).rejects.toThrow(/private network/);
+  });
+
+  it('pins and reuses a validated loopback connection in local development', async () => {
+    let requests = 0;
+    const server = createServer((request, response) => {
+      requests += 1;
+      expect(request.headers.authorization).toBe('Bearer local-secret');
+      let body = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => {
+        body += chunk;
+      });
+      request.on('end', () => {
+        const method = (JSON.parse(body) as { method?: string }).method;
+        if (method === 'notifications/initialized') {
+          response.writeHead(202).end();
+          return;
+        }
+        const result =
+          method === 'initialize'
+            ? { serverInfo: { name: 'Pinned local MCP' } }
+            : { tools: [{ name: 'status.read', inputSchema: { type: 'object' } }] };
+        response
+          .writeHead(200, {
+            'content-type': 'application/json',
+            'mcp-session-id': 'local-session',
+          })
+          .end(JSON.stringify({ jsonrpc: '2.0', id: method === 'initialize' ? 1 : 2, result }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('test server has no TCP address');
+
+    try {
+      const discovery = await inspectMcpConnection(`http://127.0.0.1:${address.port}/mcp`, {
+        bearerTokenEncrypted: encryptMcpBearerToken('local-secret'),
+      });
+      expect(discovery).toMatchObject({
+        status: 'ready',
+        serverName: 'Pinned local MCP',
+        tools: [{ name: 'status.read' }],
+      });
+      expect(requests).toBe(3);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
   });
 });

@@ -435,6 +435,13 @@
       "when": 1787720000000,
       "tag": "0061_bearer_mcp_credentials",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1787727653346,
+      "tag": "0062_eager_katie_power",
+      "breakpoints": true
     }
   ]
 }

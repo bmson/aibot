@@ -1,0 +1,2 @@
+DROP INDEX "commitments_agent_hash_idx";--> statement-breakpoint
+CREATE UNIQUE INDEX "commitments_agent_hash_idx" ON "commitments" USING btree ("agent_id","content_hash") WHERE "commitments"."status" IN ('open','snoozed');

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { type CommitmentRow, commitments, conversations, type Db, messages } from '@assistant/db';
-import { and, desc, eq, gte, lt, or } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ModelRouter } from '../model-router/router.js';
 
@@ -43,6 +43,10 @@ function hashCommitment(kind: string, title: string, details: string): string {
   return createHash('sha256')
     .update(`${kind}\n${title.trim().toLowerCase()}\n${details.trim().toLowerCase()}`)
     .digest('hex');
+}
+
+function normalizedTitle(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 function parseDueAt(value: string): Date | null {
@@ -128,20 +132,32 @@ export async function extractCommitments(
       },
     );
     if (!outcome.ok) continue;
+    const activeRows = outcome.object.resolvedTitles.length
+      ? await deps.db
+          .select({ id: commitments.id, title: commitments.title })
+          .from(commitments)
+          .where(
+            and(
+              eq(commitments.agentId, opts.agentId),
+              inArray(commitments.status, ['open', 'snoozed']),
+            ),
+          )
+          .orderBy(desc(commitments.updatedAt))
+          .limit(60)
+      : [];
     for (const resolvedTitle of outcome.object.resolvedTitles) {
-      const needle = resolvedTitle.trim().toLowerCase();
+      const needle = normalizedTitle(resolvedTitle);
       if (needle.length < 3) continue;
-      const activeRows = await deps.db
-        .select({ id: commitments.id, title: commitments.title })
-        .from(commitments)
-        .where(and(eq(commitments.agentId, opts.agentId), eq(commitments.status, 'open')))
-        .limit(60);
-      const match = activeRows.find(
-        (row) =>
-          row.title.toLowerCase().includes(needle) || needle.includes(row.title.toLowerCase()),
-      );
-      if (match)
-        await resolveCommitment(deps.db, match.id, 'Owner confirmed this loop is resolved.');
+      const matches = activeRows.filter((row) => normalizedTitle(row.title) === needle);
+      const [match] = matches;
+      if (matches.length === 1 && match) {
+        await resolveCommitment(
+          deps.db,
+          opts.agentId,
+          match.id,
+          'Owner confirmed this loop is resolved.',
+        );
+      }
     }
     const sourceMessageId = ordered.at(-1)?.id;
     for (const item of outcome.object.commitments) {
@@ -155,6 +171,7 @@ export async function extractCommitments(
           agentId: opts.agentId,
           conversationId,
           sourceMessageId,
+          sourceTaskId: opts.taskId,
           kind: item.kind,
           title,
           details,
@@ -163,10 +180,33 @@ export async function extractCommitments(
           confidence: item.confidence.toFixed(2),
           contentHash: hash,
         })
-        .onConflictDoNothing({ target: [commitments.agentId, commitments.contentHash] })
+        .onConflictDoNothing({
+          target: [commitments.agentId, commitments.contentHash],
+          where: sql`${commitments.status} IN ('open','snoozed')`,
+        })
         .returning({ id: commitments.id });
       if (inserted.length) saved += 1;
-      else duplicates += 1;
+      else {
+        duplicates += 1;
+        await deps.db
+          .update(commitments)
+          .set({
+            conversationId,
+            sourceMessageId,
+            sourceTaskId: opts.taskId,
+            nextAction: item.nextAction.trim(),
+            dueAt: parseDueAt(item.dueAt),
+            confidence: item.confidence.toFixed(2),
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(commitments.agentId, opts.agentId),
+              eq(commitments.contentHash, hash),
+              inArray(commitments.status, ['open', 'snoozed']),
+            ),
+          );
+      }
     }
   }
   return { conversationsScanned, saved, duplicates };
@@ -222,55 +262,133 @@ export function renderOpenCommitments(rows: CommitmentRow[], maxChars = 1400): s
   );
 }
 
-export async function resolveCommitment(db: Db, id: string, resolution: string): Promise<void> {
-  await db
+export async function resolveCommitment(
+  db: Db,
+  agentId: string,
+  id: string,
+  resolution: string,
+): Promise<boolean> {
+  const rows = await db
     .update(commitments)
-    .set({ status: 'resolved', resolvedAt: new Date(), resolution })
-    .where(eq(commitments.id, id));
+    .set({
+      status: 'resolved',
+      resolvedAt: new Date(),
+      snoozedUntil: null,
+      resolution,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(commitments.id, id),
+        eq(commitments.agentId, agentId),
+        inArray(commitments.status, ['open', 'snoozed']),
+      ),
+    )
+    .returning({ id: commitments.id });
+  return rows.length === 1;
 }
 
-export async function snoozeCommitment(db: Db, id: string, until: Date): Promise<void> {
-  await db
+export async function snoozeCommitment(
+  db: Db,
+  agentId: string,
+  id: string,
+  until: Date,
+): Promise<boolean> {
+  if (!Number.isFinite(until.getTime()) || until <= new Date()) {
+    throw new Error('A commitment can only be snoozed until a valid future date.');
+  }
+  const rows = await db
     .update(commitments)
-    .set({ status: 'snoozed', snoozedUntil: until })
-    .where(eq(commitments.id, id));
+    .set({ status: 'snoozed', snoozedUntil: until, updatedAt: new Date() })
+    .where(
+      and(
+        eq(commitments.id, id),
+        eq(commitments.agentId, agentId),
+        inArray(commitments.status, ['open', 'snoozed']),
+      ),
+    )
+    .returning({ id: commitments.id });
+  return rows.length === 1;
 }
 
 export async function dismissCommitment(
   db: Db,
+  agentId: string,
   id: string,
   resolution = 'Dismissed by owner',
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const rows = await db
     .update(commitments)
-    .set({ status: 'dismissed', resolvedAt: new Date(), resolution })
-    .where(eq(commitments.id, id));
+    .set({
+      status: 'dismissed',
+      resolvedAt: new Date(),
+      snoozedUntil: null,
+      resolution,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(commitments.id, id),
+        eq(commitments.agentId, agentId),
+        inArray(commitments.status, ['open', 'snoozed']),
+      ),
+    )
+    .returning({ id: commitments.id });
+  return rows.length === 1;
 }
 
 export async function correctCommitment(
   db: Db,
+  agentId: string,
   id: string,
   patch: { title: string; details?: string; nextAction?: string },
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const [current] = await db
+    .select({ kind: commitments.kind, details: commitments.details })
+    .from(commitments)
+    .where(
+      and(
+        eq(commitments.id, id),
+        eq(commitments.agentId, agentId),
+        inArray(commitments.status, ['open', 'snoozed']),
+      ),
+    );
+  if (!current) return false;
+  const title = patch.title.trim().replace(/\s+/g, ' ').slice(0, 180);
+  if (!title) throw new Error('A commitment title is required.');
+  const details = patch.details?.trim().slice(0, 500) ?? current.details;
+  const rows = await db
     .update(commitments)
     .set({
-      title: patch.title.trim().slice(0, 180),
-      details: patch.details?.trim().slice(0, 500),
+      title,
+      details,
       nextAction: patch.nextAction?.trim().slice(0, 240),
       confidence: '1.00',
+      contentHash: hashCommitment(current.kind, title, details),
+      updatedAt: new Date(),
     })
-    .where(eq(commitments.id, id));
+    .where(
+      and(
+        eq(commitments.id, id),
+        eq(commitments.agentId, agentId),
+        inArray(commitments.status, ['open', 'snoozed']),
+      ),
+    )
+    .returning({ id: commitments.id });
+  return rows.length === 1;
 }
 
 export async function markStaleCommitments(db: Db, agentId: string, before: Date): Promise<number> {
   const rows = await db
     .update(commitments)
-    .set({ status: 'stale' })
+    .set({ status: 'stale', updatedAt: new Date() })
     .where(
       and(
         eq(commitments.agentId, agentId),
-        eq(commitments.status, 'open'),
+        or(
+          eq(commitments.status, 'open'),
+          and(eq(commitments.status, 'snoozed'), lt(commitments.snoozedUntil, sql`now()`)),
+        ),
         lt(commitments.updatedAt, before),
       ),
     )

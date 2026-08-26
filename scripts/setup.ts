@@ -53,6 +53,7 @@ for (const [name, value] of Object.entries({
   MOBILE_API_TOKEN: randomBytes(32).toString('hex'),
   INTERNAL_API_SECRET: randomBytes(32).toString('hex'),
   PROFILE_ENC_KEY: randomBytes(32).toString('hex'),
+  MCP_ENC_KEY: randomBytes(32).toString('hex'),
 })) {
   env = setValue(env, name, value);
 }
