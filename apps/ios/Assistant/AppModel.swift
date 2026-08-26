@@ -39,6 +39,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var activityThought: AssistantThought?
     @Published private(set) var activityDetail: String?
     @Published var errorMessage: String?
+    /// Text of a turn that failed to send, handed back to the composer so the
+    /// words are never lost to a network or server failure. ChatView consumes it.
+    @Published private(set) var restorableDraft: String?
     @Published var showingConnection = false
     /// One-shot intent shared by every user-facing way to send a message,
     /// including quick replies and document shortcuts.
@@ -902,7 +905,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func send(_ rawText: String, autonomous override: Bool? = nil) {
+    func send(_ rawText: String, autonomous override: Bool? = nil, force: Bool = false) {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending,
               let client,
@@ -936,6 +939,7 @@ final class AppModel: ObservableObject {
                     conversationId: conversationId,
                     text: text,
                     autonomous: autonomous,
+                    force: force,
                     onDelta: { [weak self] delta in
                         guard let self else { return }
                         await self.receive(delta: delta, streamID: streamID)
@@ -960,6 +964,9 @@ final class AppModel: ObservableObject {
                 // banner. cancelSend owns the UI state in that case.
                 guard !Task.isCancelled else { return }
                 self.messages.removeAll { $0.id == streamID && $0.text.isEmpty }
+                // The composer cleared the draft when it sent; a failed turn
+                // gives the words back rather than losing them to the failure.
+                self.restorableDraft = text
                 self.errorMessage = error.localizedDescription
                 self.isSending = false
                 self.setActivityThought(.stopped, proposedDetail: error.localizedDescription)
@@ -974,10 +981,16 @@ final class AppModel: ObservableObject {
     }
 
     func decide(_ item: PendingApproval, decision: String) async -> Bool {
+        await decideApproval(id: item.id, decision: decision)
+    }
+
+    /// Inline approve/decline from a chat decision card, keyed by the message
+    /// part's approvalId rather than a fetched PendingApproval row.
+    func decideApproval(id: String, decision: String) async -> Bool {
         guard let client else { return false }
         errorMessage = nil
         do {
-            _ = try await client.decideApproval(id: item.id, decision: decision)
+            _ = try await client.decideApproval(id: id, decision: decision)
             await refreshAll()
             return true
         } catch {
@@ -1033,6 +1046,13 @@ final class AppModel: ObservableObject {
     }
 
     func dismissError() { errorMessage = nil }
+
+    /// ChatView takes the failed turn's text back into its composer, once.
+    func restoreFailedDraft() -> String? {
+        let draft = restorableDraft
+        restorableDraft = nil
+        return draft
+    }
 
 #if DEBUG
     func previewActivitySequence() {
@@ -1143,6 +1163,7 @@ final class AppModel: ObservableObject {
                 let assistantBefore = messages.filter { !$0.id.hasPrefix("stream-") && $0.role == .assistant }.count
                 merge(updates.messages)
                 merge(updates.refreshed)
+                removeSuperseded(updates.superseded)
                 toolActivity = updates.activity
                 if let latestTool = updates.activity.last {
                     await publishThought(
@@ -1215,6 +1236,17 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The merge above can only add or replace by id. A state row delivered by
+    /// an earlier poll and later replaced by a newer twin (a crash-retry
+    /// re-emitting a task's stop notice) sits behind the cursor forever, so
+    /// the server names it for removal — applied after every merge, since a
+    /// refreshed card can itself be the row being replaced.
+    private func removeSuperseded(_ ids: [String]?) {
+        guard let ids, !ids.isEmpty else { return }
+        let retracted = Set(ids)
+        messages.removeAll { retracted.contains($0.id) }
+    }
+
     private func merge(_ incoming: [ChatMessage]) {
         for message in incoming {
             if let index = messages.firstIndex(where: { $0.id == message.id }) {
@@ -1252,6 +1284,7 @@ final class AppModel: ObservableObject {
                     let assistantBefore = self.messages.filter { $0.role == .assistant }.count
                     self.merge(updates.messages)
                     self.merge(updates.refreshed)
+                    self.removeSuperseded(updates.superseded)
                     if let cursor = updates.nextCursor { self.cursor = cursor }
                     let assistantAfter = self.messages.filter { $0.role == .assistant }.count
                     if assistantAfter > assistantBefore,

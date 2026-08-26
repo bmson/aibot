@@ -1,5 +1,5 @@
 import { encodeMessageCursor, getAgent } from '@assistant/core/chat';
-import { conversations, createDb, type Db, messages } from '@assistant/db';
+import { conversations, createDb, type Db, messages, tasks } from '@assistant/db';
 import { getTableColumns, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getChatUpdates } from './chat.js';
@@ -11,6 +11,7 @@ let db: Db;
 let dbUp = false;
 let agentId = '';
 const createdChatIds: string[] = [];
+const createdTaskIds: string[] = [];
 /** A well-formed id that matches no row — hydration must call it 'missing'. */
 const MISSING_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -24,11 +25,21 @@ async function newChat(channel: 'chat' | 'sms' = 'chat'): Promise<string> {
   return id;
 }
 
+async function newTask(conversationId: string): Promise<string> {
+  const [task] = await db
+    .insert(tasks)
+    .values({ agentId, type: 'adhoc', trust: 'owner', conversationId })
+    .returning();
+  const id = (task as NonNullable<typeof task>).id;
+  createdTaskIds.push(id);
+  return id;
+}
+
 async function post(
   conversationId: string,
   role: 'user' | 'assistant',
   text: string,
-  options: { createdAt?: Date; parts?: unknown[] } = {},
+  options: { createdAt?: Date; parts?: unknown[]; taskId?: string } = {},
 ) {
   // Project created_at at full timestamptz precision like listMessages does:
   // cursor assertions compare against cursors advanced over stored rows, which
@@ -42,6 +53,7 @@ async function post(
       parts: options.parts ?? [{ type: 'text', text }],
       text,
       ...(options.createdAt ? { createdAt: options.createdAt } : {}),
+      ...(options.taskId ? { taskId: options.taskId } : {}),
     })
     .returning({
       ...getTableColumns(messages),
@@ -68,6 +80,11 @@ beforeAll(async () => {
 afterAll(async () => {
   if (dbUp && createdChatIds.length) {
     await db.delete(messages).where(inArray(messages.conversationId, createdChatIds));
+  }
+  if (dbUp && createdTaskIds.length) {
+    await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
+  }
+  if (dbUp && createdChatIds.length) {
     await db.delete(conversations).where(inArray(conversations.id, createdChatIds));
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
@@ -284,5 +301,93 @@ describe('refreshing decision cards already on screen', () => {
     const elsewhere = await post(await newChat(), 'assistant', 'not yours');
     const updates = await getChatUpdates(db, { conversationId, refreshIds: [elsewhere.id] });
     expect(updates?.refreshed).toEqual([]);
+  });
+});
+
+describe('superseding runtime rows an open client is already showing', () => {
+  // Read-time collapse only sees the rows in one fetch. When the older twin of
+  // a state row was delivered by an earlier tick it sits behind the cursor, so
+  // the page never contains it and a merge-by-id client would show both until
+  // the next full load. The poll therefore names those losers in `superseded`.
+  const T0 = new Date('2026-08-26T08:00:00.000Z');
+  const at = (seconds: number) => new Date(T0.getTime() + seconds * 1000);
+
+  it('retracts the earlier state row when a retry re-emits it newer', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const conversationId = await newChat();
+    const taskId = await newTask(conversationId);
+    const stale = await post(
+      conversationId,
+      'assistant',
+      "I couldn't complete this after repeated attempts and stopped. Last error: 2302 tokens",
+      { taskId, createdAt: at(0) },
+    );
+    // The open client has this row; its cursor has moved past it.
+    const cursor = encodeMessageCursor(stale);
+    const retried = await post(
+      conversationId,
+      'assistant',
+      "I couldn't complete this after repeated attempts and stopped. Last error: 2277 tokens",
+      {
+        taskId,
+        createdAt: at(60),
+        parts: [
+          {
+            type: 'text',
+            text: "I couldn't complete this after repeated attempts and stopped. Last error: 2277 tokens",
+          },
+          { type: 'notice', notice: 'needs-attention' },
+        ],
+      },
+    );
+
+    const updates = await getChatUpdates(db, { conversationId, cursor });
+    expect(updates?.messages.map((message) => message.id)).toEqual([retried.id]);
+    expect(updates?.superseded).toEqual([stale.id]);
+  });
+
+  it('never delivers an approval nudge whose card the client already has', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const conversationId = await newChat();
+    const taskId = await newTask(conversationId);
+    const card = await post(conversationId, 'assistant', 'This needs your approval before I act:', {
+      taskId,
+      createdAt: at(0),
+      parts: [
+        { type: 'text', text: 'This needs your approval before I act:' },
+        { type: 'approval', approvalId: MISSING_ID, shortCode: 'A7', summary: 'Search the web' },
+      ],
+    });
+    // The card went out on an earlier tick; only the nudge lands in this one.
+    // Collapsing the page alone cannot see the card behind the cursor.
+    const nudge = await post(
+      conversationId,
+      'assistant',
+      'Something needs your approval:\nA7: Search the web',
+      { taskId, createdAt: at(30) },
+    );
+
+    const updates = await getChatUpdates(db, {
+      conversationId,
+      cursor: encodeMessageCursor(card),
+    });
+    expect(updates?.messages).toEqual([]);
+    // The card is the family winner — it stays up; nothing names it for removal.
+    expect(updates?.superseded).toEqual([]);
+    expect(nudge).toBeDefined();
+  });
+
+  it('leaves ordinary conversation untouched and empty-handed', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const conversationId = await newChat();
+    const seen = await post(conversationId, 'user', 'hello', { createdAt: at(0) });
+    const reply = await post(conversationId, 'assistant', 'hi there', { createdAt: at(1) });
+
+    const updates = await getChatUpdates(db, {
+      conversationId,
+      cursor: encodeMessageCursor(seen),
+    });
+    expect(updates?.messages.map((message) => message.id)).toEqual([reply.id]);
+    expect(updates?.superseded).toEqual([]);
   });
 });

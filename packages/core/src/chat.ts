@@ -35,10 +35,19 @@ import type { ActionEvidence } from './workflow/response-contract.js';
  * chat UI can show a "recalled from earlier" affordance (Phase 4). The recall
  * part is UI-only: model history is rebuilt from `messages.text`, never parts.
  */
+/** Why a chat turn died before its reply — carried on the `turn-failed` notice part. */
+export type TurnFailureReason = 'model' | 'budget' | 'empty';
+
 export function assistantMessageParts(
   text: string,
   recall?: RecallSource[],
-  opts?: { contractNotice?: boolean; cues?: Cue[]; responseCards?: Record<string, unknown>[] },
+  opts?: {
+    contractNotice?: boolean;
+    offCourse?: boolean;
+    turnFailed?: TurnFailureReason;
+    cues?: Cue[];
+    responseCards?: Record<string, unknown>[];
+  },
 ): unknown[] {
   // A reply carrying [break] cues persists as one TEXT part per bubble, split
   // at the scanner-recorded offsets — verbatim slices, so the concatenation
@@ -53,6 +62,15 @@ export function assistantMessageParts(
   // Structured marker (parts are jsonb — no migration): the chat UI styles the
   // message as an honesty-check system notice instead of assistant prose.
   if (opts?.contractNotice) parts.push({ type: 'notice', notice: 'response-contract' });
+  // The tool-less path's honesty guard flagged this reply for claiming work it
+  // could not have run. The text stays as drafted; the marker lets the chat
+  // attach the "answered without checking" card with its rerun action.
+  if (opts?.offCourse) parts.push({ type: 'notice', notice: 'off-course' });
+  // A turn that failed before its reply still leaves a durable record — the
+  // chat renders it as a failure card (with retry), never as assistant prose.
+  if (opts?.turnFailed) {
+    parts.push({ type: 'notice', notice: 'turn-failed', reason: opts.turnFailed });
+  }
   // Companion cues stripped from the reply text; the dashboard reads them to
   // animate its face and offer quick-reply chips.
   if (opts?.cues && opts.cues.length > 0) parts.push(...cueMessageParts(opts.cues));
@@ -394,13 +412,14 @@ export async function getOrCreateNotificationsConversation(
 }
 
 /**
- * Mirror an opted-in goal's mission update into the owner's primary chat thread
- * (long-running-chat design, option B), so background work shows up in the one
- * discussion. No-op unless the goal has `mirrorToPrimary` set and a primary
- * thread already exists. The work chat remains the full record; this posts a
+ * Mirror an opted-in goal's mission update into the owner's Notifications
+ * thread, so background work is visible without breaking the conversational
+ * flow of the primary chat. No-op unless the goal has `mirrorToPrimary` set
+ * (the flag predates the Notifications destination — it now means "mirror to
+ * my activity stream"). The work chat remains the full record; this posts a
  * short labeled copy. Best-effort — callers swallow errors.
  */
-export async function mirrorGoalUpdateToPrimary(
+export async function mirrorGoalUpdateToNotifications(
   db: Db,
   mission: {
     id: string;
@@ -417,12 +436,12 @@ export async function mirrorGoalUpdateToPrimary(
     .where(eq(goals.id, mission.goalId))
     .limit(1);
   if (!goal?.mirror) return;
-  const primary = await findPrimaryConversation(db, mission.agentId);
-  // Skip when there's no primary yet, or the mission already reports into it.
-  if (!primary || primary.id === mission.conversationId) return;
+  const conversationId = await getOrCreateNotificationsConversation(db, mission.agentId);
+  // Skip when the mission already reports into the Notifications thread.
+  if (conversationId === mission.conversationId) return;
   const labeled = `Quick update on your “${goal.title}” goal: ${text}`;
   await persistMessage(db, {
-    conversationId: primary.id,
+    conversationId,
     taskId: mission.id,
     role: 'assistant',
     origin: 'assistant',
@@ -444,15 +463,25 @@ export async function mirrorGoalUpdateToPrimary(
  * falling back to the assistant-owned Notifications thread before a primary
  * exists, which is the same fallback `owner.notify` already uses. Never creates
  * a primary thread: a background writer must not decide which conversation
- * becomes the owner's main one.
+ * becomes the owner's main one. Writers whose update is not a conversation
+ * starter pass `destination: 'notifications'` to keep the primary thread
+ * conversational.
  */
 export async function postOwnerNotice(
   db: Db,
-  input: { agentId: string; text: string; taskId?: string; extraParts?: readonly unknown[] },
+  input: {
+    agentId: string;
+    text: string;
+    taskId?: string;
+    extraParts?: readonly unknown[];
+    destination?: 'primary' | 'notifications';
+  },
 ): Promise<{ conversationId: string }> {
-  const primary = await findPrimaryConversation(db, input.agentId);
   const conversationId =
-    primary?.id ?? (await getOrCreateNotificationsConversation(db, input.agentId));
+    input.destination === 'notifications'
+      ? await getOrCreateNotificationsConversation(db, input.agentId)
+      : ((await findPrimaryConversation(db, input.agentId))?.id ??
+        (await getOrCreateNotificationsConversation(db, input.agentId)));
   await persistMessage(db, {
     conversationId,
     ...(input.taskId ? { taskId: input.taskId } : {}),
@@ -649,6 +678,13 @@ export async function finishTask(
     responseText?: string;
     recall?: RecallSource[];
     cues?: Cue[];
+    offCourse?: boolean;
+    /**
+     * A failed turn's durable record in the thread: the owner-facing one-liner
+     * plus its reason, persisted as a `turn-failed` notice. Without it a dead
+     * turn vanishes on reload and the owner's message sits forever unanswered.
+     */
+    failureNotice?: { text: string; reason: TurnFailureReason };
   },
 ): Promise<boolean> {
   return db.transaction(async (tx) => {
@@ -669,8 +705,21 @@ export async function finishTask(
         origin: 'assistant',
         parts: assistantMessageParts(outcome.responseText, outcome.recall, {
           cues: outcome.cues,
+          offCourse: outcome.offCourse,
         }),
         text: outcome.responseText,
+      });
+    }
+    if (outcome.status === 'failed' && outcome.failureNotice && task.conversationId) {
+      await persistMessage(tx as unknown as Db, {
+        conversationId: task.conversationId,
+        taskId: task.id,
+        role: 'assistant',
+        origin: 'assistant',
+        parts: assistantMessageParts(outcome.failureNotice.text, undefined, {
+          turnFailed: outcome.failureNotice.reason,
+        }),
+        text: outcome.failureNotice.text,
       });
     }
     return true;

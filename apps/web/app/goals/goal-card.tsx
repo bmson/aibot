@@ -241,9 +241,9 @@ export function GoalCard({ goal }: { goal: GoalView }) {
               <Badge
                 tone="neutral"
                 size="xs"
-                title="Background updates from this goal also appear in your main chat."
+                title="Background updates from this goal also appear in your Notifications thread."
               >
-                In main chat
+                In Notifications
               </Badge>
             ) : null}
           </div>
@@ -450,7 +450,7 @@ export function GoalCard({ goal }: { goal: GoalView }) {
               defaultChecked={goal.mirrorToPrimary}
               className="mt-0.5 size-4"
             />
-            <span>Show this goal’s background updates in my main chat thread</span>
+            <span>Show this goal’s background updates in my Notifications thread</span>
           </label>
           {editState.error ? (
             <p className="text-xs text-red-600 dark:text-red-400">{editState.error}</p>

@@ -78,9 +78,14 @@ export function isContractNotice(text: string): boolean {
  * Messages written before a marker existed carry none and keep rendering as
  * prose — nothing rewrites the past.
  */
-export type NoticeKind = 'response-contract' | 'parked' | 'needs-attention';
+export type NoticeKind = 'response-contract' | 'parked' | 'needs-attention' | 'turn-failed';
 
-const NOTICE_KINDS = new Set<string>(['response-contract', 'parked', 'needs-attention']);
+const NOTICE_KINDS = new Set<string>([
+  'response-contract',
+  'parked',
+  'needs-attention',
+  'turn-failed',
+]);
 
 export function noticeKindOf(parts: unknown[]): NoticeKind | null {
   for (const part of parts) {
@@ -90,18 +95,6 @@ export function noticeKindOf(parts: unknown[]): NoticeKind | null {
     if (typeof notice === 'string' && NOTICE_KINDS.has(notice)) return notice as NoticeKind;
   }
   return null;
-}
-
-/**
- * The placeholder the chat route streams back when a turn was handed to the
- * executor (acceptedStreamResponse in packages/application/src/chat-turn.ts —
- * keep the two in step). It exists only to give the AI SDK a valid completed
- * message and is never persisted, so it can never meet a durable twin: left in
- * the log it would sit below every message that lands after it. The presence
- * row says the same thing, better, so the log drops it.
- */
-export function isAsyncAcknowledgement(text: string): boolean {
-  return text.trim().startsWith('Got it — I’m working on this now.');
 }
 
 /**
@@ -122,4 +115,41 @@ export function isDecisionProseNotice(text: string): boolean {
     trimmed.startsWith('This needs your approval before I act:') ||
     trimmed.startsWith('I need your permission to raise this task’s spending limit')
   );
+}
+
+/**
+ * The tool-less streaming path's honesty guard marks a reply that claimed work
+ * it could not have run (guardDraft in packages/application/src/chat-guard.ts).
+ * The marker arrives live as a `data-off-course` stream part and persists as a
+ * `notice` part on the message (assistantMessageParts in core) — the text is
+ * left as drafted either way, so the chat renders the reply with the
+ * "answered without checking" card under it rather than a baked-in confession.
+ */
+export function isOffCourse(parts: unknown[]): boolean {
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    const candidate = part as { type?: unknown; notice?: unknown };
+    if (candidate.type === 'data-off-course') return true;
+    if (candidate.type === 'notice' && candidate.notice === 'off-course') return true;
+  }
+  return false;
+}
+
+export type TurnFailureReason = 'model' | 'budget' | 'empty';
+
+/**
+ * Why a `turn-failed` notice happened, carried on the part itself
+ * (finishTask in core). Drives the card's action: a budget stop links to the
+ * Costs page, the rest offer a retry.
+ */
+export function turnFailedReason(parts: unknown[]): TurnFailureReason | null {
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    const candidate = part as { type?: unknown; notice?: unknown; reason?: unknown };
+    if (candidate.type !== 'notice' || candidate.notice !== 'turn-failed') continue;
+    return candidate.reason === 'budget' || candidate.reason === 'empty'
+      ? candidate.reason
+      : 'model';
+  }
+  return null;
 }

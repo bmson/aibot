@@ -535,6 +535,7 @@ struct APIClient: Sendable {
         conversationId: String,
         text: String,
         autonomous: Bool,
+        force: Bool = false,
         onDelta: @escaping @Sendable (String) async -> Void,
         onCue: @escaping @Sendable (MessagePart) async -> Void
     ) async throws -> SendReceipt {
@@ -545,6 +546,7 @@ struct APIClient: Sendable {
         let body = ChatRequest(
             conversationId: conversationId,
             autonomous: autonomous,
+            force: force,
             messages: [.init(
                 id: UUID().uuidString,
                 role: "user",
@@ -555,6 +557,13 @@ struct APIClient: Sendable {
 
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        // Error bodies are small JSON with owner-facing copy; drain them so the
+        // banner shows the server's own words rather than a stock status string.
+        if !(200..<300).contains(http.statusCode) {
+            var errorData = Data()
+            for try await byte in bytes { errorData.append(byte) }
+            try await validate(http, data: errorData)
+        }
         try await validate(http, data: nil)
         let taskId = http.value(forHTTPHeaderField: "x-async-task")
         let cursor = http.value(forHTTPHeaderField: "x-message-cursor")
@@ -784,6 +793,9 @@ struct ChatCreateReceipt: Decodable, Sendable {
 private struct ChatRequest: Encodable {
     let conversationId: String
     let autonomous: Bool
+    /// "Run it for real" on an off-course reply: route straight to the
+    /// executor without arming the autonomy grant.
+    let force: Bool
     let messages: [RequestMessage]
 }
 

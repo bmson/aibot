@@ -242,11 +242,12 @@ not the primary chat. Two ways to reconcile with "one discussion":
   all threads (embeddings are channel/thread-agnostic), so asking about a goal in the primary thread
   surfaces the mission's latest update — without a chatty mission flooding the main feed.
 - **B (implemented, per-goal opt-in).** A goal with `goals.mirror_to_primary` set also has its
-  mission `report()` updates mirrored — as a short labeled copy — into the primary thread, so
-  background progress appears inline. `mirrorGoalUpdateToPrimary` (`chat.ts`) is called from mission
-  `report()` (`missions.ts`); it no-ops unless the goal opted in and a primary thread already exists,
-  and the work chat still keeps the full record. Toggled from the goal create/edit forms. Off by
-  default so a noisy mission never spams the main conversation uninvited.
+  mission `report()` updates mirrored — as a short labeled copy — into the Notifications thread, so
+  background progress is discoverable without interrupting the primary conversation's flow (the
+  column predates that destination; it now means "mirror to my activity stream").
+  `mirrorGoalUpdateToNotifications` (`chat.ts`) is called from mission `report()` (`missions.ts`);
+  it no-ops unless the goal opted in, and the work chat still keeps the full record. Toggled from
+  the goal create/edit forms. Off by default so a noisy mission never spams uninvited.
 
 Identity is already unified independent of this — one agent, one owner card (`chat.ts:73-79`), one
 voice profile — so it already *talks* like one person. Single-thread + recall adds the continuous
@@ -319,4 +320,4 @@ grow-the-prompt approach.
 3. τ and K defaults — still guessed (τ = 0.75, K = 4). Tune from a measurement pass with the flag on.
 4. ~~Autonomous-work threads — recall-only vs route-into-primary.~~ **Resolved:** option A is the
    default (recall spans all owner threads); option B ships as a per-goal `mirror_to_primary` opt-in
-   that mirrors mission updates into the primary thread. Off by default.
+   that mirrors mission updates into the Notifications thread. Off by default.

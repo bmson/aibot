@@ -318,6 +318,12 @@ struct ChatView: View {
             guard phase != .active else { return }
             settleInterruptedMenuGesture()
         }
+        .onChange(of: model.restorableDraft) { _, restorable in
+            // A failed send hands its text back — the composer shows the words
+            // again instead of the owner retyping them.
+            guard restorable != nil, let failed = model.restoreFailedDraft() else { return }
+            draft = failed
+        }
     }
 
     private var crownContentClearanceHeight: CGFloat {
@@ -598,7 +604,10 @@ struct ChatView: View {
             message: message,
             userPrompt: model.messages[..<index].reversed().first(where: { $0.role == .user })?.text,
             isStreaming: message.id.hasPrefix("stream-") && model.isSending,
-            openApprovals: { model.present(.approvals) }
+            openApprovals: { model.present(.approvals) },
+            runForReal: model.isSending ? nil : { text in model.send(text, force: true) },
+            retry: model.isSending ? nil : { text in model.send(text) },
+            decideApproval: { id, decision in await model.decideApproval(id: id, decision: decision) }
         )
         .padding(.top, startsRun(at: index) ? 22 : 7)
         .transition(
