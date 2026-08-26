@@ -151,6 +151,18 @@ enum PullMenuMotion {
     }
 }
 
+/// The transcript's live scroll offset, deliberately held in a reference type
+/// rather than in `@State`. Jump to latest needs the offset the instant it is
+/// pressed, but storing a value that changes on every scrolled frame in view
+/// state would re-evaluate the whole conversation at display rate.
+///
+/// The value is kept in content space — distance from the top of the content,
+/// zero at rest against the crown clearance — because `ScrollPosition` offsets
+/// the content insets itself, while `ScrollGeometry.contentOffset` does not.
+private final class TranscriptScrollTracker {
+    var contentPosition: CGFloat = 0
+}
+
 struct ChatView: View {
     let safeAreaTopInset: CGFloat
 
@@ -182,6 +194,7 @@ struct ChatView: View {
     // Unpositioned by default so normal finger scrolling remains authoritative.
     // Jump to latest writes an explicit edge only for that owner action.
     @State private var transcriptScrollPosition = ScrollPosition()
+    @State private var transcriptScroll = TranscriptScrollTracker()
     @State private var hasPositionedInitialConversation = false
     @State private var menuPullDistance: CGFloat = 0
     @State private var menuCloseDragDistance: CGFloat = 0
@@ -430,6 +443,14 @@ struct ChatView: View {
                     menuPullTranscriptCompensation = displacement
                 }
             }
+            // Recorded outside view state on purpose — see
+            // `TranscriptScrollTracker`. Jump to latest reads it to stop an
+            // in-flight scroll exactly where the transcript currently sits.
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.y + geometry.contentInsets.top
+            } action: { _, position in
+                transcriptScroll.contentPosition = position
+            }
             .onScrollPhaseChange { _, newPhase, _ in
                 transcriptScrollPhase = newPhase
             }
@@ -519,7 +540,7 @@ struct ChatView: View {
                 if showsJumpToLatest {
                     jumpToLatestButton {
                         jumpFeedback += 1
-                        jumpToLatestImmediately(using: proxy)
+                        jumpToLatest(using: proxy)
                     }
                     .padding(.bottom, composerHeight + 20)
                     .transition(.opacity)
@@ -1831,9 +1852,11 @@ struct ChatView: View {
             }
         } else {
             // An animated scrollTo issued while the transcript still has
-            // momentum is deferred until the movement settles, so the button
-            // felt unresponsive mid-fling. Snap immediately instead — that
-            // interrupts the momentum and lands on the latest message.
+            // momentum is deferred until the movement settles, which reads as
+            // a stalled transcript. Snap immediately instead — that interrupts
+            // the momentum and lands on the latest message. A pressed Jump to
+            // latest wants the same takeover with its motion kept, so it goes
+            // through `jumpToLatest(using:)` rather than this automatic path.
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
@@ -1842,36 +1865,57 @@ struct ChatView: View {
         }
     }
 
-    /// A direct owner action is stronger than automatic transcript motion.
-    /// Assigning an explicit position cancels any active scroll animation;
-    /// reissuing it on the next run loop ensures it wins if the older command
-    /// had already been scheduled by SwiftUI.
-    private func jumpToLatestImmediately(using proxy: ScrollViewProxy) {
+    /// A direct owner action outranks any transcript motion already under way.
+    /// A momentum fling, a reveal animation for a newly arrived message, an
+    /// earlier jump still playing out — the press takes all of them over rather
+    /// than queueing behind them, then animates down to the newest message.
+    ///
+    /// The takeover is two commands in two run loops on purpose. Landing on the
+    /// offset the transcript currently occupies, with animations off, resolves
+    /// whatever scroll is in flight on the spot; the animated command that
+    /// follows then starts from rest and owns the trip to the bottom. Issued in
+    /// one pass, SwiftUI would coalesce them and the older motion would keep
+    /// running — which is exactly what made the button feel dead mid-scroll.
+    private func jumpToLatest(using proxy: ScrollViewProxy) {
         latestJumpRequest &+= 1
         let request = latestJumpRequest
-        forceLatestScroll(using: proxy)
+        hasUnseenMessages = false
+        stopTranscriptScroll()
 
         DispatchQueue.main.async {
             // A subsequent press owns the destination, never a stale tap.
             guard request == latestJumpRequest else { return }
-            forceLatestScroll(using: proxy)
-
-            // Edge positions stay active as content changes. Release the
-            // override only after both immediate commands have been applied,
-            // so later streaming text does not permanently pin the reader.
-            DispatchQueue.main.async {
+            animateTranscriptToLatest(using: proxy) {
+                // Edge positions stay active as content changes. Release the
+                // override once the reader has landed, so later streaming text
+                // does not permanently pin the transcript to its bottom.
                 guard request == latestJumpRequest else { return }
                 transcriptScrollPosition = ScrollPosition()
             }
         }
     }
 
-    private func forceLatestScroll(using proxy: ScrollViewProxy) {
+    /// Ends an in-flight scroll by committing the transcript to where it
+    /// already is. An unanimated point assignment cancels both a SwiftUI scroll
+    /// animation and any UIScrollView deceleration underneath it.
+    private func stopTranscriptScroll() {
+        guard transcriptScrollPhase != .idle else { return }
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            transcriptScrollPosition = ScrollPosition(id: "bottom", anchor: .bottom)
+            transcriptScrollPosition.scrollTo(y: transcriptScroll.contentPosition)
+        }
+    }
+
+    private func animateTranscriptToLatest(
+        using proxy: ScrollViewProxy,
+        completion: @escaping () -> Void
+    ) {
+        withAnimation(reduceMotion ? nil : .snappy(duration: 0.3, extraBounce: 0)) {
+            transcriptScrollPosition.scrollTo(edge: .bottom)
             proxy.scrollTo("bottom", anchor: .bottom)
+        } completion: {
+            completion()
         }
     }
 

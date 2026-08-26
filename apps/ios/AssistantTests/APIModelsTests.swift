@@ -444,7 +444,8 @@ final class APIModelsTests: XCTestCase {
               case let .weather(_, sunTemperature, sunCondition, sunDetails) = cards[1] else {
             return XCTFail("Expected one weather card per forecast day")
         }
-        XCTAssertEqual(location, "Palo Alto this weekend")
+        // Each card stamps its own day, so the headline keeps the place alone.
+        XCTAssertEqual(location, "Palo Alto")
         XCTAssertEqual(satTemperature, "16–23°C")
         XCTAssertEqual(satCondition, "Sunny")
         XCTAssertEqual(satDetails.first?.label, "Day")
@@ -453,6 +454,84 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(sunCondition, "Partly Cloudy")
         XCTAssertEqual(sunDetails.first?.value, "Sunday")
         XCTAssertNotEqual(cards[0].id, cards[1].id)
+    }
+
+    func testWeatherInferenceSplitsDayHeadingsIntoOneCardPerDay() {
+        let cards = MessageResponseCard.inferred(
+            from: """
+            Here's the **weekend weather forecast for Palo Alto** (where your Saturday match is scheduled):
+
+            **Saturday (August 29)**
+            - 🌤 **12:00 PM (match time):**
+              - **22°C (72°F)**, partly cloudy
+              - **Wind:** 10 km/h (6 mph) — gentle breeze
+              - **Rain chance: 0%**
+
+            **Sunday (August 30)**
+            - ☀️ **11:50 AM (match time):**
+              - **23°C (73°F)**, sunny
+              - **Wind:** 12 km/h (7 mph)
+              - **Rain chance: 0%**
+
+            **Perfect soccer conditions!** No rain, mild temps, and light wind.
+
+            *(Source: OpenWeatherMap, Palo Alto microclimate, refreshed at 5:47 PM PDT.)*
+            """
+        )
+        XCTAssertEqual(cards.count, 2)
+        guard case let .weather(location, satTemperature, satCondition, satDetails) = cards[0],
+              case let .weather(_, sunTemperature, sunCondition, sunDetails) = cards[1] else {
+            return XCTFail("Expected one weather card per forecast day")
+        }
+        // The place, not "Right now": the answer is about somewhere else.
+        XCTAssertEqual(location, "Palo Alto")
+        XCTAssertEqual(satDetails.first?.value, "Saturday")
+        XCTAssertEqual(sunDetails.first?.value, "Sunday")
+        XCTAssertEqual(satTemperature, "22°C (72°F)")
+        XCTAssertEqual(sunTemperature, "23°C (73°F)")
+        // A dry weekend reads its sky from the forecast, never from the label
+        // of the "Rain chance: 0%" metric sitting underneath it.
+        XCTAssertEqual(satCondition, "Partly Cloudy")
+        XCTAssertEqual(sunCondition, "Sunny")
+        XCTAssertEqual(satDetails.map(\.label), ["Day", "Wind", "Rain chance"])
+        XCTAssertEqual(satDetails[1].value, "10 km/h (6 mph) — gentle breeze")
+        XCTAssertEqual(sunDetails[1].value, "12 km/h (7 mph)")
+        XCTAssertNotEqual(cards[0].id, cards[1].id)
+        XCTAssertEqual(WeatherPresentation.caption(details: satDetails, hasForecast: false), "Saturday")
+    }
+
+    func testWeatherInferenceIgnoresDayMentionsThatCarryNoReading() {
+        let cards = MessageResponseCard.inferred(
+            from: """
+            It is 18°C and sunny right now.
+
+            **Monday**
+            Nothing booked yet.
+            """
+        )
+        XCTAssertEqual(cards.count, 1)
+        guard case let .weather(location, temperature, condition, details) = cards[0] else {
+            return XCTFail("Expected a single current-conditions card")
+        }
+        XCTAssertEqual(location, "Right now")
+        XCTAssertEqual(temperature, "18°C")
+        XCTAssertEqual(condition, "Sunny")
+        XCTAssertTrue(details.isEmpty)
+    }
+
+    func testWeatherConditionIgnoresRainChanceAndReassurances() {
+        let cards = MessageResponseCard.inferred(
+            from: """
+            Weather in Palo Alto:
+            - 24°C (75°F), clear skies
+            - **Rain chance:** 0% — no rain expected all day
+            """
+        )
+        guard case let .weather(location, _, condition, _)? = cards.first else {
+            return XCTFail("Expected a weather card")
+        }
+        XCTAssertEqual(location, "Palo Alto")
+        XCTAssertEqual(condition, "Clear Skies")
     }
 
     func testWeatherCaptionNamesTheDayOnPerDayForecastCards() {

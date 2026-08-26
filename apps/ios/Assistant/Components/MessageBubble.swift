@@ -690,35 +690,179 @@ enum MessageResponseCard: Identifiable {
     private static func inferredWeather(_ text: String, lower: String) -> [Self] {
         let weatherTerms = ["weather", "forecast", "sunny", "cloudy", "rain", "snow", "wind", "humidity"]
         guard weatherTerms.contains(where: lower.contains) else { return [] }
-        let temperaturePattern = #"(?<!\d)(-?\d{1,3})\s*°?\s*([FC])\b"#
-        guard let expression = try? NSRegularExpression(pattern: temperaturePattern, options: [.caseInsensitive]),
-              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let value = Range(match.range(at: 1), in: text),
-              let unit = Range(match.range(at: 2), in: text) else { return [] }
-        let temperature = weatherField(named: "temperature", in: text)
-            ?? "\(text[value])°\(text[unit].uppercased())"
-        let condition = weatherField(named: "conditions", in: text)
-            ?? ["rain", "snow", "cloud", "sun", "wind", "fog", "storm"]
-                .first(where: lower.contains)
-                .map { $0 == "sun" ? "Sunny" : $0.capitalized }
-            ?? "Current conditions"
-        let location = weatherLocation(in: text) ?? "Right now"
-        let details = weatherDetails(in: text)
-        let days = WeatherPresentation.split(details).days
+        guard let reading = weatherReading(in: text) else { return [] }
+        let temperature = weatherField(named: "temperature", in: text) ?? reading
+        let condition = weatherCondition(in: text) ?? "Current conditions"
+        let location = weatherLocation(in: text)
+
         // A forecast answer names each day it covers; deal every day its own
         // card so a "Palo Alto this weekend" question reads as a Saturday card
-        // and a Sunday card instead of one today-flavored tile.
+        // and a Sunday card instead of one today-flavored tile. Most answers
+        // set a day apart with its own heading and list that day's readings
+        // underneath, so those sections are the first place to look.
+        let sections = weatherDaySections(in: text)
+        if !sections.isEmpty {
+            return sections.map { section in
+                .weather(
+                    location: location ?? "Forecast",
+                    temperature: weatherField(named: "temperature", in: section.text)
+                        ?? weatherReading(in: section.text)
+                        ?? temperature,
+                    condition: weatherCondition(in: section.text) ?? condition,
+                    details: [WeatherDetail(label: "Day", value: section.day)]
+                        + weatherDetails(in: section.text)
+                )
+            }
+        }
+
+        let details = weatherDetails(in: text)
+        let days = WeatherPresentation.split(details).days
         guard !days.isEmpty else {
-            return [.weather(location: location, temperature: temperature, condition: condition, details: details)]
+            return [
+                .weather(
+                    location: location ?? "Right now",
+                    temperature: temperature,
+                    condition: condition,
+                    details: details
+                )
+            ]
         }
         return days.map { day in
             .weather(
-                location: location,
+                location: location ?? "Forecast",
                 temperature: forecastTemperature(in: day.facts) ?? temperature,
                 condition: forecastCondition(in: day.facts) ?? condition,
                 details: [WeatherDetail(label: "Day", value: day.day)] + day.facts
             )
         }
+    }
+
+    private struct WeatherDaySection {
+        let day: String
+        let text: String
+    }
+
+    private static let weatherDayHeadingExpression = try? NSRegularExpression(
+        pattern: #"^[^\p{L}\p{N}]*(?:\d+[.)][^\p{L}\p{N}]*)?"#
+            + #"(saturday|sunday|monday|tuesday|wednesday|thursday|friday"#
+            + #"|sat|sun|mon|tue|tues|wed|thu|thur|thurs|fri|today|tomorrow|tonight)"#
+            + #"\b[\s,:–—-]*"#
+            + #"(?:\(?\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*\d{1,2}(?:st|nd|rd|th)?\s*\)?"#
+            + #"|\(?\s*\d{1,2}\s*[/.-]\s*\d{1,2}\s*\)?)?"#
+            + #"[\s):,.–—_#-]*$"#,
+        options: [.caseInsensitive]
+    )
+
+    /// A multi-day answer sets each day apart with its own heading —
+    /// "**Saturday (August 29)**" — and lists that day's readings underneath.
+    /// Splitting on those headings is what lets a weekend question answer with
+    /// a Saturday card and a Sunday card instead of one merged tile.
+    private static func weatherDaySections(in text: String) -> [WeatherDaySection] {
+        var sections: [(day: String, lines: [String])] = []
+        for line in text.components(separatedBy: .newlines) {
+            if let day = weatherDayHeading(line) {
+                sections.append((day: day, lines: []))
+            } else if !sections.isEmpty {
+                sections[sections.count - 1].lines.append(line)
+            }
+        }
+        // A passing mention ("Monday looks wetter") is not a forecast day: a
+        // section earns its own card only when it carries a reading of its own.
+        return sections.compactMap { section -> WeatherDaySection? in
+            let body = section.lines.joined(separator: "\n")
+            guard weatherReading(in: body) != nil || !weatherDetails(in: body).isEmpty else {
+                return nil
+            }
+            return WeatherDaySection(day: section.day, text: body)
+        }
+    }
+
+    /// A heading names its day and nothing else. "**Saturday:** Sunny, 16–23°C"
+    /// carries the day's forecast on the same line, so it stays a labeled
+    /// detail rather than opening a section.
+    private static func weatherDayHeading(_ line: String) -> String? {
+        guard let expression = weatherDayHeadingExpression else { return nil }
+        let plain = line
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+        guard let match = expression.firstMatch(in: plain, range: NSRange(plain.startIndex..., in: plain)),
+              let dayRange = Range(match.range(at: 1), in: plain) else { return nil }
+        return String(plain[dayRange]).capitalized
+    }
+
+    /// The first temperature in the text, keeping a parenthetical second unit
+    /// ("22°C (72°F)") so the card can show whichever one the device reads in.
+    private static func weatherReading(in text: String) -> String? {
+        let unit = #"(-?\d{1,3})\s*[°º]?\s*([CF])\b"#
+        let pattern = #"(?<!\d)"# + unit + #"(?:\s*\(\s*"# + unit + #"\s*\))?"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let value = Range(match.range(at: 1), in: text),
+              let symbol = Range(match.range(at: 2), in: text) else { return nil }
+        let primary = "\(text[value])°\(text[symbol].uppercased())"
+        guard let pairedValue = Range(match.range(at: 3), in: text),
+              let pairedSymbol = Range(match.range(at: 4), in: text) else { return primary }
+        return "\(primary) (\(text[pairedValue])°\(text[pairedSymbol].uppercased()))"
+    }
+
+    /// The sky, never a metric. An explicit `Conditions:` field wins, then the
+    /// phrase beside the reading ("22°C (72°F), partly cloudy"), and only then
+    /// a bare keyword — scanned over text with probability phrasing removed so
+    /// a dry day's "Rain chance: 0%" cannot report the card as rain.
+    private static func weatherCondition(in text: String) -> String? {
+        if let field = weatherField(named: "conditions", in: text) { return field }
+        if let beside = conditionBesideReading(in: text) { return beside }
+        let scan = conditionScanText(text)
+        return ["rain", "snow", "cloud", "sun", "wind", "fog", "storm"]
+            .first(where: scan.contains)
+            .map { $0 == "sun" ? "Sunny" : $0.capitalized }
+    }
+
+    private static func conditionBesideReading(in text: String) -> String? {
+        for line in text.components(separatedBy: .newlines) {
+            let plain = line
+                .replacingOccurrences(of: "**", with: "")
+                .replacingOccurrences(of: "__", with: "")
+            guard weatherReading(in: plain) != nil else { continue }
+            for phrase in plain.components(separatedBy: CharacterSet(charactersIn: ",;—–")) {
+                if let condition = conditionPhrase(phrase) { return condition }
+            }
+        }
+        return nil
+    }
+
+    /// A sky phrase carries letters and no measurement: "partly cloudy" is one,
+    /// "22°C (72°F)", "10 km/h" and "Rain chance: 0%" are not.
+    private static func conditionPhrase(_ phrase: String) -> String? {
+        let trimmed = phrase.trimmingCharacters(in: CharacterSet(charactersIn: " \t*_•·-.()"))
+        guard !trimmed.isEmpty,
+              !trimmed.contains(":"),
+              trimmed.rangeOfCharacter(from: .letters) != nil,
+              trimmed.rangeOfCharacter(from: .decimalDigits) == nil,
+              !trimmed.contains("°"), !trimmed.contains("º"), !trimmed.contains("%"),
+              !weatherMetricLabels.contains(trimmed.lowercased()) else { return nil }
+        return trimmed.capitalized
+    }
+
+    private static let weatherMetricLabels: Set<String> = [
+        "temperature", "conditions", "wind", "humidity", "rain chance", "feels like",
+        "visibility", "pressure", "uv index", "dew point", "source", "updated",
+    ]
+
+    /// "Rain chance: 0%" is a metric and "no rain" is a reassurance — neither
+    /// describes the sky. Drop that phrasing before a bare keyword decides the
+    /// card's condition and its symbol.
+    private static func conditionScanText(_ text: String) -> String {
+        var scan = text.lowercased().replacingOccurrences(of: "**", with: "")
+        for phrase in [
+            "rain chance", "chance of rain", "rain probability", "probability of rain",
+            "precipitation chance", "chance of precipitation", "chance of showers",
+            "no rain", "without rain", "rain-free", "rain free",
+            "wind chill", "wind speed", "wind gusts", "wind:",
+        ] {
+            scan = scan.replacingOccurrences(of: phrase, with: " ")
+        }
+        return scan
     }
 
     /// The day's own reading ("16–23°C") becomes its card's big number; without
@@ -815,15 +959,40 @@ enum MessageResponseCard: Identifiable {
         }
     }
 
+    /// Names the place the answer is about: "the weather for Palo Alto", "the
+    /// weekend weather forecast for Palo Alto", "the forecast in Tokyo". A
+    /// parenthetical aside after the place ends the name, as a colon does.
     private static func weatherLocation(in text: String) -> String? {
-        let pattern = #"(?i)\bweather\s+for\s+(.+?)(?:\s+as\s+of\b|[\r\n:])"#
+        let pattern = #"(?i)\b(?:weather|forecast)(?:\s+(?:forecast|report|outlook|conditions|update))?"#
+            + #"\s+(?:for|in|at|near|around)\s+(.+?)(?:\s+as\s+of\b|[\r\n:(]|$)"#
         guard let expression = try? NSRegularExpression(pattern: pattern),
               let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let locationRange = Range(match.range(at: 1), in: text) else { return nil }
         let location = String(text[locationRange])
             .replacingOccurrences(of: "**", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return location.isEmpty ? nil : location
+            .trimmingCharacters(in: CharacterSet(charactersIn: " \t*_,.–—-"))
+        return locationWithoutTimeframe(location)
+    }
+
+    /// Each card already stamps the day it describes, so "Palo Alto this
+    /// weekend" in the headline would say the same thing twice.
+    private static func locationWithoutTimeframe(_ location: String) -> String? {
+        let pattern = #"(?i)[\s,]*\b(?:this|the|next|coming|over\s+the)?\s*"#
+            + #"(?:weekend|week|morning|afternoon|evening|night|tonight|today|tomorrow"#
+            + #"|right\s+now|now|saturday|sunday|monday|tuesday|wednesday|thursday|friday)\b[\s.,]*$"#
+        var trimmed = location
+        if let expression = try? NSRegularExpression(pattern: pattern) {
+            // Twice covers a stacked qualifier such as "Palo Alto this weekend".
+            for _ in 0..<2 {
+                let range = NSRange(trimmed.startIndex..., in: trimmed)
+                guard let match = expression.firstMatch(in: trimmed, range: range),
+                      let matchRange = Range(match.range, in: trimmed),
+                      !matchRange.isEmpty else { break }
+                trimmed.removeSubrange(matchRange)
+            }
+        }
+        trimmed = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: " \t,.–—-"))
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// Preserves less-common metrics such as cloud cover or dew point without
