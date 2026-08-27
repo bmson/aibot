@@ -11,6 +11,8 @@ import { eq, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   findDuplicateKnowledgeGraphEntities,
+  getKnowledgeGraphCalendar,
+  getKnowledgeGraphNeighborhood,
   getKnowledgeGraphOverview,
   searchKnowledgeGraphEntities,
 } from './knowledge-graph.js';
@@ -33,6 +35,7 @@ let db: Db;
 let dbUp = false;
 let agentId: string;
 let hubId: string;
+let memoryId: string;
 
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
@@ -69,6 +72,7 @@ beforeAll(async () => {
       })
       .returning({ id: memories.id });
     if (!memory) throw new Error('test memory was not created');
+    memoryId = memory.id;
 
     const [hub] = await db
       .insert(knowledgeGraphEntities)
@@ -249,5 +253,301 @@ describe('knowledge graph entity search (integration)', () => {
       canonicalKey: `topic:${MARKER} hub`,
     });
     expect(crossKind.map((row) => row.targetId)).not.toContain(long.id);
+  });
+});
+
+describe('knowledge graph kind filter (integration)', () => {
+  it('narrows the true match count and every returned row to the kind', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const overview = await getKnowledgeGraphOverview(db, {
+      query: MARKER,
+      kind: 'organization',
+      pageSize: 100,
+    });
+    expect(overview.matchingEntities).toBe(ENTITY_COUNT);
+    expect(overview.entities).toHaveLength(ENTITY_COUNT);
+    expect(overview.entities.every((entity) => entity.kind === 'organization')).toBe(true);
+
+    const topics = await getKnowledgeGraphOverview(db, { query: MARKER, kind: 'topic' });
+    expect(topics.matchingEntities).toBe(1);
+    expect(topics.entities[0]?.id).toBe(hubId);
+
+    // No place entities exist anywhere in the fixture, so this is zero no
+    // matter which other suite has run.
+    const none = await getKnowledgeGraphOverview(db, { query: MARKER, kind: 'place' });
+    expect(none.matchingEntities).toBe(0);
+    expect(none.entities).toHaveLength(0);
+  });
+
+  it('pages a filtered list without repeating an item', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const first = await getKnowledgeGraphOverview(db, {
+      query: MARKER,
+      kind: 'organization',
+      pageSize: 20,
+      page: 1,
+    });
+    const second = await getKnowledgeGraphOverview(db, {
+      query: MARKER,
+      kind: 'organization',
+      pageSize: 20,
+      page: 2,
+    });
+    const overlap = first.entities.filter((entity) =>
+      second.entities.some((other) => other.id === entity.id),
+    );
+    expect(overlap).toEqual([]);
+    expect(first.entityPages).toBe(Math.ceil(ENTITY_COUNT / 20));
+  });
+
+  it('treats an unknown kind as no filter rather than an empty graph', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // Compared against the unfiltered query rather than a hardcoded count:
+    // other suites' fixtures legitimately shift the absolute number.
+    const filtered = await getKnowledgeGraphOverview(db, { query: MARKER, kind: 'not-a-kind' });
+    const unfiltered = await getKnowledgeGraphOverview(db, { query: MARKER });
+    expect(filtered.matchingEntities).toBe(unfiltered.matchingEntities);
+  });
+
+  it('still selects a deep-linked entity whose kind is filtered out', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // ?kind=place&entity=<the topic hub> must open the hub, not nothing —
+    // otherwise switching filters would silently lose a shared link's subject.
+    const overview = await getKnowledgeGraphOverview(db, {
+      query: MARKER,
+      kind: 'place',
+      entityId: hubId,
+    });
+    expect(overview.matchingEntities).toBe(0);
+    expect(overview.selected?.id).toBe(hubId);
+  });
+});
+
+describe('knowledge graph neighborhood (integration)', () => {
+  beforeAll(async () => {
+    if (!dbUp) return;
+    // An earlier test flips one hub edge to rejected; the neighbourhood tests
+    // assert exact active counts, so the fixture starts from a known state
+    // rather than depending on file order.
+    await db
+      .update(knowledgeGraphRelations)
+      .set({ reviewStatus: 'unreviewed' })
+      .where(eq(knowledgeGraphRelations.subjectEntityId, hubId));
+  });
+
+  it('returns every active edge of a high-degree hub, past the old 80-row cap', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const neighborhood = await getKnowledgeGraphNeighborhood(db, { entityId: hubId });
+    expect(neighborhood.entity?.id).toBe(hubId);
+    expect(neighborhood.edges).toHaveLength(ENTITY_COUNT);
+    expect(neighborhood.total).toBe(ENTITY_COUNT);
+    expect(neighborhood.edges.every((edge) => edge.outbound)).toBe(true);
+  });
+
+  it('honours a limit while reporting the true degree', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const neighborhood = await getKnowledgeGraphNeighborhood(db, { entityId: hubId, limit: 10 });
+    expect(neighborhood.edges).toHaveLength(10);
+    expect(neighborhood.total).toBe(ENTITY_COUNT);
+  });
+
+  it('excludes stale edges from both the page and the count', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [stale] = await db
+      .select({ id: knowledgeGraphRelations.id })
+      .from(knowledgeGraphRelations)
+      .where(eq(knowledgeGraphRelations.subjectEntityId, hubId))
+      .limit(1);
+    if (!stale) throw new Error('no relation to mark stale');
+    await db
+      .update(knowledgeGraphRelations)
+      .set({ reviewStatus: 'rejected' })
+      .where(eq(knowledgeGraphRelations.id, stale.id));
+    try {
+      const neighborhood = await getKnowledgeGraphNeighborhood(db, { entityId: hubId });
+      expect(neighborhood.total).toBe(ENTITY_COUNT - 1);
+      expect(neighborhood.edges.map((edge) => edge.id)).not.toContain(stale.id);
+    } finally {
+      await db
+        .update(knowledgeGraphRelations)
+        .set({ reviewStatus: 'unreviewed' })
+        .where(eq(knowledgeGraphRelations.id, stale.id));
+    }
+  });
+
+  it('orders confirmed edges ahead of unreviewed ones', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const confirmed = await db
+      .select({ id: knowledgeGraphRelations.id })
+      .from(knowledgeGraphRelations)
+      .where(eq(knowledgeGraphRelations.subjectEntityId, hubId))
+      .limit(2);
+    for (const row of confirmed) {
+      await db
+        .update(knowledgeGraphRelations)
+        .set({ reviewStatus: 'confirmed' })
+        .where(eq(knowledgeGraphRelations.id, row.id));
+    }
+    try {
+      const neighborhood = await getKnowledgeGraphNeighborhood(db, { entityId: hubId });
+      const firstTwo = neighborhood.edges.slice(0, 2).map((edge) => edge.id);
+      expect(new Set(firstTwo)).toEqual(new Set(confirmed.map((row) => row.id)));
+      expect(neighborhood.edges[2]?.reviewStatus).toBe('unreviewed');
+    } finally {
+      for (const row of confirmed) {
+        await db
+          .update(knowledgeGraphRelations)
+          .set({ reviewStatus: 'unreviewed' })
+          .where(eq(knowledgeGraphRelations.id, row.id));
+      }
+    }
+  });
+
+  it('reads a spoke as a degree-1 node with the edge pointing at the hub', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [spoke] = await db
+      .select({ id: knowledgeGraphEntities.id })
+      .from(knowledgeGraphEntities)
+      .where(like(knowledgeGraphEntities.canonicalKey, `organization:${MARKER} spoke 000`))
+      .limit(1);
+    if (!spoke) throw new Error('spoke fixture missing');
+    const neighborhood = await getKnowledgeGraphNeighborhood(db, { entityId: spoke.id });
+    expect(neighborhood.edges).toHaveLength(1);
+    expect(neighborhood.edges[0]?.outbound).toBe(false);
+    expect(neighborhood.edges[0]?.other.id).toBe(hubId);
+  });
+
+  it('answers empty for an entity id that is not in the graph', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const neighborhood = await getKnowledgeGraphNeighborhood(db, {
+      entityId: '00000000-0000-4000-8000-000000000000',
+    });
+    expect(neighborhood.entity).toBeNull();
+    expect(neighborhood.edges).toEqual([]);
+    expect(neighborhood.total).toBe(0);
+  });
+});
+
+describe('knowledge graph calendar (integration)', () => {
+  const calendarEntityIds: string[] = [];
+
+  beforeAll(async () => {
+    if (!dbUp) return;
+    // Date entities group by canonical key, so the marker cannot ride inside
+    // the key; cleanup below is by tracked id. Labels deliberately avoid the
+    // marker so the count-sensitive sidebar tests never see these rows.
+    const fixtures: Array<{ canonicalKey: string; label: string }> = [
+      { canonicalKey: 'date:2026-03-06', label: '6 March 2026' },
+      { canonicalKey: 'date:2026-03-21', label: '21 March 2026' },
+      { canonicalKey: 'date:--03-06', label: 'March 6' },
+      { canonicalKey: 'date:2026-03', label: 'March 2026' },
+      { canonicalKey: 'date:2026', label: '2026' },
+      { canonicalKey: 'date:2026-04-02', label: '2 April 2026' },
+    ];
+    const inserted = await db
+      .insert(knowledgeGraphEntities)
+      .values(fixtures.map((fixture) => ({ agentId, kind: 'date' as const, ...fixture })))
+      .returning({
+        id: knowledgeGraphEntities.id,
+        canonicalKey: knowledgeGraphEntities.canonicalKey,
+      });
+    calendarEntityIds.push(...inserted.map((row) => row.id));
+
+    const idFor = (key: string) => {
+      const row = inserted.find((item) => item.canonicalKey === key);
+      if (!row) throw new Error(`calendar fixture missing for ${key}`);
+      return row.id;
+    };
+    // Every in-month date (and the recurring one) connects to the hub; the
+    // year-only and next-month dates get edges too, so the test can assert
+    // they are left out rather than merely absent.
+    const keys = [
+      'date:2026-03-06',
+      'date:2026-03-21',
+      'date:--03-06',
+      'date:2026-03',
+      'date:2026',
+      'date:2026-04-02',
+    ];
+    await db.insert(knowledgeGraphRelations).values(
+      keys.map((key, index) => ({
+        agentId,
+        subjectEntityId: hubId,
+        predicate: 'mentions',
+        objectEntityId: idFor(key),
+        sourceMemoryId: memoryId,
+        evidenceQuote: `${MARKER} calendar fixture`,
+        sourceFingerprint: `${MARKER}-cal-${index}`,
+        ordinal: 100 + index,
+        confidence: '0.90',
+        // The 21 March edge is stale: the calendar must not show it.
+        reviewStatus: key === 'date:2026-03-21' ? ('rejected' as const) : ('confirmed' as const),
+      })),
+    );
+  });
+
+  afterAll(async () => {
+    if (!dbUp) return;
+    // Relations cascade from their endpoint entities.
+    for (const id of calendarEntityIds) {
+      await db.delete(knowledgeGraphEntities).where(eq(knowledgeGraphEntities.id, id));
+    }
+  });
+
+  it('rejects a month that is not a real month', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    expect(await getKnowledgeGraphCalendar(db, { month: 'nonsense' })).toBeNull();
+    expect(await getKnowledgeGraphCalendar(db, { month: '2026-13' })).toBeNull();
+  });
+
+  it('groups exact, recurring, and month-precision dates by canonical key', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const calendar = await getKnowledgeGraphCalendar(db, { month: '2026-03' });
+    if (!calendar) throw new Error('calendar came back null');
+
+    expect(calendar.days['06']).toHaveLength(2);
+    const recurring = calendar.days['06']?.find((entry) => entry.recurring);
+    const exact = calendar.days['06']?.find((entry) => !entry.recurring);
+    expect(recurring?.entity.canonicalKey).toBe('date:--03-06');
+    expect(exact?.entity.canonicalKey).toBe('date:2026-03-06');
+    // Both carry their live hub connection.
+    expect(exact?.connections.map((conn) => conn.other.id)).toContain(hubId);
+    expect(recurring?.connections.map((conn) => conn.other.id)).toContain(hubId);
+
+    expect(calendar.monthEntry?.entity.canonicalKey).toBe('date:2026-03');
+    expect(calendar.monthEntry?.connections.map((conn) => conn.other.id)).toContain(hubId);
+  });
+
+  it('leaves year-only and other-month dates out, and drops stale edges', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const calendar = await getKnowledgeGraphCalendar(db, { month: '2026-03' });
+    if (!calendar) throw new Error('calendar came back null');
+
+    const allEntities = Object.values(calendar.days)
+      .flat()
+      .map((entry) => entry.entity.canonicalKey);
+    expect(allEntities).not.toContain('date:2026');
+    expect(allEntities).not.toContain('date:2026-04-02');
+
+    // The only edge touching 21 March is rejected: the entity appears (it is
+    // a real node) but shows no connections, and the counts exclude the edge.
+    // Year-only and other-month entities are not in the month's id set, so
+    // their edges are not counted either — three live edges remain.
+    expect(calendar.days['21']).toHaveLength(1);
+    expect(calendar.days['21']?.[0]?.connections).toHaveLength(0);
+    expect(calendar.totalConnections).toBe(3);
+    expect(calendar.shownConnections).toBe(3);
+  });
+
+  it('answers an empty month without inventing rows', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const calendar = await getKnowledgeGraphCalendar(db, { month: '2031-11' });
+    expect(calendar).toMatchObject({
+      month: '2031-11',
+      days: {},
+      monthEntry: null,
+      totalConnections: 0,
+      shownConnections: 0,
+    });
   });
 });

@@ -1,9 +1,12 @@
 import {
+  asGraphEntityKind,
   getAssistantTimezone,
+  getKnowledgeGraphNeighborhood,
   getKnowledgeGraphOverview,
   type KnowledgeGraphRelationView,
 } from '@assistant/application';
 import {
+  CalendarDays,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -22,10 +25,10 @@ import {
 } from '@/app/profile/knowledge/actions';
 import { AddKnowledgeRelation } from '@/app/profile/knowledge/add-relation';
 import { MergeEntity, RenameEntity } from '@/app/profile/knowledge/entity-forms';
-import { LocalMap, type LocalMapEdge } from '@/app/profile/knowledge/local-map';
+import { LocalMap } from '@/app/profile/knowledge/local-map';
 import { requireOwner } from '@/auth';
 import { formatFriendlyDateTime, formatUsd, relativeTime } from '@/lib/format';
-import { entityKindLabel, humanizePredicate } from '@/lib/knowledge';
+import { ENTITY_KINDS, entityKindLabel, humanizePredicate } from '@/lib/knowledge';
 import { getDb } from '@/lib/server';
 import {
   Badge,
@@ -37,18 +40,21 @@ import {
   cardTitleClass,
   EmptyState,
   inputClass,
+  labelClass,
   microLabelClass,
   PageHeader,
   PageShell,
+  selectClass,
 } from '@/lib/ui';
 import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 
 export const metadata = { title: 'Knowledge review' };
 export const dynamic = 'force-dynamic';
 
-function hrefFor(opts: { q?: string; entity?: string; page?: number }): string {
+function hrefFor(opts: { q?: string; kind?: string; entity?: string; page?: number }): string {
   const params = new URLSearchParams();
   if (opts.q) params.set('q', opts.q);
+  if (opts.kind) params.set('kind', opts.kind);
   if (opts.entity) params.set('entity', opts.entity);
   if (opts.page && opts.page > 1) params.set('page', String(opts.page));
   const search = params.toString();
@@ -165,32 +171,26 @@ function ReviewRelation({
 export default async function KnowledgeReviewPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; entity?: string; page?: string }>;
+  searchParams: Promise<{ q?: string; kind?: string; entity?: string; page?: string }>;
 }) {
   await requireOwner();
   const params = await searchParams;
   const query = (params.q ?? '').trim().slice(0, 120);
+  const kind = asGraphEntityKind(params.kind) ?? '';
   const requestedPage = Number.parseInt(params.page ?? '1', 10);
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
   const db = getDb();
   const [graph, timeZone] = await Promise.all([
-    getKnowledgeGraphOverview(db, { query, entityId: params.entity, page }),
+    getKnowledgeGraphOverview(db, { query, kind, entityId: params.entity, page }),
     getAssistantTimezone(db),
   ]);
   const now = new Date();
-  const activeRelations = graph.relations.filter(
-    (relation) => relation.reviewStatus !== 'rejected',
-  );
-  const mapEdges: LocalMapEdge[] = activeRelations.map((relation) => {
-    const outbound = relation.subject.id === graph.selected?.id;
-    return {
-      id: relation.id,
-      predicate: relation.predicate,
-      outbound,
-      reviewStatus: relation.reviewStatus,
-      other: outbound ? relation.object : relation.subject,
-    };
-  });
+  // The map draws from its own query, not the review list: the list is capped
+  // at 80 and ordered unreviewed-first for triage, which drew a skewed subset
+  // for high-degree entities.
+  const neighborhood = graph.selected
+    ? await getKnowledgeGraphNeighborhood(db, { entityId: graph.selected.id })
+    : { entity: null, edges: [], total: 0 };
 
   return (
     <PageShell size="wide">
@@ -198,6 +198,12 @@ export default async function KnowledgeReviewPage({
         back={{ href: '/profile', label: 'Memory' }}
         title="Knowledge review"
         intro="Inspect the source-backed connections the assistant can use, validate their wording, and add corrections with your own evidence."
+        actions={
+          <Link href="/profile/knowledge/calendar" className={btn.outline}>
+            <CalendarDays className="size-4" aria-hidden="true" />
+            Date calendar
+          </Link>
+        }
       />
 
       <div className="mt-6 grid gap-3 sm:grid-cols-4">
@@ -268,18 +274,39 @@ export default async function KnowledgeReviewPage({
 
       <div className="mt-6 grid min-w-0 gap-6 lg:grid-cols-[minmax(14rem,0.7fr)_minmax(0,1.8fr)]">
         <aside className="min-w-0 lg:sticky lg:top-5 lg:self-start">
-          <form action="/profile/knowledge" method="get" className="relative">
-            <Search
-              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted"
-              aria-hidden="true"
-            />
-            <input
-              type="search"
-              name="q"
-              defaultValue={query}
-              placeholder="Find a person, project, place…"
-              className={`${inputClass} w-full pl-9`}
-            />
+          <form action="/profile/knowledge" method="get" className="grid gap-2">
+            <label className="relative block">
+              <span className="sr-only">Search knowledge items</span>
+              <Search
+                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                name="q"
+                defaultValue={query}
+                placeholder="Find a person, project, place…"
+                className={`${inputClass} w-full pl-9`}
+              />
+            </label>
+            <div className="flex items-center gap-2">
+              <label className="min-w-0 flex-1">
+                <span className={`sr-only ${labelClass}`}>Type</span>
+                <select name="kind" defaultValue={kind} className={`${selectClass} w-full`}>
+                  <option value="">All types</option>
+                  {ENTITY_KINDS.map((value) => (
+                    <option key={value} value={value}>
+                      {entityKindLabel(value)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {/* An explicit submit keeps the filter usable without client JS;
+                  the form otherwise only applies on Enter. */}
+              <button type="submit" className={btn.outline}>
+                Apply
+              </button>
+            </div>
           </form>
           {/* The stat card above prints the true entity count, so this list has
               to say how much of it is on screen — the two silently disagreeing
@@ -287,6 +314,7 @@ export default async function KnowledgeReviewPage({
           <p className="mt-2 px-1 text-xs text-muted">
             {graph.matchingEntities.toLocaleString()}
             {query ? ' matching' : ''} item{graph.matchingEntities === 1 ? '' : 's'}
+            {kind ? ` · ${entityKindLabel(kind)} only` : ''}
             {graph.entityPages > 1 ? ` · page ${graph.entityPage} of ${graph.entityPages}` : ''}
           </p>
           <nav
@@ -295,13 +323,15 @@ export default async function KnowledgeReviewPage({
           >
             {graph.entities.length === 0 ? (
               <p className="px-3 py-6 text-sm text-muted">
-                {query ? 'No matching knowledge items.' : 'No source-backed connections yet.'}
+                {query || kind
+                  ? 'No matching knowledge items.'
+                  : 'No source-backed connections yet.'}
               </p>
             ) : (
               graph.entities.map((entity) => (
                 <Link
                   key={entity.id}
-                  href={hrefFor({ q: query, entity: entity.id, page: graph.entityPage })}
+                  href={hrefFor({ q: query, kind, entity: entity.id, page: graph.entityPage })}
                   aria-current={entity.id === graph.selected?.id ? 'page' : undefined}
                   title={entity.label}
                   className={`block rounded-lg px-3 py-2.5 motion-safe:transition-colors ${
@@ -322,7 +352,7 @@ export default async function KnowledgeReviewPage({
             <nav className="mt-3 flex items-center justify-between gap-2" aria-label="Item pages">
               {graph.entityPage > 1 ? (
                 <Link
-                  href={hrefFor({ q: query, page: graph.entityPage - 1 })}
+                  href={hrefFor({ q: query, kind, page: graph.entityPage - 1 })}
                   className={btn.outline}
                 >
                   <ChevronLeft className="size-4" aria-hidden="true" />
@@ -333,7 +363,7 @@ export default async function KnowledgeReviewPage({
               )}
               {graph.entityPage < graph.entityPages ? (
                 <Link
-                  href={hrefFor({ q: query, page: graph.entityPage + 1 })}
+                  href={hrefFor({ q: query, kind, page: graph.entityPage + 1 })}
                   className={btn.outline}
                 >
                   Next
@@ -393,22 +423,23 @@ export default async function KnowledgeReviewPage({
                   <div>
                     <h2 className={cardTitleClass}>Local map</h2>
                     <p className="mt-1 text-sm text-muted">
-                      A focused view keeps the graph readable. Only non-stale, directly sourced
-                      edges appear here — select any neighbour to re-centre on it.
+                      Drag to pan, scroll or use the buttons to zoom. Open a neighbour to re-centre
+                      on it, or press its + to grow its own connections in place.
                     </p>
                   </div>
                   <span className="inline-flex items-center gap-1 text-xs text-muted">
                     <GitFork className="size-3.5" aria-hidden="true" />
-                    {graph.selectedActiveRelationTotal.toLocaleString()} active edge
-                    {graph.selectedActiveRelationTotal === 1 ? '' : 's'}
+                    {neighborhood.total.toLocaleString()} active edge
+                    {neighborhood.total === 1 ? '' : 's'}
                   </span>
                 </div>
                 <div className="mt-3">
                   <LocalMap
                     selected={graph.selected}
-                    edges={mapEdges}
-                    totalEdges={graph.selectedActiveRelationTotal}
-                    hrefForEntity={(entityId) => hrefFor({ q: query, entity: entityId })}
+                    initialEdges={neighborhood.edges}
+                    totalEdges={neighborhood.total}
+                    query={query}
+                    kind={kind}
                   />
                 </div>
               </section>

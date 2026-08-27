@@ -2,7 +2,9 @@
 
 import {
   addOwnerKnowledgeGraphFact,
+  getKnowledgeGraphNeighborhood,
   type KnowledgeGraphEntityView,
+  type KnowledgeGraphNeighborEdge,
   mergeKnowledgeGraphEntities,
   reextractRelativeDateSources,
   renameKnowledgeGraphEntity,
@@ -101,6 +103,19 @@ export async function searchKnowledgeEntities(
     excludeId,
     kind: kind || undefined,
   });
+}
+
+/**
+ * The interactive map's expansion fetch. The application layer clamps the
+ * limit, so a client-supplied value can never widen it past the shared cap.
+ */
+export async function loadKnowledgeNeighborhood(
+  entityId: string,
+  limit?: number,
+): Promise<{ edges: KnowledgeGraphNeighborEdge[]; total: number }> {
+  await requireOwner();
+  const neighborhood = await getKnowledgeGraphNeighborhood(getDb(), { entityId, limit });
+  return { edges: neighborhood.edges, total: neighborhood.total };
 }
 
 export type AddKnowledgeRelationState = KnowledgeActionState;

@@ -1,254 +1,512 @@
+'use client';
+
+import { Minus, Plus, RotateCcw } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { loadKnowledgeNeighborhood } from '@/app/profile/knowledge/actions';
+import {
+  arrowhead,
+  type Canvas,
+  type CanvasNode,
+  CENTER_R,
+  CX,
+  CY,
+  DRAG_THRESHOLD,
+  EXPANSION_LIMIT,
+  edgeLine,
+  entityHref,
+  HIT_R,
+  INITIAL_VIEWPORT,
+  initialCanvas,
+  LABEL_LIMIT,
+  type MapEdgeInput,
+  type MapEntity,
+  mergeExpansion,
+  NODE_R,
+  panBy,
+  toViewPoint,
+  VIEW_H,
+  VIEW_W,
+  type Viewport,
+  zoomAt,
+} from '@/app/profile/knowledge/local-map-model';
 import {
   clipNodeLabel,
   entityKindLabel,
   entityKindPaint,
   humanizePredicate,
 } from '@/lib/knowledge';
+import { focusRing } from '@/lib/ui';
 
 /**
- * A bounded node-link view of one entity's immediate neighbourhood, drawn as
- * server-rendered SVG. It stays a *local* map on purpose — an unbounded global
- * canvas is not what makes a personal graph reviewable — but unlike the grid of
- * cards it replaced, it shows direction, review state, and entity kind, and each
- * neighbour is a link, so the map is how you move around the graph.
+ * The interactive local map: pan, zoom, click a neighbour to re-centre the
+ * page on it, or expand a node in place to grow the canvas a ring at a time.
  *
- * No client JS and no charting dependency: the layout is trigonometry over a
- * fixed ellipse, and every colour is a Tailwind utility, so the `@theme inline`
- * tokens flip it for dark mode without a second code path.
+ * The first hop arrives as server-rendered props; expansion goes through a
+ * server action. Rendering stays SVG (no charting dependency): layout is
+ * deterministic trigonometry from local-map-model, so the drawing is
+ * snapshot-stable, keyboard-navigable, and never animates under
+ * prefers-reduced-motion.
  */
 
-export interface LocalMapEdge {
-  id: string;
-  predicate: string;
-  /** True when the selected entity is the subject of the relation. */
-  outbound: boolean;
-  reviewStatus: 'unreviewed' | 'confirmed' | 'rejected';
-  other: { id: string; label: string; kind: string };
-}
+const WHEEL_ZOOM_IN = 1.12;
+const WHEEL_ZOOM_OUT = 1 / WHEEL_ZOOM_IN;
+const KEY_PAN = 40;
+const KEY_ZOOM = 1.25;
 
-/** Geometry. Width leaves room for the labels that hang off the outer nodes. */
-const VIEW_W = 760;
-const VIEW_H = 420;
-const CX = VIEW_W / 2;
-const CY = VIEW_H / 2;
-const RX = 230;
-const RY = 150;
-const CENTER_R = 13;
-const NODE_R = 7;
-/** Two-line neighbour labels stop being readable much past a dozen spokes. */
-const MAX_NODES = 12;
-
-function arrowhead(tipX: number, tipY: number, dx: number, dy: number): string {
-  const length = 9;
-  const half = 3.6;
-  const baseX = tipX - dx * length;
-  const baseY = tipY - dy * length;
-  // Perpendicular to the direction, so the head stays square to its own edge.
-  const px = -dy * half;
-  const py = dx * half;
-  return [
-    `${tipX.toFixed(2)},${tipY.toFixed(2)}`,
-    `${(baseX + px).toFixed(2)},${(baseY + py).toFixed(2)}`,
-    `${(baseX - px).toFixed(2)},${(baseY - py).toFixed(2)}`,
-  ].join(' ');
+interface ExpansionState {
+  expanded: boolean;
+  /** Edges the expansion cap did not fetch, reported next to the node. */
+  overflow: number;
 }
 
 export function LocalMap({
   selected,
-  edges,
+  initialEdges,
   totalEdges,
-  hrefForEntity,
+  query,
+  kind,
 }: {
-  selected: { label: string; kind: string };
-  edges: LocalMapEdge[];
+  selected: MapEntity;
+  initialEdges: MapEdgeInput[];
   totalEdges: number;
-  hrefForEntity: (entityId: string) => string;
+  query: string;
+  kind: string;
 }) {
-  const shown = edges.slice(0, MAX_NODES);
-  const kindsPresent = [...new Set([selected.kind, ...shown.map((edge) => edge.other.kind)])];
+  const [canvas, setCanvas] = useState<Canvas>(() => initialCanvas(selected, initialEdges));
+  const [viewport, setViewport] = useState<Viewport>(INITIAL_VIEWPORT);
+  const [expansions, setExpansions] = useState<Record<string, ExpansionState>>({});
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [announce, setAnnounce] = useState('');
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    origin: Viewport;
+    dragging: boolean;
+  } | null>(null);
 
-  const nodes = shown.map((edge, index) => {
-    const angle = -Math.PI / 2 + (index * 2 * Math.PI) / shown.length;
-    const cos = Math.cos(angle);
-    const sin = Math.sin(angle);
-    const x = CX + RX * cos;
-    const y = CY + RY * sin;
-    // Unit vector along the drawn line, which is not the ellipse angle once rx
-    // and ry differ — using the raw angle skewed every arrowhead.
-    const dx = x - CX;
-    const dy = y - CY;
-    const length = Math.hypot(dx, dy) || 1;
-    const ux = dx / length;
-    const uy = dy / length;
-    return {
-      edge,
-      x,
-      y,
-      ux,
-      uy,
-      // Trim both ends so the line meets neither disc, leaving room for the head.
-      x1: CX + ux * (CENTER_R + 3),
-      y1: CY + uy * (CENTER_R + 3),
-      x2: x - ux * (NODE_R + 3),
-      y2: y - uy * (NODE_R + 3),
-      anchorEnd: cos < 0,
+  // Server navigation or a revalidation (confirm/mark-stale) hands down new
+  // props; the canvas resets to match rather than showing stale expansions.
+  // Adjusting state during render is the React-sanctioned reset pattern and
+  // avoids an effect that would paint the stale frame first.
+  const propsKey = `${selected.id}|${initialEdges.map((edge) => `${edge.id}:${edge.reviewStatus}`).join(',')}`;
+  const [seenPropsKey, setSeenPropsKey] = useState(propsKey);
+  if (seenPropsKey !== propsKey) {
+    setSeenPropsKey(propsKey);
+    setCanvas(initialCanvas(selected, initialEdges));
+    setViewport(INITIAL_VIEWPORT);
+    setExpansions({});
+    setPendingId(null);
+    setActiveId(null);
+  }
+
+  const nodeById = new Map(canvas.nodes.map((node) => [node.id, node]));
+  const expandedIds = new Set(
+    Object.entries(expansions)
+      .filter(([, state]) => state.expanded)
+      .map(([id]) => id),
+  );
+  const showAllLabels = canvas.nodes.length <= LABEL_LIMIT;
+
+  const hrefFor = (entityId: string) => entityHref(entityId, query, kind);
+
+  const handleExpand = async (node: CanvasNode) => {
+    if (pendingId) return;
+    setPendingId(node.id);
+    try {
+      const result = await loadKnowledgeNeighborhood(node.id, EXPANSION_LIMIT);
+      const merged = mergeExpansion(canvas, node.id, result.edges);
+      setCanvas(merged.canvas);
+      setExpansions((previous) => ({
+        ...previous,
+        [node.id]: { expanded: true, overflow: Math.max(0, result.total - result.edges.length) },
+      }));
+      setAnnounce(
+        merged.added > 0
+          ? `Showing ${merged.added} more connection${merged.added === 1 ? '' : 's'} around ${node.label}.${merged.capped ? ' The map is full; open a node to keep exploring.' : ''}`
+          : `No further connections around ${node.label}.`,
+      );
+    } catch {
+      setAnnounce(`Could not load connections around ${node.label}. Try again.`);
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  // ── Pan/zoom wiring ──────────────────────────────────────────────────────
+  // Pointer capture starts only once the drag threshold trips, so a plain
+  // press on a node still reaches the anchor as a click.
+
+  const handlePointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: viewport,
+      dragging: false,
     };
-  });
+  };
 
-  const description = shown
-    .map(
-      (edge) =>
-        `${selected.label} ${edge.outbound ? '' : 'is the object of '}${humanizePredicate(
-          edge.predicate,
-        )} ${edge.outbound ? 'to ' : 'from '}${edge.other.label}`,
-    )
+  const handlePointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.dragging && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+    if (!drag.dragging) {
+      drag.dragging = true;
+      svgRef.current?.setPointerCapture(event.pointerId);
+    }
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const scaleX = VIEW_W / rect.width;
+    const scaleY = VIEW_H / rect.height;
+    setViewport(panBy(drag.origin, dx * scaleX, dy * scaleY));
+  };
+
+  const handlePointerEnd = (event: React.PointerEvent<SVGSVGElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (drag.dragging) svgRef.current?.releasePointerCapture(event.pointerId);
+    dragRef.current = null;
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const panKeys: Record<string, [number, number]> = {
+      ArrowLeft: [KEY_PAN, 0],
+      ArrowRight: [-KEY_PAN, 0],
+      ArrowUp: [0, KEY_PAN],
+      ArrowDown: [0, -KEY_PAN],
+    };
+    const pan = panKeys[event.key];
+    if (pan) {
+      event.preventDefault();
+      setViewport((current) => panBy(current, pan[0], pan[1]));
+      return;
+    }
+    if (event.key === '+' || event.key === '=') {
+      event.preventDefault();
+      setViewport((current) => zoomAt(current, KEY_ZOOM, VIEW_W / 2, VIEW_H / 2));
+    } else if (event.key === '-') {
+      event.preventDefault();
+      setViewport((current) => zoomAt(current, 1 / KEY_ZOOM, VIEW_W / 2, VIEW_H / 2));
+    } else if (event.key === '0') {
+      event.preventDefault();
+      setViewport(INITIAL_VIEWPORT);
+    }
+  };
+
+  // React attaches wheel listeners passively, which cannot preventDefault —
+  // the page would scroll while the map zooms. A native non-passive listener
+  // is the only way to keep wheel-zoom inside the map region.
+  useEffect(() => {
+    const element = svgRef.current;
+    if (!element) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = element.getBoundingClientRect();
+      const point = toViewPoint(event.clientX, event.clientY, rect);
+      setViewport((current) =>
+        zoomAt(current, event.deltaY < 0 ? WHEEL_ZOOM_IN : WHEEL_ZOOM_OUT, point.x, point.y),
+      );
+    };
+    element.addEventListener('wheel', onWheel, { passive: false });
+    return () => element.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const zoomButtonClass = `mobile-touch-target inline-flex size-9 items-center justify-center rounded-lg border border-edge bg-raised/95 text-muted motion-safe:transition-colors hover:text-strong ${focusRing}`;
+
+  const nodeLabelVisible = (node: CanvasNode) =>
+    showAllLabels || node.id === activeId || expandedIds.has(node.id);
+
+  const description = canvas.edges
+    .map((edge) => {
+      const subject = nodeById.get(edge.subjectId);
+      const object = nodeById.get(edge.objectId);
+      if (!subject || !object) return '';
+      return `${subject.label} ${humanizePredicate(edge.predicate)} ${object.label}`;
+    })
+    .filter(Boolean)
     .join('; ');
 
   return (
     <div>
-      <div className="overflow-hidden rounded-xl border border-edge bg-[radial-gradient(circle_at_center,rgba(81,143,106,0.12),transparent_48%)] p-2 sm:p-4">
-        {shown.length === 0 ? (
-          <p className="py-10 text-center text-sm text-muted">No active connections to draw yet.</p>
+      <div
+        className="relative overflow-hidden rounded-xl border border-edge bg-[radial-gradient(circle_at_center,rgba(81,143,106,0.12),transparent_48%)]"
+        // A pan/zoom canvas with its own key map is one of the few legitimate
+        // application roles: arrow-key panning is the WCAG 2.5.7 keyboard
+        // alternative to drag-pan, and every control inside stays Tab-operable.
+        role="application"
+        aria-label="Interactive map viewport. Drag to pan; use arrow keys to pan, plus and minus to zoom, zero to reset."
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: arrow-key panning is the keyboard alternative to drag-pan, so the widget must be in the tab order.
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+      >
+        {canvas.nodes.length === 1 ? (
+          <p className="p-2 py-10 text-center text-sm text-muted sm:p-4">
+            No active connections to draw yet.
+          </p>
         ) : (
+          // touch-action:none lets a finger drag pan the map instead of fighting
+          // the page scroll; the map's height keeps the rest of the page reachable.
           <svg
+            ref={svgRef}
             viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-            className="h-auto w-full"
+            className="h-auto w-full touch-none select-none"
             role="img"
             aria-labelledby="local-map-title local-map-desc"
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerEnd}
+            onPointerCancel={handlePointerEnd}
           >
             <title id="local-map-title">{`Connections around ${selected.label}`}</title>
             <desc id="local-map-desc">{description}</desc>
 
-            {nodes.map(({ edge, x1, y1, x2, y2, ux, uy }) => {
-              const confirmed = edge.reviewStatus === 'confirmed';
-              const lineClass = confirmed
-                ? 'stroke-accent/70'
-                : 'stroke-amber-500/80 dark:stroke-amber-400/80';
-              const headClass = confirmed
-                ? 'fill-accent/70'
-                : 'fill-amber-500/80 dark:fill-amber-400/80';
-              // The head sits at whichever end the relation points to, so an
-              // incoming edge reads as incoming without hovering anything.
-              const head = edge.outbound ? arrowhead(x2, y2, ux, uy) : arrowhead(x1, y1, -ux, -uy);
-              return (
-                <g key={edge.id}>
-                  <line
-                    x1={x1}
-                    y1={y1}
-                    x2={x2}
-                    y2={y2}
-                    strokeWidth={1.5}
-                    strokeDasharray={confirmed ? undefined : '4 3'}
-                    className={lineClass}
-                  />
-                  <polygon points={head} className={headClass} />
-                </g>
-              );
-            })}
+            <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
+              {canvas.edges.map((edge) => {
+                const subject = nodeById.get(edge.subjectId);
+                const object = nodeById.get(edge.objectId);
+                if (!subject || !object) return null;
+                const confirmed = edge.reviewStatus === 'confirmed';
+                const line = edgeLine(
+                  subject,
+                  object,
+                  subject.ring === 0 ? CENTER_R : NODE_R,
+                  object.ring === 0 ? CENTER_R : NODE_R,
+                );
+                return (
+                  <g key={edge.id}>
+                    <line
+                      x1={line.x1}
+                      y1={line.y1}
+                      x2={line.x2}
+                      y2={line.y2}
+                      strokeWidth={1.5}
+                      strokeDasharray={confirmed ? undefined : '4 3'}
+                      className={
+                        confirmed
+                          ? 'stroke-accent/70'
+                          : 'stroke-amber-500/80 dark:stroke-amber-400/80'
+                      }
+                    />
+                    <polygon
+                      points={arrowhead(line.x2, line.y2, line.ux, line.uy)}
+                      className={
+                        confirmed ? 'fill-accent/70' : 'fill-amber-500/80 dark:fill-amber-400/80'
+                      }
+                    />
+                  </g>
+                );
+              })}
 
-            {nodes.map(({ edge, x, y, anchorEnd }) => {
-              const paint = entityKindPaint(edge.other.kind);
-              const labelX = anchorEnd ? x - (NODE_R + 5) : x + NODE_R + 5;
-              return (
-                <a key={edge.id} href={hrefForEntity(edge.other.id)}>
-                  <title>
-                    {`${edge.other.label} — ${entityKindLabel(edge.other.kind)} · ${
-                      edge.outbound ? 'outgoing' : 'incoming'
-                    } ${humanizePredicate(edge.predicate)}`}
-                  </title>
-                  <circle cx={x} cy={y} r={NODE_R} strokeWidth={2} className={paint.node} />
-                  <text
-                    x={labelX}
-                    y={y + 1}
-                    textAnchor={anchorEnd ? 'end' : 'start'}
-                    className="fill-strong text-[12px] font-medium"
-                  >
-                    {clipNodeLabel(edge.other.label)}
-                  </text>
-                  <text
-                    x={labelX}
-                    y={y + 13}
-                    textAnchor={anchorEnd ? 'end' : 'start'}
-                    className="fill-muted text-[9.5px]"
-                  >
-                    {`${edge.outbound ? '→' : '←'} ${clipNodeLabel(humanizePredicate(edge.predicate), 22)}`}
-                  </text>
-                </a>
-              );
-            })}
+              {canvas.nodes.map((node) => {
+                if (node.ring === 0) return null;
+                const paint = entityKindPaint(node.kind);
+                const expansion = expansions[node.id];
+                const anchorLeft = node.x > CX + 40;
+                const labelX = anchorLeft ? node.x - (NODE_R + 5) : node.x + NODE_R + 5;
+                return (
+                  <g key={node.id}>
+                    <a
+                      href={hrefFor(node.id)}
+                      className="group"
+                      onMouseEnter={() => setActiveId(node.id)}
+                      onMouseLeave={() => setActiveId(null)}
+                      onFocus={() => setActiveId(node.id)}
+                      onBlur={() => setActiveId(null)}
+                    >
+                      <title>
+                        {`${node.label} — ${entityKindLabel(node.kind)}. Open to centre the map on it.`}
+                      </title>
+                      {/* Invisible 44px hit disc over the visible node. */}
+                      <circle cx={node.x} cy={node.y} r={HIT_R} fill="transparent" />
+                      <circle
+                        cx={node.x}
+                        cy={node.y}
+                        r={NODE_R}
+                        strokeWidth={2}
+                        className={`${paint.node} group-focus-visible:stroke-zinc-900 group-focus-visible:stroke-[3] dark:group-focus-visible:stroke-white`}
+                      />
+                      {nodeLabelVisible(node) ? (
+                        <text
+                          x={labelX}
+                          y={node.y + 1}
+                          textAnchor={anchorLeft ? 'end' : 'start'}
+                          className="fill-strong text-[12px] font-medium"
+                        >
+                          {clipNodeLabel(node.label)}
+                        </text>
+                      ) : null}
+                      {expansion && expansion.overflow > 0 ? (
+                        <text
+                          x={labelX}
+                          y={node.y + 13}
+                          textAnchor={anchorLeft ? 'end' : 'start'}
+                          className="fill-muted text-[9.5px]"
+                        >
+                          {`+${expansion.overflow} more — open to explore`}
+                        </text>
+                      ) : null}
+                    </a>
+                    {!expansion ? (
+                      // biome-ignore lint/a11y/useSemanticElements: a <button> cannot exist inside SVG; the g carries the button role, keyboard activation, and an accessible name.
+                      <g
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Show connections around ${node.label}`}
+                        aria-disabled={pendingId !== null}
+                        className={`cursor-pointer ${focusRing}`}
+                        onClick={() => void handleExpand(node)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            void handleExpand(node);
+                          }
+                        }}
+                      >
+                        <circle
+                          cx={node.x + 13}
+                          cy={node.y - 13}
+                          r={7}
+                          className="fill-raised stroke-edge hover:fill-sunken"
+                          strokeWidth={1.5}
+                        />
+                        {/* The accessible name comes from the g's aria-label, so
+                            this glyph needs no hiding of its own. */}
+                        <text
+                          x={node.x + 13}
+                          y={node.y - 9.5}
+                          textAnchor="middle"
+                          className="fill-muted text-[10px] font-semibold"
+                        >
+                          {pendingId === node.id ? '…' : '+'}
+                        </text>
+                      </g>
+                    ) : null}
+                  </g>
+                );
+              })}
 
-            <circle
-              cx={CX}
-              cy={CY}
-              r={CENTER_R}
-              strokeWidth={2.5}
-              className={entityKindPaint(selected.kind).node}
-            />
-            <text
-              x={CX}
-              y={CY - CENTER_R - 10}
-              textAnchor="middle"
-              className="fill-strong text-[13px] font-semibold"
-            >
-              {clipNodeLabel(selected.label, 28)}
-            </text>
-            <text
-              x={CX}
-              y={CY + CENTER_R + 16}
-              textAnchor="middle"
-              className="fill-muted text-[9.5px] tracking-[0.08em] uppercase"
-            >
-              {entityKindLabel(selected.kind)}
-            </text>
+              <circle
+                cx={CX}
+                cy={CY}
+                r={CENTER_R}
+                strokeWidth={2.5}
+                className={entityKindPaint(selected.kind).node}
+              />
+              <text
+                x={CX}
+                y={CY - CENTER_R - 10}
+                textAnchor="middle"
+                className="fill-strong text-[13px] font-semibold"
+              >
+                {clipNodeLabel(selected.label, 28)}
+              </text>
+              <text
+                x={CX}
+                y={CY + CENTER_R + 16}
+                textAnchor="middle"
+                className="fill-muted text-[9.5px] tracking-[0.08em] uppercase"
+              >
+                {entityKindLabel(selected.kind)}
+              </text>
+            </g>
           </svg>
         )}
+
+        <div className="absolute top-2 right-2 flex flex-col gap-1">
+          <button
+            type="button"
+            aria-label="Zoom in"
+            className={zoomButtonClass}
+            onClick={() =>
+              setViewport((current) => zoomAt(current, KEY_ZOOM, VIEW_W / 2, VIEW_H / 2))
+            }
+          >
+            <Plus className="size-4" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            aria-label="Zoom out"
+            className={zoomButtonClass}
+            onClick={() =>
+              setViewport((current) => zoomAt(current, 1 / KEY_ZOOM, VIEW_W / 2, VIEW_H / 2))
+            }
+          >
+            <Minus className="size-4" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            aria-label="Reset view"
+            className={zoomButtonClass}
+            onClick={() => setViewport(INITIAL_VIEWPORT)}
+          >
+            <RotateCcw className="size-4" aria-hidden="true" />
+          </button>
+        </div>
+
+        <div aria-live="polite" role="status" className="sr-only">
+          {announce}
+        </div>
       </div>
 
-      {shown.length > 0 ? (
-        <>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
-            {kindsPresent.map((kind) => (
-              <span key={kind} className="inline-flex items-center gap-1.5">
-                <span
-                  aria-hidden="true"
-                  className={`inline-block size-2 rounded-full ${entityKindPaint(kind).swatch}`}
-                />
-                {entityKindLabel(kind)}
-              </span>
-            ))}
-            <span className="inline-flex items-center gap-1.5">
-              <span
-                aria-hidden="true"
-                className="inline-block h-px w-4 border-t-2 border-dashed border-amber-500 dark:border-amber-400"
-              />
-              Needs review
-            </span>
-          </div>
-          {/* The diagram's content as text: the <desc> above is a summary, this
-              is the navigable equivalent for anyone not reading the drawing. */}
-          <ul className="sr-only">
-            {shown.map((edge) => (
-              <li key={edge.id}>
-                <a href={hrefForEntity(edge.other.id)}>
-                  {`${edge.other.label} (${entityKindLabel(edge.other.kind)}) — ${
-                    edge.outbound ? 'outgoing' : 'incoming'
-                  } ${humanizePredicate(edge.predicate)}${
-                    edge.reviewStatus === 'confirmed' ? '' : ', needs review'
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+        {[...new Set(canvas.nodes.map((node) => node.kind))].map((nodeKind) => (
+          <span key={nodeKind} className="inline-flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className={`inline-block size-2 rounded-full ${entityKindPaint(nodeKind).swatch}`}
+            />
+            {entityKindLabel(nodeKind)}
+          </span>
+        ))}
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            aria-hidden="true"
+            className="inline-block h-px w-4 border-t-2 border-dashed border-amber-500 dark:border-amber-400"
+          />
+          Needs review
+        </span>
+      </div>
+
+      {/* The drawing's content as a navigable list — the equivalent for anyone
+          not reading the SVG, and the touch-friendly path on small screens. */}
+      <ul className="sr-only">
+        {canvas.nodes
+          .filter((node) => node.ring > 0)
+          .map((node) => {
+            const connecting = canvas.edges.filter(
+              (edge) =>
+                (edge.subjectId === node.id || edge.objectId === node.id) &&
+                (edge.subjectId === selected.id || edge.objectId === selected.id),
+            );
+            return (
+              <li key={node.id}>
+                <a href={hrefFor(node.id)}>
+                  {`${node.label} (${entityKindLabel(node.kind)})${
+                    connecting.length > 0
+                      ? ` — ${connecting
+                          .map(
+                            (edge) =>
+                              `${edge.subjectId === node.id ? 'outgoing' : 'incoming'} ${humanizePredicate(edge.predicate)}${edge.reviewStatus === 'confirmed' ? '' : ', needs review'}`,
+                          )
+                          .join('; ')}`
+                      : ''
                   }`}
                 </a>
               </li>
-            ))}
-          </ul>
-        </>
-      ) : null}
+            );
+          })}
+      </ul>
 
       {/* The count comes from a query, not from what was drawn — reporting the
-          drawn number as the total is the bug this whole change is about. No
-          claim about the list below either: that section is capped in its own
-          right and says so itself. */}
-      {totalEdges > shown.length ? (
+          drawn number as the total is the bug the true-total queries exist to fix. */}
+      {totalEdges > initialEdges.length ? (
         <p className="mt-2 text-xs text-muted">
-          Showing {shown.length} of {totalEdges.toLocaleString()} active connections.
+          Showing {initialEdges.length} of {totalEdges.toLocaleString()} active connections.
         </p>
       ) : null}
     </div>

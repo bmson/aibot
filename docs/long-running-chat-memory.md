@@ -81,11 +81,22 @@ their source memory, extraction confidence, source trust, and review time. The o
 - add a relationship manually only with an owner-written source note. That note is saved as a normal,
   owner-confirmed durable memory and is the relationship's evidence — never a graph-only assertion.
 
-The local map is drawn as server-rendered SVG: directed edges, colour by entity kind, dashed for
-edges still awaiting review, and every neighbour a link, so the map is how the owner moves around the
-graph. It stays bounded to one entity's neighbourhood and states its own overflow rather than
-silently truncating. Entity lists page and report their true totals; the merge target is found by
-searching the whole graph rather than picking from a fixed prefix of it.
+The local map is an interactive SVG canvas over one entity's neighbourhood: directed edges, colour
+by entity kind, dashed for edges still awaiting review. It draws up to 150 active first-hop
+connections from its own query (the review list's 80-row, unreviewed-first page would draw a skewed
+subset), states its own overflow rather than silently truncating, and supports drag-pan, wheel/button
+and keyboard zoom. Clicking a neighbour navigates the whole page to re-centre on it — sidebar,
+evidence list, and curation forms always agree on the subject — while a per-node expand control folds
+a second hop into the canvas (50 edges per click, deduped, hard-capped canvas) so exploration never
+has to render the whole graph at once. Entity lists page and report their true totals; the sidebar
+filters by entity kind; the merge target is found by searching the whole graph rather than picking
+from a fixed prefix of it.
+
+`/profile/knowledge/calendar` renders the graph's date entities as a month grid: exact days in their
+cells, recurring `--MM-DD` dates (birthdays, anniversaries) marked yearly in the cell of the day they
+recur on, and month-only mentions listed separately. Grouping keys off the canonical date key, never
+the locale-formatted label. It is a view over dates *mentioned in memories* — deliberately not the
+synced Google Calendar, and labelled as such.
 
 Relationship review state is keyed to the source-memory relationship fingerprint. Re-extracting a
 changed memory refreshes the direct edge while retaining a matching owner decision.

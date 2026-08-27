@@ -18,7 +18,21 @@ import {
   memories,
   namePrefixMatch,
 } from '@assistant/db';
-import { and, asc, count, desc, eq, gt, ilike, isNull, ne, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  ilike,
+  inArray,
+  isNull,
+  like,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { type AnyPgColumn, alias } from 'drizzle-orm/pg-core';
 import type { EmbeddingPort } from './profile/commands.js';
 
@@ -127,16 +141,35 @@ function asReviewStatus(value: string): KnowledgeGraphReviewStatus {
   return value === 'confirmed' || value === 'rejected' ? value : 'unreviewed';
 }
 
+/**
+ * The domain owns the kind list; a URL or form can carry any string, so
+ * unknown values degrade to "no filter" rather than silently zeroing the list
+ * — a garbage `?kind=` looking like data loss is the failure this avoids.
+ */
+export function asGraphEntityKind(value: string | undefined): GraphEntityKind | undefined {
+  return value && (GRAPH_ENTITY_KINDS as readonly string[]).includes(value)
+    ? (value as GraphEntityKind)
+    : undefined;
+}
+
 /** Owner-facing, bounded graph inspection. It reads only source-backed edges. */
 export async function getKnowledgeGraphOverview(
   db: Db,
-  input: { query?: string; entityId?: string; page?: number; pageSize?: number } = {},
+  input: {
+    query?: string;
+    kind?: string;
+    entityId?: string;
+    page?: number;
+    pageSize?: number;
+  } = {},
 ): Promise<KnowledgeGraphOverview> {
   const agent = await getAgent(db);
   const query = cleanSearch(input.query ?? '');
+  const kind = asGraphEntityKind(input.kind);
   const pageSize = input.pageSize ?? ENTITY_PAGE_SIZE;
   const entityCondition = and(
     eq(knowledgeGraphEntities.agentId, agent.id),
+    kind ? eq(knowledgeGraphEntities.kind, kind) : undefined,
     query ? ilike(displayLabel(knowledgeGraphEntities), `%${query}%`) : undefined,
   );
   // The match count has to be known before the page can be clamped, so it is
@@ -222,6 +255,9 @@ export async function getKnowledgeGraphOverview(
   const selected =
     (requestedId
       ? (entities.find((entity) => entity.id === requestedId) ??
+        // The fallback lookup is deliberately unfiltered by kind: a deep link
+        // like ?entity=<id>&kind=person must still open a date entity, or
+        // changing the filter would make a shared link lose its subject.
         (
           await db
             .select({
@@ -357,6 +393,292 @@ export async function getKnowledgeGraphOverview(
     selectedRelationTotal: Number(selectedRelationRow?.value ?? 0),
     selectedActiveRelationTotal: Number(selectedActiveRow?.value ?? 0),
     duplicates,
+  };
+}
+
+/** One edge as the local map draws it: the neighbour plus direction relative to the queried entity. */
+export interface KnowledgeGraphNeighborEdge {
+  id: string;
+  predicate: string;
+  /** True when the queried entity is the subject of the relation. */
+  outbound: boolean;
+  reviewStatus: KnowledgeGraphReviewStatus;
+  other: KnowledgeGraphEntityView;
+}
+
+export interface KnowledgeGraphNeighborhood {
+  entity: KnowledgeGraphEntityView | null;
+  edges: KnowledgeGraphNeighborEdge[];
+  /** True active degree from a count query — never the length of the capped page. */
+  total: number;
+}
+
+/**
+ * First paint of the interactive map. 150 keeps a hub readable while covering
+ * nearly every real entity; the server clamps anything larger to 250.
+ */
+const NEIGHBORHOOD_DEFAULT_LIMIT = 150;
+const NEIGHBORHOOD_MAX_LIMIT = 250;
+/** One expansion click's worth of second-hop neighbours. */
+export const NEIGHBORHOOD_EXPANSION_LIMIT = 50;
+
+/**
+ * The map's own data path, separate from the review list. The overview's
+ * relation page is capped at 80 and ordered unreviewed-first so the owner sees
+ * what needs attention; drawing the map from it showed a skewed subset for
+ * high-degree entities. This query is ordered for stable rendering instead —
+ * confirmed edges first, then recency — and reports the true active degree.
+ *
+ * Used for both the initial neighbourhood and the client-driven expansion,
+ * which is why it takes any entity id rather than the page's selected one.
+ */
+export async function getKnowledgeGraphNeighborhood(
+  db: Db,
+  input: { entityId: string; limit?: number },
+): Promise<KnowledgeGraphNeighborhood> {
+  const agent = await getAgent(db);
+  const entity = await agentEntity(db, input.entityId);
+  if (!entity) return { entity: null, edges: [], total: 0 };
+  const limit = Math.max(
+    1,
+    Math.min(input.limit ?? NEIGHBORHOOD_DEFAULT_LIMIT, NEIGHBORHOOD_MAX_LIMIT),
+  );
+
+  const subject = alias(knowledgeGraphEntities, 'neighbourhood_subject');
+  const object = alias(knowledgeGraphEntities, 'neighbourhood_object');
+  const incidentActive = and(
+    eq(knowledgeGraphRelations.agentId, agent.id),
+    ne(knowledgeGraphRelations.reviewStatus, 'rejected'),
+    or(
+      eq(knowledgeGraphRelations.subjectEntityId, entity.id),
+      eq(knowledgeGraphRelations.objectEntityId, entity.id),
+    ),
+  );
+  const [rows, [totalRow]] = await Promise.all([
+    db
+      .select({
+        id: knowledgeGraphRelations.id,
+        predicate: knowledgeGraphRelations.predicate,
+        reviewStatus: knowledgeGraphRelations.reviewStatus,
+        subjectId: knowledgeGraphRelations.subjectEntityId,
+        objectId: knowledgeGraphRelations.objectEntityId,
+        subjectLabel: displayLabel(subject),
+        subjectKind: subject.kind,
+        subjectCanonicalKey: subject.canonicalKey,
+        objectLabel: displayLabel(object),
+        objectKind: object.kind,
+        objectCanonicalKey: object.canonicalKey,
+      })
+      .from(knowledgeGraphRelations)
+      .innerJoin(subject, eq(knowledgeGraphRelations.subjectEntityId, subject.id))
+      .innerJoin(object, eq(knowledgeGraphRelations.objectEntityId, object.id))
+      .where(incidentActive)
+      .orderBy(
+        asc(sql`CASE ${knowledgeGraphRelations.reviewStatus} WHEN 'confirmed' THEN 0 ELSE 1 END`),
+        desc(knowledgeGraphRelations.createdAt),
+      )
+      .limit(limit),
+    db.select({ value: count() }).from(knowledgeGraphRelations).where(incidentActive),
+  ]);
+  const edges = rows.map((row) => {
+    const outbound = row.subjectId === entity.id;
+    return {
+      id: row.id,
+      predicate: row.predicate,
+      outbound,
+      reviewStatus: asReviewStatus(row.reviewStatus),
+      other: outbound
+        ? {
+            id: row.objectId,
+            label: row.objectLabel,
+            kind: row.objectKind,
+            canonicalKey: row.objectCanonicalKey,
+          }
+        : {
+            id: row.subjectId,
+            label: row.subjectLabel,
+            kind: row.subjectKind,
+            canonicalKey: row.subjectCanonicalKey,
+          },
+    };
+  });
+  return { entity, edges, total: Number(totalRow?.value ?? 0) };
+}
+
+/** What a date entity connects to, as one cell of the calendar renders it. */
+export interface KnowledgeGraphCalendarConnection {
+  relationId: string;
+  predicate: string;
+  /** True when the date entity is the subject of the relation. */
+  outbound: boolean;
+  other: KnowledgeGraphEntityView;
+}
+
+export interface KnowledgeGraphCalendarEntry {
+  entity: KnowledgeGraphEntityView;
+  /** Recurring dates (`--MM-DD`, birthdays and anniversaries) recur every year. */
+  recurring: boolean;
+  connections: KnowledgeGraphCalendarConnection[];
+}
+
+export interface KnowledgeGraphCalendarMonth {
+  month: string;
+  /** Entries keyed by two-digit day of month ('01'..'31'); a cell can hold several. */
+  days: Record<string, KnowledgeGraphCalendarEntry[]>;
+  /** The month-precision entity (`date:YYYY-MM`), when memories mention the month itself. */
+  monthEntry: KnowledgeGraphCalendarEntry | null;
+  /** True count of the month's incident edges; `shownConnections` is the drawn page. */
+  totalConnections: number;
+  shownConnections: number;
+}
+
+/** The month URL param, validated before it is ever spliced into a LIKE pattern. */
+export const CALENDAR_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+/** One busy month of edges. Cells truncate per day long before this, so the page stays fast. */
+const CALENDAR_EDGE_LIMIT = 200;
+
+function dayOfMonth(canonicalKey: string): string | null {
+  const day = /^(?:date:\d{4}-\d{2}|date:--\d{2})-(\d{2})$/.exec(canonicalKey)?.[1];
+  return day ?? null;
+}
+
+/**
+ * Dates the graph knows about for one month, with what they connect to. This
+ * is a view over knowledge-graph date entities — memories that mention a day —
+ * not the synced calendar, so nothing here implies a scheduled appointment.
+ *
+ * Grouping keys off `canonicalKey`, never the label: labels are
+ * locale-formatted ("6 March 2026") and two spellings of one day share a key.
+ */
+export async function getKnowledgeGraphCalendar(
+  db: Db,
+  input: { month: string },
+): Promise<KnowledgeGraphCalendarMonth | null> {
+  if (!CALENDAR_MONTH_RE.test(input.month)) return null;
+  const agent = await getAgent(db);
+  const month = input.month;
+  const mm = month.slice(5, 7);
+
+  const dateRows = await db
+    .select({
+      id: knowledgeGraphEntities.id,
+      label: displayLabel(knowledgeGraphEntities),
+      kind: knowledgeGraphEntities.kind,
+      canonicalKey: knowledgeGraphEntities.canonicalKey,
+    })
+    .from(knowledgeGraphEntities)
+    .where(
+      and(
+        eq(knowledgeGraphEntities.agentId, agent.id),
+        eq(knowledgeGraphEntities.kind, 'date'),
+        or(
+          like(knowledgeGraphEntities.canonicalKey, `date:${month}-%`),
+          like(knowledgeGraphEntities.canonicalKey, `date:--${mm}-%`),
+          eq(knowledgeGraphEntities.canonicalKey, `date:${month}`),
+        ),
+      ),
+    )
+    .orderBy(asc(knowledgeGraphEntities.canonicalKey));
+
+  const empty: KnowledgeGraphCalendarMonth = {
+    month,
+    days: {},
+    monthEntry: null,
+    totalConnections: 0,
+    shownConnections: 0,
+  };
+  const dateById = new Map(dateRows.map((row) => [row.id, row]));
+  if (dateById.size === 0) return empty;
+  const dateIds = [...dateById.keys()];
+
+  const subject = alias(knowledgeGraphEntities, 'calendar_subject');
+  const object = alias(knowledgeGraphEntities, 'calendar_object');
+  const incidentActive = and(
+    eq(knowledgeGraphRelations.agentId, agent.id),
+    ne(knowledgeGraphRelations.reviewStatus, 'rejected'),
+    or(
+      inArray(knowledgeGraphRelations.subjectEntityId, dateIds),
+      inArray(knowledgeGraphRelations.objectEntityId, dateIds),
+    ),
+  );
+  const [edgeRows, [totalRow]] = await Promise.all([
+    db
+      .select({
+        id: knowledgeGraphRelations.id,
+        predicate: knowledgeGraphRelations.predicate,
+        subjectId: knowledgeGraphRelations.subjectEntityId,
+        objectId: knowledgeGraphRelations.objectEntityId,
+        subjectLabel: displayLabel(subject),
+        subjectKind: subject.kind,
+        subjectCanonicalKey: subject.canonicalKey,
+        objectLabel: displayLabel(object),
+        objectKind: object.kind,
+        objectCanonicalKey: object.canonicalKey,
+      })
+      .from(knowledgeGraphRelations)
+      .innerJoin(subject, eq(knowledgeGraphRelations.subjectEntityId, subject.id))
+      .innerJoin(object, eq(knowledgeGraphRelations.objectEntityId, object.id))
+      .where(incidentActive)
+      .orderBy(asc(knowledgeGraphRelations.createdAt), asc(knowledgeGraphRelations.ordinal))
+      .limit(CALENDAR_EDGE_LIMIT),
+    db.select({ value: count() }).from(knowledgeGraphRelations).where(incidentActive),
+  ]);
+
+  const days: Record<string, KnowledgeGraphCalendarEntry[]> = {};
+  let monthEntry: KnowledgeGraphCalendarEntry | null = null;
+  const entryByEntity = new Map<string, KnowledgeGraphCalendarEntry>();
+  for (const row of dateRows) {
+    const entry: KnowledgeGraphCalendarEntry = {
+      entity: row,
+      recurring: row.canonicalKey.startsWith('date:--'),
+      connections: [],
+    };
+    entryByEntity.set(row.id, entry);
+    if (row.canonicalKey === `date:${month}`) {
+      monthEntry = entry;
+      continue;
+    }
+    const day = dayOfMonth(row.canonicalKey);
+    if (!day) continue;
+    const entries = days[day] ?? [];
+    entries.push(entry);
+    days[day] = entries;
+  }
+
+  for (const row of edgeRows) {
+    // An edge between two date entities anchors to the subject; both are on
+    // the grid, so either choice lands the connection on a real day.
+    const subjectIsDate = entryByEntity.has(row.subjectId);
+    const entry = entryByEntity.get(subjectIsDate ? row.subjectId : row.objectId);
+    if (!entry) continue;
+    entry.connections.push({
+      relationId: row.id,
+      predicate: row.predicate,
+      outbound: subjectIsDate,
+      other: subjectIsDate
+        ? {
+            id: row.objectId,
+            label: row.objectLabel,
+            kind: row.objectKind,
+            canonicalKey: row.objectCanonicalKey,
+          }
+        : {
+            id: row.subjectId,
+            label: row.subjectLabel,
+            kind: row.subjectKind,
+            canonicalKey: row.subjectCanonicalKey,
+          },
+    });
+  }
+  for (const entry of entryByEntity.values()) {
+    entry.connections.sort((a, b) => a.other.label.localeCompare(b.other.label));
+  }
+  return {
+    month,
+    days,
+    monthEntry,
+    totalConnections: Number(totalRow?.value ?? 0),
+    shownConnections: edgeRows.length,
   };
 }
 

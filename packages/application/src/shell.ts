@@ -20,6 +20,14 @@ export async function getAssistantTimezone(db: Db): Promise<string> {
   }
 }
 
+export async function getAssistantLocale(db: Db): Promise<string> {
+  try {
+    return (await getAgent(db)).locale || 'en';
+  } catch {
+    return 'en';
+  }
+}
+
 export async function getPrimaryConversationId(db: Db): Promise<string> {
   const agent = await getAgent(db);
   return (await getOrCreatePrimaryConversation(db, agent.id)).id;
