@@ -24,7 +24,10 @@ import {
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
 const MARKER = `xtest-kgview-${Date.now()}`;
-const ENTITY_COUNT = 75;
+// Above the application layer's 80-row relation cap on purpose: these tests
+// exist to prove the reported counts are queried rather than taken from the
+// page, and a fixture that fits inside the cap cannot show the difference.
+const ENTITY_COUNT = 85;
 
 let db: Db;
 let dbUp = false;
@@ -157,8 +160,10 @@ describe('knowledge graph overview (integration)', () => {
     const overview = await getKnowledgeGraphOverview(db, { query: MARKER, entityId: hubId });
     expect(overview.selected?.id).toBe(hubId);
     expect(overview.selectedRelationTotal).toBe(ENTITY_COUNT);
-    // The list itself stays bounded; the count above is what tells the truth.
-    expect(overview.relations.length).toBeLessThanOrEqual(ENTITY_COUNT);
+    // The list itself stays bounded — that it is strictly shorter than the
+    // total is what proves the cap is in play and the count is not just the
+    // array's length wearing a different name.
+    expect(overview.relations.length).toBeLessThan(overview.selectedRelationTotal);
   });
 
   // The local map draws from the same capped page, so its own length would
