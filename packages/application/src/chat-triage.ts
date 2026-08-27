@@ -57,6 +57,32 @@ const LEADING_FILLER =
 const FAILED_ACTION_FOLLOW_UP =
   /\b(?:i(?:'m| am) not seeing (?:the |any )?(?:change|changes|update|updates)|i (?:do not|don't) see (?:the |any )?(?:change|changes|update|updates)|(?:it|that|this|they|those|these) (?:wasn't|was not|weren't|were not|isn't|is not|aren't|are not|hasn't|has not|haven't|have not) (?:actually )?(?:updated|changed|added|sent|created|saved|scheduled|booked|fixed|applied|submitted)|(?:it|that|this|they|those|these) (?:didn't|did not) (?:actually )?(?:update|change|send|save|work)|nothing (?:changed|happened|was updated|was added|was sent|was created|was saved)|still (?:missing|unchanged|not updated|not changed|not there)|did you (?:actually )?(?:update|change|add|send|create|save|schedule|book|fix|apply|submit))\b/;
 
+// The ambient block carries one thing about the sky: conditions right now, at
+// the owner's current location. A forecast for another day or another place is
+// a lookup, and on the tool-less path the model can only invent one or
+// apologise for having no data — both of which it has done in production.
+const WEATHER_SUBJECT = /\b(?:weather|forecast|temperature|rain|raining|snow|snowing)\b/;
+
+// Anything but right-here-right-now: a named day, a later part of today, or a
+// stretch of the week.
+const WEATHER_ELSEWHEN =
+  /\b(?:tomorrow|tonight|later|this (?:evening|afternoon|morning|week|weekend)|next (?:week|weekend)|the weekend|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/;
+
+// A place the ambient location line cannot be: "in San Francisco", "for Tokyo".
+// Matched against the original text — the capital is the signal.
+const WEATHER_ELSEWHERE = /\b(?:in|at|for|near|around)\s+(?:the\s+)?[A-Z][A-Za-z]/;
+
+// Only a question routes: "will it rain in Boston tomorrow?" is a lookup,
+// "ugh, rain all weekend" is conversation.
+const QUESTION_OPENER =
+  /^(?:how|what|when|where|will|is|are|any|do|does|should|can|could|gonna|going to)\b/;
+
+function looksLikeWeatherLookup(text: string, stripped: string): boolean {
+  if (!WEATHER_SUBJECT.test(stripped)) return false;
+  if (!text.includes('?') && !QUESTION_OPENER.test(stripped)) return false;
+  return WEATHER_ELSEWHEN.test(stripped) || WEATHER_ELSEWHERE.test(text);
+}
+
 const PRIOR_ACTION_COMMITMENT =
   /\b(?:update|change|edit|replace|fix|format|add|send|create|save|schedule|book|apply|submit|upload|share|delete|cancel)(?:d|s|ing)?\b/;
 
@@ -80,6 +106,7 @@ export function looksLikeActionRequest(text: string, priorAssistantText = ''): b
     LEADING_ACTION.test(t) ||
     ACTION_PHRASE.test(t) ||
     READ_PHRASE.test(t) ||
+    looksLikeWeatherLookup(text, t) ||
     (FAILED_ACTION_FOLLOW_UP.test(t) &&
       PRIOR_ACTION_COMMITMENT.test(priorAssistantText.toLowerCase()))
   );

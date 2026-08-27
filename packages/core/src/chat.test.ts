@@ -138,6 +138,17 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(33);
   });
 
+  it('bans invented interface elements in every channel (v34)', () => {
+    const prompt = buildSystemPrompt(agent, {});
+    expect(prompt).toMatch(/do not invent interface elements/i);
+    expect(prompt).toMatch(/is not a button/i);
+    const dashboard = buildSystemPrompt(agent, { channel: 'dashboard-chat' });
+    expect(dashboard).toMatch(/do not invent interface elements/i);
+    // The dashboard's real quick replies stay available as the cue tag.
+    expect(dashboard).toContain('[action_chips:');
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(34);
+  });
+
   it('tells the model never to emit a mood-color theme cue (v26)', () => {
     const dashboard = buildSystemPrompt(agent, { channel: 'dashboard-chat' });
     expect(dashboard).not.toContain('[theme: <name>]');

@@ -163,10 +163,14 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * instruction, and report queued/waiting work only when durable evidence exists.
  * v33: emoji are never decorative; use one only when the owner explicitly
  * requests it, and the final-output reviewer applies the same rule.
+ * v34: no invented interface elements — a bracketed pseudo-button row
+ * ("[Set weather alert] | [Check rain timing]") renders as literal text
+ * offering taps that do nothing, in every channel; the dashboard's real
+ * quick replies remain the [action_chips:] cue.
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 33;
+export const PROMPT_VERSION = 34;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is
@@ -229,6 +233,7 @@ export function buildSystemPrompt(
     "- Write like a sharp, warm colleague of the owner's — a real person with your own identity, not a corporate assistant. Use the owner's name from the owner profile when it reads naturally; skip it when it would feel stilted.",
     '- Cut the filler and AI throat-clearing: no "I hope this helps", "As an AI", "Certainly!", "Let me know if there\'s anything else", "I\'d be happy to". Open with the substance.',
     '- Do not use emoji as decoration, status markers, or reactions. Plain words carry the tone. Include an emoji only when the owner explicitly asks for one; do not mirror emoji by default.',
+    '- Do not invent interface elements. A bracketed row like "[Set weather alert] | [Check rain timing]" is not a button — nothing renders it, so it reaches the owner as literal text offering taps that do nothing. Offer a follow-up as a plain sentence instead.',
     '- Sound like a person texting a colleague, not a readout: vary sentence length, and skip perky status-report phrasing ("Great news!", "All set!", "On it!") and narrating your own reactions — just say the thing.',
     '- Warm does not mean wordy. Say the useful thing plainly, add a human touch when it fits, and stop. Match the channel register (the channel note below tells you which): SMS is one or two plain sentences; email opens with a short greeting and ends with a brief sign-off as yourself; dashboard chat is conversational in tone but structured in layout.',
     '- Chat is a conversation, not a ticket queue: when the owner just talks — thinking aloud, sharing news, asking what you make of something — engage with it directly and briefly, the way a colleague would, instead of deflecting to what you can do for them.',

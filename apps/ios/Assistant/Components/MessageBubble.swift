@@ -1276,8 +1276,15 @@ enum MessageResponseCard: Identifiable {
         let weatherTerms = ["weather", "forecast", "sunny", "cloudy", "rain", "snow", "wind", "humidity"]
         guard weatherTerms.contains(where: lower.contains) else { return [] }
         guard let reading = weatherReading(in: text) else { return [] }
-        let temperature = weatherField(named: "temperature", in: text) ?? reading
-        let condition = weatherCondition(in: text) ?? "Current conditions"
+        // An answer for one day often arrives as that day's arc — morning,
+        // afternoon, evening — with no single headline reading. The daytime
+        // part is what the question was about, so it, not whichever reading
+        // happens to come first in the text, sets the card's headline.
+        let dayParts = daytimeWeatherParts(in: text)
+        let temperature = weatherField(named: "temperature", in: text)
+            ?? dayParts.lazy.compactMap({ weatherReading(in: $0.value) }).first
+            ?? reading
+        let condition = weatherCondition(in: text, preferring: dayParts) ?? "Current conditions"
         let location = weatherLocation(in: text)
 
         // A forecast answer names each day it covers; deal every day its own
@@ -1287,13 +1294,15 @@ enum MessageResponseCard: Identifiable {
         // underneath, so those sections are the first place to look.
         let sections = weatherDaySections(in: text)
         if !sections.isEmpty {
-            return sections.map { section in
-                .weather(
+            return sections.map { section -> Self in
+                let sectionParts = daytimeWeatherParts(in: section.text)
+                return .weather(
                     location: location ?? "Forecast",
                     temperature: weatherField(named: "temperature", in: section.text)
+                        ?? sectionParts.lazy.compactMap({ weatherReading(in: $0.value) }).first
                         ?? weatherReading(in: section.text)
                         ?? temperature,
-                    condition: weatherCondition(in: section.text) ?? condition,
+                    condition: weatherCondition(in: section.text, preferring: sectionParts) ?? condition,
                     details: [WeatherDetail(label: "Day", value: section.day)]
                         + weatherDetails(in: section.text)
                 )
@@ -1394,8 +1403,15 @@ enum MessageResponseCard: Identifiable {
     /// phrase beside the reading ("22°C (72°F), partly cloudy"), and only then
     /// a bare keyword — scanned over text with probability phrasing removed so
     /// a dry day's "Rain chance: 0%" cannot report the card as rain.
-    private static func weatherCondition(in text: String) -> String? {
+    private static func weatherCondition(
+        in text: String,
+        preferring parts: [WeatherDetail] = []
+    ) -> String? {
         if let field = weatherField(named: "conditions", in: text) { return field }
+        // "Afternoon: Sunny, 21°C" states the sky for the part of the day the
+        // card is reporting; a keyword swept from the rest of the answer does
+        // not, and has no business overruling it.
+        if let part = forecastCondition(in: parts) { return part }
         if let beside = conditionBesideReading(in: text) { return beside }
         let scan = conditionScanText(text)
         return ["rain", "snow", "cloud", "sun", "wind", "fog", "storm"]
@@ -1480,10 +1496,33 @@ enum MessageResponseCard: Identifiable {
         return nil
     }
 
+    /// One day's answer is often written as that day's arc rather than as a
+    /// single reading. Each part is a fact the card can show on its own row.
+    private static let weatherDayPartFields: [(label: String, names: [String])] = [
+        ("Morning", ["morning"]),
+        ("Midday", ["midday", "noon"]),
+        ("Afternoon", ["afternoon"]),
+        ("Evening", ["evening"]),
+        ("Overnight", ["overnight", "tonight", "night"]),
+    ]
+
+    /// The day's parts, daylight first: "how will the weather be" is a question
+    /// about the day itself, so the afternoon speaks for it, then midday, then
+    /// the morning. Evening and overnight answer only for an answer that
+    /// covers nothing else.
+    private static func daytimeWeatherParts(in text: String) -> [WeatherDetail] {
+        ["Afternoon", "Midday", "Morning", "Evening", "Overnight"].compactMap { label -> WeatherDetail? in
+            guard let field = weatherDayPartFields.first(where: { $0.label == label }),
+                  let value = field.names.lazy.compactMap({ weatherField(named: $0, in: text) }).first
+            else { return nil }
+            return WeatherDetail(label: field.label, value: value)
+        }
+    }
+
     /// Keep weather measurements in the structured surface, while leaving
     /// conversational boilerplate and provenance out of the card.
     private static func weatherDetails(in text: String) -> [WeatherDetail] {
-        let fields: [(label: String, names: [String])] = [
+        let fields: [(label: String, names: [String])] = weatherDayPartFields + [
             ("Today", ["today's range", "today’s range"]),
             ("Wind", ["wind"]),
             ("Humidity", ["humidity"]),
@@ -1550,13 +1589,42 @@ enum MessageResponseCard: Identifiable {
     private static func weatherLocation(in text: String) -> String? {
         let pattern = #"(?i)\b(?:weather|forecast)(?:\s+(?:forecast|report|outlook|conditions|update))?"#
             + #"\s+(?:for|in|at|near|around)\s+(.+?)(?:\s+as\s+of\b|[\r\n:(]|$)"#
-        guard let expression = try? NSRegularExpression(pattern: pattern),
-              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let locationRange = Range(match.range(at: 1), in: text) else { return nil }
-        let location = String(text[locationRange])
+        let named = firstCapture(of: pattern, in: text).map { cleanedLocation($0) }
+        // "San Francisco weather for Thu Aug 27, 2026" answers "for what day",
+        // not "for where". A date in the headline slot would name neither.
+        if let named, !isDateLike(named) { return locationWithoutTimeframe(named) }
+        if let before = placeBeforeWeatherWord(in: text) { return locationWithoutTimeframe(before) }
+        return nil
+    }
+
+    /// The place can lead the sentence instead of following the word:
+    /// "San Francisco weather for Thu Aug 27" names it before "weather".
+    private static func placeBeforeWeatherWord(in text: String) -> String? {
+        let pattern = #"([\p{Lu}][\p{L}.'’-]*(?:[ -][\p{Lu}][\p{L}.'’-]*)*(?:,\s*[\p{Lu}][\p{L}.]*)?)"#
+            + #"\s+(?:weather|forecast)\b"#
+        return firstCapture(of: pattern, in: text).map { cleanedLocation($0) }
+    }
+
+    /// A weekday, a month and day, or a bare number is a date, and a date is
+    /// never the place a forecast is about.
+    private static func isDateLike(_ value: String) -> Bool {
+        let pattern = #"(?i)^(?:(?:mon|tues?|wed(?:nes)?|thur?s?|fri|sat(?:ur)?|sun)(?:day)?\b"#
+            + #"|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*\d"#
+            + #"|today\b|tomorrow\b|tonight\b|\d)"#
+        return value.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    private static func cleanedLocation(_ value: String) -> String {
+        value
             .replacingOccurrences(of: "**", with: "")
             .trimmingCharacters(in: CharacterSet(charactersIn: " \t*_,.–—-"))
-        return locationWithoutTimeframe(location)
+    }
+
+    private static func firstCapture(of pattern: String, in text: String) -> String? {
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[range])
     }
 
     /// Each card already stamps the day it describes, so "Palo Alto this
@@ -1607,10 +1675,27 @@ enum MessageResponseCard: Identifiable {
             .lowercased()
             .replacingOccurrences(of: "’", with: "'")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized != "source"
-            && !normalized.contains("current weather")
-            && !normalized.hasPrefix("here's the weather")
+        guard normalized != "source",
+              !normalized.contains("current weather"),
+              !normalized.hasPrefix("here's the weather") else { return false }
+        // A metric names itself in a word or three — "Wind", "Rain chance",
+        // "Dew point". A sentence cut at its first colon does not: "For your
+        // 11:00 Zoom meeting: ideal indoor conditions" would otherwise become a
+        // row labelled "For your 11", which is prose broken in half rather than
+        // a fact. That sentence belongs to the reply, and stays there.
+        let words = normalized.split(separator: " ")
+        return (1...3).contains(words.count)
+            && normalized.rangeOfCharacter(from: .decimalDigits) == nil
+            && !prosaicDetailOpeners.contains(String(words[0]))
     }
+
+    /// A row that opens like a sentence is a sentence. These are the words an
+    /// aside starts with, never the first word of a weather metric.
+    private static let prosaicDetailOpeners: Set<String> = [
+        "a", "also", "and", "as", "at", "because", "but", "by", "for", "given", "heads",
+        "if", "in", "note", "on", "one", "overall", "plus", "recommendation", "reminder",
+        "since", "so", "the", "tip", "to", "want", "what", "when", "with", "you", "your",
+    ]
 
     /// Finds a labeled Markdown field in a conventional assistant response,
     /// such as `- **Conditions:** Partly cloudy`. The detail itself stays in

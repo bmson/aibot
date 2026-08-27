@@ -101,4 +101,29 @@ describe('looksLikeActionRequest', () => {
   it('does not infer an action from a complaint without a prior action commitment', () => {
     expect(looksLikeActionRequest("I'm not seeing the change", 'That makes sense.')).toBe(false);
   });
+
+  it('routes a forecast the ambient block cannot answer to the executor', () => {
+    for (const t of [
+      'How will the weather be tomorrow?', // the reported prod miss: invented a forecast
+      'How will the weather be in San Francisco', // and then apologised for having none
+      "what's the forecast for Tokyo this week",
+      'will it rain in Boston tomorrow?',
+      'is it going to snow this weekend?',
+      'what is the temperature in Reykjavík?',
+    ]) {
+      expect(looksLikeActionRequest(t), `should be a lookup: ${t}`).toBe(true);
+    }
+  });
+
+  it('leaves right-here-right-now weather to the ambient block', () => {
+    for (const t of [
+      "what's the weather?",
+      'how is the weather right now',
+      'is it raining?',
+      'ugh, rain all weekend',
+      'I love the rain on a Sunday',
+    ]) {
+      expect(looksLikeActionRequest(t), `should be conversation: ${t}`).toBe(false);
+    }
+  });
 });

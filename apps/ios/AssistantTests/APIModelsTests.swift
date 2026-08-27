@@ -714,6 +714,65 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(condition, "Clear Skies")
     }
 
+    func testWeatherCardReadsOneDayFromItsDaytimePart() {
+        // The reported reply: one day written as its arc, with an aside, a
+        // provenance line and a row of pseudo-buttons the model made up.
+        let cards = MessageResponseCard.inferred(
+            from: """
+            Checking current weather sources...
+
+            **San Francisco weather for Thu Aug 27, 2026:**
+
+            🌤 **Morning:** Partly cloudy, 16°C (61°F)
+
+            ☀️ **Afternoon:** Sunny, 21°C (70°F)
+
+            🌬️ **Wind:** Light breeze (8 km/h W)
+
+            🌧️ **Rain chance:** 10%
+
+            **For your 11:00 Zoom meeting:** Ideal indoor conditions with mild temps outside.
+
+            (Source: National Weather Service SF Bay Area)
+
+            [⏰ Set weather alert] | [🌧️ Check rain timing]
+            """
+        )
+        XCTAssertEqual(cards.count, 1)
+        guard case let .weather(location, temperature, condition, details) = cards[0] else {
+            return XCTFail("Expected a weather card")
+        }
+        // The place, not the date that followed "weather for".
+        XCTAssertEqual(location, "San Francisco")
+        // The day is what was asked about, so the afternoon carries the
+        // headline — not the morning reading that happens to come first, and
+        // not "Rain" swept out of the "Check rain timing" line below.
+        XCTAssertEqual(temperature, "21°C (70°F)")
+        XCTAssertEqual(condition, "Sunny")
+        // Every part of the day stays on the card as its own row; the meeting
+        // aside stays in the reply, where it reads as the sentence it is.
+        XCTAssertEqual(details.map(\.label), ["Morning", "Afternoon", "Wind", "Rain chance"])
+        XCTAssertEqual(details[0].value, "Partly cloudy, 16°C (61°F)")
+        XCTAssertEqual(details[1].value, "Sunny, 21°C (70°F)")
+        XCTAssertEqual(details[2].value, "Light breeze (8 km/h W)")
+    }
+
+    func testWeatherCardKeepsSentencesOutOfTheMetricList() {
+        let cards = MessageResponseCard.inferred(
+            from: """
+            Weather in Palo Alto:
+            - **Conditions:** Sunny, 22°C (72°F)
+            - **Wind:** 10 km/h
+            - **For your 11:00 Zoom meeting:** Ideal indoor conditions.
+            - **Note for the drive home:** Nothing to worry about.
+            """
+        )
+        guard case let .weather(_, _, _, details) = cards[0] else {
+            return XCTFail("Expected a weather card")
+        }
+        XCTAssertEqual(details.map(\.label), ["Wind"])
+    }
+
     func testWeatherCaptionNamesTheDayOnPerDayForecastCards() {
         let dayCard = [
             MessageResponseCard.WeatherDetail(label: "Day", value: "Saturday"),
