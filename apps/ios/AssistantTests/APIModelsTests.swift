@@ -101,6 +101,86 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(message.text, "Hello")
     }
 
+    private func persisted(
+        _ id: String,
+        _ role: ChatRole,
+        _ text: String,
+        at sentAt: String
+    ) -> ChatMessage {
+        ChatMessage(
+            id: id,
+            role: role,
+            parts: [.init(type: "text", text: text)],
+            metadata: ["createdAt": .string(sentAt)]
+        )
+    }
+
+    func testChatLogPutsDurableTwinsBackWhereTheyWereAsked() {
+        var order = ChatLogOrder()
+        // Three turns typed while the assistant worked. Their durable twins
+        // arrive later, and a merge can only append them.
+        let typed = [
+            "Anything on my calendar for tomorrow?",
+            "Check all calendars",
+            "How will the weather be tomorrow?",
+        ].map { ChatMessage.optimistic(role: .user, text: $0) }
+        var log = order.ordered(
+            [persisted("m0", .assistant, "Morning.", at: "2026-08-27T09:00:00.000Z")] + typed
+        )
+        XCTAssertEqual(log.map(\.id), ["m0"] + typed.map(\.id))
+
+        // The replies land first — they are what the poll returns.
+        log = order.ordered(log + [
+            persisted("a1", .assistant, "Two things today.", at: "2026-08-27T09:00:20.000Z"),
+            persisted("a2", .assistant, "All three calendars are clear.", at: "2026-08-27T09:00:40.000Z"),
+        ])
+        XCTAssertEqual(log.map(\.id), ["m0"] + typed.map(\.id) + ["a1", "a2"])
+
+        // Then a refresh returns the durable user rows, appended at the end.
+        let durable = [
+            persisted("u1", .user, typed[0].text, at: "2026-08-27T09:00:10.000Z"),
+            persisted("u2", .user, typed[1].text, at: "2026-08-27T09:00:30.000Z"),
+            persisted("u3", .user, typed[2].text, at: "2026-08-27T09:00:50.000Z"),
+        ]
+        log = order.ordered(log.filter { !$0.id.hasPrefix("local-") } + durable)
+        // Each question back above the reply that answered it.
+        XCTAssertEqual(log.map(\.id), ["m0", "u1", "a1", "u2", "a2", "u3"])
+    }
+
+    func testChatLogKeepsAnUnsentTurnAboveTheReplyArrivingUnderIt() {
+        var order = ChatLogOrder()
+        let question = ChatMessage.optimistic(role: .user, text: "How will the weather be?")
+        var log = order.ordered([
+            persisted("m0", .user, "Morning.", at: "2026-08-27T09:00:00.000Z"),
+            question,
+        ])
+        XCTAssertEqual(log.map(\.id), ["m0", question.id])
+
+        // A question whose durable twin has not come back yet still sits above
+        // the reply answering it: the reply's send time is later than the log
+        // the question anchored to, and no device clock is consulted.
+        log = order.ordered(log + [
+            persisted("a1", .assistant, "Sunny.", at: "2026-08-27T09:00:05.000Z"),
+        ])
+        XCTAssertEqual(log.map(\.id), ["m0", question.id, "a1"])
+
+        // The live bubble is written last and stays last.
+        let streaming = ChatMessage.optimistic(role: .assistant, text: "", id: "stream-1")
+        XCTAssertEqual(
+            order.ordered(log + [streaming]).map(\.id),
+            ["m0", question.id, "a1", "stream-1"]
+        )
+    }
+
+    func testChatLogOrdersMessagesSharingASendTimeByIdLikeTheServer() {
+        var order = ChatLogOrder()
+        let log = order.ordered([
+            persisted("b", .assistant, "Second", at: "2026-08-27T09:00:00.000Z"),
+            persisted("a", .user, "First", at: "2026-08-27T09:00:00.000Z"),
+        ])
+        XCTAssertEqual(log.map(\.id), ["a", "b"])
+    }
+
     func testDecisionMessageUsesOnlyItsStructuredCardAndTracksResolution() throws {
         let pendingData = """
         {"id":"approval-message","role":"assistant","parts":[

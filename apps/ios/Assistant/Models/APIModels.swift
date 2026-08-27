@@ -219,6 +219,79 @@ enum ChatTranscriptItem: Identifiable, Hashable {
     }
 }
 
+/// Chronological order for the rendered log, and the only place order is
+/// decided. Everything else — a poll's merge, a streamed reply's appends, a
+/// refresh folding the durable log back in — only puts messages in the set;
+/// this puts them in sequence. (The web client orders its log the same way;
+/// see orderChatLog.)
+///
+/// Persisted rows sort by the send time the server stamped them with and
+/// tie-break on id, exactly as the server ordered them (`created_at, id`).
+/// A row the client made itself — an optimistic user turn, a reply still
+/// streaming — has no send time yet, so it anchors to the newest send time in
+/// the log when it first appeared and holds that place until its durable twin
+/// arrives. Anchoring to the log rather than to the device clock is what keeps
+/// a question above the answer arriving under it on a device whose clock runs
+/// fast or slow.
+///
+/// A place is assigned once per id and never recomputed, so nothing already on
+/// screen moves as later messages come in. Without this, a merge could only
+/// append: a refresh that brought back the durable twins of four optimistic
+/// turns re-homed all four to the bottom of the log, under the replies that
+/// had already answered them.
+struct ChatLogOrder {
+    private struct Position {
+        let sentAt: Date
+        let arrival: Int
+        let persisted: Bool
+    }
+
+    private var positions: [String: Position] = [:]
+
+    /// Forget every assigned place. A different conversation's ids have no
+    /// order to agree with these.
+    mutating func reset() { positions.removeAll() }
+
+    mutating func ordered(_ messages: [ChatMessage]) -> [ChatMessage] {
+        // One send-time read per message: parsing it is the expensive part,
+        // and this runs on every poll.
+        let sendTimes = messages.map { (id: $0.id, sentAt: $0.createdAt) }
+        let newest = sendTimes.compactMap(\.sentAt).max() ?? .distantPast
+        for message in sendTimes {
+            assign(id: message.id, sentAt: message.sentAt, anchoredTo: newest)
+        }
+        let places = positions
+        return messages.sorted { left, right in
+            guard let first = places[left.id], let second = places[right.id] else { return false }
+            if first.sentAt != second.sentAt { return first.sentAt < second.sentAt }
+            // A client-made row anchored to this send time when it appeared,
+            // so it belongs after everything the server already stamped with
+            // it. Keeping the two kinds apart is also what makes this a total
+            // order: id decides between durable rows, arrival between local
+            // ones, and the two rules never have to agree with each other.
+            if first.persisted != second.persisted { return first.persisted }
+            return first.persisted ? left.id < right.id : first.arrival < second.arrival
+        }
+    }
+
+    private mutating func assign(id: String, sentAt: Date?, anchoredTo anchor: Date) {
+        let existing = positions[id]
+        if let existing, existing.persisted { return }
+        guard let sentAt else {
+            guard existing == nil else { return }
+            positions[id] = Position(sentAt: anchor, arrival: positions.count, persisted: false)
+            return
+        }
+        // A row that arrives durable, or one that gains its send time on a
+        // later read, keeps the place it already holds in the sequence.
+        positions[id] = Position(
+            sentAt: sentAt,
+            arrival: existing?.arrival ?? positions.count,
+            persisted: true
+        )
+    }
+}
+
 extension Array where Element == ChatMessage {
     /// Collapse only a consecutive run of two or more fully settled approval
     /// receipts. A user message, pending/declined decision, budget card, or

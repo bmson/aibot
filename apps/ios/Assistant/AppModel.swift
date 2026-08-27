@@ -51,6 +51,9 @@ final class AppModel: ObservableObject {
     private(set) var serverURL: String
     private var client: APIClient?
     private var cursor: String?
+    /// Sequence for the rendered log. A merge can only add or replace by id —
+    /// where a message belongs is decided here, once per id.
+    private var logOrder = ChatLogOrder()
     private var pollTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
     private var thoughtClearTask: Task<Void, Never>?
@@ -920,6 +923,9 @@ final class AppModel: ObservableObject {
         let streamID = "stream-\(UUID().uuidString)"
         messages.append(localUser)
         messages.append(.optimistic(role: .assistant, text: "", id: streamID))
+        // Neither row has a send time yet, so both anchor to the end of the
+        // durable log and hold that place until their persisted twins arrive.
+        messages = logOrder.ordered(messages)
         setActivityThought(.thinking, proposedDetail: text)
         thoughtClearTask?.cancel()
 
@@ -1092,7 +1098,7 @@ final class AppModel: ObservableObject {
             if preservingLocalMessages {
                 merge(response.conversation.messages)
             } else {
-                messages = response.conversation.messages
+                messages = logOrder.ordered(response.conversation.messages)
             }
         }
         if !isSending, activityThought == nil || activityThought == .backgroundWork || activityThought == .needsYou {
@@ -1111,7 +1117,9 @@ final class AppModel: ObservableObject {
     private func setActiveConversation(_ conversation: ConversationView) {
         activeConversation = conversation
         cursor = conversation.cursor
-        messages = conversation.messages
+        // Another conversation's ids have no sequence to agree with this one's.
+        logOrder.reset()
+        messages = logOrder.ordered(conversation.messages)
         toolActivity = []
         activityThought = nil
     }
@@ -1265,6 +1273,7 @@ final class AppModel: ObservableObject {
             }
             messages.append(message)
         }
+        messages = logOrder.ordered(messages)
     }
 
     private func startIdlePolling() {
