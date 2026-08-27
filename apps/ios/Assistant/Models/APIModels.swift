@@ -601,9 +601,29 @@ struct PendingApproval: Codable, Identifiable, Sendable {
     let decision: JSONValue
 }
 
+/// A settled approval as the history list reads it. The server deliberately
+/// trims payloads from resolved rows — the payloads that made the decision
+/// worth reviewing stay in the database — so this is NOT the `ApprovalRecord`
+/// the pending list decodes. Decoding it as one fails the whole overview the
+/// moment a single approval resolves.
+struct ResolvedApprovalRecord: Codable, Identifiable, Sendable {
+    let id: String
+    let taskId: String
+    let shortCode: String
+    let summary: String
+    let status: String
+    let requestedAt: String
+    let resolvedAt: String?
+    let resolvedVia: String?
+    let expiresAt: String
+    /// Whether the owner changed the arguments before approving. Optional so a
+    /// newer app remains decodable against an older server mid-rollout.
+    let edited: Bool?
+}
+
 struct ResolvedApproval: Codable, Identifiable, Sendable {
     var id: String { approval.id }
-    let approval: ApprovalRecord
+    let approval: ResolvedApprovalRecord
     let taskType: String
 }
 
