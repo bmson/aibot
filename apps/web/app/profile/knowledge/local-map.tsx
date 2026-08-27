@@ -242,10 +242,13 @@ export function LocalMap({
         </>
       ) : null}
 
+      {/* The count comes from a query, not from what was drawn — reporting the
+          drawn number as the total is the bug this whole change is about. No
+          claim about the list below either: that section is capped in its own
+          right and says so itself. */}
       {totalEdges > shown.length ? (
         <p className="mt-2 text-xs text-muted">
-          Showing {shown.length} of {totalEdges.toLocaleString()} active connections. All of them
-          are listed below with their evidence.
+          Showing {shown.length} of {totalEdges.toLocaleString()} active connections.
         </p>
       ) : null}
     </div>

@@ -399,15 +399,15 @@ export default async function KnowledgeReviewPage({
                   </div>
                   <span className="inline-flex items-center gap-1 text-xs text-muted">
                     <GitFork className="size-3.5" aria-hidden="true" />
-                    {mapEdges.length.toLocaleString()} active edge
-                    {mapEdges.length === 1 ? '' : 's'}
+                    {graph.selectedActiveRelationTotal.toLocaleString()} active edge
+                    {graph.selectedActiveRelationTotal === 1 ? '' : 's'}
                   </span>
                 </div>
                 <div className="mt-3">
                   <LocalMap
                     selected={graph.selected}
                     edges={mapEdges}
-                    totalEdges={mapEdges.length}
+                    totalEdges={graph.selectedActiveRelationTotal}
                     hrefForEntity={(entityId) => hrefFor({ q: query, entity: entityId })}
                   />
                 </div>

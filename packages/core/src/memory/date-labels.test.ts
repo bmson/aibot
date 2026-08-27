@@ -64,6 +64,32 @@ describe('canonicalizeDateLabel', () => {
     expect(key(march?.key ?? '')).toBe('--03-06');
   });
 
+  // Asking for "last Monday" on a Monday walks back a full week, which used to
+  // shift every week offset one week early.
+  it('anchors week offsets on the current week, including when recorded on a Monday', () => {
+    const monday = new Date('2026-03-02T12:00:00Z');
+    expect(key('this week', monday)).toBe('2026-03-02');
+    expect(key('next week', monday)).toBe('2026-03-09');
+    expect(key('last week', monday)).toBe('2026-02-23');
+    // Mid-week the answer is the same Monday.
+    expect(key('this week', ANCHOR)).toBe('2026-03-02');
+    expect(key('next week', ANCHOR)).toBe('2026-03-09');
+  });
+
+  // "February 31" passed the loose 1-31 day check, and formatting rolled it into
+  // March — a key and a label naming different days, which would never merge
+  // with the real March date.
+  it('rejects a recurring month and day that is not a real calendar date', () => {
+    expect(key('February 31')).toBeNull();
+    expect(key('--02-31')).toBeNull();
+    expect(key('31 February')).toBeNull();
+    // 29 February is legitimate as a recurring date and must survive.
+    expect(canonicalizeDateLabel('February 29', ANCHOR, 'UTC', 'en-GB')).toMatchObject({
+      key: '--02-29',
+      label: '29 February',
+    });
+  });
+
   it('declines wording it cannot pin to a date', () => {
     for (const vague of [
       'soon',

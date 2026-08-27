@@ -874,8 +874,6 @@ export async function createOwnerKnowledgeGraphFact(
   if (await isTombstoned(deps.db, contentHash)) {
     return { error: 'This fact was previously removed, so it was not added again.' };
   }
-  const [embedding] = await deps.router.embed([content]);
-  if (!embedding) return { error: 'The source could not be prepared for recall.' };
 
   // The owner is writing now, so now is the anchor for any relative date they
   // typed. Locale and timezone come from the agent even when the caller named
@@ -892,6 +890,24 @@ export async function createOwnerKnowledgeGraphFact(
     timeZone: settings.timeZone,
     locale: settings.locale,
   };
+
+  // Every reason to reject has to be found before anything is written. An
+  // unreadable date used to surface after the memory row was already inserted,
+  // so the owner was told the fact was rejected while the library kept it — and
+  // a corrected retry then collided with that hidden source. This also avoids
+  // paying for an embedding on a request that cannot succeed.
+  for (const entity of [subject, object]) {
+    if (entity.kind !== 'date') continue;
+    if (!canonicalizeDateLabel(entity.label, context.anchor, context.timeZone, context.locale)) {
+      return {
+        error: `"${entity.label}" could not be read as a date. Try a day, month and year.`,
+      };
+    }
+  }
+
+  const [embedding] = await deps.router.embed([content]);
+  if (!embedding) return { error: 'The source could not be prepared for recall.' };
+
   const subjectContact =
     subject.kind === 'person' ? contactForLabel(people, subject.label) : undefined;
   const [memory] = await deps.db
@@ -917,9 +933,10 @@ export async function createOwnerKnowledgeGraphFact(
   const graphSubject = await upsertEntity(deps.db, agentId, subject, people, context);
   const graphObject = await upsertEntity(deps.db, agentId, object, people, context);
   if (!graphSubject || !graphObject) {
-    return {
-      error: 'A date here could not be read as a date. Try writing it as a day, month and year.',
-    };
+    // Unreachable in practice: the date endpoints were validated above and no
+    // other kind can fail to resolve. Kept because upsertEntity's contract
+    // permits null, and a silent crash here would strand the memory row.
+    return { error: 'That relationship could not be recorded. Please try again.' };
   }
   const fingerprint = relationshipFingerprint(graphSubject.key, predicate, graphObject.key);
   const [relation] = await deps.db
@@ -1088,19 +1105,24 @@ export async function backfillKnowledgeGraphDates(
       unresolved: 0,
     };
 
-    // The anchor is the earliest memory the entity is cited by: the first time
-    // this date was talked about is the reading its wording was written under.
+    // Both ends of the citing window, not just the earliest. A relative label
+    // means a different day depending on when it was written, and one entity is
+    // shared by every memory that used that wording — so resolving `date:friday`
+    // against its earliest citation alone would repoint a later memory's edge to
+    // a day that memory never meant.
     const rows = asRows<{
       id: string;
       label: string;
       canonicalKey: string;
       anchor: Date | string;
+      lastAnchor: Date | string;
     }>(
       await db.execute(sql`
       SELECT entity.id AS "id",
              entity.label AS "label",
              entity.canonical_key AS "canonicalKey",
-             MIN(memory.created_at) AS "anchor"
+             MIN(memory.created_at) AS "anchor",
+             MAX(memory.created_at) AS "lastAnchor"
       FROM knowledge_graph_entities AS entity
       INNER JOIN knowledge_graph_relations AS relation
         ON relation.subject_entity_id = entity.id OR relation.object_entity_id = entity.id
@@ -1113,8 +1135,20 @@ export async function backfillKnowledgeGraphDates(
     for (const row of rows) {
       result.scanned += 1;
       const anchor = row.anchor instanceof Date ? row.anchor : new Date(row.anchor);
+      const lastAnchor = row.lastAnchor instanceof Date ? row.lastAnchor : new Date(row.lastAnchor);
       const canonical = canonicalizeDateLabel(row.label, anchor, timeZone, locale);
       if (!canonical) {
+        result.unresolved += 1;
+        continue;
+      }
+      // Resolving the same label against the far end of the window is how an
+      // anchor-sensitive wording gives itself away: "2026-03-06" lands on the
+      // same key from either end, "Friday" does not. When the ends disagree,
+      // this node means different days to different memories and no single
+      // rewrite is right — leave it for the anchored re-extraction, which
+      // resolves per source. Counting it unresolved is what surfaces it there.
+      const fromLatest = canonicalizeDateLabel(row.label, lastAnchor, timeZone, locale);
+      if (!fromLatest || fromLatest.key !== canonical.key) {
         result.unresolved += 1;
         continue;
       }

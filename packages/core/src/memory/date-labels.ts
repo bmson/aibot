@@ -116,16 +116,25 @@ function monthResult(year: number, month: number, locale: string): CanonicalDate
   };
 }
 
-/** A month/day with no year — a birthday, an anniversary, a recurring date. */
-function recurringResult(month: number, day: number, locale: string): CanonicalDate {
+/**
+ * A month/day with no year — a birthday, an anniversary, a recurring date.
+ *
+ * Validated against a real leap-year calendar date rather than the loose 1-31
+ * day check: "February 31" passes that check, and formatting it rolls the
+ * display into March, producing a key and a label naming different days — which
+ * would then never merge with the real March date. 2024 is the reference year
+ * because it is the only way 29 February can be legitimate.
+ */
+function recurringResult(month: number, day: number, locale: string): CanonicalDate | null {
+  const reference = realDate(2024, month, day);
+  if (!reference) return null;
   return {
     key: `--${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
     label: new Intl.DateTimeFormat(locale, {
       timeZone: 'UTC',
       month: 'long',
       day: 'numeric',
-      // A leap day needs a leap year to format; 2024 never reaches the label.
-    }).format(utcDate(2024, month, day)),
+    }).format(reference),
     precision: 'recurring',
   };
 }
@@ -204,7 +213,7 @@ export function canonicalizeDateLabel(
   if (isoRecurring) {
     const month = Number(isoRecurring[1]);
     const day = Number(isoRecurring[2]);
-    return validMonthDay(month, day) ? recurringResult(month, day, locale) : null;
+    return recurringResult(month, day, locale);
   }
 
   const year = YEAR_RE.exec(text);
@@ -232,7 +241,7 @@ export function canonicalizeDateLabel(
       const date = realDate(Number(dayMonth[3]), month, day);
       return date ? dayResult(date, locale) : null;
     }
-    return validMonthDay(month, day) ? recurringResult(month, day, locale) : null;
+    return recurringResult(month, day, locale);
   }
 
   const monthDay = MONTH_DAY_YEAR_RE.exec(text);
@@ -244,7 +253,7 @@ export function canonicalizeDateLabel(
       const date = realDate(Number(monthDay[3]), month, day);
       return date ? dayResult(date, locale) : null;
     }
-    return validMonthDay(month, day) ? recurringResult(month, day, locale) : null;
+    return recurringResult(month, day, locale);
   }
 
   const anchorDay = zonedDay(anchor, timeZone);
@@ -265,9 +274,12 @@ export function canonicalizeDateLabel(
     const direction = offset[1] === 'last' ? -1 : offset[1] === 'next' ? 1 : 0;
     if (offset[2] === 'week') {
       // A week is not a day, but the whole week is anchored by its Monday, which
-      // is a date the graph can hold and merge on.
-      const monday = weekdayDate(anchorDay, 1, 'last');
-      return dayResult(new Date(monday.getTime() + direction * 7 * DAY_MS), locale);
+      // is a date the graph can hold and merge on. That Monday has to be found
+      // *inclusively* — asking weekdayDate for "last Monday" on a Monday walks
+      // back a full week, which shifted every week offset one week early.
+      const backToMonday = (anchorDay.getUTCDay() - 1 + 7) % 7;
+      const monday = anchorDay.getTime() - backToMonday * DAY_MS;
+      return dayResult(new Date(monday + direction * 7 * DAY_MS), locale);
     }
     if (offset[2] === 'month') {
       const month = anchorDay.getUTCMonth() + direction;

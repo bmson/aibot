@@ -160,6 +160,31 @@ describe('knowledge graph overview (integration)', () => {
     // The list itself stays bounded; the count above is what tells the truth.
     expect(overview.relations.length).toBeLessThanOrEqual(ENTITY_COUNT);
   });
+
+  // The local map draws from the same capped page, so its own length would
+  // report the cap as the degree — the exact failure this change exists to fix.
+  it('counts active edges from a query, not from the page the map draws', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const before = await getKnowledgeGraphOverview(db, { query: MARKER, entityId: hubId });
+    expect(before.selectedActiveRelationTotal).toBe(ENTITY_COUNT);
+    expect(before.selectedActiveRelationTotal).toBeGreaterThan(before.relations.length);
+
+    // Marking one stale must drop it from the active count but not the total.
+    const [edge] = await db
+      .select({ id: knowledgeGraphRelations.id })
+      .from(knowledgeGraphRelations)
+      .where(eq(knowledgeGraphRelations.subjectEntityId, hubId))
+      .limit(1);
+    if (!edge) throw new Error('no relation to reject');
+    await db
+      .update(knowledgeGraphRelations)
+      .set({ reviewStatus: 'rejected' })
+      .where(eq(knowledgeGraphRelations.id, edge.id));
+
+    const after = await getKnowledgeGraphOverview(db, { query: MARKER, entityId: hubId });
+    expect(after.selectedActiveRelationTotal).toBe(ENTITY_COUNT - 1);
+    expect(after.selectedRelationTotal).toBe(ENTITY_COUNT);
+  });
 });
 
 describe('knowledge graph entity search (integration)', () => {

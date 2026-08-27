@@ -812,6 +812,157 @@ describe('knowledge graph sync and recall', () => {
     expect(dates.map((row) => row.key)).not.toContain('date:friday');
   });
 
+  // A relative label means a different day depending on when it was written,
+  // and one entity is shared by every memory that used that wording. Resolving
+  // it against the earliest citation alone would repoint a later memory's edge
+  // to a day that memory never meant.
+  it('leaves a shared relative date alone when its sources would disagree', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [early] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} Iris presents on Friday.`,
+        contentHash: `${MARKER}-shared-1`,
+        embedding: unit(65),
+        confidence: '0.90',
+        createdAt: new Date('2026-03-04T12:00:00Z'),
+      })
+      .returning({ id: memories.id });
+    const [late] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} Jonah travels on Friday.`,
+        contentHash: `${MARKER}-shared-2`,
+        embedding: unit(66),
+        confidence: '0.90',
+        // Five weeks later — a different Friday entirely.
+        createdAt: new Date('2026-04-08T12:00:00Z'),
+      })
+      .returning({ id: memories.id });
+    const [shared] = await db
+      .insert(knowledgeGraphEntities)
+      .values({
+        agentId,
+        canonicalKey: `date:${MARKER} friday`,
+        label: 'Friday',
+        kind: 'date',
+      })
+      .returning({ id: knowledgeGraphEntities.id });
+    const [who] = await db
+      .insert(knowledgeGraphEntities)
+      .values({
+        agentId,
+        canonicalKey: `person:${MARKER} iris`,
+        label: `${MARKER} Iris`,
+        kind: 'person',
+      })
+      .returning({ id: knowledgeGraphEntities.id });
+    if (!early || !late || !shared || !who) throw new Error('fixtures were not created');
+
+    for (const [index, source] of [early, late].entries()) {
+      await db.insert(knowledgeGraphRelations).values({
+        agentId,
+        subjectEntityId: who.id,
+        predicate: 'happens_on',
+        objectEntityId: shared.id,
+        sourceMemoryId: source.id,
+        evidenceQuote: 'on Friday',
+        sourceFingerprint: `${MARKER}-shared-fp-${index}`,
+        ordinal: index + 1,
+        confidence: '0.90',
+      });
+    }
+
+    await backfillKnowledgeGraphDates(db, { agentId });
+
+    const [after] = await db
+      .select({ key: knowledgeGraphEntities.canonicalKey })
+      .from(knowledgeGraphEntities)
+      .where(eq(knowledgeGraphEntities.id, shared.id));
+    // Untouched: no single rewrite is right for both, so it is left for the
+    // anchored re-extraction, which resolves per source.
+    expect(after?.key).toBe(`date:${MARKER} friday`);
+  });
+
+  // An absolute label lands on the same key from either end of the window, so
+  // sharing it across memories is harmless and it must still be canonicalized.
+  it('still canonicalizes an absolute date shared by memories from different days', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [first] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} Kit files on 2026-05-01.`,
+        contentHash: `${MARKER}-abs-1`,
+        embedding: unit(67),
+        confidence: '0.90',
+        createdAt: new Date('2026-03-04T12:00:00Z'),
+      })
+      .returning({ id: memories.id });
+    const [second] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} Lena reviews on 2026-05-01.`,
+        contentHash: `${MARKER}-abs-2`,
+        embedding: unit(68),
+        confidence: '0.90',
+        createdAt: new Date('2026-04-08T12:00:00Z'),
+      })
+      .returning({ id: memories.id });
+    const [absolute] = await db
+      .insert(knowledgeGraphEntities)
+      .values({
+        agentId,
+        canonicalKey: `date:${MARKER} 1 may 2026`,
+        label: '1 May 2026',
+        kind: 'date',
+      })
+      .returning({ id: knowledgeGraphEntities.id });
+    const [actor] = await db
+      .insert(knowledgeGraphEntities)
+      .values({
+        agentId,
+        canonicalKey: `person:${MARKER} kit`,
+        label: `${MARKER} Kit`,
+        kind: 'person',
+      })
+      .returning({ id: knowledgeGraphEntities.id });
+    if (!first || !second || !absolute || !actor) throw new Error('fixtures were not created');
+
+    for (const [index, source] of [first, second].entries()) {
+      await db.insert(knowledgeGraphRelations).values({
+        agentId,
+        subjectEntityId: actor.id,
+        predicate: 'acts_on',
+        objectEntityId: absolute.id,
+        sourceMemoryId: source.id,
+        evidenceQuote: 'on 2026-05-01',
+        sourceFingerprint: `${MARKER}-abs-fp-${index}`,
+        ordinal: index + 1,
+        confidence: '0.90',
+      });
+    }
+
+    await backfillKnowledgeGraphDates(db, { agentId });
+
+    const [after] = await db
+      .select({ key: knowledgeGraphEntities.canonicalKey })
+      .from(knowledgeGraphEntities)
+      .where(eq(knowledgeGraphEntities.id, absolute.id));
+    expect(after?.key).toBe('date:2026-05-01');
+  });
+
   // The paid pass is only worth offering for sources the free one could not
   // fix, so a source that already carries a canonical date must not be counted.
   it('counts only the sources whose dates the free backfill could not fix', async (ctx) => {

@@ -91,6 +91,12 @@ export interface KnowledgeGraphOverview {
    * reported the cap as the degree.
    */
   selectedRelationTotal: number;
+  /**
+   * Incident edges that are not stale — what the local map actually draws from.
+   * Separate from the total because the map is built from one capped page of
+   * relations, so its own length would report the cap as the degree.
+   */
+  selectedActiveRelationTotal: number;
   duplicates: KnowledgeGraphDuplicate[];
 }
 
@@ -252,6 +258,7 @@ export async function getKnowledgeGraphOverview(
       selected: null,
       relations: [],
       selectedRelationTotal: 0,
+      selectedActiveRelationTotal: 0,
       duplicates: [],
     };
   }
@@ -265,7 +272,7 @@ export async function getKnowledgeGraphOverview(
       eq(knowledgeGraphRelations.objectEntityId, selected.id),
     ),
   );
-  const [relationRows, [selectedRelationRow], duplicates] = await Promise.all([
+  const [relationRows, [selectedRelationRow], [selectedActiveRow], duplicates] = await Promise.all([
     db
       .select({
         id: knowledgeGraphRelations.id,
@@ -300,6 +307,10 @@ export async function getKnowledgeGraphOverview(
       )
       .limit(RELATION_LIMIT),
     db.select({ value: count() }).from(knowledgeGraphRelations).where(incidentToSelected),
+    db
+      .select({ value: count() })
+      .from(knowledgeGraphRelations)
+      .where(and(incidentToSelected, ne(knowledgeGraphRelations.reviewStatus, 'rejected'))),
     findDuplicateKnowledgeGraphEntities(db, selected),
   ]);
   const relations = relationRows.map((row) => ({
@@ -344,6 +355,7 @@ export async function getKnowledgeGraphOverview(
     selected,
     relations,
     selectedRelationTotal: Number(selectedRelationRow?.value ?? 0),
+    selectedActiveRelationTotal: Number(selectedActiveRow?.value ?? 0),
     duplicates,
   };
 }
