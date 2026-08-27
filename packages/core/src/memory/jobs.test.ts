@@ -73,6 +73,9 @@ describe('codeJobName', () => {
     expect(codeJobName(taskWith({ job: 'memory.extract' }))).toBe('memory.extract');
     expect(codeJobName(taskWith({ job: 'memory.consolidate' }))).toBe('memory.consolidate');
     expect(codeJobName(taskWith({ job: 'memory.graph_sync' }))).toBe('memory.graph_sync');
+    expect(codeJobName(taskWith({ job: 'memory.graph_date_backfill' }))).toBe(
+      'memory.graph_date_backfill',
+    );
     expect(codeJobName(taskWith({ job: 'voice.ingest' }))).toBe('voice.ingest');
     expect(codeJobName(taskWith({ job: 'documents.extract' }))).toBe('documents.extract');
     expect(codeJobName(taskWith({ job: 'documents.process' }))).toBe('documents.process');
@@ -97,6 +100,20 @@ describe('feature-gated code jobs', () => {
       agentId: 'unused',
     } as TaskRow);
     expect(result).toEqual({ done: true, summary: 'knowledge graph: disabled' });
+  });
+
+  // The date backfill reads the graph, so it is gated on the same flag even
+  // though it never spends anything.
+  it('gates the date backfill behind the same flag', async () => {
+    loadConfig({ GRAPH_RAG_ENABLED: 'false' });
+    expect(isCodeJobEnabled('memory.graph_date_backfill')).toBe(false);
+
+    const result = await runCodeJob(
+      { db: {} as Db, router: fakeRouter },
+      'memory.graph_date_backfill',
+      { id: 'unused', agentId: 'unused' } as TaskRow,
+    );
+    expect(result).toEqual({ done: true, summary: 'knowledge graph dates: disabled' });
   });
 });
 

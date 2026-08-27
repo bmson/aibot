@@ -3,8 +3,15 @@
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
+// Rollup thresholds. Days stop being a unit people can read somewhere around a
+// month — "612d ago" is a number you have to divide before it means anything —
+// so the scale continues into months and years. 30/365-day months and years are
+// deliberately approximate: this is the fuzzy half of a timestamp, and callers
+// that need the real calendar date pair it with formatFriendlyDateTime.
+const MONTH = DAY * 30;
+const YEAR = DAY * 365;
 
-/** "3m ago" / "in 2h" / "just now". Deterministic, server-rendered only. */
+/** "3m ago" / "in 2h" / "5mo ago" / "2y ago" / "just now". Server-rendered only. */
 export function relativeTime(date: Date, now: Date = new Date()): string {
   const diff = date.getTime() - now.getTime();
   const abs = Math.abs(diff);
@@ -14,7 +21,11 @@ export function relativeTime(date: Date, now: Date = new Date()): string {
       ? `${Math.round(abs / MINUTE)}m`
       : abs < DAY
         ? `${Math.round(abs / HOUR)}h`
-        : `${Math.round(abs / DAY)}d`;
+        : abs < MONTH
+          ? `${Math.round(abs / DAY)}d`
+          : abs < YEAR
+            ? `${Math.min(11, Math.round(abs / MONTH))}mo`
+            : `${Math.round(abs / YEAR)}y`;
   return diff < 0 ? `${unit} ago` : `in ${unit}`;
 }
 

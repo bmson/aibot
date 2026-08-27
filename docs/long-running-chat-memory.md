@@ -17,12 +17,31 @@ extracted from exactly one active source memory, and the source fact remains the
 receives.
 
 - `knowledge_graph_entities` holds canonical people, organizations, projects, places, events, dates,
-  and topics. Person nodes link to existing contacts when names resolve.
+  and topics. Person nodes link to existing contacts when names resolve — on an exact name or alias
+  match, or on an unambiguous short-name prefix ("Anna" ≡ "Anna Jónsdóttir"), the same rule contact
+  dedup uses. An ambiguous prefix links nothing rather than guessing.
+- Date entities carry a canonical key (`date:2026-03-06`, `date:2026-03`, `date:--03-06`, `date:2026`)
+  rather than the extractor's wording, so "Friday", "next Friday" and "2026-03-06" are one node.
+  Relative wording resolves against the **source memory's own timestamp**, never the current time, so
+  a re-extraction lands on the same node forever. Wording that denotes no fixed date takes its edge
+  down with it: an unmergeable "some point next quarter" node is worse than no edge.
+- A display label is only replaced by a better one — a contact's name and a canonical date always
+  win; otherwise a properly-cased or longer spelling wins and ties keep what is stored. Extraction
+  used to rewrite the label every run, so a name flip-flopped with whichever run went last.
 - `knowledge_graph_relations` holds only direct, source-backed triples; it never stores a relationship
   inferred by traversal. `knowledge_graph_sources` checkpoints the source content hash so edits are
   re-extracted and forgotten/deleted memories cascade away.
-- The offline `memory.graph_sync` job backfills and reconciles graph sources in small batches. It is
-  never on the response hot path.
+- The offline `memory.graph_sync` job backfills and reconciles graph sources in small batches
+  (`GRAPH_SYNC_BATCH_LIMIT`, default 25, twice an hour). It is never on the response hot path. Its
+  run summary reports what the run spent, and the review page prices the remaining backlog from
+  recent actuals rather than a hardcoded per-source figure.
+- The nightly `memory.graph_date_backfill` job re-canonicalizes existing date entities from labels
+  the graph already holds, folding duplicates together through the same merge path owner-driven
+  merges use. It makes **no model calls** and is budgeted at zero. Sources whose dates only an
+  anchored extraction prompt can resolve are counted, not queued: re-reading them costs one call
+  each, so it is an explicit control on the review page. A blanket extraction-version bump was the
+  alternative and was rejected — it would re-extract the whole corpus and, because recall gates on
+  the version, take every existing edge out of recall until the backlog drained.
 - A transient extraction failure retries after 15 minutes, 1 hour, then 6 hours. A fourth failure
   quarantines that unchanged source instead of spending every scheduler run on it; a source edit or
   extraction-version change starts a fresh attempt. The daily deterministic health check tells the
@@ -61,6 +80,12 @@ their source memory, extraction confidence, source trust, and review time. The o
   entities; an alias records the merged canonical key so future syncs keep using the chosen entity;
 - add a relationship manually only with an owner-written source note. That note is saved as a normal,
   owner-confirmed durable memory and is the relationship's evidence — never a graph-only assertion.
+
+The local map is drawn as server-rendered SVG: directed edges, colour by entity kind, dashed for
+edges still awaiting review, and every neighbour a link, so the map is how the owner moves around the
+graph. It stays bounded to one entity's neighbourhood and states its own overflow rather than
+silently truncating. Entity lists page and report their true totals; the merge target is found by
+searching the whole graph rather than picking from a fixed prefix of it.
 
 Relationship review state is keyed to the source-memory relationship fingerprint. Re-extracting a
 changed memory refreshes the direct edge while retaining a matching owner decision.

@@ -376,6 +376,18 @@ const scheduleSeed = [
     cron: '15,45 * * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'memory.graph_sync' },
   },
+  // Re-canonicalizes date entities from labels the graph already holds. It makes
+  // no model calls at all, so it is budgeted at zero and can run over everything
+  // nightly rather than in metered batches.
+  {
+    name: 'knowledge-graph-date-backfill',
+    cron: '5 3 * * *',
+    taskTemplate: {
+      type: 'scheduled',
+      budgetUsdLimit: '0.00',
+      job: 'memory.graph_date_backfill',
+    },
+  },
   // Phase 2 (long-running chat): segment the day's conversations into topic
   // summaries recall can retrieve. A code job like extraction/consolidation;
   // runs before them so summaries reflect the freshest boundaries.
@@ -450,6 +462,7 @@ const SEED_OWNED_SCHEDULES = new Set([
   'memory-extraction',
   'memory-consolidation',
   'knowledge-graph-sync',
+  'knowledge-graph-date-backfill',
   'chat-segmentation',
   'anomaly-scan',
   'skill-reflection',
