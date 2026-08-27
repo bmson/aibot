@@ -113,7 +113,7 @@ function CardShell({
 }) {
   return (
     <section
-      className={`paper ${CARD_WIDTH} overflow-hidden rounded-[1.125rem] border border-edge/70 bg-raised`}
+      className={`paper ${CARD_WIDTH} overflow-hidden rounded-xl border border-edge/70 bg-raised`}
     >
       <div className="flex items-center gap-2.5 border-b border-edge/60 bg-sunken/40 px-4 py-2.5 sm:px-5">
         <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent">

@@ -85,7 +85,7 @@ export function DecisionCard({
     <section
       data-decision-card="true"
       data-tone={tone}
-      className={`paper ${CARD_WIDTH} overflow-hidden rounded-[1.125rem] border bg-raised ${styles.edge}`}
+      className={`paper ${CARD_WIDTH} overflow-hidden rounded-xl border bg-raised ${styles.edge}`}
     >
       <div
         data-decision-card-header="true"
