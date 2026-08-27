@@ -7,23 +7,15 @@ import {
   type AddKnowledgeRelationState,
   addKnowledgeRelation,
 } from '@/app/profile/knowledge/actions';
+import { ENTITY_KINDS, entityKindLabel } from '@/lib/knowledge';
 import { btn, btnSm, inputClass, labelClass, selectClass, textareaClass } from '@/lib/ui';
 
 const initialState: AddKnowledgeRelationState = { error: null, success: null };
-const ENTITY_KINDS = [
-  ['person', 'Person'],
-  ['organization', 'Organization'],
-  ['project', 'Project'],
-  ['place', 'Place'],
-  ['event', 'Event'],
-  ['date', 'Date'],
-  ['topic', 'Topic'],
-] as const;
 
 function EntityKindOptions() {
-  return ENTITY_KINDS.map(([value, label]) => (
+  return ENTITY_KINDS.map((value) => (
     <option key={value} value={value}>
-      {label}
+      {entityKindLabel(value)}
     </option>
   ));
 }

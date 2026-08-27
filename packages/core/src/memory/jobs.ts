@@ -16,7 +16,13 @@ import { runDocumentExtraction } from './documents.js';
 import { pendingEmailExtractionCount, runEmailIngestExtraction } from './email-extraction.js';
 import { runMemoryExtraction } from './extraction.js';
 import { runImportJob, type WorkspaceReader } from './import.js';
-import { pendingKnowledgeGraphSourceCount, syncKnowledgeGraph } from './knowledge-graph.js';
+import {
+  backfillKnowledgeGraphDates,
+  countRelativeDateSources,
+  graphSyncSpendUsd,
+  pendingKnowledgeGraphSourceCount,
+  syncKnowledgeGraph,
+} from './knowledge-graph.js';
 import { segmentConversations } from './segmentation.js';
 import { runSkillReflection } from './skill-reflect.js';
 import { runVoiceIngest } from './voice-ingest.js';
@@ -34,6 +40,7 @@ export type CodeJobName =
   | 'briefing.compose'
   | 'memory.consolidate'
   | 'memory.graph_sync'
+  | 'memory.graph_date_backfill'
   | 'chat.segment'
   | 'import.run'
   | 'voice.ingest'
@@ -54,6 +61,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'briefing.compose',
   'memory.consolidate',
   'memory.graph_sync',
+  'memory.graph_date_backfill',
   'chat.segment',
   'import.run',
   'voice.ingest',
@@ -75,7 +83,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
  * task rows, and a manually queued job completes without provider work.
  */
 export function isCodeJobEnabled(job: string): boolean {
-  return job !== 'memory.graph_sync' || loadConfig().GRAPH_RAG_ENABLED;
+  return !job.startsWith('memory.graph_') || loadConfig().GRAPH_RAG_ENABLED;
 }
 
 export interface CodeJobOutcome {
@@ -166,12 +174,35 @@ export async function runCodeJob(
         agentId: task.agentId,
         heartbeat: deps.heartbeat,
       });
-      const pending = await pendingKnowledgeGraphSourceCount(deps.db, task.agentId);
+      const [pending, spentUsd] = await Promise.all([
+        pendingKnowledgeGraphSourceCount(deps.db, task.agentId),
+        graphSyncSpendUsd(deps.db, task.id),
+      ]);
       return {
         done: true,
         summary:
           `knowledge graph: ${r.relationships} relation(s) from ${r.processed}/${r.candidates} source(s), ` +
-          `${r.failed} retrying, ${r.quarantined} quarantined, ${pending} pending`,
+          `${r.failed} retrying, ${r.quarantined} quarantined, ${pending} pending, ` +
+          `$${spentUsd.toFixed(4)} spent`,
+      };
+    }
+    // Deliberately free: it re-reads labels the graph already holds and never
+    // calls a model, so it can run over the whole corpus in one go. Sources it
+    // cannot fix are only counted — paying to re-extract them stays the owner's
+    // explicit choice, made from the review page.
+    case 'memory.graph_date_backfill': {
+      if (!isCodeJobEnabled(job)) {
+        return { done: true, summary: 'knowledge graph dates: disabled' };
+      }
+      await deps.heartbeat?.();
+      const r = await backfillKnowledgeGraphDates(deps.db, { agentId: task.agentId });
+      const remaining = await countRelativeDateSources(deps.db, task.agentId);
+      return {
+        done: true,
+        summary:
+          `knowledge graph dates: ${r.canonicalized} canonicalized, ${r.merged} merged, ` +
+          `${r.unresolved} unresolved of ${r.scanned} scanned, ` +
+          `${remaining} source(s) would need re-extraction`,
       };
     }
     case 'chat.segment': {

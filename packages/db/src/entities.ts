@@ -5,8 +5,12 @@ import { type ContactRow, contacts, memories, memoryTombstones } from './schema.
 /** Subjects that are the assistant itself — facts about it never become contacts. */
 const ASSISTANT_ALIASES = new Set(['assistant', 'ai bot', 'b bot', 'the assistant', 'bot']);
 
-/** A short name may prefix a longer full name at a word boundary. */
-function namePrefixMatch(a: string, b: string): boolean {
+/**
+ * A short name may prefix a longer full name at a word boundary. Shared with the
+ * knowledge graph, which resolves person nodes against these same contacts and
+ * needs to agree with contact dedup about when "Anna" is "Anna Jónsdóttir".
+ */
+export function namePrefixMatch(a: string, b: string): boolean {
   const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
   return shorter.length >= 3 && (longer === shorter || longer.startsWith(`${shorter} `));
 }
