@@ -134,6 +134,32 @@ describe('MCP Streamable HTTP client', () => {
     await expect(checkedMcpEndpoint(endpoint)).rejects.toThrow(/private network/);
   });
 
+  // The rejection cases above all passed while every public IPv4 endpoint was
+  // also being rejected: one BlockList held both families, and `::ffff:0:0/96`
+  // — the IPv4-mapped range — matches any plain IPv4 address, so a single IPv6
+  // rule blocked all of IPv4. Nothing asserted the guard still lets normal
+  // traffic through, so the whole feature was unusable in production.
+  it.each([
+    'https://140.82.113.22/mcp/',
+    'https://8.8.8.8/mcp',
+    'https://[2606:4700:4700::1111]/mcp',
+  ])('accepts a public endpoint: %s', async (endpoint) => {
+    await expect(checkedMcpEndpoint(endpoint)).resolves.toBeInstanceOf(URL);
+  });
+
+  it.each([
+    'https://10.0.0.1/mcp',
+    'https://192.168.1.10/mcp',
+    'https://172.16.0.1/mcp',
+    'https://169.254.169.254/mcp',
+    'https://100.64.0.1/mcp',
+    // Loopback is deliberately absent: it is allowed in local development,
+    // which is the mode this suite runs in, and the pinned-loopback test below
+    // covers it. In production the same address falls to the check above.
+  ])('still rejects private IPv4 endpoints: %s', async (endpoint) => {
+    await expect(checkedMcpEndpoint(endpoint)).rejects.toThrow(/private network/);
+  });
+
   it('pins and reuses a validated loopback connection in local development', async () => {
     let requests = 0;
     const server = createServer((request, response) => {
