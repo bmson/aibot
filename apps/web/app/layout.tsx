@@ -267,7 +267,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             or the shell's presence says work is happening. */}
         <NotchCompanion presence={dashboard.presence} />
         <NavCommandsProvider destinations={destinations} signedIn={!!session?.user}>
-          <main className="app-main page-gutter relative z-10 min-w-0 flex-1 py-5 md:pt-20 lg:pb-7">
+          <main className="app-main page-gutter relative z-10 min-w-0 flex-1 py-5 lg:py-7">
             {children}
           </main>
         </NavCommandsProvider>
