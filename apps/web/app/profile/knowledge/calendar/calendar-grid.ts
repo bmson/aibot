@@ -49,8 +49,10 @@ export function monthTitle(month: string, locale: string): string {
 
 /**
  * First column of the grid, 0 = Sunday .. 6 = Saturday. `Intl.Locale.weekInfo`
- * knows the owner's convention (Sunday in the US, Monday in most of Europe);
- * Monday is the documented fallback where the runtime predates the API.
+ * knows the owner's convention (Sunday in the US, Monday in most of Europe).
+ * The answer depends on the runtime's CLDR data, so callers must not assume a
+ * specific locale maps to a specific day everywhere; Monday is the documented
+ * fallback where the runtime predates the API or cannot parse the locale.
  */
 export function weekStartForLocale(locale: string): number {
   try {
