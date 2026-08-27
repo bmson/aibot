@@ -532,20 +532,32 @@ try {
     const composerSurface = page.getByTestId('chat-composer-surface');
     await targetSize(message, 'chat message field');
     await targetSize(send, 'chat send button');
+    // The composer's material, and how the log ends underneath it.
+    //
+    // The transcript fades out on its way under the composer. That fade is
+    // PAINTED as a scrim over the log (.chat-viewport::after), never MASKED out
+    // of the log itself: a mask on a scroll container forces the scroller into
+    // its own alpha layer, so every scroll frame re-composites the whole
+    // visible transcript through it, and the text loses subpixel antialiasing.
+    // The two render the same pixels over the flat stage, so the mask staying
+    // off is a performance contract, not a cosmetic one — hence asserting it is
+    // absent rather than merely that some fade exists.
     const glassContract = await composerSurface.evaluate((surface) => {
       const veil = document.querySelector<HTMLElement>('.composer-veil');
       const transcript = document.querySelector<HTMLElement>('[role="log"]');
+      const viewport = document.querySelector<HTMLElement>('.chat-viewport');
       return {
         surfaceFilter: getComputedStyle(surface).backdropFilter,
         veilFilter: veil ? getComputedStyle(veil).backdropFilter : 'missing',
         transcriptMask: transcript ? getComputedStyle(transcript).maskImage : 'missing',
+        fadeScrim: viewport ? getComputedStyle(viewport, '::after').backgroundImage : 'missing',
       };
     });
     assert(
       glassContract.surfaceFilter.includes('blur(7px)') &&
         glassContract.veilFilter === 'none' &&
-        glassContract.transcriptMask !== 'none' &&
-        glassContract.transcriptMask !== 'missing',
+        glassContract.transcriptMask === 'none' &&
+        glassContract.fadeScrim.includes('gradient'),
       `composer glass/fade contract regressed: ${JSON.stringify(glassContract)}`,
     );
     // A side thread is a subpage, so "All chats" is its back link now — one
