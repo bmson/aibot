@@ -36,8 +36,12 @@ describe('approvalSummaryOf', () => {
   });
 
   it('rejects incomplete or unsafe summary parts', () => {
-    expect(approvalSummaryOf([{ type: 'approval-summary', purpose: '', approvalCount: 1 }])).toBeNull();
-    expect(approvalSummaryOf([{ type: 'approval-summary', purpose: 'Check plans', approvalCount: 0 }])).toBeNull();
+    expect(
+      approvalSummaryOf([{ type: 'approval-summary', purpose: '', approvalCount: 1 }]),
+    ).toBeNull();
+    expect(
+      approvalSummaryOf([{ type: 'approval-summary', purpose: 'Check plans', approvalCount: 0 }]),
+    ).toBeNull();
   });
 });
 

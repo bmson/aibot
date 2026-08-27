@@ -936,8 +936,8 @@ export function ChatClient({
                   approvalSummary !== null
                     ? []
                     : approvalParts.length > 0 || budgetParts.length > 0
-                    ? textParts.filter((part) => !isDecisionProseNotice(part.text))
-                    : textParts;
+                      ? textParts.filter((part) => !isDecisionProseNotice(part.text))
+                      : textParts;
                 // Whitespace-only text parts are the residue of a [break]
                 // split point — they join into the message text (dedupe
                 // relies on that) but render as nothing.

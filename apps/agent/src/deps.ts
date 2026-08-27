@@ -97,11 +97,12 @@ export function shouldMirrorIntoPrimary(
   return !sourceConversationId || sourceConversationId !== primaryConversationId;
 }
 
-export function approvalSummaryNotice(
-  approvals: ReadonlyArray<{ purpose?: string }>,
-): { text: string; extraParts: readonly unknown[] } {
-  const purpose = approvals.find((approval) => approval.purpose?.trim())?.purpose?.trim()
-    ?? 'Continue this task';
+export function approvalSummaryNotice(approvals: ReadonlyArray<{ purpose?: string }>): {
+  text: string;
+  extraParts: readonly unknown[];
+} {
+  const purpose =
+    approvals.find((approval) => approval.purpose?.trim())?.purpose?.trim() ?? 'Continue this task';
   const approvalCount = approvals.length;
   return {
     text: [
@@ -148,12 +149,7 @@ function dashboardOwnerNotifier(deps: AgentDeps): OwnerNotifier {
       );
       if (notices.length === 0) return;
       const summary = approvalSummaryNotice(notices);
-      await post(
-        summary.text,
-        notices[0]?.taskId,
-        notices[0]?.conversationId,
-        summary.extraParts,
-      );
+      await post(summary.text, notices[0]?.taskId, notices[0]?.conversationId, summary.extraParts);
     },
   };
 }

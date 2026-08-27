@@ -1,7 +1,7 @@
 import type { TaskRow } from '@assistant/db';
 import type { InstalledModuleSet, ModuleChannel } from '@assistant/modules';
 import { describe, expect, it } from 'vitest';
-import { approvalSummaryNotice, type AgentDeps, shouldMirrorIntoPrimary } from './deps.js';
+import { type AgentDeps, approvalSummaryNotice, shouldMirrorIntoPrimary } from './deps.js';
 import { approvalNoticeEmail, executorDeps } from './executor-deps.js';
 
 describe('approvalNoticeEmail', () => {
