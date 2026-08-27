@@ -895,6 +895,41 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(item.stuckWaiting, true)
     }
 
+    func testResolvedApprovalsDecodeWithoutPayloads() throws {
+        // The resolved history deliberately drops payload/resolutionPayload —
+        // they stay in the database. Decoding the row as the pending list's
+        // full record failed the whole overview the moment a single approval
+        // resolved, taking Activity, Goals, and Documents down with it.
+        let trimmed = """
+        {"pending":[],"resolved":[
+          {"approval":{"id":"a1","taskId":"t1","shortCode":"A7","summary":"Search the web",
+                       "status":"approved","requestedAt":"2026-08-27T09:00:00.000Z",
+                       "resolvedAt":"2026-08-27T09:05:00.000Z","resolvedVia":"web",
+                       "expiresAt":"2026-08-28T09:00:00.000Z","edited":true},
+           "taskType":"chat"}
+        ]}
+        """.data(using: .utf8)!
+        let inbox = try JSONDecoder().decode(ApprovalInbox.self, from: trimmed)
+        XCTAssertEqual(inbox.resolved.first?.approval.id, "a1")
+        XCTAssertEqual(inbox.resolved.first?.approval.edited, true)
+
+        // A server build from before the trim still sends the full row; it
+        // must still decode.
+        let legacy = """
+        {"pending":[],"resolved":[
+          {"approval":{"id":"a1","taskId":"t1","shortCode":"A7","summary":"Search the web",
+                       "payload":{"query":"cafes"},"resolutionPayload":{"approved":true},
+                       "status":"approved","requestedAt":"2026-08-27T09:00:00.000Z",
+                       "resolvedAt":"2026-08-27T09:05:00.000Z","resolvedVia":"web",
+                       "expiresAt":"2026-08-28T09:00:00.000Z"},
+           "taskType":"chat"}
+        ]}
+        """.data(using: .utf8)!
+        let legacyInbox = try JSONDecoder().decode(ApprovalInbox.self, from: legacy)
+        XCTAssertEqual(legacyInbox.resolved.first?.approval.id, "a1")
+        XCTAssertNil(legacyInbox.resolved.first?.approval.edited)
+    }
+
     func testCapabilityStatusDistinguishesUnavailableFromMissingSetup() throws {
         let unavailableData = #"{"id":"google","title":"Google Workspace","summary":"Workspace tools","enabled":true,"ready":false,"status":"unavailable","detail":"agent readiness unavailable"}"#.data(using: .utf8)!
         let unavailable = try JSONDecoder().decode(WorkspaceCapability.self, from: unavailableData)

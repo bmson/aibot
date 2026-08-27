@@ -332,7 +332,7 @@ struct ApprovalsView: View {
             Text(item.approval.summary)
                 .font(.subheadline)
                 .lineLimit(usesAccessibilityLayout ? nil : 2)
-            Text("\(item.approval.shortCode) · \(relative(item.approval.resolvedAt ?? item.approval.expiresAt))")
+            Text("\(item.approval.shortCode) · \(relative(item.approval.resolvedAt ?? item.approval.expiresAt))\(item.approval.edited == true ? " · edited" : "")")
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
         }
