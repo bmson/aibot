@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  approvalSummaryOf,
   chatNoticeMessage,
   isContractNotice,
   isDecisionProseNotice,
@@ -12,6 +13,31 @@ describe('chat notices', () => {
       'This chat still has active work. Finish, cancel, or pause it before archiving.',
     );
     expect(chatNoticeMessage('unknown')).toBeUndefined();
+  });
+});
+
+describe('approvalSummaryOf', () => {
+  it('accepts the compact purpose and action count without exposing approval payloads', () => {
+    expect(
+      approvalSummaryOf([
+        { type: 'text', text: 'fallback copy' },
+        {
+          type: 'approval-summary',
+          purpose: 'Find an open cafe nearby',
+          approvalCount: 4,
+          shortCode: 'A123',
+        },
+      ]),
+    ).toEqual({
+      type: 'approval-summary',
+      purpose: 'Find an open cafe nearby',
+      approvalCount: 4,
+    });
+  });
+
+  it('rejects incomplete or unsafe summary parts', () => {
+    expect(approvalSummaryOf([{ type: 'approval-summary', purpose: '', approvalCount: 1 }])).toBeNull();
+    expect(approvalSummaryOf([{ type: 'approval-summary', purpose: 'Check plans', approvalCount: 0 }])).toBeNull();
   });
 });
 

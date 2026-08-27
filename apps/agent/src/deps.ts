@@ -97,23 +97,48 @@ export function shouldMirrorIntoPrimary(
   return !sourceConversationId || sourceConversationId !== primaryConversationId;
 }
 
+export function approvalSummaryNotice(
+  approvals: ReadonlyArray<{ purpose?: string }>,
+): { text: string; extraParts: readonly unknown[] } {
+  const purpose = approvals.find((approval) => approval.purpose?.trim())?.purpose?.trim()
+    ?? 'Continue this task';
+  const approvalCount = approvals.length;
+  return {
+    text: [
+      `Approval needed to continue: ${purpose}`,
+      `${approvalCount} ${approvalCount === 1 ? 'action is' : 'actions are'} waiting for review in Approvals.`,
+    ].join('\n'),
+    extraParts: [{ type: 'approval-summary', purpose, approvalCount }],
+  };
+}
+
 function dashboardOwnerNotifier(deps: AgentDeps): OwnerNotifier {
-  const post = async (text: string, taskId?: string, sourceConversationId?: string | null) => {
+  const post = async (
+    text: string,
+    taskId?: string,
+    sourceConversationId?: string | null,
+    extraParts?: readonly unknown[],
+  ) => {
     const agent = await getAgent(deps.db);
     const primary = await findPrimaryConversation(deps.db, agent.id);
     // Executor notices are already persisted into their owning conversation.
     // Mirroring one whose owner IS the primary chat creates the exact pair the
     // reader used to see: a structured card followed by a prose restatement.
     if (!shouldMirrorIntoPrimary(sourceConversationId, primary?.id)) return;
-    await postOwnerNotice(deps.db, { agentId: agent.id, text, ...(taskId ? { taskId } : {}) });
+    await postOwnerNotice(deps.db, {
+      agentId: agent.id,
+      text,
+      ...(taskId ? { taskId } : {}),
+      ...(extraParts?.length ? { extraParts } : {}),
+    });
   };
   return {
     notifyOwner: async ({ text, taskId, conversationId }) => {
       await post(text, taskId, conversationId);
     },
     // Approval cards are already posted into the originating conversation by the
-    // executor; this is the out-of-band nudge for an owner who is not looking at
-    // that thread, so it names the codes without repeating the full card.
+    // executor. Mirror one compact, purpose-first summary for an owner who is
+    // looking at the primary chat instead — details remain on Approvals.
     notifyApprovals: async (pending) => {
       if (pending.length === 0) return;
       const agent = await getAgent(deps.db);
@@ -122,10 +147,12 @@ function dashboardOwnerNotifier(deps: AgentDeps): OwnerNotifier {
         shouldMirrorIntoPrimary(approval.conversationId, primary?.id),
       );
       if (notices.length === 0) return;
-      const lines = notices.map((approval) => `${approval.shortCode}: ${approval.summary}`);
+      const summary = approvalSummaryNotice(notices);
       await post(
-        `${notices.length === 1 ? 'Something needs' : `${notices.length} things need`} your approval:\n${lines.join('\n')}`,
+        summary.text,
         notices[0]?.taskId,
+        notices[0]?.conversationId,
+        summary.extraParts,
       );
     },
   };

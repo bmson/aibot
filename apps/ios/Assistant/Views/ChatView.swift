@@ -561,7 +561,7 @@ struct ChatView: View {
                         jumpFeedback += 1
                         jumpToLatest(using: proxy)
                     }
-                    .padding(.bottom, composerHeight + 20)
+                    .padding(.bottom, composerHeight + 12)
                     .transition(.opacity)
                 }
             }

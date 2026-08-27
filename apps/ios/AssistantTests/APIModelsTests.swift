@@ -123,6 +123,20 @@ final class APIModelsTests: XCTestCase {
         XCTAssertFalse(approved.hasPendingDecision)
     }
 
+    func testApprovalSummaryUsesItsStructuredCardAndKeepsFallbackTextHidden() throws {
+        let data = """
+        {"id":"approval-summary-message","role":"assistant","parts":[
+          {"type":"text","text":"Approval needed to continue: Find an open cafe nearby"},
+          {"type":"approval-summary","purpose":"Find an open cafe nearby","approvalCount":4}
+        ]}
+        """.data(using: .utf8)!
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+
+        XCTAssertEqual(message.approvalSummary?.purpose, "Find an open cafe nearby")
+        XCTAssertEqual(message.approvalSummary?.approvalCount, 4)
+        XCTAssertTrue(message.visibleTextBubbles.isEmpty)
+    }
+
     func testTranscriptGroupsOnlyConsecutiveApprovedApprovalReceipts() {
         func receipt(_ id: String, status: String = "approved") -> ChatMessage {
             ChatMessage(

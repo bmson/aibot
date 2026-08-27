@@ -30,6 +30,8 @@ enum AssistantAppearance: String, CaseIterable, Identifiable {
 }
 
 enum AssistantTheme {
+    /// Shared outer geometry for every content card in the app.
+    static let cardCornerRadius: CGFloat = 20
     static let conversationCornerRadius: CGFloat = 27
     static let canvas = Color(hex: 0xEEF5F0)
     static let canvasDark = Color(hex: 0x121A15)
@@ -199,7 +201,7 @@ extension View {
         surface: Color? = nil,
         strokeTint: Color? = nil
     ) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
 
         return self
             .padding(16)
@@ -221,7 +223,7 @@ extension View {
             .padding(14)
             .background(
                 AssistantTheme.sunken(for: scheme).opacity(0.72),
-                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
             )
     }
 }

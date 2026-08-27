@@ -500,6 +500,7 @@ export async function handleChatTurn(
     agentId: agent.id,
     conversationId: conversation.id,
     goalId,
+    title: userText,
   });
 
   // Honesty-check scope for guardDraft: everything earlier turns actually did,

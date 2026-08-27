@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   buildSystemPrompt,
+  conciseTaskTitle,
   createChatTask,
   decodeMessageCursor,
   encodeMessageCursor,
@@ -125,14 +126,16 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(31);
   });
 
-  it('keeps replies plain and conversational — no emojis, no perky readouts (v28)', () => {
+  it('keeps replies text-first — no decorative emoji or perky readouts (v33)', () => {
     const prompt = buildSystemPrompt(agent, {});
-    expect(prompt).toMatch(/skip emojis/i);
+    expect(prompt).toMatch(/do not use emoji as decoration/i);
+    expect(prompt).toMatch(/only when the owner explicitly asks/i);
+    expect(prompt).not.toMatch(/mirrored emoji is acceptable/i);
     expect(prompt).toMatch(/perky status-report phrasing/i);
     const dashboard = buildSystemPrompt(agent, { channel: 'dashboard-chat' });
     expect(dashboard).not.toMatch(/face carry the expression/i);
     expect(dashboard).not.toContain('Pixar robot');
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(28);
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(33);
   });
 
   it('tells the model never to emit a mood-color theme cue (v26)', () => {
@@ -155,6 +158,14 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     // Byte-stability sentinel: adding the channel gate changed nothing for
     // channel-less callers beyond what v21 already produced.
     expect(buildSystemPrompt(agent, { now })).toBe(buildSystemPrompt(agent, { now }));
+  });
+});
+
+describe('conciseTaskTitle', () => {
+  it('gives direct chat work the same concise owner-request context as queued tasks', () => {
+    expect(conciseTaskTitle('  Find\n an open cafe nearby  ')).toBe('Find an open cafe nearby');
+    expect(conciseTaskTitle('x'.repeat(81))).toBe(`${'x'.repeat(79)}…`);
+    expect(conciseTaskTitle('   ')).toBeUndefined();
   });
 });
 

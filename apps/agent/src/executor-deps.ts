@@ -84,6 +84,7 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
         approvals.map((approval) => ({
           ...approval,
           conversationId: task.conversationId,
+          purpose: task.title ?? undefined,
         })),
       );
       for (const channel of channels) {

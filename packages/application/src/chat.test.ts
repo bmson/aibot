@@ -133,6 +133,31 @@ describe('hydrateChatApprovals', () => {
 });
 
 describe('collapseRuntimeMessageDuplicates', () => {
+  it('keeps only the newest structured approval summary when a dashboard notification retries', () => {
+    const first = row(
+      '11111111-1111-4111-8111-111111111111',
+      'Approval needed to continue: Find an open cafe nearby\n2 actions are waiting for review in Approvals.',
+      [
+        { type: 'text', text: 'Approval needed to continue: Find an open cafe nearby' },
+        { type: 'approval-summary', purpose: 'Find an open cafe nearby', approvalCount: 2 },
+      ],
+      '2026-08-26T08:00:00.000Z',
+    );
+    const retry = row(
+      '22222222-2222-4222-8222-222222222222',
+      'Approval needed to continue: Find an open cafe nearby\n2 actions are waiting for review in Approvals.',
+      [
+        { type: 'text', text: 'Approval needed to continue: Find an open cafe nearby' },
+        { type: 'approval-summary', purpose: 'Find an open cafe nearby', approvalCount: 2 },
+      ],
+      '2026-08-26T08:00:00.010Z',
+    );
+
+    expect(collapseRuntimeMessageDuplicates([first, retry]).map((message) => message.id)).toEqual([
+      retry.id,
+    ]);
+  });
+
   it('drops the dashboard approval nudge when the same task has its real card', () => {
     const card = row(
       '11111111-1111-4111-8111-111111111111',

@@ -3,6 +3,31 @@ const CHAT_NOTICES = {
     'This chat still has active work. Finish, cancel, or pause it before archiving.',
 } as const;
 
+export interface ApprovalSummaryPart {
+  type: 'approval-summary';
+  purpose: string;
+  approvalCount: number;
+}
+
+/** Validate the dashboard-only summary the approval notifier persists. */
+export function approvalSummaryOf(parts: unknown[]): ApprovalSummaryPart | null {
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    const candidate = part as {
+      type?: unknown;
+      purpose?: unknown;
+      approvalCount?: unknown;
+    };
+    if (candidate.type !== 'approval-summary' || typeof candidate.purpose !== 'string') continue;
+    const purpose = candidate.purpose.trim();
+    if (!purpose || typeof candidate.approvalCount !== 'number') continue;
+    const approvalCount = Math.trunc(candidate.approvalCount);
+    if (!Number.isSafeInteger(approvalCount) || approvalCount < 1) continue;
+    return { type: 'approval-summary', purpose, approvalCount };
+  }
+  return null;
+}
+
 export function chatNoticeMessage(code: string | undefined): string | undefined {
   return code && code in CHAT_NOTICES ? CHAT_NOTICES[code as keyof typeof CHAT_NOTICES] : undefined;
 }

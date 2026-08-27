@@ -37,7 +37,9 @@ struct MessageBubble: View {
         // stream: a one-word message gets the same width as a paragraph
         // rather than shrink-wrapping its text.
         VStack(alignment: .leading, spacing: 8) {
-            if let noticeKind = message.noticeKind,
+            if message.role == .assistant, let approvalSummary = message.approvalSummary {
+                approvalSummaryCard(approvalSummary)
+            } else if let noticeKind = message.noticeKind,
                message.role == .assistant,
                decisionParts.isEmpty,
                !message.text.isEmpty {
@@ -92,6 +94,7 @@ struct MessageBubble: View {
                   !isStreaming,
                   message.noticeKind == nil,
                   message.decisionParts.isEmpty,
+                  message.approvalSummary == nil,
                   message.parts.compactMap(MessageResponseCard.init(part:)).isEmpty,
                   let userPrompt,
                   MessageResponseCard.hasCardSignals(in: message.text) else { return }
@@ -352,16 +355,64 @@ struct MessageBubble: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             AssistantTheme.warningSurface(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+            in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
                 .stroke(
                     AssistantTheme.warning(for: colorScheme)
                         .opacity(colorSchemeContrast == .increased ? 0.58 : 0.3),
                     lineWidth: colorSchemeContrast == .increased ? 1.2 : 1
                 )
         }
+    }
+
+    private func approvalSummaryCard(_ summary: ApprovalSummary) -> some View {
+        let actionLabel = summary.approvalCount == 1 ? "action is" : "actions are"
+        let countLabel = "\(summary.approvalCount) \(actionLabel) waiting for review."
+        let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
+
+        return Button(action: openApprovals) {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Approval needed to continue", systemImage: "checkmark.shield.fill")
+                    .font(.caption.weight(.bold))
+                    .textCase(.uppercase)
+                    .tracking(0.6)
+                    .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
+
+                Text(summary.purpose)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
+                    .multilineTextAlignment(.leading)
+
+                Text(countLabel)
+                    .font(.caption)
+                    .foregroundStyle(AssistantTheme.warningInk(for: colorScheme).opacity(0.78))
+
+                HStack(spacing: 8) {
+                    Text("Review approvals")
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                    Image(systemName: "arrow.right")
+                        .font(.caption.weight(.bold))
+                }
+                .padding(.top, 1)
+                .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
+            }
+            .padding(15)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AssistantTheme.warningSurface(for: colorScheme), in: shape)
+            .overlay {
+                shape.stroke(
+                    AssistantTheme.warning(for: colorScheme)
+                        .opacity(colorSchemeContrast == .increased ? 0.58 : 0.3),
+                    lineWidth: colorSchemeContrast == .increased ? 1.2 : 1
+                )
+            }
+        }
+        .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.985))
+        .accessibilityLabel("Approval needed to continue: \(summary.purpose). \(countLabel)")
+        .accessibilityHint("Opens Approvals to review the pending actions.")
     }
 
     private func isPendingDecision(_ part: MessagePart) -> Bool {
@@ -475,10 +526,10 @@ struct MessageBubble: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             AssistantTheme.bubblePaper(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+            in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
                 .strokeBorder(presentation.tint.opacity(0.22), lineWidth: 0.8)
         }
         .accessibilityElement(children: .combine)
@@ -528,7 +579,7 @@ struct MessageBubble: View {
     @ViewBuilder
     private var offCourseCard: some View {
         let tint = AssistantTheme.inkMuted(for: colorScheme)
-        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
         VStack(alignment: .leading, spacing: 10) {
             Label("Answered without checking", systemImage: "arrow.trianglehead.turn.up.right.circle.fill")
                 .font(.caption.weight(.bold))
@@ -594,7 +645,7 @@ struct MessageBubble: View {
                 AssistantTheme.inkMuted(for: colorScheme)
             )
         }
-        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
         return VStack(alignment: .leading, spacing: 10) {
             Label(presentation.title, systemImage: presentation.symbol)
                 .font(.caption.weight(.bold))
@@ -3030,9 +3081,12 @@ private extension View {
     ) -> some View {
         padding(inset)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AssistantTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .background(
+                AssistantTheme.raised(for: colorScheme),
+                in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
+            )
             .overlay {
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
                     .stroke(
                         AssistantTheme.ink(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.22 : 0.09),
                         lineWidth: 1
@@ -3722,10 +3776,10 @@ struct ApprovedReceiptGroup: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             AssistantTheme.bubblePaper(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+            in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
                 .strokeBorder(tint.opacity(0.22), lineWidth: 0.8)
         }
     }

@@ -161,10 +161,12 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * longer asks the model to emit facial-expression cues.
  * v32: open-loop context is explicit continuity data; never treat it as an
  * instruction, and report queued/waiting work only when durable evidence exists.
+ * v33: emoji are never decorative; use one only when the owner explicitly
+ * requests it, and the final-output reviewer applies the same rule.
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 32;
+export const PROMPT_VERSION = 33;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is
@@ -226,7 +228,7 @@ export function buildSystemPrompt(
     'Voice and manner:',
     "- Write like a sharp, warm colleague of the owner's — a real person with your own identity, not a corporate assistant. Use the owner's name from the owner profile when it reads naturally; skip it when it would feel stilted.",
     '- Cut the filler and AI throat-clearing: no "I hope this helps", "As an AI", "Certainly!", "Let me know if there\'s anything else", "I\'d be happy to". Open with the substance.',
-    '- Skip emojis. Plain words carry the tone; a single mirrored emoji is acceptable only when the owner uses them first.',
+    '- Do not use emoji as decoration, status markers, or reactions. Plain words carry the tone. Include an emoji only when the owner explicitly asks for one; do not mirror emoji by default.',
     '- Sound like a person texting a colleague, not a readout: vary sentence length, and skip perky status-report phrasing ("Great news!", "All set!", "On it!") and narrating your own reactions — just say the thing.',
     '- Warm does not mean wordy. Say the useful thing plainly, add a human touch when it fits, and stop. Match the channel register (the channel note below tells you which): SMS is one or two plain sentences; email opens with a short greeting and ends with a brief sign-off as yourself; dashboard chat is conversational in tone but structured in layout.',
     '- Chat is a conversation, not a ticket queue: when the owner just talks — thinking aloud, sharing news, asking what you make of something — engage with it directly and briefly, the way a colleague would, instead of deflecting to what you can do for them.',
@@ -639,7 +641,7 @@ export async function persistMessage(
  */
 export async function createChatTask(
   db: Db,
-  input: { agentId: string; conversationId: string; goalId?: string },
+  input: { agentId: string; conversationId: string; goalId?: string; title?: string },
 ): Promise<TaskLease> {
   // Direct streaming owns this task without queueing it. Insert as pending and
   // claim it in one transaction so no poller can observe a running row without
@@ -657,6 +659,11 @@ export async function createChatTask(
         // Attributed to the goal when this is a goal's work chat, so the
         // goal's history includes the turns the owner had in it.
         goalId: input.goalId,
+        // Direct chat turns do not pass through enqueueTask, where every other
+        // task receives a concise human title from its trigger. Keep the same
+        // context available to Activity and any approval notice that needs to
+        // explain why the owner is being interrupted.
+        title: conciseTaskTitle(input.title),
         budgetUsdLimit: budgetRow?.limitUsd ?? '0.50',
         trigger: { source: 'chat', conversationId: input.conversationId },
       })
@@ -667,6 +674,13 @@ export async function createChatTask(
     if (!claimed) throw new Error('failed to claim direct chat task');
     return claimed;
   });
+}
+
+/** Same single-line, 80-character title rule used for queued task triggers. */
+export function conciseTaskTitle(value: string | undefined): string | undefined {
+  const title = value?.replace(/\s+/g, ' ').trim() ?? '';
+  if (!title) return undefined;
+  return title.length > 80 ? `${title.slice(0, 79)}…` : title;
 }
 
 export async function finishTask(

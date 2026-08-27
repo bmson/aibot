@@ -425,7 +425,7 @@ private struct DashboardCard<Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
 
         VStack(alignment: .leading, spacing: 13) {
             HStack(spacing: 12) {

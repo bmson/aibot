@@ -1,7 +1,7 @@
 import type { TaskRow } from '@assistant/db';
 import type { InstalledModuleSet, ModuleChannel } from '@assistant/modules';
 import { describe, expect, it } from 'vitest';
-import { type AgentDeps, shouldMirrorIntoPrimary } from './deps.js';
+import { approvalSummaryNotice, type AgentDeps, shouldMirrorIntoPrimary } from './deps.js';
 import { approvalNoticeEmail, executorDeps } from './executor-deps.js';
 
 describe('approvalNoticeEmail', () => {
@@ -46,6 +46,22 @@ describe('dashboard notice mirroring', () => {
   it('still mirrors background and work-thread notices into the primary conversation', () => {
     expect(shouldMirrorIntoPrimary('work-chat', 'primary-chat')).toBe(true);
     expect(shouldMirrorIntoPrimary(null, 'primary-chat')).toBe(true);
+  });
+});
+
+describe('approvalSummaryNotice', () => {
+  it('explains the task purpose and count without leaking approval codes or payloads', () => {
+    expect(
+      approvalSummaryNotice([
+        { purpose: 'Find an open cafe nearby' },
+        { purpose: 'Find an open cafe nearby' },
+      ]),
+    ).toEqual({
+      text: 'Approval needed to continue: Find an open cafe nearby\n2 actions are waiting for review in Approvals.',
+      extraParts: [
+        { type: 'approval-summary', purpose: 'Find an open cafe nearby', approvalCount: 2 },
+      ],
+    });
   });
 });
 

@@ -23,6 +23,7 @@ import { destinationIcon, formatBadgeCount, useNavCommands } from '@/app/nav-com
 import { cancelTask } from '@/app/tasks/actions';
 import { chipsOf, latestTheme } from '@/lib/chat-cues';
 import {
+  approvalSummaryOf,
   isContractNotice,
   isDecisionProseNotice,
   isOffCourse,
@@ -40,6 +41,7 @@ import { toolLabel } from '@/lib/views';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
 import { ActionChips } from './action-chips';
 import { ApprovalGroup } from './approval-group';
+import { ApprovalSummaryCard } from './approval-summary';
 import { ChatErrorBanner } from './chat-error-banner';
 import type { InlineApprovalPart } from './inline-approval';
 import { InlineBudgetRequest, type InlineBudgetRequestPart } from './inline-budget-request';
@@ -913,6 +915,7 @@ export function ChatClient({
                   | InlineBudgetRequestPart
                   | InlineSuggestionPart
                 >;
+                const approvalSummary = approvalSummaryOf(parts);
                 const approvalParts = parts.filter(
                   (part): part is InlineApprovalPart => part.type === 'approval',
                 );
@@ -930,7 +933,9 @@ export function ChatClient({
                 // decision — hide the duplicate text, never the persisted
                 // message itself.
                 const visibleTextParts =
-                  approvalParts.length > 0 || budgetParts.length > 0
+                  approvalSummary !== null
+                    ? []
+                    : approvalParts.length > 0 || budgetParts.length > 0
                     ? textParts.filter((part) => !isDecisionProseNotice(part.text))
                     : textParts;
                 // Whitespace-only text parts are the residue of a [break]
@@ -951,6 +956,7 @@ export function ChatClient({
                   message.role === 'assistant' &&
                   approvalParts.length === 0 &&
                   budgetParts.length === 0 &&
+                  approvalSummary === null &&
                   fullText !== ''
                     ? (noticeKindOf(parts) ??
                       (isContractNotice(fullText) ? 'response-contract' : null))
@@ -1103,6 +1109,7 @@ export function ChatClient({
                       </div>
                     ) : null}
                     {approvalParts.length > 0 ? <ApprovalGroup parts={approvalParts} /> : null}
+                    {approvalSummary ? <ApprovalSummaryCard summary={approvalSummary} /> : null}
                     {budgetParts.map((part) => (
                       <InlineBudgetRequest key={part.taskId} part={part} />
                     ))}

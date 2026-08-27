@@ -169,7 +169,8 @@ function isApprovalNudgeText(text: string): boolean {
   const trimmed = text.trim();
   return (
     trimmed.startsWith('Something needs your approval:') ||
-    /^\d+ things need your approval:/u.test(trimmed)
+    /^\d+ things need your approval:/u.test(trimmed) ||
+    trimmed.startsWith('Approval needed to continue:')
   );
 }
 
@@ -189,7 +190,8 @@ function runtimeStateFamily(row: PersistedMessage): string | undefined {
   const marker = noticeMarker(row);
   const text = row.text.trim();
   let family: string | undefined;
-  if (approvalsInRow.length > 0) family = `approval:${approvalsInRow.join(',')}`;
+  if (hasPart(row, 'approval-summary')) family = 'approval-summary';
+  else if (approvalsInRow.length > 0) family = `approval:${approvalsInRow.join(',')}`;
   else if (hasPart(row, 'budget-request')) family = 'budget-request';
   else if (marker === 'parked' || marker === 'needs-attention') family = marker;
   else if (NEEDS_ATTENTION_PREFIXES.some((prefix) => text.startsWith(prefix))) {
@@ -208,14 +210,20 @@ function runtimeStateFamily(row: PersistedMessage): string | undefined {
  */
 export function collapseRuntimeMessageDuplicates<T extends PersistedMessage>(rows: T[]): T[] {
   const structuredApprovalTasks = new Set(
-    rows.filter((row) => row.taskId && hasPart(row, 'approval')).map((row) => row.taskId as string),
+    rows
+      .filter((row) => row.taskId && (hasPart(row, 'approval') || hasPart(row, 'approval-summary')))
+      .map((row) => row.taskId as string),
   );
   const dropped = new Set<string>();
   const families = new Map<string, T[]>();
 
   for (const row of rows) {
     if (!row.taskId || row.role !== 'assistant') continue;
-    if (structuredApprovalTasks.has(row.taskId) && isApprovalNudgeText(row.text)) {
+    if (
+      structuredApprovalTasks.has(row.taskId) &&
+      !hasPart(row, 'approval-summary') &&
+      isApprovalNudgeText(row.text)
+    ) {
       dropped.add(row.id);
       continue;
     }
@@ -235,6 +243,7 @@ export function collapseRuntimeMessageDuplicates<T extends PersistedMessage>(row
       (row) =>
         noticeMarker(row) !== undefined ||
         hasPart(row, 'approval') ||
+        hasPart(row, 'approval-summary') ||
         hasPart(row, 'budget-request'),
     );
     const candidates = structured.length > 0 ? structured : group;

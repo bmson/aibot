@@ -51,6 +51,8 @@ struct MessagePart: Codable, Hashable, Sendable {
     var suggestionId: String?
     var shortCode: String?
     var summary: String?
+    var purpose: String?
+    var approvalCount: Int?
     var status: String?
     var proposedBudgetUsd: Double?
     /// Auto-recall provenance. Optional keeps an older server and all prior
@@ -130,11 +132,22 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         parts.filter { ["approval", "budget-request"].contains($0.type) }
     }
 
+    /// Dashboard mirrors carry a compact reason and count rather than the raw
+    /// approval payloads. The Approvals screen remains the exact review surface.
+    var approvalSummary: ApprovalSummary? {
+        for part in parts where part.type == "approval-summary" {
+            guard let purpose = part.purpose?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !purpose.isEmpty else { continue }
+            return ApprovalSummary(purpose: purpose, approvalCount: max(part.approvalCount ?? 1, 1))
+        }
+        return nil
+    }
+
     /// Runtime decision prose and the structured card say the same thing.
     /// Keep one visual object in the transcript: the card, whose live status
     /// can change after the message itself was persisted.
     var visibleTextBubbles: [String] {
-        decisionParts.isEmpty ? textBubbles : []
+        decisionParts.isEmpty && approvalSummary == nil ? textBubbles : []
     }
 
     var noticeKind: ChatNoticeKind? {
@@ -175,6 +188,11 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     static func optimistic(role: ChatRole, text: String, id: String = "local-\(UUID().uuidString)") -> Self {
         .init(id: id, role: role, parts: [.init(type: "text", text: text)])
     }
+}
+
+struct ApprovalSummary: Hashable, Sendable {
+    let purpose: String
+    let approvalCount: Int
 }
 
 /// Transcript presentation deliberately stays separate from persisted

@@ -65,6 +65,8 @@ export interface OwnerNotifier {
       shortCode: string;
       summary: string;
       toolName?: string;
+      /** Concise owner-facing reason the parked task was started. */
+      purpose?: string;
     }>,
   ): Promise<void>;
 }

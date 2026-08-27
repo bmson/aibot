@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildOutputVerificationPrompt,
+  OUTPUT_VERIFICATION_SYSTEM,
   type OutputVerification,
   verifyFinalOutput,
 } from './output-verification.js';
 
 describe('self-reflective output verification', () => {
+  it('treats unrequested emoji as a final-response defect', () => {
+    expect(OUTPUT_VERIFICATION_SYSTEM).toMatch(/emoji are not decoration/i);
+    expect(OUTPUT_VERIFICATION_SYSTEM).toMatch(/explicitly request an emoji/i);
+    expect(OUTPUT_VERIFICATION_SYSTEM).toMatch(/complete emoji-free replacement/i);
+  });
+
   it('uses a complete verifier revision and leaves final safety enforcement to its caller', async () => {
     const router = {
       object: async () => ({
