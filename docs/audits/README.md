@@ -22,3 +22,4 @@ the living references in the parent folder instead:
 | [codebase-review-2.md](codebase-review-2.md) | 2026-07 | Second pass: release-script injection, drift detection |
 | [codebase-review-3.md](codebase-review-3.md) | 2026-08 | Dead-code removal and verification tooling |
 | [codebase-review-4.md](codebase-review-4.md) | 2026-08 | Writing and organization: naming, comments, file layout |
+| [performance-review.md](performance-review.md) | 2026-08 | Unbounded reads, polling cadence, per-render work, the local queue driver |

@@ -68,6 +68,72 @@ function hasDecisionPart(message: UIMessage): boolean {
 const MAX_REFRESH_IDS = 10;
 
 /**
+ * Whether a row the server just sent is the one already on screen.
+ *
+ * Both sides of this comparison are the same server serializer's output, so
+ * the encoded form is stable and comparing it is enough to tell a genuine
+ * update from a re-read. Only rows already in the log are ever compared, so
+ * this costs nothing on a page of new messages.
+ */
+function sameMessage(current: UIMessage, incoming: UIMessage): boolean {
+  return (
+    current.role === incoming.role &&
+    JSON.stringify(current.metadata) === JSON.stringify(incoming.metadata) &&
+    JSON.stringify(current.parts) === JSON.stringify(incoming.parts)
+  );
+}
+
+/**
+ * One poll's rows folded into the log the reader is looking at.
+ *
+ * Merged by id, then the client's own provisional copies of what arrived are
+ * retired. Ordering is NOT decided here — orderChatLog derives it from the
+ * merged set on every render, so this and useChat's own appends cannot
+ * disagree about where a message goes.
+ *
+ * Returns `current` ITSELF when the tick moved nothing, which is what keeps a
+ * quiet thread quiet: `refresh` re-asks for every open decision card on every
+ * tick, so a thread holding one unanswered approval used to hand React a fresh
+ * array — and re-parse that card's markdown — every twelve seconds to report
+ * that nothing had happened. A row that comes back identical is not news.
+ */
+export function mergeChatLog(
+  current: UIMessage[],
+  arriving: UIMessage[],
+  options: { serverIds: Set<string>; streaming: boolean; retracted: Set<string> },
+): UIMessage[] {
+  const merged = [...current];
+  const indexes = new Map(merged.map((message, index) => [message.id, index]));
+  let touched = false;
+  for (const message of arriving) {
+    const index = indexes.get(message.id);
+    if (index === undefined) {
+      indexes.set(message.id, merged.length);
+      merged.push(message);
+      touched = true;
+      continue;
+    }
+    if (sameMessage(merged[index] as UIMessage, message)) continue;
+    merged[index] = message;
+    touched = true;
+  }
+  // A reply still streaming has no persisted twin yet, so leave replies alone
+  // until it finishes. Reconciling the user's own turn is always safe — it only
+  // ever removes a duplicate of something already on screen, and that duplicate
+  // was visible for the whole stream before.
+  let reconciled = retireProvisionalUserTurns(merged, options.serverIds);
+  if (!options.streaming) reconciled = retireProvisionalReplies(reconciled, options.serverIds);
+  // `retracted` is applied AFTER the merges, because a refreshed card this tick
+  // re-read can itself be the row being replaced.
+  if (options.retracted.size > 0) {
+    reconciled = reconciled.filter((message) => !options.retracted.has(message.id));
+  }
+  // Reconciliation reads the whole log rather than one page, so an idle tick
+  // can still finish what a tick during a stream could not.
+  return touched || reconciled.length !== merged.length ? reconciled : current;
+}
+
+/**
  * Messages whose decision is still open. Their live status lives in another
  * table, so a card answered on the Approvals page would otherwise keep offering
  * Approve/Decline here until a reload — the log saying something that is no
@@ -155,16 +221,10 @@ export function useChatPolling({
       setPollTrouble(next);
     };
 
-    // Merge durable rows into the log by id, then retire the client's own
-    // provisional copies of them. Ordering is NOT decided here — orderChatLog
-    // derives it from the merged set on every render, so this and useChat's own
-    // appends cannot disagree about where a message goes.
-    //
-    // `superseded` is the retraction channel: a state row delivered by an
-    // earlier tick can be replaced by a newer twin that arrives behind it (a
-    // crash-retry re-emitting a task's stop notice). The server names the
-    // losers and they come down here — applied AFTER the merges, because a
-    // refreshed card this tick re-read can itself be the row being replaced.
+    // One tick's rows, handed to mergeChatLog. `superseded` is the retraction
+    // channel: a state row delivered by an earlier tick can be replaced by a
+    // newer twin that arrives behind it (a crash-retry re-emitting a task's
+    // stop notice), and the server names the losers.
     const mergeMessages = (incoming: UIMessage[], refreshed: UIMessage[], superseded: string[]) => {
       const arriving = [...incoming, ...refreshed];
       // The live recall note under the log exists only until its durable twin
@@ -182,30 +242,13 @@ export function useChatPolling({
       // — it only ever removes a duplicate of something already on screen, and
       // that duplicate was visible for the whole stream before.
       const streaming = statusRef.current === 'streaming' || statusRef.current === 'submitted';
-      setMessages((current) => {
-        const merged = [...current];
-        const indexes = new Map(merged.map((message, index) => [message.id, index]));
-        for (const message of arriving) {
-          const index = indexes.get(message.id);
-          if (index === undefined) {
-            indexes.set(message.id, merged.length);
-            merged.push(message);
-          } else {
-            merged[index] = message;
-          }
-        }
-        const serverIds = serverIdsRef.current ?? EMPTY_SERVER_IDS;
-        let reconciled = retireProvisionalUserTurns(merged, serverIds);
-        if (!streaming) reconciled = retireProvisionalReplies(reconciled, serverIds);
-        if (retracted.size > 0) {
-          reconciled = reconciled.filter((message) => !retracted.has(message.id));
-        }
-        // Reconciliation reads the whole log rather than one page, so an idle
-        // tick can still finish what a tick during a stream could not. Hand
-        // back the same array when nothing moved so React skips the re-render.
-        const changed = arriving.length > 0 || reconciled.length !== merged.length;
-        return changed ? reconciled : current;
-      });
+      setMessages((current) =>
+        mergeChatLog(current, arriving, {
+          serverIds: serverIdsRef.current ?? EMPTY_SERVER_IDS,
+          streaming,
+          retracted,
+        }),
+      );
     };
 
     const settle = (note: string | null, opts?: { retryable?: boolean }) => {

@@ -83,7 +83,15 @@ const globalCache = globalThis as unknown as {
 };
 
 export function getDb(): Db {
-  globalCache.__assistantDb ??= createDb(loadConfig().DATABASE_URL);
+  if (!globalCache.__assistantDb) {
+    const config = loadConfig();
+    globalCache.__assistantDb = createDb(config.DATABASE_URL, {
+      max: config.DB_POOL_MAX,
+      idleTimeoutSeconds: config.DB_IDLE_TIMEOUT_SECONDS,
+      connectTimeoutSeconds: config.DB_CONNECT_TIMEOUT_SECONDS,
+      statementTimeoutMs: config.DB_STATEMENT_TIMEOUT_MS,
+    });
+  }
   return globalCache.__assistantDb;
 }
 

@@ -28,10 +28,38 @@ export interface PendingApprovalItem {
   decision: unknown;
 }
 
+/**
+ * A settled approval, as the history list reads it. Deliberately NOT an
+ * `ApprovalSnapshot`: the list only says when it was resolved, how, and
+ * whether the owner edited it on the way through — so the payloads that made
+ * the decision worth reviewing stay in the database.
+ */
 export interface ResolvedApprovalItem {
-  approval: ApprovalSnapshot;
+  approval: {
+    id: string;
+    taskId: string;
+    shortCode: string;
+    summary: string;
+    status: string;
+    requestedAt: Date;
+    resolvedAt: Date | null;
+    resolvedVia: string | null;
+    expiresAt: Date;
+    /** Whether the owner changed the arguments before approving. */
+    edited: boolean;
+  };
   taskType: string;
 }
+
+/**
+ * How many unanswered approvals one screen carries.
+ *
+ * Each pending row brings the exact argument snapshot the owner is being asked
+ * to approve, which is the point of the screen and cannot be trimmed — so the
+ * bound goes on the row count instead. An assistant that has piled up more
+ * than this has a problem the Activity page is the place to see.
+ */
+const MAX_PENDING = 50;
 
 export interface ApprovalInbox {
   pending: PendingApprovalItem[];
@@ -63,9 +91,22 @@ export async function listApprovalInbox(db: Db, recentLimit = 20): Promise<Appro
           gt(approvals.expiresAt, sql`now()`),
         ),
       )
-      .orderBy(asc(approvals.requestedAt)),
+      .orderBy(asc(approvals.requestedAt))
+      .limit(MAX_PENDING),
     db
-      .select({ approval: approvals, taskType: tasks.type })
+      .select({
+        id: approvals.id,
+        taskId: approvals.taskId,
+        shortCode: approvals.shortCode,
+        summary: approvals.summary,
+        status: approvals.status,
+        requestedAt: approvals.requestedAt,
+        resolvedAt: approvals.resolvedAt,
+        resolvedVia: approvals.resolvedVia,
+        expiresAt: approvals.expiresAt,
+        edited: sql<boolean>`${approvals.resolutionPayload} IS NOT NULL`,
+        taskType: tasks.type,
+      })
       .from(approvals)
       .innerJoin(tasks, eq(approvals.taskId, tasks.id))
       .where(
@@ -81,7 +122,10 @@ export async function listApprovalInbox(db: Db, recentLimit = 20): Promise<Appro
       .limit(recentLimit),
   ]);
 
-  return { pending, resolved };
+  return {
+    pending,
+    resolved: resolved.map(({ taskType, ...approval }) => ({ approval, taskType })),
+  };
 }
 
 /** Resolve one owner decision through the durable approval workflow. */

@@ -209,7 +209,12 @@ export function buildDeps(): AgentDeps {
   if (cached) return cached;
 
   const config = loadConfig();
-  const db = createDb(config.DATABASE_URL);
+  const db = createDb(config.DATABASE_URL, {
+    max: config.DB_POOL_MAX,
+    idleTimeoutSeconds: config.DB_IDLE_TIMEOUT_SECONDS,
+    connectTimeoutSeconds: config.DB_CONNECT_TIMEOUT_SECONDS,
+    statementTimeoutMs: config.DB_STATEMENT_TIMEOUT_MS,
+  });
   const router = new ModelRouter(db, config.OPENROUTER_API_KEY);
   const workspacePrefix = `workspace/${config.ASSISTANT_WORKSPACE_ID}`;
   const workspaceRoot = path.join(repoRoot, '.workspace');
