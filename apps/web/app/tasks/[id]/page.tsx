@@ -1,9 +1,10 @@
-import { getTaskDetail } from '@assistant/application/tasks';
+import { getTaskDetail, type RecordedValue } from '@assistant/application/tasks';
 import { Brain, Hand, MessageSquare, Wrench } from 'lucide-react';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { requireOwner } from '@/auth';
-import { formatDateTime, formatUsd, prettyJson, relativeTime, truncate } from '@/lib/format';
+import { formatDateTime, formatUsd, relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
 import {
   BackLink,
@@ -47,38 +48,49 @@ interface TimelineEntry {
   content: ReactNode;
 }
 
-function JsonDetails({ summary, value }: { summary: string; value: unknown }) {
+/**
+ * A recorded JSON value from the audit record. The application layer has
+ * already rendered and clipped it, so this only prints what it was given and
+ * says plainly when that is not the whole thing.
+ */
+function JsonDetails({ summary, value }: { summary: string; value: RecordedValue }) {
   return (
     <details className="mt-1">
       <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs text-muted select-none">
         {summary}
       </summary>
       <pre className="mt-1 overscroll-x-contain overflow-x-auto rounded bg-sunken p-2 font-mono text-xs">
-        {typeof value === 'string' ? value : prettyJson(value)}
+        {value.text}
       </pre>
+      {value.truncated ? (
+        <p className="mt-1 text-xs text-muted">
+          Showing the first {value.text.length.toLocaleString()} of{' '}
+          {value.totalChars.toLocaleString()} characters.
+        </p>
+      ) : null}
     </details>
   );
 }
 
-function completedSuccessfully(call: { status: string; result: unknown }) {
-  if (call.status !== 'succeeded') return false;
-  if (!call.result || typeof call.result !== 'object') return true;
-  const result = call.result as { ok?: unknown; status?: unknown; deliveryStatus?: unknown };
-  return (
-    result.ok !== false &&
-    !(typeof result.status === 'number' && result.status >= 400) &&
-    result.deliveryStatus !== 'unknown'
-  );
-}
-
-export default async function TaskDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function TaskDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ before?: string }>;
+}) {
   await requireOwner();
-  const { id } = await params;
+  const [{ id }, { before }] = await Promise.all([params, searchParams]);
   if (!UUID_RE.test(id)) notFound();
 
   const db = getDb();
   const now = new Date();
-  const detail = await getTaskDetail(db, id);
+  // The timeline is paged from the newest end; `before` walks backwards from
+  // the oldest entry already shown. A malformed cursor just starts over.
+  const cursor = before ? new Date(before) : undefined;
+  const detail = await getTaskDetail(db, id, {
+    ...(cursor && !Number.isNaN(cursor.getTime()) ? { before: cursor } : {}),
+  });
   if (!detail) notFound();
   const {
     timezone,
@@ -88,6 +100,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     approvals: taskApprovals,
     messages: taskMessages,
     files: taskFiles,
+    actions,
+    hasMoreTimeline,
     activeGrant,
     stuckWaiting,
   } = detail;
@@ -97,9 +111,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   );
 
   const timeline: TimelineEntry[] = [
-    ...taskToolCalls.map((tc): TimelineEntry => {
-      const decision = tc.decision as { riskTier?: string; policyId?: string } | null;
-      return {
+    ...taskToolCalls.map(
+      (tc): TimelineEntry => ({
         key: `tool-${tc.id}`,
         at: tc.createdAt,
         icon: 'tool',
@@ -112,19 +125,19 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                 step {tc.step} · <StatusChip status={tc.status} />
               </span>
             </p>
-            {decision?.riskTier ? (
+            {tc.riskTier ? (
               <p className="mt-0.5 text-xs text-muted">
-                risk {decision.riskTier}
-                {decision.policyId ? ` · policy ${decision.policyId}` : ''}
+                risk {tc.riskTier}
+                {tc.policyId ? ` · policy ${tc.policyId}` : ''}
               </p>
             ) : null}
-            <JsonDetails summary="Args" value={tc.args} />
-            {tc.result != null ? <JsonDetails summary="Result" value={tc.result} /> : null}
+            {tc.args ? <JsonDetails summary="Args" value={tc.args} /> : null}
+            {tc.result ? <JsonDetails summary="Result" value={tc.result} /> : null}
             {tc.error ? <JsonDetails summary="Error" value={tc.error} /> : null}
           </div>
         ),
-      };
-    }),
+      }),
+    ),
     ...taskModelCalls.map(
       (mc): TimelineEntry => ({
         key: `model-${mc.id}`,
@@ -175,14 +188,15 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         content: (
           <p className="text-sm">
             <span className="font-medium">{message.role}</span>{' '}
-            <span className="text-muted">{truncate(message.text, 200)}</span>
+            <span className="text-muted">{message.text}</span>
           </p>
         ),
       }),
     ),
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
-  const completedActions = taskToolCalls.filter(completedSuccessfully);
-  const incompleteActions = taskToolCalls.filter((call) => !completedSuccessfully(call));
+  const oldestShown = timeline[0]?.at;
+  const completedActions = actions.filter((action) => action.completed);
+  const incompleteActions = actions.filter((action) => !action.completed);
   const taskBudget = Number(task.budgetUsdLimit);
   const suggestedBudget = Math.ceil(Math.max(taskBudget * 2, Number(task.spentUsd) + 0.25) * 4) / 4;
   const stoppedForTaskBudget =
@@ -327,8 +341,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                   </div>
                   <StatusChip status="done" />
                 </div>
-                {call.result != null ? (
-                  <JsonDetails summary="View result" value={call.result} />
+                {call.resultPreview ? (
+                  <JsonDetails summary="View result" value={call.resultPreview} />
                 ) : null}
               </li>
             ))}
@@ -382,7 +396,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         <p className="mt-1 text-xs text-muted">
           Tool calls, approvals, messages, and model activity for troubleshooting.
         </p>
-        {task.plan != null ? <JsonDetails summary="Plan" value={task.plan} /> : null}
+        {task.plan ? <JsonDetails summary="Plan" value={task.plan} /> : null}
         {timeline.length === 0 ? (
           <p className="mt-3 text-sm text-muted">No activity recorded for this item yet.</p>
         ) : (
@@ -408,6 +422,29 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             })}
           </ol>
         )}
+        {/* The record is paged from the newest end, so a long mission's page
+            weight is a function of the page size and not of how long it ran.
+            Older entries are a link away rather than always in the payload. */}
+        {hasMoreTimeline && oldestShown ? (
+          <p className="mt-4 text-sm">
+            <Link
+              href={`/tasks/${task.id}?before=${encodeURIComponent(oldestShown.toISOString())}`}
+              className="font-medium underline underline-offset-2 hover:no-underline"
+            >
+              Show older activity
+            </Link>
+          </p>
+        ) : null}
+        {before ? (
+          <p className="mt-4 text-sm">
+            <Link
+              href={`/tasks/${task.id}`}
+              className="font-medium underline underline-offset-2 hover:no-underline"
+            >
+              Back to the newest activity
+            </Link>
+          </p>
+        ) : null}
       </details>
     </PageShell>
   );

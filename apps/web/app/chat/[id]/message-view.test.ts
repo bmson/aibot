@@ -1,6 +1,7 @@
 import type { UIMessage } from 'ai';
 import { describe, expect, it } from 'vitest';
 import {
+  createChatLogOrder,
   dayLabel,
   orderChatLog,
   retireProvisionalReplies,
@@ -26,7 +27,7 @@ function provisional(id: string, role: 'user' | 'assistant', text: string): UIMe
 }
 
 function order(messages: UIMessage[]): string[] {
-  return orderChatLog(messages, new Map()).map((message) => message.id);
+  return orderChatLog(messages, createChatLogOrder()).map((message) => message.id);
 }
 
 describe('orderChatLog', () => {
@@ -64,17 +65,44 @@ describe('orderChatLog', () => {
     // Both are undated, and the AI SDK's ids are random — sorting them by id
     // put the answer above the question roughly half the time. Arrival order
     // is the only thing that knows which came first.
-    const arrival = new Map<string, number>();
+    const order = createChatLogOrder();
     const question = provisional('zzz-user', 'user', 'what is on today?');
     const reply = provisional('aaa-assistant', 'assistant', 'Two meetings…');
-    const log = orderChatLog([question, reply], arrival);
+    const log = orderChatLog([question, reply], order);
     expect(log.map((message) => message.id)).toEqual(['zzz-user', 'aaa-assistant']);
     // And it stays put once a durable message from earlier is merged in.
     const withEarlier = orderChatLog(
       [reply, durable('s1', 'assistant', 'earlier', '2026-08-18T09:00:00.000Z'), question],
-      arrival,
+      order,
     );
     expect(withEarlier.map((message) => message.id)).toEqual(['s1', 'zzz-user', 'aaa-assistant']);
+  });
+
+  // Send times are cached per id so a long thread is not re-parsed on every
+  // render. An undated message must NOT be cached as undated: it is a local
+  // turn whose durable twin arrives later under the same id, carrying the
+  // send time that decides where it really belongs.
+  it('sorts a message by the send time it gains later, not by the one it lacked', () => {
+    const order = createChatLogOrder();
+    const local = provisional('m1', 'user', 'book the flight');
+    const earlier = durable('s1', 'assistant', 'earlier', '2026-08-18T09:00:00.000Z');
+    expect(orderChatLog([local, earlier], order).map((m) => m.id)).toEqual(['s1', 'm1']);
+
+    // The same id comes back persisted, and dated BEFORE the message it had
+    // been sorted after.
+    const persisted = durable('m1', 'user', 'book the flight', '2026-08-18T08:00:00.000Z');
+    expect(orderChatLog([persisted, earlier], order).map((m) => m.id)).toEqual(['m1', 's1']);
+  });
+
+  it('gives the same order whether or not the send times are already cached', () => {
+    const order = createChatLogOrder();
+    const log = [
+      durable('b', 'user', 'second', '2026-08-18T10:05:00.000Z'),
+      durable('a', 'assistant', 'first', '2026-08-18T10:00:00.000Z'),
+    ];
+    const first = orderChatLog(log, order).map((m) => m.id);
+    expect(orderChatLog(log, order).map((m) => m.id)).toEqual(first);
+    expect(first).toEqual(['a', 'b']);
   });
 });
 

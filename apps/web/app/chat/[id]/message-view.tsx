@@ -53,6 +53,45 @@ export function messageDate(message: UIMessage): Date | null {
 }
 
 /**
+ * What the log has learned about sequence, carried across renders by the
+ * component that owns it. Both halves only ever grow, so what they say about
+ * a message never changes once it has been said.
+ */
+export interface ChatLogOrder {
+  /** Where each id was first seen — the fallback order for undated messages. */
+  arrival: Map<string, number>;
+  /** Parsed send times, so an instant is derived from its ISO string once. */
+  sendTimes: Map<string, number>;
+}
+
+export function createChatLogOrder(): ChatLogOrder {
+  return { arrival: new Map(), sendTimes: new Map() };
+}
+
+/**
+ * A message's send time as a number, parsed at most once per id.
+ *
+ * `messageDate` builds a Date from an ISO string, and the sort below asks for
+ * one O(n log n) times per render — which during a stream is once per token.
+ * On a long thread that was thousands of Date constructions a second, all of
+ * them re-deriving an instant that cannot move: the server fixes a message's
+ * send time when it persists it.
+ *
+ * Only real timestamps are remembered. A message the client made itself has no
+ * send time *yet* — it gets one when its durable twin arrives under the same
+ * id — so caching its absence would pin it after the log forever. Those cost a
+ * property check per comparison and no Date at all.
+ */
+function sendTime(message: UIMessage, order: ChatLogOrder): number {
+  const cached = order.sendTimes.get(message.id);
+  if (cached !== undefined) return cached;
+  const at = messageDate(message)?.getTime();
+  if (at === undefined) return Number.POSITIVE_INFINITY;
+  order.sendTimes.set(message.id, at);
+  return at;
+}
+
+/**
  * Chronological order for the rendered log, and the only place order is
  * decided. Everything else — the poll's merge, useChat's own appends — just
  * puts messages in the set; this puts them in sequence.
@@ -65,22 +104,19 @@ export function messageDate(message: UIMessage): Date | null {
  * streaming in response to it were both undated, so the tie-break ran on two
  * randomly generated ids and the answer could render above the question.
  *
- * `arrivalOrder` is mutated to assign a number to each id on first sight. It
- * only ever grows, so an id's place in the sequence never changes.
+ * `order` is mutated to record each id on first sight.
  */
-export function orderChatLog(
-  messages: UIMessage[],
-  arrivalOrder: Map<string, number>,
-): UIMessage[] {
+export function orderChatLog(messages: UIMessage[], order: ChatLogOrder): UIMessage[] {
+  const { arrival } = order;
   for (const message of messages) {
-    if (!arrivalOrder.has(message.id)) arrivalOrder.set(message.id, arrivalOrder.size);
+    if (!arrival.has(message.id)) arrival.set(message.id, arrival.size);
   }
   return [...messages].sort((a, b) => {
-    const left = messageDate(a)?.getTime() ?? Number.POSITIVE_INFINITY;
-    const right = messageDate(b)?.getTime() ?? Number.POSITIVE_INFINITY;
+    const left = sendTime(a, order);
+    const right = sendTime(b, order);
     if (left !== right) return left - right;
     if (Number.isFinite(left)) return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-    return (arrivalOrder.get(a.id) ?? 0) - (arrivalOrder.get(b.id) ?? 0);
+    return (arrival.get(a.id) ?? 0) - (arrival.get(b.id) ?? 0);
   });
 }
 

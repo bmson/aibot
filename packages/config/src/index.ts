@@ -62,6 +62,23 @@ const ConfigSchema = z.object({
     }),
 
   DATABASE_URL: z.string().default('postgres://assistant:assistant@localhost:5432/assistant'),
+  /**
+   * Connection pool shape, per process.
+   *
+   * Every service builds its own pool, so the ceiling a database sees is this
+   * times the number of running containers — an agent at concurrency 4 across
+   * 3 instances plus 2 web instances is 50 connections against defaults that
+   * are usually 25 or 100. `DB_POOL_MAX` is the knob for that.
+   *
+   * The timeouts exist because a pool without them degrades quietly: an idle
+   * connection is held for the life of the process, and one pathological query
+   * pins a connection with nothing to end it. `DB_STATEMENT_TIMEOUT_MS` is the
+   * backstop — set it above the slowest legitimate query, not near it.
+   */
+  DB_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+  DB_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(0).max(3600).default(30),
+  DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(120).default(10),
+  DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(0).max(600_000).default(60_000),
   OPENROUTER_API_KEY: z.string().default(''),
   OWNER_NAME: z.string().trim().min(1).default('Owner'),
   OWNER_EMAIL: z.string().trim().email().default('owner@example.com'),

@@ -99,7 +99,7 @@ export default async function ApprovalsPage() {
                       </Link>,
                       `requested ${formatDateTime(approval.requestedAt, tz)}`,
                       approval.resolvedAt
-                        ? `resolved ${relativeTime(approval.resolvedAt, now)}${approval.resolvedVia ? ` via ${approval.resolvedVia}` : ''}${approval.resolutionPayload ? ' · edited' : ''}`
+                        ? `resolved ${relativeTime(approval.resolvedAt, now)}${approval.resolvedVia ? ` via ${approval.resolvedVia}` : ''}${approval.edited ? ' · edited' : ''}`
                         : `expired ${relativeTime(approval.expiresAt, now)}`,
                     ]}
                   />

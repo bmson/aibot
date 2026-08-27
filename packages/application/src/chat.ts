@@ -31,6 +31,7 @@ import {
   isNull,
   lt,
   notInArray,
+  or,
   sql,
 } from 'drizzle-orm';
 
@@ -63,6 +64,9 @@ const CURSOR_SETTLE_MS = 15_000;
 
 /** Cap on how many on-screen decision cards one poll may re-read. */
 const MAX_REFRESH_IDS = 10;
+
+/** How stale the read stamp must be before opening a thread rewrites it. */
+const READ_STAMP_SETTLE_SECONDS = 30;
 
 export type InlineApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'missing';
 export interface InlineApprovalDetail {
@@ -529,28 +533,30 @@ export async function archiveInactiveChats(db: Db, olderThanDays = 30): Promise<
     )
     .orderBy(desc(conversations.updatedAt))
     .limit(100);
-  let archived = 0;
-  for (const candidate of candidates) {
-    const [activeTask] = await db
-      .select({ id: tasks.id })
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.agentId, agent.id),
-          eq(tasks.conversationId, candidate.id),
-          notInArray(tasks.status, TERMINAL_TASK_STATUSES),
+  if (candidates.length === 0) return 0;
+  // One statement, not two per candidate. This walked up to a hundred chats
+  // asking the same question a hundred times; the condition it was asking is
+  // something Postgres can answer inside the UPDATE.
+  const archived = await db
+    .update(conversations)
+    .set({ archivedAt: new Date(), updatedAt: new Date() })
+    .where(
+      and(
+        inArray(
+          conversations.id,
+          candidates.map((candidate) => candidate.id),
         ),
-      )
-      .limit(1);
-    if (activeTask) continue;
-    const changed = await db
-      .update(conversations)
-      .set({ archivedAt: new Date(), updatedAt: new Date() })
-      .where(and(eq(conversations.id, candidate.id), isNull(conversations.archivedAt)))
-      .returning({ id: conversations.id });
-    archived += changed.length;
-  }
-  return archived;
+        isNull(conversations.archivedAt),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${tasks}
+          WHERE ${tasks.conversationId} = ${conversations.id}
+            AND ${tasks.agentId} = ${agent.id}
+            AND ${tasks.status} NOT IN ${TERMINAL_TASK_STATUSES}
+        )`,
+      ),
+    )
+    .returning({ id: conversations.id });
+  return archived.length;
 }
 
 export async function listChatHistory(db: Db, archived: boolean) {
@@ -630,11 +636,28 @@ export async function getChatConversationView(
   // page and both mobile reads funnel here — so it doubles as the read
   // cursor. The chat list marks a thread unread when activity lands after
   // this stamp. Best-effort: a failed stamp costs a dot, not the page.
+  //
+  // Only written when it would actually move. This is a read path that the
+  // native app re-enters on every foreground and the web page on every load,
+  // and an unconditional UPDATE put all of them in line behind each other for
+  // the same row the executor is writing `updated_at` to. The unread dot is
+  // about whether you have looked recently, not about the exact second.
   try {
     await db
       .update(conversations)
       .set({ lastReadAt: input.now ?? new Date() })
-      .where(eq(conversations.id, conversation.id));
+      .where(
+        and(
+          eq(conversations.id, conversation.id),
+          or(
+            isNull(conversations.lastReadAt),
+            lt(
+              conversations.lastReadAt,
+              sql`now() - interval '${sql.raw(String(READ_STAMP_SETTLE_SECONDS))} seconds'`,
+            ),
+          ),
+        ),
+      );
   } catch (err) {
     console.error('conversation read stamp failed', err);
   }

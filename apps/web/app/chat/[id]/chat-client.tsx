@@ -43,7 +43,9 @@ import { ChatErrorBanner } from './chat-error-banner';
 import { ChatLog } from './chat-log';
 import {
   type ChatErrorInfo,
+  type ChatLogOrder,
   chatErrorInfo,
+  createChatLogOrder,
   decodeRecallHeader,
   messageText,
   orderChatLog,
@@ -214,12 +216,13 @@ export function ChatClient({
   }
   const initialMessageIds = initialMessageIdsRef.current;
   /**
-   * Where each message came into the log. Only the client's own messages need
-   * it — they carry no send time to sort on — but it is assigned to every id so
-   * a message's place in the sequence is fixed the first time it is seen and
-   * never recomputed. See orderChatLog.
+   * What the log has learned about sequence: where each message came into it,
+   * and the send time parsed out of each one. Only the client's own messages
+   * need the arrival half — they carry no send time to sort on — but every id
+   * is recorded, so a message's place in the sequence is fixed the first time
+   * it is seen and never recomputed. See orderChatLog.
    */
-  const arrivalOrderRef = useRef<Map<string, number>>(new Map());
+  const logOrderRef = useRef<ChatLogOrder>(createChatLogOrder());
 
   /**
    * How far the thread poll has read. This is deliberately a ref and not state:
@@ -306,7 +309,7 @@ export function ChatClient({
    * enters the message list — the presence UI reports the work instead, so
    * nothing here has to recognise and drop a placeholder.
    */
-  const log = useMemo(() => orderChatLog(messages, arrivalOrderRef.current), [messages]);
+  const log = useMemo(() => orderChatLog(messages, logOrderRef.current), [messages]);
   logRef.current = log;
 
   useEffect(() => {
@@ -354,7 +357,10 @@ export function ChatClient({
   const renderedNow = useMemo(() => new Date(renderedAt), [renderedAt]);
   const busy = status === 'submitted' || status === 'streaming' || asyncTurn !== null;
 
-  const chatTheme = useMemo(() => latestTheme(log), [log]);
+  // Pinned to 'default' by owner decision (see chat-cues.test.ts) — the call
+  // is constant-time, so it needs no memo of its own; the attribute below stays
+  // wired up so the themes in globals.css can be turned back on in one place.
+  const chatTheme = latestTheme(log);
   const companionActivity: CompanionActivity =
     status === 'submitted'
       ? 'thinking'
