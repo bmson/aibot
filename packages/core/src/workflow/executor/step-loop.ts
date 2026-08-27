@@ -1110,7 +1110,11 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         contractNotice: checked.blocked || undefined,
       });
     }
-    const text = stepResult.text.trim() || '(no response)';
+    // An empty final completion is a failed reply, not a message to the owner
+    // — never ship a placeholder like "(no response)" as if the model spoke.
+    const text =
+      stepResult.text.trim() ||
+      'The model came back with an empty reply. Nothing from this turn was lost — the Activity page shows what ran. Send it again to retry.';
     rc.window.push({ role: 'assistant', content: text } as ModelMessage);
     return stageModelFinalResponse(
       deps,

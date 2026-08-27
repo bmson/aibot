@@ -13,14 +13,26 @@ import {
   conversations,
   type Db,
   goals,
-  type messages,
+  messages,
   models,
   suggestions,
   tasks,
   toolCalls,
 } from '@assistant/db';
 import type { UIMessage } from 'ai';
-import { and, count, desc, eq, inArray, isNotNull, isNull, lt, notInArray, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  notInArray,
+  sql,
+} from 'drizzle-orm';
 
 const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'];
 const SETTLED_TASK_STATUSES = new Set([
@@ -152,6 +164,40 @@ function approvalIds(row: PersistedMessage): string[] {
     .sort();
 }
 
+/** The dashboard approval nudge, recognisable by its prose shape alone. */
+function isApprovalNudgeText(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    trimmed.startsWith('Something needs your approval:') ||
+    /^\d+ things need your approval:/u.test(trimmed)
+  );
+}
+
+const NEEDS_ATTENTION_PREFIXES = [
+  "I couldn't complete this after repeated attempts and stopped.",
+  'A task stopped and needs you',
+];
+
+/**
+ * The runtime state family one row belongs to, keyed by its task, or
+ * undefined for ordinary conversation. Rows in a family are projections of
+ * the SAME task state, so only the richest, newest one may stay visible.
+ */
+function runtimeStateFamily(row: PersistedMessage): string | undefined {
+  if (!row.taskId || row.role !== 'assistant') return undefined;
+  const approvalsInRow = approvalIds(row);
+  const marker = noticeMarker(row);
+  const text = row.text.trim();
+  let family: string | undefined;
+  if (approvalsInRow.length > 0) family = `approval:${approvalsInRow.join(',')}`;
+  else if (hasPart(row, 'budget-request')) family = 'budget-request';
+  else if (marker === 'parked' || marker === 'needs-attention') family = marker;
+  else if (NEEDS_ATTENTION_PREFIXES.some((prefix) => text.startsWith(prefix))) {
+    family = 'needs-attention';
+  }
+  return family ? `${row.taskId}:${family}` : undefined;
+}
+
 /**
  * Runtime notices are state projections, not separate conversational turns.
  * Older workers could write one into the task's thread and then mirror a
@@ -169,30 +215,13 @@ export function collapseRuntimeMessageDuplicates<T extends PersistedMessage>(row
 
   for (const row of rows) {
     if (!row.taskId || row.role !== 'assistant') continue;
-    const text = row.text.trim();
-    if (
-      structuredApprovalTasks.has(row.taskId) &&
-      (text.startsWith('Something needs your approval:') ||
-        /^\d+ things need your approval:/u.test(text))
-    ) {
+    if (structuredApprovalTasks.has(row.taskId) && isApprovalNudgeText(row.text)) {
       dropped.add(row.id);
       continue;
     }
 
-    const approvalsInRow = approvalIds(row);
-    const marker = noticeMarker(row);
-    let family: string | undefined;
-    if (approvalsInRow.length > 0) family = `approval:${approvalsInRow.join(',')}`;
-    else if (hasPart(row, 'budget-request')) family = 'budget-request';
-    else if (marker === 'parked' || marker === 'needs-attention') family = marker;
-    else if (
-      text.startsWith("I couldn't complete this after repeated attempts and stopped.") ||
-      text.startsWith('A task stopped and needs you')
-    ) {
-      family = 'needs-attention';
-    }
-    if (!family) continue;
-    const key = `${row.taskId}:${family}`;
+    const key = runtimeStateFamily(row);
+    if (!key) continue;
     const group = families.get(key) ?? [];
     group.push(row);
     families.set(key, group);
@@ -221,8 +250,66 @@ export function collapseRuntimeMessageDuplicates<T extends PersistedMessage>(row
   return rows.filter((row) => !dropped.has(row.id) || kept.has(row.id));
 }
 
+/** Cap on how much task history one poll re-reads to catch stale on-screen rows. */
+const MAX_RUNTIME_SIBLINGS = 200;
+
+/**
+ * Collapse one delivered page against the FULL runtime-state history of the
+ * tasks it touches.
+ *
+ * Collapsing the page alone is not enough: the older twin of a state row was
+ * delivered by an earlier tick and now sits behind the cursor, so a merge-by-id
+ * client keeps showing it next to the newer row that replaced it — the
+ * duplicate only disappears on the next full load. Re-reading the tasks'
+ * assistant rows (indexed, and only when the page actually carries a state
+ * row) lets one response both hide a just-arrived row whose card the client
+ * already has AND name the already-delivered rows it supersedes.
+ *
+ * `visible` is the page after collapse; `superseded` names rows OUTSIDE the
+ * page the client may be showing that should now come down. A superseded id
+ * can also appear in this response's `refreshed` — the retraction wins.
+ */
+async function collapsePageWithTaskHistory(
+  db: Db,
+  conversationId: string,
+  page: PersistedMessage[],
+): Promise<{ visible: PersistedMessage[]; superseded: string[] }> {
+  const taskIds = new Set<string>();
+  for (const row of page) {
+    if (!row.taskId || row.role !== 'assistant') continue;
+    if (runtimeStateFamily(row) !== undefined || isApprovalNudgeText(row.text)) {
+      taskIds.add(row.taskId);
+    }
+  }
+  if (taskIds.size === 0) return { visible: page, superseded: [] };
+
+  const siblings = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        inArray(messages.taskId, [...taskIds]),
+        eq(messages.role, 'assistant'),
+      ),
+    )
+    .orderBy(asc(messages.createdAt), asc(messages.id))
+    .limit(MAX_RUNTIME_SIBLINGS);
+
+  const siblingIds = new Set(siblings.map((row) => row.id));
+  const union = [...siblings, ...page.filter((row) => !siblingIds.has(row.id))];
+  const keptIds = new Set(collapseRuntimeMessageDuplicates(union).map((row) => row.id));
+  const pageIds = new Set(page.map((row) => row.id));
+  return {
+    visible: page.filter((row) => keptIds.has(row.id)),
+    superseded: union
+      .filter((row) => !keptIds.has(row.id) && !pageIds.has(row.id))
+      .map((row) => row.id),
+  };
+}
+
 function toUiMessages(rows: PersistedMessage[]): UIMessage[] {
-  return collapseRuntimeMessageDuplicates(rows)
+  return rows
     .filter((row) => row.role === 'user' || row.role === 'assistant')
     .map((row) => ({
       id: row.id,
@@ -530,6 +617,18 @@ export async function getChatConversationView(
       ),
     );
   if (!conversation) return null;
+  // Every load of this view is the owner opening the thread — the dashboard
+  // page and both mobile reads funnel here — so it doubles as the read
+  // cursor. The chat list marks a thread unread when activity lands after
+  // this stamp. Best-effort: a failed stamp costs a dot, not the page.
+  try {
+    await db
+      .update(conversations)
+      .set({ lastReadAt: input.now ?? new Date() })
+      .where(eq(conversations.id, conversation.id));
+  } catch (err) {
+    console.error('conversation read stamp failed', err);
+  }
   const goalId = goalIdFromMetadata(conversation.metadata);
   const requestedTaskId = input.taskId && UUID_RE.test(input.taskId) ? input.taskId : undefined;
   const requestedCursor = decodeMessageCursor(input.cursor);
@@ -570,7 +669,10 @@ export async function getChatConversationView(
       )
       .orderBy(models.label),
   ]);
-  const messages = await hydrateChatApprovals(db, toUiMessages(messageRows));
+  const messages = await hydrateChatApprovals(
+    db,
+    toUiMessages(collapseRuntimeMessageDuplicates(messageRows)),
+  );
   return {
     conversation,
     agentName: agent.name || 'Assistant',
@@ -615,6 +717,13 @@ export async function getChatConversationView(
  * in `refreshed`, deliberately NOT in `messages`: `messages` is what the client
  * uses to decide a turn has produced its answer, and a re-read of an old row is
  * not new output.
+ *
+ * `superseded` is the reverse direction: rows an earlier tick already
+ * delivered that a row in THIS page replaces (a crash-retry re-emitting a task
+ * state, a prose mirror superseded by its structured card). Collapsing one
+ * page can never see those — the older twin sits behind the cursor — so the
+ * page is collapsed against its tasks' full state history and the losers an
+ * open client may be showing come back here for removal.
  */
 export async function getChatUpdates(
   db: Db,
@@ -660,7 +769,8 @@ export async function getChatUpdates(
   });
   const hasMore = Boolean(cursor && rows.length > pageSize);
   const page = rows.slice(0, pageSize);
-  const messages = await hydrateChatApprovals(db, toUiMessages(page));
+  const { visible, superseded } = await collapsePageWithTaskHistory(db, input.conversationId, page);
+  const messages = await hydrateChatApprovals(db, toUiMessages(visible));
   const refreshIds = (input.refreshIds ?? [])
     .filter((id) => UUID_RE.test(id))
     .slice(0, MAX_REFRESH_IDS);
@@ -687,7 +797,7 @@ export async function getChatUpdates(
             .limit(3)
         ).reverse()
       : [];
-  return { taskStatus, messages, refreshed, nextCursor, hasMore, activity };
+  return { taskStatus, messages, refreshed, superseded, nextCursor, hasMore, activity };
 }
 
 /**

@@ -23,10 +23,11 @@ import { destinationIcon, formatBadgeCount, useNavCommands } from '@/app/nav-com
 import { cancelTask } from '@/app/tasks/actions';
 import { chipsOf, latestTheme } from '@/lib/chat-cues';
 import {
-  isAsyncAcknowledgement,
   isContractNotice,
   isDecisionProseNotice,
+  isOffCourse,
   noticeKindOf,
+  turnFailedReason,
 } from '@/lib/chat-notices';
 import {
   type CompanionActivity,
@@ -39,14 +40,16 @@ import { toolLabel } from '@/lib/views';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
 import { ActionChips } from './action-chips';
 import { ApprovalGroup } from './approval-group';
+import { ChatErrorBanner } from './chat-error-banner';
 import type { InlineApprovalPart } from './inline-approval';
 import { InlineBudgetRequest, type InlineBudgetRequestPart } from './inline-budget-request';
 import { type InlineSuggestionPart, SuggestionCard } from './inline-suggestion';
 import { MessageMarkdown } from './markdown';
 import {
   AssistantUpdate,
+  type ChatErrorInfo,
+  chatErrorInfo,
   decodeRecallHeader,
-  errorText,
   MessageActions,
   messageDate,
   messageText,
@@ -55,10 +58,18 @@ import {
   RecallNote,
   type RecallSource,
   recallSourcesOf,
-  retireProvisionalReplies,
-  retireProvisionalUserTurns,
   stampLabel,
 } from './message-view';
+import { OffCourseCard } from './off-course-card';
+import { ResponseCards, rendersAllCards, responseCardPayloads } from './response-card';
+import {
+  type AsyncNote,
+  type AsyncTurn,
+  type ChatActivityItem,
+  type PollTrouble,
+  type TurnState,
+  useChatPolling,
+} from './use-chat-polling';
 
 interface ChatClientProps {
   conversationId: string;
@@ -78,7 +89,7 @@ interface ChatClientProps {
   modelOverride: string | null;
   goalTitle?: string;
   /** A task created by the goal form before this page opened. */
-  initialAsyncTurn?: { taskId: string; cursor: string };
+  initialAsyncTurn?: AsyncTurn;
   /** Where the idle thread poll resumes from — the newest message at render. */
   initialCursor?: string | null;
   archived: boolean;
@@ -89,60 +100,6 @@ interface ChatClientProps {
   /** Pre-fills the composer (e.g. an "ask about this document" deep-link). */
   initialInput?: string;
 }
-
-/** Task statuses that mean "parked on the owner", not "finished". */
-const PARKED_TASK_STATUSES = new Set(['waiting_approval', 'waiting_budget', 'needs_attention']);
-
-/**
- * A task publishes a parked status before the card explaining the park is
- * persisted. The executor now writes that card ahead of its outbound owner
- * ping, so the gap is a single insert — but a poll can still land inside it,
- * and stopping there is what left approvals invisible until a reload. Give a
- * parked task this many extra polls to produce a card before settling, so a
- * park that legitimately has no card (plain needs_attention prose) still ends.
- */
-const PARK_GRACE_TICKS = 4;
-const EMPTY_SERVER_IDS = new Set<string>();
-
-/** An approval or budget card — the thing a parked task is waiting on. */
-function hasDecisionPart(message: UIMessage): boolean {
-  return (message.parts as Array<{ type?: string }>).some(
-    (part) => part?.type === 'approval' || part?.type === 'budget-request',
-  );
-}
-
-/** How many on-screen decision cards one poll re-reads (matches the route). */
-const MAX_REFRESH_IDS = 10;
-
-/**
- * Messages whose decision is still open. Their live status lives in another
- * table, so a card answered on the Approvals page would otherwise keep offering
- * Approve/Decline here until a reload — the log saying something that is no
- * longer true.
- */
-function unresolvedDecisionIds(log: UIMessage[]): string[] {
-  const ids: string[] = [];
-  // Newest first: a thread can hold more open cards than one poll may carry,
-  // and the ones the reader is looking at are the recent ones.
-  for (let index = log.length - 1; index >= 0 && ids.length < MAX_REFRESH_IDS; index -= 1) {
-    const message = log[index] as UIMessage;
-    const open = (message.parts as Array<{ type?: string; status?: string }>).some(
-      (part) =>
-        (part?.type === 'approval' ||
-          part?.type === 'budget-request' ||
-          part?.type === 'suggestion') &&
-        (part.status === undefined || part.status === 'pending' || part.status === 'snoozed'),
-    );
-    if (open) ids.push(message.id);
-  }
-  return ids;
-}
-
-/** Poll cadence while a task is running, versus the open thread sitting idle. */
-const ACTIVE_POLL_MS = 2_500;
-const IDLE_POLL_MS = 12_000;
-/** How long to keep claiming live progress for one turn before saying so. */
-const TURN_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * One entry in the "/" palette. Composer commands act on this chat; navigation
@@ -227,19 +184,14 @@ export function ChatClient({
   /** New messages that arrived while scrolled up (the pill shows a dot). */
   const [unseenCount, setUnseenCount] = useState(0);
   /** Set when the route handed the turn to the executor — we poll until it settles. */
-  const [asyncTurn, setAsyncTurn] = useState<{
-    taskId: string;
-    cursor: string;
-  } | null>(initialAsyncTurn ?? null);
-  const [asyncNote, setAsyncNote] = useState<string | null>(null);
-  const [asyncTaskStatus, setAsyncTaskStatus] = useState<string | null>(
-    initialAsyncTurn ? 'pending' : null,
-  );
+  const [asyncTurn, setAsyncTurn] = useState<AsyncTurn | null>(initialAsyncTurn ?? null);
+  /** How an open turn ended. `retryable` offers to resend the opening message. */
+  const [asyncNote, setAsyncNote] = useState<AsyncNote | null>(null);
+  /** The silent poll loop's only surfaces: repeated failure, or a dead session. */
+  const [pollTrouble, setPollTrouble] = useState<PollTrouble>(null);
   const [asyncActionError, setAsyncActionError] = useState<string | null>(null);
   const [isCancellingAsync, startCancelTransition] = useTransition();
-  const [activity, setActivity] = useState<
-    Array<{ toolName: string; status: string; step: number }>
-  >([]);
+  const [activity, setActivity] = useState<ChatActivityItem[]>([]);
   /** Live provenance for the current streaming turn (the persisted part covers reloads). */
   const [liveRecall, setLiveRecall] = useState<RecallSource[] | null>(null);
   /** This-turn autonomy: one submitted turn can skip routine approvals. */
@@ -247,6 +199,8 @@ export function ChatClient({
   const autonomousRef = useRef(false);
   autonomousRef.current = autonomous;
   const resetAutonomyAfterSubmitRef = useRef(false);
+  /** One-shot "run it for real" reroute — arming, sending, and clearing below. */
+  const forceRef = useRef(false);
   /** A failed send can put the exact text back into the composer without guesswork. */
   const [lastSubmittedText, setLastSubmittedText] = useState('');
   const formRef = useRef<HTMLFormElement>(null);
@@ -292,18 +246,12 @@ export function ChatClient({
     serverIdsRef.current = new Set(initialMessages.map((message) => message.id));
   }
   /** Read inside the poll loop, which must not re-subscribe when these change. */
-  const asyncTurnRef = useRef<{ taskId: string; cursor: string } | null>(initialAsyncTurn ?? null);
+  const asyncTurnRef = useRef<AsyncTurn | null>(initialAsyncTurn ?? null);
   const statusRef = useRef<string>('ready');
   /** Lets the poll name the decision cards on screen without re-subscribing. */
   const logRef = useRef<UIMessage[]>(initialMessages);
   /** Per-turn settle bookkeeping, reset when a new task takes over. */
-  const turnRef = useRef<{
-    taskId: string;
-    startedAt: number;
-    sawAssistant: boolean;
-    sawDecision: boolean;
-    graceTicks: number;
-  } | null>(null);
+  const turnRef = useRef<TurnState | null>(null);
   /** Lets a fresh turn wake the poll instead of waiting out an idle interval. */
   const pokePollRef = useRef<(() => void) | null>(null);
 
@@ -322,12 +270,17 @@ export function ChatClient({
             body: {
               ...body,
               autonomous: autonomousRef.current,
+              force: forceRef.current,
               messages: latestUser ? [latestUser] : [],
             },
           };
         },
         // Wrap fetch to capture the routing headers set by the chat route.
         fetch: (async (info, init) => {
+          // The request body is already built by now, so the one-shot reroute
+          // flag clears here — error responses included, it can never leak into
+          // an unrelated later send.
+          forceRef.current = false;
           const response = await fetch(info, init);
           const modelId = response.headers.get('x-model-id');
           const degraded = response.headers.get('x-model-degraded') === 'true';
@@ -358,22 +311,11 @@ export function ChatClient({
   /**
    * The log as it is read: ordered once, in one place, from the merged set.
    *
-   * The acknowledgement the chat route streams back for an action turn is
-   * dropped here. It is never persisted, so it can never meet a durable twin —
-   * left in, it would sit pinned below every message that lands after it. The
-   * presence row underneath says the same thing while the work is running.
+   * An action turn's hand-off arrives as a transient data part, which never
+   * enters the message list — the presence UI reports the work instead, so
+   * nothing here has to recognise and drop a placeholder.
    */
-  const log = useMemo(
-    () =>
-      orderChatLog(
-        messages.filter(
-          (message) =>
-            serverIdsRef.current?.has(message.id) || !isAsyncAcknowledgement(messageText(message)),
-        ),
-        arrivalOrderRef.current,
-      ),
-    [messages],
-  );
+  const log = useMemo(() => orderChatLog(messages, arrivalOrderRef.current), [messages]);
   logRef.current = log;
 
   useEffect(() => {
@@ -390,192 +332,25 @@ export function ChatClient({
     }
   }, [status]);
 
-  // One poll for the whole thread, for as long as the page is open.
-  //
-  // It used to start when a turn was handed to the executor and stop when that
-  // task settled, which meant the log only ever updated itself during a turn
-  // you had just sent. Everything else — the executor resuming after you
-  // approve, a schedule or watch posting, inbound mail mirrored into chat —
-  // landed in the database with nobody listening and appeared only on the next
-  // page load. The cursor now outlives any single task: settling a turn ends
-  // the turn's presence UI, not the listening.
-  useEffect(() => {
-    let cancelled = false;
-    let timer = 0;
-
-    // Merge durable rows into the log by id, then retire the client's own
-    // provisional copies of them. Ordering is NOT decided here — orderChatLog
-    // derives it from the merged set on every render, so this and useChat's own
-    // appends cannot disagree about where a message goes.
-    const mergeMessages = (incoming: UIMessage[], refreshed: UIMessage[]) => {
-      const arriving = [...incoming, ...refreshed];
-      for (const message of arriving) serverIdsRef.current?.add(message.id);
-      // A reply still streaming has no persisted twin yet, so leave replies
-      // alone until it finishes. Reconciling the user's own turn is always safe
-      // — it only ever removes a duplicate of something already on screen, and
-      // that duplicate was visible for the whole stream before.
-      const streaming = statusRef.current === 'streaming' || statusRef.current === 'submitted';
-      setMessages((current) => {
-        const merged = [...current];
-        const indexes = new Map(merged.map((message, index) => [message.id, index]));
-        for (const message of arriving) {
-          const index = indexes.get(message.id);
-          if (index === undefined) {
-            indexes.set(message.id, merged.length);
-            merged.push(message);
-          } else {
-            merged[index] = message;
-          }
-        }
-        const serverIds = serverIdsRef.current ?? EMPTY_SERVER_IDS;
-        let reconciled = retireProvisionalUserTurns(merged, serverIds);
-        if (!streaming) reconciled = retireProvisionalReplies(reconciled, serverIds);
-        // Reconciliation reads the whole log rather than one page, so an idle
-        // tick can still finish what a tick during a stream could not. Hand
-        // back the same array when nothing moved so React skips the re-render.
-        const changed = arriving.length > 0 || reconciled.length !== merged.length;
-        return changed ? reconciled : current;
-      });
-    };
-
-    const settle = (note: string | null) => {
-      if (cancelled) return;
-      setAsyncNote(note);
-      setAsyncTurn(null);
-      setAsyncTaskStatus(null);
-      setActivity([]);
-      turnRef.current = null;
-    };
-
-    const poll = async () => {
-      if (cancelled) return;
-      const turn = asyncTurnRef.current;
-      // Nothing to catch up on while the tab is hidden, and a background tab
-      // polling forever is the kind of thing that shows up on a phone battery.
-      if (document.visibilityState !== 'visible') return schedule(turn);
-      // Per-turn settle state, reset whenever a new task takes over.
-      if (turn && turnRef.current?.taskId !== turn.taskId) {
-        turnRef.current = {
-          taskId: turn.taskId,
-          startedAt: Date.now(),
-          sawAssistant: false,
-          sawDecision: false,
-          graceTicks: PARK_GRACE_TICKS,
-        };
-      }
-      const turnState = turn ? turnRef.current : null;
-      try {
-        const query = new URLSearchParams({ conversationId });
-        if (turn) query.set('taskId', turn.taskId);
-        if (cursorRef.current) query.set('cursor', cursorRef.current);
-        const refreshIds = unresolvedDecisionIds(logRef.current);
-        if (refreshIds.length > 0) query.set('refresh', refreshIds.join(','));
-        const res = await fetch(`/api/chat/status?${query.toString()}`);
-        if (res.ok) {
-          const data = (await res.json()) as {
-            taskStatus: string | null;
-            messages: UIMessage[];
-            refreshed?: UIMessage[];
-            nextCursor: string | null;
-            hasMore: boolean;
-            activity?: Array<{ toolName: string; status: string; step: number }>;
-          };
-          if (turn) setActivity(data.activity ?? []);
-          if (turn && data.taskStatus) setAsyncTaskStatus(data.taskStatus);
-          // `refreshed` is deliberately kept out of the settle checks below: a
-          // re-read of a card already on screen is not this turn producing an
-          // answer.
-          mergeMessages(data.messages, data.refreshed ?? []);
-          // The cursor deliberately lags behind rows too fresh to be safely
-          // remembered (see CURSOR_SETTLE_MS in the application service), so a
-          // tick can legitimately end where it began. Only chase the next page
-          // when the cursor actually moved — otherwise this loop would re-ask
-          // for the same page with no delay between tries.
-          const advanced = Boolean(data.nextCursor) && data.nextCursor !== cursorRef.current;
-          if (data.nextCursor) cursorRef.current = data.nextCursor;
-          if (data.hasMore && advanced) {
-            if (!cancelled) timer = window.setTimeout(tick, 0);
-            return;
-          }
-          if (turnState && data.taskStatus) {
-            turnState.sawAssistant ||= data.messages.some(
-              (message) => message.role === 'assistant',
-            );
-            turnState.sawDecision ||= data.messages.some(hasDecisionPart);
-            if (data.taskStatus === 'done' && turnState.sawAssistant) return settle(null);
-            if (PARKED_TASK_STATUSES.has(data.taskStatus) && turnState.sawAssistant) {
-              // Stop as soon as the card the park is waiting on is here.
-              // Without one, keep polling for a bounded grace: the status can
-              // be observed in the moment between the park commit and the
-              // card's insert, and settling there loses the card.
-              if (turnState.sawDecision || turnState.graceTicks <= 0) return settle(null);
-              turnState.graceTicks -= 1;
-            }
-            if (data.taskStatus === 'failed' || data.taskStatus === 'cancelled') {
-              return settle(
-                `The task ${data.taskStatus === 'cancelled' ? 'was cancelled' : 'ended unsuccessfully'}.`,
-              );
-            }
-          }
-        }
-      } catch {
-        // transient poll failure — the next tick tries again
-      }
-      // Give up on *waiting* for a long turn, not on the thread: the presence
-      // row stops claiming live progress while the poll keeps running, so the
-      // answer still lands on its own whenever the executor finishes.
-      if (turnState && Date.now() - turnState.startedAt > TURN_TIMEOUT_MS) {
-        settle('Still working. The result will appear here when it finishes.');
-        return schedule(null);
-      }
-      schedule(asyncTurnRef.current);
-    };
-
-    // A visibility change or a newly handed-off task can wake the loop while
-    // the previous request is still in flight. Queue one follow-up instead of
-    // allowing responses to race and move the cursor out of order.
-    let pollInFlight = false;
-    let pollQueued = false;
-    const tick = async () => {
-      if (pollInFlight) {
-        pollQueued = true;
-        return;
-      }
-      pollInFlight = true;
-      try {
-        await poll();
-      } finally {
-        pollInFlight = false;
-        if (pollQueued && !cancelled) {
-          pollQueued = false;
-          window.clearTimeout(timer);
-          timer = window.setTimeout(tick, 0);
-        }
-      }
-    };
-
-    const schedule = (turn: { taskId: string } | null) => {
-      if (cancelled) return;
-      timer = window.setTimeout(tick, turn ? ACTIVE_POLL_MS : IDLE_POLL_MS);
-    };
-
-    // Coming back to the tab should feel current immediately, not one idle
-    // interval later.
-    const onVisible = () => {
-      if (document.visibilityState !== 'visible' || cancelled) return;
-      window.clearTimeout(timer);
-      void tick();
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    pokePollRef.current = onVisible;
-    void tick();
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      document.removeEventListener('visibilitychange', onVisible);
-      pokePollRef.current = null;
-    };
-  }, [conversationId, setMessages]);
+  // One poll for the whole thread, for as long as the page is open — the
+  // synchronization half of the chat lives in use-chat-polling.ts so this
+  // component owns presentation only.
+  useChatPolling({
+    conversationId,
+    setMessages,
+    statusRef,
+    asyncTurnRef,
+    cursorRef,
+    logRef,
+    serverIdsRef,
+    turnRef,
+    pokePollRef,
+    setAsyncNote,
+    setAsyncTurn,
+    setActivity,
+    setLiveRecall,
+    setPollTrouble,
+  });
 
   // Sending a turn must not wait out an idle interval before the poll notices
   // the new task — re-tick as soon as one is handed over.
@@ -902,7 +677,6 @@ export function ChatClient({
     setAtBottom(true);
     setUnseenCount(0);
     setLastSubmittedText(text);
-    setAsyncTaskStatus('pending');
     if (clearComposer) setInput('');
     setFallbackNote(null);
     setModelError(null);
@@ -919,6 +693,14 @@ export function ChatClient({
     if (/^\/model(?:\s.*)?$/i.test(text)) return;
     if (commandPaletteOpen) return;
     sendTurn(text, true);
+  };
+
+  // The off-course card's fix: the same words again, but routed around the
+  // classifier straight to the executor, where the tools are.
+  const runForReal = (text: string) => {
+    if (busy || text.trim() === '') return;
+    forceRef.current = true;
+    sendTurn(text, false);
   };
 
   const closeModelPicker = () => {
@@ -950,14 +732,21 @@ export function ChatClient({
     startCancelTransition(async () => {
       try {
         await cancelTask(taskId);
-        setAsyncNote('Stopped by you.');
+        setAsyncNote({ text: 'Stopped by you.', retryable: true });
         setAsyncTurn(null);
-        setAsyncTaskStatus('cancelled');
         setActivity([]);
       } catch {
         setAsyncActionError('Could not stop this task. Try again or open Activity.');
       }
     });
+  };
+
+  const errorInfo: ChatErrorInfo | null = error ? chatErrorInfo(error) : null;
+  /** A failed turn can always be resent as-is; the draft is the escape hatch. */
+  const retryLastTurn = () => {
+    if (lastSubmittedText.trim() === '') return;
+    clearError();
+    sendTurn(lastSubmittedText, false);
   };
 
   return (
@@ -1166,6 +955,21 @@ export function ChatClient({
                     ? (noticeKindOf(parts) ??
                       (isContractNotice(fullText) ? 'response-contract' : null))
                     : null;
+                // An off-course reply keeps its text (it had already streamed)
+                // and adds the marker card; a turn-failed notice IS the card.
+                // Both recoveries resend the words that opened this turn.
+                const offCourse = message.role === 'assistant' && isOffCourse(parts);
+                const failedReason = message.role === 'assistant' ? turnFailedReason(parts) : null;
+                const precedingUserText =
+                  offCourse || failedReason !== null
+                    ? (() => {
+                        for (let back = messageIndex - 1; back >= 0; back -= 1) {
+                          const candidate = log[back];
+                          if (candidate?.role === 'user') return messageText(candidate);
+                        }
+                        return undefined;
+                      })()
+                    : undefined;
                 const date = messageDate(message);
                 // A chat is one continuous discussion — per-message clock times
                 // are noise there, and the reply's own footer carries the "when"
@@ -1174,7 +978,14 @@ export function ChatClient({
                 // Notifications keeps them.
                 const showTime = date !== null && notificationMode;
                 const recallSources = recallSourcesOf(message);
-                const hasText = renderedTextParts.length > 0 && noticeKind === null;
+                // Rich cards ARE the answer when every card on the message can
+                // render here — showing the prose too would restate it. A kind
+                // this surface can't render keeps the prose fallback instead
+                // (parity with the iOS bubble).
+                const cards = message.role === 'assistant' ? responseCardPayloads(parts) : [];
+                const renderCards =
+                  cards.length > 0 && rendersAllCards(cards) && noticeKind === null;
+                const hasText = renderedTextParts.length > 0 && noticeKind === null && !renderCards;
                 const isNewMessage = !initialMessageIdsRef.current?.has(message.id);
                 const previousMessage = messageIndex > 0 ? log[messageIndex - 1] : undefined;
                 // A "run" is a streak of turns from the same speaker. Handing
@@ -1196,7 +1007,34 @@ export function ChatClient({
                     data-run-start={startsRun}
                   >
                     {noticeKind !== null ? (
-                      <NoticeCard kind={noticeKind} text={fullText} />
+                      <NoticeCard
+                        kind={noticeKind}
+                        text={fullText}
+                        actions={
+                          noticeKind === 'turn-failed' ? (
+                            <>
+                              {failedReason === 'budget' ? (
+                                <Link
+                                  href="/costs"
+                                  className={`inline-flex h-8 items-center rounded-full border border-accent/30 px-3.5 text-xs font-medium text-accent motion-safe:transition-colors hover:bg-accent/10 ${focusRing}`}
+                                >
+                                  Open Costs
+                                </Link>
+                              ) : null}
+                              {precedingUserText ? (
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => sendTurn(precedingUserText, false)}
+                                  className={`inline-flex h-8 items-center rounded-full border border-accent/30 px-3.5 text-xs font-medium text-accent motion-safe:transition-colors hover:bg-accent/10 active:bg-accent/15 disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`}
+                                >
+                                  Try again
+                                </button>
+                              ) : null}
+                            </>
+                          ) : undefined
+                        }
+                      />
                     ) : notificationMode && message.role === 'assistant' && hasText ? (
                       <AssistantUpdate text={fullText} sources={recallSources} />
                     ) : hasText ? (
@@ -1269,6 +1107,15 @@ export function ChatClient({
                       <InlineBudgetRequest key={part.taskId} part={part} />
                     ))}
                     <SuggestionCard parts={suggestionParts} />
+                    {renderCards ? <ResponseCards cards={cards} timeZone={agentTimezone} /> : null}
+                    {offCourse ? (
+                      <OffCourseCard
+                        active={!busy}
+                        onRunForReal={
+                          precedingUserText ? () => runForReal(precedingUserText) : undefined
+                        }
+                      />
+                    ) : null}
                     {message.role === 'assistant' && noticeKind === null ? (
                       <ActionChips
                         labels={chipsOf(message)}
@@ -1306,35 +1153,40 @@ export function ChatClient({
                   {asyncActionError}
                 </p>
               ) : null}
-              {asyncTurn && asyncTaskStatus ? (
-                <div
-                  role="status"
-                  className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-stage-muted"
-                >
-                  <span className="font-medium text-stage-strong">
-                    {asyncTaskStatus === 'waiting_approval'
-                      ? 'Waiting for your approval'
-                      : asyncTaskStatus === 'waiting_budget'
-                        ? 'Waiting for spending permission'
-                        : asyncTaskStatus === 'needs_attention'
-                          ? 'Needs your attention'
-                          : asyncTaskStatus === 'failed'
-                            ? 'Work ended unsuccessfully'
-                            : asyncTaskStatus === 'running'
-                              ? 'Working'
-                              : 'Starting the work'}
-                  </span>
-                  <Link href="/tasks" className="font-medium underline underline-offset-2">
-                    Open Activity
-                  </Link>
-                </div>
-              ) : null}
               {asyncNote ? (
                 <p role="status" className="mt-3 text-xs text-stage-muted">
-                  {asyncNote}{' '}
+                  {asyncNote.text}{' '}
                   <Link href="/tasks" className="font-medium underline underline-offset-2">
                     Open Activity
                   </Link>
+                  {asyncNote.retryable && !busy && lastSubmittedText.trim() !== '' ? (
+                    <>
+                      {' · '}
+                      <button
+                        type="button"
+                        onClick={retryLastTurn}
+                        className={`font-medium underline underline-offset-2 hover:no-underline ${focusRing}`}
+                      >
+                        Try again
+                      </button>
+                    </>
+                  ) : null}
+                </p>
+              ) : null}
+              {pollTrouble === 'expired' ? (
+                <p role="alert" className="mt-3 text-xs text-stage-muted">
+                  Your session expired — live updates are off.{' '}
+                  <button
+                    type="button"
+                    onClick={() => window.location.reload()}
+                    className={`font-medium underline underline-offset-2 hover:no-underline ${focusRing}`}
+                  >
+                    Reload to sign in again
+                  </button>
+                </p>
+              ) : pollTrouble === 'stale' ? (
+                <p role="status" className="mt-3 text-xs text-stage-muted">
+                  Live updates paused — retrying.
                 </p>
               ) : null}
               {liveRecall ? <RecallNote sources={liveRecall} /> : null}
@@ -1419,35 +1271,18 @@ export function ChatClient({
               </button>
             </div>
           ) : null}
-          {error ? (
-            <div
-              role="alert"
-              className="pointer-events-auto mb-2 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200"
-            >
-              <span>{errorText(error)}</span>
-              <span className="flex shrink-0 items-center gap-2">
-                {lastSubmittedText && input === '' ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      clearError();
-                      setInput(lastSubmittedText);
-                      window.requestAnimationFrame(() => textareaRef.current?.focus());
-                    }}
-                    className="text-xs font-medium underline underline-offset-2 hover:no-underline"
-                  >
-                    Restore draft
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={clearError}
-                  className="text-xs underline underline-offset-2 hover:no-underline"
-                >
-                  Dismiss
-                </button>
-              </span>
-            </div>
+          {error && errorInfo ? (
+            <ChatErrorBanner
+              error={errorInfo}
+              canRetry={lastSubmittedText.trim() !== '' && input === ''}
+              onRetry={retryLastTurn}
+              onRestoreDraft={() => {
+                clearError();
+                setInput(lastSubmittedText);
+                window.requestAnimationFrame(() => textareaRef.current?.focus());
+              }}
+              onDismiss={clearError}
+            />
           ) : null}
           {commandPaletteOpen ? (
             <section

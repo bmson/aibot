@@ -148,6 +148,9 @@ export async function runWatchSuggest(
         text,
         ...(opts.taskId ? { taskId: opts.taskId } : {}),
         extraParts: parts.slice(1),
+        // A watch fire is background activity, not a conversation starter —
+        // keep the primary thread conversational.
+        destination: 'notifications',
       });
     }
     return {

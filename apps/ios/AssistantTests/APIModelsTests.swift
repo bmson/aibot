@@ -40,6 +40,23 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(metrics.size, CGSize(width: 98, height: 48))
     }
 
+    func testChatUpdatesDecodesSupersededRetractions() throws {
+        let withRetractions = """
+        {"taskStatus":null,"messages":[],"refreshed":[],
+         "superseded":["old-notice-id"],"nextCursor":null,"hasMore":false,"activity":[]}
+        """.data(using: .utf8)!
+        let updates = try JSONDecoder().decode(ChatUpdates.self, from: withRetractions)
+        XCTAssertEqual(updates.superseded, ["old-notice-id"])
+
+        // A server build from before retractions must still decode.
+        let withoutRetractions = """
+        {"taskStatus":null,"messages":[],"refreshed":[],
+         "nextCursor":null,"hasMore":false,"activity":[]}
+        """.data(using: .utf8)!
+        let legacy = try JSONDecoder().decode(ChatUpdates.self, from: withoutRetractions)
+        XCTAssertNil(legacy.superseded)
+    }
+
     func testDecodesCompanionCuesAndQuickReplies() throws {
         let data = #"{"id":"1","role":"assistant","parts":[{"type":"text","text":"Ready."},{"type":"data-face","data":{"state":"warm_smile"}},{"type":"data-theme","data":{"name":"cool_sky"}},{"type":"data-chips","data":{"labels":["Show me","Continue"]}}]}"#.data(using: .utf8)!
         let message = try JSONDecoder().decode(ChatMessage.self, from: data)

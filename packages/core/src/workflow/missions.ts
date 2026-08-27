@@ -1,7 +1,7 @@
 import { type AgentRow, type Db, type TaskRow, tasks } from '@assistant/db';
 import { and, desc, eq, notInArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { mirrorGoalUpdateToPrimary, persistMessage } from '../chat.js';
+import { mirrorGoalUpdateToNotifications, persistMessage } from '../chat.js';
 import { InboundEventSchema, type Plan, type TaskState } from '../events.js';
 import type { ModelRouter } from '../model-router/router.js';
 import {
@@ -348,9 +348,10 @@ async function reflect(
  * Post a mission update where the owner will see it: into its work chat
  * (dashboard) and — because missions are long-horizon and the owner is rarely
  * watching — pushed to the owner's channel when a notifier is wired. For
- * opted-in goals, also mirror a labeled copy into the primary thread so
- * background work shows up in the one discussion (long-running-chat, option B).
- * Terminal/decision events only; owner push and mirror are best-effort.
+ * opted-in goals, also mirror a labeled copy into the Notifications thread so
+ * background work stays discoverable without interrupting the primary
+ * conversation. Terminal/decision events only; owner push and mirror are
+ * best-effort.
  */
 async function report(deps: MissionDeps, mission: TaskRow, text: string): Promise<boolean> {
   let delivered = false;
@@ -370,8 +371,8 @@ async function report(deps: MissionDeps, mission: TaskRow, text: string): Promis
         .catch((err) => console.error('mission owner notification failed', err));
     }
   }
-  await mirrorGoalUpdateToPrimary(deps.db, mission, text).catch((err) =>
-    console.error('goal update mirror to primary thread failed', err),
+  await mirrorGoalUpdateToNotifications(deps.db, mission, text).catch((err) =>
+    console.error('goal update mirror to notifications thread failed', err),
   );
   return delivered;
 }

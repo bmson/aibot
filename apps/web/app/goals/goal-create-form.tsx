@@ -113,7 +113,7 @@ export function GoalCreateForm({ startOpen = false }: { startOpen?: boolean }) {
             </div>
             <label className="flex items-start gap-2 text-xs text-muted">
               <input type="checkbox" name="mirrorToPrimary" className="mt-0.5 size-4" />
-              <span>Also show background updates in my main chat.</span>
+              <span>Also send background updates to my Notifications thread.</span>
             </label>
           </div>
         </details>

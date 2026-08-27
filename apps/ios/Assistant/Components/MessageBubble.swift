@@ -6,8 +6,21 @@ struct MessageBubble: View {
     let userPrompt: String?
     let isStreaming: Bool
     let openApprovals: () -> Void
+    /// The off-course card's fix: resend the prompt through the executor.
+    /// Nil when another turn is in flight, so a stale rerun can't jump the queue.
+    let runForReal: ((String) -> Void)?
+    /// A failed turn's recovery: the same words through normal routing.
+    /// Same nil-while-sending rule as runForReal.
+    let retry: ((String) -> Void)?
+    /// Inline approve/decline for pending approval cards — (approvalId, decision).
+    let decideApproval: ((String, String) async -> Bool)?
 
     @State private var onDeviceCardAnalysis: OnDeviceCardAnalysis?
+    /// Armed-confirm for inline decisions, mirroring the web's two-tap rule:
+    /// a button left mid-arm lapses on its own rather than staying one click
+    /// from acting.
+    @State private var armedDecision: String?
+    @State private var decidingApproval = false
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -44,10 +57,20 @@ struct MessageBubble: View {
             ForEach(decisionParts.indices, id: \.self) { index in
                 let part = decisionParts[index]
                 if isPendingDecision(part) {
-                    Button(action: openApprovals) {
-                        decisionCard(part)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button(action: openApprovals) {
+                            decisionCard(part)
+                        }
+                        .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.985))
+                        // Approvals answer from the chat row itself; the card tap
+                        // still opens the full review sheet for the payload.
+                        if part.type == "approval",
+                           let decideApproval,
+                           let approvalId = part.approvalId,
+                           !approvalId.isEmpty {
+                            inlineDecisionRow(approvalId: approvalId, decide: decideApproval)
+                        }
                     }
-                    .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.985))
                 } else {
                     settledDecisionReceipt(part)
                 }
@@ -55,6 +78,10 @@ struct MessageBubble: View {
 
             if message.role == .assistant, !responseCards.isEmpty {
                 RichResponseCards(cards: responseCards)
+            }
+
+            if message.role == .assistant, message.isOffCourse, !isStreaming {
+                offCourseCard
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -341,6 +368,75 @@ struct MessageBubble: View {
         part.status == nil || part.status == "pending" || part.status == "snoozed"
     }
 
+    /// One tap arms, the second confirms — the same armed-confirm rule the web
+    /// approval rows use, so a stray touch can never decide. An armed button
+    /// lapses after three seconds.
+    private func inlineDecisionRow(
+        approvalId: String,
+        decide: @escaping (String, String) async -> Bool
+    ) -> some View {
+        HStack(spacing: 8) {
+            inlineDecisionButton(
+                title: armedDecision == "\(approvalId)-denied" ? "Sure?" : "Decline",
+                tint: AssistantTheme.inkMuted(for: colorScheme)
+            ) {
+                handleDecisionTap(approvalId, "denied", decide: decide)
+            }
+            inlineDecisionButton(
+                title: armedDecision == "\(approvalId)-approved" ? "Sure?" : "Approve",
+                tint: AssistantTheme.accent(for: colorScheme)
+            ) {
+                handleDecisionTap(approvalId, "approved", decide: decide)
+            }
+            Spacer(minLength: 0)
+        }
+        .disabled(decidingApproval)
+        .opacity(decidingApproval ? 0.6 : 1)
+    }
+
+    private func inlineDecisionButton(
+        title: String,
+        tint: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(tint)
+                .padding(.horizontal, 14)
+                .frame(height: 36)
+                .background(
+                    Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 1)
+                )
+                .contentShape(Capsule())
+        }
+        .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.97))
+        .accessibilityHint("First tap arms, second tap confirms")
+    }
+
+    private func handleDecisionTap(
+        _ approvalId: String,
+        _ decision: String,
+        decide: @escaping (String, String) async -> Bool
+    ) {
+        let key = "\(approvalId)-\(decision)"
+        guard armedDecision == key else {
+            armedDecision = key
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                if armedDecision == key { armedDecision = nil }
+            }
+            return
+        }
+        armedDecision = nil
+        guard !decidingApproval else { return }
+        decidingApproval = true
+        Task {
+            _ = await decide(approvalId, decision)
+            decidingApproval = false
+        }
+    }
+
     private func settledDecisionReceipt(_ part: MessagePart) -> some View {
         let presentation = settledDecisionPresentation(part)
         return HStack(alignment: .top, spacing: 11) {
@@ -425,6 +521,52 @@ struct MessageBubble: View {
         }
     }
 
+    /// The honesty guard's marker on a tool-less reply that claimed work it
+    /// could not have run: the text above stays (it had already streamed), the
+    /// card carries the trust state and the rerun. Mirrored from the web's
+    /// off-course-card.tsx — keep the copy in step.
+    @ViewBuilder
+    private var offCourseCard: some View {
+        let tint = AssistantTheme.inkMuted(for: colorScheme)
+        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Answered without checking", systemImage: "arrow.trianglehead.turn.up.right.circle.fill")
+                .font(.caption.weight(.bold))
+                .textCase(.uppercase)
+                .tracking(0.6)
+                .foregroundStyle(tint)
+            Text("That reply came from memory, not from your accounts — no lookup or action actually ran, so don’t take anything it claimed as checked or done.")
+                .font(.system(size: messageFontSize, weight: .regular))
+                .tracking(-0.08)
+                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                .lineSpacing(2.5)
+            if let runForReal, let userPrompt {
+                Button {
+                    runForReal(userPrompt)
+                } label: {
+                    Text("Run it for real")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                        .padding(.horizontal, 14)
+                        .frame(height: 36)
+                        .background(
+                            Capsule().strokeBorder(
+                                AssistantTheme.accent(for: colorScheme).opacity(0.35),
+                                lineWidth: 1
+                            )
+                        )
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.97))
+                .accessibilityHint("Sends the same request again as a real task")
+            }
+        }
+        .padding(15)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AssistantTheme.bubblePaper(for: colorScheme), in: shape)
+        .overlay { shape.strokeBorder(tint.opacity(0.25), lineWidth: 0.9) }
+    }
+
     private func noticeCard(_ kind: ChatNoticeKind, text: String) -> some View {
         let presentation: (title: String, symbol: String, tint: Color) = switch kind {
         case .responseContract:
@@ -445,6 +587,12 @@ struct MessageBubble: View {
                 "exclamationmark.triangle.fill",
                 AssistantTheme.warning(for: colorScheme)
             )
+        case .turnFailed:
+            (
+                "Didn’t go through",
+                "xmark.circle.fill",
+                AssistantTheme.inkMuted(for: colorScheme)
+            )
         }
         let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
         return VStack(alignment: .leading, spacing: 10) {
@@ -462,6 +610,27 @@ struct MessageBubble: View {
                 accent: AssistantTheme.accent(for: colorScheme)
             )
             .textSelection(.enabled)
+            // A failed turn's recovery is one tap: the same words again.
+            if kind == .turnFailed, let retry, let userPrompt {
+                Button {
+                    retry(userPrompt)
+                } label: {
+                    Text("Try again")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                        .padding(.horizontal, 14)
+                        .frame(height: 36)
+                        .background(
+                            Capsule().strokeBorder(
+                                AssistantTheme.accent(for: colorScheme).opacity(0.35),
+                                lineWidth: 1
+                            )
+                        )
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.97))
+                .accessibilityHint("Sends the same message again")
+            }
         }
         .padding(15)
         .frame(maxWidth: .infinity, alignment: .leading)

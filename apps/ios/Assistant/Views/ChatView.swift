@@ -318,6 +318,12 @@ struct ChatView: View {
             guard phase != .active else { return }
             settleInterruptedMenuGesture()
         }
+        .onChange(of: model.restorableDraft) { _, restorable in
+            // A failed send hands its text back — the composer shows the words
+            // again instead of the owner retyping them.
+            guard restorable != nil, let failed = model.restoreFailedDraft() else { return }
+            draft = failed
+        }
     }
 
     private var crownContentClearanceHeight: CGFloat {
@@ -369,8 +375,12 @@ struct ChatView: View {
                             messageRow(message, at: index, motionIsReduced: motionIsReduced)
                         }
                     }
+                    // The composer is an overlay, so reserve its measured
+                    // height only after the final message. This preserves the
+                    // underlay while scrolling but lets the last card clear
+                    // the input at the transcript's bottom edge.
                     Color.clear
-                        .frame(height: 18)
+                        .frame(height: composerHeight + 18)
                         .id("bottom")
                 }
                 .padding(.horizontal, 16)
@@ -526,13 +536,16 @@ struct ChatView: View {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
             }
-            // The composer owns real layout space. An overlay plus a spacer at
-            // only the very end let every intermediate scroll position paint
-            // message text underneath the translucent field, which made the
-            // bottom of long cards unreadable. A safe-area inset shortens the
-            // transcript viewport itself while preserving keyboard behavior.
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+            // Keep the transcript edge-to-edge and place the translucent
+            // composer above it. Cards should remain scrollable beneath the
+            // input instead of ending at an artificial bottom inset.
+            .overlay(alignment: .bottom) {
                 composer
+                    // An overlay receives the scroll view's full height as a
+                    // proposal. Keep the composer intrinsic before measuring
+                    // it; otherwise that proposal can turn the end spacer
+                    // into a whole blank transcript screen.
+                    .fixedSize(horizontal: false, vertical: true)
                     .safeAreaPadding(.bottom)
                     .offset(y: menuPullActive ? menuPullComposerOffset : 0)
                     .onGeometryChange(for: CGFloat.self) { geometry in
@@ -598,7 +611,10 @@ struct ChatView: View {
             message: message,
             userPrompt: model.messages[..<index].reversed().first(where: { $0.role == .user })?.text,
             isStreaming: message.id.hasPrefix("stream-") && model.isSending,
-            openApprovals: { model.present(.approvals) }
+            openApprovals: { model.present(.approvals) },
+            runForReal: model.isSending ? nil : { text in model.send(text, force: true) },
+            retry: model.isSending ? nil : { text in model.send(text) },
+            decideApproval: { id, decision in await model.decideApproval(id: id, decision: decision) }
         )
         .padding(.top, startsRun(at: index) ? 22 : 7)
         .transition(

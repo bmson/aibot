@@ -29,6 +29,24 @@ export type NoticeKind = 'parked' | 'needs-attention';
  */
 const SELF_DESCRIBING = new Set(['notice', 'approval', 'budget-request', 'suggestion']);
 
+/**
+ * Decision parts (approval rows, a spending request) render as their own
+ * cards, so a text part carrying the same sentences would render the decision
+ * twice. New rows leave the prose out of `parts` entirely — it lives on in
+ * the message's `text` column, which is what model history, embeddings, and
+ * channel bodies read. Rows written before this change keep both; the chat's
+ * isDecisionProseNotice filter covers those.
+ */
+const CARD_ONLY_PARTS = new Set(['approval', 'budget-request']);
+
+function carriesOwnCard(extraParts: unknown[]): boolean {
+  return extraParts.some((part) => {
+    if (!part || typeof part !== 'object') return false;
+    const type = (part as { type?: unknown }).type;
+    return typeof type === 'string' && CARD_ONLY_PARTS.has(type);
+  });
+}
+
 export function noticeParts(kind: NoticeKind, extraParts: unknown[] = []): unknown[] {
   const speaksForItself = extraParts.some((part) => {
     if (!part || typeof part !== 'object') return false;
@@ -56,7 +74,9 @@ export async function postConversationNotice(
       taskId: task.id,
       role: 'assistant',
       origin: 'assistant',
-      parts: [{ type: 'text', text }, ...extraParts],
+      // A decision card speaks for itself: no duplicated prose part. The prose
+      // still lands in `text` (model history and channel bodies read that).
+      parts: carriesOwnCard(extraParts) ? extraParts : [{ type: 'text', text }, ...extraParts],
       text,
     });
     return true;

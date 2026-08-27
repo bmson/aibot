@@ -9,6 +9,7 @@ import {
   listConversationToolEvidence,
   listMessages,
   persistMessage,
+  type TurnFailureReason,
 } from '@assistant/core/chat';
 import { createCueScanner, stripCueTags } from '@assistant/core/chat-cues';
 import { getAmbientBlock } from '@assistant/core/memory/ambient';
@@ -35,7 +36,7 @@ import {
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { pumpWithCues, type StreamChunk } from './chat-cue-stream.js';
-import { CORRECTION, guardDraft } from './chat-guard.js';
+import { guardDraft } from './chat-guard.js';
 import { looksLikeActionRequest } from './chat-triage.js';
 
 const MAX_REQUEST_BYTES = 32 * 1024;
@@ -96,6 +97,18 @@ function textOf(message: UIMessage): string {
 }
 
 /**
+ * The durable record a failed turn leaves in the thread, rendered by the chat
+ * as a failure card with a retry — never as assistant prose, and never as
+ * nothing (a reload used to erase every trace that the turn died).
+ */
+const TURN_FAILURE_COPY: Record<TurnFailureReason, string> = {
+  model: "This reply didn't make it — the model service failed. Trying again usually works.",
+  budget:
+    'This reply was stopped by your spending cap. Raise it on the Costs page, then try again.',
+  empty: 'The model returned an empty reply. Trying again usually works.',
+};
+
+/**
  * Does this turn ask the assistant to DO something (tools/actions), or just
  * converse? Action turns run through the real executor — planner, tools, risk
  * gate, approvals — because this streaming route has NO tools, and a tool-less
@@ -112,27 +125,20 @@ const NeedsActionSchema = z.object({
 
 /**
  * Action turns are accepted by the workflow queue rather than answered in this
- * request. An empty UI message stream is not a valid completed assistant turn
- * for every AI SDK client version, which surfaced as a generic "request failed"
- * after an otherwise successful submission. Send one explicit acknowledgement;
- * the client replaces the temporary state with the durable task reply it polls.
- *
- * This text is never persisted, so the chat log recognises and drops it rather
- * than leaving a message with no send time pinned below everything that lands
- * afterwards — isAsyncAcknowledgement in apps/web/lib/chat-notices.ts matches
- * its opening, so keep the two in step.
+ * request. The client learns about the hand-off from the x-async-task header
+ * and polls for the durable reply, so the stream itself carries only a
+ * transient marker: a transient data part is delivered to the client without
+ * entering the message, so no placeholder text ever lands in the log to be
+ * recognised and dropped later.
  */
 function acceptedStreamResponse(taskId: string, headers: Record<string, string>): Response {
   const stream = createUIMessageStream({
     execute: ({ writer }) => {
-      const partId = `task-${taskId}`;
-      writer.write({ type: 'text-start', id: partId });
       writer.write({
-        type: 'text-delta',
-        id: partId,
-        delta: 'Got it — I’m working on this now. I’ll post the result here.',
+        type: 'data-task-accepted',
+        data: { taskId },
+        transient: true,
       });
-      writer.write({ type: 'text-end', id: partId });
       writer.write({ type: 'finish', finishReason: 'stop' });
     },
   });
@@ -167,44 +173,78 @@ export async function handleChatTurn(
 ): Promise<Response> {
   const { config, db, router } = dependencies;
   if (!config.OPENROUTER_API_KEY) {
-    return Response.json({ error: 'OPENROUTER_API_KEY not set — add it to .env' }, { status: 503 });
+    return Response.json(
+      {
+        error:
+          'The model gateway is not configured on this server — add OPENROUTER_API_KEY to its environment.',
+        code: 'not_configured',
+      },
+      { status: 503 },
+    );
   }
 
   const declaredLength = Number(req.headers.get('content-length') ?? 0);
   if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_BYTES) {
-    return Response.json({ error: 'chat request too large' }, { status: 413 });
+    return Response.json(
+      { error: 'That message is too large to send — trim it and try again.', code: 'too_large' },
+      { status: 413 },
+    );
   }
   const requestBody = await readBoundedBody(req, MAX_REQUEST_BYTES).catch(() => null);
-  if (!requestBody) return Response.json({ error: 'failed to read request body' }, { status: 400 });
+  if (!requestBody) {
+    return Response.json(
+      { error: 'The request could not be read — try sending again.', code: 'bad_request' },
+      { status: 400 },
+    );
+  }
   if (!requestBody.ok) {
-    return Response.json({ error: 'chat request too large' }, { status: 413 });
+    return Response.json(
+      { error: 'That message is too large to send — trim it and try again.', code: 'too_large' },
+      { status: 413 },
+    );
   }
   const rawBody = requestBody.text;
   let parsedBody: unknown;
   try {
     parsedBody = JSON.parse(rawBody) as unknown;
   } catch {
-    return Response.json({ error: 'invalid JSON body' }, { status: 400 });
+    return Response.json(
+      { error: 'The request was malformed — try sending again.', code: 'bad_request' },
+      { status: 400 },
+    );
   }
   if (!parsedBody || typeof parsedBody !== 'object' || Array.isArray(parsedBody)) {
-    return Response.json({ error: 'body must be an object' }, { status: 400 });
+    return Response.json(
+      { error: 'The request was malformed — try sending again.', code: 'bad_request' },
+      { status: 400 },
+    );
   }
   const body = parsedBody as {
     messages?: UIMessage[];
     conversationId?: string;
     autonomous?: boolean;
+    force?: boolean;
   };
   if (body.conversationId && !UUID_RE.test(body.conversationId)) {
-    return Response.json({ error: 'invalid conversationId' }, { status: 400 });
+    return Response.json(
+      { error: 'The request was malformed — try sending again.', code: 'bad_request' },
+      { status: 400 },
+    );
   }
   // The composer's "Autonomous" toggle. This POST is an authenticated owner
   // action (isAuthed above), so it is a valid grant-arming surface: the toggle
   // IS the approval, and the task runs free-range (subject to the dispatcher's
   // hard floor). A forced action request always runs through the executor.
   const autonomousRequested = body.autonomous === true;
+  // "Run it for real" on an off-course reply: route around the classifier
+  // without arming the autonomy grant — approvals still ask as usual.
+  const forceRequested = body.force === true;
   const uiMessages = body.messages ?? [];
   if (!Array.isArray(uiMessages)) {
-    return Response.json({ error: 'messages must be an array' }, { status: 400 });
+    return Response.json(
+      { error: 'The request was malformed — try sending again.', code: 'bad_request' },
+      { status: 400 },
+    );
   }
   const userMessage = [...uiMessages]
     .reverse()
@@ -213,13 +253,24 @@ export async function handleChatTurn(
         Boolean(message) && typeof message === 'object' && message.role === 'user',
     );
   if (!userMessage || !Array.isArray(userMessage.parts)) {
-    return Response.json({ error: 'no user message in request' }, { status: 400 });
+    return Response.json(
+      { error: 'The request was malformed — try sending again.', code: 'bad_request' },
+      { status: 400 },
+    );
   }
 
   const userText = textOf(userMessage).trim();
-  if (!userText) return Response.json({ error: 'empty user message' }, { status: 400 });
+  if (!userText) {
+    return Response.json(
+      { error: 'Type a message first, then send.', code: 'bad_request' },
+      { status: 400 },
+    );
+  }
   if (byteLength(userText) > MAX_USER_MESSAGE_BYTES) {
-    return Response.json({ error: 'user message too large' }, { status: 413 });
+    return Response.json(
+      { error: 'That message is too large to send — trim it and try again.', code: 'too_large' },
+      { status: 413 },
+    );
   }
 
   const agent = await getAgent(db);
@@ -269,6 +320,7 @@ export async function handleChatTurn(
     .find((message) => message.role === 'assistant');
   if (
     autonomousRequested ||
+    forceRequested ||
     looksLikeActionRequest(userText, priorAssistantText ? textOf(priorAssistantText) : '')
   ) {
     // A free-range request must run through the executor (which honors the grant
@@ -309,7 +361,8 @@ export async function handleChatTurn(
       return Response.json(
         {
           error:
-            'The task service is temporarily unavailable. Your message was saved; refresh this chat in a moment before retrying.',
+            'The task service is temporarily unavailable. Your message was saved — try again in a moment.',
+          code: 'queue_unavailable',
         },
         { status: 503 },
       );
@@ -351,7 +404,8 @@ export async function handleChatTurn(
       return Response.json(
         {
           error:
-            'The task service is temporarily unavailable. Your message was saved; refresh this chat in a moment before retrying.',
+            'The task service is temporarily unavailable. Your message was saved — try again in a moment.',
+          code: 'queue_unavailable',
         },
         { status: 503 },
       );
@@ -481,6 +535,16 @@ export async function handleChatTurn(
         // clean text, and the persisted reply must be byte-identical to the
         // streamed one (retireProvisionalReplies dedupes on exact text).
         const stripped = stripCueTags(text);
+        // An empty completion is a failed turn, not a blank bubble.
+        if (stripped.text.trim() === '') {
+          console.warn('model returned an empty chat reply', { taskId: task.id });
+          await finishTask(db, task, {
+            status: 'failed',
+            progress: 'model returned an empty reply',
+            failureNotice: { text: TURN_FAILURE_COPY.empty, reason: 'empty' },
+          });
+          return;
+        }
         const guarded = guardDraft(stripped.text, toolEvidence, { readRequest });
         if (guarded.corrected) {
           console.warn('tool-less chat draft claimed unperformed work', {
@@ -489,15 +553,17 @@ export async function handleChatTurn(
         }
         await finishTask(db, task, {
           status: 'done',
-          responseText: guarded.text,
+          responseText: stripped.text,
           recall: recallSources,
           cues: stripped.cues,
+          offCourse: guarded.corrected,
         });
       },
       onError: async (error) => {
         await finishTask(db, task, {
           status: 'failed',
           progress: String(error).slice(0, 500),
+          failureNotice: { text: TURN_FAILURE_COPY.model, reason: 'model' },
         });
       },
     });
@@ -505,30 +571,44 @@ export async function handleChatTurn(
     await finishTask(db, task, {
       status: 'failed',
       progress: String(error).slice(0, 500),
+      failureNotice: { text: TURN_FAILURE_COPY.model, reason: 'model' },
     });
-    return Response.json({ error: 'model request failed' }, { status: 502 });
+    return Response.json(
+      {
+        error:
+          'The model service failed to answer. Your message was saved — try again in a moment.',
+        code: 'model_unavailable',
+      },
+      { status: 502 },
+    );
   }
 
   if (!outcome.ok) {
     await finishTask(db, task, {
       status: 'failed',
       progress: outcome.decision.reason,
+      failureNotice: { text: TURN_FAILURE_COPY.budget, reason: 'budget' },
     });
     return Response.json(
-      { error: outcome.decision.reason, mode: outcome.decision.mode },
+      {
+        error: `Your spending cap stopped this reply (${outcome.decision.reason}). Raise the cap on the Costs page, then try again.`,
+        code: 'budget_exhausted',
+        mode: outcome.decision.mode,
+      },
       { status: 402 },
     );
   }
 
-  // Stream the draft as-is, then run the honesty check on the finished text and
-  // append the correction part when it claimed tool-backed work — the deltas
-  // have already reached the client, so appending is the only honest option
-  // that keeps the live view and the persisted message (onComplete) identical.
+  // Stream the draft as-is, then run the honesty check on the finished text.
+  // The deltas have already reached the client, so a flagged draft is marked
+  // rather than edited: a data part lands in the live message, and onComplete
+  // persists the same flag as a structured notice part — the chat renders the
+  // "answered without checking" card from either.
   const okOutcome = outcome;
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
       // Pump the model stream by hand (not writer.merge, whose pump can race a
-      // direct write) and hold the finish part back, so the correction — when
+      // direct write) and hold the finish part back, so the marker — when
       // needed — still lands inside the message, not after the client saw it end.
       // The pump also strips companion cue tags from the text deltas and
       // re-emits them as data-* parts, so the face reacts mid-stream while the
@@ -541,10 +621,7 @@ export async function handleChatTurn(
       );
       const draft = await okOutcome.text;
       if (guardDraft(stripCueTags(draft).text, toolEvidence, { readRequest }).corrected) {
-        const partId = `contract-${task.id}`;
-        writer.write({ type: 'text-start', id: partId });
-        writer.write({ type: 'text-delta', id: partId, delta: CORRECTION });
-        writer.write({ type: 'text-end', id: partId });
+        writer.write({ type: 'data-off-course', data: {} });
       }
       writer.write({ type: 'finish', finishReason: 'stop' });
     },

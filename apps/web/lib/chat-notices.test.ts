@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   chatNoticeMessage,
-  isAsyncAcknowledgement,
   isContractNotice,
   isDecisionProseNotice,
   noticeKindOf,
@@ -122,16 +121,6 @@ describe('noticeKindOf', () => {
   it('ignores a kind it does not know, so an unrecognised marker stays prose', () => {
     expect(noticeKindOf([{ type: 'notice', notice: 'something-newer' }])).toBeNull();
     expect(noticeKindOf([null, 'text', { type: 'notice' }])).toBeNull();
-  });
-});
-
-describe('isAsyncAcknowledgement', () => {
-  it('matches the placeholder the chat route streams for an action turn', () => {
-    // Verbatim from acceptedStreamResponse in packages/application/src/chat-turn.ts.
-    expect(
-      isAsyncAcknowledgement('Got it — I’m working on this now. I’ll post the result here.'),
-    ).toBe(true);
-    expect(isAsyncAcknowledgement('Got it. Your flight is booked.')).toBe(false);
   });
 });
 

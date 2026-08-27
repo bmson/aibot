@@ -144,6 +144,17 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
             .first
     }
 
+    /// The tool-less chat path's honesty guard marked this reply: it claimed
+    /// work that never ran. Live the marker is a `data-off-course` stream
+    /// part; the persisted message carries a `notice` part with the same
+    /// meaning. Kept out of ChatNoticeKind on purpose — an off-course reply
+    /// keeps its text and ADDS the card, it is not replaced by one.
+    var isOffCourse: Bool {
+        parts.contains { part in
+            part.type == "data-off-course" || (part.type == "notice" && part.notice == "off-course")
+        }
+    }
+
     var hasPendingDecision: Bool {
         decisionParts.contains { part in
             part.status == nil || part.status == "pending" || part.status == "snoozed"
@@ -159,6 +170,7 @@ enum ChatNoticeKind: String, Codable, Sendable {
     case responseContract = "response-contract"
     case parked
     case needsAttention = "needs-attention"
+    case turnFailed = "turn-failed"
 }
 
 enum CompanionFace: String, Codable, Sendable {
@@ -887,6 +899,11 @@ struct ChatUpdates: Codable, Sendable {
     let taskStatus: String?
     let messages: [ChatMessage]
     let refreshed: [ChatMessage]
+    /// Ids of rows an earlier poll delivered that a row in this payload
+    /// replaces (a crash-retry re-emitting a task state, a prose mirror
+    /// superseded by its structured card). Optional so a stale server build
+    /// cannot break decoding of every update.
+    let superseded: [String]?
     let nextCursor: String?
     let hasMore: Bool
     let activity: [ToolActivity]

@@ -9,6 +9,7 @@
 import type { UIMessage } from 'ai';
 import {
   Check,
+  CircleX,
   Copy,
   History,
   type LucideIcon,
@@ -18,7 +19,7 @@ import {
   Sparkles,
   TriangleAlert,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 
 import type { NoticeKind } from '@/lib/chat-notices';
 import { focusRing } from '@/lib/ui';
@@ -279,9 +280,19 @@ const NOTICE_PRESENTATION = {
   'response-contract': { tone: 'system', icon: ShieldCheck, label: 'System check' },
   parked: { tone: 'system', icon: PauseCircle, label: 'Paused — resumes on its own' },
   'needs-attention': { tone: 'waiting', icon: TriangleAlert, label: 'Needs you' },
+  'turn-failed': { tone: 'system', icon: CircleX, label: 'Didn’t go through' },
 } as const satisfies Record<NoticeKind, { tone: DecisionTone; icon: LucideIcon; label: string }>;
 
-export function NoticeCard({ kind, text }: { kind: NoticeKind; text: string }) {
+export function NoticeCard({
+  kind,
+  text,
+  actions,
+}: {
+  kind: NoticeKind;
+  text: string;
+  /** Recovery affordances — a turn-failed card's retry, for instance. */
+  actions?: ReactNode;
+}) {
   const { tone, icon, label } = NOTICE_PRESENTATION[kind];
   return (
     <DecisionCard tone={tone} icon={icon} label={label}>
@@ -292,6 +303,7 @@ export function NoticeCard({ kind, text }: { kind: NoticeKind; text: string }) {
       >
         <MessageMarkdown text={text} />
       </div>
+      {actions ? <div className="mt-3 flex flex-wrap items-center gap-2">{actions}</div> : null}
       {kind === 'response-contract' ? (
         <details className="mt-2">
           <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs text-muted select-none">
@@ -419,19 +431,32 @@ export function decodeRecallHeader(value: string | null): RecallSource[] | null 
   }
 }
 
+export interface ChatErrorInfo {
+  message: string;
+  /** Server-supplied machine code (`budget_exhausted`, …) driving actions. */
+  code?: string;
+}
+
 /**
  * The transport throws `Error(await response.text())` on non-ok responses, so
- * 402/503 JSON bodies from the chat route arrive as the error message.
+ * 402/503 JSON bodies from the chat route arrive as the error message. The
+ * server's `error` string is already owner-facing copy (the iOS app shows it
+ * verbatim); the `code` rides along for clients that attach actions to kinds
+ * of failure. A bare `unauthorized` from older proxies still gets translated.
  */
-export function errorText(error: Error): string {
+export function chatErrorInfo(error: Error): ChatErrorInfo {
   try {
-    const parsed = JSON.parse(error.message) as { error?: string };
-    if (parsed.error) return parsed.error;
+    const parsed = JSON.parse(error.message) as { error?: string; code?: string };
+    if (parsed.error) return { message: parsed.error, code: parsed.code };
   } catch {
     // not JSON — fall through to the raw message
   }
-  return (
-    error.message ||
-    'We could not display the response. Your message may still have been saved — refresh this chat before retrying.'
-  );
+  if (error.message === 'unauthorized') {
+    return { message: 'Your session expired — sign in again, then resend.', code: 'unauthorized' };
+  }
+  return {
+    message:
+      error.message ||
+      'We could not display the response. Your message may still have been saved — refresh this chat before retrying.',
+  };
 }
