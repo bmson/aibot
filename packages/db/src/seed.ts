@@ -462,6 +462,7 @@ const SEED_OWNED_SCHEDULES = new Set([
   'memory-extraction',
   'memory-consolidation',
   'knowledge-graph-sync',
+  'knowledge-graph-date-backfill',
   'chat-segmentation',
   'anomaly-scan',
   'skill-reflection',
