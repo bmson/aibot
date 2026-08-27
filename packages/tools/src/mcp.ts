@@ -51,7 +51,16 @@ function clip(value: unknown, max: number): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '';
 }
 
-const blockedAddresses = new BlockList();
+/**
+ * Split by family on purpose. A single BlockList holding both families rejects
+ * every public IPv4 address on the internet: `::ffff:0:0/96` is the IPv4-mapped
+ * range, and Node matches a plain IPv4 address against it, so one IPv6 rule
+ * silently blocked all of IPv4. Keeping the lists apart means an IPv4 check
+ * never consults an IPv6 rule, while `::ffff:…` stays blocked for addresses
+ * that really are IPv6 — which is the bypass that rule exists to close.
+ */
+const blockedIpv4Addresses = new BlockList();
+const blockedIpv6Addresses = new BlockList();
 const publicIpv6Addresses = new BlockList();
 publicIpv6Addresses.addSubnet('2000::', 3, 'ipv6');
 for (const [network, prefix] of [
@@ -70,7 +79,7 @@ for (const [network, prefix] of [
   ['224.0.0.0', 4],
   ['240.0.0.0', 4],
 ] as const) {
-  blockedAddresses.addSubnet(network, prefix, 'ipv4');
+  blockedIpv4Addresses.addSubnet(network, prefix, 'ipv4');
 }
 for (const [network, prefix] of [
   ['::', 96],
@@ -85,15 +94,15 @@ for (const [network, prefix] of [
   ['fec0::', 10],
   ['ff00::', 8],
 ] as const) {
-  blockedAddresses.addSubnet(network, prefix, 'ipv6');
+  blockedIpv6Addresses.addSubnet(network, prefix, 'ipv6');
 }
 
 function isNonPublicAddress(address: string): boolean {
   const family = isIP(address);
   return family === 4
-    ? blockedAddresses.check(address, 'ipv4')
+    ? blockedIpv4Addresses.check(address, 'ipv4')
     : family === 6
-      ? blockedAddresses.check(address, 'ipv6') || !publicIpv6Addresses.check(address, 'ipv6')
+      ? blockedIpv6Addresses.check(address, 'ipv6') || !publicIpv6Addresses.check(address, 'ipv6')
       : true;
 }
 
