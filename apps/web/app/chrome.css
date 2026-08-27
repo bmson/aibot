@@ -76,11 +76,10 @@ section[aria-label="Choose response model"] [role="option"] {
   transition: background-color var(--motion-fast) ease;
 }
 
-/* Message controls stay quiet until the message becomes the user's focus. */
-.group\/msg {
-  transition: filter 180ms ease;
-}
-
+/* Message controls stay quiet until the message becomes the user's focus.
+   The group itself carried a `transition: filter` here, for a filter nothing
+   ever set — so it animated nothing, and left every message in the transcript
+   standing as a filter-animation candidate. Only the controls fade. */
 .group\/msg [aria-label*="message" i],
 .group\/msg [data-message-actions] {
   opacity: 0.44;
@@ -139,7 +138,6 @@ button[aria-label="Jump to latest"]:hover {
   [data-testid="chat-composer-surface"],
   section[aria-label="Commands"] [role="option"],
   section[aria-label="Choose response model"] [role="option"],
-  .group\/msg,
   .group\/msg [aria-label*="message" i],
   .group\/msg [data-message-actions],
   button[aria-label="Jump to latest"] {

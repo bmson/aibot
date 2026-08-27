@@ -152,15 +152,39 @@ export function retireProvisionalReplies(log: UIMessage[], serverIds: Set<string
  * the first paint and appeared a frame later, pushing the whole log down as it
  * did. One zone on both sides makes the first paint the final one.
  */
+/*
+ * Building an `Intl.DateTimeFormat` is expensive enough to show up in a render
+ * profile: every reply on screen asks for a day key, a clock time and a full
+ * tooltip stamp, so an unmemoized log built hundreds of them per keystroke.
+ * The set of shapes used here is tiny and fixed, so they are built once and
+ * kept.
+ */
+const formatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function formatter(timeZone: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${timeZone}|${JSON.stringify(options)}`;
+  const cached = formatterCache.get(key);
+  if (cached) return cached;
+  const built = new Intl.DateTimeFormat('en-US', { timeZone, ...options });
+  formatterCache.set(key, built);
+  return built;
+}
+
 function dayKey(date: Date, timeZone: string): string {
   // en-CA gives an ISO-shaped YYYY-MM-DD, so day keys compare as strings and
   // the year is the first four characters.
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(date);
+  const key = `en-CA|${timeZone}|day`;
+  let cached = formatterCache.get(key);
+  if (!cached) {
+    cached = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    formatterCache.set(key, cached);
+  }
+  return cached.format(date);
 }
 
 export function sameDay(a: Date, b: Date, timeZone: string): boolean {
@@ -172,8 +196,7 @@ export function dayLabel(date: Date, now: Date, timeZone: string): string {
   const today = dayKey(now, timeZone);
   if (key === today) return 'Today';
   if (key === dayKey(new Date(now.getTime() - 24 * 60 * 60 * 1000), timeZone)) return 'Yesterday';
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone,
+  return formatter(timeZone, {
     month: 'short',
     day: 'numeric',
     ...(key.slice(0, 4) === today.slice(0, 4) ? {} : { year: 'numeric' }),
@@ -181,11 +204,7 @@ export function dayLabel(date: Date, now: Date, timeZone: string): string {
 }
 
 export function timeLabel(date: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date);
+  return formatter(timeZone, { hour: 'numeric', minute: '2-digit' }).format(date);
 }
 
 /**
@@ -369,8 +388,7 @@ function friendlyRecallDate(isoDay: string, now: Date = new Date()): string {
   const date = new Date(`${isoDay}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) return isoDay;
   const sameYear = date.getUTCFullYear() === now.getUTCFullYear();
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: 'UTC',
+  return formatter('UTC', {
     month: 'short',
     day: 'numeric',
     ...(sameYear ? {} : { year: 'numeric' }),

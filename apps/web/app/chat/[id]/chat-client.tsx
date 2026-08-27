@@ -17,19 +17,19 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from 'react';
 import { signOutAction } from '@/app/actions';
 import { destinationIcon, formatBadgeCount, useNavCommands } from '@/app/nav-commands';
 import { cancelTask } from '@/app/tasks/actions';
-import { chipsOf, latestTheme } from '@/lib/chat-cues';
-import {
-  approvalSummaryOf,
-  isContractNotice,
-  isDecisionProseNotice,
-  isOffCourse,
-  noticeKindOf,
-  turnFailedReason,
-} from '@/lib/chat-notices';
+import { latestTheme } from '@/lib/chat-cues';
 import {
   type CompanionActivity,
   type CompanionThought,
@@ -39,31 +39,17 @@ import { BackLink, CountBadge, focusRing, microLabelClass } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { toolLabel } from '@/lib/views';
 import { archiveConversation, changeConversationModel, restoreConversation } from '../actions';
-import { ActionChips } from './action-chips';
-import { ApprovalGroup } from './approval-group';
-import { ApprovalSummaryCard } from './approval-summary';
 import { ChatErrorBanner } from './chat-error-banner';
-import type { InlineApprovalPart } from './inline-approval';
-import { InlineBudgetRequest, type InlineBudgetRequestPart } from './inline-budget-request';
-import { type InlineSuggestionPart, SuggestionCard } from './inline-suggestion';
-import { MessageMarkdown } from './markdown';
+import { ChatLog } from './chat-log';
 import {
-  AssistantUpdate,
   type ChatErrorInfo,
   chatErrorInfo,
   decodeRecallHeader,
-  MessageActions,
-  messageDate,
   messageText,
-  NoticeCard,
   orderChatLog,
   RecallNote,
   type RecallSource,
-  recallSourcesOf,
-  stampLabel,
 } from './message-view';
-import { OffCourseCard } from './off-course-card';
-import { ResponseCards, rendersAllCards, responseCardPayloads } from './response-card';
 import {
   type AsyncNote,
   type AsyncTurn,
@@ -207,23 +193,26 @@ export function ChatClient({
   const [lastSubmittedText, setLastSubmittedText] = useState('');
   const formRef = useRef<HTMLFormElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /** What the autosize effect last wrote, and the text it measured — see below. */
+  const appliedInputHeightRef = useRef(0);
+  const previousInputRef = useRef(initialInput ?? '');
   const messageScrollerRef = useRef<HTMLDivElement>(null);
   /** The floating composer overlays the log — see the layout note on the form. */
   const [composerHeight, setComposerHeight] = useState(112);
   const stickToBottomRef = useRef(true);
   const previousMessageCountRef = useRef(initialMessages.length);
+  /**
+   * How long the transcript was when the reader last left the bottom. `null`
+   * means there is no baseline because the reader is pinned there and the pill
+   * it feeds cannot be showing — see the effect that maintains it.
+   */
   const previousTranscriptLengthRef = useRef<number | null>(null);
-  if (previousTranscriptLengthRef.current === null) {
-    previousTranscriptLengthRef.current = initialMessages.reduce(
-      (total, message) => total + messageText(message).length,
-      0,
-    );
-  }
   /** Messages present at mount render static; only genuinely new ones animate in. */
   const initialMessageIdsRef = useRef<Set<string> | null>(null);
   if (initialMessageIdsRef.current === null) {
     initialMessageIdsRef.current = new Set(initialMessages.map((message) => message.id));
   }
+  const initialMessageIds = initialMessageIdsRef.current;
   /**
    * Where each message came into the log. Only the client's own messages need
    * it — they carry no send time to sort on — but it is assigned to every id so
@@ -597,6 +586,16 @@ export function ChatClient({
       ?.scrollIntoView({ block: 'nearest' });
   }, [commandPaletteOpen, safeCommandHighlight]);
 
+  // Follow the newest message down while the reader is pinned to the bottom.
+  //
+  // This used to run after every render with no dependencies at all, which
+  // meant a forced layout (`scrollHeight`) and a scroll write on every
+  // keystroke, every resize of the composer and every scroll event — the
+  // scroller was re-measured constantly to discover that nothing had moved.
+  // The dependencies below are everything this column can grow by: the log
+  // itself, the space reserved for the composer, and the few notes appended
+  // under it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: these are triggers to re-measure on, not values the effect reads
   useEffect(() => {
     if (!stickToBottomRef.current) return;
     const frame = window.requestAnimationFrame(() => {
@@ -604,19 +603,65 @@ export function ChatClient({
       if (scroller) scroller.scrollTop = scroller.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
-  });
+  }, [log, composerHeight, liveRecall, asyncNote, asyncActionError, pollTrouble]);
+
+  /*
+   * Whether the scroller is pinned to the bottom, measured once per frame
+   * rather than once per scroll event.
+   *
+   * A scroll fires far more often than it changes this answer, and reading
+   * `scrollHeight` inside the event handler forced layout in the middle of the
+   * gesture — while a stream was landing, that was a synchronous re-layout of
+   * the whole transcript on every event. Coalescing into an animation frame
+   * moves the read to the point where layout has already settled, and a
+   * passive listener keeps it off the critical path of the gesture. React
+   * drops the state writes when the answer has not changed, so an ordinary
+   * scroll now re-renders nothing at all.
+   */
+  useEffect(() => {
+    const scroller = messageScrollerRef.current;
+    if (!scroller) return;
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const bottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
+      stickToBottomRef.current = bottom;
+      setAtBottom(bottom);
+      if (bottom) setUnseenCount(0);
+    };
+    const onScroll = () => {
+      if (frame === 0) frame = window.requestAnimationFrame(measure);
+    };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      if (frame !== 0) window.cancelAnimationFrame(frame);
+    };
+  }, []);
 
   // A message or streamed text landed while the reader was scrolled up — keep
   // the jump pill meaningful even when the message count itself did not grow.
+  //
+  // Summing the whole transcript is O(everything said so far), and it ran on
+  // every streamed token. The pill it feeds only exists while the reader is
+  // scrolled away, so while pinned to the bottom the sum is skipped and the
+  // baseline is dropped; leaving the bottom re-establishes it from the log as
+  // it stands, which is the only moment its value is ever read.
   useEffect(() => {
     const addedMessages = Math.max(0, log.length - previousMessageCountRef.current);
+    previousMessageCountRef.current = log.length;
+    if (stickToBottomRef.current) {
+      previousTranscriptLengthRef.current = null;
+      return;
+    }
     const transcriptLength = log.reduce((total, message) => total + messageText(message).length, 0);
-    const streamedTextGrew = transcriptLength > (previousTranscriptLengthRef.current ?? 0);
-    if (!stickToBottomRef.current && (addedMessages > 0 || streamedTextGrew)) {
+    const baseline = previousTranscriptLengthRef.current;
+    previousTranscriptLengthRef.current = transcriptLength;
+    if (baseline === null) return;
+    const streamedTextGrew = transcriptLength > baseline;
+    if (addedMessages > 0 || streamedTextGrew) {
       setUnseenCount((count) => (addedMessages > 0 ? count + addedMessages : Math.max(count, 1)));
     }
-    previousMessageCountRef.current = log.length;
-    previousTranscriptLengthRef.current = transcriptLength;
   }, [log]);
 
   // The composer floats over the conversation, so nothing in the log can rely
@@ -653,12 +698,27 @@ export function ChatClient({
 
   // Grow the composer with its content, up to the CSS max-height cap. `input`
   // is the trigger; the new height is read from the DOM, not from `input`.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: input drives the re-measure
+  //
+  // Measuring shrinkage means collapsing the box to nothing and reading it
+  // back, and that write-then-read is a forced synchronous layout. It used to
+  // happen on every keystroke. It is only ever needed when the text got
+  // shorter: a textarea already reports a `scrollHeight` larger than itself the
+  // moment its content outgrows it, so growing needs no collapse, and typing
+  // forward — the overwhelmingly common case — now costs a single clean read.
+  // The applied height is remembered so an unchanged one is never written back,
+  // which also keeps the form's ResizeObserver quiet.
   useLayoutEffect(() => {
     const element = textareaRef.current;
     if (!element) return;
-    element.style.height = '0px';
-    element.style.height = `${Math.min(element.scrollHeight, 160)}px`;
+    const previous = previousInputRef.current;
+    previousInputRef.current = input;
+    const mayShrink = appliedInputHeightRef.current === 0 || input.length <= previous.length;
+    if (mayShrink) element.style.height = '0px';
+    const next = Math.min(element.scrollHeight, 160);
+    if (next !== appliedInputHeightRef.current || mayShrink) {
+      appliedInputHeightRef.current = next;
+      element.style.height = `${next}px`;
+    }
   }, [input]);
 
   const jumpToLatest = () => {
@@ -704,6 +764,19 @@ export function ChatClient({
     forceRef.current = true;
     sendTurn(text, false);
   };
+
+  /*
+   * The transcript is memoized, so the callbacks it holds must keep one
+   * identity for the life of the page — otherwise every keystroke would hand
+   * it new functions and defeat the memo. The refs carry the live closures, so
+   * what runs is always the current `sendTurn`, not the one from mount.
+   */
+  const sendTurnRef = useRef(sendTurn);
+  sendTurnRef.current = sendTurn;
+  const runForRealRef = useRef(runForReal);
+  runForRealRef.current = runForReal;
+  const handleSend = useCallback((text: string) => sendTurnRef.current(text, false), []);
+  const handleRunForReal = useCallback((text: string) => runForRealRef.current(text), []);
 
   const closeModelPicker = () => {
     // You reach the picker by typing "/model" over whatever was in the
@@ -830,13 +903,6 @@ export function ChatClient({
         ref={messageScrollerRef}
         role="log"
         aria-label="Conversation"
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          const bottom = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
-          stickToBottomRef.current = bottom;
-          setAtBottom(bottom);
-          if (bottom) setUnseenCount(0);
-        }}
         style={{ paddingBottom: `calc(5rem + ${composerHeight}px)` }}
         className="scroll-subtle min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto pt-20"
       >
@@ -908,241 +974,17 @@ export function ChatClient({
             </div>
           ) : (
             <div className="mt-auto flex min-w-0 flex-col">
-              {log.map((message, messageIndex) => {
-                const parts = message.parts as Array<
-                  | UIMessage['parts'][number]
-                  | InlineApprovalPart
-                  | InlineBudgetRequestPart
-                  | InlineSuggestionPart
-                >;
-                const approvalSummary = approvalSummaryOf(parts);
-                const approvalParts = parts.filter(
-                  (part): part is InlineApprovalPart => part.type === 'approval',
-                );
-                const budgetParts = parts.filter(
-                  (part): part is InlineBudgetRequestPart => part.type === 'budget-request',
-                );
-                const suggestionParts = parts.filter(
-                  (part): part is InlineSuggestionPart => part.type === 'suggestion',
-                );
-                const textParts = parts.filter(
-                  (part): part is Extract<UIMessage['parts'][number], { type: 'text' }> =>
-                    part.type === 'text',
-                );
-                // The card repeats the executor's own prose about the same
-                // decision — hide the duplicate text, never the persisted
-                // message itself.
-                const visibleTextParts =
-                  approvalSummary !== null
-                    ? []
-                    : approvalParts.length > 0 || budgetParts.length > 0
-                      ? textParts.filter((part) => !isDecisionProseNotice(part.text))
-                      : textParts;
-                // Whitespace-only text parts are the residue of a [break]
-                // split point — they join into the message text (dedupe
-                // relies on that) but render as nothing.
-                const renderedTextParts = visibleTextParts.filter(
-                  (part) => part.text.trim().length > 0,
-                );
-                const fullText = visibleTextParts
-                  .map((part) => part.text)
-                  .join('')
-                  .trim();
-                // A card the assistant placed answers for itself, so a notice
-                // marker on the same message never overrides it. `isContractNotice`
-                // still matches by prose for messages persisted before the
-                // structured marker existed.
-                const noticeKind =
-                  message.role === 'assistant' &&
-                  approvalParts.length === 0 &&
-                  budgetParts.length === 0 &&
-                  approvalSummary === null &&
-                  fullText !== ''
-                    ? (noticeKindOf(parts) ??
-                      (isContractNotice(fullText) ? 'response-contract' : null))
-                    : null;
-                // An off-course reply keeps its text (it had already streamed)
-                // and adds the marker card; a turn-failed notice IS the card.
-                // Both recoveries resend the words that opened this turn.
-                const offCourse = message.role === 'assistant' && isOffCourse(parts);
-                const failedReason = message.role === 'assistant' ? turnFailedReason(parts) : null;
-                const precedingUserText =
-                  offCourse || failedReason !== null
-                    ? (() => {
-                        for (let back = messageIndex - 1; back >= 0; back -= 1) {
-                          const candidate = log[back];
-                          if (candidate?.role === 'user') return messageText(candidate);
-                        }
-                        return undefined;
-                      })()
-                    : undefined;
-                const date = messageDate(message);
-                // A chat is one continuous discussion — per-message clock times
-                // are noise there, and the reply's own footer carries the "when"
-                // for anyone who wants it. Proactive updates are the exception:
-                // those arrive at a time that is part of the message, so
-                // Notifications keeps them.
-                const showTime = date !== null && notificationMode;
-                const recallSources = recallSourcesOf(message);
-                // Rich cards ARE the answer when every card on the message can
-                // render here — showing the prose too would restate it. A kind
-                // this surface can't render keeps the prose fallback instead
-                // (parity with the iOS bubble).
-                const cards = message.role === 'assistant' ? responseCardPayloads(parts) : [];
-                const renderCards =
-                  cards.length > 0 && rendersAllCards(cards) && noticeKind === null;
-                const hasText = renderedTextParts.length > 0 && noticeKind === null && !renderCards;
-                const isNewMessage = !initialMessageIdsRef.current?.has(message.id);
-                const previousMessage = messageIndex > 0 ? log[messageIndex - 1] : undefined;
-                // A "run" is a streak of turns from the same speaker. Handing
-                // over gets a clear break; a follow-on from the same speaker
-                // tucks in close, so a run reads as one continuous thought.
-                const startsRun = !previousMessage || previousMessage.role !== message.role;
-                const streamingCaret =
-                  status === 'streaming' &&
-                  message.role === 'assistant' &&
-                  messageIndex === log.length - 1;
-                return (
-                  <div
-                    key={message.id}
-                    className={`flex min-w-0 flex-col gap-2 first:mt-0 ${startsRun ? 'mt-7' : 'mt-2'} ${
-                      isNewMessage ? 'motion-safe:animate-[message-in_220ms_ease-out]' : ''
-                    }`}
-                    data-message-block="true"
-                    data-role={message.role}
-                    data-run-start={startsRun}
-                  >
-                    {noticeKind !== null ? (
-                      <NoticeCard
-                        kind={noticeKind}
-                        text={fullText}
-                        actions={
-                          noticeKind === 'turn-failed' ? (
-                            <>
-                              {failedReason === 'budget' ? (
-                                <Link
-                                  href="/costs"
-                                  className={`inline-flex h-8 items-center rounded-full border border-accent/30 px-3.5 text-xs font-medium text-accent motion-safe:transition-colors hover:bg-accent/10 ${focusRing}`}
-                                >
-                                  Open Costs
-                                </Link>
-                              ) : null}
-                              {precedingUserText ? (
-                                <button
-                                  type="button"
-                                  disabled={busy}
-                                  onClick={() => sendTurn(precedingUserText, false)}
-                                  className={`inline-flex h-8 items-center rounded-full border border-accent/30 px-3.5 text-xs font-medium text-accent motion-safe:transition-colors hover:bg-accent/10 active:bg-accent/15 disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`}
-                                >
-                                  Try again
-                                </button>
-                              ) : null}
-                            </>
-                          ) : undefined
-                        }
-                      />
-                    ) : notificationMode && message.role === 'assistant' && hasText ? (
-                      <AssistantUpdate text={fullText} sources={recallSources} />
-                    ) : hasText ? (
-                      <div
-                        className={
-                          message.role === 'user' ? 'flex justify-end' : 'flex justify-start'
-                        }
-                      >
-                        {message.role === 'assistant' ? (
-                          // The assistant speaks on paper: a white sheet laid
-                          // on the stage, which is the one opaque material in
-                          // the thread and so reads as the thing that was
-                          // brought to you. The raised-card treatment stays
-                          // reserved for objects it places in the thread (an
-                          // approval, a budget ask). A reply split by [break]
-                          // cues arrives as several text parts — each renders
-                          // as its own sheet, the way separate texts from a
-                          // person stack.
-                          <div className="group/msg min-w-0 w-full max-w-none">
-                            <RecallNote sources={recallSources} />
-                            <div className="flex min-w-0 flex-col gap-2">
-                              {renderedTextParts.map((part, index) => (
-                                <div
-                                  key={`${message.id}-${index.toString()}`}
-                                  className={`bubble-assistant min-w-0 max-w-full rounded-[1.375rem] px-4 py-3 text-sm leading-6 ${
-                                    streamingCaret && index === renderedTextParts.length - 1
-                                      ? 'chat-caret'
-                                      : ''
-                                  }`}
-                                >
-                                  <MessageMarkdown text={part.text} />
-                                </div>
-                              ))}
-                            </div>
-                            <MessageActions
-                              text={fullText}
-                              date={date}
-                              now={renderedNow}
-                              timeZone={agentTimezone}
-                            />
-                          </div>
-                        ) : (
-                          // Both speakers read at the same size — a smaller user
-                          // bubble made your own words look like a footnote.
-                          // That size is the one the event cards already use, so
-                          // speech and system notices sit on one typographic
-                          // scale instead of two. Your voice takes no material
-                          // at all: an outline on the stage against the
-                          // assistant's sheet of paper, so the two are told
-                          // apart by what they are made of and not only by
-                          // which side of the column they sit on.
-                          <div
-                            title={date ? date.toLocaleString() : undefined}
-                            className="bubble-owner min-w-0 max-w-[88%] rounded-[1.375rem] px-4 py-3 text-sm leading-6 sm:max-w-[min(76%,42rem)]"
-                          >
-                            {visibleTextParts.map((part, index) => (
-                              <p
-                                key={`${message.id}-${index.toString()}`}
-                                className="break-words whitespace-pre-wrap [overflow-wrap:anywhere]"
-                              >
-                                {part.text}
-                              </p>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ) : null}
-                    {approvalParts.length > 0 ? <ApprovalGroup parts={approvalParts} /> : null}
-                    {approvalSummary ? <ApprovalSummaryCard summary={approvalSummary} /> : null}
-                    {budgetParts.map((part) => (
-                      <InlineBudgetRequest key={part.taskId} part={part} />
-                    ))}
-                    <SuggestionCard parts={suggestionParts} />
-                    {renderCards ? <ResponseCards cards={cards} timeZone={agentTimezone} /> : null}
-                    {offCourse ? (
-                      <OffCourseCard
-                        active={!busy}
-                        onRunForReal={
-                          precedingUserText ? () => runForReal(precedingUserText) : undefined
-                        }
-                      />
-                    ) : null}
-                    {message.role === 'assistant' && noticeKind === null ? (
-                      <ActionChips
-                        labels={chipsOf(message)}
-                        active={messageIndex === log.length - 1 && !busy}
-                        onSend={(label) => sendTurn(label, false)}
-                      />
-                    ) : null}
-                    {showTime && date ? (
-                      <p
-                        title={date.toLocaleString()}
-                        className={`text-xs text-stage-muted ${
-                          message.role === 'user' ? 'self-end' : 'self-start'
-                        }`}
-                      >
-                        {stampLabel(date, renderedNow, agentTimezone)}
-                      </p>
-                    ) : null}
-                  </div>
-                );
-              })}
+              <ChatLog
+                log={log}
+                busy={busy}
+                streaming={status === 'streaming'}
+                notificationMode={notificationMode}
+                agentTimezone={agentTimezone}
+                renderedNow={renderedNow}
+                initialMessageIds={initialMessageIds}
+                onSend={handleSend}
+                onRunForReal={handleRunForReal}
+              />
               {/* Nothing transient is written here any more.
                *
                * "Thinking…", "Working…" and the live work trail all used to

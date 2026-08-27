@@ -65,22 +65,36 @@ body:has(.chat-viewport) {
 }
 
 /* Keep the transcript fully clear at the top. The bottom fade remains so the
-   composer can sit over a moving log without its edge cutting through a row. */
-.chat-viewport > .scroll-subtle {
-  -webkit-mask-image: linear-gradient(
+   composer can sit over a moving log without its edge cutting through a row.
+ *
+ * The fade is painted ON the log rather than masked OUT of it. A mask on a
+ * scroll container is the expensive way to do this: it forces the scroller into
+ * its own composited layer with an alpha channel, so every scroll frame
+ * re-composites the whole visible transcript through the mask instead of
+ * shifting what is already rasterised — and it costs the text subpixel
+ * antialiasing along the way.
+ *
+ * A scrim is identical here because the log fades into a flat ground: the stage
+ * is painted on `body` (above), so `alpha·text + (1-alpha)·stage` is the same
+ * pixel whether the alpha comes from erasing the text or from laying that much
+ * stage over it. The stops below are the mask's, complemented — 1.0/0.88/0.62
+ * became 0/0.12/0.38 — and render pixel-for-pixel the same ramp.
+ *
+ * It sits above the log and below the composer (z-20) and jump pill (z-30), so
+ * both still frost a faded transcript exactly as before. */
+.chat-viewport::after {
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
     to bottom,
-    #000 0,
-    #000 calc(100% - 9rem),
-    rgb(0 0 0 / 0.88) calc(100% - 5.5rem),
-    rgb(0 0 0 / 0.62) 100%
+    transparent 0,
+    transparent calc(100% - 9rem),
+    color-mix(in srgb, var(--stage) 12%, transparent) calc(100% - 5.5rem),
+    color-mix(in srgb, var(--stage) 38%, transparent) 100%
   );
-  mask-image: linear-gradient(
-    to bottom,
-    #000 0,
-    #000 calc(100% - 9rem),
-    rgb(0 0 0 / 0.88) calc(100% - 5.5rem),
-    rgb(0 0 0 / 0.62) 100%
-  );
+  content: "";
 }
 
 /* …and anything that is still PAPER inside the chat — an approval, a budget
@@ -157,6 +171,18 @@ body:has(.chat-viewport) {
     border-top: 0;
     border-left: 1px solid var(--stage-hairline);
   }
+}
+
+/* Each message lays out independently of the rest of the transcript.
+ *
+ * Without this, a reply gaining a line as it streams — or the composer
+ * changing height when the keyboard opens — dirtied layout for every message
+ * in the log, and on a long thread that is the difference between a scroll
+ * that holds 60fps and one that drops frames. `paint` is deliberately not
+ * contained: a card inside a message casts its shadow past the block box, and
+ * paint containment would clip it. */
+[data-message-block] {
+  contain: layout style;
 }
 
 /* Messages get more breathing room without turning into disconnected cards. */
@@ -348,7 +374,6 @@ body:has(.chat-viewport) {
 
 @media (prefers-reduced-motion: reduce) {
   .scroll-subtle .my-auto > .grid > button,
-  .group\/msg,
   [data-testid="chat-composer-surface"] {
     transition: none;
   }

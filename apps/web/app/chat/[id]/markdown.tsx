@@ -1,5 +1,6 @@
 'use client';
 
+import { memo } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -133,8 +134,17 @@ const components: Components = {
   ),
 };
 
-/** Assistant-message markdown (GFM: tables, strikethrough, task lists, autolinks). */
-export function MessageMarkdown({ text }: { text: string }) {
+/**
+ * Assistant-message markdown (GFM: tables, strikethrough, task lists, autolinks).
+ *
+ * Memoized on `text`, which is the whole of its input. Parsing markdown is by
+ * far the most expensive thing the transcript does, and the log re-renders for
+ * reasons that have nothing to do with any given message — a keystroke in the
+ * composer, the keyboard resizing the form, a token arriving on the newest
+ * reply. Without this, every one of those re-parsed every reply on screen, and
+ * a long thread turned typing into a several-hundred-millisecond wait.
+ */
+export const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: string }) {
   return (
     <div className="min-w-0 max-w-full break-words leading-relaxed [overflow-wrap:anywhere]">
       <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
@@ -142,4 +152,4 @@ export function MessageMarkdown({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});
