@@ -78,4 +78,24 @@ describe('LocalMap static render', () => {
     );
     expect(html).toContain('No active connections to draw yet.');
   });
+
+  it('pages a crowded kind behind a "+N more" node instead of piling up', () => {
+    const many: MapEdgeInput[] = Array.from({ length: 30 }, (_, index) => ({
+      id: `d${index}`,
+      predicate: 'on',
+      outbound: true,
+      reviewStatus: 'confirmed',
+      other: { id: `date-${index}`, label: `Day ${index + 1}`, kind: 'date' },
+    }));
+    const html = renderToStaticMarkup(
+      <LocalMap selected={selected} initialEdges={many} totalEdges={30} query="" kind="" />,
+    );
+    // Twelve dates render (labels page in lexicographic order: Day 1, Day
+    // 10-19, Day 2); the rest collapse into one labelled pager control.
+    expect(html).toContain('Day 12');
+    expect(html).not.toContain('Day 3</text>');
+    expect(html).not.toContain('Day 20</text>');
+    expect(html).toContain('+18 more');
+    expect(html).toContain('Show more date connections (18 not shown)');
+  });
 });

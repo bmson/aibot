@@ -1,5 +1,6 @@
 import {
   asGraphEntityKind,
+  getAssistantLocale,
   getAssistantTimezone,
   getKnowledgeGraphNeighborhood,
   getKnowledgeGraphOverview,
@@ -28,7 +29,12 @@ import { MergeEntity, RenameEntity } from '@/app/profile/knowledge/entity-forms'
 import { LocalMap } from '@/app/profile/knowledge/local-map';
 import { requireOwner } from '@/auth';
 import { formatFriendlyDateTime, formatUsd, relativeTime } from '@/lib/format';
-import { ENTITY_KINDS, entityKindLabel, humanizePredicate } from '@/lib/knowledge';
+import {
+  ENTITY_KINDS,
+  entityKindLabel,
+  formatCanonicalDateKey,
+  humanizePredicate,
+} from '@/lib/knowledge';
 import { getDb } from '@/lib/server';
 import {
   Badge,
@@ -96,10 +102,12 @@ function ReviewRelation({
   relation,
   now,
   timeZone,
+  locale,
 }: {
   relation: KnowledgeGraphRelationView;
   now: Date;
   timeZone: string;
+  locale: string;
 }) {
   const status = relationTone(relation.reviewStatus);
   const sourceQuery = relation.source.content.slice(0, 120);
@@ -126,6 +134,11 @@ function ReviewRelation({
           {relation.source.ownerConfirmed
             ? 'owner verified source'
             : `${relation.source.originTrust} source`}
+          {relation.validFrom || relation.validUntil
+            ? ` · ${relation.validFrom ? formatCanonicalDateKey(relation.validFrom, locale) : 'unknown start'} to ${
+                relation.validUntil ? formatCanonicalDateKey(relation.validUntil, locale) : 'now'
+              }`
+            : ''}
           {relation.reviewedAt
             ? ` · reviewed ${relativeTime(relation.reviewedAt, now)} (${formatFriendlyDateTime(
                 relation.reviewedAt,
@@ -180,9 +193,10 @@ export default async function KnowledgeReviewPage({
   const requestedPage = Number.parseInt(params.page ?? '1', 10);
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
   const db = getDb();
-  const [graph, timeZone] = await Promise.all([
+  const [graph, timeZone, locale] = await Promise.all([
     getKnowledgeGraphOverview(db, { query, kind, entityId: params.entity, page }),
     getAssistantTimezone(db),
+    getAssistantLocale(db),
   ]);
   const now = new Date();
   // The map draws from its own query, not the review list: the list is capped
@@ -473,6 +487,7 @@ export default async function KnowledgeReviewPage({
                         relation={relation}
                         now={now}
                         timeZone={timeZone}
+                        locale={locale}
                       />
                     ))}
                   </div>

@@ -35,6 +35,8 @@ export interface CanvasNode extends MapEntity {
   /** 0 = map centre, 1 = its neighbours, 2+ = click-expanded rings. */
   ring: number;
   parentId: string | null;
+  /** Set on the "+N more" pager node that stands for a kind's unrevealed neighbours. */
+  aggregate?: { kind: string; remaining: number };
 }
 
 export interface CanvasEdge {
@@ -94,12 +96,60 @@ export function ringRadii(count: number): { rx: number; ry: number } {
 }
 
 /**
+ * Kind bands get their own arc sectors in this stable order — the order the
+ * sidebar's labels already use. Unknown kinds sit behind the known seven.
+ */
+const KIND_ORDER = ['person', 'organization', 'project', 'place', 'event', 'date', 'topic'];
+
+/** Neighbours of one kind drawn before the "+N more" pager node appears. */
+export const KIND_PAGE_SIZE = 12;
+
+function kindRank(kind: string): number {
+  const index = KIND_ORDER.indexOf(kind);
+  return index === -1 ? KIND_ORDER.length : index;
+}
+
+interface KindGroup {
+  kind: string;
+  shown: MapEntity[];
+  remaining: number;
+}
+
+/** Group neighbours by kind, sorted for stability, paged by `revealed`. */
+function groupByKind(others: MapEntity[], revealed: Record<string, number>): KindGroup[] {
+  const byKind = new Map<string, MapEntity[]>();
+  for (const other of others) {
+    const list = byKind.get(other.kind) ?? [];
+    list.push(other);
+    byKind.set(other.kind, list);
+  }
+  return [...byKind.entries()]
+    .sort((a, b) => kindRank(a[0]) - kindRank(b[0]))
+    .map(([kind, items]) => {
+      // Label order, not fetch order: paging a kind must not reshuffle it.
+      const sorted = [...items].sort((a, b) => a.label.localeCompare(b.label));
+      const shown = sorted.slice(0, KIND_PAGE_SIZE * (revealed[kind] ?? 1));
+      return { kind, shown, remaining: sorted.length - shown.length };
+    });
+}
+
+/**
  * The initial canvas: centre plus first hop. Two edges can share a neighbour
  * ("works at" and "advises" the same org), so nodes dedupe by entity id while
  * edges keep their own identity. Self-loops draw as a zero-length line, which
  * is noise — they stay visible in the evidence list instead.
+ *
+ * Neighbours are banded by kind into equal arc sectors: a hub whose 90 edges
+ * mix people, dates, and projects reads as three arcs instead of one pile.
+ * Each kind shows a page of KIND_PAGE_SIZE; the remainder collapses into a
+ * "+N more" aggregate node that pages its kind in place, so "show everything"
+ * is a click per kind rather than an unreadable 150-node star.
  */
-export function initialCanvas(center: MapEntity, edges: MapEdgeInput[]): Canvas {
+export function initialCanvas(
+  center: MapEntity,
+  edges: MapEdgeInput[],
+  revealed: Record<string, number> = {},
+): Canvas {
   const seen = new Set<string>([center.id]);
   const uniqueOthers: MapEntity[] = [];
   for (const edge of edges) {
@@ -107,22 +157,54 @@ export function initialCanvas(center: MapEntity, edges: MapEdgeInput[]): Canvas 
     seen.add(edge.other.id);
     uniqueOthers.push(edge.other);
   }
-  const { rx, ry } = ringRadii(uniqueOthers.length);
-  const nodes: CanvasNode[] = [
-    { ...center, x: CX, y: CY, ring: 0, parentId: null },
-    ...uniqueOthers.map((other, index) => {
-      const angle = -Math.PI / 2 + (index * 2 * Math.PI) / uniqueOthers.length;
-      return {
+  const groups = groupByKind(uniqueOthers, revealed);
+  const renderedTotal = groups.reduce(
+    (total, group) => total + group.shown.length + (group.remaining > 0 ? 1 : 0),
+    0,
+  );
+  const { rx, ry } = ringRadii(renderedTotal);
+  const nodes: CanvasNode[] = [{ ...center, x: CX, y: CY, ring: 0, parentId: null }];
+
+  const sectorAngle = (2 * Math.PI) / groups.length;
+  groups.forEach((group, groupIndex) => {
+    const sectorStart = -Math.PI / 2 + groupIndex * sectorAngle;
+    // Padding keeps the outermost nodes of adjacent kinds from touching.
+    const pad = Math.min(0.18, sectorAngle * 0.2);
+    const slots = group.shown.length + (group.remaining > 0 ? 1 : 0);
+    const angleFor = (slot: number) =>
+      slots === 1
+        ? sectorStart + sectorAngle / 2
+        : sectorStart + pad + (slot * (sectorAngle - 2 * pad)) / (slots - 1);
+    group.shown.forEach((other, index) => {
+      const angle = angleFor(index);
+      nodes.push({
         ...other,
         x: CX + rx * Math.cos(angle),
         y: CY + ry * Math.sin(angle),
         ring: 1,
         parentId: center.id,
-      };
-    }),
-  ];
+      });
+    });
+    if (group.remaining > 0) {
+      const angle = angleFor(slots - 1);
+      nodes.push({
+        id: `__more_${group.kind}`,
+        label: `+${group.remaining} more`,
+        kind: group.kind,
+        x: CX + rx * Math.cos(angle),
+        y: CY + ry * Math.sin(angle),
+        ring: 1,
+        parentId: center.id,
+        aggregate: { kind: group.kind, remaining: group.remaining },
+      });
+    }
+  });
+
+  const canvasIds = new Set(nodes.map((node) => node.id));
   const canvasEdges: CanvasEdge[] = edges
-    .filter((edge) => edge.other.id !== center.id)
+    // Self-loops draw as a zero-length line, and edges to a paged-out
+    // neighbour would be invisible — both stay readable in the evidence list.
+    .filter((edge) => edge.other.id !== center.id && canvasIds.has(edge.other.id))
     .map((edge) => ({
       id: edge.id,
       predicate: edge.predicate,

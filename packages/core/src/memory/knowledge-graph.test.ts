@@ -45,6 +45,35 @@ let agentId: string;
 
 const router = {
   async object(_: string, input: { prompt?: string }) {
+    if (input.prompt?.includes('worked at')) {
+      return {
+        ok: true,
+        object: {
+          relationships: [
+            {
+              subject: { label: `${MARKER} Owner`, kind: 'person' },
+              predicate: 'worked_at',
+              object: { label: `${MARKER} Acme`, kind: 'organization' },
+              evidenceQuote: `${MARKER} Owner worked at ${MARKER} Acme from 2019 to March 2023.`,
+              confidence: 0.9,
+              validFrom: '2019',
+              validUntil: 'March 2023',
+            },
+            {
+              subject: { label: `${MARKER} Owner`, kind: 'person' },
+              predicate: 'visited',
+              object: { label: `${MARKER} Acme`, kind: 'organization' },
+              evidenceQuote: `${MARKER} Owner visited ${MARKER} Acme often.`,
+              confidence: 0.9,
+              // '1492' is unquoted; 'often' is quoted but names no date.
+              // Both must be dropped without taking the edge down.
+              validFrom: '1492',
+              validUntil: 'often',
+            },
+          ],
+        },
+      };
+    }
     if (input.prompt?.includes('operates')) {
       return {
         ok: true,
@@ -177,6 +206,45 @@ describe('knowledge graph sync and recall', () => {
     expect(recalled.block).toContain(`${MARKER} Project Fox`);
     expect(recalled.sources.some((source) => source.kind === 'knowledge_graph')).toBe(true);
     expect(recalled.sources.some((source) => source.hops === 2)).toBe(true);
+  });
+
+  it('stores temporal qualifiers only when their wording is quoted and parseable', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [memory] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} Owner worked at ${MARKER} Acme from 2019 to March 2023. ${MARKER} Owner visited ${MARKER} Acme often.`,
+        contentHash: `${MARKER}-qualifiers`,
+        embedding: unit(44),
+        originTrust: 'owner',
+      })
+      .returning({ id: memories.id });
+    if (!memory) throw new Error('test memory was not created');
+
+    const synced = await syncKnowledgeGraph({ db, router }, { agentId });
+    expect(synced.relationships).toBeGreaterThanOrEqual(2);
+
+    const relations = await db
+      .select({
+        predicate: knowledgeGraphRelations.predicate,
+        validFrom: knowledgeGraphRelations.validFrom,
+        validUntil: knowledgeGraphRelations.validUntil,
+      })
+      .from(knowledgeGraphRelations)
+      .where(eq(knowledgeGraphRelations.sourceMemoryId, memory.id));
+
+    const worked = relations.find((row) => row.predicate === 'worked_at');
+    expect(worked?.validFrom).toBe('2019');
+    expect(worked?.validUntil).toBe('2023-03');
+
+    // The edge survives; its ungrounded qualifiers do not.
+    const visited = relations.find((row) => row.predicate === 'visited');
+    expect(visited).toBeDefined();
+    expect(visited?.validFrom).toBeNull();
+    expect(visited?.validUntil).toBeNull();
   });
 
   it('re-extracts edited source content instead of retaining its old edge', async (ctx) => {

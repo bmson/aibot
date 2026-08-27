@@ -17,7 +17,7 @@ import {
   weekStartForLocale,
 } from '@/app/profile/knowledge/calendar/calendar-grid';
 import { requireOwner } from '@/auth';
-import { entityKindLabel, entityKindPaint } from '@/lib/knowledge';
+import { entityKindLabel, entityKindPaint, humanizePredicate } from '@/lib/knowledge';
 import { getDb } from '@/lib/server';
 import {
   Badge,
@@ -53,7 +53,7 @@ function CalendarEntryRow({ entry }: { entry: KnowledgeGraphCalendarEntry }) {
           <li key={connection.relationId} className="min-w-0">
             <Link
               href={entityHref(connection.other.id)}
-              title={`${connection.other.label} — ${entityKindLabel(connection.other.kind)}`}
+              title={`${connection.other.label} — ${entityKindLabel(connection.other.kind)} · ${humanizePredicate(connection.predicate)}`}
               className="flex min-w-0 items-center gap-1 rounded text-xs leading-5 text-strong motion-safe:transition-colors hover:bg-raised"
             >
               <span
@@ -64,6 +64,28 @@ function CalendarEntryRow({ entry }: { entry: KnowledgeGraphCalendarEntry }) {
               />
               <span className="min-w-0 truncate">{connection.other.label}</span>
             </Link>
+            {/* Second hop: the people and places attached to this event or
+                project, so a cell reads as a day, not a bare name. */}
+            {connection.related.length > 0 ? (
+              <span className="flex min-w-0 flex-wrap items-center gap-x-1 pl-2.5 text-[0.68rem] leading-4 text-muted">
+                {connection.related.map((item, index) => (
+                  <span key={item.id} className="inline-flex min-w-0 items-center">
+                    {index > 0 ? (
+                      <span aria-hidden="true" className="text-muted/60">
+                        {' · '}
+                      </span>
+                    ) : null}
+                    <Link
+                      href={entityHref(item.id)}
+                      title={`${item.label} — ${entityKindLabel(item.kind)}`}
+                      className="max-w-24 truncate rounded underline-offset-2 motion-safe:transition-colors hover:text-strong hover:underline"
+                    >
+                      {item.label}
+                    </Link>
+                  </span>
+                ))}
+              </span>
+            ) : null}
           </li>
         ))}
       </ul>
@@ -73,6 +95,16 @@ function CalendarEntryRow({ entry }: { entry: KnowledgeGraphCalendarEntry }) {
           className="mt-0.5 inline-block rounded text-[0.68rem] font-medium text-muted underline-offset-2 motion-safe:transition-colors hover:text-strong hover:underline"
         >
           +{hidden} more
+        </Link>
+      ) : null}
+      {/* A date whose edges are all stale still exists; link it rather than
+          render an invisible cell. */}
+      {entry.connections.length === 0 ? (
+        <Link
+          href={entityHref(entry.entity.id)}
+          className="inline-block rounded text-[0.68rem] text-muted underline-offset-2 motion-safe:transition-colors hover:text-strong hover:underline"
+        >
+          {entry.entity.label}
         </Link>
       ) : null}
     </div>

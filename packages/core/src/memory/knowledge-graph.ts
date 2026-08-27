@@ -52,6 +52,13 @@ export const GraphExtractionSchema = z.object({
         object: GraphEntitySchema,
         evidenceQuote: z.string().min(3).max(500),
         confidence: z.number().min(0).max(1).default(0.7),
+        /**
+         * Temporal qualifiers copied verbatim from the source ("2019", "March
+         * 2023"). Canonicalized against the source's anchor before storage;
+         * dropped when the wording is unparseable or absent from the quote.
+         */
+        validFrom: z.string().min(2).max(60).optional(),
+        validUntil: z.string().min(2).max(60).optional(),
       }),
     )
     .max(5)
@@ -216,6 +223,26 @@ export function graphRelationshipIsGrounded(
     evidence.includes(object) &&
     predicateWords.length > 0 &&
     predicateWords.every((word) => evidence.includes(word))
+  );
+}
+
+/**
+ * Canonical key for one temporal qualifier, or null when it cannot be kept.
+ * Qualifiers follow the same evidence contract as the edge itself: the wording
+ * must appear in the relationship's quoted evidence, and it must resolve to a
+ * real date against the source's anchor. Dropping the qualifier keeps the edge
+ * — a job edge without its span is still a fact; an invented span is not.
+ */
+function canonicalQualifier(
+  wording: string | undefined,
+  evidenceQuote: string,
+  context: ResolutionContext,
+): string | null {
+  if (!wording) return null;
+  const clean = wording.replace(/\s+/g, ' ').trim();
+  if (!clean || !normalized(evidenceQuote).includes(normalized(clean))) return null;
+  return (
+    canonicalizeDateLabel(clean, context.anchor, context.timeZone, context.locale)?.key ?? null
   );
 }
 
@@ -409,6 +436,14 @@ function extractionSystem(context: ResolutionContext): string {
     'Use concise human-readable entity labels and a stable snake_case predicate.',
     'For every relationship, evidenceQuote must copy the shortest contiguous source phrase that directly states it. The quote must contain both entity labels and the predicate words; derive the snake_case predicate from those quoted words.',
     'Use person, organization, project, place, event, date, or topic for entity kinds.',
+    'A predicate reads subject → object: "Gunnar father_of Anna" means Gunnar is Anna\'s father.',
+    'Prefer a specific predicate over a vague one — never related_to or knows when the fact says more. When the fact states one of these, name it:',
+    '- family: father_of, mother_of, parent_of, son_of, daughter_of, child_of, brother_of, sister_of, sibling_of, grandfather_of, grandmother_of, grandparent_of, grandson_of, granddaughter_of, spouse_of, partner_of, uncle_of, aunt_of, nephew_of, niece_of, cousin_of',
+    '- biography: born_on, born_in, grew_up_in, lives_in, met_at, met_during, engaged_on, married_on, divorced_on, died_on',
+    '- work and education: works_at, worked_at, role_as, studies_at, studied_at, graduated_from, interned_at',
+    '- events: attends, attended, happens_on, happens_at, starts_on, ends_on',
+    'Attach times and dates as date entities with predicates like born_on, met_at, happens_on, or married_on — never as date wording inside a person or event label.',
+    'When a relationship itself has a stated start or end (a job span, a course, a marriage, living somewhere), copy the date wording into validFrom / validUntil exactly as written in the source. That wording must also appear in the evidenceQuote. Omit both when the source states no start or end.',
     `This fact was recorded on ${recordedOn} (${context.timeZone}). Resolve every relative date in it ("Friday", "tomorrow", "next week") against that date.`,
     'Write a date entity label as YYYY-MM-DD, or YYYY-MM when only the month is known, or a month and day when the year is genuinely unknown. Never label a date entity with relative wording.',
     'Return an empty relationships array when the source does not state a clear relationship.',
@@ -634,6 +669,8 @@ async function persistRelationships(
         if (saved.has(fingerprint)) continue;
         saved.add(fingerprint);
         ordinal += 1;
+        const validFrom = canonicalQualifier(relation.validFrom, relation.evidenceQuote, context);
+        const validUntil = canonicalQualifier(relation.validUntil, relation.evidenceQuote, context);
         await txDb
           .insert(knowledgeGraphRelations)
           .values({
@@ -646,6 +683,8 @@ async function persistRelationships(
             sourceFingerprint: fingerprint,
             ordinal,
             confidence: Math.min(Number(source.confidence), relation.confidence).toFixed(2),
+            validFrom,
+            validUntil,
           })
           .onConflictDoUpdate({
             target: [
@@ -662,6 +701,8 @@ async function persistRelationships(
               evidenceQuote: relation.evidenceQuote,
               ordinal,
               confidence: Math.min(Number(source.confidence), relation.confidence).toFixed(2),
+              validFrom,
+              validUntil,
             },
           });
         touched.add(subject.key);

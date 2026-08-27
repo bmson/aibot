@@ -110,3 +110,41 @@ export function clipNodeLabel(label: string, max = 18): string {
   const clean = label.replace(/\s+/g, ' ').trim();
   return clean.length <= max ? clean : `${clean.slice(0, max - 1)}…`;
 }
+
+/**
+ * Render a canonical date key (`2026-03-06`, `2026-03`, `--03-06`, `2026`) in
+ * the owner's locale. Mirrors the four precisions core's date canonicalizer
+ * can produce; an unrecognized key renders as itself rather than disappearing.
+ * All formatting is pinned to UTC because the keys name calendar days, not
+ * instants — a zoned format could shift the rendered day back one.
+ */
+export function formatCanonicalDateKey(key: string, locale: string): string {
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  if (day) {
+    return new Intl.DateTimeFormat(locale, {
+      timeZone: 'UTC',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    }).format(new Date(Date.UTC(Number(day[1]), Number(day[2]) - 1, Number(day[3]))));
+  }
+  const month = /^(\d{4})-(\d{2})$/.exec(key);
+  if (month) {
+    return new Intl.DateTimeFormat(locale, {
+      timeZone: 'UTC',
+      year: 'numeric',
+      month: 'long',
+    }).format(new Date(Date.UTC(Number(month[1]), Number(month[2]) - 1, 1)));
+  }
+  const recurring = /^--(\d{2})-(\d{2})$/.exec(key);
+  if (recurring) {
+    // 2024 is the leap-year reference the canonicalizer itself uses, so
+    // February 29 formats rather than rolling into March.
+    return new Intl.DateTimeFormat(locale, {
+      timeZone: 'UTC',
+      month: 'long',
+      day: 'numeric',
+    }).format(new Date(Date.UTC(2024, Number(recurring[1]) - 1, Number(recurring[2]))));
+  }
+  return key;
+}

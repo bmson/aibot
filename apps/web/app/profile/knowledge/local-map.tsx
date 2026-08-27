@@ -1,11 +1,10 @@
 'use client';
 
 import { Minus, Plus, RotateCcw } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { loadKnowledgeNeighborhood } from '@/app/profile/knowledge/actions';
 import {
   arrowhead,
-  type Canvas,
   type CanvasNode,
   CENTER_R,
   CX,
@@ -39,7 +38,8 @@ import { focusRing } from '@/lib/ui';
 
 /**
  * The interactive local map: pan, zoom, click a neighbour to re-centre the
- * page on it, or expand a node in place to grow the canvas a ring at a time.
+ * page on it, expand a node in place to grow the canvas a ring at a time, and
+ * page crowded kinds with their "+N more" node.
  *
  * The first hop arrives as server-rendered props; expansion goes through a
  * server action. Rendering stays SVG (no charting dependency): layout is
@@ -53,10 +53,9 @@ const WHEEL_ZOOM_OUT = 1 / WHEEL_ZOOM_IN;
 const KEY_PAN = 40;
 const KEY_ZOOM = 1.25;
 
-interface ExpansionState {
-  expanded: boolean;
-  /** Edges the expansion cap did not fetch, reported next to the node. */
-  overflow: number;
+interface ExpansionData {
+  edges: MapEdgeInput[];
+  total: number;
 }
 
 export function LocalMap({
@@ -72,9 +71,11 @@ export function LocalMap({
   query: string;
   kind: string;
 }) {
-  const [canvas, setCanvas] = useState<Canvas>(() => initialCanvas(selected, initialEdges));
+  /** Kind → pages revealed so far (1 = the first KIND_PAGE_SIZE). */
+  const [revealed, setRevealed] = useState<Record<string, number>>({});
+  /** Node id → its fetched second hop. Canvas derives from this, so a reveal re-layout keeps expansions. */
+  const [expandedData, setExpandedData] = useState<Record<string, ExpansionData>>({});
   const [viewport, setViewport] = useState<Viewport>(INITIAL_VIEWPORT);
-  const [expansions, setExpansions] = useState<Record<string, ExpansionState>>({});
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [announce, setAnnounce] = useState('');
@@ -95,22 +96,31 @@ export function LocalMap({
   const [seenPropsKey, setSeenPropsKey] = useState(propsKey);
   if (seenPropsKey !== propsKey) {
     setSeenPropsKey(propsKey);
-    setCanvas(initialCanvas(selected, initialEdges));
+    setRevealed({});
+    setExpandedData({});
     setViewport(INITIAL_VIEWPORT);
-    setExpansions({});
     setPendingId(null);
     setActiveId(null);
   }
 
+  const canvas = useMemo(() => {
+    let next = initialCanvas(selected, initialEdges, revealed);
+    for (const [parentId, data] of Object.entries(expandedData)) {
+      next = mergeExpansion(next, parentId, data.edges).canvas;
+    }
+    return next;
+  }, [selected, initialEdges, revealed, expandedData]);
+
   const nodeById = new Map(canvas.nodes.map((node) => [node.id, node]));
-  const expandedIds = new Set(
-    Object.entries(expansions)
-      .filter(([, state]) => state.expanded)
-      .map(([id]) => id),
-  );
-  const showAllLabels = canvas.nodes.length <= LABEL_LIMIT;
+  const realNodes = canvas.nodes.filter((node) => !node.aggregate);
+  const showAllLabels = realNodes.length <= LABEL_LIMIT;
 
   const hrefFor = (entityId: string) => entityHref(entityId, query, kind);
+
+  const handleReveal = (kindKey: string) => {
+    setRevealed((previous) => ({ ...previous, [kindKey]: (previous[kindKey] ?? 1) + 1 }));
+    setAnnounce(`Showing more ${entityKindLabel(kindKey).toLocaleLowerCase()} connections.`);
+  };
 
   const handleExpand = async (node: CanvasNode) => {
     if (pendingId) return;
@@ -118,10 +128,9 @@ export function LocalMap({
     try {
       const result = await loadKnowledgeNeighborhood(node.id, EXPANSION_LIMIT);
       const merged = mergeExpansion(canvas, node.id, result.edges);
-      setCanvas(merged.canvas);
-      setExpansions((previous) => ({
+      setExpandedData((previous) => ({
         ...previous,
-        [node.id]: { expanded: true, overflow: Math.max(0, result.total - result.edges.length) },
+        [node.id]: { edges: result.edges, total: result.total },
       }));
       setAnnounce(
         merged.added > 0
@@ -219,7 +228,10 @@ export function LocalMap({
   const zoomButtonClass = `mobile-touch-target inline-flex size-9 items-center justify-center rounded-lg border border-edge bg-raised/95 text-muted motion-safe:transition-colors hover:text-strong ${focusRing}`;
 
   const nodeLabelVisible = (node: CanvasNode) =>
-    showAllLabels || node.id === activeId || expandedIds.has(node.id);
+    showAllLabels ||
+    node.id === activeId ||
+    Boolean(expandedData[node.id]) ||
+    Boolean(node.aggregate);
 
   const description = canvas.edges
     .map((edge) => {
@@ -244,7 +256,7 @@ export function LocalMap({
         tabIndex={0}
         onKeyDown={handleKeyDown}
       >
-        {canvas.nodes.length === 1 ? (
+        {realNodes.length === 1 ? (
           <p className="p-2 py-10 text-center text-sm text-muted sm:p-4">
             No active connections to draw yet.
           </p>
@@ -304,8 +316,50 @@ export function LocalMap({
 
               {canvas.nodes.map((node) => {
                 if (node.ring === 0) return null;
+                const aggregate = node.aggregate;
+                if (aggregate) {
+                  return (
+                    // biome-ignore lint/a11y/useSemanticElements: a <button> cannot exist inside SVG; the g carries the button role, keyboard activation, and an accessible name.
+                    <g
+                      key={node.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Show more ${entityKindLabel(node.kind).toLocaleLowerCase()} connections (${aggregate.remaining} not shown)`}
+                      className={`cursor-pointer ${focusRing}`}
+                      onClick={() => handleReveal(aggregate.kind)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          handleReveal(aggregate.kind);
+                        }
+                      }}
+                    >
+                      <circle cx={node.x} cy={node.y} r={HIT_R} fill="transparent" />
+                      <circle
+                        cx={node.x}
+                        cy={node.y}
+                        r={NODE_R}
+                        strokeWidth={2}
+                        strokeDasharray="3 3"
+                        className="fill-zinc-100 stroke-zinc-400 dark:fill-zinc-900 dark:stroke-zinc-500"
+                      />
+                      <text
+                        x={node.x > CX + 40 ? node.x - (NODE_R + 5) : node.x + NODE_R + 5}
+                        y={node.y + 1}
+                        textAnchor={node.x > CX + 40 ? 'end' : 'start'}
+                        className="fill-muted text-[12px] font-medium"
+                      >
+                        {node.label}
+                      </text>
+                    </g>
+                  );
+                }
+
                 const paint = entityKindPaint(node.kind);
-                const expansion = expansions[node.id];
+                const expansion = expandedData[node.id];
+                const overflow = expansion
+                  ? Math.max(0, expansion.total - expansion.edges.length)
+                  : 0;
                 const anchorLeft = node.x > CX + 40;
                 const labelX = anchorLeft ? node.x - (NODE_R + 5) : node.x + NODE_R + 5;
                 return (
@@ -340,14 +394,14 @@ export function LocalMap({
                           {clipNodeLabel(node.label)}
                         </text>
                       ) : null}
-                      {expansion && expansion.overflow > 0 ? (
+                      {overflow > 0 ? (
                         <text
                           x={labelX}
                           y={node.y + 13}
                           textAnchor={anchorLeft ? 'end' : 'start'}
                           className="fill-muted text-[9.5px]"
                         >
-                          {`+${expansion.overflow} more — open to explore`}
+                          {`+${overflow} more — open to explore`}
                         </text>
                       ) : null}
                     </a>
@@ -454,7 +508,7 @@ export function LocalMap({
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
-        {[...new Set(canvas.nodes.map((node) => node.kind))].map((nodeKind) => (
+        {[...new Set(realNodes.map((node) => node.kind))].map((nodeKind) => (
           <span key={nodeKind} className="inline-flex items-center gap-1.5">
             <span
               aria-hidden="true"
@@ -475,7 +529,7 @@ export function LocalMap({
       {/* The drawing's content as a navigable list — the equivalent for anyone
           not reading the SVG, and the touch-friendly path on small screens. */}
       <ul className="sr-only">
-        {canvas.nodes
+        {realNodes
           .filter((node) => node.ring > 0)
           .map((node) => {
             const connecting = canvas.edges.filter(

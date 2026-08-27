@@ -55,6 +55,9 @@ export interface KnowledgeGraphRelationView {
   confidence: number;
   reviewStatus: KnowledgeGraphReviewStatus;
   reviewedAt: Date | null;
+  /** Temporal qualifiers as canonical date keys, when the source states a span. */
+  validFrom: string | null;
+  validUntil: string | null;
   source: {
     memoryId: string;
     content: string;
@@ -316,6 +319,8 @@ export async function getKnowledgeGraphOverview(
         confidence: knowledgeGraphRelations.confidence,
         reviewStatus: knowledgeGraphRelations.reviewStatus,
         reviewedAt: knowledgeGraphRelations.reviewedAt,
+        validFrom: knowledgeGraphRelations.validFrom,
+        validUntil: knowledgeGraphRelations.validUntil,
         subjectId: subject.id,
         subjectLabel: displayLabel(subject),
         subjectKind: subject.kind,
@@ -367,6 +372,8 @@ export async function getKnowledgeGraphOverview(
     confidence: Number(row.confidence),
     reviewStatus: asReviewStatus(row.reviewStatus),
     reviewedAt: row.reviewedAt,
+    validFrom: row.validFrom,
+    validUntil: row.validUntil,
     source: {
       memoryId: row.sourceMemoryId,
       content: row.sourceContent,
@@ -512,6 +519,12 @@ export interface KnowledgeGraphCalendarConnection {
   /** True when the date entity is the subject of the relation. */
   outbound: boolean;
   other: KnowledgeGraphEntityView;
+  /**
+   * The connection's own connections, one hop further out — the people and
+   * places attached to an event. Only event/project endpoints are expanded:
+   * a date → topic → 85-spokes hop is noise, and this is what keeps it out.
+   */
+  related: KnowledgeGraphEntityView[];
 }
 
 export interface KnowledgeGraphCalendarEntry {
@@ -536,6 +549,11 @@ export interface KnowledgeGraphCalendarMonth {
 export const CALENDAR_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 /** One busy month of edges. Cells truncate per day long before this, so the page stays fast. */
 const CALENDAR_EDGE_LIMIT = 200;
+/** Second-hop fetch for event/project context, and the per-cell rendering cap on it. */
+const CALENDAR_SECOND_HOP_LIMIT = 100;
+const CALENDAR_RELATED_LIMIT = 3;
+/** Endpoint kinds worth expanding one hop further: the people and places OF an event. */
+const CALENDAR_EXPANDED_KINDS = new Set(['event', 'project']);
 
 function dayOfMonth(canonicalKey: string): string | null {
   const day = /^(?:date:\d{4}-\d{2}|date:--\d{2})-(\d{2})$/.exec(canonicalKey)?.[1];
@@ -645,32 +663,103 @@ export async function getKnowledgeGraphCalendar(
     days[day] = entries;
   }
 
+  const secondHopIds = new Set<string>();
   for (const row of edgeRows) {
     // An edge between two date entities anchors to the subject; both are on
     // the grid, so either choice lands the connection on a real day.
     const subjectIsDate = entryByEntity.has(row.subjectId);
     const entry = entryByEntity.get(subjectIsDate ? row.subjectId : row.objectId);
     if (!entry) continue;
+    const other = subjectIsDate
+      ? {
+          id: row.objectId,
+          label: row.objectLabel,
+          kind: row.objectKind,
+          canonicalKey: row.objectCanonicalKey,
+        }
+      : {
+          id: row.subjectId,
+          label: row.subjectLabel,
+          kind: row.subjectKind,
+          canonicalKey: row.subjectCanonicalKey,
+        };
     entry.connections.push({
       relationId: row.id,
       predicate: row.predicate,
       outbound: subjectIsDate,
-      other: subjectIsDate
-        ? {
-            id: row.objectId,
-            label: row.objectLabel,
-            kind: row.objectKind,
-            canonicalKey: row.objectCanonicalKey,
-          }
-        : {
-            id: row.subjectId,
-            label: row.subjectLabel,
-            kind: row.subjectKind,
-            canonicalKey: row.subjectCanonicalKey,
-          },
+      other,
+      related: [],
     });
+    if (CALENDAR_EXPANDED_KINDS.has(other.kind)) secondHopIds.add(other.id);
   }
+
+  // Second hop: what the connected events and projects themselves connect to.
+  // This is what makes a day cell read "Spring offsite — Bjorn, Reykjavik"
+  // instead of a bare event name.
+  const relatedByParent = new Map<string, KnowledgeGraphEntityView[]>();
+  if (secondHopIds.size > 0) {
+    const hopSubject = alias(knowledgeGraphEntities, 'calendar_hop_subject');
+    const hopObject = alias(knowledgeGraphEntities, 'calendar_hop_object');
+    const hopRows = await db
+      .select({
+        subjectId: knowledgeGraphRelations.subjectEntityId,
+        objectId: knowledgeGraphRelations.objectEntityId,
+        subjectLabel: displayLabel(hopSubject),
+        subjectKind: hopSubject.kind,
+        subjectCanonicalKey: hopSubject.canonicalKey,
+        objectLabel: displayLabel(hopObject),
+        objectKind: hopObject.kind,
+        objectCanonicalKey: hopObject.canonicalKey,
+      })
+      .from(knowledgeGraphRelations)
+      .innerJoin(hopSubject, eq(knowledgeGraphRelations.subjectEntityId, hopSubject.id))
+      .innerJoin(hopObject, eq(knowledgeGraphRelations.objectEntityId, hopObject.id))
+      .where(
+        and(
+          eq(knowledgeGraphRelations.agentId, agent.id),
+          ne(knowledgeGraphRelations.reviewStatus, 'rejected'),
+          or(
+            inArray(knowledgeGraphRelations.subjectEntityId, [...secondHopIds]),
+            inArray(knowledgeGraphRelations.objectEntityId, [...secondHopIds]),
+          ),
+        ),
+      )
+      .orderBy(asc(knowledgeGraphRelations.createdAt))
+      .limit(CALENDAR_SECOND_HOP_LIMIT);
+    for (const row of hopRows) {
+      const parentId = secondHopIds.has(row.subjectId) ? row.subjectId : row.objectId;
+      const view =
+        parentId === row.subjectId
+          ? {
+              id: row.objectId,
+              label: row.objectLabel,
+              kind: row.objectKind,
+              canonicalKey: row.objectCanonicalKey,
+            }
+          : {
+              id: row.subjectId,
+              label: row.subjectLabel,
+              kind: row.subjectKind,
+              canonicalKey: row.subjectCanonicalKey,
+            };
+      // In-month dates have their own cells; repeating them as context is noise.
+      if (dateById.has(view.id)) continue;
+      const list = relatedByParent.get(parentId) ?? [];
+      if (list.some((item) => item.id === view.id) || list.length >= CALENDAR_RELATED_LIMIT) {
+        continue;
+      }
+      list.push(view);
+      relatedByParent.set(parentId, list);
+    }
+    for (const list of relatedByParent.values()) {
+      list.sort((a, b) => a.label.localeCompare(b.label));
+    }
+  }
+
   for (const entry of entryByEntity.values()) {
+    for (const connection of entry.connections) {
+      connection.related = relatedByParent.get(connection.other.id) ?? [];
+    }
     entry.connections.sort((a, b) => a.other.label.localeCompare(b.other.label));
   }
   return {

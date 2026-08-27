@@ -51,6 +51,14 @@ receives.
 - Every recalled direct edge carries a contiguous quote from its source fact proving its endpoints
   and predicate. When this extraction contract changes, sources are versioned and rebuilt offline;
   legacy edges stay out of graph traversal until they have the new evidence.
+- The extractor works from a preferred predicate vocabulary so the same fact lands on the same edge
+  wording: family (`father_of`, `mother_of`, `grandmother_of`, `sibling_of`, …), biography
+  (`born_on`, `born_in`, `met_at`, `married_on`, …), work and education (`works_at`, `worked_at`,
+  `studied_at`, `graduated_from`, …), and events (`happens_on`, `attended`, …), with dates and times
+  attached as date entities rather than label wording. Predicates read subject → object
+  (`Gunnar father_of Anna`). A relationship with a stated span (a job, a course, a marriage) stores
+  it as `valid_from`/`valid_until` canonical date keys on the edge itself, copied only from wording
+  present in the evidence quote — an unquoted or unparseable span is dropped, never the edge.
 - A recall query first has to clear the existing semantic-similarity threshold against a source memory.
   Only then can it follow incoming/outgoing relationships up to two hops. The injected block contains
   the original evidence facts and labels every two-hop connection as context, not a conclusion.
@@ -82,21 +90,25 @@ their source memory, extraction confidence, source trust, and review time. The o
   owner-confirmed durable memory and is the relationship's evidence — never a graph-only assertion.
 
 The local map is an interactive SVG canvas over one entity's neighbourhood: directed edges, colour
-by entity kind, dashed for edges still awaiting review. It draws up to 150 active first-hop
-connections from its own query (the review list's 80-row, unreviewed-first page would draw a skewed
-subset), states its own overflow rather than silently truncating, and supports drag-pan, wheel/button
-and keyboard zoom. Clicking a neighbour navigates the whole page to re-centre on it — sidebar,
-evidence list, and curation forms always agree on the subject — while a per-node expand control folds
-a second hop into the canvas (50 edges per click, deduped, hard-capped canvas) so exploration never
-has to render the whole graph at once. Entity lists page and report their true totals; the sidebar
-filters by entity kind; the merge target is found by searching the whole graph rather than picking
-from a fixed prefix of it.
+by entity kind, dashed for edges still awaiting review. First-hop neighbours band into per-kind arc
+sectors — a hub whose edges mix people, dates, and projects reads as arcs, not a pile — and each
+kind pages twelve at a time behind a "+N more" node that reveals the next page in place. The map
+draws from its own query of up to 150 active first-hop connections (the review list's 80-row,
+unreviewed-first page would draw a skewed subset), states its own overflow rather than silently
+truncating, and supports drag-pan, wheel/button and keyboard zoom. Clicking a neighbour navigates
+the whole page to re-centre on it — sidebar, evidence list, and curation forms always agree on the
+subject — while a per-node expand control folds a second hop into the canvas (50 edges per click,
+deduped, hard-capped canvas) so exploration never has to render the whole graph at once. Entity
+lists page and report their true totals; the sidebar filters by entity kind; the merge target is
+found by searching the whole graph rather than picking from a fixed prefix of it.
 
 `/profile/knowledge/calendar` renders the graph's date entities as a month grid: exact days in their
 cells, recurring `--MM-DD` dates (birthdays, anniversaries) marked yearly in the cell of the day they
 recur on, and month-only mentions listed separately. Grouping keys off the canonical date key, never
-the locale-formatted label. It is a view over dates *mentioned in memories* — deliberately not the
-synced Google Calendar, and labelled as such.
+the locale-formatted label. Cells also show a bounded second hop — the people and places attached to
+an event or project that touches the day — so a cell reads as a day, not a bare name; broad kinds
+(topics) are never expanded into cells. It is a view over dates *mentioned in memories* —
+deliberately not the synced Google Calendar, and labelled as such.
 
 Relationship review state is keyed to the source-memory relationship fingerprint. Re-extracting a
 changed memory refreshes the direct edge while retaining a matching owner decision.

@@ -9,6 +9,7 @@ import {
   entityHref,
   INITIAL_VIEWPORT,
   initialCanvas,
+  KIND_PAGE_SIZE,
   MAX_SCALE,
   type MapEdgeInput,
   MIN_SCALE,
@@ -79,6 +80,75 @@ describe('initialCanvas', () => {
     expect(ringRadii(6)).toEqual(ringRadii(12));
     expect(ringRadii(120).rx).toBeGreaterThan(ringRadii(12).rx);
     expect(ringRadii(10000).rx).toBeLessThanOrEqual(230 * 3);
+  });
+
+  it('bands neighbours into per-kind sectors capped at a page each', () => {
+    const many: MapEdgeInput[] = [
+      ...Array.from({ length: 30 }, (_, index) => ({
+        id: `d${index}`,
+        predicate: 'on',
+        outbound: true,
+        reviewStatus: 'confirmed' as const,
+        other: {
+          id: `date-${index}`,
+          label: `2026-03-${String(index + 1).padStart(2, '0')}`,
+          kind: 'date',
+        },
+      })),
+      edge('p1', 'person-a'),
+      edge('p2', 'person-b'),
+    ];
+    const canvas = initialCanvas(center, many);
+
+    // The 30 dates page at KIND_PAGE_SIZE and collapse into one pager node;
+    // the two people render whole.
+    const dates = canvas.nodes.filter((node) => node.kind === 'date' && !node.aggregate);
+    expect(dates).toHaveLength(KIND_PAGE_SIZE);
+    const pager = canvas.nodes.find((node) => node.aggregate);
+    expect(pager).toMatchObject({ kind: 'date', label: '+18 more' });
+    expect(canvas.nodes.filter((node) => node.kind === 'project')).toHaveLength(2);
+
+    // Paged-out neighbours drop their edges too — nothing invisible is drawn
+    // or announced.
+    expect(canvas.edges).toHaveLength(KIND_PAGE_SIZE + 2);
+
+    // Kinds occupy distinct sectors: with two kinds, project ranks before date
+    // in KIND_ORDER, so projects take the right half and dates the left.
+    const projects = canvas.nodes.filter((node) => node.kind === 'project');
+    expect(projects.length).toBeGreaterThan(0);
+    expect(projects.every((node) => node.x >= CX - 0.001)).toBe(true);
+    expect(dates.every((node) => node.x <= CX + 0.001)).toBe(true);
+    expect(pager && pager.x <= CX + 0.001).toBe(true);
+  });
+
+  it('reveals the next page of a kind without reshuffling it', () => {
+    const many: MapEdgeInput[] = Array.from({ length: 30 }, (_, index) => ({
+      id: `d${index}`,
+      predicate: 'on',
+      outbound: true,
+      reviewStatus: 'confirmed' as const,
+      other: {
+        id: `date-${index}`,
+        label: `Day ${String(index + 1).padStart(2, '0')}`,
+        kind: 'date',
+      },
+    }));
+    const first = initialCanvas(center, many);
+    const firstIds = first.nodes
+      .filter((node) => node.kind === 'date' && !node.aggregate)
+      .map((n) => n.id);
+
+    const second = initialCanvas(center, many, { date: 2 });
+    const secondIds = second.nodes
+      .filter((node) => node.kind === 'date' && !node.aggregate)
+      .map((n) => n.id);
+    expect(secondIds.slice(0, KIND_PAGE_SIZE)).toEqual(firstIds);
+    expect(secondIds).toHaveLength(KIND_PAGE_SIZE * 2);
+    expect(second.nodes.find((node) => node.aggregate)?.label).toBe('+6 more');
+
+    const third = initialCanvas(center, many, { date: 3 });
+    expect(third.nodes.some((node) => node.aggregate)).toBe(false);
+    expect(third.nodes.filter((node) => node.kind === 'date')).toHaveLength(30);
   });
 });
 

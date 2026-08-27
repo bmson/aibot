@@ -449,6 +449,13 @@
       "when": 1787784157158,
       "tag": "0063_milky_mephisto",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1787869859160,
+      "tag": "0064_exotic_lord_hawal",
+      "breakpoints": true
     }
   ]
 }

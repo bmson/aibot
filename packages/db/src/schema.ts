@@ -980,6 +980,14 @@ export const knowledgeGraphRelations = pgTable(
     /** The source fact can yield several direct relationships. */
     ordinal: smallint('ordinal').notNull(),
     confidence: numeric('confidence', { precision: 3, scale: 2 }).notNull().default('0.70'),
+    /**
+     * Optional temporal qualifiers as canonical date keys (`2026-03-06`,
+     * `2026-03`, `--03-06`, `2026`), e.g. a job's span on a `worked_at` edge.
+     * Text keys rather than date columns because partial precision is the
+     * common case, and only ever populated from wording quoted in the source.
+     */
+    validFrom: text('valid_from'),
+    validUntil: text('valid_until'),
     /** Owner curation; rejected edges are excluded from graph recall. */
     reviewStatus: text('review_status').notNull().default('unreviewed'),
     reviewedAt: timestamp('reviewed_at', { withTimezone: true }),

@@ -436,17 +436,20 @@ describe('knowledge graph calendar (integration)', () => {
     // Date entities group by canonical key, so the marker cannot ride inside
     // the key; cleanup below is by tracked id. Labels deliberately avoid the
     // marker so the count-sensitive sidebar tests never see these rows.
-    const fixtures: Array<{ canonicalKey: string; label: string }> = [
+    const fixtures: Array<{ canonicalKey: string; label: string; kind?: string }> = [
       { canonicalKey: 'date:2026-03-06', label: '6 March 2026' },
       { canonicalKey: 'date:2026-03-21', label: '21 March 2026' },
       { canonicalKey: 'date:--03-06', label: 'March 6' },
       { canonicalKey: 'date:2026-03', label: 'March 2026' },
       { canonicalKey: 'date:2026', label: '2026' },
       { canonicalKey: 'date:2026-04-02', label: '2 April 2026' },
+      // The second-hop fixtures: an event on 6 March and the person on it.
+      { canonicalKey: 'event:spring offsite', label: 'Spring offsite', kind: 'event' },
+      { canonicalKey: 'person:brynja', label: 'Brynja', kind: 'person' },
     ];
     const inserted = await db
       .insert(knowledgeGraphEntities)
-      .values(fixtures.map((fixture) => ({ agentId, kind: 'date' as const, ...fixture })))
+      .values(fixtures.map((fixture) => ({ agentId, kind: 'date', ...fixture })))
       .returning({
         id: knowledgeGraphEntities.id,
         canonicalKey: knowledgeGraphEntities.canonicalKey,
@@ -469,8 +472,8 @@ describe('knowledge graph calendar (integration)', () => {
       'date:2026',
       'date:2026-04-02',
     ];
-    await db.insert(knowledgeGraphRelations).values(
-      keys.map((key, index) => ({
+    await db.insert(knowledgeGraphRelations).values([
+      ...keys.map((key, index) => ({
         agentId,
         subjectEntityId: hubId,
         predicate: 'mentions',
@@ -483,7 +486,33 @@ describe('knowledge graph calendar (integration)', () => {
         // The 21 March edge is stale: the calendar must not show it.
         reviewStatus: key === 'date:2026-03-21' ? ('rejected' as const) : ('confirmed' as const),
       })),
-    );
+      // The event's own edges: one to the date (first hop from the calendar's
+      // side), one to a person (the second hop the cell should surface).
+      {
+        agentId,
+        subjectEntityId: idFor('event:spring offsite'),
+        predicate: 'happens_on',
+        objectEntityId: idFor('date:2026-03-06'),
+        sourceMemoryId: memoryId,
+        evidenceQuote: `${MARKER} calendar fixture`,
+        sourceFingerprint: `${MARKER}-cal-event-on`,
+        ordinal: 200,
+        confidence: '0.90',
+        reviewStatus: 'confirmed' as const,
+      },
+      {
+        agentId,
+        subjectEntityId: idFor('event:spring offsite'),
+        predicate: 'attended_by',
+        objectEntityId: idFor('person:brynja'),
+        sourceMemoryId: memoryId,
+        evidenceQuote: `${MARKER} calendar fixture`,
+        sourceFingerprint: `${MARKER}-cal-event-attendee`,
+        ordinal: 201,
+        confidence: '0.90',
+        reviewStatus: 'confirmed' as const,
+      },
+    ]);
   });
 
   afterAll(async () => {
@@ -518,6 +547,23 @@ describe('knowledge graph calendar (integration)', () => {
     expect(calendar.monthEntry?.connections.map((conn) => conn.other.id)).toContain(hubId);
   });
 
+  it('carries a second hop for events, and never for broad kinds', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const calendar = await getKnowledgeGraphCalendar(db, { month: '2026-03' });
+    if (!calendar) throw new Error('calendar came back null');
+
+    const exact = calendar.days['06']?.find((entry) => !entry.recurring);
+    const eventConn = exact?.connections.find((conn) => conn.other.kind === 'event');
+    // The person on the event surfaces; the event's edge back to the date
+    // itself does not (that day has its own cell).
+    expect(eventConn?.other.label).toBe('Spring offsite');
+    expect(eventConn?.related.map((item) => item.label)).toEqual(['Brynja']);
+
+    // A topic hub with 85 neighbours is never expanded into the cell.
+    const hubConn = exact?.connections.find((conn) => conn.other.id === hubId);
+    expect(hubConn?.related).toEqual([]);
+  });
+
   it('leaves year-only and other-month dates out, and drops stale edges', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const calendar = await getKnowledgeGraphCalendar(db, { month: '2026-03' });
@@ -532,11 +578,12 @@ describe('knowledge graph calendar (integration)', () => {
     // The only edge touching 21 March is rejected: the entity appears (it is
     // a real node) but shows no connections, and the counts exclude the edge.
     // Year-only and other-month entities are not in the month's id set, so
-    // their edges are not counted either — three live edges remain.
+    // their edges are not counted either — three hub edges plus the event's
+    // happens_on remain.
     expect(calendar.days['21']).toHaveLength(1);
     expect(calendar.days['21']?.[0]?.connections).toHaveLength(0);
-    expect(calendar.totalConnections).toBe(3);
-    expect(calendar.shownConnections).toBe(3);
+    expect(calendar.totalConnections).toBe(4);
+    expect(calendar.shownConnections).toBe(4);
   });
 
   it('answers an empty month without inventing rows', async (ctx) => {
