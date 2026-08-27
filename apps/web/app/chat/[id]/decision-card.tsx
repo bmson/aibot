@@ -57,10 +57,10 @@ const TONES: Record<DecisionTone, { edge: string; band: string; chip: string; la
 };
 
 /**
- * Nothing in the log is wider than the assistant's own bubble cap, so a card
- * and a reply sit on one measure instead of the card reaching past it.
+ * Cards fill the transcript column, just like the native chat. The transcript
+ * owns the desktop reading measure; cards should not introduce a second cap.
  */
-const CARD_WIDTH = 'min-w-0 w-full max-w-2xl';
+const CARD_WIDTH = 'min-w-0 w-full max-w-none';
 
 export function DecisionCard({
   tone,

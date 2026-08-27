@@ -760,10 +760,10 @@ export function ChatClient({
     //
     // The column widens on larger screens so the header/composer use the
     // space a floating rail plus a wide canvas otherwise leaves empty — but
-    // each bubble caps its own width separately (max-w-[min(76%,42rem)]
-    // above), not this container: prose that runs to 1000px is tiring, and
-    // pinning the user's bubbles that far right would make a two-way
-    // exchange read as two columns regardless of how wide the column is.
+    // User bubbles cap their own width separately, keeping a two-way exchange
+    // conversational on a wide canvas. Assistant sheets and cards span this
+    // whole column, matching the native transcript and keeping result surfaces
+    // aligned with one another.
     <div
       data-chat-theme={chatTheme !== 'default' ? chatTheme : undefined}
       className="chat-viewport relative mx-auto -my-5 flex h-[calc(100dvh-1rem-var(--app-chrome,0px))] w-full min-w-0 max-w-3xl flex-col lg:-my-7 lg:h-[calc(100dvh-var(--app-chrome,0px))] lg:max-w-4xl 2xl:max-w-[56rem]"
@@ -1053,7 +1053,7 @@ export function ChatClient({
                           // cues arrives as several text parts — each renders
                           // as its own sheet, the way separate texts from a
                           // person stack.
-                          <div className="group/msg min-w-0 max-w-[88%] sm:max-w-[min(76%,42rem)]">
+                          <div className="group/msg min-w-0 w-full max-w-none">
                             <RecallNote sources={recallSources} />
                             <div className="flex min-w-0 flex-col gap-2">
                               {renderedTextParts.map((part, index) => (
@@ -1480,7 +1480,7 @@ export function ChatClient({
               }}
               placeholder="Ask anything…"
               rows={1}
-              className="block max-h-40 min-h-11 w-full min-w-0 flex-1 resize-none self-center border-0 bg-transparent px-2 py-2 text-base leading-6 outline-none sm:text-sm"
+              className="block max-h-40 min-h-10 w-full min-w-0 flex-1 resize-none self-center border-0 bg-transparent px-2 py-2 text-base leading-6 outline-none sm:text-sm"
             />
             {/* No rule between the field and its controls. A full-bleed border
                 ran straight into the card's corner arc, which cut it off at an

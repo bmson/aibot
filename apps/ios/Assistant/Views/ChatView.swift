@@ -364,6 +364,7 @@ struct ChatView: View {
 
     private var conversationSurface: some View {
         let motionIsReduced = reduceMotion
+        let transcriptItems = model.messages.transcriptItems()
 
         return ScrollViewReader { proxy in
             ScrollView {
@@ -371,8 +372,8 @@ struct ChatView: View {
                     if model.messages.isEmpty {
                         emptyConversation
                     } else {
-                        ForEach(Array(model.messages.enumerated()), id: \.element.id) { index, message in
-                            messageRow(message, at: index, motionIsReduced: motionIsReduced)
+                        ForEach(transcriptItems) { item in
+                            transcriptRow(item, motionIsReduced: motionIsReduced)
                         }
                     }
                     // The composer is an overlay, so reserve its measured
@@ -596,6 +597,31 @@ struct ChatView: View {
     /// sheet entirely and stretched the bubble-to-input gap.
     private var menuPullComposerOffset: CGFloat {
         min(max(menuPullTranscriptCompensation, -20), 20)
+    }
+
+    @ViewBuilder
+    private func transcriptRow(
+        _ item: ChatTranscriptItem,
+        motionIsReduced: Bool
+    ) -> some View {
+        switch item {
+        case let .message(message, index):
+            messageRow(message, at: index, motionIsReduced: motionIsReduced)
+        case let .approvedReceiptGroup(messages, firstIndex):
+            ApprovedReceiptGroup(messages: messages)
+                .padding(.top, startsRun(at: firstIndex) ? 22 : 7)
+                .transition(
+                    motionIsReduced
+                        ? .opacity
+                        : .asymmetric(
+                            insertion: .opacity
+                                .combined(with: .scale(scale: 0.986, anchor: .bottom))
+                                .combined(with: .offset(y: 10)),
+                            removal: .opacity
+                        )
+                )
+                .id(item.id)
+        }
     }
 
     private func messageRow(

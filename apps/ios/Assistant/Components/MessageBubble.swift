@@ -717,10 +717,20 @@ enum MessageResponseCard: Identifiable {
         let excerpt: String
     }
 
+    struct InterviewPerson: Identifiable {
+        let name: String
+        let role: String
+        let background: [String]
+        let interviewFocus: String
+
+        var id: String { name.lowercased() }
+    }
+
     case agenda(title: String, subtitle: String, items: [AgendaItem])
     case event(id: String, start: String, time: String, title: String, location: String, attendees: [String], calendars: [String], calendarLinkURL: String?, meetingLinkURL: String?)
     case weather(location: String, temperature: String, condition: String, details: [WeatherDetail])
     case duration(title: String, duration: String, detail: String?, confidence: String?)
+    case interviewPrep(title: String, people: [InterviewPerson], techStack: [String], nextSteps: [String])
     case reminder(id: String, title: String, schedule: String, nextFires: String, enabled: Bool)
     case emails(id: String, title: String, query: String, mailbox: String, complete: Bool, matchingMessagesEstimate: Int?, messages: [EmailResult])
     case documents(id: String, title: String, query: String, passages: [DocumentPassage])
@@ -741,6 +751,7 @@ enum MessageResponseCard: Identifiable {
             // reading; the day name keeps each card's identity distinct.
             "weather-\(location)-\(details.first { $0.label.caseInsensitiveCompare("Day") == .orderedSame }?.value ?? "")-\(temperature)"
         case let .duration(title, duration, _, _): "duration-\(title)-\(duration)"
+        case let .interviewPrep(title, people, _, _): "interview-prep-\(title)-\(people.map(\.id).joined(separator: "-"))"
         case let .reminder(id, _, _, _, _): id
         case let .emails(id, _, _, _, _, _, _): id
         case let .documents(id, _, _, _): id
@@ -1020,6 +1031,9 @@ enum MessageResponseCard: Identifiable {
         if cardKind == nil || normalizedCardKind(cardKind) == "duration" {
             if let duration = inferredDuration(text, lower: lower) { return [duration] }
         }
+        if normalizedCardKind(cardKind) == "interview-prep" {
+            if let prep = inferredInterviewPrep(text) { return [prep] }
+        }
         return []
     }
 
@@ -1030,6 +1044,7 @@ enum MessageResponseCard: Identifiable {
             || lower.contains("calendar")
             || lower.contains("agenda")
             || lower.contains("schedule")
+            || interviewPrepSignalCount(in: lower) >= 2
     }
 
     static func requestLooksLikeWeather(_ request: String) -> Bool {
@@ -1044,8 +1059,146 @@ enum MessageResponseCard: Identifiable {
         case "weather", "forecast", "temperature": return "weather"
         case "agenda", "calendar", "schedule": return "agenda"
         case "duration", "time-estimate", "time estimate": return "duration"
+        case "interview-prep", "interview prep", "interviewers", "people research": return "interview-prep"
         default: return "none"
         }
+    }
+
+    private enum InterviewSection {
+        case none
+        case background
+        case techStack
+        case nextSteps
+    }
+
+    /// This parser only reorganizes facts the assistant already wrote. The
+    /// on-device model decides whether interview research was the user's main
+    /// request; keeping extraction deterministic avoids inventing a person's
+    /// experience, role, or interview remit while still replacing a dense
+    /// nested markdown list with a scannable card.
+    private static func inferredInterviewPrep(_ text: String) -> Self? {
+        let lines = text.components(separatedBy: .newlines)
+        var people: [InterviewPerson] = []
+        var techStack: [String] = []
+        var nextSteps: [String] = []
+        var section: InterviewSection = .none
+        var name: String?
+        var role = ""
+        var background: [String] = []
+        var interviewFocus = ""
+
+        func flushPerson() {
+            guard let name, !name.isEmpty, !role.isEmpty, !interviewFocus.isEmpty else { return }
+            people.append(.init(name: name, role: role, background: Array(background.prefix(3)), interviewFocus: interviewFocus))
+        }
+
+        for index in lines.indices {
+            let raw = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty else { continue }
+            let text = cleanedInterviewLine(raw)
+            let lower = text.lowercased()
+
+            if lower.contains("tech stack") {
+                flushPerson()
+                name = nil
+                role = ""
+                background = []
+                interviewFocus = ""
+                section = .techStack
+                continue
+            }
+            if lower.hasPrefix("want me to") || lower.hasPrefix("next steps") {
+                flushPerson()
+                name = nil
+                role = ""
+                background = []
+                interviewFocus = ""
+                section = .nextSteps
+                continue
+            }
+            if looksLikeInterviewPersonHeading(raw, at: index, in: lines) {
+                flushPerson()
+                name = text
+                role = ""
+                background = []
+                interviewFocus = ""
+                section = .none
+                continue
+            }
+            if lower.hasPrefix("role:") {
+                role = String(text.dropFirst("Role:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                section = .none
+                continue
+            }
+            if lower.hasPrefix("background:") {
+                let detail = String(text.dropFirst("Background:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !detail.isEmpty { background.append(detail) }
+                section = .background
+                continue
+            }
+            if lower.hasPrefix("likely interview focus:") {
+                interviewFocus = String(text.dropFirst("Likely interview focus:".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                section = .none
+                continue
+            }
+
+            guard raw.hasPrefix("-") || raw.hasPrefix("•") || raw.hasPrefix("*") else { continue }
+            switch section {
+            case .background where name != nil:
+                background.append(text)
+            case .techStack:
+                techStack.append(text)
+            case .nextSteps:
+                nextSteps.append(text)
+            default:
+                break
+            }
+        }
+        flushPerson()
+
+        let distinctPeople = people.reduce(into: [InterviewPerson]()) { collected, person in
+            if !collected.contains(where: { $0.id == person.id }) { collected.append(person) }
+        }
+        guard distinctPeople.count >= 2 else { return nil }
+        return .interviewPrep(
+            title: "Interview prep",
+            people: Array(distinctPeople.prefix(4)),
+            techStack: Array(techStack.prefix(4)),
+            nextSteps: Array(nextSteps.prefix(3))
+        )
+    }
+
+    private static func interviewPrepSignalCount(in lower: String) -> Int {
+        let normalized = lower
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+        return min(
+            normalized.components(separatedBy: "role:").count - 1,
+            normalized.components(separatedBy: "likely interview focus:").count - 1
+        )
+    }
+
+    private static func cleanedInterviewLine(_ value: String) -> String {
+        var value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        while value.hasPrefix("#") { value.removeFirst() }
+        value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.hasPrefix("- ") { value.removeFirst(2) }
+        else if value.hasPrefix("•") { value.removeFirst() }
+        else if value.hasPrefix("* ") { value.removeFirst(2) }
+        value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func looksLikeInterviewPersonHeading(_ raw: String, at index: Int, in lines: [String]) -> Bool {
+        guard !raw.hasPrefix("-") && !raw.hasPrefix("•") else { return false }
+        let candidate = cleanedInterviewLine(raw)
+        guard !candidate.contains(":"), candidate.count <= 60, !candidate.isEmpty else { return false }
+        let end = min(lines.count, index + 5)
+        return lines[(index + 1)..<end].contains { $0.lowercased().contains("role:") }
     }
 
     private static func inferredAgenda(_ text: String, lower: String) -> Self? {
@@ -1672,6 +1825,8 @@ private struct RichResponseCards: View {
                     weatherCard(location: location, temperature: temperature, condition: condition, details: details)
                 case let .duration(title, duration, detail, confidence):
                     durationCard(title: title, duration: duration, detail: detail, confidence: confidence)
+                case let .interviewPrep(title, people, techStack, nextSteps):
+                    interviewPrepCard(title: title, people: people, techStack: techStack, nextSteps: nextSteps)
                 case let .reminder(_, title, schedule, nextFires, enabled):
                     reminderCard(title: title, schedule: schedule, nextFires: nextFires, enabled: enabled)
                 case let .emails(_, title, query, mailbox, complete, estimate, messages):
@@ -2121,6 +2276,136 @@ private struct RichResponseCards: View {
         .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
     }
 
+    private func interviewPrepCard(
+        title: String,
+        people: [MessageResponseCard.InterviewPerson],
+        techStack: [String],
+        nextSteps: [String]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 15) {
+            resultHeader(
+                title: title,
+                subtitle: "People research, organized for your conversation",
+                countLabel: "\(people.count) people"
+            )
+
+            VStack(spacing: 0) {
+                ForEach(people) { person in
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "person.crop.circle.fill")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                                .frame(width: 30, height: 30)
+                                .background(
+                                    AssistantTheme.accent(for: colorScheme).opacity(0.11),
+                                    in: Circle()
+                                )
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(person.name)
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                Text(AssistantMarkdown.inlineAttributed(person.role))
+                                    .font(.caption)
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                    .multilineTextAlignment(.leading)
+                            }
+                            Spacer(minLength: 0)
+                        }
+
+                        if !person.background.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("BACKGROUND")
+                                    .font(.caption2.weight(.bold))
+                                    .tracking(0.55)
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                ForEach(person.background.indices, id: \.self) { index in
+                                    interviewBullet(person.background[index])
+                                }
+                            }
+                        }
+
+                        HStack(alignment: .top, spacing: 7) {
+                            Image(systemName: "target")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                                .frame(width: 16)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("INTERVIEW FOCUS")
+                                    .font(.caption2.weight(.bold))
+                                    .tracking(0.55)
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                Text(AssistantMarkdown.inlineAttributed(person.interviewFocus))
+                                    .font(.caption)
+                                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                    .multilineTextAlignment(.leading)
+                            }
+                        }
+                    }
+                    .padding(.vertical, person.id == people.first?.id ? 0 : 15)
+
+                    if person.id != people.last?.id {
+                        Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                    }
+                }
+            }
+
+            if !techStack.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Tech stack", systemImage: "square.stack.3d.up.fill")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    AssistantFlowLayout(spacing: 6) {
+                        ForEach(techStack.indices, id: \.self) { index in
+                            Text(techStack[index])
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
+                        }
+                    }
+                }
+                .padding(.top, 2)
+            }
+
+            if !nextSteps.isEmpty {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("NEXT STEPS")
+                        .font(.caption2.weight(.bold))
+                        .tracking(0.55)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    ForEach(nextSteps.indices, id: \.self) { index in
+                        HStack(alignment: .firstTextBaseline, spacing: 7) {
+                            Image(systemName: "arrow.right.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                            Text(AssistantMarkdown.inlineAttributed(nextSteps[index]))
+                                .font(.caption)
+                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                .multilineTextAlignment(.leading)
+                        }
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+        .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
+    }
+
+    private func interviewBullet(_ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Circle()
+                .fill(AssistantTheme.accent(for: colorScheme))
+                .frame(width: 4, height: 4)
+                .accessibilityHidden(true)
+            Text(AssistantMarkdown.inlineAttributed(text))
+                .font(.caption)
+                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                .multilineTextAlignment(.leading)
+        }
+    }
+
     private func reminderCard(title: String, schedule: String, nextFires: String, enabled: Bool) -> some View {
         HStack(alignment: .top, spacing: 13) {
             Image(systemName: enabled ? "bell.badge.fill" : "bell.slash.fill")
@@ -2335,13 +2620,17 @@ private struct RichResponseCards: View {
                                 Link(destination: url) {
                                     Text(AssistantMarkdown.inlineAttributed(result.title))
                                         .font(.subheadline.weight(.semibold))
+                                        .multilineTextAlignment(.leading)
                                         .fixedSize(horizontal: false, vertical: true)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                             } else {
                                 Text(AssistantMarkdown.inlineAttributed(result.title))
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                    .multilineTextAlignment(.leading)
                                     .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             Text(searchResultHost(result.url))
                                 .font(.caption2.weight(.medium))
@@ -3353,5 +3642,122 @@ private struct AssistantMarkdownView: View {
             return markdown
         }
         return String(attributed.characters)
+    }
+}
+
+/// One compact transcript card for adjacent approvals that have all been
+/// resolved. Expanding it keeps each approval's summary and short code
+/// available without making a rapid approval run dominate the conversation.
+struct ApprovedReceiptGroup: View {
+    let messages: [ChatMessage]
+
+    @State private var isExpanded = false
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var approvals: [MessagePart] {
+        messages.flatMap(\.decisionParts)
+    }
+
+    private var countLabel: String {
+        let count = approvals.count
+        return "\(count) \(count == 1 ? "request" : "requests") approved"
+    }
+
+    var body: some View {
+        let tint = AssistantTheme.success(for: colorScheme)
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.24, extraBounce: 0.02)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(alignment: .center, spacing: 11) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundStyle(tint)
+                        .frame(width: 38, height: 38)
+                        .background(
+                            tint.opacity(0.11),
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        )
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(countLabel)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                        Text(isExpanded ? "Hide approved requests" : "Approved in sequence · Tap to view")
+                            .font(.caption)
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    }
+
+                    Spacer(minLength: 6)
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(countLabel)
+            .accessibilityHint(isExpanded ? "Double tap to hide the approved requests." : "Double tap to show the approved requests.")
+
+            if isExpanded {
+                VStack(spacing: 0) {
+                    ForEach(approvals.indices, id: \.self) { index in
+                        receiptRow(approvals[index])
+                            .padding(.vertical, index == 0 ? 0 : 11)
+                        if index < approvals.count - 1 {
+                            Divider()
+                                .overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                        }
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            AssistantTheme.bubblePaper(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(tint.opacity(0.22), lineWidth: 0.8)
+        }
+    }
+
+    private func receiptRow(_ approval: MessagePart) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: "checkmark")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(AssistantTheme.success(for: colorScheme))
+                .frame(width: 18, height: 18)
+                .background(
+                    AssistantTheme.success(for: colorScheme).opacity(0.11),
+                    in: Circle()
+                )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(approval.summary ?? "Approved request")
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    .lineLimit(2)
+                Text("This request was approved.")
+                    .font(.caption)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            }
+
+            Spacer(minLength: 4)
+            if let code = approval.shortCode, !code.isEmpty {
+                Text(code)
+                    .font(.caption2.monospaced().weight(.semibold))
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }

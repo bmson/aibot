@@ -161,8 +161,77 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         }
     }
 
+    /// A resolved approval normally carries its original explanatory text and
+    /// one structured approval part. The text is intentionally hidden by the
+    /// receipt UI, so adjacent receipts of this exact shape can share one
+    /// transcript card without concealing another response or live decision.
+    var isApprovedApprovalReceipt: Bool {
+        role == .assistant
+            && !decisionParts.isEmpty
+            && decisionParts.allSatisfy { $0.type == "approval" && $0.status == "approved" }
+            && parts.allSatisfy { ["text", "approval"].contains($0.type) }
+    }
+
     static func optimistic(role: ChatRole, text: String, id: String = "local-\(UUID().uuidString)") -> Self {
         .init(id: id, role: role, parts: [.init(type: "text", text: text)])
+    }
+}
+
+/// Transcript presentation deliberately stays separate from persisted
+/// messages: the server still supplies one durable receipt per approval, while
+/// the app makes a run of settled receipts easier to scan.
+enum ChatTranscriptItem: Identifiable, Hashable {
+    case message(ChatMessage, index: Int)
+    case approvedReceiptGroup([ChatMessage], firstIndex: Int)
+
+    var id: String {
+        switch self {
+        case let .message(message, _):
+            return message.id
+        case let .approvedReceiptGroup(messages, _):
+            return "approved-receipts-\(messages.map(\.id).joined(separator: "-"))"
+        }
+    }
+
+    var firstIndex: Int {
+        switch self {
+        case let .message(_, index), let .approvedReceiptGroup(_, index):
+            return index
+        }
+    }
+}
+
+extension Array where Element == ChatMessage {
+    /// Collapse only a consecutive run of two or more fully settled approval
+    /// receipts. A user message, pending/declined decision, budget card, or
+    /// any other message content always remains a hard visual boundary.
+    func transcriptItems() -> [ChatTranscriptItem] {
+        var items: [ChatTranscriptItem] = []
+        var index = startIndex
+
+        while index < endIndex {
+            let message = self[index]
+            guard message.isApprovedApprovalReceipt else {
+                items.append(.message(message, index: index))
+                formIndex(after: &index)
+                continue
+            }
+
+            let firstIndex = index
+            var receipts: [ChatMessage] = []
+            while index < endIndex, self[index].isApprovedApprovalReceipt {
+                receipts.append(self[index])
+                formIndex(after: &index)
+            }
+
+            if receipts.count == 1, let receipt = receipts.first {
+                items.append(.message(receipt, index: firstIndex))
+            } else {
+                items.append(.approvedReceiptGroup(receipts, firstIndex: firstIndex))
+            }
+        }
+
+        return items
     }
 }
 

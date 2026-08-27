@@ -220,6 +220,23 @@
   color: #fca5a5;
 }
 
+/* Desktop browsers do not expose an iOS safe-area inset. Without a fallback
+   the open pill starts at y=0 and overlaps the first line of the page. Keep
+   the native geometry above untouched, but give pointer-driven web shells a
+   compact top gutter and a self-contained pill height. `main` reserves the
+   matching space in layout.tsx. */
+@media (pointer: fine) {
+  .status-overlay {
+    --island-top: calc(var(--app-chrome, 0px) + 0.75rem);
+    --island-bottom: calc(var(--app-chrome, 0px) + 3.75rem);
+  }
+
+  .notch-island[data-open="true"] {
+    height: 2.75rem;
+    padding: 0.75rem 1rem 0.7rem;
+  }
+}
+
 @keyframes notch-island-spin {
   to {
     rotate: 360deg;

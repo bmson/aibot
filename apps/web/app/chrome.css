@@ -51,7 +51,6 @@ main .scroll-subtle:not(nav) {
 [data-testid="chat-composer-surface"] textarea {
   outline: none;
   box-shadow: none;
-  line-height: 1.55;
 }
 
 [data-testid="chat-composer-surface"] textarea:focus,

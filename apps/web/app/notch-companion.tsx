@@ -35,6 +35,8 @@ import {
 const SETTLE_HOLD_MS = 1800;
 /** A failure earns longer — it is the one state worth catching. */
 const FAILED_HOLD_MS = 4000;
+/** Keep the persistent shell in sync without turning it into a busy poller. */
+const PRESENCE_POLL_MS = 10_000;
 
 const TONE_GLYPH: Record<ThoughtTone, typeof Loader2> = {
   thinking: Sparkles,
@@ -45,11 +47,54 @@ const TONE_GLYPH: Record<ThoughtTone, typeof Loader2> = {
 };
 
 export function NotchCompanion({ presence }: { presence: Presence }) {
+  const [shellPresence, setShellPresence] = useState<Presence>(presence);
+
+  // A root layout is preserved across client navigation. Keep its initial
+  // server snapshot, but refresh this tiny projection so an approval that
+  // resumes and then settles cannot leave "Needs you" stranded on screen.
+  useEffect(() => {
+    setShellPresence(presence);
+  }, [presence]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const response = await fetch('/api/shell/status', { cache: 'no-store' });
+        if (!response.ok) return;
+        const payload = (await response.json()) as { presence?: unknown };
+        if (
+          !cancelled &&
+          (payload.presence === 'idle' ||
+            payload.presence === 'working' ||
+            payload.presence === 'attention')
+        ) {
+          setShellPresence(payload.presence);
+        }
+      } catch {
+        // Keep the last known state while offline; the next interval retries.
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), PRESENCE_POLL_MS);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, []);
+
   // Publish the server's baseline. Its own effect so a navigation that changes
   // the shell's presence updates the island without remounting it.
   useEffect(() => {
-    setCompanionState({ presence });
-  }, [presence]);
+    setCompanionState({ presence: shellPresence });
+  }, [shellPresence]);
 
   const [state, setState] = useState<CompanionState>(getCompanionState);
   useEffect(() => subscribeCompanion(setState), []);

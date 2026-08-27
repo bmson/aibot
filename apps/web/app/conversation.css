@@ -64,25 +64,19 @@ body:has(.chat-viewport) {
   color: var(--stage-strong);
 }
 
-/* Fade the transcript itself at both viewport edges. This includes glyphs,
-   text, and bubble geometry, so a message cannot be sliced by the edge of a
-   backdrop-filter layer. The composer's own small blur then softens whatever
-   remains directly beneath the control. */
+/* Keep the transcript fully clear at the top. The bottom fade remains so the
+   composer can sit over a moving log without its edge cutting through a row. */
 .chat-viewport > .scroll-subtle {
   -webkit-mask-image: linear-gradient(
     to bottom,
-    transparent 0,
-    rgb(0 0 0 / 0.72) 3rem,
-    #000 5.5rem,
+    #000 0,
     #000 calc(100% - 9rem),
     rgb(0 0 0 / 0.88) calc(100% - 5.5rem),
     rgb(0 0 0 / 0.62) 100%
   );
   mask-image: linear-gradient(
     to bottom,
-    transparent 0,
-    rgb(0 0 0 / 0.72) 3rem,
-    #000 5.5rem,
+    #000 0,
     #000 calc(100% - 9rem),
     rgb(0 0 0 / 0.88) calc(100% - 5.5rem),
     rgb(0 0 0 / 0.62) 100%

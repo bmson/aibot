@@ -10,7 +10,7 @@ struct OnDeviceCardAnalysis: Sendable {
     @Guide(description: "The user's primary intent, such as weather, directions, calendar, duration, or other")
     let primaryIntent: String
 
-    @Guide(description: "The one eligible card kind, or none. Use weather, agenda, duration, or none")
+    @Guide(description: "The one eligible card kind, or none. Use weather, agenda, duration, interview-prep, or none")
     let cardKind: String
 
     @Guide(description: "True only when the candidate card is the primary answer requested by the user")
@@ -36,8 +36,11 @@ enum OnDeviceCardParser {
             become a card. For example, weather mentioned inside directions is not
             a weather card unless the user explicitly asked for weather.
 
-            Only choose weather, agenda, or duration when that is the primary answer
-            requested by the user and the response contains a matching reading.
+            Only choose weather, agenda, duration, or interview-prep when that is
+            the primary answer requested by the user and the response contains the
+            corresponding structured information. Interview-prep is for a research
+            answer about two or more prospective interviewers, with roles and
+            interview-focus notes; it is not for a single incidental biography.
             Otherwise choose cardKind none and shouldRenderCard false. Never invent
             facts, locations, or values. Confidence is between 0 and 1.
             """)
@@ -81,6 +84,8 @@ enum OnDeviceCardParser {
             return intent.contains("calendar") || intent.contains("agenda") || intent.contains("schedule")
         case "duration":
             return intent.contains("duration") || intent.contains("time") || intent.contains("estimate")
+        case "interview-prep":
+            return intent.contains("interview") || intent.contains("interviewer") || intent.contains("prep")
         default:
             return false
         }
@@ -92,6 +97,7 @@ enum OnDeviceCardParser {
         case "weather", "forecast", "temperature": return "weather"
         case "agenda", "calendar", "schedule": return "agenda"
         case "duration", "time-estimate", "time estimate": return "duration"
+        case "interview-prep", "interview prep", "interviewers", "people research": return "interview-prep"
         default: return "none"
         }
     }
@@ -111,6 +117,10 @@ enum OnDeviceCardParser {
             return ["how long", "duration", "take", "takes", "estimate", "minutes", "hours"].contains {
                 lower.contains($0)
             }
+        case "interview-prep":
+            return ["interview", "interviewer", "interviewers", "prep", "prepare"].contains {
+                lower.contains($0)
+            }
         default:
             return false
         }
@@ -128,6 +138,13 @@ enum OnDeviceCardParser {
             return response.range(of: #"(?m)^\s*(?:[-•*]|\d+\.)?\s*\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\b"#, options: .regularExpression) != nil
         case "duration":
             return response.range(of: #"\b\d+(?:\.\d+)?\s*(?:minutes?|mins?|hours?|hrs?|days?)\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+        case "interview-prep":
+            let normalized = lower
+                .replacingOccurrences(of: "**", with: "")
+                .replacingOccurrences(of: "__", with: "")
+            let roleCount = normalized.components(separatedBy: "role:").count - 1
+            let focusCount = normalized.components(separatedBy: "interview focus:").count - 1
+            return roleCount >= 2 && focusCount >= 2
         default:
             return false
         }

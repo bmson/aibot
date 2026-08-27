@@ -123,6 +123,35 @@ final class APIModelsTests: XCTestCase {
         XCTAssertFalse(approved.hasPendingDecision)
     }
 
+    func testTranscriptGroupsOnlyConsecutiveApprovedApprovalReceipts() {
+        func receipt(_ id: String, status: String = "approved") -> ChatMessage {
+            ChatMessage(
+                id: id,
+                role: .assistant,
+                parts: [
+                    .init(type: "text", text: "This needs your approval before I act."),
+                    .init(type: "approval", approvalId: "approval-\(id)", summary: "Request \(id)", status: status),
+                ]
+            )
+        }
+
+        let user = ChatMessage.optimistic(role: .user, text: "Do the work", id: "user")
+        let items = [user, receipt("one"), receipt("two"), receipt("pending", status: "pending"), receipt("three"), receipt("four")]
+            .transcriptItems()
+
+        XCTAssertEqual(items.count, 4)
+        guard case let .approvedReceiptGroup(firstGroup, firstIndex) = items[1] else {
+            return XCTFail("Expected the adjacent approved receipts to be grouped")
+        }
+        XCTAssertEqual(firstGroup.map(\.id), ["one", "two"])
+        XCTAssertEqual(firstIndex, 1)
+        guard case let .approvedReceiptGroup(secondGroup, firstIndex) = items[3] else {
+            return XCTFail("Expected the later adjacent approved receipts to be grouped")
+        }
+        XCTAssertEqual(secondGroup.map(\.id), ["three", "four"])
+        XCTAssertEqual(firstIndex, 4)
+    }
+
     func testStructuredTaskNoticeDecodesForCardPresentation() throws {
         let data = """
         {"id":"notice-1","role":"assistant","parts":[
@@ -457,6 +486,42 @@ final class APIModelsTests: XCTestCase {
         }
         XCTAssertEqual(duration, "45 minutes")
         XCTAssertTrue(MessageResponseCard.inferred(from: "The answer has 45 lines.").isEmpty)
+    }
+
+    func testInterviewPrepCardReformatsStructuredInterviewerResearch() {
+        let cards = MessageResponseCard.inferred(
+            from: """
+            ## James Friend
+            - **Role:** Software Engineer at Clay ([LinkedIn](https://linkedin.com/in/jamesfriendau))
+            - **Background:**
+              - Previously at Canva (2022–2024), worked on frontend infrastructure.
+              - Focus: React, TypeScript, performance optimization.
+            - **Likely interview focus:** System design trade-offs and scaling UI components.
+
+            ## Brandon Goren
+            - **Role:** Software Engineer at Clay ([LinkedIn](https://linkedin.com/in/brandon-goren-3830b483))
+            - **Background:**
+              - Ex-Microsoft (Azure DevOps), ex-Washington University researcher.
+              - Specializes in React state management and API design.
+            - **Likely interview focus:** React patterns and data-flow architecture.
+
+            ## Clay's Tech Stack
+            - Next.js, TypeScript, Tailwind, GraphQL.
+
+            Want me to:
+            - Draft tailored prep questions for each interviewer?
+            """,
+            cardKind: "interview-prep"
+        )
+
+        guard case let .interviewPrep(_, people, techStack, nextSteps)? = cards.first else {
+            return XCTFail("Expected structured interviewer research to become an interview-prep card")
+        }
+        XCTAssertEqual(people.map(\.name), ["James Friend", "Brandon Goren"])
+        XCTAssertEqual(people[0].background.count, 2)
+        XCTAssertEqual(people[1].interviewFocus, "React patterns and data-flow architecture.")
+        XCTAssertEqual(techStack, ["Next.js, TypeScript, Tailwind, GraphQL."])
+        XCTAssertEqual(nextSteps, ["Draft tailored prep questions for each interviewer?"])
     }
 
     func testDirectionsPromptDoesNotEnableIncidentalWeatherCardFallback() {

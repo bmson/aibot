@@ -27,7 +27,10 @@ import {
 import type { ReactNode } from 'react';
 import { focusRing, microLabelClass } from '@/lib/ui';
 
-const CARD_WIDTH = 'min-w-0 w-full max-w-2xl';
+// Cards fill the transcript column, matching the native chat surface. The
+// column itself owns the readable desktop measure; a second, narrower card cap
+// made structured results look disconnected from the conversation around them.
+const CARD_WIDTH = 'min-w-0 w-full max-w-none';
 
 type Raw = Record<string, unknown>;
 
