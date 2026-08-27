@@ -1188,6 +1188,16 @@ export async function backfillKnowledgeGraphDates(
  * Sources the free backfill could not help: their date wording only resolves
  * with the anchored prompt, which means paying for a model call. Counted
  * separately from the work so the spend stays an explicit choice.
+ *
+ * The exclusion below is deliberately coarse: any incident canonical date
+ * counts the source as handled. It therefore under-offers — a memory that
+ * mentions two dates, where the old extraction caught the absolute one and
+ * missed the relative one, is not offered for repair. Establishing that the
+ * *relative mention itself* resolved would mean running the canonicalizer over
+ * every candidate's text, which cannot happen inside a count that runs on each
+ * page load. Erring toward under-offering is the right way round when the
+ * alternative spends the owner's budget on sources that are already fine; a
+ * missed one is still reachable by editing the memory, which re-dirties it.
  */
 export async function countRelativeDateSources(db: Db, agentId: string): Promise<number> {
   const rows = asRows<{ value: string | number }>(
