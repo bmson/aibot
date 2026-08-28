@@ -10,9 +10,16 @@ import {
 import { and, desc, eq, gte } from 'drizzle-orm';
 import { z } from 'zod';
 import { getAgent, postOwnerNotice } from '../chat.js';
+import { loadConfig } from '../config.js';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
 import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
+import {
+  describeSalience,
+  type EventSalience,
+  salientEvents,
+} from '../proactive/calendar-salience.js';
+import { type ProactiveNotifier, pingOwner } from '../proactive/notify.js';
 import { createSuggestion, listOpenSuggestions } from './suggestions.js';
 
 /**
@@ -41,6 +48,7 @@ const MAX_GOAL_DELTAS = 6;
 const MAX_WATCH_HITS = 6;
 const MAX_OPEN_SUGGESTIONS = 5;
 const MAX_CONFLICTS = 4;
+const MAX_SALIENT = 5;
 /** How far ahead the calendar read reaches from run time: today and tomorrow. */
 const CALENDAR_WINDOW_HOURS = 36;
 const COMPOSE_TIMEOUT_MS = 30_000;
@@ -58,6 +66,18 @@ export interface BriefingCalendarEvent {
   end: string;
   calendar: string;
   allDay: boolean;
+  /**
+   * The fields below are what salience is judged from. Every one is optional:
+   * the provider does not always populate them, and an installation whose
+   * reader predates this shape must degrade to "no salience" rather than
+   * throw. `normalizeEvent` (packages/tools/src/google/calendar.ts) has all of
+   * them already — until now the port simply dropped them on the floor.
+   */
+  eventId?: string;
+  location?: string;
+  organizer?: string;
+  /** Raw "email (responseStatus)" strings, as the calendar adapter renders them. */
+  attendees?: readonly string[];
 }
 
 export interface BriefingCalendarWindow {
@@ -100,7 +120,11 @@ const PAYABLE: ReadonlySet<string> = new Set(['financial']);
  * Nothing happened → say nothing: a daily "nothing to report" trains the
  * owner to ignore the thread the real ones arrive in. Routine calendar events
  * and already-posted open suggestions are context for a briefing, never a
- * reason to deliver one — but a conflict is a surprise worth surfacing.
+ * reason to deliver one — but a conflict is a surprise worth surfacing, and so
+ * is a *salient* event: an invitation still unanswered, somewhere the owner has
+ * to travel to, something outside their usual hours. Counting only overlaps
+ * made a day holding a flight read as routine, which is most of why the
+ * briefing went quiet for days at a time.
  */
 export function briefingHasNews(counts: {
   highlights: number;
@@ -108,6 +132,7 @@ export function briefingHasNews(counts: {
   needsAttention: number;
   pendingApprovals: number;
   calendarConflicts: number;
+  calendarSalient: number;
   goalDeltas: number;
   watchHits: number;
 }): boolean {
@@ -117,6 +142,7 @@ export function briefingHasNews(counts: {
     counts.needsAttention > 0 ||
     counts.pendingApprovals > 0 ||
     counts.calendarConflicts > 0 ||
+    counts.calendarSalient > 0 ||
     counts.goalDeltas > 0 ||
     counts.watchHits > 0
   );
@@ -154,6 +180,8 @@ function proposalFor(entry: UpcomingDate): { summary: string; action: string } |
 
 export interface BriefingResult {
   delivered: boolean;
+  /** Whether the phone leg was attempted and accepted (not held by the policy). */
+  pinged: boolean;
   mailScanned: number;
   highlights: number;
   needsAttention: number;
@@ -162,6 +190,7 @@ export interface BriefingResult {
   suggested: number;
   calendarEvents: number;
   calendarConflicts: number;
+  calendarSalient: number;
   goalDeltas: number;
   watchHits: number;
 }
@@ -244,6 +273,7 @@ export async function runBriefing(
     db: Db;
     router: ModelRouter;
     calendarReader?: BriefingCalendarReader;
+    notifyOwner?: ProactiveNotifier;
     heartbeat?: () => Promise<void>;
   },
   opts: { taskId?: string; now?: Date } = {},
@@ -256,6 +286,7 @@ export async function runBriefing(
     const agent = await getAgent(db);
     const result: BriefingResult = {
       delivered: false,
+      pinged: false,
       mailScanned: 0,
       highlights: 0,
       needsAttention: 0,
@@ -264,6 +295,7 @@ export async function runBriefing(
       suggested: 0,
       calendarEvents: 0,
       calendarConflicts: 0,
+      calendarSalient: 0,
       goalDeltas: 0,
       watchHits: 0,
     };
@@ -336,6 +368,15 @@ export async function runBriefing(
     const highlights = mail.filter((row) => row.importance >= 3).slice(0, MAX_HIGHLIGHTS);
     const upcoming = upcomingFrom(mail, now);
     const conflicts = calendar ? findConflicts(calendar.events) : [];
+    // Salience is judged against the owner's own addresses so an unanswered
+    // invitation can be told from one they already accepted, and an in-house
+    // organizer from an outside one.
+    const salient: EventSalience[] = calendar
+      ? salientEvents(calendar.events, {
+          timeZone: agent.timezone,
+          selfEmails: [loadConfig().OWNER_EMAIL, agent.email],
+        })
+      : [];
     result.mailScanned = mail.length;
     result.highlights = highlights.length;
     result.needsAttention = attention.length;
@@ -343,6 +384,7 @@ export async function runBriefing(
     result.upcoming = upcoming.length;
     result.calendarEvents = calendar?.events.length ?? 0;
     result.calendarConflicts = conflicts.length;
+    result.calendarSalient = salient.length;
     result.goalDeltas = goalDeltas.length;
     result.watchHits = watchHits.length;
 
@@ -356,6 +398,7 @@ export async function runBriefing(
         needsAttention: attention.length,
         pendingApprovals: pending.length,
         calendarConflicts: conflicts.length,
+        calendarSalient: salient.length,
         goalDeltas: goalDeltas.length,
         watchHits: watchHits.length,
       })
@@ -368,6 +411,12 @@ export async function runBriefing(
       lines.push(
         'Calendar conflicts in the next day or two:',
         ...conflicts.map((c) => `- "${c.a}" overlaps "${c.b}" (starting ${c.at})`),
+      );
+    }
+    if (salient.length > 0) {
+      lines.push(
+        `${lines.length ? '\n' : ''}Events worth a second look:`,
+        ...salient.slice(0, MAX_SALIENT).map(describeSalience),
       );
     }
     if (calendar && calendar.events.length > 0) {
@@ -500,25 +549,74 @@ export async function runBriefing(
       result.suggested += 1;
     }
 
-    await postOwnerNotice(db, {
+    const { conversationId } = await postOwnerNotice(db, {
       agentId: agent.id,
       text: body,
       ...(opts.taskId ? { taskId: opts.taskId } : {}),
       extraParts: parts,
     });
     result.delivered = true;
+
+    // The dashboard copy is posted; this is the buzz that makes it findable
+    // without opening the app. Deliberately a deterministic headline rather
+    // than the composed prose: a push is one line, and a second model call to
+    // shorten it would be a second chance to invent urgency. Passing the
+    // conversation stops the dashboard notifier mirroring the notice twice.
+    result.pinged = await pingOwner(deps.notifyOwner, {
+      conversationId,
+      text: briefingHeadline(result),
+      ...(opts.taskId ? { taskId: opts.taskId } : {}),
+    });
     return result;
   });
+}
+
+/**
+ * The push line: what is in the briefing, counted, in one sentence.
+ *
+ * Built from the same counts the digest was assembled from, so it can only
+ * ever claim what the structured inputs support — the no-fabricated-urgency
+ * rule applied to the notification as well as the body.
+ */
+export function briefingHeadline(result: BriefingResult): string {
+  const parts: string[] = [];
+  if (result.calendarConflicts > 0) {
+    parts.push(
+      `${result.calendarConflicts} calendar conflict${result.calendarConflicts === 1 ? '' : 's'}`,
+    );
+  }
+  if (result.calendarSalient > 0) {
+    parts.push(
+      `${result.calendarSalient} event${result.calendarSalient === 1 ? '' : 's'} worth a look`,
+    );
+  }
+  if (result.highlights > 0) {
+    parts.push(`${result.highlights} mail highlight${result.highlights === 1 ? '' : 's'}`);
+  }
+  if (result.upcoming > 0)
+    parts.push(`${result.upcoming} date${result.upcoming === 1 ? '' : 's'} coming up`);
+  if (result.needsAttention > 0) parts.push(`${result.needsAttention} needing you`);
+  if (result.pendingApprovals > 0) {
+    parts.push(`${result.pendingApprovals} awaiting approval`);
+  }
+  if (result.watchHits > 0)
+    parts.push(`${result.watchHits} watch hit${result.watchHits === 1 ? '' : 's'}`);
+  if (result.goalDeltas > 0)
+    parts.push(`${result.goalDeltas} goal update${result.goalDeltas === 1 ? '' : 's'}`);
+  // briefingHasNews gated delivery, so this is unreachable on a delivered
+  // briefing — but a headline is a string, and an empty one is worse than dull.
+  if (parts.length === 0) return 'Your briefing is ready.';
+  return `Briefing: ${parts.join(', ')}.`;
 }
 
 /** The job registry's summary line. */
 export function briefingSummary(result: BriefingResult): string {
   if (!result.delivered) return 'briefing: nothing to report';
   return (
-    `briefing: delivered — ${result.highlights} mail highlight(s) of ${result.mailScanned}, ` +
+    `briefing: delivered${result.pinged ? ' + pinged' : ''} — ${result.highlights} mail highlight(s) of ${result.mailScanned}, ` +
     `${result.upcoming} upcoming date(s), ${result.suggested} suggestion(s), ` +
     `${result.needsAttention} needing attention, ${result.pendingApprovals} awaiting approval, ` +
-    `${result.calendarEvents} calendar event(s) (${result.calendarConflicts} conflict(s)), ` +
+    `${result.calendarEvents} calendar event(s) (${result.calendarConflicts} conflict(s), ${result.calendarSalient} salient), ` +
     `${result.goalDeltas} goal delta(s), ${result.watchHits} watch hit(s)`
   );
 }

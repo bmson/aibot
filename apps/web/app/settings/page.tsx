@@ -81,7 +81,12 @@ export default async function SettingsPage() {
       notificationPrefs,
     },
     mcpConnections,
-  ] = await Promise.all([getApplication().getSettings(), getApplication().listMcpConnections()]);
+    proactiveHealth,
+  ] = await Promise.all([
+    getApplication().getSettings(),
+    getApplication().listMcpConnections(),
+    getApplication().getProactiveHealth(),
+  ]);
 
   // Pairing values for the iOS app. The URL mirrors what the owner is
   // browsing right now — if they reached settings over a LAN IP or the
@@ -136,6 +141,58 @@ export default async function SettingsPage() {
         <SectionHeading title="Mobile app" hint="pair the iPhone app with this server" />
         <Card className="mt-3">
           <MobileTokenPanel maskedToken={maskedToken} serverUrl={serverUrl} canRotate={canRotate} />
+        </Card>
+      </section>
+
+      {/* Is the proactive machinery actually receiving anything?
+          Every producer is self-silencing, so a broken mail pipeline and a
+          quiet week look identical. This is the surface that tells them apart. */}
+      <section>
+        <SectionHeading
+          title="Noticing"
+          hint={
+            proactiveHealth.healthy
+              ? `${proactiveHealth.mailScored7d} message(s) scored this week`
+              : 'something is stopping the assistant from noticing things'
+          }
+        />
+        <Card className="mt-3">
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
+            <div>
+              <dt className="text-xs text-muted">Mail scored (24h)</dt>
+              <dd className="mt-0.5 font-medium">{proactiveHealth.mailScored24h}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted">Mail scored (7d)</dt>
+              <dd className="mt-0.5 font-medium">{proactiveHealth.mailScored7d}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted">Nudges sent (24h)</dt>
+              <dd className="mt-0.5 font-medium">{proactiveHealth.momentsDelivered24h}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted">Push devices</dt>
+              <dd className="mt-0.5 font-medium">{proactiveHealth.pushDevices}</dd>
+            </div>
+          </dl>
+          <p className="mt-4 border-t border-edge pt-3 text-xs leading-5 text-muted">
+            Ingest mode <span className="font-mono">{proactiveHealth.ingestMode}</span>
+            {proactiveHealth.lastMailAt
+              ? ` · last message ${relativeTime(new Date(proactiveHealth.lastMailAt))}`
+              : ' · no mail has ever been scored'}
+          </p>
+          {proactiveHealth.warnings.length > 0 && (
+            <ul className="mt-3 grid gap-2">
+              {proactiveHealth.warnings.map((warning) => (
+                <li
+                  key={warning}
+                  className="rounded-md border border-edge bg-sunken/40 px-3 py-2 text-xs leading-5"
+                >
+                  {warning}
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       </section>
 

@@ -1602,6 +1602,44 @@ export const proactivePings = pgTable(
   ],
 );
 
+/**
+ * One row per proactive "moment" the pulse actually delivered.
+ *
+ * Two jobs, which is why it is a table rather than a counter. `moment_key` is
+ * stable per occurrence — a specific event's lead-time nudge, a specific
+ * message's follow-up — so the unique index is the fence that stops the next
+ * sweep, or a redelivered task, saying the same thing twice. And `delivered_at`
+ * is what the pacing governor counts: independent producers each know nothing
+ * about the others, so a shared ledger is the only place "at most one an hour,
+ * N a day" can actually be enforced.
+ *
+ * Distinct from `proactive_pings`, which records *phone* attempts across every
+ * producer including held ones. This records what the pulse decided to say.
+ * Purged with the other operational counters — it is pacing state, not history.
+ */
+export const proactiveMoments = pgTable(
+  'proactive_moments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    /** Which producer shape this was, for the pacing rules and for telemetry. */
+    kind: text('kind').notNull(),
+    /** Stable per occurrence (e.g. `event-lead:<eventId>:<startIso>`). */
+    momentKey: text('moment_key').notNull(),
+    /** What the owner was told, trimmed — so a duplicate is explainable. */
+    summary: text('summary').notNull().default(''),
+    /** Whether the phone leg was accepted; a held ping still delivered a notice. */
+    pinged: boolean('pinged').notNull().default(false),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('proactive_moments_key_idx').on(t.agentId, t.momentKey),
+    index('proactive_moments_agent_delivered_idx').on(t.agentId, t.deliveredAt),
+  ],
+);
+
 /** Durable, machine-readable health checks for deployed channel integrations. */
 export const canaryRuns = pgTable(
   'canary_runs',
@@ -2036,6 +2074,7 @@ export type BudgetRow = typeof budgets.$inferSelect;
 export type ScheduleRow = typeof schedules.$inferSelect;
 export type EmailIngestRow = typeof emailIngest.$inferSelect;
 export type SuggestionRow = typeof suggestions.$inferSelect;
+export type ProactiveMomentRow = typeof proactiveMoments.$inferSelect;
 export type WatchRow = typeof watches.$inferSelect;
 export type WatchFireRow = typeof watchFires.$inferSelect;
 export type CanaryRunRow = typeof canaryRuns.$inferSelect;

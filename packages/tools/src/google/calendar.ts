@@ -236,6 +236,32 @@ async function collectEvents(
  * deps. The result carries event content verbatim from Google; callers treat
  * it as data, never instructions.
  */
+/**
+ * Refuse an "owner only" write whose event turns out to have attendees.
+ *
+ * This is the enforcement half of the `ownerOnly` argument: the declared flag
+ * buys the autonomous tier, and this fetch is what makes the claim true. It
+ * throws rather than silently downgrading to an approval, because by the time
+ * execute runs the risk decision is already made — failing loudly is the only
+ * honest outcome, and it tells the model exactly how to retry.
+ */
+async function assertNoAttendees(
+  deps: CalendarToolDeps,
+  eventId: string,
+  action: 'update' | 'cancel',
+): Promise<void> {
+  const event = await deps.client.api<{ attendees?: Array<{ email: string }> }>(
+    `${CAL}/calendars/primary/events/${encodeURIComponent(eventId)}`,
+  );
+  const attendees = event.attendees ?? [];
+  if (attendees.length > 0) {
+    throw new Error(
+      `Cannot ${action} event ${eventId} as owner-only: it has ${attendees.length} attendee(s) ` +
+        `who would be notified. Retry without ownerOnly so the owner can approve it.`,
+    );
+  }
+}
+
 export async function listEventsInWindow(
   client: GoogleClient,
   opts: { timeMin: Date; timeMax: Date; maxResults?: number },
@@ -535,6 +561,16 @@ export function registerCalendarTools(
       location: z.string().max(300).optional(),
       description: z.string().max(4000).optional(),
       addAttendees: z.array(z.string().email()).max(20).optional(),
+      /**
+       * "This event is mine alone — nobody gets mailed about the change."
+       *
+       * The claim, not the check. `risk` is synchronous and sees only these
+       * args, never the stored event, so a caller could assert this about an
+       * event that does in fact have attendees. Execute therefore fetches the
+       * event and refuses outright when it finds any — the assertion buys the
+       * autonomous tier, the fetch is what makes it true.
+       */
+      ownerOnly: z.boolean().optional(),
     })
     .refine(
       (u) =>
@@ -554,11 +590,24 @@ export function registerCalendarTools(
       description:
         "Reschedule or edit an existing event on the assistant's own calendar (new time, title, location, or added attendees). Attendees are notified.",
       inputSchema: updateSchema,
-      // Conservative v1: always approval. The risk callback only sees the new
-      // args, not whether the EXISTING event has attendees who'd be notified of a
-      // reschedule, so a dynamic tier would under-gate that case. Revisit if it
-      // proves noisy for solo events.
-      risk: 'approval',
+      /**
+       * Approval by default, because the risk callback sees only the new args
+       * and not whether the EXISTING event has attendees who would be mailed
+       * about a reschedule — a dynamic tier alone would under-gate that.
+       *
+       * `ownerOnly: true` is the caller stating there are none, which earns the
+       * autonomous tier here and is then *verified* against the stored event in
+       * execute. Adding an attendee in the same call contradicts the claim
+       * outright, so that combination stays gated no matter what was asserted.
+       * Editing an appointment on one's own calendar is reversible and reaches
+       * nobody — the same reasoning `create_event` already applies below.
+       */
+      risk: (args) => {
+        const a = args as z.infer<typeof updateSchema>;
+        return a.ownerOnly === true && (a.addAttendees?.length ?? 0) === 0
+          ? 'autonomous'
+          : 'approval';
+      },
       acceptsUntrustedInput: false,
       approvalSummary: (args) => {
         const a = args as z.infer<typeof updateSchema>;
@@ -571,6 +620,11 @@ export function registerCalendarTools(
         return `Update calendar event ${a.eventId}: ${changes.join('; ') || 'edit details'}`;
       },
       execute: async (args) => {
+        // Verify the owner-only claim before acting on it. An event with
+        // attendees would mail every one of them about the change, which is
+        // exactly the outward action the autonomous tier must not cover — so a
+        // wrong claim fails loudly rather than quietly notifying people.
+        if (args.ownerOnly) await assertNoAttendees(deps, args.eventId, 'update');
         // Merge added attendees onto the existing set so the PATCH doesn't drop
         // current invitees (Calendar replaces the attendees array wholesale).
         const patch: Record<string, unknown> = {};
@@ -590,14 +644,33 @@ export function registerCalendarTools(
         const updated = await deps.client.api<{
           id: string;
           htmlLink?: string;
-        }>(`${CAL}/calendars/primary/events/${encodeURIComponent(args.eventId)}?sendUpdates=all`, {
-          method: 'PATCH',
-          body: JSON.stringify(patch),
-        });
+        }>(
+          `${CAL}/calendars/primary/events/${encodeURIComponent(args.eventId)}?sendUpdates=${
+            args.ownerOnly ? 'none' : 'all'
+          }`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify(patch),
+          },
+        );
         return { eventId: updated.id, link: updated.htmlLink, updated: true };
       },
     },
-    { outwardFacing: true },
+    {
+      outwardFacing: true,
+      /**
+       * Same reasoning as `create_event`'s flag below, applied to an edit: an
+       * owner-only change mails nobody, so it stays autonomous when untrusted
+       * content is in the session. `ownerVisibleOnlyFor` fails closed on an
+       * argument shape it cannot read, and execute still verifies the claim
+       * against the stored event, so a false assertion cannot slip a
+       * third-party notification through this gate.
+       */
+      ownerVisibleOnly: (args) => {
+        const a = args as z.infer<typeof updateSchema>;
+        return a.ownerOnly === true && (a.addAttendees?.length ?? 0) === 0;
+      },
+    },
   );
 
   register(
@@ -605,22 +678,39 @@ export function registerCalendarTools(
     {
       name: 'calendar.cancel_event',
       description:
-        "Cancel an event on the assistant's calendar. If it has attendees they are notified — hence approval.",
-      inputSchema: z.object({ eventId: z.string().min(3).max(200) }),
-      // Conservative v1: cancellation always needs approval (attendee check
-      // would need an async risk fn; revisit if it gets annoying).
-      risk: 'approval',
+        "Cancel an event on the assistant's calendar. If it has attendees they are notified — hence approval. Set ownerOnly=true for an event with no attendees (a private appointment); the call is refused if the event turns out to have any.",
+      inputSchema: z.object({
+        eventId: z.string().min(3).max(200),
+        /** See `updateSchema.ownerOnly`: the claim, verified in execute. */
+        ownerOnly: z.boolean().optional(),
+      }),
+      /**
+       * Approval by default: cancelling an event with attendees mails all of
+       * them. `ownerOnly: true` claims there are none, which is verified
+       * against the stored event before anything is deleted — the async check
+       * the original "revisit if it gets annoying" note was waiting for, done
+       * in execute because the risk callback cannot await.
+       */
+      risk: (args) =>
+        (args as { ownerOnly?: boolean }).ownerOnly === true ? 'autonomous' : 'approval',
       acceptsUntrustedInput: false,
       approvalSummary: (args) => `Cancel calendar event ${(args as { eventId: string }).eventId}`,
       execute: async (args) => {
+        if (args.ownerOnly) await assertNoAttendees(deps, args.eventId, 'cancel');
         await deps.client.api(
-          `${CAL}/calendars/primary/events/${encodeURIComponent(args.eventId)}?sendUpdates=all`,
+          `${CAL}/calendars/primary/events/${encodeURIComponent(args.eventId)}?sendUpdates=${
+            args.ownerOnly ? 'none' : 'all'
+          }`,
           { method: 'DELETE' },
         );
         return { cancelled: args.eventId };
       },
     },
-    { outwardFacing: true },
+    {
+      outwardFacing: true,
+      /** See `update_event`: verified in execute, so the claim cannot lie. */
+      ownerVisibleOnly: (args) => (args as { ownerOnly?: boolean }).ownerOnly === true,
+    },
   );
 
   return registry;

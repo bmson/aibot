@@ -317,7 +317,7 @@ const scheduleSeed = [
       type: 'scheduled',
       budgetUsdLimit: '0.10',
       instruction:
-        "Prepare the owner's morning brief. Check: (1) today's events on your calendar and the owner's free/busy, (2) recent email in your inbox needing attention (gmail.search newer_than:1d), (3) goals list — anything slipping, (4) upcoming occasions in the next several days (occasions.list) — birthdays or anniversaries to prepare for, (5) your own progress notes. Then send ONE concise brief via owner.notify: schedule, needs-attention items, any upcoming occasion, and what you plan to do today. No fluff.",
+        "Prepare the owner's morning brief. Check: (1) today's events on your calendar and the owner's free/busy, (2) recent email in your inbox needing attention (gmail.search newer_than:1d), (3) goals list — anything slipping, (4) upcoming occasions in the next several days (occasions.list) — birthdays or anniversaries to prepare for, (5) your own progress notes. Then send ONE concise brief via owner.notify with ping=true: schedule, needs-attention items, any upcoming occasion, and what you plan to do today. No fluff.",
     },
   },
   // Phase 8: extraction and consolidation are code jobs, not model-prompted
@@ -349,6 +349,19 @@ const scheduleSeed = [
     cron: '45 7 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'briefing.compose' },
   },
+  // The pulse (anticipation layer): the during-the-day counterpart to the
+  // morning digest. Everything proactive used to happen at 07:30, 07:45 and
+  // 19:30, so an unanswered invitation or an actionable email could sit all day
+  // with nothing said. This asks every twenty minutes whether something is
+  // worth saying RIGHT NOW — a salient event about to start, important mail
+  // nothing picked up, a commitment coming due — and almost always answers no.
+  // Self-silencing like the briefing, and paced by its own ledger (at most one
+  // an hour) on top of the owner's quiet hours and ambient cap.
+  {
+    name: 'pulse',
+    cron: '*/20 * * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.02', job: 'pulse.check' },
+  },
   // The evening counterpart to the morning brief: looks at TOMORROW while
   // there is still time to react — a closed school, a cancelled standing
   // event, a dated obligation sitting in email but not on the calendar.
@@ -360,7 +373,7 @@ const scheduleSeed = [
       type: 'scheduled',
       budgetUsdLimit: '0.10',
       instruction:
-        "Do a short look-ahead at TOMORROW for the owner while there is still time to react tonight. Check: (1) tomorrow's events across every calendar you can read (calendar.list_events) — flag anything unexpected for the day of week: a school day with no school, a holiday or closure, a cancelled recurring event, an unusual gap or a conflict; (2) recent email (gmail.search newer_than:2d) for anything that names tomorrow or the next few days — a deadline, a form due, a pickup, a booking — that is NOT already on the calendar; (3) the ambient weather block when tomorrow involves outdoor plans. If something is genuinely worth knowing tonight, send ONE concise heads-up via owner.notify: what it is, which day it concerns, and the sensible next step. Most evenings tomorrow is routine — then send nothing and finish with an empty reply; no message is the right answer when there is nothing to say.",
+        "Do a short look-ahead at TOMORROW for the owner while there is still time to react tonight. Check: (1) tomorrow's events across every calendar you can read (calendar.list_events) — flag anything unexpected for the day of week: a school day with no school, a holiday or closure, a cancelled recurring event, an unusual gap or a conflict; (2) recent email (gmail.search newer_than:2d) for anything that names tomorrow or the next few days — a deadline, a form due, a pickup, a booking — that is NOT already on the calendar; (3) the ambient weather block when tomorrow involves outdoor plans. If something is genuinely worth knowing tonight, send ONE concise heads-up via owner.notify with ping=true: what it is, which day it concerns, and the sensible next step. Most evenings tomorrow is routine — then send nothing and finish with an empty reply; no message is the right answer when there is nothing to say.",
     },
   },
   {
@@ -375,6 +388,17 @@ const scheduleSeed = [
     name: 'knowledge-graph-sync',
     cron: '15,45 * * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'memory.graph_sync' },
+  },
+  // Curiosity (anticipation layer): one question a day about something the
+  // graph structurally does not know — where a well-connected person lives,
+  // a relation extraction hedged on. The graph otherwise only ever grows by
+  // overhearing, so it can hold a contact for a year without ever asking the
+  // obvious follow-up. Midday on purpose: a question is a conversation opener,
+  // not something to wake up to. Self-silencing, and a gap is asked once ever.
+  {
+    name: 'knowledge-graph-curiosity',
+    cron: '15 12 * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.02', job: 'graph.curiosity' },
   },
   // Re-canonicalizes date entities from labels the graph already holds. It makes
   // no model calls at all, so it is budgeted at zero and can run over everything
@@ -463,6 +487,7 @@ const SEED_OWNED_SCHEDULES = new Set([
   'memory-consolidation',
   'knowledge-graph-sync',
   'knowledge-graph-date-backfill',
+  'knowledge-graph-curiosity',
   'chat-segmentation',
   'anomaly-scan',
   'skill-reflection',

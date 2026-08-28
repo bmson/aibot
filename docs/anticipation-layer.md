@@ -35,6 +35,68 @@ phone, via `owner.notify`'s `ping` flag. All of it obeys the same rule as the
 briefing: proactive work surfaces to the owner (a notice), and anything
 outward still goes through the approval spine.
 
+**Shipped since (the during-the-day layer).** The three daily touchpoints were
+all built to self-silence, and together they could leave the assistant mute for
+days: an unanswered invitation sat on the calendar and an actionable email sat
+in the ledger with nothing said until the next morning, if then. Four changes
+close that:
+
+- **The briefing reaches the phone.** `runBriefing` delivered through
+  `postOwnerNotice`, which only writes a conversation row — so the flagship
+  proactive feature was discoverable solely by opening the app. It now also
+  calls `notifyOwner` with a deterministic headline (`briefingHeadline`) at
+  `ambient` urgency. `ExecutorDeps.notifyOwner` carries an `urgency` field for
+  this; omitted it stays `interrupt`, so dead-letter and budget-stall pings are
+  unchanged.
+- **Calendar salience** (`packages/core/src/proactive/calendar-salience.ts`).
+  `briefingHasNews` counted overlaps and nothing else, so a day holding a
+  flight or an unanswered invite read as routine. A pure, deterministic scorer
+  over an unanswered RSVP, a physical location, an unusual hour, an outside
+  organizer, size and duration now feeds a `calendarSalient` count into the same
+  predicate. No model decides importance — every point is a fact the provider
+  stated, which is the no-fabricated-urgency rule applied to the calendar.
+- **The pulse** (`packages/core/src/proactive/pulse.ts`, the `pulse.check` code
+  job on a `*/20 * * * *` schedule). Asks whether anything is worth saying *now*
+  — a salient event inside its lead time, actionable high-importance mail
+  nothing picked up, a commitment coming due — and delivers at most one thing
+  per firing. Bounded structurally, not by prompt: the new `proactive_moments`
+  table gives idempotency (`moment_key` unique per agent, claimed *before*
+  anything is posted, so concurrent sweeps cannot both speak) and pacing (one an
+  hour, and a daily ceiling the owner tightens with the ping limit they already
+  have). A code job, so it holds no tools and cannot act outward; it proposes
+  through the ordinary suggestion surface.
+- **Curiosity** (`packages/core/src/proactive/curiosity.ts` +
+  `memory/graph-gaps.ts`, the `graph.curiosity` job at midday). The knowledge
+  graph only ever grew by overhearing. This computes *structural* gaps from rows
+  — a well-connected entity missing a predicate its kind normally carries, a
+  relation extraction hedged on, a person with no contact link — and asks one
+  question a day. Deliberately a notice and not a suggestion: accepting a
+  suggestion enqueues a task, and a question's answer is data, not work. The
+  reply is captured by the existing `memory.extract` → `memory.graph_sync` path,
+  so the loop closes with no new machinery, and a gap asked once is never asked
+  again.
+
+**Reversible self-only writes, extended.** `calendar.update_event` and
+`calendar.cancel_event` were flat `risk: 'approval'` with a note in the source
+saying the attendee check "would need an async risk fn; revisit if it gets
+annoying". They now take an explicit `ownerOnly` argument: it earns the
+autonomous tier and the `ownerVisibleOnly` flag exactly as `create_event`'s
+zero-attendee shape does, and `execute` then *fetches the event and refuses*
+if it has any attendee. The declared flag buys the tier; the fetch is what makes
+the claim true. Adding an attendee in the same call contradicts the claim and
+stays gated. `sendUpdates=none` on the verified path.
+
+**Making silence legible.** Every producer here is self-silencing, so a broken
+pipeline and a quiet week look identical. Two surfaces tell them apart:
+`proactiveConfigNotes` (`packages/modules/src/diagnostics.ts`, printed by
+`pnpm config:check`) names settings that are valid but leave the assistant mute,
+and `assessProactiveHealth` (`packages/core/src/proactive/pipeline-health.ts`,
+the "Noticing" card in Settings) reports what actually arrived. The failure they
+exist for: `EMAIL_INGEST_MODE` defaults to `direct`, so an owner who forwards
+their inbox here has that mail dropped as unauthenticated (forwarding breaks SPF
+alignment) or as automated, `email_ingest` stays empty, and the importance
+alerts, briefing highlights and proposed dates all silently never happen.
+
 **The nudge policy (shipped).** Every out-of-band ping carries an urgency:
 `ambient` (a briefing, a watch hit, an arrival nudge — things the owner did
 not just ask for) or `interrupt` (an approval waiting, a stall in requested

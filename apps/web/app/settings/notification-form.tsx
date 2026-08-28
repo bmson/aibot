@@ -72,8 +72,9 @@ export function NotificationForm({
       <p className="text-xs leading-5 text-muted">
         During quiet hours the assistant still posts everything to chat, but only what you are
         waiting on (approvals, stalled work) may buzz your phone. The limit caps how often routine
-        notices — a briefing, a watch hit, an arrival nudge — may interrupt per day. Leave both
-        empty to be reachable at any hour.
+        notices — a briefing, a watch hit, an arrival nudge, anything the assistant volunteers
+        during the day — may interrupt, and doubles as how often it may speak up unprompted at all.
+        Leave both empty to be reachable at any hour.
       </p>
       <div className="flex items-center gap-2">
         <button
