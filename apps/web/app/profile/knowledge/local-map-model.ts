@@ -83,11 +83,12 @@ export const DRAG_THRESHOLD = 4;
 export const INITIAL_VIEWPORT: Viewport = { x: 0, y: 0, scale: 1 };
 
 /** The map builds its own entity links — functions cannot cross the server/client boundary as props. */
-export function entityHref(entityId: string, query: string, kind: string): string {
+export function entityHref(entityId: string, query: string, kind: string, view?: string): string {
   const params = new URLSearchParams();
   if (query) params.set('q', query);
   if (kind) params.set('kind', kind);
   params.set('entity', entityId);
+  if (view) params.set('view', view);
   return `/profile/knowledge?${params.toString()}`;
 }
 

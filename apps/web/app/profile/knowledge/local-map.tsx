@@ -69,12 +69,15 @@ export function LocalMap({
   totalEdges,
   query,
   kind,
+  view,
 }: {
   selected: MapEntity;
   initialEdges: MapEdgeInput[];
   totalEdges: number;
   query: string;
   kind: string;
+  /** Preserved in node links so opening a neighbour stays in the map view. */
+  view?: string;
 }) {
   /** Kind → pages revealed so far (1 = the first KIND_PAGE_SIZE). */
   const [revealed, setRevealed] = useState<Record<string, number>>({});
@@ -126,7 +129,7 @@ export function LocalMap({
     ? canvas.nodes.find((node) => node.id === selectedNodeId && !node.aggregate)
     : undefined;
 
-  const hrefFor = (entityId: string) => entityHref(entityId, query, kind);
+  const hrefFor = (entityId: string) => entityHref(entityId, query, kind, view);
 
   const handleReveal = (kindKey: string) => {
     setRevealed((previous) => ({ ...previous, [kindKey]: (previous[kindKey] ?? 1) + 1 }));

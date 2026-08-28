@@ -29,6 +29,7 @@ import {
   gt,
   gte,
   ilike,
+  inArray,
   isNotNull,
   isNull,
   ne,
@@ -471,6 +472,9 @@ export interface KnowledgeGraphNeighborEdge {
   /** True when the queried entity is the subject of the relation. */
   outbound: boolean;
   reviewStatus: KnowledgeGraphReviewStatus;
+  /** Temporal qualifiers as canonical date keys, when the source states a span. */
+  validFrom: string | null;
+  validUntil: string | null;
   other: KnowledgeGraphEntityView;
 }
 
@@ -527,6 +531,8 @@ export async function getKnowledgeGraphNeighborhood(
         id: knowledgeGraphRelations.id,
         predicate: knowledgeGraphRelations.predicate,
         reviewStatus: knowledgeGraphRelations.reviewStatus,
+        validFrom: knowledgeGraphRelations.validFrom,
+        validUntil: knowledgeGraphRelations.validUntil,
         subjectId: knowledgeGraphRelations.subjectEntityId,
         objectId: knowledgeGraphRelations.objectEntityId,
         subjectLabel: displayLabel(subject),
@@ -561,6 +567,8 @@ export async function getKnowledgeGraphNeighborhood(
       predicate: row.predicate,
       outbound,
       reviewStatus: asReviewStatus(row.reviewStatus),
+      validFrom: row.validFrom,
+      validUntil: row.validUntil,
       other: outbound
         ? {
             id: row.objectId,
@@ -577,6 +585,145 @@ export async function getKnowledgeGraphNeighborhood(
     };
   });
   return { entity, edges, total: Number(totalRow?.value ?? 0) };
+}
+
+/** One arrow in a flow chain: the relation traversed and the entity arrived at. */
+export interface KnowledgeGraphPathStep {
+  relationId: string;
+  predicate: string;
+  reviewStatus: KnowledgeGraphReviewStatus;
+  /** Temporal qualifiers as canonical date keys, when the source states a span. */
+  validFrom: string | null;
+  validUntil: string | null;
+  entity: KnowledgeGraphEntityView;
+}
+
+/**
+ * A short, cycle-free chain away from the selected entity. steps[0] is the
+ * first hop; steps[1], when present, continues from there.
+ */
+export interface KnowledgeGraphPath {
+  steps: KnowledgeGraphPathStep[];
+}
+
+/** First-hop chains drawn in the paths view; each continues at most once. */
+const PATH_LIMIT = 8;
+/** Second-hop edges fetched for all chain endpoints together. */
+const PATH_SECOND_HOP_LIMIT = 100;
+
+/**
+ * The managed alternative to a hairball: a handful of curated two-hop chains
+ * rather than the whole neighbourhood at once. Chains are cycle-free by
+ * construction — a continuation may not revisit the centre or the chain's own
+ * first hop. The strongest continuation wins (confidence, then recency); a
+ * first hop with none still renders as a one-step chain.
+ */
+export async function getKnowledgeGraphPaths(
+  db: Db,
+  input: { entityId: string },
+): Promise<{ entity: KnowledgeGraphEntityView | null; paths: KnowledgeGraphPath[] }> {
+  const agent = await getAgent(db);
+  const entity = await agentEntity(db, input.entityId);
+  if (!entity) return { entity: null, paths: [] };
+
+  const firstHop = await getKnowledgeGraphNeighborhood(db, {
+    entityId: entity.id,
+    limit: PATH_LIMIT,
+  });
+  if (firstHop.edges.length === 0) return { entity, paths: [] };
+
+  const endpointIds = firstHop.edges.map((edge) => edge.other.id);
+  const subject = alias(knowledgeGraphEntities, 'paths_subject');
+  const object = alias(knowledgeGraphEntities, 'paths_object');
+  const secondHopRows = await db
+    .select({
+      id: knowledgeGraphRelations.id,
+      predicate: knowledgeGraphRelations.predicate,
+      reviewStatus: knowledgeGraphRelations.reviewStatus,
+      validFrom: knowledgeGraphRelations.validFrom,
+      validUntil: knowledgeGraphRelations.validUntil,
+      confidence: knowledgeGraphRelations.confidence,
+      subjectId: knowledgeGraphRelations.subjectEntityId,
+      objectId: knowledgeGraphRelations.objectEntityId,
+      subjectLabel: displayLabel(subject),
+      subjectKind: subject.kind,
+      subjectCanonicalKey: subject.canonicalKey,
+      objectLabel: displayLabel(object),
+      objectKind: object.kind,
+      objectCanonicalKey: object.canonicalKey,
+    })
+    .from(knowledgeGraphRelations)
+    .innerJoin(subject, eq(knowledgeGraphRelations.subjectEntityId, subject.id))
+    .innerJoin(object, eq(knowledgeGraphRelations.objectEntityId, object.id))
+    .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
+    .innerJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
+    .where(
+      and(
+        or(
+          inArray(knowledgeGraphRelations.subjectEntityId, endpointIds),
+          inArray(knowledgeGraphRelations.objectEntityId, endpointIds),
+        ),
+        activeRelationConditions(agent.id),
+      ),
+    )
+    .orderBy(desc(knowledgeGraphRelations.confidence), desc(knowledgeGraphRelations.createdAt))
+    .limit(PATH_SECOND_HOP_LIMIT);
+
+  const secondHopByEndpoint = new Map<string, typeof secondHopRows>();
+  for (const row of secondHopRows) {
+    for (const endpoint of [row.subjectId, row.objectId]) {
+      if (!endpointIds.includes(endpoint)) continue;
+      const list = secondHopByEndpoint.get(endpoint) ?? [];
+      list.push(row);
+      secondHopByEndpoint.set(endpoint, list);
+    }
+  }
+
+  const paths: KnowledgeGraphPath[] = firstHop.edges.map((edge) => {
+    const first: KnowledgeGraphPathStep = {
+      relationId: edge.id,
+      predicate: edge.predicate,
+      reviewStatus: edge.reviewStatus,
+      validFrom: edge.validFrom,
+      validUntil: edge.validUntil,
+      entity: edge.other,
+    };
+    // The best continuation that neither returns to the centre nor loops back
+    // onto the chain's own first hop.
+    const continuation = (secondHopByEndpoint.get(edge.other.id) ?? []).find((row) => {
+      const otherId = row.subjectId === edge.other.id ? row.objectId : row.subjectId;
+      return otherId !== entity.id && otherId !== edge.other.id;
+    });
+    if (!continuation) return { steps: [first] };
+    const outbound = continuation.subjectId === edge.other.id;
+    return {
+      steps: [
+        first,
+        {
+          relationId: continuation.id,
+          predicate: continuation.predicate,
+          reviewStatus: asReviewStatus(continuation.reviewStatus),
+          validFrom: continuation.validFrom,
+          validUntil: continuation.validUntil,
+          entity: outbound
+            ? {
+                id: continuation.objectId,
+                label: continuation.objectLabel,
+                kind: continuation.objectKind,
+                canonicalKey: continuation.objectCanonicalKey,
+              }
+            : {
+                id: continuation.subjectId,
+                label: continuation.subjectLabel,
+                kind: continuation.subjectKind,
+                canonicalKey: continuation.subjectCanonicalKey,
+              },
+        },
+      ],
+    };
+  });
+
+  return { entity, paths };
 }
 
 /**

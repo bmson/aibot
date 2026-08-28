@@ -9,12 +9,13 @@ import {
   knowledgeGraphSources,
   memories,
 } from '@assistant/db';
-import { eq, like } from 'drizzle-orm';
+import { and, eq, inArray, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   findDuplicateKnowledgeGraphEntities,
   getKnowledgeGraphNeighborhood,
   getKnowledgeGraphOverview,
+  getKnowledgeGraphPaths,
   retypeKnowledgeGraphEntity,
   searchKnowledgeGraphEntities,
 } from './knowledge-graph.js';
@@ -514,5 +515,116 @@ describe('knowledge graph retype (integration)', () => {
     } finally {
       await db.delete(knowledgeGraphEntities).where(eq(knowledgeGraphEntities.id, fixture.id));
     }
+  });
+});
+
+describe('knowledge graph paths (integration)', () => {
+  let crossEdgeId: string;
+  const hubEdgeIds: string[] = [];
+
+  beforeAll(async () => {
+    if (!dbUp) return;
+    // A spoke-to-spoke edge, so chains through either spoke have a
+    // continuation. Both hub edges are confirmed so the two spokes
+    // deterministically lead the first hop regardless of insert timestamps.
+    const [spokeA] = await db
+      .select({ id: knowledgeGraphEntities.id })
+      .from(knowledgeGraphEntities)
+      .where(like(knowledgeGraphEntities.canonicalKey, `organization:${MARKER} spoke 000`))
+      .limit(1);
+    const [spokeB] = await db
+      .select({ id: knowledgeGraphEntities.id })
+      .from(knowledgeGraphEntities)
+      .where(like(knowledgeGraphEntities.canonicalKey, `organization:${MARKER} spoke 001`))
+      .limit(1);
+    const [memory] = await db
+      .select({ id: memories.id })
+      .from(memories)
+      .where(eq(memories.contentHash, `${MARKER}-source`))
+      .limit(1);
+    if (!spokeA || !spokeB || !memory) throw new Error('paths fixtures missing');
+    const hubEdges = await db
+      .update(knowledgeGraphRelations)
+      .set({ reviewStatus: 'confirmed' })
+      .where(
+        and(
+          eq(knowledgeGraphRelations.subjectEntityId, hubId),
+          inArray(knowledgeGraphRelations.objectEntityId, [spokeA.id, spokeB.id]),
+        ),
+      )
+      .returning({ id: knowledgeGraphRelations.id });
+    hubEdgeIds.push(...hubEdges.map((row) => row.id));
+    const [edge] = await db
+      .insert(knowledgeGraphRelations)
+      .values({
+        agentId,
+        subjectEntityId: spokeA.id,
+        predicate: 'partners_with',
+        objectEntityId: spokeB.id,
+        sourceMemoryId: memory.id,
+        evidenceQuote: `${MARKER} hub relates to everything`,
+        sourceFingerprint: `${MARKER}-paths-cross`,
+        ordinal: 90,
+        confidence: '0.95',
+        reviewStatus: 'confirmed',
+        validFrom: '2024',
+        validUntil: '2026',
+      })
+      .returning({ id: knowledgeGraphRelations.id });
+    if (!edge) throw new Error('cross edge was not created');
+    crossEdgeId = edge.id;
+  });
+
+  afterAll(async () => {
+    if (!dbUp) return;
+    if (crossEdgeId) {
+      await db.delete(knowledgeGraphRelations).where(eq(knowledgeGraphRelations.id, crossEdgeId));
+    }
+    if (hubEdgeIds.length > 0) {
+      await db
+        .update(knowledgeGraphRelations)
+        .set({ reviewStatus: 'unreviewed' })
+        .where(inArray(knowledgeGraphRelations.id, hubEdgeIds));
+    }
+  });
+
+  it('builds capped, cycle-free chains out from the centre', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const result = await getKnowledgeGraphPaths(db, { entityId: hubId });
+    expect(result.entity?.id).toBe(hubId);
+    // 85 first-hop edges, capped at 8 chains.
+    expect(result.paths).toHaveLength(8);
+    for (const path of result.paths) {
+      expect(path.steps.length).toBeGreaterThanOrEqual(1);
+      expect(path.steps.length).toBeLessThanOrEqual(2);
+      // No chain revisits the centre.
+      expect(path.steps.every((step) => step.entity.id !== hubId)).toBe(true);
+    }
+    // The two confirmed spokes lead, and each continues through the cross
+    // edge to the other — the span rides along.
+    const continued = result.paths.filter((path) => path.steps.length === 2);
+    expect(continued).toHaveLength(2);
+    for (const path of continued) {
+      expect(path.steps[1]?.predicate).toBe('partners_with');
+      expect(path.steps[1]?.validFrom).toBe('2024');
+      expect(path.steps[1]?.validUntil).toBe('2026');
+    }
+    // The continuations point at the two spokes, never at the start of the
+    // chain itself.
+    const destinations = new Set(continued.map((path) => path.steps[1]?.entity.id));
+    const starts = new Set(continued.map((path) => path.steps[0]?.entity.id));
+    expect(destinations.size).toBe(2);
+    for (const id of destinations) expect(starts.has(id)).toBe(true);
+    for (const id of starts) expect(destinations.has(id)).toBe(true);
+    expect([...destinations].every((id) => id !== hubId)).toBe(true);
+  });
+
+  it('answers empty for an unknown entity', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const result = await getKnowledgeGraphPaths(db, {
+      entityId: '00000000-0000-4000-8000-000000000000',
+    });
+    expect(result.entity).toBeNull();
+    expect(result.paths).toEqual([]);
   });
 });

@@ -4,6 +4,7 @@ import {
   getAssistantTimezone,
   getKnowledgeGraphNeighborhood,
   getKnowledgeGraphOverview,
+  getKnowledgeGraphPaths,
   type KnowledgeGraphRelationView,
   PREDICATE_VOCABULARY,
 } from '@assistant/application';
@@ -25,8 +26,11 @@ import {
   retryQuarantinedKnowledgeSources,
 } from '@/app/profile/knowledge/actions';
 import { AddKnowledgeRelation } from '@/app/profile/knowledge/add-relation';
+import { KnowledgeGraphDetails } from '@/app/profile/knowledge/details-table';
 import { MergeEntity, RenameEntity, RetypeEntity } from '@/app/profile/knowledge/entity-forms';
+import { KnowledgeGraphExplorer } from '@/app/profile/knowledge/explorer';
 import { LocalMap } from '@/app/profile/knowledge/local-map';
+import { KnowledgeGraphPaths } from '@/app/profile/knowledge/paths-view';
 import { requireOwner } from '@/auth';
 import { formatFriendlyDateTime, formatUsd, relativeTime } from '@/lib/format';
 import {
@@ -50,6 +54,9 @@ import {
   microLabelClass,
   PageHeader,
   PageShell,
+  segmentedControlClass,
+  segmentedItemActiveClass,
+  segmentedItemClass,
   selectClass,
 } from '@/lib/ui';
 import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
@@ -57,12 +64,40 @@ import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 export const metadata = { title: 'Knowledge review' };
 export const dynamic = 'force-dynamic';
 
-function hrefFor(opts: { q?: string; kind?: string; entity?: string; page?: number }): string {
+const VIEWS = [
+  { id: 'explorer', label: 'Explorer' },
+  { id: 'map', label: 'Map' },
+  { id: 'paths', label: 'Paths' },
+  { id: 'details', label: 'Details' },
+] as const;
+type KnowledgeView = (typeof VIEWS)[number]['id'];
+
+function asKnowledgeView(value: string | undefined): KnowledgeView {
+  return VIEWS.some((view) => view.id === value) ? (value as KnowledgeView) : 'explorer';
+}
+
+const VIEW_INTROS: Record<KnowledgeView, string> = {
+  explorer:
+    'Every active connection, grouped by relationship family. Open a branch to see its own connections.',
+  map: 'Drag to pan, scroll or use the buttons to zoom. Select a neighbour to open or expand it; page a crowded kind with its “more” pill.',
+  paths: 'A few curated chains out from this item — never the whole neighbourhood at once.',
+  details:
+    'Every active connection as a compact table. Review actions stay with the evidence cards below.',
+};
+
+function hrefFor(opts: {
+  q?: string;
+  kind?: string;
+  entity?: string;
+  page?: number;
+  view?: KnowledgeView;
+}): string {
   const params = new URLSearchParams();
   if (opts.q) params.set('q', opts.q);
   if (opts.kind) params.set('kind', opts.kind);
   if (opts.entity) params.set('entity', opts.entity);
   if (opts.page && opts.page > 1) params.set('page', String(opts.page));
+  if (opts.view && opts.view !== 'explorer') params.set('view', opts.view);
   const search = params.toString();
   return search ? `/profile/knowledge?${search}` : '/profile/knowledge';
 }
@@ -198,12 +233,19 @@ function ReviewRelation({
 export default async function KnowledgeReviewPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; kind?: string; entity?: string; page?: string }>;
+  searchParams: Promise<{
+    q?: string;
+    kind?: string;
+    entity?: string;
+    page?: string;
+    view?: string;
+  }>;
 }) {
   await requireOwner();
   const params = await searchParams;
   const query = (params.q ?? '').trim().slice(0, 120);
   const kind = asGraphEntityKind(params.kind) ?? '';
+  const view = asKnowledgeView(params.view);
   const requestedPage = Number.parseInt(params.page ?? '1', 10);
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
   const db = getDb();
@@ -213,12 +255,17 @@ export default async function KnowledgeReviewPage({
     getAssistantLocale(db),
   ]);
   const now = new Date();
-  // The map draws from its own query, not the review list: the list is capped
-  // at 80 and ordered unreviewed-first for triage, which drew a skewed subset
-  // for high-degree entities.
-  const neighborhood = graph.selected
-    ? await getKnowledgeGraphNeighborhood(db, { entityId: graph.selected.id })
-    : { entity: null, edges: [], total: 0 };
+  // The views draw from their own queries, not the review list: the list is
+  // capped at 80 and ordered unreviewed-first for triage, which drew a skewed
+  // subset for high-degree entities.
+  const neighborhood =
+    graph.selected && view !== 'paths'
+      ? await getKnowledgeGraphNeighborhood(db, { entityId: graph.selected.id })
+      : { entity: null, edges: [], total: 0 };
+  const paths =
+    graph.selected && view === 'paths'
+      ? await getKnowledgeGraphPaths(db, { entityId: graph.selected.id })
+      : null;
 
   return (
     <PageShell size="wide">
@@ -445,28 +492,83 @@ export default async function KnowledgeReviewPage({
               </section>
 
               <section className="mt-6">
-                <div className="flex flex-wrap items-baseline justify-between gap-3">
-                  <div>
-                    <h2 className={cardTitleClass}>Local map</h2>
-                    <p className="mt-1 text-sm text-muted">
-                      Drag to pan, scroll or use the buttons to zoom. Select a neighbour to open or
-                      expand it; page a crowded kind with its “more” pill.
-                    </p>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className={cardTitleClass}>Explore connections</h2>
+                    <p className="mt-1 text-sm text-muted">{VIEW_INTROS[view]}</p>
                   </div>
-                  <span className="inline-flex items-center gap-1 text-xs text-muted">
-                    <GitFork className="size-3.5" aria-hidden="true" />
-                    {neighborhood.total.toLocaleString()} active edge
-                    {neighborhood.total === 1 ? '' : 's'}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {view !== 'paths' ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-muted">
+                        <GitFork className="size-3.5" aria-hidden="true" />
+                        {neighborhood.total.toLocaleString()} active edge
+                        {neighborhood.total === 1 ? '' : 's'}
+                      </span>
+                    ) : null}
+                    <nav className={segmentedControlClass} aria-label="Connection views">
+                      {VIEWS.map((item) => (
+                        <Link
+                          key={item.id}
+                          href={hrefFor({
+                            q: query,
+                            kind,
+                            entity: graph.selected?.id,
+                            view: item.id,
+                          })}
+                          aria-current={item.id === view ? 'true' : undefined}
+                          className={
+                            item.id === view ? segmentedItemActiveClass : segmentedItemClass
+                          }
+                        >
+                          {item.label}
+                        </Link>
+                      ))}
+                    </nav>
+                  </div>
                 </div>
                 <div className="mt-3">
-                  <LocalMap
-                    selected={graph.selected}
-                    initialEdges={neighborhood.edges}
-                    totalEdges={neighborhood.total}
-                    query={query}
-                    kind={kind}
-                  />
+                  {view === 'map' ? (
+                    <LocalMap
+                      selected={graph.selected}
+                      initialEdges={neighborhood.edges}
+                      totalEdges={neighborhood.total}
+                      query={query}
+                      kind={kind}
+                      view="map"
+                    />
+                  ) : null}
+                  {view === 'explorer' ? (
+                    <KnowledgeGraphExplorer
+                      selected={graph.selected}
+                      edges={neighborhood.edges}
+                      total={neighborhood.total}
+                      vocabulary={PREDICATE_VOCABULARY}
+                      query={query}
+                      kind={kind}
+                      locale={locale}
+                    />
+                  ) : null}
+                  {view === 'paths' && paths ? (
+                    <KnowledgeGraphPaths
+                      paths={paths.paths}
+                      centerLabel={graph.selected.label}
+                      centerKind={graph.selected.kind}
+                      hrefFor={(entityId) =>
+                        hrefFor({ q: query, kind, entity: entityId, view: 'paths' })
+                      }
+                      locale={locale}
+                    />
+                  ) : null}
+                  {view === 'details' ? (
+                    <KnowledgeGraphDetails
+                      edges={neighborhood.edges}
+                      total={neighborhood.total}
+                      hrefFor={(entityId) =>
+                        hrefFor({ q: query, kind, entity: entityId, view: 'details' })
+                      }
+                      locale={locale}
+                    />
+                  ) : null}
                 </div>
               </section>
 

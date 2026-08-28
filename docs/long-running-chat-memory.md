@@ -105,18 +105,20 @@ their source memory, extraction confidence, source trust, and review time. The o
   fail to parse, other kinds search-and-pick existing entities (a typed name that matches nothing is
   created), and the predicate field suggests the vocabulary for the chosen kind pair.
 
-The local map is an interactive SVG canvas over one entity's neighbourhood: directed edges, colour
-by entity kind, dashed for edges still awaiting review. First-hop neighbours band into per-kind arc
-sectors sized by how much each kind renders — a hub whose edges mix people, dates, and projects
-reads as arcs, not a pile — and each kind pages twelve at a time behind a "+N more" pill that
-reveals the next page in place. Node actions live in one floating toolbar: selecting a neighbour
-offers Open (re-centre the page on it — sidebar, evidence list, and curation forms always agree on
-the subject) and Expand (fold a second hop into the canvas, 50 edges per click, deduped,
-hard-capped). The map draws from its own query of up to 150 active first-hop connections (the
-review list's 80-row, unreviewed-first page would draw a skewed subset), states its own overflow
-rather than silently truncating, and supports drag-pan, wheel/button and keyboard zoom. Entity
-lists page and report their true totals; the sidebar filters by entity kind; the merge target is
-found by searching the whole graph rather than picking from a fixed prefix of it.
+The selected entity's connections have four views behind a switcher. **Explorer** (the default) is
+a vertical outline grouped by predicate family — the registry's family/biography/work/events
+groups, with custom predicates under Other — where each row shows direction, predicate, the linked
+entity, its span, and review state, and a toggle folds one more hop in underneath. An outline
+rather than a tree: a row on its own ancestor chain is never re-expanded, so cycles stay finite.
+**Map** is the interactive radial SVG (pan/zoom, select-to-act toolbar, per-kind arc sectors with
+"+N more" pills) kept as the spatial overview. **Paths** is the managed flowchart: up to eight
+curated chains out from the entity, each continuing at most one hop and never revisiting an entity
+in its own chain, rendered as plain vertical lists of links — no layout math, no overlap. **Details**
+is the complete compact table of active connections (direction, predicate, entity, type, dates,
+status). All four draw from the same recall-eligible query and state their true totals; review
+actions stay with the evidence cards below. Entity lists page and report their true totals; the
+sidebar filters by entity kind; the merge target is found by searching the whole graph rather than
+picking from a fixed prefix of it.
 
 Relationship review state is keyed to the source-memory relationship fingerprint. Re-extracting a
 changed memory refreshes the direct edge while retaining a matching owner decision.
