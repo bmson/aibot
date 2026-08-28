@@ -257,7 +257,13 @@ details[open] > .disclosure::before {
    Cards settle in as they scroll into view. `animation-timeline: view()` drives
    this from the scroller itself — no IntersectionObserver, no client component,
    and nothing to hydrate. Anything already on screen at load starts at the end
-   of its range, so the first paint is complete rather than animating in. */
+   of its range, so the first paint is complete rather than animating in.
+
+   The animation targets `transform`, which makes every revealed card the
+   containing block for its `position: fixed` descendants — an overlay nested
+   in one is sized and clipped by the card, not the window. Overlays that must
+   cover the window belong in the top layer instead: `Modal` or `ActionMenu`
+   in lib/ui-client.tsx. */
 @media (prefers-reduced-motion: no-preference) {
   @supports (animation-timeline: view()) {
     .reveal {

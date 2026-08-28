@@ -12,7 +12,7 @@ import {
 } from '@/app/profile/knowledge/actions';
 import { ENTITY_KINDS, entityKindLabel } from '@/lib/knowledge';
 import { btnSm, inputClass, labelClass, selectClass } from '@/lib/ui';
-import { SubmitButton } from '@/lib/ui-client';
+import { Modal, SubmitButton } from '@/lib/ui-client';
 
 const initialState: KnowledgeActionState = { error: null, success: null };
 
@@ -313,31 +313,28 @@ export function EditKnowledgeEntity({
         Edit item
       </button>
       {open ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Edit ${entity.label}`}
-          className="fixed inset-0 z-50 grid place-items-end bg-strong/25 sm:place-items-center sm:p-6"
+        <Modal
+          label={`Edit ${entity.label}`}
+          onClose={() => setOpen(false)}
+          panelClassName="max-w-xl gap-5"
         >
-          <div className="grid max-h-[92dvh] w-full max-w-xl gap-5 overflow-y-auto rounded-t-2xl bg-raised p-5 shadow-2xl sm:rounded-2xl sm:p-6">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="font-display text-xl font-semibold text-strong">Edit item</p>
-                <p className="mt-1 text-sm text-muted">
-                  Change how this item appears and is organised.
-                </p>
-              </div>
-              <button type="button" onClick={() => setOpen(false)} className={btnSm.outline}>
-                Done
-              </button>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="font-display text-xl font-semibold text-strong">Edit item</p>
+              <p className="mt-1 text-sm text-muted">
+                Change how this item appears and is organised.
+              </p>
             </div>
-            <div className="grid gap-5">
-              <RenameEntity entity={entity} />
-              <RetypeEntity entity={entity} />
-              <MergeEntity entity={entity} duplicates={duplicates} />
-            </div>
+            <button type="button" onClick={() => setOpen(false)} className={btnSm.outline}>
+              Done
+            </button>
           </div>
-        </div>
+          <div className="grid gap-5">
+            <RenameEntity entity={entity} />
+            <RetypeEntity entity={entity} />
+            <MergeEntity entity={entity} duplicates={duplicates} />
+          </div>
+        </Modal>
       ) : null}
     </>
   );

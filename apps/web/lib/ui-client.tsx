@@ -223,3 +223,85 @@ export function ConfirmButton({
     </button>
   );
 }
+
+/**
+ * A modal in the browser's top layer.
+ *
+ * An overlay nested inside a card cannot escape it with `position: fixed`:
+ * every `cardShellClass` carries `.reveal`, whose view-timeline animation
+ * targets `transform`, and an element with an active transform animation is
+ * the containing block for its fixed descendants. `overflow-hidden` on the
+ * same shell then clips what is left, so the panel opened *inside* the card,
+ * at card size, instead of over the window. A native `<dialog>` opened with
+ * `showModal()` sidesteps both — the top layer is positioned against the
+ * viewport whatever its ancestors do — and brings Escape-to-close, focus
+ * containment, and an inert background with it.
+ *
+ * The dialog element itself is the full-viewport scrim; `panelClassName` sizes
+ * and spaces the card inside it, a bottom sheet on a phone and centred from
+ * `sm` up.
+ */
+export function Modal({
+  label,
+  onClose,
+  panelClassName = 'max-w-2xl gap-4',
+  children,
+}: {
+  /** Accessible name for the dialog, since the heading lives in `children`. */
+  label: string;
+  onClose: () => void;
+  /** Width and internal spacing for the panel; the shell styling is fixed. */
+  panelClassName?: string;
+  children: ReactNode;
+}) {
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  // Light dismiss only when the press *started* on the scrim: a drag that
+  // selects text in the panel and releases outside it is not a dismissal.
+  const pressedScrim = useRef(false);
+
+  // Mount-time open: the caller renders <Modal> only while it should be shown,
+  // so there is no open prop to track. `hidden open:grid` keeps the frame
+  // before this effect from flashing a scrim that is not in the top layer yet.
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog || dialog.open) return;
+    dialog.showModal();
+    return () => dialog.close();
+  }, []);
+
+  const outside = (target: EventTarget | null) => !panelRef.current?.contains(target as Node);
+
+  return (
+    // The click is light dismiss, not an interactive element: the keyboard
+    // equivalent is Escape, which the dialog already handles natively.
+    // biome-ignore lint/a11y/useKeyWithClickEvents: see above
+    <dialog
+      ref={dialogRef}
+      aria-label={label}
+      onClose={() => {
+        // `close` is fired from a queued task, so the one Strict Mode's
+        // mount/unmount/mount provokes arrives *after* the remount reopened
+        // the dialog. A dialog still open here never really closed.
+        if (!dialogRef.current?.open) onClose();
+      }}
+      onMouseDown={(event) => {
+        pressedScrim.current = outside(event.target);
+      }}
+      onClick={(event) => {
+        // Testing containment rather than `target === dialog` keeps a native
+        // select's option list — which reports the select as its target while
+        // painting outside the panel — from closing the form.
+        if (pressedScrim.current && outside(event.target)) onClose();
+      }}
+      className="fixed inset-0 m-0 hidden h-full max-h-none w-full max-w-none place-items-end border-0 bg-transparent p-0 backdrop:bg-strong/25 open:grid sm:place-items-center sm:p-6"
+    >
+      <div
+        ref={panelRef}
+        className={`grid max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl bg-raised p-5 shadow-[var(--shadow-overlay)] sm:rounded-2xl sm:p-6 ${panelClassName}`}
+      >
+        {children}
+      </div>
+    </dialog>
+  );
+}

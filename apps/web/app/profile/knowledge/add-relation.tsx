@@ -16,6 +16,7 @@ import {
 } from '@/app/profile/knowledge/actions';
 import { ENTITY_KINDS, entityKindLabel, PREDICATE_FALLBACK_SUGGESTIONS } from '@/lib/knowledge';
 import { btn, btnSm, inputClass, labelClass, selectClass, textareaClass } from '@/lib/ui';
+import { Modal } from '@/lib/ui-client';
 
 const initialState: AddKnowledgeRelationState = { error: null, success: null };
 
@@ -350,16 +351,13 @@ export function AddKnowledgeRelation({
     );
   }
 
+  const title = correction ? 'Correct connection' : 'Add a connection';
+
   return (
-    <form
-      action={formAction}
-      className="fixed inset-0 z-50 grid place-items-end bg-strong/25 p-0 sm:place-items-center sm:p-6"
-    >
-      <div className="grid max-h-[92dvh] w-full max-w-2xl gap-4 overflow-y-auto rounded-t-2xl bg-raised p-5 shadow-2xl sm:rounded-2xl sm:p-6">
+    <Modal label={title} onClose={() => setOpen(false)}>
+      <form action={formAction} className="grid gap-4">
         <div>
-          <p className="font-display text-xl font-semibold text-strong">
-            {correction ? 'Correct connection' : 'Add a connection'}
-          </p>
+          <p className="font-display text-xl font-semibold text-strong">{title}</p>
           <p className="mt-1 text-sm leading-5 text-muted">
             {correction
               ? 'Save the corrected fact first. The earlier connection will remain as evidence but stop being used.'
@@ -458,7 +456,7 @@ export function AddKnowledgeRelation({
             </p>
           ) : null}
         </div>
-      </div>
-    </form>
+      </form>
+    </Modal>
   );
 }
