@@ -84,31 +84,28 @@ their source memory, extraction confidence, source trust, and review time. The o
 
 - confirm an extracted relationship or mark it stale; stale edges remain auditable but are excluded
   from GraphRAG recall;
-- rename an entity's display label without changing its extraction identity, or merge duplicate
-  entities; an alias records the merged canonical key so future syncs keep using the chosen entity;
+- rename an entity's display label without changing its extraction identity, change its kind
+  (retype), or merge duplicate entities; aliases record the old canonical keys so future syncs keep
+  using the chosen entity. Dates cannot be retyped — their identity is the canonical date key, not
+  a label — and a retype that would collide with an existing entity declines in favour of a merge;
 - add a relationship manually only with an owner-written source note. That note is saved as a normal,
   owner-confirmed durable memory and is the relationship's evidence — never a graph-only assertion.
+  The form adapts to the chosen kinds: dates use structured day/month/yearly inputs that can never
+  fail to parse, other kinds search-and-pick existing entities (a typed name that matches nothing is
+  created), and the predicate field suggests the vocabulary for the chosen kind pair.
 
 The local map is an interactive SVG canvas over one entity's neighbourhood: directed edges, colour
 by entity kind, dashed for edges still awaiting review. First-hop neighbours band into per-kind arc
-sectors — a hub whose edges mix people, dates, and projects reads as arcs, not a pile — and each
-kind pages twelve at a time behind a "+N more" node that reveals the next page in place. The map
-draws from its own query of up to 150 active first-hop connections (the review list's 80-row,
-unreviewed-first page would draw a skewed subset), states its own overflow rather than silently
-truncating, and supports drag-pan, wheel/button and keyboard zoom. Clicking a neighbour navigates
-the whole page to re-centre on it — sidebar, evidence list, and curation forms always agree on the
-subject — while a per-node expand control folds a second hop into the canvas (50 edges per click,
-deduped, hard-capped canvas) so exploration never has to render the whole graph at once. Entity
+sectors sized by how much each kind renders — a hub whose edges mix people, dates, and projects
+reads as arcs, not a pile — and each kind pages twelve at a time behind a "+N more" pill that
+reveals the next page in place. Node actions live in one floating toolbar: selecting a neighbour
+offers Open (re-centre the page on it — sidebar, evidence list, and curation forms always agree on
+the subject) and Expand (fold a second hop into the canvas, 50 edges per click, deduped,
+hard-capped). The map draws from its own query of up to 150 active first-hop connections (the
+review list's 80-row, unreviewed-first page would draw a skewed subset), states its own overflow
+rather than silently truncating, and supports drag-pan, wheel/button and keyboard zoom. Entity
 lists page and report their true totals; the sidebar filters by entity kind; the merge target is
 found by searching the whole graph rather than picking from a fixed prefix of it.
-
-`/profile/knowledge/calendar` renders the graph's date entities as a month grid: exact days in their
-cells, recurring `--MM-DD` dates (birthdays, anniversaries) marked yearly in the cell of the day they
-recur on, and month-only mentions listed separately. Grouping keys off the canonical date key, never
-the locale-formatted label. Cells also show a bounded second hop — the people and places attached to
-an event or project that touches the day — so a cell reads as a day, not a bare name; broad kinds
-(topics) are never expanded into cells. It is a view over dates *mentioned in memories* —
-deliberately not the synced Google Calendar, and labelled as such.
 
 Relationship review state is keyed to the source-memory relationship fingerprint. Re-extracting a
 changed memory refreshes the direct edge while retaining a matching owner decision.

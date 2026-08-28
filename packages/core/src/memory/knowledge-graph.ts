@@ -779,6 +779,97 @@ export async function mergeGraphEntities(
 }
 
 /**
+ * Change an entity's kind — the curation action the review page was missing.
+ * The kind participates in identity (`<kind>:<normalized label>`), so a retype
+ * re-keys the entity and records the old key as an alias; future extractions
+ * of the old identity still land here, while a fresh mention under the new
+ * kind finds it directly.
+ *
+ * Dates are excluded on both sides: their identity is a canonical date key
+ * that cannot be derived from a label, and a label-keyed date is exactly the
+ * debris the canonicalizer exists to prevent. If the target identity already
+ * exists, the right action is a merge, so this declines rather than creating
+ * a second node or folding silently.
+ */
+export async function retypeGraphEntity(
+  db: Db,
+  agentId: string,
+  entityId: string,
+  kind: GraphEntityKind,
+): Promise<{ error?: string }> {
+  const [entity] = await db
+    .select({
+      id: knowledgeGraphEntities.id,
+      kind: knowledgeGraphEntities.kind,
+      label: knowledgeGraphEntities.label,
+      canonicalKey: knowledgeGraphEntities.canonicalKey,
+      contactId: knowledgeGraphEntities.contactId,
+    })
+    .from(knowledgeGraphEntities)
+    .where(
+      and(eq(knowledgeGraphEntities.id, entityId), eq(knowledgeGraphEntities.agentId, agentId)),
+    )
+    .limit(1);
+  if (!entity) return { error: 'Knowledge item not found.' };
+  if (entity.kind === kind) return {};
+  if (entity.kind === 'date' || kind === 'date') {
+    return {
+      error:
+        'Dates keep a canonical identity and cannot change type. If it duplicates another item, merge them instead.',
+    };
+  }
+
+  // A person backed by a contact keeps its `contact:<id>` identity; anything
+  // else is keyed by the normalized label under the new kind.
+  const nextKey =
+    kind === 'person' && entity.contactId
+      ? `contact:${entity.contactId}`
+      : `${kind}:${normalized(entity.label)}`;
+  if (nextKey !== entity.canonicalKey) {
+    const [conflict] = await db
+      .select({ id: knowledgeGraphEntities.id })
+      .from(knowledgeGraphEntities)
+      .where(
+        and(
+          eq(knowledgeGraphEntities.agentId, agentId),
+          eq(knowledgeGraphEntities.canonicalKey, nextKey),
+          ne(knowledgeGraphEntities.id, entity.id),
+        ),
+      )
+      .limit(1);
+    if (conflict) {
+      return {
+        error: `An item named "${entity.label}" already exists as that type. Merge them instead.`,
+      };
+    }
+  }
+
+  await db.transaction(async (tx) => {
+    const txDb = tx as unknown as Db;
+    if (nextKey !== entity.canonicalKey) {
+      await txDb
+        .insert(knowledgeGraphEntityAliases)
+        .values({ agentId, canonicalKey: entity.canonicalKey, entityId: entity.id })
+        .onConflictDoUpdate({
+          target: [knowledgeGraphEntityAliases.agentId, knowledgeGraphEntityAliases.canonicalKey],
+          set: { entityId: entity.id },
+        });
+    }
+    await txDb
+      .update(knowledgeGraphEntities)
+      .set({
+        kind,
+        canonicalKey: nextKey,
+        // The contact link only means something while the entity is a person.
+        contactId: kind === 'person' ? entity.contactId : null,
+        updatedAt: sql`now()`,
+      })
+      .where(eq(knowledgeGraphEntities.id, entity.id));
+  });
+  return {};
+}
+
+/**
  * Backfill and incrementally reconcile source memories. A source becomes dirty
  * whenever its current content hash differs from the stored extraction hash;
  * that makes profile edits and consolidation rewrites safe without coupling
@@ -875,9 +966,9 @@ export async function syncKnowledgeGraph(
 }
 
 export interface OwnerGraphFactInput {
-  subject: { label: string; kind: GraphEntityKind };
+  subject: { label: string; kind: GraphEntityKind; id?: string };
   predicate: string;
-  object: { label: string; kind: GraphEntityKind };
+  object: { label: string; kind: GraphEntityKind; id?: string };
   /** Owner-written evidence note — never hidden behind an inferred edge. */
   note: string;
 }
@@ -898,24 +989,6 @@ export async function createOwnerKnowledgeGraphFact(
   deps: { db: Db; router: Pick<ModelRouter, 'embed'>; agentId?: string },
   input: OwnerGraphFactInput,
 ): Promise<OwnerGraphFactResult> {
-  const subjectParsed = GraphEntitySchema.safeParse(input.subject);
-  const objectParsed = GraphEntitySchema.safeParse(input.object);
-  const predicate = cleanPredicate(input.predicate);
-  const note = input.note.replace(/\s+/g, ' ').trim().slice(0, 1_000);
-  if (!subjectParsed.success || !objectParsed.success || !predicate || note.length < 3) {
-    return { error: 'Add both entities, a relationship, and a short source note.' };
-  }
-  const subject = { ...subjectParsed.data, label: cleanLabel(subjectParsed.data.label) };
-  const object = { ...objectParsed.data, label: cleanLabel(objectParsed.data.label) };
-  if (!subject.label || !object.label) return { error: 'Entity names cannot be empty.' };
-
-  const readablePredicate = predicate.replaceAll('_', ' ');
-  const content = `${subject.label} ${readablePredicate} ${object.label}. Owner note: ${note}`;
-  const contentHash = createHash('sha256').update(content).digest('hex');
-  if (await isTombstoned(deps.db, contentHash)) {
-    return { error: 'This fact was previously removed, so it was not added again.' };
-  }
-
   // The owner is writing now, so now is the anchor for any relative date they
   // typed. Locale and timezone come from the agent even when the caller named
   // the id, since a date label has to be rendered in the owner's terms.
@@ -932,13 +1005,68 @@ export async function createOwnerKnowledgeGraphFact(
     locale: settings.locale,
   };
 
+  // An endpoint carrying an id names an existing entity — the add form's
+  // type-ahead picker submits ids so linking never retypes (and never
+  // duplicates) a name. Resolve it back to label+kind so the rest of the
+  // pipeline sees one shape either way.
+  const resolveEndpoint = async (endpoint: OwnerGraphFactInput['subject']) => {
+    if (!endpoint.id) return endpoint;
+    if (!/^[0-9a-f-]{36}$/i.test(endpoint.id)) return null;
+    const [row] = await deps.db
+      .select({
+        id: knowledgeGraphEntities.id,
+        label: knowledgeGraphEntities.label,
+        kind: knowledgeGraphEntities.kind,
+        canonicalKey: knowledgeGraphEntities.canonicalKey,
+        contactId: knowledgeGraphEntities.contactId,
+      })
+      .from(knowledgeGraphEntities)
+      .where(
+        and(
+          eq(knowledgeGraphEntities.id, endpoint.id),
+          eq(knowledgeGraphEntities.agentId, agentId),
+        ),
+      )
+      .limit(1);
+    return row ?? null;
+  };
+  const [subjectRow, objectRow] = await Promise.all([
+    resolveEndpoint(input.subject),
+    resolveEndpoint(input.object),
+  ]);
+  if (!subjectRow || !objectRow) {
+    return { error: 'One of those knowledge items no longer exists.' };
+  }
+
+  const subjectParsed = GraphEntitySchema.safeParse(subjectRow);
+  const objectParsed = GraphEntitySchema.safeParse(objectRow);
+  const predicate = cleanPredicate(input.predicate);
+  const note = input.note.replace(/\s+/g, ' ').trim().slice(0, 1_000);
+  if (!subjectParsed.success || !objectParsed.success || !predicate || note.length < 3) {
+    return { error: 'Add both entities, a relationship, and a short source note.' };
+  }
+  const subject = { ...subjectParsed.data, label: cleanLabel(subjectParsed.data.label) };
+  const object = { ...objectParsed.data, label: cleanLabel(objectParsed.data.label) };
+  if (!subject.label || !object.label) return { error: 'Entity names cannot be empty.' };
+
+  const readablePredicate = predicate.replaceAll('_', ' ');
+  const content = `${subject.label} ${readablePredicate} ${object.label}. Owner note: ${note}`;
+  const contentHash = createHash('sha256').update(content).digest('hex');
+  if (await isTombstoned(deps.db, contentHash)) {
+    return { error: 'This fact was previously removed, so it was not added again.' };
+  }
+
   // Every reason to reject has to be found before anything is written. An
   // unreadable date used to surface after the memory row was already inserted,
   // so the owner was told the fact was rejected while the library kept it — and
   // a corrected retry then collided with that hidden source. This also avoids
-  // paying for an embedding on a request that cannot succeed.
-  for (const entity of [subject, object]) {
-    if (entity.kind !== 'date') continue;
+  // paying for an embedding on a request that cannot succeed. Id-resolved
+  // endpoints are already canonical, so only free-typed dates are checked.
+  for (const [entity, row] of [
+    [subject, subjectRow],
+    [object, objectRow],
+  ] as const) {
+    if (entity.kind !== 'date' || 'canonicalKey' in row) continue;
     if (!canonicalizeDateLabel(entity.label, context.anchor, context.timeZone, context.locale)) {
       return {
         error: `"${entity.label}" could not be read as a date. Try a day, month and year.`,
@@ -950,7 +1078,11 @@ export async function createOwnerKnowledgeGraphFact(
   if (!embedding) return { error: 'The source could not be prepared for recall.' };
 
   const subjectContact =
-    subject.kind === 'person' ? contactForLabel(people, subject.label) : undefined;
+    'contactId' in subjectRow && subjectRow.contactId
+      ? { id: subjectRow.contactId, name: subject.label, aliases: [] }
+      : subject.kind === 'person'
+        ? contactForLabel(people, subject.label)
+        : undefined;
   const [memory] = await deps.db
     .insert(memories)
     .values({
@@ -971,8 +1103,14 @@ export async function createOwnerKnowledgeGraphFact(
     .returning({ id: memories.id });
   if (!memory) return { error: 'That source fact is already in the knowledge library.' };
 
-  const graphSubject = await upsertEntity(deps.db, agentId, subject, people, context);
-  const graphObject = await upsertEntity(deps.db, agentId, object, people, context);
+  const graphSubject =
+    'canonicalKey' in subjectRow
+      ? { id: subjectRow.id, key: subjectRow.canonicalKey }
+      : await upsertEntity(deps.db, agentId, subject, people, context);
+  const graphObject =
+    'canonicalKey' in objectRow
+      ? { id: objectRow.id, key: objectRow.canonicalKey }
+      : await upsertEntity(deps.db, agentId, object, people, context);
   if (!graphSubject || !graphObject) {
     // Unreachable in practice: the date endpoints were validated above and no
     // other kind can fail to resolve. Kept because upsertEntity's contract

@@ -9,6 +9,7 @@ import {
   mergeGraphEntities,
   requeueRelativeDateSources,
   retryQuarantinedKnowledgeGraphSources as retryQuarantinedSources,
+  retypeGraphEntity,
 } from '@assistant/core/memory/knowledge-graph';
 import {
   type Db,
@@ -18,21 +19,7 @@ import {
   memories,
   namePrefixMatch,
 } from '@assistant/db';
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  gt,
-  ilike,
-  inArray,
-  isNull,
-  like,
-  ne,
-  or,
-  sql,
-} from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, ilike, isNull, ne, or, sql } from 'drizzle-orm';
 import { type AnyPgColumn, alias } from 'drizzle-orm/pg-core';
 import type { EmbeddingPort } from './profile/commands.js';
 
@@ -512,265 +499,6 @@ export async function getKnowledgeGraphNeighborhood(
   return { entity, edges, total: Number(totalRow?.value ?? 0) };
 }
 
-/** What a date entity connects to, as one cell of the calendar renders it. */
-export interface KnowledgeGraphCalendarConnection {
-  relationId: string;
-  predicate: string;
-  /** True when the date entity is the subject of the relation. */
-  outbound: boolean;
-  other: KnowledgeGraphEntityView;
-  /**
-   * The connection's own connections, one hop further out — the people and
-   * places attached to an event. Only event/project endpoints are expanded:
-   * a date → topic → 85-spokes hop is noise, and this is what keeps it out.
-   */
-  related: KnowledgeGraphEntityView[];
-}
-
-export interface KnowledgeGraphCalendarEntry {
-  entity: KnowledgeGraphEntityView;
-  /** Recurring dates (`--MM-DD`, birthdays and anniversaries) recur every year. */
-  recurring: boolean;
-  connections: KnowledgeGraphCalendarConnection[];
-}
-
-export interface KnowledgeGraphCalendarMonth {
-  month: string;
-  /** Entries keyed by two-digit day of month ('01'..'31'); a cell can hold several. */
-  days: Record<string, KnowledgeGraphCalendarEntry[]>;
-  /** The month-precision entity (`date:YYYY-MM`), when memories mention the month itself. */
-  monthEntry: KnowledgeGraphCalendarEntry | null;
-  /** True count of the month's incident edges; `shownConnections` is the drawn page. */
-  totalConnections: number;
-  shownConnections: number;
-}
-
-/** The month URL param, validated before it is ever spliced into a LIKE pattern. */
-export const CALENDAR_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
-/** One busy month of edges. Cells truncate per day long before this, so the page stays fast. */
-const CALENDAR_EDGE_LIMIT = 200;
-/** Second-hop fetch for event/project context, and the per-cell rendering cap on it. */
-const CALENDAR_SECOND_HOP_LIMIT = 100;
-const CALENDAR_RELATED_LIMIT = 3;
-/** Endpoint kinds worth expanding one hop further: the people and places OF an event. */
-const CALENDAR_EXPANDED_KINDS = new Set(['event', 'project']);
-
-function dayOfMonth(canonicalKey: string): string | null {
-  const day = /^(?:date:\d{4}-\d{2}|date:--\d{2})-(\d{2})$/.exec(canonicalKey)?.[1];
-  return day ?? null;
-}
-
-/**
- * Dates the graph knows about for one month, with what they connect to. This
- * is a view over knowledge-graph date entities — memories that mention a day —
- * not the synced calendar, so nothing here implies a scheduled appointment.
- *
- * Grouping keys off `canonicalKey`, never the label: labels are
- * locale-formatted ("6 March 2026") and two spellings of one day share a key.
- */
-export async function getKnowledgeGraphCalendar(
-  db: Db,
-  input: { month: string },
-): Promise<KnowledgeGraphCalendarMonth | null> {
-  if (!CALENDAR_MONTH_RE.test(input.month)) return null;
-  const agent = await getAgent(db);
-  const month = input.month;
-  const mm = month.slice(5, 7);
-
-  const dateRows = await db
-    .select({
-      id: knowledgeGraphEntities.id,
-      label: displayLabel(knowledgeGraphEntities),
-      kind: knowledgeGraphEntities.kind,
-      canonicalKey: knowledgeGraphEntities.canonicalKey,
-    })
-    .from(knowledgeGraphEntities)
-    .where(
-      and(
-        eq(knowledgeGraphEntities.agentId, agent.id),
-        eq(knowledgeGraphEntities.kind, 'date'),
-        or(
-          like(knowledgeGraphEntities.canonicalKey, `date:${month}-%`),
-          like(knowledgeGraphEntities.canonicalKey, `date:--${mm}-%`),
-          eq(knowledgeGraphEntities.canonicalKey, `date:${month}`),
-        ),
-      ),
-    )
-    .orderBy(asc(knowledgeGraphEntities.canonicalKey));
-
-  const empty: KnowledgeGraphCalendarMonth = {
-    month,
-    days: {},
-    monthEntry: null,
-    totalConnections: 0,
-    shownConnections: 0,
-  };
-  const dateById = new Map(dateRows.map((row) => [row.id, row]));
-  if (dateById.size === 0) return empty;
-  const dateIds = [...dateById.keys()];
-
-  const subject = alias(knowledgeGraphEntities, 'calendar_subject');
-  const object = alias(knowledgeGraphEntities, 'calendar_object');
-  const incidentActive = and(
-    eq(knowledgeGraphRelations.agentId, agent.id),
-    ne(knowledgeGraphRelations.reviewStatus, 'rejected'),
-    or(
-      inArray(knowledgeGraphRelations.subjectEntityId, dateIds),
-      inArray(knowledgeGraphRelations.objectEntityId, dateIds),
-    ),
-  );
-  const [edgeRows, [totalRow]] = await Promise.all([
-    db
-      .select({
-        id: knowledgeGraphRelations.id,
-        predicate: knowledgeGraphRelations.predicate,
-        subjectId: knowledgeGraphRelations.subjectEntityId,
-        objectId: knowledgeGraphRelations.objectEntityId,
-        subjectLabel: displayLabel(subject),
-        subjectKind: subject.kind,
-        subjectCanonicalKey: subject.canonicalKey,
-        objectLabel: displayLabel(object),
-        objectKind: object.kind,
-        objectCanonicalKey: object.canonicalKey,
-      })
-      .from(knowledgeGraphRelations)
-      .innerJoin(subject, eq(knowledgeGraphRelations.subjectEntityId, subject.id))
-      .innerJoin(object, eq(knowledgeGraphRelations.objectEntityId, object.id))
-      .where(incidentActive)
-      .orderBy(asc(knowledgeGraphRelations.createdAt), asc(knowledgeGraphRelations.ordinal))
-      .limit(CALENDAR_EDGE_LIMIT),
-    db.select({ value: count() }).from(knowledgeGraphRelations).where(incidentActive),
-  ]);
-
-  const days: Record<string, KnowledgeGraphCalendarEntry[]> = {};
-  let monthEntry: KnowledgeGraphCalendarEntry | null = null;
-  const entryByEntity = new Map<string, KnowledgeGraphCalendarEntry>();
-  for (const row of dateRows) {
-    const entry: KnowledgeGraphCalendarEntry = {
-      entity: row,
-      recurring: row.canonicalKey.startsWith('date:--'),
-      connections: [],
-    };
-    entryByEntity.set(row.id, entry);
-    if (row.canonicalKey === `date:${month}`) {
-      monthEntry = entry;
-      continue;
-    }
-    const day = dayOfMonth(row.canonicalKey);
-    if (!day) continue;
-    const entries = days[day] ?? [];
-    entries.push(entry);
-    days[day] = entries;
-  }
-
-  const secondHopIds = new Set<string>();
-  for (const row of edgeRows) {
-    // An edge between two date entities anchors to the subject; both are on
-    // the grid, so either choice lands the connection on a real day.
-    const subjectIsDate = entryByEntity.has(row.subjectId);
-    const entry = entryByEntity.get(subjectIsDate ? row.subjectId : row.objectId);
-    if (!entry) continue;
-    const other = subjectIsDate
-      ? {
-          id: row.objectId,
-          label: row.objectLabel,
-          kind: row.objectKind,
-          canonicalKey: row.objectCanonicalKey,
-        }
-      : {
-          id: row.subjectId,
-          label: row.subjectLabel,
-          kind: row.subjectKind,
-          canonicalKey: row.subjectCanonicalKey,
-        };
-    entry.connections.push({
-      relationId: row.id,
-      predicate: row.predicate,
-      outbound: subjectIsDate,
-      other,
-      related: [],
-    });
-    if (CALENDAR_EXPANDED_KINDS.has(other.kind)) secondHopIds.add(other.id);
-  }
-
-  // Second hop: what the connected events and projects themselves connect to.
-  // This is what makes a day cell read "Spring offsite — Bjorn, Reykjavik"
-  // instead of a bare event name.
-  const relatedByParent = new Map<string, KnowledgeGraphEntityView[]>();
-  if (secondHopIds.size > 0) {
-    const hopSubject = alias(knowledgeGraphEntities, 'calendar_hop_subject');
-    const hopObject = alias(knowledgeGraphEntities, 'calendar_hop_object');
-    const hopRows = await db
-      .select({
-        subjectId: knowledgeGraphRelations.subjectEntityId,
-        objectId: knowledgeGraphRelations.objectEntityId,
-        subjectLabel: displayLabel(hopSubject),
-        subjectKind: hopSubject.kind,
-        subjectCanonicalKey: hopSubject.canonicalKey,
-        objectLabel: displayLabel(hopObject),
-        objectKind: hopObject.kind,
-        objectCanonicalKey: hopObject.canonicalKey,
-      })
-      .from(knowledgeGraphRelations)
-      .innerJoin(hopSubject, eq(knowledgeGraphRelations.subjectEntityId, hopSubject.id))
-      .innerJoin(hopObject, eq(knowledgeGraphRelations.objectEntityId, hopObject.id))
-      .where(
-        and(
-          eq(knowledgeGraphRelations.agentId, agent.id),
-          ne(knowledgeGraphRelations.reviewStatus, 'rejected'),
-          or(
-            inArray(knowledgeGraphRelations.subjectEntityId, [...secondHopIds]),
-            inArray(knowledgeGraphRelations.objectEntityId, [...secondHopIds]),
-          ),
-        ),
-      )
-      .orderBy(asc(knowledgeGraphRelations.createdAt))
-      .limit(CALENDAR_SECOND_HOP_LIMIT);
-    for (const row of hopRows) {
-      const parentId = secondHopIds.has(row.subjectId) ? row.subjectId : row.objectId;
-      const view =
-        parentId === row.subjectId
-          ? {
-              id: row.objectId,
-              label: row.objectLabel,
-              kind: row.objectKind,
-              canonicalKey: row.objectCanonicalKey,
-            }
-          : {
-              id: row.subjectId,
-              label: row.subjectLabel,
-              kind: row.subjectKind,
-              canonicalKey: row.subjectCanonicalKey,
-            };
-      // In-month dates have their own cells; repeating them as context is noise.
-      if (dateById.has(view.id)) continue;
-      const list = relatedByParent.get(parentId) ?? [];
-      if (list.some((item) => item.id === view.id) || list.length >= CALENDAR_RELATED_LIMIT) {
-        continue;
-      }
-      list.push(view);
-      relatedByParent.set(parentId, list);
-    }
-    for (const list of relatedByParent.values()) {
-      list.sort((a, b) => a.label.localeCompare(b.label));
-    }
-  }
-
-  for (const entry of entryByEntity.values()) {
-    for (const connection of entry.connections) {
-      connection.related = relatedByParent.get(connection.other.id) ?? [];
-    }
-    entry.connections.sort((a, b) => a.other.label.localeCompare(b.other.label));
-  }
-  return {
-    month,
-    days,
-    monthEntry,
-    totalConnections: Number(totalRow?.value ?? 0),
-    shownConnections: edgeRows.length,
-  };
-}
-
 /**
  * Type-ahead over every entity, replacing the old 200-row `<select>` payload.
  * The cap here bounds one dropdown's worth of results, not the reachable set:
@@ -928,29 +656,56 @@ export async function retryQuarantinedKnowledgeGraphSources(db: Db): Promise<num
   return retryQuarantinedSources(db, agent.id);
 }
 
+export async function retypeKnowledgeGraphEntity(
+  db: Db,
+  entityId: string,
+  kind: string,
+): Promise<{ error?: string }> {
+  const next = asGraphEntityKind(kind);
+  if (!next) return { error: 'Choose a valid type.' };
+  const agent = await getAgent(db);
+  return retypeGraphEntity(db, agent.id, entityId, next);
+}
+
 export async function addOwnerKnowledgeGraphFact(
   db: Db,
   router: EmbeddingPort,
   input: {
     subjectLabel: string;
     subjectKind: string;
+    subjectId?: string;
     predicate: string;
     objectLabel: string;
     objectKind: string;
+    objectId?: string;
     note: string;
   },
 ): Promise<{ error?: string }> {
   // The domain owns the kind list; re-declaring it here let the two drift.
   const isKind = (value: string): value is GraphEntityKind =>
     (GRAPH_ENTITY_KINDS as readonly string[]).includes(value);
-  if (!isKind(input.subjectKind)) return { error: 'Choose a valid source type.' };
-  if (!isKind(input.objectKind)) return { error: 'Choose a valid target type.' };
+  // An endpoint with an id gets its kind from the entity itself; the form's
+  // kind field is only meaningful for a free-typed (new) entity.
+  if (!input.subjectId && !isKind(input.subjectKind)) {
+    return { error: 'Choose a valid source type.' };
+  }
+  if (!input.objectId && !isKind(input.objectKind)) {
+    return { error: 'Choose a valid target type.' };
+  }
   return createOwnerKnowledgeGraphFact(
     { db, router },
     {
-      subject: { label: input.subjectLabel, kind: input.subjectKind },
+      subject: {
+        label: input.subjectLabel,
+        kind: isKind(input.subjectKind) ? input.subjectKind : 'topic',
+        id: input.subjectId,
+      },
       predicate: input.predicate,
-      object: { label: input.objectLabel, kind: input.objectKind },
+      object: {
+        label: input.objectLabel,
+        kind: isKind(input.objectKind) ? input.objectKind : 'topic',
+        id: input.objectId,
+      },
       note: input.note,
     },
   );

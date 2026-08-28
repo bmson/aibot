@@ -9,6 +9,7 @@ import {
   reextractRelativeDateSources,
   renameKnowledgeGraphEntity,
   retryQuarantinedKnowledgeGraphSources,
+  retypeKnowledgeGraphEntity,
   reviewKnowledgeGraphRelation,
   searchKnowledgeGraphEntities,
 } from '@assistant/application';
@@ -91,6 +92,19 @@ export async function mergeKnowledgeEntity(
   return { error: null, success: 'Items merged. Future extractions will use the one you kept.' };
 }
 
+export async function retypeKnowledgeEntity(
+  entityId: string,
+  _previous: KnowledgeActionState,
+  formData: FormData,
+): Promise<KnowledgeActionState> {
+  await requireOwner();
+  const kind = String(formData.get('kind') ?? '');
+  const result = await retypeKnowledgeGraphEntity(getDb(), entityId, kind);
+  if (result.error) return { error: result.error, success: null };
+  revalidateKnowledgeGraph();
+  return { error: null, success: 'Type updated. Existing connections are unchanged.' };
+}
+
 /** Type-ahead for the merge picker; reaches any entity, not a fixed prefix. */
 export async function searchKnowledgeEntities(
   query: string,
@@ -125,12 +139,16 @@ export async function addKnowledgeRelation(
   formData: FormData,
 ): Promise<AddKnowledgeRelationState> {
   await requireOwner();
+  const subjectId = String(formData.get('subjectId') ?? '');
+  const objectId = String(formData.get('objectId') ?? '');
   const result = await addOwnerKnowledgeGraphFact(getDb(), getRouter(), {
     subjectLabel: String(formData.get('subjectLabel') ?? ''),
     subjectKind: String(formData.get('subjectKind') ?? ''),
+    subjectId: subjectId || undefined,
     predicate: String(formData.get('predicate') ?? ''),
     objectLabel: String(formData.get('objectLabel') ?? ''),
     objectKind: String(formData.get('objectKind') ?? ''),
+    objectId: objectId || undefined,
     note: String(formData.get('note') ?? ''),
   });
   if (result.error) return { error: result.error, success: null };

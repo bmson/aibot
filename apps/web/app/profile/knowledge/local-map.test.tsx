@@ -46,11 +46,13 @@ describe('LocalMap static render', () => {
     expect(html).toContain('kind=person');
   });
 
-  it('exposes an expand control per neighbour and zoom controls', () => {
+  it('keeps the canvas quiet until selection, with zoom controls always present', () => {
     const html = renderToStaticMarkup(
       <LocalMap selected={selected} initialEdges={edges(2)} totalEdges={2} query="" kind="" />,
     );
-    expect(html).toContain('Show connections around Neighbour 0');
+    // Node actions live in the selection toolbar, which renders only after a
+    // node is selected — no per-node buttons clutter the drawing.
+    expect(html).not.toContain('Show connections around');
     expect(html).toContain('aria-label="Zoom in"');
     expect(html).toContain('aria-label="Zoom out"');
     expect(html).toContain('aria-label="Reset view"');

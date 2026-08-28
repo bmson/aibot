@@ -1,6 +1,6 @@
 'use client';
 
-import { Minus, Plus, RotateCcw } from 'lucide-react';
+import { ArrowRight, Minus, Plus, RotateCcw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { loadKnowledgeNeighborhood } from '@/app/profile/knowledge/actions';
 import {
@@ -34,12 +34,17 @@ import {
   entityKindPaint,
   humanizePredicate,
 } from '@/lib/knowledge';
-import { focusRing } from '@/lib/ui';
+import { btnSm, focusRing } from '@/lib/ui';
 
 /**
- * The interactive local map: pan, zoom, click a neighbour to re-centre the
- * page on it, expand a node in place to grow the canvas a ring at a time, and
- * page crowded kinds with their "+N more" node.
+ * The interactive local map: pan, zoom, select a neighbour to act on it (open
+ * re-centres the page; expand grows its connections in place), and page crowded
+ * kinds with their "+N more" pill.
+ *
+ * Node actions live in one floating toolbar rather than a per-node badge: a
+ * hub has dozens of neighbours, and a button on each was visual noise. The
+ * toolbar's controls are real HTML elements with full-size touch targets —
+ * SVG nodes stay links, and the drawing stays quiet until you select something.
  *
  * The first hop arrives as server-rendered props; expansion goes through a
  * server action. Rendering stays SVG (no charting dependency): layout is
@@ -75,6 +80,8 @@ export function LocalMap({
   const [revealed, setRevealed] = useState<Record<string, number>>({});
   /** Node id → its fetched second hop. Canvas derives from this, so a reveal re-layout keeps expansions. */
   const [expandedData, setExpandedData] = useState<Record<string, ExpansionData>>({});
+  /** The canvas node selected for the action toolbar. Not the page's entity. */
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>(INITIAL_VIEWPORT);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -98,6 +105,7 @@ export function LocalMap({
     setSeenPropsKey(propsKey);
     setRevealed({});
     setExpandedData({});
+    setSelectedNodeId(null);
     setViewport(INITIAL_VIEWPORT);
     setPendingId(null);
     setActiveId(null);
@@ -114,6 +122,9 @@ export function LocalMap({
   const nodeById = new Map(canvas.nodes.map((node) => [node.id, node]));
   const realNodes = canvas.nodes.filter((node) => !node.aggregate);
   const showAllLabels = realNodes.length <= LABEL_LIMIT;
+  const toolbarNode = selectedNodeId
+    ? canvas.nodes.find((node) => node.id === selectedNodeId && !node.aggregate)
+    : undefined;
 
   const hrefFor = (entityId: string) => entityHref(entityId, query, kind);
 
@@ -183,6 +194,10 @@ export function LocalMap({
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      setSelectedNodeId(null);
+      return;
+    }
     const panKeys: Record<string, [number, number]> = {
       ArrowLeft: [KEY_PAN, 0],
       ArrowRight: [-KEY_PAN, 0],
@@ -230,6 +245,7 @@ export function LocalMap({
   const nodeLabelVisible = (node: CanvasNode) =>
     showAllLabels ||
     node.id === activeId ||
+    node.id === selectedNodeId ||
     Boolean(expandedData[node.id]) ||
     Boolean(node.aggregate);
 
@@ -251,7 +267,7 @@ export function LocalMap({
         // application roles: arrow-key panning is the WCAG 2.5.7 keyboard
         // alternative to drag-pan, and every control inside stays Tab-operable.
         role="application"
-        aria-label="Interactive map viewport. Drag to pan; use arrow keys to pan, plus and minus to zoom, zero to reset."
+        aria-label="Interactive map viewport. Select a node to act on it. Drag to pan; use arrow keys to pan, plus and minus to zoom, zero to reset, escape to clear the selection."
         // biome-ignore lint/a11y/noNoninteractiveTabindex: arrow-key panning is the keyboard alternative to drag-pan, so the widget must be in the tab order.
         tabIndex={0}
         onKeyDown={handleKeyDown}
@@ -263,6 +279,7 @@ export function LocalMap({
         ) : (
           // touch-action:none lets a finger drag pan the map instead of fighting
           // the page scroll; the map's height keeps the rest of the page reachable.
+          // biome-ignore lint/a11y/useKeyWithClickEvents: the keyboard equivalent of a background press is Escape on the wrapping viewport's keydown.
           <svg
             ref={svgRef}
             viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
@@ -273,6 +290,13 @@ export function LocalMap({
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerEnd}
             onPointerCancel={handlePointerEnd}
+            onClick={(event) => {
+              // A press on empty canvas clears the selection; node clicks stop
+              // at their own handlers, so reaching here means background.
+              if (!(event.target as Element).closest('a, [role="button"]')) {
+                setSelectedNodeId(null);
+              }
+            }}
           >
             <title id="local-map-title">{`Connections around ${selected.label}`}</title>
             <desc id="local-map-desc">{description}</desc>
@@ -318,6 +342,9 @@ export function LocalMap({
                 if (node.ring === 0) return null;
                 const aggregate = node.aggregate;
                 if (aggregate) {
+                  // The kind pager: a pill, not a node, so it can never be
+                  // mistaken for an entity.
+                  const pillWidth = Math.max(56, node.label.length * 6.4 + 18);
                   return (
                     // biome-ignore lint/a11y/useSemanticElements: a <button> cannot exist inside SVG; the g carries the button role, keyboard activation, and an accessible name.
                     <g
@@ -335,19 +362,20 @@ export function LocalMap({
                       }}
                     >
                       <circle cx={node.x} cy={node.y} r={HIT_R} fill="transparent" />
-                      <circle
-                        cx={node.x}
-                        cy={node.y}
-                        r={NODE_R}
-                        strokeWidth={2}
-                        strokeDasharray="3 3"
-                        className="fill-zinc-100 stroke-zinc-400 dark:fill-zinc-900 dark:stroke-zinc-500"
+                      <rect
+                        x={node.x - pillWidth / 2}
+                        y={node.y - 11}
+                        width={pillWidth}
+                        height={22}
+                        rx={11}
+                        strokeWidth={1.5}
+                        className="fill-raised stroke-edge"
                       />
                       <text
-                        x={node.x > CX + 40 ? node.x - (NODE_R + 5) : node.x + NODE_R + 5}
-                        y={node.y + 1}
-                        textAnchor={node.x > CX + 40 ? 'end' : 'start'}
-                        className="fill-muted text-[12px] font-medium"
+                        x={node.x}
+                        y={node.y + 3.5}
+                        textAnchor="middle"
+                        className="fill-muted text-[10.5px] font-medium"
                       >
                         {node.label}
                       </text>
@@ -360,23 +388,41 @@ export function LocalMap({
                 const overflow = expansion
                   ? Math.max(0, expansion.total - expansion.edges.length)
                   : 0;
+                const isSelected = node.id === selectedNodeId;
                 const anchorLeft = node.x > CX + 40;
-                const labelX = anchorLeft ? node.x - (NODE_R + 5) : node.x + NODE_R + 5;
+                const labelX = anchorLeft ? node.x - (NODE_R + 6) : node.x + NODE_R + 6;
                 return (
                   <g key={node.id}>
                     <a
                       href={hrefFor(node.id)}
                       className="group"
+                      aria-current={isSelected ? 'true' : undefined}
+                      onClick={(event) => {
+                        // Selection, not navigation: the toolbar carries the
+                        // "open" action. The href stays for keyboard focus,
+                        // screen readers, and open-in-new-tab.
+                        event.preventDefault();
+                        setSelectedNodeId(node.id);
+                      }}
                       onMouseEnter={() => setActiveId(node.id)}
                       onMouseLeave={() => setActiveId(null)}
                       onFocus={() => setActiveId(node.id)}
                       onBlur={() => setActiveId(null)}
                     >
                       <title>
-                        {`${node.label} — ${entityKindLabel(node.kind)}. Open to centre the map on it.`}
+                        {`${node.label} — ${entityKindLabel(node.kind)}. Select to open or expand it.`}
                       </title>
                       {/* Invisible 44px hit disc over the visible node. */}
                       <circle cx={node.x} cy={node.y} r={HIT_R} fill="transparent" />
+                      {isSelected ? (
+                        <circle
+                          cx={node.x}
+                          cy={node.y}
+                          r={NODE_R + 4.5}
+                          strokeWidth={2}
+                          className="fill-none stroke-accent"
+                        />
+                      ) : null}
                       <circle
                         cx={node.x}
                         cy={node.y}
@@ -389,15 +435,15 @@ export function LocalMap({
                           x={labelX}
                           y={node.y + 1}
                           textAnchor={anchorLeft ? 'end' : 'start'}
-                          className="fill-strong text-[12px] font-medium"
+                          className={`text-[12px] ${isSelected ? 'fill-strong font-semibold' : 'fill-strong font-medium'}`}
                         >
-                          {clipNodeLabel(node.label)}
+                          {clipNodeLabel(node.label, 22)}
                         </text>
                       ) : null}
                       {overflow > 0 ? (
                         <text
                           x={labelX}
-                          y={node.y + 13}
+                          y={node.y + 14}
                           textAnchor={anchorLeft ? 'end' : 'start'}
                           className="fill-muted text-[9.5px]"
                         >
@@ -405,41 +451,6 @@ export function LocalMap({
                         </text>
                       ) : null}
                     </a>
-                    {!expansion ? (
-                      // biome-ignore lint/a11y/useSemanticElements: a <button> cannot exist inside SVG; the g carries the button role, keyboard activation, and an accessible name.
-                      <g
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Show connections around ${node.label}`}
-                        aria-disabled={pendingId !== null}
-                        className={`cursor-pointer ${focusRing}`}
-                        onClick={() => void handleExpand(node)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            void handleExpand(node);
-                          }
-                        }}
-                      >
-                        <circle
-                          cx={node.x + 13}
-                          cy={node.y - 13}
-                          r={7}
-                          className="fill-raised stroke-edge hover:fill-sunken"
-                          strokeWidth={1.5}
-                        />
-                        {/* The accessible name comes from the g's aria-label, so
-                            this glyph needs no hiding of its own. */}
-                        <text
-                          x={node.x + 13}
-                          y={node.y - 9.5}
-                          textAnchor="middle"
-                          className="fill-muted text-[10px] font-semibold"
-                        >
-                          {pendingId === node.id ? '…' : '+'}
-                        </text>
-                      </g>
-                    ) : null}
                   </g>
                 );
               })}
@@ -501,6 +512,43 @@ export function LocalMap({
             <RotateCcw className="size-4" aria-hidden="true" />
           </button>
         </div>
+
+        {/* The one place node actions live. Selecting a node floats this bar;
+            its controls are real HTML with full-size targets, which a per-node
+            SVG badge could never be. */}
+        {toolbarNode ? (
+          <div className="pointer-events-none absolute inset-x-2 bottom-2 flex justify-center">
+            <div className="pointer-events-auto flex min-w-0 max-w-full items-center gap-2 rounded-full bg-raised/95 py-1.5 pr-1.5 pl-3 ring-1 ring-edge backdrop-blur-sm">
+              <span
+                aria-hidden="true"
+                className={`inline-block size-2 shrink-0 rounded-full ${entityKindPaint(toolbarNode.kind).swatch}`}
+              />
+              <span className="min-w-0 truncate text-sm font-medium text-strong">
+                {toolbarNode.label}
+              </span>
+              <span className="shrink-0 text-xs text-muted">
+                {entityKindLabel(toolbarNode.kind)}
+              </span>
+              {expandedData[toolbarNode.id] ? (
+                <span className="shrink-0 px-2 text-xs text-muted">Expanded</span>
+              ) : (
+                <button
+                  type="button"
+                  disabled={pendingId !== null}
+                  onClick={() => void handleExpand(toolbarNode)}
+                  className={btnSm.outline}
+                >
+                  <Plus className="size-3.5" aria-hidden="true" />
+                  {pendingId === toolbarNode.id ? 'Loading…' : 'Expand'}
+                </button>
+              )}
+              <a href={hrefFor(toolbarNode.id)} className={btnSm.primary}>
+                Open
+                <ArrowRight className="size-3.5" aria-hidden="true" />
+              </a>
+            </div>
+          </div>
+        ) : null}
 
         <div aria-live="polite" role="status" className="sr-only">
           {announce}

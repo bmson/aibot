@@ -7,7 +7,6 @@ import {
   type KnowledgeGraphRelationView,
 } from '@assistant/application';
 import {
-  CalendarDays,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -25,7 +24,7 @@ import {
   retryQuarantinedKnowledgeSources,
 } from '@/app/profile/knowledge/actions';
 import { AddKnowledgeRelation } from '@/app/profile/knowledge/add-relation';
-import { MergeEntity, RenameEntity } from '@/app/profile/knowledge/entity-forms';
+import { MergeEntity, RenameEntity, RetypeEntity } from '@/app/profile/knowledge/entity-forms';
 import { LocalMap } from '@/app/profile/knowledge/local-map';
 import { requireOwner } from '@/auth';
 import { formatFriendlyDateTime, formatUsd, relativeTime } from '@/lib/format';
@@ -212,12 +211,6 @@ export default async function KnowledgeReviewPage({
         back={{ href: '/profile', label: 'Memory' }}
         title="Knowledge review"
         intro="Inspect the source-backed connections the assistant can use, validate their wording, and add corrections with your own evidence."
-        actions={
-          <Link href="/profile/knowledge/calendar" className={btn.outline}>
-            <CalendarDays className="size-4" aria-hidden="true" />
-            Date calendar
-          </Link>
-        }
       />
 
       <div className="mt-6 grid gap-3 sm:grid-cols-4">
@@ -426,8 +419,9 @@ export default async function KnowledgeReviewPage({
                   <AddKnowledgeRelation selected={graph.selected} />
                 </div>
 
-                <div className="mt-5 grid gap-4 border-t border-edge pt-4 sm:grid-cols-2">
+                <div className="mt-5 grid gap-4 border-t border-edge pt-4 sm:grid-cols-3">
                   <RenameEntity entity={graph.selected} />
+                  <RetypeEntity entity={graph.selected} />
                   <MergeEntity entity={graph.selected} duplicates={graph.duplicates} />
                 </div>
               </section>
@@ -437,8 +431,8 @@ export default async function KnowledgeReviewPage({
                   <div>
                     <h2 className={cardTitleClass}>Local map</h2>
                     <p className="mt-1 text-sm text-muted">
-                      Drag to pan, scroll or use the buttons to zoom. Open a neighbour to re-centre
-                      on it, or press its + to grow its own connections in place.
+                      Drag to pan, scroll or use the buttons to zoom. Select a neighbour to open or
+                      expand it; page a crowded kind with its “more” pill.
                     </p>
                   </div>
                   <span className="inline-flex items-center gap-1 text-xs text-muted">

@@ -11,9 +11,9 @@ import { eq, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   findDuplicateKnowledgeGraphEntities,
-  getKnowledgeGraphCalendar,
   getKnowledgeGraphNeighborhood,
   getKnowledgeGraphOverview,
+  retypeKnowledgeGraphEntity,
   searchKnowledgeGraphEntities,
 } from './knowledge-graph.js';
 
@@ -35,7 +35,6 @@ let db: Db;
 let dbUp = false;
 let agentId: string;
 let hubId: string;
-let memoryId: string;
 
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
@@ -72,7 +71,6 @@ beforeAll(async () => {
       })
       .returning({ id: memories.id });
     if (!memory) throw new Error('test memory was not created');
-    memoryId = memory.id;
 
     const [hub] = await db
       .insert(knowledgeGraphEntities)
@@ -428,173 +426,45 @@ describe('knowledge graph neighborhood (integration)', () => {
   });
 });
 
-describe('knowledge graph calendar (integration)', () => {
-  const calendarEntityIds: string[] = [];
-
-  beforeAll(async () => {
-    if (!dbUp) return;
-    // Date entities group by canonical key, so the marker cannot ride inside
-    // the key; cleanup below is by tracked id. Labels deliberately avoid the
-    // marker so the count-sensitive sidebar tests never see these rows.
-    const fixtures: Array<{ canonicalKey: string; label: string; kind?: string }> = [
-      { canonicalKey: 'date:2026-03-06', label: '6 March 2026' },
-      { canonicalKey: 'date:2026-03-21', label: '21 March 2026' },
-      { canonicalKey: 'date:--03-06', label: 'March 6' },
-      { canonicalKey: 'date:2026-03', label: 'March 2026' },
-      { canonicalKey: 'date:2026', label: '2026' },
-      { canonicalKey: 'date:2026-04-02', label: '2 April 2026' },
-      // The second-hop fixtures: an event on 6 March and the person on it.
-      { canonicalKey: 'event:spring offsite', label: 'Spring offsite', kind: 'event' },
-      { canonicalKey: 'person:brynja', label: 'Brynja', kind: 'person' },
-    ];
-    const inserted = await db
+describe('knowledge graph retype (integration)', () => {
+  it('validates the kind and round-trips an entity through a retype', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // Its own fixture, deleted by id: a retype re-keys the entity, and the
+    // normalized key drops the marker's hyphens, so the shared marker cleanup
+    // would miss it.
+    const [fixture] = await db
       .insert(knowledgeGraphEntities)
-      .values(fixtures.map((fixture) => ({ agentId, kind: 'date', ...fixture })))
-      .returning({
-        id: knowledgeGraphEntities.id,
-        canonicalKey: knowledgeGraphEntities.canonicalKey,
-      });
-    calendarEntityIds.push(...inserted.map((row) => row.id));
+      .values({
+        agentId,
+        canonicalKey: `topic:${MARKER} roundtrip`,
+        label: `${MARKER} Roundtrip`,
+        kind: 'topic',
+      })
+      .returning({ id: knowledgeGraphEntities.id });
+    if (!fixture) throw new Error('retype fixture missing');
+    try {
+      expect((await retypeKnowledgeGraphEntity(db, fixture.id, 'nonsense')).error).toContain(
+        'valid type',
+      );
 
-    const idFor = (key: string) => {
-      const row = inserted.find((item) => item.canonicalKey === key);
-      if (!row) throw new Error(`calendar fixture missing for ${key}`);
-      return row.id;
-    };
-    // Every in-month date (and the recurring one) connects to the hub; the
-    // year-only and next-month dates get edges too, so the test can assert
-    // they are left out rather than merely absent.
-    const keys = [
-      'date:2026-03-06',
-      'date:2026-03-21',
-      'date:--03-06',
-      'date:2026-03',
-      'date:2026',
-      'date:2026-04-02',
-    ];
-    await db.insert(knowledgeGraphRelations).values([
-      ...keys.map((key, index) => ({
-        agentId,
-        subjectEntityId: hubId,
-        predicate: 'mentions',
-        objectEntityId: idFor(key),
-        sourceMemoryId: memoryId,
-        evidenceQuote: `${MARKER} calendar fixture`,
-        sourceFingerprint: `${MARKER}-cal-${index}`,
-        ordinal: 100 + index,
-        confidence: '0.90',
-        // The 21 March edge is stale: the calendar must not show it.
-        reviewStatus: key === 'date:2026-03-21' ? ('rejected' as const) : ('confirmed' as const),
-      })),
-      // The event's own edges: one to the date (first hop from the calendar's
-      // side), one to a person (the second hop the cell should surface).
-      {
-        agentId,
-        subjectEntityId: idFor('event:spring offsite'),
-        predicate: 'happens_on',
-        objectEntityId: idFor('date:2026-03-06'),
-        sourceMemoryId: memoryId,
-        evidenceQuote: `${MARKER} calendar fixture`,
-        sourceFingerprint: `${MARKER}-cal-event-on`,
-        ordinal: 200,
-        confidence: '0.90',
-        reviewStatus: 'confirmed' as const,
-      },
-      {
-        agentId,
-        subjectEntityId: idFor('event:spring offsite'),
-        predicate: 'attended_by',
-        objectEntityId: idFor('person:brynja'),
-        sourceMemoryId: memoryId,
-        evidenceQuote: `${MARKER} calendar fixture`,
-        sourceFingerprint: `${MARKER}-cal-event-attendee`,
-        ordinal: 201,
-        confidence: '0.90',
-        reviewStatus: 'confirmed' as const,
-      },
-    ]);
-  });
+      expect((await retypeKnowledgeGraphEntity(db, fixture.id, 'project')).error).toBeUndefined();
+      const [retyped] = await db
+        .select({ kind: knowledgeGraphEntities.kind, key: knowledgeGraphEntities.canonicalKey })
+        .from(knowledgeGraphEntities)
+        .where(eq(knowledgeGraphEntities.id, fixture.id));
+      expect(retyped?.kind).toBe('project');
+      expect(retyped?.key.startsWith('project:')).toBe(true);
+      expect(retyped?.key.endsWith('roundtrip')).toBe(true);
 
-  afterAll(async () => {
-    if (!dbUp) return;
-    // Relations cascade from their endpoint entities.
-    for (const id of calendarEntityIds) {
-      await db.delete(knowledgeGraphEntities).where(eq(knowledgeGraphEntities.id, id));
+      expect((await retypeKnowledgeGraphEntity(db, fixture.id, 'topic')).error).toBeUndefined();
+      const [back] = await db
+        .select({ kind: knowledgeGraphEntities.kind, key: knowledgeGraphEntities.canonicalKey })
+        .from(knowledgeGraphEntities)
+        .where(eq(knowledgeGraphEntities.id, fixture.id));
+      expect(back?.kind).toBe('topic');
+      expect(back?.key.startsWith('topic:')).toBe(true);
+    } finally {
+      await db.delete(knowledgeGraphEntities).where(eq(knowledgeGraphEntities.id, fixture.id));
     }
-  });
-
-  it('rejects a month that is not a real month', async (ctx) => {
-    if (!dbUp) return ctx.skip();
-    expect(await getKnowledgeGraphCalendar(db, { month: 'nonsense' })).toBeNull();
-    expect(await getKnowledgeGraphCalendar(db, { month: '2026-13' })).toBeNull();
-  });
-
-  it('groups exact, recurring, and month-precision dates by canonical key', async (ctx) => {
-    if (!dbUp) return ctx.skip();
-    const calendar = await getKnowledgeGraphCalendar(db, { month: '2026-03' });
-    if (!calendar) throw new Error('calendar came back null');
-
-    expect(calendar.days['06']).toHaveLength(2);
-    const recurring = calendar.days['06']?.find((entry) => entry.recurring);
-    const exact = calendar.days['06']?.find((entry) => !entry.recurring);
-    expect(recurring?.entity.canonicalKey).toBe('date:--03-06');
-    expect(exact?.entity.canonicalKey).toBe('date:2026-03-06');
-    // Both carry their live hub connection.
-    expect(exact?.connections.map((conn) => conn.other.id)).toContain(hubId);
-    expect(recurring?.connections.map((conn) => conn.other.id)).toContain(hubId);
-
-    expect(calendar.monthEntry?.entity.canonicalKey).toBe('date:2026-03');
-    expect(calendar.monthEntry?.connections.map((conn) => conn.other.id)).toContain(hubId);
-  });
-
-  it('carries a second hop for events, and never for broad kinds', async (ctx) => {
-    if (!dbUp) return ctx.skip();
-    const calendar = await getKnowledgeGraphCalendar(db, { month: '2026-03' });
-    if (!calendar) throw new Error('calendar came back null');
-
-    const exact = calendar.days['06']?.find((entry) => !entry.recurring);
-    const eventConn = exact?.connections.find((conn) => conn.other.kind === 'event');
-    // The person on the event surfaces; the event's edge back to the date
-    // itself does not (that day has its own cell).
-    expect(eventConn?.other.label).toBe('Spring offsite');
-    expect(eventConn?.related.map((item) => item.label)).toEqual(['Brynja']);
-
-    // A topic hub with 85 neighbours is never expanded into the cell.
-    const hubConn = exact?.connections.find((conn) => conn.other.id === hubId);
-    expect(hubConn?.related).toEqual([]);
-  });
-
-  it('leaves year-only and other-month dates out, and drops stale edges', async (ctx) => {
-    if (!dbUp) return ctx.skip();
-    const calendar = await getKnowledgeGraphCalendar(db, { month: '2026-03' });
-    if (!calendar) throw new Error('calendar came back null');
-
-    const allEntities = Object.values(calendar.days)
-      .flat()
-      .map((entry) => entry.entity.canonicalKey);
-    expect(allEntities).not.toContain('date:2026');
-    expect(allEntities).not.toContain('date:2026-04-02');
-
-    // The only edge touching 21 March is rejected: the entity appears (it is
-    // a real node) but shows no connections, and the counts exclude the edge.
-    // Year-only and other-month entities are not in the month's id set, so
-    // their edges are not counted either — three hub edges plus the event's
-    // happens_on remain.
-    expect(calendar.days['21']).toHaveLength(1);
-    expect(calendar.days['21']?.[0]?.connections).toHaveLength(0);
-    expect(calendar.totalConnections).toBe(4);
-    expect(calendar.shownConnections).toBe(4);
-  });
-
-  it('answers an empty month without inventing rows', async (ctx) => {
-    if (!dbUp) return ctx.skip();
-    const calendar = await getKnowledgeGraphCalendar(db, { month: '2031-11' });
-    expect(calendar).toMatchObject({
-      month: '2031-11',
-      days: {},
-      monthEntry: null,
-      totalConnections: 0,
-      shownConnections: 0,
-    });
   });
 });

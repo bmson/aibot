@@ -3,6 +3,7 @@ import {
   createDb,
   type Db,
   knowledgeGraphEntities,
+  knowledgeGraphEntityAliases,
   knowledgeGraphRelations,
   knowledgeGraphSources,
   memories,
@@ -18,6 +19,7 @@ import {
   GRAPH_EXTRACTION_VERSION,
   graphRelationshipIsGrounded,
   retryQuarantinedKnowledgeGraphSources,
+  retypeGraphEntity,
   syncKnowledgeGraph,
 } from './knowledge-graph.js';
 
@@ -599,6 +601,157 @@ describe('knowledge graph sync and recall', () => {
       queryEmbedding: unit(46),
     });
     expect(recalled.block).not.toContain(`${MARKER} Manual Project`);
+  });
+
+  it('links an owner fact to existing entities by id, without retyping names', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [subject, object] = await db
+      .insert(knowledgeGraphEntities)
+      .values([
+        {
+          agentId,
+          canonicalKey: `person:${MARKER} linked person`,
+          label: `${MARKER} Linked Person`,
+          kind: 'person',
+        },
+        {
+          agentId,
+          canonicalKey: `organization:${MARKER} linked org`,
+          label: `${MARKER} Linked Org`,
+          kind: 'organization',
+        },
+      ])
+      .returning({ id: knowledgeGraphEntities.id });
+
+    const saved = await createOwnerKnowledgeGraphFact(
+      {
+        db,
+        agentId,
+        router: {
+          async embed() {
+            return [unit(45)];
+          },
+        },
+      },
+      {
+        // Labels deliberately empty: an id-resolved endpoint takes its label
+        // and kind from the entity itself.
+        subject: { label: '', kind: 'topic', id: subject?.id },
+        predicate: 'advises',
+        object: { label: '', kind: 'topic', id: object?.id },
+        note: 'Board work the owner noted directly.',
+      },
+    );
+    expect(saved.error).toBeUndefined();
+    if (!saved.relationId) throw new Error('owner fact was not saved');
+    const [relation] = await db
+      .select({
+        subjectEntityId: knowledgeGraphRelations.subjectEntityId,
+        objectEntityId: knowledgeGraphRelations.objectEntityId,
+      })
+      .from(knowledgeGraphRelations)
+      .where(eq(knowledgeGraphRelations.id, saved.relationId));
+    expect(relation?.subjectEntityId).toBe(subject?.id);
+    expect(relation?.objectEntityId).toBe(object?.id);
+
+    // A stale id is a clean refusal, not a half-written fact.
+    const stale = await createOwnerKnowledgeGraphFact(
+      {
+        db,
+        agentId,
+        router: {
+          async embed() {
+            return [unit(45)];
+          },
+        },
+      },
+      {
+        subject: { label: '', kind: 'person', id: '00000000-0000-4000-8000-000000000000' },
+        predicate: 'advises',
+        object: { label: '', kind: 'organization', id: object?.id },
+        note: 'Board work the owner noted directly.',
+      },
+    );
+    expect(stale.error).toContain('no longer exists');
+  });
+
+  it('retypes an entity and records its old identity as an alias', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [entity] = await db
+      .insert(knowledgeGraphEntities)
+      .values({
+        agentId,
+        canonicalKey: `organization:${MARKER} retype me`,
+        label: `${MARKER} Retype Me`,
+        kind: 'organization',
+      })
+      .returning({ id: knowledgeGraphEntities.id });
+    if (!entity) throw new Error('retype fixture was not created');
+
+    const result = await retypeGraphEntity(db, agentId, entity.id, 'project');
+    expect(result.error).toBeUndefined();
+
+    const [updated] = await db
+      .select({
+        kind: knowledgeGraphEntities.kind,
+        canonicalKey: knowledgeGraphEntities.canonicalKey,
+      })
+      .from(knowledgeGraphEntities)
+      .where(eq(knowledgeGraphEntities.id, entity.id));
+    expect(updated).toEqual({
+      kind: 'project',
+      canonicalKey: `project:${normalizedKey(`${MARKER} retype me`)}`,
+    });
+
+    // The old identity resolves to the same node, so a delayed extraction of
+    // an older source never recreates it under the previous kind.
+    const [aliasRow] = await db
+      .select({ entityId: knowledgeGraphEntityAliases.entityId })
+      .from(knowledgeGraphEntityAliases)
+      .where(
+        and(
+          eq(knowledgeGraphEntityAliases.agentId, agentId),
+          eq(knowledgeGraphEntityAliases.canonicalKey, `organization:${MARKER} retype me`),
+        ),
+      );
+    expect(aliasRow?.entityId).toBe(entity.id);
+
+    // Retyping back is a no-op-succeeds path, and the same kind is a no-op.
+    expect((await retypeGraphEntity(db, agentId, entity.id, 'project')).error).toBeUndefined();
+  });
+
+  it('declines a retype that would collide with an existing entity', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [entity] = await db
+      .insert(knowledgeGraphEntities)
+      .values({
+        agentId,
+        canonicalKey: `organization:${MARKER} manual project`,
+        label: `${MARKER} Manual Project`,
+        kind: 'organization',
+      })
+      .returning({ id: knowledgeGraphEntities.id });
+    if (!entity) throw new Error('collision fixture was not created');
+
+    // The owner-fact test above created `project:${MARKER} manual project`.
+    const result = await retypeGraphEntity(db, agentId, entity.id, 'project');
+    expect(result.error).toContain('Merge');
+  });
+
+  it('refuses to retype a date entity', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [entity] = await db
+      .insert(knowledgeGraphEntities)
+      .values({
+        agentId,
+        canonicalKey: 'date:2027-01-15',
+        label: '15 January 2027',
+        kind: 'date',
+      })
+      .returning({ id: knowledgeGraphEntities.id });
+    if (!entity) throw new Error('date fixture was not created');
+    const result = await retypeGraphEntity(db, agentId, entity.id, 'event');
+    expect(result.error).toContain('canonical');
   });
 
   it('retains a matching owner decision when its source is re-extracted', async (ctx) => {

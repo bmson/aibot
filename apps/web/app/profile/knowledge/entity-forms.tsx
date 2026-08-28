@@ -7,10 +7,11 @@ import {
   type KnowledgeActionState,
   mergeKnowledgeEntity,
   renameKnowledgeEntity,
+  retypeKnowledgeEntity,
   searchKnowledgeEntities,
 } from '@/app/profile/knowledge/actions';
-import { entityKindLabel } from '@/lib/knowledge';
-import { btnSm, inputClass, labelClass } from '@/lib/ui';
+import { ENTITY_KINDS, entityKindLabel } from '@/lib/knowledge';
+import { btnSm, inputClass, labelClass, selectClass } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 
 const initialState: KnowledgeActionState = { error: null, success: null };
@@ -58,6 +59,53 @@ export function RenameEntity({ entity }: { entity: KnowledgeGraphEntityView }) {
       <div className="flex flex-wrap items-center gap-2">
         <SubmitButton size="sm" pendingLabel="Saving…">
           Rename display
+        </SubmitButton>
+        <ActionMessage state={state} />
+      </div>
+    </form>
+  );
+}
+
+/**
+ * Change an entity's kind — the missing curation action. Dates are excluded:
+ * their identity is a canonical date key, not a label, so retyping one would
+ * produce exactly the kind of ambiguous node the canonicalizer exists to
+ * prevent. The server declines with a merge hint when the target identity
+ * already exists.
+ */
+export function RetypeEntity({ entity }: { entity: KnowledgeGraphEntityView }) {
+  const [state, formAction] = useActionState(
+    retypeKnowledgeEntity.bind(null, entity.id),
+    initialState,
+  );
+  const [kind, setKind] = useState(entity.kind);
+  const isDate = entity.kind === 'date';
+  return (
+    <form action={formAction} className="grid gap-2">
+      <label className={`grid gap-1 ${labelClass}`}>
+        Type
+        <select
+          name="kind"
+          value={kind}
+          onChange={(event) => setKind(event.target.value)}
+          disabled={isDate}
+          className={selectClass}
+        >
+          {ENTITY_KINDS.map((value) => (
+            <option key={value} value={value}>
+              {entityKindLabel(value)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="text-xs leading-5 text-muted">
+        {isDate
+          ? 'Dates keep their canonical identity and cannot change type.'
+          : 'Changes how this item is filed. Its connections stay, and future extractions under the old identity still land here.'}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <SubmitButton size="sm" pendingLabel="Updating…" disabled={isDate || kind === entity.kind}>
+          Change type
         </SubmitButton>
         <ActionMessage state={state} />
       </div>

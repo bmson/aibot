@@ -59,15 +59,17 @@ export interface Viewport {
   scale: number;
 }
 
-export const VIEW_W = 760;
-export const VIEW_H = 420;
+export const VIEW_W = 820;
+export const VIEW_H = 520;
 export const CX = VIEW_W / 2;
 export const CY = VIEW_H / 2;
-export const CENTER_R = 13;
-export const NODE_R = 7;
+export const CENTER_R = 15;
+export const NODE_R = 9;
 /** Invisible hit disc: 44px diameter keeps nodes operable on touch screens. */
 export const HIT_R = 22;
-/** Past this many nodes, labels hide until hover/focus — they overlap into mush. */
+/** Radius of the ring a second hop fans out on, measured from its parent. */
+export const EXPAND_R = 130;
+/** Past this many nodes, labels hide until hover/focus/selection — they overlap into mush. */
 export const LABEL_LIMIT = 28;
 /** One expansion click's budget, mirrored by the server action's clamp. */
 export const EXPANSION_LIMIT = 50;
@@ -91,8 +93,33 @@ export function entityHref(entityId: string, query: string, kind: string): strin
 
 /** The first ring grows its ellipse with degree, so a hub spreads instead of stacking. */
 export function ringRadii(count: number): { rx: number; ry: number } {
-  const growth = Math.max(1, Math.min(3, 1 + (count - 12) / 60));
-  return { rx: 230 * growth, ry: 150 * growth };
+  const growth = Math.max(1, Math.min(2.6, 1 + (count - 12) / 55));
+  return { rx: 280 * growth, ry: 190 * growth };
+}
+
+/**
+ * Smallest arc a kind sector may occupy (~31°). A singleton kind still gets
+ * breathing room; without the floor its node would sit on a neighbour's label.
+ */
+export const MIN_SECTOR = 0.55;
+
+/**
+ * Divide the circle among kinds proportionally to how much each renders, with
+ * the floor above, normalized back to 2π. Deterministic — the same canvas
+ * always lays out identically, which is what keeps the drawing testable.
+ */
+export function sectorSpans(counts: number[]): Array<{ start: number; span: number }> {
+  const total = counts.reduce((sum, count) => sum + count, 0);
+  if (total === 0) return [];
+  const raw = counts.map((count) => Math.max(MIN_SECTOR, (count / total) * 2 * Math.PI));
+  const scale = (2 * Math.PI) / raw.reduce((sum, span) => sum + span, 0);
+  let cursor = -Math.PI / 2;
+  return raw.map((span) => {
+    const scaled = span * scale;
+    const sector = { start: cursor, span: scaled };
+    cursor += scaled;
+    return sector;
+  });
 }
 
 /**
@@ -158,23 +185,22 @@ export function initialCanvas(
     uniqueOthers.push(edge.other);
   }
   const groups = groupByKind(uniqueOthers, revealed);
-  const renderedTotal = groups.reduce(
-    (total, group) => total + group.shown.length + (group.remaining > 0 ? 1 : 0),
-    0,
-  );
+  const renderedCounts = groups.map((group) => group.shown.length + (group.remaining > 0 ? 1 : 0));
+  const renderedTotal = renderedCounts.reduce((total, count) => total + count, 0);
   const { rx, ry } = ringRadii(renderedTotal);
   const nodes: CanvasNode[] = [{ ...center, x: CX, y: CY, ring: 0, parentId: null }];
 
-  const sectorAngle = (2 * Math.PI) / groups.length;
+  const sectors = sectorSpans(renderedCounts);
   groups.forEach((group, groupIndex) => {
-    const sectorStart = -Math.PI / 2 + groupIndex * sectorAngle;
+    const sector = sectors[groupIndex];
+    if (!sector) return;
     // Padding keeps the outermost nodes of adjacent kinds from touching.
-    const pad = Math.min(0.18, sectorAngle * 0.2);
-    const slots = group.shown.length + (group.remaining > 0 ? 1 : 0);
+    const pad = Math.min(0.18, sector.span * 0.15);
+    const slots = renderedCounts[groupIndex] ?? 1;
     const angleFor = (slot: number) =>
       slots === 1
-        ? sectorStart + sectorAngle / 2
-        : sectorStart + pad + (slot * (sectorAngle - 2 * pad)) / (slots - 1);
+        ? sector.start + sector.span / 2
+        : sector.start + pad + (slot * (sector.span - 2 * pad)) / (slots - 1);
     group.shown.forEach((other, index) => {
       const angle = angleFor(index);
       nodes.push({
@@ -261,8 +287,8 @@ export function mergeExpansion(
         : startAngle + (index * spread) / (placed.length - 1);
     return {
       ...other,
-      x: parent.x + 110 * Math.cos(angle),
-      y: parent.y + 110 * Math.sin(angle),
+      x: parent.x + EXPAND_R * Math.cos(angle),
+      y: parent.y + EXPAND_R * Math.sin(angle),
       ring: parent.ring + 1,
       parentId,
     };

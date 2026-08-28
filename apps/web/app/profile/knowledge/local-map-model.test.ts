@@ -5,6 +5,7 @@ import {
   CX,
   CY,
   clampScale,
+  EXPAND_R,
   edgeLine,
   entityHref,
   INITIAL_VIEWPORT,
@@ -13,10 +14,14 @@ import {
   MAX_SCALE,
   type MapEdgeInput,
   MIN_SCALE,
+  MIN_SECTOR,
   mergeExpansion,
   panBy,
   ringRadii,
+  sectorSpans,
   toViewPoint,
+  VIEW_H,
+  VIEW_W,
   zoomAt,
 } from '@/app/profile/knowledge/local-map-model';
 
@@ -79,7 +84,24 @@ describe('initialCanvas', () => {
   it('widens the ring as degree grows so hubs spread instead of stacking', () => {
     expect(ringRadii(6)).toEqual(ringRadii(12));
     expect(ringRadii(120).rx).toBeGreaterThan(ringRadii(12).rx);
-    expect(ringRadii(10000).rx).toBeLessThanOrEqual(230 * 3);
+    expect(ringRadii(10000).rx).toBeLessThanOrEqual(280 * 2.6);
+  });
+
+  it('divides the circle proportionally with a floor for small kinds', () => {
+    const spans = sectorSpans([13, 2]);
+    expect(spans).toHaveLength(2);
+    const total = spans.reduce((sum, sector) => sum + sector.span, 0);
+    expect(total).toBeCloseTo(2 * Math.PI, 5);
+    // The bigger kind gets the bigger arc; the small one clears the floor.
+    expect(spans[0]?.span ?? 0).toBeGreaterThan(spans[1]?.span ?? 0);
+    expect(spans[1]?.span ?? 0).toBeGreaterThanOrEqual(MIN_SECTOR - 0.001);
+    // Sectors tile the circle: each starts where the last ended.
+    expect(spans[1]?.start ?? 0).toBeCloseTo((spans[0]?.start ?? 0) + (spans[0]?.span ?? 0), 5);
+
+    // A singleton kind still gets breathing room.
+    const [lonely] = sectorSpans([1]);
+    expect(lonely?.span ?? 0).toBeCloseTo(2 * Math.PI, 5);
+    expect(sectorSpans([])).toEqual([]);
   });
 
   it('bands neighbours into per-kind sectors capped at a page each', () => {
@@ -112,13 +134,18 @@ describe('initialCanvas', () => {
     // or announced.
     expect(canvas.edges).toHaveLength(KIND_PAGE_SIZE + 2);
 
-    // Kinds occupy distinct sectors: with two kinds, project ranks before date
-    // in KIND_ORDER, so projects take the right half and dates the left.
-    const projects = canvas.nodes.filter((node) => node.kind === 'project');
-    expect(projects.length).toBeGreaterThan(0);
-    expect(projects.every((node) => node.x >= CX - 0.001)).toBe(true);
-    expect(dates.every((node) => node.x <= CX + 0.001)).toBe(true);
-    expect(pager && pager.x <= CX + 0.001).toBe(true);
+    // Kinds occupy distinct sectors: no project node shares an angle with a
+    // date node.
+    const angleOf = (node: { x: number; y: number }) =>
+      (Math.atan2(node.y - CY, node.x - CX) + 2 * Math.PI) % (2 * Math.PI);
+    const projectAngles = new Set(
+      canvas.nodes
+        .filter((node) => node.kind === 'project')
+        .map((node) => angleOf(node).toFixed(3)),
+    );
+    for (const node of dates) {
+      expect(projectAngles.has(angleOf(node).toFixed(3))).toBe(false);
+    }
   });
 
   it('reveals the next page of a kind without reshuffling it', () => {
@@ -163,7 +190,7 @@ describe('mergeExpansion', () => {
     for (const child of children) {
       expect(child.parentId).toBe('a');
       expect(Math.hypot(child.x - (parent?.x ?? 0), child.y - (parent?.y ?? 0))).toBeCloseTo(
-        110,
+        EXPAND_R,
         0,
       );
     }
@@ -238,9 +265,15 @@ describe('viewport math', () => {
   });
 
   it('maps client pixels into viewBox units', () => {
-    const point = toViewPoint(200, 50, { left: 100, top: 10, width: 760, height: 420 });
-    expect(point.x).toBeCloseTo(100);
-    expect(point.y).toBeCloseTo(40);
+    // The rect is half the viewBox's size, so client distances double.
+    const point = toViewPoint(200, 50, {
+      left: 100,
+      top: 10,
+      width: VIEW_W / 2,
+      height: VIEW_H / 2,
+    });
+    expect(point.x).toBeCloseTo(200);
+    expect(point.y).toBeCloseTo(80);
   });
 });
 
