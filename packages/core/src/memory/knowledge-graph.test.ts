@@ -18,6 +18,7 @@ import {
   createOwnerKnowledgeGraphFact,
   GRAPH_EXTRACTION_VERSION,
   graphRelationshipIsGrounded,
+  mergeGraphEntities,
   retryQuarantinedKnowledgeGraphSources,
   retypeGraphEntity,
   syncKnowledgeGraph,
@@ -169,6 +170,45 @@ describe('knowledge graph sync and recall', () => {
     ).toBe(false);
   });
 
+  it('requires word-boundary matches, so substrings of real words cannot ground an edge', () => {
+    // "Ann" is a substring of "Anna" — substring matching used to accept this.
+    expect(
+      graphRelationshipIsGrounded('Anna works at Acme.', {
+        subject: { label: 'Ann' },
+        predicate: 'works_at',
+        object: { label: 'Acme' },
+        evidenceQuote: 'Anna works at Acme.',
+      }),
+    ).toBe(false);
+    // "Art" is a substring of "artist".
+    expect(
+      graphRelationshipIsGrounded('Anna visited an artist in Reykjavik.', {
+        subject: { label: 'Anna' },
+        predicate: 'visited',
+        object: { label: 'Art' },
+        evidenceQuote: 'Anna visited an artist',
+      }),
+    ).toBe(false);
+    // The predicate word must be a real word too, not a fragment.
+    expect(
+      graphRelationshipIsGrounded('Anna saw the cat at Acme.', {
+        subject: { label: 'Anna' },
+        predicate: 'works_at',
+        object: { label: 'Acme' },
+        evidenceQuote: 'Anna saw the cat at Acme.',
+      }),
+    ).toBe(false);
+    // Possessives and ordinary prose still match.
+    expect(
+      graphRelationshipIsGrounded("Anna works at Acme's office.", {
+        subject: { label: 'Anna' },
+        predicate: 'works_at',
+        object: { label: 'Acme' },
+        evidenceQuote: "Anna works at Acme's office.",
+      }),
+    ).toBe(true);
+  });
+
   it('backs facts into direct relations and expands a qualified seed by two hops', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const [first] = await db
@@ -247,6 +287,16 @@ describe('knowledge graph sync and recall', () => {
     expect(visited).toBeDefined();
     expect(visited?.validFrom).toBeNull();
     expect(visited?.validUntil).toBeNull();
+
+    // And the span travels into recall, so a time-aware question has the
+    // dates to reason over instead of a bare employer name.
+    const recalled = await recallKnowledgeGraph(db, {
+      agentId,
+      queryText: `${MARKER} where did the owner work before`,
+      queryEmbedding: unit(44),
+    });
+    expect(recalled.block).toContain('worked at');
+    expect(recalled.block).toContain('(2019 to 2023-03)');
   });
 
   it('re-extracts edited source content instead of retaining its old edge', async (ctx) => {
@@ -754,6 +804,103 @@ describe('knowledge graph sync and recall', () => {
     expect(result.error).toContain('canonical');
   });
 
+  it('deduplicates edges a merge makes identical, keeping the confirmed one', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [memory] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} dedup source.`,
+        contentHash: `${MARKER}-dedup-source`,
+        embedding: unit(69),
+        originTrust: 'owner',
+      })
+      .returning({ id: memories.id });
+    if (!memory) throw new Error('dedup memory was not created');
+    const [target, absorbed, other] = await db
+      .insert(knowledgeGraphEntities)
+      .values([
+        {
+          agentId,
+          canonicalKey: `topic:${MARKER} dedup target`,
+          label: `${MARKER} Dedup Target`,
+          kind: 'topic',
+        },
+        {
+          agentId,
+          canonicalKey: `topic:${MARKER} dedup absorbed`,
+          label: `${MARKER} Dedup Absorbed`,
+          kind: 'topic',
+        },
+        {
+          agentId,
+          canonicalKey: `organization:${MARKER} dedup other`,
+          label: `${MARKER} Dedup Other`,
+          kind: 'organization',
+        },
+      ])
+      .returning({ id: knowledgeGraphEntities.id });
+    if (!target || !absorbed || !other) throw new Error('dedup fixtures were not created');
+
+    await db.insert(knowledgeGraphRelations).values([
+      // The confirmed edge on the survivor.
+      {
+        agentId,
+        subjectEntityId: target.id,
+        predicate: 'likes',
+        objectEntityId: other.id,
+        sourceMemoryId: memory.id,
+        evidenceQuote: `${MARKER} dedup source.`,
+        sourceFingerprint: `${MARKER}-dedup-a`,
+        ordinal: 1,
+        confidence: '0.90',
+        reviewStatus: 'confirmed' as const,
+      },
+      // The same semantic edge on the absorbed entity, still unreviewed.
+      {
+        agentId,
+        subjectEntityId: absorbed.id,
+        predicate: 'likes',
+        objectEntityId: other.id,
+        sourceMemoryId: memory.id,
+        evidenceQuote: `${MARKER} dedup source.`,
+        sourceFingerprint: `${MARKER}-dedup-b`,
+        ordinal: 2,
+        confidence: '0.95',
+        reviewStatus: 'unreviewed' as const,
+      },
+      // An edge between the two, which becomes a self-loop after the merge.
+      {
+        agentId,
+        subjectEntityId: target.id,
+        predicate: 'mentions',
+        objectEntityId: absorbed.id,
+        sourceMemoryId: memory.id,
+        evidenceQuote: `${MARKER} dedup source.`,
+        sourceFingerprint: `${MARKER}-dedup-self`,
+        ordinal: 3,
+        confidence: '0.80',
+      },
+    ]);
+
+    await mergeGraphEntities(db, agentId, absorbed.id, target.id);
+
+    const remaining = await db
+      .select({
+        predicate: knowledgeGraphRelations.predicate,
+        reviewStatus: knowledgeGraphRelations.reviewStatus,
+        confidence: knowledgeGraphRelations.confidence,
+      })
+      .from(knowledgeGraphRelations)
+      .where(eq(knowledgeGraphRelations.sourceMemoryId, memory.id));
+    // One deduplicated edge survives; the self-loop is gone.
+    expect(remaining).toEqual([
+      { predicate: 'likes', reviewStatus: 'confirmed', confidence: '0.90' },
+    ]);
+  });
+
   it('retains a matching owner decision when its source is re-extracted', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const [memory] = await db
@@ -1213,5 +1360,129 @@ describe('knowledge graph sync and recall', () => {
     });
 
     expect(await countRelativeDateSources(db, agentId)).toBe(before + 1);
+  });
+});
+
+describe('cross-agent graph safety (integration)', () => {
+  let otherAgentId: string;
+  const recordedSystems: string[] = [];
+
+  /** A router stub that records the system prompt of every extraction call. */
+  const recordingRouter = {
+    async object(_: string, input: { prompt?: string; system?: string }) {
+      recordedSystems.push(input.system ?? '');
+      return {
+        ok: true,
+        object: {
+          relationships: [
+            {
+              subject: { label: `${MARKER} timezone`, kind: 'topic' },
+              predicate: 'probe',
+              object: { label: 'probe', kind: 'topic' },
+              evidenceQuote: `${MARKER} timezone probe`,
+              confidence: 0.9,
+            },
+          ],
+        },
+      };
+    },
+  } as unknown as ModelRouter;
+
+  beforeAll(async () => {
+    if (!dbUp) return;
+    const [other] = await db
+      .insert(agents)
+      .values({
+        name: 'Other Agent',
+        email: `${MARKER}-other@example.com`,
+        workspacePrefix: `${MARKER}-other`,
+        timezone: 'Pacific/Auckland',
+        locale: 'is',
+      })
+      .returning({ id: agents.id });
+    if (!other) throw new Error('other agent was not created');
+    otherAgentId = other.id;
+  });
+
+  afterAll(async () => {
+    if (!dbUp) return;
+    await db.delete(memories).where(eq(memories.agentId, otherAgentId));
+    await db.delete(agents).where(eq(agents.id, otherAgentId));
+  });
+
+  it('refuses to merge an entity owned by another agent', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [mine, theirs] = await db
+      .insert(knowledgeGraphEntities)
+      .values([
+        {
+          agentId,
+          canonicalKey: `topic:${MARKER} mine`,
+          label: `${MARKER} Mine`,
+          kind: 'topic',
+        },
+        {
+          agentId: otherAgentId,
+          canonicalKey: `topic:${MARKER} theirs`,
+          label: `${MARKER} Theirs`,
+          kind: 'topic',
+        },
+      ])
+      .returning({ id: knowledgeGraphEntities.id });
+    if (!mine || !theirs) throw new Error('cross-agent fixtures were not created');
+
+    // Both directions must no-op: theirs as source, theirs as target.
+    await mergeGraphEntities(db, agentId, theirs.id, mine.id);
+    await mergeGraphEntities(db, agentId, mine.id, theirs.id);
+
+    const rows = await db
+      .select({ id: knowledgeGraphEntities.id })
+      .from(knowledgeGraphEntities)
+      .where(like(knowledgeGraphEntities.canonicalKey, `topic:${MARKER}%`));
+    const ids = rows.map((row) => row.id);
+    expect(ids).toContain(mine.id);
+    expect(ids).toContain(theirs.id);
+  });
+
+  it('anchors each source in its own agent’s timezone and locale', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    await db.insert(memories).values([
+      {
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} timezone probe from the main agent.`,
+        contentHash: `${MARKER}-tz-main`,
+        embedding: unit(70),
+        confidence: '0.90',
+      },
+      {
+        agentId: otherAgentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} timezone probe from the other agent.`,
+        contentHash: `${MARKER}-tz-other`,
+        embedding: unit(71),
+        confidence: '0.90',
+      },
+    ]);
+
+    const [mainAgent] = await db
+      .select({ timezone: agents.timezone })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .limit(1);
+    const mainZone = mainAgent?.timezone ?? 'UTC';
+
+    recordedSystems.length = 0;
+    // Unscoped: one sync run touches both agents.
+    await syncKnowledgeGraph({ db, router: recordingRouter });
+
+    // Each extraction must have been prompted in its owner's terms, not the
+    // first agent the run happened to load.
+    const mainCall = recordedSystems.find((system) => system.includes(`(${mainZone})`));
+    const otherCall = recordedSystems.find((system) => system.includes('(Pacific/Auckland)'));
+    expect(mainCall).toBeDefined();
+    expect(otherCall).toBeDefined();
   });
 });

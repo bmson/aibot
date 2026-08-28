@@ -24,6 +24,7 @@
     "./memory/location": "./src/memory/location.ts",
     "./memory/knowledge-graph": "./src/memory/knowledge-graph.ts",
     "./memory/occasions": "./src/memory/occasions.ts",
+    "./memory/predicate-vocabulary": "./src/memory/predicate-vocabulary.ts",
     "./memory/recall": "./src/memory/recall.ts",
     "./memory/recall-metrics": "./src/memory/recall-metrics.ts",
     "./memory/skills": "./src/memory/skills.ts",

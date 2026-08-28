@@ -4,6 +4,7 @@ import {
   countRelativeDateSources,
   createOwnerKnowledgeGraphFact,
   GRAPH_ENTITY_KINDS,
+  GRAPH_EXTRACTION_VERSION,
   type GraphEntityKind,
   meanExtractionCostUsd,
   mergeGraphEntities,
@@ -19,9 +20,33 @@ import {
   memories,
   namePrefixMatch,
 } from '@assistant/db';
-import { and, asc, count, desc, eq, gt, ilike, isNull, ne, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  gte,
+  ilike,
+  isNotNull,
+  isNull,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { type AnyPgColumn, alias } from 'drizzle-orm/pg-core';
 import type { EmbeddingPort } from './profile/commands.js';
+
+// The typed predicate vocabulary is domain data the add-relationship form
+// needs as plain serializable props; re-exported so the web layer never
+// reaches past the application boundary. Package subpath specifiers in this
+// repo are extensionless — the exports-map key carries no `.js`.
+export type { PredicateSpec } from '@assistant/core/memory/predicate-vocabulary';
+export {
+  PREDICATE_VOCABULARY,
+  predicateSuggestionsFor,
+} from '@assistant/core/memory/predicate-vocabulary';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -45,6 +70,8 @@ export interface KnowledgeGraphRelationView {
   /** Temporal qualifiers as canonical date keys, when the source states a span. */
   validFrom: string | null;
   validUntil: string | null;
+  /** True when GraphRAG can currently traverse this edge (see activeGraphWhere in core). */
+  inRecall: boolean;
   source: {
     memoryId: string;
     content: string;
@@ -140,6 +167,30 @@ export function asGraphEntityKind(value: string | undefined): GraphEntityKind | 
   return value && (GRAPH_ENTITY_KINDS as readonly string[]).includes(value)
     ? (value as GraphEntityKind)
     : undefined;
+}
+
+/**
+ * Recall eligibility for owner-facing queries — the drizzle mirror of
+ * `activeGraphWhere` in core's graph-recall.ts. An edge the UI calls "active"
+ * must be one GraphRAG could actually traverse: current, source-backed,
+ * ready-checkpointed, and embedded. The review list shows every edge (it is
+ * the audit surface) but flags the ineligible ones; the map and the "active
+ * edge" counts use this filter. Keep the two sides aligned — the parity is
+ * pinned by tests in this package and in core.
+ */
+function activeRelationConditions(agentId: string) {
+  return and(
+    eq(knowledgeGraphRelations.agentId, agentId),
+    ne(knowledgeGraphRelations.reviewStatus, 'rejected'),
+    eq(memories.category, 'knowledge'),
+    eq(memories.quarantined, false),
+    or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
+    isNotNull(memories.embedding),
+    eq(knowledgeGraphSources.status, 'ready'),
+    eq(knowledgeGraphSources.contentHash, memories.contentHash),
+    gte(knowledgeGraphSources.extractionVersion, GRAPH_EXTRACTION_VERSION),
+    isNotNull(knowledgeGraphRelations.evidenceQuote),
+  );
 }
 
 /** Owner-facing, bounded graph inspection. It reads only source-backed edges. */
@@ -308,6 +359,7 @@ export async function getKnowledgeGraphOverview(
         reviewedAt: knowledgeGraphRelations.reviewedAt,
         validFrom: knowledgeGraphRelations.validFrom,
         validUntil: knowledgeGraphRelations.validUntil,
+        hasEvidence: sql<boolean>`${knowledgeGraphRelations.evidenceQuote} IS NOT NULL`,
         subjectId: subject.id,
         subjectLabel: displayLabel(subject),
         subjectKind: subject.kind,
@@ -321,11 +373,19 @@ export async function getKnowledgeGraphOverview(
         sourceCreatedAt: memories.createdAt,
         sourceOwnerConfirmed: memories.ownerConfirmed,
         sourceOriginTrust: memories.originTrust,
+        memoryContentHash: memories.contentHash,
+        memoryQuarantined: memories.quarantined,
+        memoryExpiresAt: memories.expiresAt,
+        memoryEmbedded: sql<boolean>`${memories.embedding} IS NOT NULL`,
+        checkpointStatus: knowledgeGraphSources.status,
+        checkpointContentHash: knowledgeGraphSources.contentHash,
+        checkpointVersion: knowledgeGraphSources.extractionVersion,
       })
       .from(knowledgeGraphRelations)
       .innerJoin(subject, eq(knowledgeGraphRelations.subjectEntityId, subject.id))
       .innerJoin(object, eq(knowledgeGraphRelations.objectEntityId, object.id))
       .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
+      .leftJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
       .where(incidentToSelected)
       .orderBy(
         asc(
@@ -338,9 +398,12 @@ export async function getKnowledgeGraphOverview(
     db
       .select({ value: count() })
       .from(knowledgeGraphRelations)
-      .where(and(incidentToSelected, ne(knowledgeGraphRelations.reviewStatus, 'rejected'))),
+      .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
+      .innerJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
+      .where(and(incidentToSelected, activeRelationConditions(agent.id))),
     findDuplicateKnowledgeGraphEntities(db, selected),
   ]);
+  const now = new Date();
   const relations = relationRows.map((row) => ({
     id: row.id,
     subject: {
@@ -361,6 +424,17 @@ export async function getKnowledgeGraphOverview(
     reviewedAt: row.reviewedAt,
     validFrom: row.validFrom,
     validUntil: row.validUntil,
+    // JS mirror of activeRelationConditions, so the audit list can flag an
+    // edge GraphRAG currently cannot traverse without hiding it from review.
+    inRecall:
+      row.reviewStatus !== 'rejected' &&
+      row.checkpointStatus === 'ready' &&
+      row.checkpointContentHash === row.memoryContentHash &&
+      (row.checkpointVersion ?? 0) >= GRAPH_EXTRACTION_VERSION &&
+      !row.memoryQuarantined &&
+      (!row.memoryExpiresAt || row.memoryExpiresAt > now) &&
+      row.memoryEmbedded &&
+      row.hasEvidence,
     source: {
       memoryId: row.sourceMemoryId,
       content: row.sourceContent,
@@ -441,12 +515,11 @@ export async function getKnowledgeGraphNeighborhood(
   const subject = alias(knowledgeGraphEntities, 'neighbourhood_subject');
   const object = alias(knowledgeGraphEntities, 'neighbourhood_object');
   const incidentActive = and(
-    eq(knowledgeGraphRelations.agentId, agent.id),
-    ne(knowledgeGraphRelations.reviewStatus, 'rejected'),
     or(
       eq(knowledgeGraphRelations.subjectEntityId, entity.id),
       eq(knowledgeGraphRelations.objectEntityId, entity.id),
     ),
+    activeRelationConditions(agent.id),
   );
   const [rows, [totalRow]] = await Promise.all([
     db
@@ -466,13 +539,20 @@ export async function getKnowledgeGraphNeighborhood(
       .from(knowledgeGraphRelations)
       .innerJoin(subject, eq(knowledgeGraphRelations.subjectEntityId, subject.id))
       .innerJoin(object, eq(knowledgeGraphRelations.objectEntityId, object.id))
+      .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
+      .innerJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
       .where(incidentActive)
       .orderBy(
         asc(sql`CASE ${knowledgeGraphRelations.reviewStatus} WHEN 'confirmed' THEN 0 ELSE 1 END`),
         desc(knowledgeGraphRelations.createdAt),
       )
       .limit(limit),
-    db.select({ value: count() }).from(knowledgeGraphRelations).where(incidentActive),
+    db
+      .select({ value: count() })
+      .from(knowledgeGraphRelations)
+      .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
+      .innerJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
+      .where(incidentActive),
   ]);
   const edges = rows.map((row) => {
     const outbound = row.subjectId === entity.id;

@@ -1,10 +1,12 @@
 import { getAgent } from '@assistant/core/chat';
+import { GRAPH_EXTRACTION_VERSION } from '@assistant/core/memory/knowledge-graph';
 import {
   agents,
   createDb,
   type Db,
   knowledgeGraphEntities,
   knowledgeGraphRelations,
+  knowledgeGraphSources,
   memories,
 } from '@assistant/db';
 import { eq, like } from 'drizzle-orm';
@@ -35,6 +37,13 @@ let db: Db;
 let dbUp = false;
 let agentId: string;
 let hubId: string;
+
+/** A fixed non-null embedding: recall eligibility requires one. */
+function unitVector(): number[] {
+  const vector = new Array(1536).fill(0);
+  vector[3] = 1;
+  return vector;
+}
 
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
@@ -68,9 +77,20 @@ beforeAll(async () => {
         content: `${MARKER} hub relates to everything.`,
         contentHash: `${MARKER}-source`,
         confidence: '0.90',
+        embedding: unitVector(),
       })
       .returning({ id: memories.id });
     if (!memory) throw new Error('test memory was not created');
+
+    // The edges below are recall-eligible only with a ready, current
+    // checkpoint whose hash matches the memory — the same contract GraphRAG
+    // enforces, which is what the active-count tests now pin.
+    await db.insert(knowledgeGraphSources).values({
+      memoryId: memory.id,
+      contentHash: `${MARKER}-source`,
+      status: 'ready',
+      extractionVersion: GRAPH_EXTRACTION_VERSION,
+    });
 
     const [hub] = await db
       .insert(knowledgeGraphEntities)
@@ -423,6 +443,34 @@ describe('knowledge graph neighborhood (integration)', () => {
     expect(neighborhood.entity).toBeNull();
     expect(neighborhood.edges).toEqual([]);
     expect(neighborhood.total).toBe(0);
+  });
+
+  it('drops edges whose source went stale, while the review list keeps and flags them', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // Simulate a source edit the sync has not processed yet: the memory's hash
+    // moves on but the checkpoint does not. GraphRAG cannot traverse those
+    // edges, so the map and the active count must agree — and the audit list
+    // must say why they vanished rather than hiding the fact.
+    await db
+      .update(memories)
+      .set({ contentHash: `${MARKER}-source-edited` })
+      .where(eq(memories.contentHash, `${MARKER}-source`));
+    try {
+      const neighborhood = await getKnowledgeGraphNeighborhood(db, { entityId: hubId });
+      expect(neighborhood.total).toBe(0);
+      expect(neighborhood.edges).toEqual([]);
+
+      const overview = await getKnowledgeGraphOverview(db, { entityId: hubId });
+      expect(overview.selectedActiveRelationTotal).toBe(0);
+      expect(overview.selectedRelationTotal).toBe(ENTITY_COUNT);
+      expect(overview.relations.length).toBeGreaterThan(0);
+      expect(overview.relations.every((relation) => !relation.inRecall)).toBe(true);
+    } finally {
+      await db
+        .update(memories)
+        .set({ contentHash: `${MARKER}-source` })
+        .where(eq(memories.contentHash, `${MARKER}-source-edited`));
+    }
   });
 });
 

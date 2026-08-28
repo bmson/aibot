@@ -74,6 +74,9 @@ interface RelationRow {
   evidenceQuote: string | null;
   createdAt: Date;
   confidence: string | number;
+  /** Canonical date keys bounding the relationship's span, when stated. */
+  validFrom: string | null;
+  validUntil: string | null;
   similarity?: number | string;
 }
 
@@ -92,7 +95,11 @@ function readablePredicate(value: string): string {
 }
 
 function relationPath(row: RelationRow): string {
-  return `${row.subjectLabel} —${readablePredicate(row.predicate)}→ ${row.objectLabel}`;
+  const span =
+    row.validFrom || row.validUntil
+      ? ` (${row.validFrom ?? '?'} to ${row.validUntil ?? 'now'})`
+      : '';
+  return `${row.subjectLabel} —${readablePredicate(row.predicate)}→ ${row.objectLabel}${span}`;
 }
 
 function validSimilarity(value: number | string | undefined): number {
@@ -138,6 +145,8 @@ async function seedRelations(
         relation.evidence_quote AS "evidenceQuote",
         memory.created_at AS "createdAt",
         relation.confidence,
+        relation.valid_from AS "validFrom",
+        relation.valid_until AS "validUntil",
         1 - (memory.embedding <=> ${vector}::vector) AS similarity
       FROM knowledge_graph_relations AS relation
       INNER JOIN memories AS memory ON memory.id = relation.source_memory_id
@@ -180,7 +189,9 @@ async function connectedRelations(
         memory.content,
         relation.evidence_quote AS "evidenceQuote",
         memory.created_at AS "createdAt",
-        relation.confidence
+        relation.confidence,
+        relation.valid_from AS "validFrom",
+        relation.valid_until AS "validUntil"
       FROM knowledge_graph_relations AS relation
       INNER JOIN memories AS memory ON memory.id = relation.source_memory_id
       INNER JOIN knowledge_graph_sources AS source ON source.memory_id = memory.id

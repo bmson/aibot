@@ -5,6 +5,7 @@ import {
   getKnowledgeGraphNeighborhood,
   getKnowledgeGraphOverview,
   type KnowledgeGraphRelationView,
+  PREDICATE_VOCABULARY,
 } from '@assistant/application';
 import {
   Check,
@@ -115,9 +116,23 @@ function ReviewRelation({
       <div className="grid gap-3 p-4 sm:p-5">
         <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
           <RelationPath relation={relation} />
-          <Badge tone={status.tone} size="xs">
-            {status.label}
-          </Badge>
+          <span className="inline-flex items-center gap-1.5">
+            {/* An edge can be visible here yet outside recall — edited source,
+                pending re-extraction, expired memory. Say so instead of letting
+                the owner assume the assistant can use it. */}
+            {!relation.inRecall ? (
+              <Badge
+                tone="muted"
+                size="xs"
+                title="Not currently used in graph recall — its source may be edited, expired, or awaiting re-extraction."
+              >
+                Not in recall
+              </Badge>
+            ) : null}
+            <Badge tone={status.tone} size="xs">
+              {status.label}
+            </Badge>
+          </span>
         </div>
         <div className="rounded-lg bg-sunken/60 p-3 text-sm leading-6 text-strong">
           <p className={`${microLabelClass} text-muted`}>Source memory</p>
@@ -392,7 +407,7 @@ export default async function KnowledgeReviewPage({
                 Add a relationship below, or wait for the knowledge-graph sync to process durable
                 facts.
               </p>
-              <AddKnowledgeRelation selected={null} />
+              <AddKnowledgeRelation selected={null} vocabulary={PREDICATE_VOCABULARY} />
             </EmptyState>
           ) : (
             <>
@@ -416,7 +431,10 @@ export default async function KnowledgeReviewPage({
                         : ''}
                     </p>
                   </div>
-                  <AddKnowledgeRelation selected={graph.selected} />
+                  <AddKnowledgeRelation
+                    selected={graph.selected}
+                    vocabulary={PREDICATE_VOCABULARY}
+                  />
                 </div>
 
                 <div className="mt-5 grid gap-4 border-t border-edge pt-4 sm:grid-cols-3">

@@ -604,11 +604,16 @@ export function LocalMap({
           })}
       </ul>
 
-      {/* The count comes from a query, not from what was drawn — reporting the
-          drawn number as the total is the bug the true-total queries exist to fix. */}
-      {totalEdges > initialEdges.length ? (
+      {/* Three distinct numbers can honestly differ here: what is drawn
+          (kind-paged), what is loaded (server page), and the true degree from
+          a count query. Conflating drawn with total is the bug the true-total
+          queries exist to fix. */}
+      {totalEdges > canvas.edges.length ? (
         <p className="mt-2 text-xs text-muted">
-          Showing {initialEdges.length} of {totalEdges.toLocaleString()} active connections.
+          {`Showing ${canvas.edges.length.toLocaleString()} of ${totalEdges.toLocaleString()} active connections.`}
+          {initialEdges.length > canvas.edges.length
+            ? ' More are already loaded — page a kind with its “more” pill.'
+            : ` The first ${initialEdges.length.toLocaleString()} are loaded; open a neighbour to keep exploring.`}
         </p>
       ) : null}
     </div>

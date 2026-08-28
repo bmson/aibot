@@ -79,7 +79,12 @@ export function RetypeEntity({ entity }: { entity: KnowledgeGraphEntityView }) {
     initialState,
   );
   const [kind, setKind] = useState(entity.kind);
+  const [confirming, setConfirming] = useState(false);
   const isDate = entity.kind === 'date';
+  const unchanged = kind === entity.kind;
+  useEffect(() => {
+    if (unchanged) setConfirming(false);
+  }, [unchanged]);
   return (
     <form action={formAction} className="grid gap-2">
       <label className={`grid gap-1 ${labelClass}`}>
@@ -87,7 +92,10 @@ export function RetypeEntity({ entity }: { entity: KnowledgeGraphEntityView }) {
         <select
           name="kind"
           value={kind}
-          onChange={(event) => setKind(event.target.value)}
+          onChange={(event) => {
+            setKind(event.target.value);
+            setConfirming(false);
+          }}
           disabled={isDate}
           className={selectClass}
         >
@@ -104,9 +112,22 @@ export function RetypeEntity({ entity }: { entity: KnowledgeGraphEntityView }) {
           : 'Changes how this item is filed. Its connections stay, and future extractions under the old identity still land here.'}
       </p>
       <div className="flex flex-wrap items-center gap-2">
-        <SubmitButton size="sm" pendingLabel="Updating…" disabled={isDate || kind === entity.kind}>
-          Change type
-        </SubmitButton>
+        {/* Two-step, like merge: a retype re-keys the entity's identity, so the
+            confirm names the target kind rather than a bare "Change type?". */}
+        {confirming && !unchanged ? (
+          <SubmitButton size="sm" variant="primary" pendingLabel="Updating…">
+            Change to {entityKindLabel(kind)}?
+          </SubmitButton>
+        ) : (
+          <button
+            type="button"
+            disabled={isDate || unchanged}
+            onClick={() => setConfirming(true)}
+            className={btnSm.outline}
+          >
+            Change type
+          </button>
+        )}
         <ActionMessage state={state} />
       </div>
     </form>

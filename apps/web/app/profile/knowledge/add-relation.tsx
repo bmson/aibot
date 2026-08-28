@@ -1,6 +1,6 @@
 'use client';
 
-import type { KnowledgeGraphEntityView } from '@assistant/application';
+import type { KnowledgeGraphEntityView, PredicateSpec } from '@assistant/application';
 import { Check, Plus, Search } from 'lucide-react';
 import { useActionState, useEffect, useRef, useState, useTransition } from 'react';
 import {
@@ -8,7 +8,7 @@ import {
   addKnowledgeRelation,
   searchKnowledgeEntities,
 } from '@/app/profile/knowledge/actions';
-import { ENTITY_KINDS, entityKindLabel, predicateSuggestions } from '@/lib/knowledge';
+import { ENTITY_KINDS, entityKindLabel, PREDICATE_FALLBACK_SUGGESTIONS } from '@/lib/knowledge';
 import { btn, btnSm, inputClass, labelClass, selectClass, textareaClass } from '@/lib/ui';
 
 const initialState: AddKnowledgeRelationState = { error: null, success: null };
@@ -274,13 +274,29 @@ function EndpointPicker({
 /**
  * The form intentionally requires a note. A manual edge is written as a
  * durable owner memory first, rather than becoming an unexplained graph row.
+ *
+ * The predicate vocabulary arrives as props from the server page: the typed
+ * registry lives in core, and a client component must not import it.
  */
-export function AddKnowledgeRelation({ selected }: { selected: KnowledgeGraphEntityView | null }) {
+export function AddKnowledgeRelation({
+  selected,
+  vocabulary,
+}: {
+  selected: KnowledgeGraphEntityView | null;
+  vocabulary: readonly PredicateSpec[];
+}) {
   const [open, setOpen] = useState(false);
   const [state, formAction, pending] = useActionState(addKnowledgeRelation, initialState);
   const [subjectKind, setSubjectKind] = useState(selected?.kind ?? 'person');
   const [objectKind, setObjectKind] = useState('organization');
-  const suggestions = predicateSuggestions(subjectKind, objectKind);
+  const typed = vocabulary
+    .filter(
+      (spec) =>
+        (spec.subjectKinds as readonly string[]).includes(subjectKind) &&
+        (spec.objectKinds as readonly string[]).includes(objectKind),
+    )
+    .map((spec) => spec.id);
+  const suggestions = typed.length > 0 ? typed : PREDICATE_FALLBACK_SUGGESTIONS;
 
   if (!open) {
     return (

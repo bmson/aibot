@@ -51,14 +51,25 @@ receives.
 - Every recalled direct edge carries a contiguous quote from its source fact proving its endpoints
   and predicate. When this extraction contract changes, sources are versioned and rebuilt offline;
   legacy edges stay out of graph traversal until they have the new evidence.
-- The extractor works from a preferred predicate vocabulary so the same fact lands on the same edge
-  wording: family (`father_of`, `mother_of`, `grandmother_of`, `sibling_of`, …), biography
-  (`born_on`, `born_in`, `met_at`, `married_on`, …), work and education (`works_at`, `worked_at`,
-  `studied_at`, `graduated_from`, …), and events (`happens_on`, `attended`, …), with dates and times
-  attached as date entities rather than label wording. Predicates read subject → object
-  (`Gunnar father_of Anna`). A relationship with a stated span (a job, a course, a marriage) stores
-  it as `valid_from`/`valid_until` canonical date keys on the edge itself, copied only from wording
-  present in the evidence quote — an unquoted or unparseable span is dropped, never the edge.
+- The extractor works from the typed predicate registry in
+  `packages/core/src/memory/predicate-vocabulary.ts` — the same registry the review page's
+  add-relationship form draws its suggestions from, so extracted and owner-authored edges share one
+  wording. Predicates read subject → object (`Gunnar father_of Anna`), carry kind-pair applicability
+  plus inverse/symmetric metadata, and are grouped as family, biography, work and education, and
+  events. A relationship with a stated span (a job, a course, a marriage) stores it as
+  `valid_from`/`valid_until` canonical date keys on the edge itself, copied only from wording present
+  in the evidence quote — an unquoted or unparseable span is dropped, never the edge — and recall
+  renders the span on the path so time-aware questions have the dates to reason over.
+- Evidence grounding matches on whole words, not substrings: "Ann" cannot ground a fact about
+  "Anna", and a predicate word cannot ground itself inside a longer word. Endpoints, predicate
+  words, evidence quote, and qualifier wording all follow the same word-boundary contract.
+- Merges and owner-authored facts are single transactions. Merging enforces that both entities
+  belong to the agent (the function is exported, so it cannot trust callers), and afterwards
+  removes the self-loops and duplicate semantic edges the repoint created — keeping the
+  owner-reviewed edge when duplicates disagree.
+- The review page's "active" edges are exactly the recall-eligible ones (ready checkpoint, current
+  hash and extraction version, live embedded memory, quoted evidence). The audit list still shows
+  every source-backed edge, flagging any the graph cannot currently traverse as "Not in recall".
 - A recall query first has to clear the existing semantic-similarity threshold against a source memory.
   Only then can it follow incoming/outgoing relationships up to two hops. The injected block contains
   the original evidence facts and labels every two-hop connection as context, not a conclusion.

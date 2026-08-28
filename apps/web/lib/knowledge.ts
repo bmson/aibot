@@ -49,55 +49,12 @@ export function sentenceCase(value: string): string {
 }
 
 /**
- * Predicate suggestions for the add-relationship form, keyed by kind pair.
- * Suggestions only (a native datalist) — the owner can always type something
- * else. The list mirrors the vocabulary the extractor is taught, so
- * owner-authored edges and extracted edges share one wording.
+ * Generic predicate fallbacks for kind pairs the typed vocabulary does not
+ * cover. The vocabulary itself lives in core (`PREDICATE_VOCABULARY`) and
+ * reaches the form as props from the server page — it cannot be imported here,
+ * because this module must stay package-free for client components.
  */
-const PREDICATE_SUGGESTIONS: Record<string, string[]> = {
-  'person->person': [
-    'father_of',
-    'mother_of',
-    'parent_of',
-    'son_of',
-    'daughter_of',
-    'brother_of',
-    'sister_of',
-    'sibling_of',
-    'grandfather_of',
-    'grandmother_of',
-    'grandparent_of',
-    'spouse_of',
-    'partner_of',
-    'uncle_of',
-    'aunt_of',
-    'cousin_of',
-    'met_at',
-    'knows',
-  ],
-  'person->organization': [
-    'works_at',
-    'worked_at',
-    'role_as',
-    'studies_at',
-    'studied_at',
-    'graduated_from',
-    'founded',
-  ],
-  'person->place': ['lives_in', 'born_in', 'grew_up_in', 'visited', 'met_at'],
-  'person->event': ['attends', 'attended', 'organizes', 'speaks_at'],
-  'person->date': ['born_on', 'married_on', 'graduated_on'],
-  'person->project': ['leads', 'works_on', 'contributes_to'],
-  'event->date': ['happens_on', 'starts_on', 'ends_on'],
-  'event->place': ['happens_at', 'held_at'],
-  'event->person': ['attended_by', 'organized_by'],
-  'project->organization': ['run_by', 'funded_by'],
-  'project->date': ['starts_on', 'due_on', 'launched_on'],
-  'organization->place': ['based_in', 'located_in'],
-  'organization->person': ['employs', 'founded_by'],
-};
-
-const PREDICATE_FALLBACK = [
+export const PREDICATE_FALLBACK_SUGGESTIONS = [
   'works_at',
   'works_on',
   'lives_in',
@@ -106,10 +63,6 @@ const PREDICATE_FALLBACK = [
   'part_of',
   'related_to',
 ];
-
-export function predicateSuggestions(subjectKind: string, objectKind: string): string[] {
-  return PREDICATE_SUGGESTIONS[`${subjectKind}->${objectKind}`] ?? PREDICATE_FALLBACK;
-}
 
 /**
  * Per-kind SVG colours for the local map. Palette colours rather than theme

@@ -20,6 +20,11 @@ import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cos
 import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import { canonicalizeDateLabel } from './date-labels.js';
+import {
+  extractionVocabularyLines,
+  GRAPH_ENTITY_KINDS,
+  type GraphEntityKind,
+} from './predicate-vocabulary.js';
 
 /**
  * Explainable GraphRAG over the personal memory library. The graph only stores
@@ -27,16 +32,11 @@ import { canonicalizeDateLabel } from './date-labels.js';
  * query time is deliberately read-only and never manufactures a new fact.
  */
 
-export const GRAPH_ENTITY_KINDS = [
-  'person',
-  'organization',
-  'project',
-  'place',
-  'event',
-  'date',
-  'topic',
-] as const;
-export type GraphEntityKind = (typeof GRAPH_ENTITY_KINDS)[number];
+export type { GraphEntityKind };
+// The kind list lives in predicate-vocabulary.ts (it is data-only, so both the
+// domain and its prompt builder share one definition); re-exported here for
+// the many callers that import it from this module.
+export { GRAPH_ENTITY_KINDS };
 
 const GraphEntitySchema = z.object({
   label: z.string().min(1).max(160),
@@ -192,6 +192,18 @@ function cleanPredicate(value: string): string {
 }
 
 /**
+ * Whole-phrase containment on normalized text (single spaces, letters and
+ * numbers only). A substring check lets "Ann" ground a fact about "Anna" and
+ * the predicate word "at" ground itself inside "Acme's cat" — word boundaries
+ * keep the evidence contract honest.
+ */
+export function normalizedIncludes(haystack: string, needle: string): boolean {
+  if (!needle) return false;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^| )${escaped}(?: |$)`).test(haystack);
+}
+
+/**
  * The extractor must cite a contiguous source phrase that includes both
  * endpoints and the predicate wording. This rejects a subtly worse form of
  * hallucination than invented entities: connecting two real names with an
@@ -218,11 +230,11 @@ export function graphRelationshipIsGrounded(
     subject.length >= 2 &&
     object.length >= 2 &&
     evidence.length >= 3 &&
-    haystack.includes(evidence) &&
-    evidence.includes(subject) &&
-    evidence.includes(object) &&
+    normalizedIncludes(haystack, evidence) &&
+    normalizedIncludes(evidence, subject) &&
+    normalizedIncludes(evidence, object) &&
     predicateWords.length > 0 &&
-    predicateWords.every((word) => evidence.includes(word))
+    predicateWords.every((word) => normalizedIncludes(evidence, word))
   );
 }
 
@@ -240,7 +252,7 @@ function canonicalQualifier(
 ): string | null {
   if (!wording) return null;
   const clean = wording.replace(/\s+/g, ' ').trim();
-  if (!clean || !normalized(evidenceQuote).includes(normalized(clean))) return null;
+  if (!clean || !normalizedIncludes(normalized(evidenceQuote), normalized(clean))) return null;
   return (
     canonicalizeDateLabel(clean, context.anchor, context.timeZone, context.locale)?.key ?? null
   );
@@ -438,10 +450,7 @@ function extractionSystem(context: ResolutionContext): string {
     'Use person, organization, project, place, event, date, or topic for entity kinds.',
     'A predicate reads subject → object: "Gunnar father_of Anna" means Gunnar is Anna\'s father.',
     'Prefer a specific predicate over a vague one — never related_to or knows when the fact says more. When the fact states one of these, name it:',
-    '- family: father_of, mother_of, parent_of, son_of, daughter_of, child_of, brother_of, sister_of, sibling_of, grandfather_of, grandmother_of, grandparent_of, grandson_of, granddaughter_of, spouse_of, partner_of, uncle_of, aunt_of, nephew_of, niece_of, cousin_of',
-    '- biography: born_on, born_in, grew_up_in, lives_in, met_at, met_during, engaged_on, married_on, divorced_on, died_on',
-    '- work and education: works_at, worked_at, role_as, studies_at, studied_at, graduated_from, interned_at',
-    '- events: attends, attended, happens_on, happens_at, starts_on, ends_on',
+    ...extractionVocabularyLines(),
     'Attach times and dates as date entities with predicates like born_on, met_at, happens_on, or married_on — never as date wording inside a person or event label.',
     'When a relationship itself has a stated start or end (a job span, a course, a marriage, living somewhere), copy the date wording into validFrom / validUntil exactly as written in the source. That wording must also appear in the evidenceQuote. Omit both when the source states no start or end.',
     `This fact was recorded on ${recordedOn} (${context.timeZone}). Resolve every relative date in it ("Friday", "tomorrow", "next week") against that date.`,
@@ -735,10 +744,58 @@ async function persistRelationships(
 }
 
 /**
+ * Remove edges a merge made redundant: self-loops (X merged into Y turns an
+ * X→Y edge into Y→Y) and exact semantic duplicates that differed only by
+ * source fingerprint. The survivor is chosen deterministically — owner review
+ * state first (a confirmed edge beats an unreviewed one), then confidence,
+ * then age — so a merge never silently discards the owner's curation.
+ */
+async function dedupeMergedRelations(db: Db, agentId: string, entityId: string): Promise<void> {
+  await db.execute(sql`
+    DELETE FROM knowledge_graph_relations
+    WHERE agent_id = ${agentId}
+      AND subject_entity_id = object_entity_id
+      AND subject_entity_id = ${entityId}
+  `);
+  const duplicates = asRows<{ id: string }>(
+    await db.execute(sql`
+      WITH ranked AS (
+        SELECT id,
+               ROW_NUMBER() OVER (
+                 PARTITION BY subject_entity_id, predicate, object_entity_id, source_memory_id
+                 ORDER BY CASE review_status
+                            WHEN 'confirmed' THEN 0
+                            WHEN 'unreviewed' THEN 1
+                            ELSE 2
+                          END,
+                          confidence DESC,
+                          created_at ASC
+               ) AS rank
+        FROM knowledge_graph_relations
+        WHERE agent_id = ${agentId}
+          AND (subject_entity_id = ${entityId} OR object_entity_id = ${entityId})
+      )
+      SELECT id FROM ranked WHERE rank > 1
+    `),
+  );
+  const ids = duplicates.map((row) => row.id);
+  if (ids.length === 0) return;
+  await db
+    .delete(knowledgeGraphRelations)
+    .where(
+      and(eq(knowledgeGraphRelations.agentId, agentId), inArray(knowledgeGraphRelations.id, ids)),
+    );
+}
+
+/**
  * Fold one entity into another: every edge re-points, an alias records the
  * absorbed canonical key so later extractions land on the survivor, and the
  * duplicate row goes away. Domain logic rather than application orchestration,
  * because both owner-driven merges and the date backfill need exactly this.
+ *
+ * Both entities must belong to the agent: the application layer checks today,
+ * but this function is exported and reachable from jobs, so it enforces
+ * ownership itself rather than trusting every caller.
  */
 export async function mergeGraphEntities(
   db: Db,
@@ -749,20 +806,37 @@ export async function mergeGraphEntities(
   if (sourceId === targetId) return;
   await db.transaction(async (tx) => {
     const txDb = tx as unknown as Db;
-    const [source] = await txDb
-      .select({ canonicalKey: knowledgeGraphEntities.canonicalKey })
+    const owned = await txDb
+      .select({ id: knowledgeGraphEntities.id, canonicalKey: knowledgeGraphEntities.canonicalKey })
       .from(knowledgeGraphEntities)
-      .where(eq(knowledgeGraphEntities.id, sourceId))
-      .limit(1);
-    if (!source) return;
+      .where(
+        and(
+          inArray(knowledgeGraphEntities.id, [sourceId, targetId]),
+          eq(knowledgeGraphEntities.agentId, agentId),
+        ),
+      );
+    const source = owned.find((row) => row.id === sourceId);
+    const target = owned.find((row) => row.id === targetId);
+    // Either endpoint missing or owned by another agent: no-op, never repoint.
+    if (!source || !target) return;
     await txDb
       .update(knowledgeGraphRelations)
       .set({ subjectEntityId: targetId })
-      .where(eq(knowledgeGraphRelations.subjectEntityId, sourceId));
+      .where(
+        and(
+          eq(knowledgeGraphRelations.subjectEntityId, sourceId),
+          eq(knowledgeGraphRelations.agentId, agentId),
+        ),
+      );
     await txDb
       .update(knowledgeGraphRelations)
       .set({ objectEntityId: targetId })
-      .where(eq(knowledgeGraphRelations.objectEntityId, sourceId));
+      .where(
+        and(
+          eq(knowledgeGraphRelations.objectEntityId, sourceId),
+          eq(knowledgeGraphRelations.agentId, agentId),
+        ),
+      );
     await txDb
       .insert(knowledgeGraphEntityAliases)
       .values({ agentId, canonicalKey: source.canonicalKey, entityId: targetId })
@@ -773,8 +847,18 @@ export async function mergeGraphEntities(
     await txDb
       .update(knowledgeGraphEntityAliases)
       .set({ entityId: targetId })
-      .where(eq(knowledgeGraphEntityAliases.entityId, sourceId));
-    await txDb.delete(knowledgeGraphEntities).where(eq(knowledgeGraphEntities.id, sourceId));
+      .where(
+        and(
+          eq(knowledgeGraphEntityAliases.entityId, sourceId),
+          eq(knowledgeGraphEntityAliases.agentId, agentId),
+        ),
+      );
+    await txDb
+      .delete(knowledgeGraphEntities)
+      .where(
+        and(eq(knowledgeGraphEntities.id, sourceId), eq(knowledgeGraphEntities.agentId, agentId)),
+      );
+    await dedupeMergedRelations(txDb, agentId, targetId);
   });
 }
 
@@ -920,20 +1004,33 @@ export async function syncKnowledgeGraph(
       return result;
     }
 
-    const [people, settings] = await Promise.all([
+    const [people, ownSettings] = await Promise.all([
       db.select({ id: contacts.id, name: contacts.name, aliases: contacts.aliases }).from(contacts),
       agentDateSettings(db, options.agentId),
     ]);
+    // Date wording is resolved in the terms of the agent who owns the memory.
+    // An unscoped sync can touch several agents, so settings resolve per source
+    // — cached, since a batch is usually one agent many times over.
+    const settingsByAgent = new Map<string, { id: string; timeZone: string; locale: string }>();
+    const settingsFor = async (agentId: string) => {
+      const cached = settingsByAgent.get(agentId);
+      if (cached) return cached;
+      const resolved =
+        agentId === ownSettings.id ? ownSettings : await agentDateSettings(db, agentId);
+      settingsByAgent.set(agentId, resolved);
+      return resolved;
+    };
 
     for (const source of rows) {
       await options.heartbeat?.();
       const claim = await claimSource(db, source);
       if (!claim) continue;
       // Anchored per source, on the memory's own timestamp.
+      const sourceSettings = await settingsFor(source.agentId);
       const context: ResolutionContext = {
         anchor: source.createdAt,
-        timeZone: settings.timeZone,
-        locale: settings.locale,
+        timeZone: sourceSettings.timeZone,
+        locale: sourceSettings.locale,
       };
       let extracted: GraphExtraction;
       try {
@@ -1083,71 +1180,93 @@ export async function createOwnerKnowledgeGraphFact(
       : subject.kind === 'person'
         ? contactForLabel(people, subject.label)
         : undefined;
-  const [memory] = await deps.db
-    .insert(memories)
-    .values({
-      agentId,
-      category: 'knowledge',
-      kind: 'fact',
-      content,
-      contentHash,
-      embedding,
-      confidence: '1.00',
-      originTrust: 'owner',
-      ownerConfirmed: true,
-      subjectContactId: subjectContact?.id,
-      domain: 'other',
-      source: 'knowledge-graph-owner',
-    })
-    .onConflictDoNothing({ target: memories.contentHash })
-    .returning({ id: memories.id });
-  if (!memory) return { error: 'That source fact is already in the knowledge library.' };
 
-  const graphSubject =
-    'canonicalKey' in subjectRow
-      ? { id: subjectRow.id, key: subjectRow.canonicalKey }
-      : await upsertEntity(deps.db, agentId, subject, people, context);
-  const graphObject =
-    'canonicalKey' in objectRow
-      ? { id: objectRow.id, key: objectRow.canonicalKey }
-      : await upsertEntity(deps.db, agentId, object, people, context);
-  if (!graphSubject || !graphObject) {
-    // Unreachable in practice: the date endpoints were validated above and no
-    // other kind can fail to resolve. Kept because upsertEntity's contract
-    // permits null, and a silent crash here would strand the memory row.
-    return { error: 'That relationship could not be recorded. Please try again.' };
+  /**
+   * A duplicate memory means the whole fact already exists. Thrown inside the
+   * transaction so it rolls back cleanly and surfaces as the duplicate error.
+   */
+  class OwnerFactDuplicate extends Error {}
+
+  // Every write — memory, entity upserts, relation, and the ready checkpoint —
+  // commits together or not at all. Before this was one transaction, a failure
+  // between the memory insert and the relation insert left an owner-confirmed
+  // memory with no graph edge and no checkpoint to recover it.
+  try {
+    return await deps.db.transaction(async (tx) => {
+      const txDb = tx as unknown as Db;
+      const [memory] = await txDb
+        .insert(memories)
+        .values({
+          agentId,
+          category: 'knowledge',
+          kind: 'fact',
+          content,
+          contentHash,
+          embedding,
+          confidence: '1.00',
+          originTrust: 'owner',
+          ownerConfirmed: true,
+          subjectContactId: subjectContact?.id,
+          domain: 'other',
+          source: 'knowledge-graph-owner',
+        })
+        .onConflictDoNothing({ target: memories.contentHash })
+        .returning({ id: memories.id });
+      if (!memory) throw new OwnerFactDuplicate();
+
+      const graphSubject =
+        'canonicalKey' in subjectRow
+          ? { id: subjectRow.id, key: subjectRow.canonicalKey }
+          : await upsertEntity(txDb, agentId, subject, people, context);
+      const graphObject =
+        'canonicalKey' in objectRow
+          ? { id: objectRow.id, key: objectRow.canonicalKey }
+          : await upsertEntity(txDb, agentId, object, people, context);
+      if (!graphSubject || !graphObject) {
+        // Unreachable in practice: the date endpoints were validated above and
+        // no other kind can fail to resolve. Kept because upsertEntity's
+        // contract permits null, and a silent crash here would strand the
+        // memory row — which the transaction now rolls back instead.
+        throw new Error('owner fact endpoints could not be recorded');
+      }
+      const fingerprint = relationshipFingerprint(graphSubject.key, predicate, graphObject.key);
+      const [relation] = await txDb
+        .insert(knowledgeGraphRelations)
+        .values({
+          agentId,
+          subjectEntityId: graphSubject.id,
+          predicate,
+          objectEntityId: graphObject.id,
+          sourceMemoryId: memory.id,
+          evidenceQuote: content,
+          sourceFingerprint: fingerprint,
+          ordinal: 1,
+          confidence: '1.00',
+          reviewStatus: 'confirmed',
+          reviewedAt: sql`now()`,
+        })
+        .returning({ id: knowledgeGraphRelations.id });
+      await markSource(
+        txDb,
+        {
+          id: memory.id,
+          agentId,
+          content,
+          contentHash,
+          confidence: '1.00',
+          subjectContactId: subjectContact?.id ?? null,
+          createdAt: context.anchor,
+        },
+        { status: 'ready', lastError: null },
+      );
+      return { memoryId: memory.id, relationId: relation?.id };
+    });
+  } catch (err) {
+    if (err instanceof OwnerFactDuplicate) {
+      return { error: 'That source fact is already in the knowledge library.' };
+    }
+    throw err;
   }
-  const fingerprint = relationshipFingerprint(graphSubject.key, predicate, graphObject.key);
-  const [relation] = await deps.db
-    .insert(knowledgeGraphRelations)
-    .values({
-      agentId,
-      subjectEntityId: graphSubject.id,
-      predicate,
-      objectEntityId: graphObject.id,
-      sourceMemoryId: memory.id,
-      evidenceQuote: content,
-      sourceFingerprint: fingerprint,
-      ordinal: 1,
-      confidence: '1.00',
-      reviewStatus: 'confirmed',
-      reviewedAt: sql`now()`,
-    })
-    .returning({ id: knowledgeGraphRelations.id });
-  await markSource(
-    deps.db,
-    {
-      id: memory.id,
-      agentId,
-      content,
-      contentHash,
-      confidence: '1.00',
-      subjectContactId: subjectContact?.id ?? null,
-      createdAt: context.anchor,
-    },
-    { status: 'ready', lastError: null },
-  );
-  return { memoryId: memory.id, relationId: relation?.id };
 }
 
 /**
