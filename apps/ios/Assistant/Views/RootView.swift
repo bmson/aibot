@@ -76,9 +76,19 @@ struct RootView: View {
             // Gated on bootstrap so the onboarding Connection form keeps its
             // own inline error instead of doubling it.
             if model.bootstrap != nil, let error = model.errorMessage {
+                let bannerTopInset = errorBannerTopInset(safeAreaTopInset: safeAreaTopInset)
+
                 errorBanner(error)
                     .padding(.horizontal, 12)
-                    .padding(.top, errorBannerTopInset(safeAreaTopInset: safeAreaTopInset))
+                    .padding(.top, bannerTopInset)
+                    // A standing banner has to move when the crown opens or
+                    // closes beneath it. On the crown's own spring, so the two
+                    // travel together rather than the banner snapping to its
+                    // new seat a beat after the black surface has grown.
+                    .animation(
+                        reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82),
+                        value: bannerTopInset
+                    )
                     .transition(
                         reduceMotion
                             ? .opacity
@@ -186,13 +196,17 @@ struct RootView: View {
             // A pushed destination shows its navigation bar; clear it.
             return safeAreaTopInset + 48
         }
-        // Clear the activity crown: expanded, it reached about 23pt into the
-        // banner, and covered it outright at accessibility sizes.
-        guard model.activityThought != nil else { return 4 }
-        return ActivityCrown.safeAreaOverhang(
+        // The banner hangs in the root stack, which ignores the top safe area,
+        // so this is measured from the physical top edge — and both states have
+        // something to clear there. Expanded, it is the crown's own surface.
+        // Idle, it is the hardware Dynamic Island: the crown paints nothing, but
+        // the pill does not go away, and the flat 4pt this used to return put
+        // the warning glyph and the first words of every error behind it.
+        return ActivityCrown.overlayTopInset(
             isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+            isExpanded: model.activityThought != nil,
             safeAreaTopInset: safeAreaTopInset
-        ) + 8
+        )
     }
 
     private func errorBanner(_ text: String) -> some View {

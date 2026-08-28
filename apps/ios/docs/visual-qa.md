@@ -12,12 +12,12 @@ or screenshotted. Findings marked **[verify]** depend on runtime geometry — sa
 insets, text metrics, Dynamic Island dimensions — and should be confirmed on device before
 you spend time on them. The rest are readable straight from the code.
 
-**Status:** 20 of 26 fixed. Every heading below is marked `Fixed` or `Open`.
+**Status:** 21 of 27 fixed. Every heading below is marked `Fixed` or `Open`.
 
 | Severity | Total | Fixed | Open |
 | --- | --- | --- | --- |
 | Critical | 4 | 4 | — |
-| High | 6 | 5 | 1 |
+| High | 7 | 6 | 1 |
 | Medium | 8 | 4 | 4 |
 | Polish | 8 | 7 | 1 |
 
@@ -117,6 +117,29 @@ where it can be a frame late or simply wrong.
 offset is part of the layout pass.
 
 `Assistant/Components/ActivityCrown.swift:214-224`, `Assistant/Views/RootView.swift:77-91`
+
+### H7 · Every error message renders behind the hardware island — **High** · Fixed
+
+M6 below moved the error banner out of `ChatView` and up into `RootView`, and offset it by
+`ActivityCrown.safeAreaOverhang` so the expanded crown could not cover it. That number is
+measured from the safe-area boundary, which was the right origin in `ChatView` — but the root
+stack carries `.ignoresSafeArea(.container, edges: .top)`, so a top-aligned child there starts
+at the physical top edge. Reading a safe-area-relative offset in that space placed the banner
+roughly one top inset too high, in both of its states:
+
+- Idle — the common case, since the crown only appears while work is running — the inset was a
+  flat `4`. On a 15 Pro the pill occupies y = 11–48, so the warning glyph and the first words
+  of every error sat behind it.
+- Expanded, the offset resolved to about 35pt on the same device, which is *inside* the crown
+  (y = 10–86) rather than below it. M6's symptom therefore survived M6's fix.
+
+*Fix:* one `ActivityCrown.overlayTopInset` measured from the physical top edge, taking the
+collapsed pill as what has to be cleared when the crown paints nothing. The transcript's own
+content margin — which was already correct — now comes from the same call, so the two cannot
+drift apart again. The banner animates between the two seats on the crown's spring.
+
+`Assistant/Components/ActivityCrown.swift:258-286`, `Assistant/Views/RootView.swift:78-98`,
+`:194-210`, `Assistant/Views/ChatView.swift:329-339`
 
 ### M1 · `topInset − 10` hardcodes one generation's island geometry — **Medium** **[verify]** · Open
 
@@ -298,6 +321,9 @@ including its dismiss button.
 
 *Fix:* offset the banner by the crown's current height, or move both into one top-aligned
 stack so they cannot overlap.
+
+The banner moved into the root stack, but the offset it was given was measured from the wrong
+origin for that stack and left the overlap in place — see H7, which supersedes this.
 
 `Assistant/Views/RootView.swift:77-91`, `Assistant/Views/ChatView.swift:121-131`
 

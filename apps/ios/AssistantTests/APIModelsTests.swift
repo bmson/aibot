@@ -1081,6 +1081,75 @@ final class APIModelsTests: XCTestCase {
         )
     }
 
+    func testTopOverlaysClearTheIslandWhetherOrNotTheCrownIsShowing() {
+        // iPhone 15 Pro. Idle the crown draws nothing, but its collapsed frame
+        // still stands for the hardware pill it is attached to — 10 to 47, a
+        // point high by design — so an overlay starts below that. This used to
+        // be a flat 4pt, which put the error banner behind the pill.
+        XCTAssertEqual(
+            ActivityCrown.overlayTopInset(
+                isAccessibilitySize: false,
+                isExpanded: false,
+                safeAreaTopInset: 59
+            ),
+            55,
+            accuracy: 0.001
+        )
+        // Expanded, the crown itself is what has to be cleared. Measured from
+        // the physical top edge: the previous safe-area-relative number was 35,
+        // which landed inside the crown rather than below it.
+        XCTAssertEqual(
+            ActivityCrown.overlayTopInset(
+                isAccessibilitySize: false,
+                isExpanded: true,
+                safeAreaTopInset: 59
+            ),
+            94,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            ActivityCrown.overlayTopInset(
+                isAccessibilitySize: true,
+                isExpanded: true,
+                safeAreaTopInset: 59
+            ),
+            206,
+            accuracy: 0.001
+        )
+        // The flush notch has no floating pill, and its own collapsed geometry
+        // still resolves to a seat below the cutout.
+        XCTAssertEqual(
+            ActivityCrown.overlayTopInset(
+                isAccessibilitySize: false,
+                isExpanded: false,
+                safeAreaTopInset: 47
+            ),
+            59,
+            accuracy: 0.001
+        )
+    }
+
+    func testTopOverlayNeverStartsInsideTheIslandOnAnyReportedInset() {
+        for step in 20...70 {
+            let inset = CGFloat(step)
+            let islandBottom = ActivityCrown.islandTopInset(safeAreaTopInset: inset)
+                + ActivityCrown.collapsedHeight
+            for isExpanded in [false, true] {
+                for isAccessibilitySize in [false, true] {
+                    XCTAssertGreaterThanOrEqual(
+                        ActivityCrown.overlayTopInset(
+                            isAccessibilitySize: isAccessibilitySize,
+                            isExpanded: isExpanded,
+                            safeAreaTopInset: inset
+                        ),
+                        islandBottom + ActivityCrown.overlayClearanceGap,
+                        "overlay drew into the island at a \(inset)pt top inset"
+                    )
+                }
+            }
+        }
+    }
+
     func testActivityDetailIsSafeForBothSystemAndInAppStatusSurfaces() {
         XCTAssertEqual(
             LiveActivityManager.safeDetail(
