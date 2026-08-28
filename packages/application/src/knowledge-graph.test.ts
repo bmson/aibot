@@ -487,48 +487,73 @@ describe('knowledge graph neighborhood (integration)', () => {
   it('creates a corrected source-backed edge before retiring the prior edge', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const [old] = await db
-      .select({ id: knowledgeGraphRelations.id, objectId: knowledgeGraphRelations.objectEntityId })
+      .select({
+        id: knowledgeGraphRelations.id,
+        objectId: knowledgeGraphRelations.objectEntityId,
+        reviewStatus: knowledgeGraphRelations.reviewStatus,
+      })
       .from(knowledgeGraphRelations)
       .where(eq(knowledgeGraphRelations.subjectEntityId, hubId))
       .limit(1);
     if (!old) throw new Error('fixture relation missing');
 
-    const result = await correctKnowledgeGraphRelation(
-      db,
-      { embed: async () => [unitVector()] },
-      old.id,
-      {
-        subjectLabel: `${MARKER} hub`,
-        subjectKind: 'topic',
-        subjectId: hubId,
-        predicate: 'correctly_relates_to',
-        objectLabel: `${MARKER} corrected spoke`,
-        objectKind: 'organization',
-        objectId: old.objectId,
-        note: 'The original relationship wording was inaccurate.',
-      },
-    );
+    let newRelationId: string | undefined;
+    try {
+      const result = await correctKnowledgeGraphRelation(
+        db,
+        { embed: async () => [unitVector()] },
+        old.id,
+        {
+          subjectLabel: `${MARKER} hub`,
+          subjectKind: 'topic',
+          subjectId: hubId,
+          predicate: 'correctly_relates_to',
+          objectLabel: `${MARKER} corrected spoke`,
+          objectKind: 'organization',
+          objectId: old.objectId,
+          note: 'The original relationship wording was inaccurate.',
+        },
+      );
 
-    expect(result.error).toBeUndefined();
-    const newRelationId = result.relationId;
-    expect(newRelationId).toBeTruthy();
-    if (!newRelationId) throw new Error('correction did not create a replacement relation');
-    const [oldAfter, newAfter] = await Promise.all([
-      db
-        .select({ status: knowledgeGraphRelations.reviewStatus })
-        .from(knowledgeGraphRelations)
-        .where(eq(knowledgeGraphRelations.id, old.id))
-        .limit(1),
-      db
-        .select({ status: knowledgeGraphRelations.reviewStatus, source: memories.content })
-        .from(knowledgeGraphRelations)
-        .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
-        .where(eq(knowledgeGraphRelations.id, newRelationId))
-        .limit(1),
-    ]);
-    expect(oldAfter[0]?.status).toBe('rejected');
-    expect(newAfter[0]).toMatchObject({ status: 'confirmed' });
-    expect(newAfter[0]?.source).toContain('The original relationship wording was inaccurate.');
+      expect(result.error).toBeUndefined();
+      newRelationId = result.relationId;
+      expect(newRelationId).toBeTruthy();
+      if (!newRelationId) throw new Error('correction did not create a replacement relation');
+      const [oldAfter, newAfter] = await Promise.all([
+        db
+          .select({ status: knowledgeGraphRelations.reviewStatus })
+          .from(knowledgeGraphRelations)
+          .where(eq(knowledgeGraphRelations.id, old.id))
+          .limit(1),
+        db
+          .select({
+            status: knowledgeGraphRelations.reviewStatus,
+            source: memories.content,
+          })
+          .from(knowledgeGraphRelations)
+          .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
+          .where(eq(knowledgeGraphRelations.id, newRelationId))
+          .limit(1),
+      ]);
+      expect(oldAfter[0]?.status).toBe('rejected');
+      expect(newAfter[0]).toMatchObject({ status: 'confirmed' });
+      expect(newAfter[0]?.source).toContain('The original relationship wording was inaccurate.');
+    } finally {
+      if (newRelationId) {
+        const [replacement] = await db
+          .select({ sourceMemoryId: knowledgeGraphRelations.sourceMemoryId })
+          .from(knowledgeGraphRelations)
+          .where(eq(knowledgeGraphRelations.id, newRelationId))
+          .limit(1);
+        if (replacement) {
+          await db.delete(memories).where(eq(memories.id, replacement.sourceMemoryId));
+        }
+      }
+      await db
+        .update(knowledgeGraphRelations)
+        .set({ reviewStatus: old.reviewStatus })
+        .where(eq(knowledgeGraphRelations.id, old.id));
+    }
   });
 });
 
