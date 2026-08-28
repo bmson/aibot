@@ -12,7 +12,9 @@ import {
 import { and, eq, inArray, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  correctKnowledgeGraphRelation,
   findDuplicateKnowledgeGraphEntities,
+  getKnowledgeGraphMapSummary,
   getKnowledgeGraphNeighborhood,
   getKnowledgeGraphOverview,
   getKnowledgeGraphPaths,
@@ -370,6 +372,14 @@ describe('knowledge graph neighborhood (integration)', () => {
     expect(neighborhood.total).toBe(ENTITY_COUNT);
   });
 
+  it('caps focus-map nodes while retaining the complete relationship count', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const summary = await getKnowledgeGraphMapSummary(db, { entityId: hubId });
+    expect(summary.neighborhood.total).toBe(ENTITY_COUNT);
+    expect(summary.neighborhood.edges).toHaveLength(24);
+    expect(summary.predicateCounts).toEqual([{ predicate: 'relates_to', count: ENTITY_COUNT }]);
+  });
+
   it('excludes stale edges from both the page and the count', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const [stale] = await db
@@ -472,6 +482,53 @@ describe('knowledge graph neighborhood (integration)', () => {
         .set({ contentHash: `${MARKER}-source` })
         .where(eq(memories.contentHash, `${MARKER}-source-edited`));
     }
+  });
+
+  it('creates a corrected source-backed edge before retiring the prior edge', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [old] = await db
+      .select({ id: knowledgeGraphRelations.id, objectId: knowledgeGraphRelations.objectEntityId })
+      .from(knowledgeGraphRelations)
+      .where(eq(knowledgeGraphRelations.subjectEntityId, hubId))
+      .limit(1);
+    if (!old) throw new Error('fixture relation missing');
+
+    const result = await correctKnowledgeGraphRelation(
+      db,
+      { embed: async () => [unitVector()] },
+      old.id,
+      {
+        subjectLabel: `${MARKER} hub`,
+        subjectKind: 'topic',
+        subjectId: hubId,
+        predicate: 'correctly_relates_to',
+        objectLabel: `${MARKER} corrected spoke`,
+        objectKind: 'organization',
+        objectId: old.objectId,
+        note: 'The original relationship wording was inaccurate.',
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    const newRelationId = result.relationId;
+    expect(newRelationId).toBeTruthy();
+    if (!newRelationId) throw new Error('correction did not create a replacement relation');
+    const [oldAfter, newAfter] = await Promise.all([
+      db
+        .select({ status: knowledgeGraphRelations.reviewStatus })
+        .from(knowledgeGraphRelations)
+        .where(eq(knowledgeGraphRelations.id, old.id))
+        .limit(1),
+      db
+        .select({ status: knowledgeGraphRelations.reviewStatus, source: memories.content })
+        .from(knowledgeGraphRelations)
+        .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
+        .where(eq(knowledgeGraphRelations.id, newRelationId))
+        .limit(1),
+    ]);
+    expect(oldAfter[0]?.status).toBe('rejected');
+    expect(newAfter[0]).toMatchObject({ status: 'confirmed' });
+    expect(newAfter[0]?.source).toContain('The original relationship wording was inaccurate.');
   });
 });
 

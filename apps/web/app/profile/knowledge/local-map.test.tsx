@@ -1,14 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MapEdgeInput } from '@/app/profile/knowledge/local-map-model';
-
-// The server action is never called during a static render, but importing the
-// real module would drag the whole server composition root into the test.
-vi.mock('@/app/profile/knowledge/actions', () => ({
-  loadKnowledgeNeighborhood: vi.fn(async () => ({ edges: [], total: 0 })),
-}));
-
+import { describe, expect, it } from 'vitest';
 import { LocalMap } from '@/app/profile/knowledge/local-map';
+import type { MapEdgeInput } from '@/app/profile/knowledge/local-map-model';
 
 const selected = { id: 'c', label: 'Ada Lovelace', kind: 'person' };
 
@@ -23,10 +16,6 @@ function edges(count: number): MapEdgeInput[] {
 }
 
 describe('LocalMap static render', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   it('draws every first-hop neighbour as a link that keeps search and filter', () => {
     const html = renderToStaticMarkup(
       <LocalMap
@@ -72,6 +61,27 @@ describe('LocalMap static render', () => {
     expect(html).toContain('Neighbour 0 (Project)');
     expect(html).toContain('knows');
     expect(html).toContain('needs review');
+  });
+
+  it('lists the bounded map facts as readable relationship sentences', () => {
+    const html = renderToStaticMarkup(
+      <LocalMap
+        selected={selected}
+        initialEdges={[
+          {
+            id: 'daughter',
+            predicate: 'daughter_of',
+            outbound: false,
+            reviewStatus: 'confirmed',
+            other: { id: 'freyja', label: 'Freyja_Ruth', kind: 'person' },
+          },
+        ]}
+        totalEdges={1}
+        query=""
+        kind=""
+      />,
+    );
+    expect(html).toContain('Freyja Ruth is Ada Lovelace&#x27;s daughter.');
   });
 
   it('says so when there is nothing to draw', () => {

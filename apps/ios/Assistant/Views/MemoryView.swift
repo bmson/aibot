@@ -148,6 +148,13 @@ struct MemoryView: View {
     private func memoryContent(_ memory: WorkspaceMemory) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             memoryOverview(memory)
+            NavigationLink {
+                KnowledgeView()
+            } label: {
+                Label("Manage knowledge connections", systemImage: "point.3.connected.trianglepath.dotted")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.bordered)
             metricGrid([
                 ("In use", memory.health.totalUsable, "brain.head.profile", AssistantTheme.accent(for: colorScheme)),
                 ("Review", memory.health.awaitingReview, "checklist", AssistantTheme.warning(for: colorScheme)),

@@ -66,6 +66,32 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(message.quickReplies, ["Show me", "Continue"])
     }
 
+    func testDecodesKnowledgeRelationshipPresentation() throws {
+        let data = """
+        {
+          "totalEntities":2,"totalRelations":1,"unreviewedRelations":1,
+          "entities":[{"id":"baldvin","label":"Baldvin","kind":"person","canonicalKey":"person:baldvin"}],
+          "matchingEntities":2,"entityPage":1,"entityPages":1,
+          "selected":{"id":"baldvin","label":"Baldvin","kind":"person","canonicalKey":"person:baldvin"},
+          "relations":[{
+            "id":"edge-1",
+            "subject":{"id":"baldvin","label":"Baldvin","kind":"person","canonicalKey":"person:baldvin"},
+            "predicate":"daughter_of",
+            "object":{"id":"freyja","label":"Freyja_Ruth","kind":"person","canonicalKey":"person:freyja"},
+            "confidence":0.92,"reviewStatus":"unreviewed","validFrom":null,"validUntil":null,"inRecall":true,
+            "source":{"memoryId":"memory-1","content":"Freyja is Baldvin's daughter.","createdAt":"2026-08-27T00:00:00.000Z","ownerConfirmed":true,"originTrust":"owner"},
+            "presentation":{"sentence":"Freyja Ruth is Baldvin's daughter.","label":"Daughter","accessibleLabel":"Freyja Ruth is Baldvin's daughter."}
+          }],
+          "selectedActiveRelationTotal":1,"duplicates":[]
+        }
+        """.data(using: .utf8)!
+
+        let overview = try JSONDecoder().decode(KnowledgeOverview.self, from: data)
+        XCTAssertEqual(overview.selected?.displayLabel, "Baldvin")
+        XCTAssertEqual(overview.relations.first?.object.displayLabel, "Freyja Ruth")
+        XCTAssertEqual(overview.relations.first?.presentation.sentence, "Freyja Ruth is Baldvin's daughter.")
+    }
+
     func testMoodStaysDefaultRegardlessOfThemeCues() {
         let themed = ChatMessage(
             id: "themed",

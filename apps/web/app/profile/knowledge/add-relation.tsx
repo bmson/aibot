@@ -1,11 +1,17 @@
 'use client';
 
-import type { KnowledgeGraphEntityView, PredicateSpec } from '@assistant/application';
+import type {
+  KnowledgeGraphEntityView,
+  KnowledgeGraphRelationView,
+  PredicateSpec,
+} from '@assistant/application';
+import { presentKnowledgeGraphRelation } from '@assistant/application/relationship-presentation';
 import { Check, Plus, Search } from 'lucide-react';
 import { useActionState, useEffect, useRef, useState, useTransition } from 'react';
 import {
   type AddKnowledgeRelationState,
   addKnowledgeRelation,
+  correctKnowledgeRelation,
   searchKnowledgeEntities,
 } from '@/app/profile/knowledge/actions';
 import { ENTITY_KINDS, entityKindLabel, PREDICATE_FALLBACK_SUGGESTIONS } from '@/lib/knowledge';
@@ -116,6 +122,7 @@ function EndpointPicker({
   onKindChange,
   prefill,
   placeholder,
+  onValueChange,
 }: {
   name: 'subject' | 'object';
   legend: string;
@@ -123,6 +130,7 @@ function EndpointPicker({
   onKindChange: (kind: string) => void;
   prefill?: KnowledgeGraphEntityView | null;
   placeholder: string;
+  onValueChange?: (value: { label: string; kind: string }) => void;
 }) {
   const [picked, setPicked] = useState<KnowledgeGraphEntityView | null>(prefill ?? null);
   const [query, setQuery] = useState('');
@@ -161,6 +169,10 @@ function EndpointPicker({
   const exactMatch = results.some(
     (row) => row.label.toLocaleLowerCase() === trimmed.toLocaleLowerCase(),
   );
+
+  useEffect(() => {
+    onValueChange?.({ label: picked?.label ?? query, kind });
+  }, [kind, onValueChange, picked?.label, query]);
 
   return (
     <fieldset className="grid min-w-0 gap-2">
@@ -271,6 +283,22 @@ function EndpointPicker({
   );
 }
 
+function predicatePhrase(predicate: string): string {
+  const label = predicate.replaceAll('_', ' ').replace(/\s+/g, ' ').trim();
+  if (label.endsWith(' of')) return `is the ${label}`;
+  if (label === 'employs') return 'employs';
+  if (label === 'attended by') return 'was attended by';
+  return label;
+}
+
+function connectionSentence(subject: string, predicate: string, object: string): string {
+  return presentKnowledgeGraphRelation({
+    subjectLabel: subject.trim() || 'First item',
+    predicate,
+    objectLabel: object.trim() || 'connected item',
+  }).sentence;
+}
+
 /**
  * The form intentionally requires a note. A manual edge is written as a
  * durable owner memory first, rather than becoming an unexplained graph row.
@@ -281,14 +309,27 @@ function EndpointPicker({
 export function AddKnowledgeRelation({
   selected,
   vocabulary,
+  correction,
 }: {
   selected: KnowledgeGraphEntityView | null;
   vocabulary: readonly PredicateSpec[];
+  correction?: KnowledgeGraphRelationView;
 }) {
   const [open, setOpen] = useState(false);
-  const [state, formAction, pending] = useActionState(addKnowledgeRelation, initialState);
-  const [subjectKind, setSubjectKind] = useState(selected?.kind ?? 'person');
-  const [objectKind, setObjectKind] = useState('organization');
+  const action = correction
+    ? correctKnowledgeRelation.bind(null, correction.id)
+    : addKnowledgeRelation;
+  const [state, formAction, pending] = useActionState(action, initialState);
+  const [subjectKind, setSubjectKind] = useState(
+    correction?.subject.kind ?? selected?.kind ?? 'person',
+  );
+  const [objectKind, setObjectKind] = useState(correction?.object.kind ?? 'organization');
+  const [subjectValue, setSubjectValue] = useState(
+    correction?.subject.label ?? selected?.label ?? '',
+  );
+  const [objectValue, setObjectValue] = useState(correction?.object.label ?? '');
+  const [predicate, setPredicate] = useState(correction?.predicate ?? '');
+  const [customPredicate, setCustomPredicate] = useState('');
   const typed = vocabulary
     .filter(
       (spec) =>
@@ -297,12 +338,14 @@ export function AddKnowledgeRelation({
     )
     .map((spec) => spec.id);
   const suggestions = typed.length > 0 ? typed : PREDICATE_FALLBACK_SUGGESTIONS;
+  const chosenPredicate =
+    predicate === '__custom' ? customPredicate : predicate || suggestions[0] || '';
 
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)} className={btnSm.outline}>
         <Plus className="size-3.5" aria-hidden="true" />
-        Add relationship
+        {correction ? 'Correct connection' : 'Add connection'}
       </button>
     );
   }
@@ -310,76 +353,111 @@ export function AddKnowledgeRelation({
   return (
     <form
       action={formAction}
-      className="mt-4 grid gap-3 rounded-xl border border-edge bg-sunken/35 p-4"
+      className="fixed inset-0 z-50 grid place-items-end bg-strong/25 p-0 sm:place-items-center sm:p-6"
     >
-      <p className="text-sm leading-5 text-muted">
-        This saves your note as the evidence behind the relationship. It is never an unsupported
-        graph-only fact.
-      </p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <EndpointPicker
-          name="subject"
-          legend="From"
-          kind={subjectKind}
-          onKindChange={setSubjectKind}
-          prefill={selected}
-          placeholder="Search or create…"
-        />
-        <EndpointPicker
-          name="object"
-          legend="To"
-          kind={objectKind}
-          onKindChange={setObjectKind}
-          placeholder="Search or create…"
-        />
-      </div>
-      <label className={`grid gap-1 ${labelClass}`}>
-        Relationship
-        <input
-          name="predicate"
-          required
-          minLength={1}
-          maxLength={80}
-          list="knowledge-predicate-suggestions"
-          placeholder={suggestions[0] ? `e.g. ${suggestions[0].replaceAll('_', ' ')}` : 'works at'}
-          autoComplete="off"
-          className={inputClass}
-        />
-        <datalist id="knowledge-predicate-suggestions">
-          {suggestions.map((suggestion) => (
-            <option key={suggestion} value={suggestion} />
-          ))}
-        </datalist>
-        <span className="text-xs leading-5 font-normal text-muted">
-          Suggestions follow the {entityKindLabel(subjectKind).toLocaleLowerCase()} →{' '}
-          {entityKindLabel(objectKind).toLocaleLowerCase()} direction; you can always type your own.
-        </span>
-      </label>
-      <label className={`grid gap-1 ${labelClass}`}>
-        Your source note
-        <textarea
-          name="note"
-          required
-          minLength={3}
-          maxLength={1000}
-          rows={2}
-          placeholder="Why this is true, or where you learned it…"
-          className={textareaClass}
-        />
-      </label>
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="submit" disabled={pending} className={btn.primary}>
-          {pending ? 'Saving…' : 'Save relationship'}
-        </button>
-        <button type="button" onClick={() => setOpen(false)} className={btn.outline}>
-          Cancel
-        </button>
-        {state.error ? (
-          <p className="text-xs text-red-600 dark:text-red-400">{state.error}</p>
-        ) : null}
-        {state.success ? (
-          <p className="text-xs text-emerald-700 dark:text-emerald-300">{state.success}</p>
-        ) : null}
+      <div className="grid max-h-[92dvh] w-full max-w-2xl gap-4 overflow-y-auto rounded-t-2xl bg-raised p-5 shadow-2xl sm:rounded-2xl sm:p-6">
+        <div>
+          <p className="font-display text-xl font-semibold text-strong">
+            {correction ? 'Correct connection' : 'Add a connection'}
+          </p>
+          <p className="mt-1 text-sm leading-5 text-muted">
+            {correction
+              ? 'Save the corrected fact first. The earlier connection will remain as evidence but stop being used.'
+              : 'Save a relationship the assistant can understand and trace back to your note.'}
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <EndpointPicker
+            name="subject"
+            legend="First item"
+            kind={subjectKind}
+            onKindChange={setSubjectKind}
+            prefill={correction?.subject ?? selected}
+            placeholder="Search or create…"
+            onValueChange={(value) => setSubjectValue(value.label)}
+          />
+          <EndpointPicker
+            name="object"
+            legend="Connected item"
+            kind={objectKind}
+            onKindChange={setObjectKind}
+            prefill={correction?.object}
+            placeholder="Search or create…"
+            onValueChange={(value) => setObjectValue(value.label)}
+          />
+        </div>
+        <label className={`grid gap-1 ${labelClass}`}>
+          Relationship
+          <select
+            value={predicate || suggestions[0] || ''}
+            onChange={(event) => setPredicate(event.target.value)}
+            className={selectClass}
+          >
+            {suggestions.map((suggestion) => (
+              <option key={suggestion} value={suggestion}>
+                {predicatePhrase(suggestion)}
+              </option>
+            ))}
+            <option value="__custom">Use my own words…</option>
+          </select>
+          {predicate === '__custom' ? (
+            <input
+              value={customPredicate}
+              onChange={(event) => setCustomPredicate(event.target.value)}
+              required
+              minLength={1}
+              maxLength={80}
+              placeholder="e.g. advises"
+              className={inputClass}
+            />
+          ) : null}
+          <input type="hidden" name="predicate" value={chosenPredicate} />
+        </label>
+        <div className="rounded-xl border border-accent/25 bg-sunken/55 p-3">
+          <p className="text-xs font-medium tracking-[0.08em] text-muted uppercase">
+            This will say
+          </p>
+          <p className="mt-1 text-sm font-medium leading-6 text-strong">
+            {connectionSentence(subjectValue, chosenPredicate, objectValue)}
+          </p>
+        </div>
+        <label className={`grid gap-1 ${labelClass}`}>
+          Your source note
+          <textarea
+            name="note"
+            required
+            minLength={3}
+            maxLength={1000}
+            rows={3}
+            placeholder="Why this is true, or where you learned it…"
+            className={textareaClass}
+          />
+          <span className="text-xs leading-5 font-normal text-muted">
+            This note is the evidence behind the connection, never an unsupported graph-only fact.
+          </span>
+        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="submit"
+            disabled={pending || !chosenPredicate.trim()}
+            className={btn.primary}
+          >
+            {pending ? 'Saving…' : correction ? 'Save corrected connection' : 'Save connection'}
+          </button>
+          <button type="button" onClick={() => setOpen(false)} className={btn.outline}>
+            Cancel
+          </button>
+          {state.error ? (
+            <p role="alert" className="text-xs text-red-600 dark:text-red-400">
+              {state.error}
+            </p>
+          ) : null}
+          {state.success ? (
+            <p role="status" className="text-xs text-emerald-700 dark:text-emerald-300">
+              {state.success}
+            </p>
+          ) : null}
+        </div>
       </div>
     </form>
   );

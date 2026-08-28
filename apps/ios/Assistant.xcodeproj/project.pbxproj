@@ -37,6 +37,7 @@
 		B0000000000000000000001B /* Components/ChatDashboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000024 /* Components/ChatDashboard.swift */; };
 		B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000023 /* Views/WorkspaceView.swift */; };
 		B0000000000000000000001C /* Views/MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000025 /* Views/MemoryView.swift */; };
+		B00000000000000000000054 /* Views/KnowledgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000054 /* Views/KnowledgeView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -105,6 +106,7 @@
 		C00000000000000000000023 /* Views/WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WorkspaceView.swift; sourceTree = "<group>"; };
 		C00000000000000000000024 /* Components/ChatDashboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/ChatDashboard.swift; sourceTree = "<group>"; };
 		C00000000000000000000025 /* Views/MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MemoryView.swift; sourceTree = "<group>"; };
+		C00000000000000000000054 /* Views/KnowledgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/KnowledgeView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -179,6 +181,7 @@
 				C00000000000000000000010 /* Views/ConnectionView.swift */,
 				C00000000000000000000023 /* Views/WorkspaceView.swift */,
 				C00000000000000000000025 /* Views/MemoryView.swift */,
+				C00000000000000000000054 /* Views/KnowledgeView.swift */,
 				C00000000000000000000011 /* Assets.xcassets */,
 				C00000000000000000000012 /* Info.plist */,
 				C00000000000000000000052 /* Assistant.entitlements */,
@@ -357,6 +360,7 @@
 				B00000000000000000000010 /* Views/ConnectionView.swift in Sources */,
 				B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */,
 				B0000000000000000000001C /* Views/MemoryView.swift in Sources */,
+				B00000000000000000000054 /* Views/KnowledgeView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

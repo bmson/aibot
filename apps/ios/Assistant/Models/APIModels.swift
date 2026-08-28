@@ -846,6 +846,99 @@ struct WorkspaceMemoryFact: Codable, Identifiable, Sendable {
     let createdAt: String
 }
 
+// MARK: - Knowledge graph
+
+struct KnowledgeEntity: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let label: String
+    let kind: String
+    let canonicalKey: String
+
+    var displayLabel: String {
+        label.replacingOccurrences(of: "_", with: " ")
+    }
+}
+
+struct KnowledgePresentation: Codable, Hashable, Sendable {
+    let sentence: String
+    let label: String
+    let accessibleLabel: String
+}
+
+struct KnowledgeSource: Codable, Hashable, Sendable {
+    let memoryId: String
+    let content: String
+    let createdAt: String
+    let ownerConfirmed: Bool
+    let originTrust: String
+}
+
+struct KnowledgeRelation: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let subject: KnowledgeEntity
+    let predicate: String
+    let object: KnowledgeEntity
+    let confidence: Double
+    let reviewStatus: String
+    let validFrom: String?
+    let validUntil: String?
+    /// Optional for a short rolling-deploy window with an older server.
+    let inRecall: Bool?
+    let source: KnowledgeSource
+    let presentation: KnowledgePresentation
+
+    var needsReview: Bool { reviewStatus == "unreviewed" }
+}
+
+struct KnowledgeOverview: Codable, Sendable {
+    let totalEntities: Int
+    let totalRelations: Int
+    let unreviewedRelations: Int
+    let entities: [KnowledgeEntity]
+    let matchingEntities: Int
+    let entityPage: Int
+    let entityPages: Int
+    let selected: KnowledgeEntity?
+    let relations: [KnowledgeRelation]
+    let selectedActiveRelationTotal: Int
+    let duplicates: [KnowledgeDuplicate]
+}
+
+struct KnowledgeDuplicate: Codable, Identifiable, Hashable, Sendable {
+    let targetId: String
+    let label: String
+    let kind: String
+    let reason: String
+    var id: String { targetId }
+}
+
+struct KnowledgeReviewInbox: Codable, Sendable {
+    let relations: [KnowledgeRelation]
+}
+
+struct KnowledgeConnectionMutation: Codable, Sendable {
+    let subjectLabel: String
+    let subjectKind: String
+    let subjectId: String?
+    let predicate: String
+    let objectLabel: String
+    let objectKind: String
+    let objectId: String?
+    let note: String
+}
+
+struct KnowledgeCorrectionMutation: Codable, Sendable {
+    let action: String
+    let subjectLabel: String
+    let subjectKind: String
+    let subjectId: String?
+    let predicate: String
+    let objectLabel: String
+    let objectKind: String
+    let objectId: String?
+    let note: String
+}
+
 struct WorkspaceSkill: Codable, Identifiable, Sendable {
     let id: String
     let name: String

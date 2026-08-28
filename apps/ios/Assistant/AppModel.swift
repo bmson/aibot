@@ -154,6 +154,54 @@ final class AppModel: ObservableObject {
         presentedRoute = nil
     }
 
+    func knowledge(query: String = "", kind: String = "", page: Int = 1) async -> KnowledgeOverview? {
+        guard let client else { return nil }
+        do { return try await client.knowledge(query: query, kind: kind, page: page) }
+        catch { errorMessage = error.localizedDescription; return nil }
+    }
+
+    func knowledgeItem(id: String) async -> KnowledgeOverview? {
+        guard let client else { return nil }
+        do { return try await client.knowledgeItem(id: id) }
+        catch { errorMessage = error.localizedDescription; return nil }
+    }
+
+    func knowledgeReview() async -> KnowledgeReviewInbox? {
+        guard let client else { return nil }
+        do { return try await client.knowledgeReview() }
+        catch { errorMessage = error.localizedDescription; return nil }
+    }
+
+    func createKnowledgeConnection(_ mutation: KnowledgeConnectionMutation) async -> Bool {
+        guard let client else { return false }
+        do { try await client.createKnowledgeConnection(mutation); return true }
+        catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    func reviewKnowledgeRelation(id: String, approve: Bool) async -> Bool {
+        guard let client else { return false }
+        do { try await client.reviewKnowledgeRelation(id: id, approve: approve); return true }
+        catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    func correctKnowledgeRelation(id: String, mutation: KnowledgeConnectionMutation) async -> Bool {
+        guard let client else { return false }
+        do { try await client.correctKnowledgeRelation(id: id, mutation: mutation); return true }
+        catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    func updateKnowledgeItem(id: String, action: String, value: String) async -> Bool {
+        guard let client else { return false }
+        do { try await client.updateKnowledgeItem(id: id, action: action, value: value); return true }
+        catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    func mergeKnowledgeItem(id: String, targetId: String) async -> Bool {
+        guard let client else { return false }
+        do { try await client.mergeKnowledgeItem(id: id, targetId: targetId); return true }
+        catch { errorMessage = error.localizedDescription; return false }
+    }
+
     func connect() async {
         guard let client else {
             showingConnection = true

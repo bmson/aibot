@@ -17,6 +17,7 @@
     "./knowledge-graph": "./src/knowledge-graph.ts",
     "./operations": "./src/operations.ts",
     "./profile": "./src/profile.ts",
+    "./relationship-presentation": "./src/relationship-presentation.ts",
     "./settings": "./src/settings.ts",
     "./shell": "./src/shell.ts",
     "./suggestions": "./src/suggestions.ts",

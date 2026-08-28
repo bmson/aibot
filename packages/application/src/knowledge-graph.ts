@@ -38,6 +38,10 @@ import {
 } from 'drizzle-orm';
 import { type AnyPgColumn, alias } from 'drizzle-orm/pg-core';
 import type { EmbeddingPort } from './profile/commands.js';
+import {
+  presentKnowledgeGraphRelation,
+  type RelationshipPresentation,
+} from './relationship-presentation.js';
 
 // The typed predicate vocabulary is domain data the add-relationship form
 // needs as plain serializable props; re-exported so the web layer never
@@ -80,6 +84,7 @@ export interface KnowledgeGraphRelationView {
     ownerConfirmed: boolean;
     originTrust: string;
   };
+  presentation: RelationshipPresentation;
 }
 
 /** An advisory merge hint, mirroring the contact-level duplicate suggestions. */
@@ -130,6 +135,106 @@ export interface KnowledgeGraphOverview {
    */
   selectedActiveRelationTotal: number;
   duplicates: KnowledgeGraphDuplicate[];
+}
+
+/** A bounded, evidence-ready queue for the owner’s review workflow. */
+export async function getKnowledgeGraphReviewQueue(
+  db: Db,
+  input: { limit?: number } = {},
+): Promise<KnowledgeGraphRelationView[]> {
+  const agent = await getAgent(db);
+  const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
+  const subject = alias(knowledgeGraphEntities, 'review_subject');
+  const object = alias(knowledgeGraphEntities, 'review_object');
+  const rows = await db
+    .select({
+      id: knowledgeGraphRelations.id,
+      predicate: knowledgeGraphRelations.predicate,
+      confidence: knowledgeGraphRelations.confidence,
+      reviewStatus: knowledgeGraphRelations.reviewStatus,
+      reviewedAt: knowledgeGraphRelations.reviewedAt,
+      validFrom: knowledgeGraphRelations.validFrom,
+      validUntil: knowledgeGraphRelations.validUntil,
+      hasEvidence: sql<boolean>`${knowledgeGraphRelations.evidenceQuote} IS NOT NULL`,
+      subjectId: subject.id,
+      subjectLabel: displayLabel(subject),
+      subjectKind: subject.kind,
+      subjectCanonicalKey: subject.canonicalKey,
+      objectId: object.id,
+      objectLabel: displayLabel(object),
+      objectKind: object.kind,
+      objectCanonicalKey: object.canonicalKey,
+      sourceMemoryId: memories.id,
+      sourceContent: memories.content,
+      sourceCreatedAt: memories.createdAt,
+      sourceOwnerConfirmed: memories.ownerConfirmed,
+      sourceOriginTrust: memories.originTrust,
+      memoryContentHash: memories.contentHash,
+      memoryQuarantined: memories.quarantined,
+      memoryExpiresAt: memories.expiresAt,
+      memoryEmbedded: sql<boolean>`${memories.embedding} IS NOT NULL`,
+      checkpointStatus: knowledgeGraphSources.status,
+      checkpointContentHash: knowledgeGraphSources.contentHash,
+      checkpointVersion: knowledgeGraphSources.extractionVersion,
+    })
+    .from(knowledgeGraphRelations)
+    .innerJoin(subject, eq(knowledgeGraphRelations.subjectEntityId, subject.id))
+    .innerJoin(object, eq(knowledgeGraphRelations.objectEntityId, object.id))
+    .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
+    .leftJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
+    .where(
+      and(
+        eq(knowledgeGraphRelations.agentId, agent.id),
+        eq(knowledgeGraphRelations.reviewStatus, 'unreviewed'),
+      ),
+    )
+    .orderBy(desc(knowledgeGraphRelations.createdAt))
+    .limit(limit);
+  const now = new Date();
+  return rows.map((row) => ({
+    id: row.id,
+    subject: {
+      id: row.subjectId,
+      label: row.subjectLabel,
+      kind: row.subjectKind,
+      canonicalKey: row.subjectCanonicalKey,
+    },
+    predicate: row.predicate,
+    object: {
+      id: row.objectId,
+      label: row.objectLabel,
+      kind: row.objectKind,
+      canonicalKey: row.objectCanonicalKey,
+    },
+    confidence: Number(row.confidence),
+    reviewStatus: asReviewStatus(row.reviewStatus),
+    reviewedAt: row.reviewedAt,
+    validFrom: row.validFrom,
+    validUntil: row.validUntil,
+    // Review deliberately includes edges that are temporarily outside recall;
+    // the owner still needs to see and decide on their evidence.
+    inRecall:
+      row.reviewStatus !== 'rejected' &&
+      row.checkpointStatus === 'ready' &&
+      row.checkpointContentHash === row.memoryContentHash &&
+      (row.checkpointVersion ?? 0) >= GRAPH_EXTRACTION_VERSION &&
+      !row.memoryQuarantined &&
+      (!row.memoryExpiresAt || row.memoryExpiresAt > now) &&
+      row.memoryEmbedded &&
+      row.hasEvidence,
+    source: {
+      memoryId: row.sourceMemoryId,
+      content: row.sourceContent,
+      createdAt: row.sourceCreatedAt,
+      ownerConfirmed: row.sourceOwnerConfirmed,
+      originTrust: row.sourceOriginTrust,
+    },
+    presentation: presentKnowledgeGraphRelation({
+      subjectLabel: row.subjectLabel,
+      predicate: row.predicate,
+      objectLabel: row.objectLabel,
+    }),
+  }));
 }
 
 function displayLabel<T extends { preferredLabel: AnyPgColumn; label: AnyPgColumn }>(entity: T) {
@@ -443,6 +548,11 @@ export async function getKnowledgeGraphOverview(
       ownerConfirmed: row.sourceOwnerConfirmed,
       originTrust: row.sourceOriginTrust,
     },
+    presentation: presentKnowledgeGraphRelation({
+      subjectLabel: row.subjectLabel,
+      predicate: row.predicate,
+      objectLabel: row.objectLabel,
+    }),
   }));
   return {
     totalEntities: Number(entityTotal?.value ?? 0),
@@ -485,6 +595,12 @@ export interface KnowledgeGraphNeighborhood {
   total: number;
 }
 
+export interface KnowledgeGraphMapSummary {
+  /** Exact counts for a focused item, before the visual cap is applied. */
+  predicateCounts: Array<{ predicate: string; count: number }>;
+  neighborhood: KnowledgeGraphNeighborhood;
+}
+
 /**
  * First paint of the interactive map. 150 keeps a hub readable while covering
  * nearly every real entity; the server clamps anything larger to 250.
@@ -506,7 +622,7 @@ export const NEIGHBORHOOD_EXPANSION_LIMIT = 50;
  */
 export async function getKnowledgeGraphNeighborhood(
   db: Db,
-  input: { entityId: string; limit?: number },
+  input: { entityId: string; limit?: number; predicates?: string[] },
 ): Promise<KnowledgeGraphNeighborhood> {
   const agent = await getAgent(db);
   const entity = await agentEntity(db, input.entityId);
@@ -515,6 +631,7 @@ export async function getKnowledgeGraphNeighborhood(
     1,
     Math.min(input.limit ?? NEIGHBORHOOD_DEFAULT_LIMIT, NEIGHBORHOOD_MAX_LIMIT),
   );
+  const predicates = input.predicates?.filter((predicate) => predicate.length > 0) ?? [];
 
   const subject = alias(knowledgeGraphEntities, 'neighbourhood_subject');
   const object = alias(knowledgeGraphEntities, 'neighbourhood_object');
@@ -524,6 +641,7 @@ export async function getKnowledgeGraphNeighborhood(
       eq(knowledgeGraphRelations.objectEntityId, entity.id),
     ),
     activeRelationConditions(agent.id),
+    predicates.length > 0 ? inArray(knowledgeGraphRelations.predicate, predicates) : undefined,
   );
   const [rows, [totalRow]] = await Promise.all([
     db
@@ -585,6 +703,50 @@ export async function getKnowledgeGraphNeighborhood(
     };
   });
   return { entity, edges, total: Number(totalRow?.value ?? 0) };
+}
+
+/**
+ * The focus-map data path: exact relationship counts, plus at most a small
+ * one-hop neighbourhood. The browser must never fetch a hub merely to draw a
+ * hairball.
+ */
+export async function getKnowledgeGraphMapSummary(
+  db: Db,
+  input: { entityId: string; predicates?: string[] },
+): Promise<KnowledgeGraphMapSummary> {
+  const agent = await getAgent(db);
+  const entity = await agentEntity(db, input.entityId);
+  if (!entity) {
+    return { predicateCounts: [], neighborhood: { entity: null, edges: [], total: 0 } };
+  }
+  const predicates = input.predicates?.filter((predicate) => predicate.length > 0) ?? [];
+  const incidentActive = and(
+    or(
+      eq(knowledgeGraphRelations.subjectEntityId, entity.id),
+      eq(knowledgeGraphRelations.objectEntityId, entity.id),
+    ),
+    activeRelationConditions(agent.id),
+  );
+  const [counts, neighborhood] = await Promise.all([
+    db
+      .select({ predicate: knowledgeGraphRelations.predicate, value: count() })
+      .from(knowledgeGraphRelations)
+      .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
+      .innerJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
+      .where(incidentActive)
+      .groupBy(knowledgeGraphRelations.predicate)
+      .orderBy(desc(count())),
+    getKnowledgeGraphNeighborhood(db, {
+      entityId: entity.id,
+      predicates,
+      // A focus map has room for interaction and labels, not a 150-node star.
+      limit: 24,
+    }),
+  ]);
+  return {
+    predicateCounts: counts.map((row) => ({ predicate: row.predicate, count: Number(row.value) })),
+    neighborhood,
+  };
 }
 
 /** One arrow in a flow chain: the relation traversed and the entity arrived at. */
@@ -867,6 +1029,44 @@ export async function reviewKnowledgeGraphRelation(
 }
 
 /**
+ * A graph correction never mutates evidence in place. It creates a replacement
+ * owner-backed fact first, then retires the edge the owner corrected.
+ */
+export async function correctKnowledgeGraphRelation(
+  db: Db,
+  router: EmbeddingPort,
+  relationId: string,
+  input: {
+    subjectLabel: string;
+    subjectKind: string;
+    subjectId?: string;
+    predicate: string;
+    objectLabel: string;
+    objectKind: string;
+    objectId?: string;
+    note: string;
+  },
+): Promise<{ error?: string; relationId?: string }> {
+  if (!UUID_RE.test(relationId)) return { error: 'That relationship no longer exists.' };
+  const agent = await getAgent(db);
+  const [existing] = await db
+    .select({ id: knowledgeGraphRelations.id })
+    .from(knowledgeGraphRelations)
+    .where(
+      and(
+        eq(knowledgeGraphRelations.id, relationId),
+        eq(knowledgeGraphRelations.agentId, agent.id),
+      ),
+    )
+    .limit(1);
+  if (!existing) return { error: 'That relationship no longer exists.' };
+  const result = await addOwnerKnowledgeGraphFact(db, router, input);
+  if (result.error) return result;
+  await reviewKnowledgeGraphRelation(db, existing.id, 'rejected');
+  return result;
+}
+
+/**
  * Re-extract the sources whose dates only a date-anchored prompt can resolve.
  * Unlike the nightly backfill this spends money — one metered model call per
  * source — so it is an explicit owner action rather than something that happens
@@ -907,7 +1107,7 @@ export async function addOwnerKnowledgeGraphFact(
     objectId?: string;
     note: string;
   },
-): Promise<{ error?: string }> {
+): Promise<{ error?: string; relationId?: string }> {
   // The domain owns the kind list; re-declaring it here let the two drift.
   const isKind = (value: string): value is GraphEntityKind =>
     (GRAPH_ENTITY_KINDS as readonly string[]).includes(value);

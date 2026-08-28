@@ -2,6 +2,7 @@
 
 import {
   addOwnerKnowledgeGraphFact,
+  correctKnowledgeGraphRelation,
   getKnowledgeGraphNeighborhood,
   type KnowledgeGraphEntityView,
   type KnowledgeGraphNeighborEdge,
@@ -154,4 +155,28 @@ export async function addKnowledgeRelation(
   if (result.error) return { error: result.error, success: null };
   revalidateKnowledgeGraph();
   return { error: null, success: 'Relationship saved with your note as its source.' };
+}
+
+export async function correctKnowledgeRelation(
+  relationId: string,
+  _previous: AddKnowledgeRelationState,
+  formData: FormData,
+): Promise<AddKnowledgeRelationState> {
+  await requireOwner();
+  const result = await correctKnowledgeGraphRelation(getDb(), getRouter(), relationId, {
+    subjectLabel: String(formData.get('subjectLabel') ?? ''),
+    subjectKind: String(formData.get('subjectKind') ?? ''),
+    subjectId: String(formData.get('subjectId') ?? '') || undefined,
+    predicate: String(formData.get('predicate') ?? ''),
+    objectLabel: String(formData.get('objectLabel') ?? ''),
+    objectKind: String(formData.get('objectKind') ?? ''),
+    objectId: String(formData.get('objectId') ?? '') || undefined,
+    note: String(formData.get('note') ?? ''),
+  });
+  if (result.error) return { error: result.error, success: null };
+  revalidateKnowledgeGraph();
+  return {
+    error: null,
+    success: 'Corrected connection saved; the earlier connection is now marked inaccurate.',
+  };
 }

@@ -298,6 +298,51 @@ export function MergeEntity({
   );
 }
 
+/** The entity tools belong behind one deliberate “Edit item” action. */
+export function EditKnowledgeEntity({
+  entity,
+  duplicates,
+}: {
+  entity: KnowledgeGraphEntityView;
+  duplicates: KnowledgeGraphDuplicate[];
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} className={btnSm.outline}>
+        Edit item
+      </button>
+      {open ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Edit ${entity.label}`}
+          className="fixed inset-0 z-50 grid place-items-end bg-strong/25 sm:place-items-center sm:p-6"
+        >
+          <div className="grid max-h-[92dvh] w-full max-w-xl gap-5 overflow-y-auto rounded-t-2xl bg-raised p-5 shadow-2xl sm:rounded-2xl sm:p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="font-display text-xl font-semibold text-strong">Edit item</p>
+                <p className="mt-1 text-sm text-muted">
+                  Change how this item appears and is organised.
+                </p>
+              </div>
+              <button type="button" onClick={() => setOpen(false)} className={btnSm.outline}>
+                Done
+              </button>
+            </div>
+            <div className="grid gap-5">
+              <RenameEntity entity={entity} />
+              <RetypeEntity entity={entity} />
+              <MergeEntity entity={entity} duplicates={duplicates} />
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 /**
  * Two-step confirm, matching the ConfirmButton pattern elsewhere, but spelled
  * out here so the confirmation can name the target — a merge is not reversible

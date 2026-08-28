@@ -15,6 +15,7 @@ export * from './mcp.js';
 export * from './operations.js';
 export * from './profile.js';
 export * from './push.js';
+export * from './relationship-presentation.js';
 export * from './settings.js';
 export * from './shell.js';
 export * from './tasks.js';

@@ -1,208 +1,150 @@
 import {
   asGraphEntityKind,
   getAssistantLocale,
-  getAssistantTimezone,
-  getKnowledgeGraphNeighborhood,
+  getKnowledgeGraphMapSummary,
   getKnowledgeGraphOverview,
-  getKnowledgeGraphPaths,
+  getKnowledgeGraphReviewQueue,
   type KnowledgeGraphRelationView,
   PREDICATE_VOCABULARY,
+  readableKnowledgeLabel,
 } from '@assistant/application';
-import {
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  CircleAlert,
-  GitFork,
-  Network,
-  Search,
-  X,
-} from 'lucide-react';
+import { Check, CircleAlert, Network, Search, X } from 'lucide-react';
 import Link from 'next/link';
 import {
   confirmKnowledgeRelation,
   reextractDatedSources,
   rejectKnowledgeRelation,
-  retryQuarantinedKnowledgeSources,
 } from '@/app/profile/knowledge/actions';
 import { AddKnowledgeRelation } from '@/app/profile/knowledge/add-relation';
-import { KnowledgeGraphDetails } from '@/app/profile/knowledge/details-table';
-import { MergeEntity, RenameEntity, RetypeEntity } from '@/app/profile/knowledge/entity-forms';
-import { KnowledgeGraphExplorer } from '@/app/profile/knowledge/explorer';
+import { EditKnowledgeEntity } from '@/app/profile/knowledge/entity-forms';
 import { LocalMap } from '@/app/profile/knowledge/local-map';
-import { KnowledgeGraphPaths } from '@/app/profile/knowledge/paths-view';
 import { requireOwner } from '@/auth';
-import { formatFriendlyDateTime, formatUsd, relativeTime } from '@/lib/format';
-import {
-  ENTITY_KINDS,
-  entityKindLabel,
-  formatCanonicalDateKey,
-  humanizePredicate,
-} from '@/lib/knowledge';
+import { entityKindLabel, formatCanonicalDateKey } from '@/lib/knowledge';
 import { getDb } from '@/lib/server';
 import {
   Badge,
   btn,
   btnSm,
-  Card,
-  cardFooterClass,
   cardShellClass,
   cardTitleClass,
   EmptyState,
   inputClass,
-  labelClass,
   microLabelClass,
   PageHeader,
   PageShell,
-  segmentedControlClass,
-  segmentedItemActiveClass,
-  segmentedItemClass,
   selectClass,
 } from '@/lib/ui';
 import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 
-export const metadata = { title: 'Knowledge review' };
+export const metadata = { title: 'Knowledge' };
 export const dynamic = 'force-dynamic';
 
-const VIEWS = [
-  { id: 'explorer', label: 'Explorer' },
-  { id: 'map', label: 'Map' },
-  { id: 'paths', label: 'Paths' },
-  { id: 'details', label: 'Details' },
-] as const;
-type KnowledgeView = (typeof VIEWS)[number]['id'];
+type Mode = 'relationships' | 'review' | 'map';
 
-function asKnowledgeView(value: string | undefined): KnowledgeView {
-  return VIEWS.some((view) => view.id === value) ? (value as KnowledgeView) : 'explorer';
+function modeFor(params: { mode?: string; view?: string }): Mode {
+  if (params.mode === 'review') return 'review';
+  if (params.mode === 'map' || params.view === 'map') return 'map';
+  // Existing Explorer, Paths, and Details links return to the one primary
+  // relationship view instead of preserving four competing mental models.
+  return 'relationships';
 }
 
-const VIEW_INTROS: Record<KnowledgeView, string> = {
-  explorer:
-    'Every active connection, grouped by relationship family. Open a branch to see its own connections.',
-  map: 'Drag to pan, scroll or use the buttons to zoom. Select a neighbour to open or expand it; page a crowded kind with its “more” pill.',
-  paths: 'A few curated chains out from this item — never the whole neighbourhood at once.',
-  details:
-    'Every active connection as a compact table. Review actions stay with the evidence cards below.',
-};
-
-function hrefFor(opts: {
+function hrefFor(input: {
   q?: string;
   kind?: string;
   entity?: string;
   page?: number;
-  view?: KnowledgeView;
+  mode?: Mode;
+  mapFamily?: string;
 }): string {
   const params = new URLSearchParams();
-  if (opts.q) params.set('q', opts.q);
-  if (opts.kind) params.set('kind', opts.kind);
-  if (opts.entity) params.set('entity', opts.entity);
-  if (opts.page && opts.page > 1) params.set('page', String(opts.page));
-  if (opts.view && opts.view !== 'explorer') params.set('view', opts.view);
+  if (input.q) params.set('q', input.q);
+  if (input.kind) params.set('kind', input.kind);
+  if (input.entity) params.set('entity', input.entity);
+  if (input.page && input.page > 1) params.set('page', String(input.page));
+  if (input.mode && input.mode !== 'relationships') params.set('mode', input.mode);
+  if (input.mapFamily) params.set('mapFamily', input.mapFamily);
   const search = params.toString();
   return search ? `/profile/knowledge?${search}` : '/profile/knowledge';
 }
 
-/**
- * The sync runs twice an hour, so a backlog is more legible as elapsed time
- * than as a run count once it stops being a handful of runs.
- */
-function drainLabel(runs: number): string {
-  if (runs <= 1) return 'one sync run';
-  const hours = runs / 2;
-  if (hours < 1.5) return `${runs} sync runs`;
-  if (hours < 48) return `${Math.round(hours)} hours`;
-  return `${Math.round(hours / 24)} days`;
+function familyFor(predicate: string): string {
+  return PREDICATE_VOCABULARY.find((entry) => entry.id === predicate)?.group ?? 'other';
 }
 
-function relationTone(status: KnowledgeGraphRelationView['reviewStatus']) {
-  if (status === 'confirmed') return { label: 'Confirmed', tone: 'green' as const };
-  if (status === 'rejected') return { label: 'Marked stale', tone: 'red' as const };
-  return { label: 'Needs review', tone: 'amber' as const };
+function familyLabel(family: string): string {
+  return family === 'work and education'
+    ? 'Work and education'
+    : family.charAt(0).toLocaleUpperCase() + family.slice(1);
 }
 
-function RelationPath({ relation }: { relation: KnowledgeGraphRelationView }) {
-  return (
-    <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm leading-6">
-      <span className="font-semibold text-strong">{relation.subject.label}</span>
-      <span className="text-xs text-muted">{humanizePredicate(relation.predicate)}</span>
-      <span aria-hidden="true" className="text-muted">
-        →
-      </span>
-      <span className="font-semibold text-strong">{relation.object.label}</span>
-    </p>
-  );
+function relationTone(relation: KnowledgeGraphRelationView) {
+  return relation.reviewStatus === 'confirmed'
+    ? { tone: 'green' as const, label: 'Confirmed' }
+    : relation.reviewStatus === 'rejected'
+      ? { tone: 'red' as const, label: 'Marked inaccurate' }
+      : { tone: 'amber' as const, label: 'Needs review' };
 }
 
-function ReviewRelation({
+function RelationCard({
   relation,
-  now,
-  timeZone,
   locale,
+  query,
+  kind,
+  focusId,
 }: {
   relation: KnowledgeGraphRelationView;
-  now: Date;
-  timeZone: string;
   locale: string;
+  query: string;
+  kind: string;
+  /** The selected item, when this card is being shown from its relationship list. */
+  focusId?: string;
 }) {
-  const status = relationTone(relation.reviewStatus);
-  const sourceQuery = relation.source.content.slice(0, 120);
+  const tone = relationTone(relation);
+  const other = relation.subject.id === focusId ? relation.object : relation.subject;
   return (
-    <article className={cardShellClass}>
-      <div className="grid gap-3 p-4 sm:p-5">
-        <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-          <RelationPath relation={relation} />
-          <span className="inline-flex items-center gap-1.5">
-            {/* An edge can be visible here yet outside recall — edited source,
-                pending re-extraction, expired memory. Say so instead of letting
-                the owner assume the assistant can use it. */}
-            {!relation.inRecall ? (
-              <Badge
-                tone="muted"
-                size="xs"
-                title="Not currently used in graph recall — its source may be edited, expired, or awaiting re-extraction."
-              >
-                Not in recall
-              </Badge>
-            ) : null}
-            <Badge tone={status.tone} size="xs">
-              {status.label}
+    <article className={`${cardShellClass} p-4 sm:p-5`}>
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className={`${microLabelClass} text-muted`}>{relation.presentation.label}</p>
+          <p className="mt-1 text-base font-semibold leading-6 text-strong">
+            {relation.presentation.sentence}
+          </p>
+        </div>
+        <span className="flex flex-wrap items-center gap-1.5">
+          {!relation.inRecall ? (
+            <Badge tone="muted" size="xs">
+              Not in recall
             </Badge>
-          </span>
-        </div>
-        <div className="rounded-lg bg-sunken/60 p-3 text-sm leading-6 text-strong">
-          <p className={`${microLabelClass} text-muted`}>Source memory</p>
-          <p className="mt-1 whitespace-pre-wrap">{relation.source.content}</p>
-        </div>
-        {/* Relative time answers "recent or not?" at a glance; the calendar date
-            beside it answers "which one?". Relative alone used to read "612d
-            ago", which answers neither. */}
-        <p className="text-xs leading-5 text-muted">
-          {Math.round(relation.confidence * 100)}% extraction confidence · saved{' '}
-          {relativeTime(relation.source.createdAt, now)} ·{' '}
-          {formatFriendlyDateTime(relation.source.createdAt, timeZone, now)} ·{' '}
-          {relation.source.ownerConfirmed
-            ? 'owner verified source'
-            : `${relation.source.originTrust} source`}
-          {relation.validFrom || relation.validUntil
-            ? ` · ${relation.validFrom ? formatCanonicalDateKey(relation.validFrom, locale) : 'unknown start'} to ${
-                relation.validUntil ? formatCanonicalDateKey(relation.validUntil, locale) : 'now'
-              }`
-            : ''}
-          {relation.reviewedAt
-            ? ` · reviewed ${relativeTime(relation.reviewedAt, now)} (${formatFriendlyDateTime(
-                relation.reviewedAt,
-                timeZone,
-                now,
-              )})`
-            : ''}
-        </p>
+          ) : null}
+          <Badge tone={tone.tone} size="xs">
+            {tone.label}
+          </Badge>
+        </span>
       </div>
-      <footer className={cardFooterClass}>
-        <Link
-          href={`/profile/memories?q=${encodeURIComponent(sourceQuery)}`}
-          className={btnSm.outline}
-        >
-          Open source
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">
+        <span>{Math.round(relation.confidence * 100)}% confidence</span>
+        {relation.validFrom || relation.validUntil ? (
+          <span>
+            {relation.validFrom
+              ? formatCanonicalDateKey(relation.validFrom, locale)
+              : 'Unknown start'}
+            {' to '}
+            {relation.validUntil ? formatCanonicalDateKey(relation.validUntil, locale) : 'now'}
+          </span>
+        ) : null}
+      </div>
+      <details className="mt-4 rounded-lg bg-sunken/50 p-3">
+        <summary className="cursor-pointer text-sm font-medium text-strong">
+          View source evidence
+        </summary>
+        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted">
+          {relation.source.content}
+        </p>
+      </details>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <Link href={hrefFor({ q: query, kind, entity: other.id })} className={btnSm.outline}>
+          Open {readableKnowledgeLabel(other.label)}
         </Link>
         {relation.reviewStatus !== 'confirmed' ? (
           <form action={confirmKnowledgeRelation.bind(null, relation.id)}>
@@ -216,21 +158,78 @@ function ReviewRelation({
           <form action={rejectKnowledgeRelation.bind(null, relation.id)}>
             <ConfirmButton
               size="sm"
-              pendingLabel="Marking…"
-              confirmLabel="Mark stale?"
-              title="Keeps the source memory, but excludes this edge from graph recall."
+              pendingLabel="Saving…"
+              confirmLabel="Mark inaccurate?"
+              title="Keeps the source evidence but excludes this connection from graph recall."
             >
               <X className="size-3.5" aria-hidden="true" />
-              Mark stale
+              Mark inaccurate
             </ConfirmButton>
           </form>
         ) : null}
-      </footer>
+        <AddKnowledgeRelation
+          selected={relation.subject}
+          vocabulary={PREDICATE_VOCABULARY}
+          correction={relation}
+        />
+      </div>
     </article>
   );
 }
 
-export default async function KnowledgeReviewPage({
+function RelationshipList({
+  relations,
+  locale,
+  query,
+  kind,
+  focusId,
+}: {
+  relations: KnowledgeGraphRelationView[];
+  locale: string;
+  query: string;
+  kind: string;
+  focusId?: string;
+}) {
+  const active = relations.filter((relation) => relation.reviewStatus !== 'rejected');
+  const groups = new Map<string, KnowledgeGraphRelationView[]>();
+  for (const relation of active) {
+    const family = familyFor(relation.predicate);
+    groups.set(family, [...(groups.get(family) ?? []), relation]);
+  }
+  if (active.length === 0) {
+    return (
+      <EmptyState>
+        No active connections yet. Add one with a source note to make it useful.
+      </EmptyState>
+    );
+  }
+  return (
+    <div className="grid gap-7">
+      {[...groups.entries()].map(([family, items]) => (
+        <section key={family}>
+          <div className="mb-3 flex items-center gap-3">
+            <h3 className={cardTitleClass}>{familyLabel(family)}</h3>
+            <span className="text-xs text-muted">{items.length}</span>
+          </div>
+          <div className="grid gap-3">
+            {items.map((relation) => (
+              <RelationCard
+                key={relation.id}
+                relation={relation}
+                locale={locale}
+                query={query}
+                kind={kind}
+                focusId={focusId}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+export default async function KnowledgePage({
   searchParams,
 }: {
   searchParams: Promise<{
@@ -238,379 +237,348 @@ export default async function KnowledgeReviewPage({
     kind?: string;
     entity?: string;
     page?: string;
+    mode?: string;
     view?: string;
+    mapFamily?: string;
   }>;
 }) {
   await requireOwner();
   const params = await searchParams;
   const query = (params.q ?? '').trim().slice(0, 120);
   const kind = asGraphEntityKind(params.kind) ?? '';
-  const view = asKnowledgeView(params.view);
   const requestedPage = Number.parseInt(params.page ?? '1', 10);
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  const mode = modeFor(params);
   const db = getDb();
-  const [graph, timeZone, locale] = await Promise.all([
+  const [graph, locale, review] = await Promise.all([
     getKnowledgeGraphOverview(db, { query, kind, entityId: params.entity, page }),
-    getAssistantTimezone(db),
     getAssistantLocale(db),
+    mode === 'review' ? getKnowledgeGraphReviewQueue(db) : Promise.resolve([]),
   ]);
-  const now = new Date();
-  // The views draw from their own queries, not the review list: the list is
-  // capped at 80 and ordered unreviewed-first for triage, which drew a skewed
-  // subset for high-degree entities.
-  const neighborhood =
-    graph.selected && view !== 'paths'
-      ? await getKnowledgeGraphNeighborhood(db, { entityId: graph.selected.id })
-      : { entity: null, edges: [], total: 0 };
-  const paths =
-    graph.selected && view === 'paths'
-      ? await getKnowledgeGraphPaths(db, { entityId: graph.selected.id })
+  const selectedFamily = params.mapFamily ?? '';
+  const familyPredicates = selectedFamily
+    ? PREDICATE_VOCABULARY.filter((entry) => entry.group === selectedFamily).map(
+        (entry) => entry.id,
+      )
+    : [];
+  const map =
+    mode === 'map' && graph.selected
+      ? await getKnowledgeGraphMapSummary(db, {
+          entityId: graph.selected.id,
+          predicates: familyPredicates,
+        })
       : null;
+  const mapFamilies = map
+    ? [...new Set(map.predicateCounts.map((row) => familyFor(row.predicate)))].map((family) => ({
+        family,
+        count: map.predicateCounts
+          .filter((row) => familyFor(row.predicate) === family)
+          .reduce((total, row) => total + row.count, 0),
+      }))
+    : [];
 
   return (
     <PageShell size="wide">
       <PageHeader
         back={{ href: '/profile', label: 'Memory' }}
-        title="Knowledge review"
-        intro="Inspect the source-backed connections the assistant can use, validate their wording, and add corrections with your own evidence."
+        title="Knowledge"
+        intro="Browse what your assistant knows, understand every connection, and keep its evidence accurate."
+        actions={
+          <Link
+            href={hrefFor({ q: query, kind, entity: graph.selected?.id, mode: 'review' })}
+            className={btn.outline}
+          >
+            <CircleAlert className="size-4" aria-hidden="true" />
+            Review {graph.unreviewedRelations.toLocaleString()}
+          </Link>
+        }
       />
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-4">
-        <Card>
-          <p className={`${microLabelClass} text-muted`}>Entities</p>
-          <p className="mt-2 font-display text-3xl font-semibold tracking-[-0.04em]">
-            {graph.totalEntities.toLocaleString()}
+      <section className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-edge bg-sunken/35 px-4 py-3 text-sm">
+        <span>
+          <strong className="text-strong">{graph.totalEntities.toLocaleString()}</strong> items
+        </span>
+        <span>
+          <strong className="text-strong">{graph.totalRelations.toLocaleString()}</strong>{' '}
+          connections
+        </span>
+        <details className="text-muted">
+          <summary className="cursor-pointer font-medium">Graph processing</summary>
+          <p className="mt-2 max-w-xl text-xs leading-5">
+            {graph.pendingSources.toLocaleString()} sources are waiting to be read.{' '}
+            {graph.relativeDateSources > 0
+              ? `${graph.relativeDateSources} date-related sources can be re-read if needed.`
+              : 'All date wording is current.'}
           </p>
-        </Card>
-        <Card>
-          <p className={`${microLabelClass} text-muted`}>Connections</p>
-          <p className="mt-2 font-display text-3xl font-semibold tracking-[-0.04em]">
-            {graph.totalRelations.toLocaleString()}
-          </p>
-        </Card>
-        <Card>
-          <p className={`${microLabelClass} text-muted`}>Needs review</p>
-          <p className="mt-2 font-display text-3xl font-semibold tracking-[-0.04em] text-amber-700 dark:text-amber-300">
-            {graph.unreviewedRelations.toLocaleString()}
-          </p>
-        </Card>
-        <Card>
-          <p className={`${microLabelClass} text-muted`}>Graph sync</p>
-          <p className="mt-2 font-display text-3xl font-semibold tracking-[-0.04em]">
-            {graph.pendingSources.toLocaleString()}
-          </p>
-          <p className="mt-1 text-xs text-muted">
-            waiting · {graph.quarantinedSources.toLocaleString()} paused
-          </p>
-          {/* The backlog drains through a metered model call per source, so the
-              count alone does not say what it will cost. Priced from recent
-              actuals; omitted rather than guessed when history is too thin. */}
-          {graph.pendingSources > 0 ? (
-            <p className="mt-1 text-xs text-muted">
-              {graph.pendingCostUsd === null
-                ? `about ${graph.pendingRuns.toLocaleString()} sync run${
-                    graph.pendingRuns === 1 ? '' : 's'
-                  } to clear`
-                : `~${formatUsd(String(graph.pendingCostUsd))} to clear, about ${drainLabel(
-                    graph.pendingRuns,
-                  )}`}
-            </p>
-          ) : null}
-          {graph.quarantinedSources > 0 ? (
-            <form action={retryQuarantinedKnowledgeSources} className="mt-3">
-              <SubmitButton size="sm" pendingLabel="Queueing…">
-                Retry paused sources
-              </SubmitButton>
-            </form>
-          ) : null}
-          {/* The nightly backfill already re-canonicalized every date it could
-              read for free. What is left needs a model call each, so it is
-              offered with its price rather than queued behind the owner's back. */}
           {graph.relativeDateSources > 0 ? (
-            <form action={reextractDatedSources} className="mt-3">
-              <p className="mb-1.5 text-xs leading-5 text-muted">
-                {graph.relativeDateSources.toLocaleString()} source
-                {graph.relativeDateSources === 1 ? '' : 's'} still date things relative to when they
-                were written.
-              </p>
+            <form action={reextractDatedSources} className="mt-2">
               <SubmitButton size="sm" pendingLabel="Queueing…">
-                Re-read their dates
+                Re-read dates
               </SubmitButton>
             </form>
           ) : null}
-        </Card>
-      </div>
+        </details>
+      </section>
 
-      <div className="mt-6 grid min-w-0 gap-6 lg:grid-cols-[minmax(14rem,0.7fr)_minmax(0,1.8fr)]">
-        <aside className="min-w-0 lg:sticky lg:top-5 lg:self-start">
-          <form action="/profile/knowledge" method="get" className="grid gap-2">
-            <label className="relative block">
-              <span className="sr-only">Search knowledge items</span>
-              <Search
-                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted"
-                aria-hidden="true"
-              />
-              <input
-                type="search"
-                name="q"
-                defaultValue={query}
-                placeholder="Find a person, project, place…"
-                className={`${inputClass} w-full pl-9`}
-              />
-            </label>
-            <div className="flex items-center gap-2">
-              <label className="min-w-0 flex-1">
-                <span className={`sr-only ${labelClass}`}>Type</span>
-                <select name="kind" defaultValue={kind} className={`${selectClass} w-full`}>
-                  <option value="">All types</option>
-                  {ENTITY_KINDS.map((value) => (
+      {mode === 'review' ? (
+        <section className="mt-7 max-w-3xl">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className={microLabelClass}>Review inbox</p>
+              <h2 className="mt-1 font-display text-2xl font-semibold text-strong">
+                Confirm what should stay connected
+              </h2>
+              <p className="mt-1 text-sm text-muted">
+                Evidence stays folded away until you need it; every decision remains traceable.
+              </p>
+            </div>
+            <Link
+              href={hrefFor({ q: query, kind, entity: graph.selected?.id })}
+              className={btnSm.outline}
+            >
+              Back to relationships
+            </Link>
+          </div>
+          <div className="mt-5 grid gap-3">
+            {review.length === 0 ? (
+              <EmptyState>Nothing needs review right now.</EmptyState>
+            ) : (
+              review.map((relation) => (
+                <RelationCard
+                  key={relation.id}
+                  relation={relation}
+                  locale={locale}
+                  query={query}
+                  kind={kind}
+                />
+              ))
+            )}
+          </div>
+        </section>
+      ) : (
+        <div className="mt-7 grid min-w-0 gap-6 lg:grid-cols-[17rem_minmax(0,1fr)]">
+          <aside className="order-2 min-w-0 lg:order-1 lg:sticky lg:top-5 lg:self-start">
+            <form
+              action="/profile/knowledge"
+              method="get"
+              className="grid gap-2 rounded-xl bg-sunken/35 p-3"
+            >
+              <label className="relative block">
+                <span className="sr-only">Find a knowledge item</span>
+                <Search
+                  className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted"
+                  aria-hidden="true"
+                />
+                <input
+                  name="q"
+                  defaultValue={query}
+                  placeholder="Find a person, place, project…"
+                  type="search"
+                  className={`${inputClass} w-full pl-9`}
+                />
+              </label>
+              <select
+                name="kind"
+                defaultValue={kind}
+                className={selectClass}
+                aria-label="Item type"
+              >
+                <option value="">All types</option>
+                {['person', 'organization', 'project', 'place', 'event', 'date', 'topic'].map(
+                  (value) => (
                     <option key={value} value={value}>
                       {entityKindLabel(value)}
                     </option>
-                  ))}
-                </select>
-              </label>
-              {/* An explicit submit keeps the filter usable without client JS;
-                  the form otherwise only applies on Enter. */}
+                  ),
+                )}
+              </select>
               <button type="submit" className={btn.outline}>
-                Apply
+                Find items
               </button>
-            </div>
-          </form>
-          {/* The stat card above prints the true entity count, so this list has
-              to say how much of it is on screen — the two silently disagreeing
-              is what made the page feel like it was hiding things. */}
-          <p className="mt-2 px-1 text-xs text-muted">
-            {graph.matchingEntities.toLocaleString()}
-            {query ? ' matching' : ''} item{graph.matchingEntities === 1 ? '' : 's'}
-            {kind ? ` · ${entityKindLabel(kind)} only` : ''}
-            {graph.entityPages > 1 ? ` · page ${graph.entityPage} of ${graph.entityPages}` : ''}
-          </p>
-          <nav
-            className="mt-2 max-h-[calc(100dvh-16rem)] space-y-1 overflow-y-auto rounded-xl bg-sunken/40 p-1.5"
-            aria-label="Knowledge items"
-          >
-            {graph.entities.length === 0 ? (
-              <p className="px-3 py-6 text-sm text-muted">
-                {query || kind
-                  ? 'No matching knowledge items.'
-                  : 'No source-backed connections yet.'}
-              </p>
-            ) : (
-              graph.entities.map((entity) => (
+            </form>
+            <p className="mt-3 px-1 text-xs text-muted">
+              {graph.matchingEntities.toLocaleString()} matching items
+            </p>
+            <nav
+              className="mt-2 max-h-[42dvh] space-y-1 overflow-y-auto rounded-xl bg-sunken/35 p-1.5 lg:max-h-[calc(100dvh-17rem)]"
+              aria-label="Knowledge items"
+            >
+              {graph.entities.map((entity) => (
                 <Link
                   key={entity.id}
-                  href={hrefFor({ q: query, kind, entity: entity.id, page: graph.entityPage })}
+                  href={hrefFor({ q: query, kind, entity: entity.id })}
                   aria-current={entity.id === graph.selected?.id ? 'page' : undefined}
-                  title={entity.label}
-                  className={`block rounded-lg px-3 py-2.5 motion-safe:transition-colors ${
-                    entity.id === graph.selected?.id
-                      ? 'bg-raised text-strong ring-1 ring-edge/80'
-                      : 'text-muted hover:bg-raised/70 hover:text-strong'
-                  }`}
+                  className={`block rounded-lg px-3 py-2.5 ${entity.id === graph.selected?.id ? 'bg-raised ring-1 ring-accent/30' : 'text-muted hover:bg-raised'}`}
                 >
-                  <span className="block truncate text-sm font-medium">{entity.label}</span>
-                  <span className="mt-0.5 block text-[0.68rem] opacity-70">
-                    {entityKindLabel(entity.kind)}
+                  <span className="block truncate text-sm font-medium text-strong">
+                    {readableKnowledgeLabel(entity.label)}
                   </span>
+                  <span className="block text-xs text-muted">{entityKindLabel(entity.kind)}</span>
                 </Link>
-              ))
-            )}
-          </nav>
-          {graph.entityPages > 1 ? (
-            <nav className="mt-3 flex items-center justify-between gap-2" aria-label="Item pages">
-              {graph.entityPage > 1 ? (
-                <Link
-                  href={hrefFor({ q: query, kind, page: graph.entityPage - 1 })}
-                  className={btn.outline}
-                >
-                  <ChevronLeft className="size-4" aria-hidden="true" />
-                  Previous
-                </Link>
-              ) : (
-                <span />
-              )}
-              {graph.entityPage < graph.entityPages ? (
-                <Link
-                  href={hrefFor({ q: query, kind, page: graph.entityPage + 1 })}
-                  className={btn.outline}
-                >
-                  Next
-                  <ChevronRight className="size-4" aria-hidden="true" />
-                </Link>
-              ) : null}
+              ))}
             </nav>
-          ) : null}
-        </aside>
-
-        <main className="min-w-0">
-          {!graph.selected ? (
-            <EmptyState>
-              <Network className="mx-auto size-5 text-muted" aria-hidden="true" />
-              <p className="mt-2 font-medium text-strong">
-                Your graph will appear as memories connect
-              </p>
-              <p className="mt-1 text-sm text-muted">
-                Add a relationship below, or wait for the knowledge-graph sync to process durable
-                facts.
-              </p>
-              <AddKnowledgeRelation selected={null} vocabulary={PREDICATE_VOCABULARY} />
-            </EmptyState>
-          ) : (
-            <>
-              <section className={`${cardShellClass} p-4 sm:p-5`}>
-                <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className={`${microLabelClass} text-muted`}>
-                      {entityKindLabel(graph.selected.kind)}
-                    </p>
-                    <h2
-                      className="mt-1 truncate font-display text-2xl font-semibold tracking-[-0.025em]"
-                      title={graph.selected.label}
+            {graph.entityPages > 1 ? (
+              <div className="mt-3 flex items-center justify-between gap-2 px-1 text-xs text-muted">
+                <span>
+                  Page {graph.entityPage} of {graph.entityPages}
+                </span>
+                <span className="flex gap-2">
+                  {graph.entityPage > 1 ? (
+                    <Link
+                      className="underline"
+                      href={hrefFor({ q: query, kind, page: graph.entityPage - 1 })}
                     >
-                      {graph.selected.label}
-                    </h2>
-                    <p className="mt-1 text-sm text-muted">
-                      {graph.selectedRelationTotal.toLocaleString()} source-backed connection
-                      {graph.selectedRelationTotal === 1 ? '' : 's'}
-                      {graph.relations.length < graph.selectedRelationTotal
-                        ? ` · showing the first ${graph.relations.length}`
-                        : ''}
-                    </p>
-                  </div>
-                  <AddKnowledgeRelation
-                    selected={graph.selected}
-                    vocabulary={PREDICATE_VOCABULARY}
-                  />
-                </div>
+                      Previous
+                    </Link>
+                  ) : null}
+                  {graph.entityPage < graph.entityPages ? (
+                    <Link
+                      className="underline"
+                      href={hrefFor({ q: query, kind, page: graph.entityPage + 1 })}
+                    >
+                      Next
+                    </Link>
+                  ) : null}
+                </span>
+              </div>
+            ) : null}
+          </aside>
 
-                <div className="mt-5 grid gap-4 border-t border-edge pt-4 sm:grid-cols-3">
-                  <RenameEntity entity={graph.selected} />
-                  <RetypeEntity entity={graph.selected} />
-                  <MergeEntity entity={graph.selected} duplicates={graph.duplicates} />
-                </div>
-              </section>
-
-              <section className="mt-6">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <h2 className={cardTitleClass}>Explore connections</h2>
-                    <p className="mt-1 text-sm text-muted">{VIEW_INTROS[view]}</p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3">
-                    {view !== 'paths' ? (
-                      <span className="inline-flex items-center gap-1 text-xs text-muted">
-                        <GitFork className="size-3.5" aria-hidden="true" />
-                        {neighborhood.total.toLocaleString()} active edge
-                        {neighborhood.total === 1 ? '' : 's'}
-                      </span>
-                    ) : null}
-                    <nav className={segmentedControlClass} aria-label="Connection views">
-                      {VIEWS.map((item) => (
-                        <Link
-                          key={item.id}
-                          href={hrefFor({
-                            q: query,
-                            kind,
-                            entity: graph.selected?.id,
-                            view: item.id,
-                          })}
-                          aria-current={item.id === view ? 'true' : undefined}
-                          className={
-                            item.id === view ? segmentedItemActiveClass : segmentedItemClass
-                          }
-                        >
-                          {item.label}
-                        </Link>
-                      ))}
-                    </nav>
-                  </div>
-                </div>
-                <div className="mt-3">
-                  {view === 'map' ? (
-                    <LocalMap
-                      selected={graph.selected}
-                      initialEdges={neighborhood.edges}
-                      totalEdges={neighborhood.total}
-                      query={query}
-                      kind={kind}
-                      view="map"
-                    />
-                  ) : null}
-                  {view === 'explorer' ? (
-                    <KnowledgeGraphExplorer
-                      selected={graph.selected}
-                      edges={neighborhood.edges}
-                      total={neighborhood.total}
-                      vocabulary={PREDICATE_VOCABULARY}
-                      query={query}
-                      kind={kind}
-                      locale={locale}
-                    />
-                  ) : null}
-                  {view === 'paths' && paths ? (
-                    <KnowledgeGraphPaths
-                      paths={paths.paths}
-                      centerLabel={graph.selected.label}
-                      centerKind={graph.selected.kind}
-                      hrefFor={(entityId) =>
-                        hrefFor({ q: query, kind, entity: entityId, view: 'paths' })
-                      }
-                      locale={locale}
-                    />
-                  ) : null}
-                  {view === 'details' ? (
-                    <KnowledgeGraphDetails
-                      edges={neighborhood.edges}
-                      total={neighborhood.total}
-                      hrefFor={(entityId) =>
-                        hrefFor({ q: query, kind, entity: entityId, view: 'details' })
-                      }
-                      locale={locale}
-                    />
-                  ) : null}
-                </div>
-              </section>
-
-              <section className="mt-6">
-                <div className="flex flex-wrap items-baseline justify-between gap-3">
-                  <div>
-                    <h2 className={cardTitleClass}>Connections and evidence</h2>
-                    <p className="mt-1 text-sm text-muted">
-                      Validate the extraction against its original memory. Marking an edge stale
-                      keeps the source but removes it from GraphRAG.
-                    </p>
-                  </div>
-                  {graph.unreviewedRelations > 0 ? (
-                    <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-300">
-                      <CircleAlert className="size-3.5" aria-hidden="true" />
-                      {graph.unreviewedRelations} awaiting review
-                    </span>
-                  ) : null}
-                </div>
-                {graph.relations.length === 0 ? (
-                  <EmptyState>
-                    This item has no source-backed edges yet. Add one with a note if it should be
-                    connected.
-                  </EmptyState>
-                ) : (
-                  <div className="mt-3 grid gap-3">
-                    {graph.relations.map((relation) => (
-                      <ReviewRelation
-                        key={relation.id}
-                        relation={relation}
-                        now={now}
-                        timeZone={timeZone}
-                        locale={locale}
+          <main className="order-1 min-w-0 lg:order-2">
+            {!graph.selected ? (
+              <EmptyState>
+                <Network className="mx-auto size-5 text-muted" />
+                Search for an item, or add the first source-backed connection.
+              </EmptyState>
+            ) : (
+              <>
+                <section className={`${cardShellClass} p-4 sm:p-5`}>
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className={microLabelClass}>{entityKindLabel(graph.selected.kind)}</p>
+                      <h2 className="mt-1 break-words font-display text-2xl font-semibold text-strong">
+                        {readableKnowledgeLabel(graph.selected.label)}
+                      </h2>
+                      <p className="mt-1 text-sm text-muted">
+                        {graph.selectedActiveRelationTotal.toLocaleString()} active connections
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <EditKnowledgeEntity entity={graph.selected} duplicates={graph.duplicates} />
+                      <AddKnowledgeRelation
+                        selected={graph.selected}
+                        vocabulary={PREDICATE_VOCABULARY}
                       />
-                    ))}
+                    </div>
                   </div>
-                )}
-              </section>
-            </>
-          )}
-        </main>
-      </div>
+                </section>
+
+                <section className="mt-7">
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                      <p className={microLabelClass}>
+                        {mode === 'map' ? 'Focus map' : 'Relationships'}
+                      </p>
+                      <h2 className="mt-1 font-display text-2xl font-semibold text-strong">
+                        {mode === 'map'
+                          ? 'One meaningful neighbourhood at a time'
+                          : 'What connects here'}
+                      </h2>
+                    </div>
+                    <div className="flex gap-2">
+                      <Link
+                        href={hrefFor({ q: query, kind, entity: graph.selected.id })}
+                        className={mode === 'relationships' ? btnSm.primary : btnSm.outline}
+                      >
+                        Relationships
+                      </Link>
+                      <Link
+                        href={hrefFor({ q: query, kind, entity: graph.selected.id, mode: 'map' })}
+                        className={`hidden md:inline-flex ${mode === 'map' ? btnSm.primary : btnSm.outline}`}
+                      >
+                        Map
+                      </Link>
+                    </div>
+                  </div>
+                  {mode === 'map' && map ? (
+                    <>
+                      <div className="mt-5 md:hidden">
+                        <EmptyState>
+                          The focus map is available on a larger screen. Relationships stay easy to
+                          browse here.
+                        </EmptyState>
+                        <div className="mt-5">
+                          <RelationshipList
+                            relations={graph.relations}
+                            locale={locale}
+                            query={query}
+                            kind={kind}
+                            focusId={graph.selected.id}
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-5 hidden md:block">
+                        <div className="mb-4 flex flex-wrap gap-2">
+                          {mapFamilies.map((item) => (
+                            <Link
+                              key={item.family}
+                              href={hrefFor({
+                                q: query,
+                                kind,
+                                entity: graph.selected?.id,
+                                mode: 'map',
+                                mapFamily: item.family,
+                              })}
+                              className={
+                                item.family === selectedFamily ? btnSm.primary : btnSm.outline
+                              }
+                            >
+                              {familyLabel(item.family)} {item.count}
+                            </Link>
+                          ))}
+                        </div>
+                        {!selectedFamily && map.neighborhood.total > 24 ? (
+                          <EmptyState>
+                            Choose a relationship family to map. This item has{' '}
+                            {map.neighborhood.total.toLocaleString()} connections, so the map stays
+                            focused and readable.
+                          </EmptyState>
+                        ) : (
+                          <>
+                            <p className="mb-3 text-sm text-muted">
+                              Showing {map.neighborhood.edges.length} of {map.neighborhood.total}{' '}
+                              matching connections. Select a node to open it; the map never expands
+                              into a full graph.
+                            </p>
+                            <LocalMap
+                              selected={graph.selected}
+                              initialEdges={map.neighborhood.edges}
+                              totalEdges={map.neighborhood.total}
+                              query={query}
+                              kind={kind}
+                              view="map"
+                            />
+                          </>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="mt-5">
+                      <RelationshipList
+                        relations={graph.relations}
+                        locale={locale}
+                        query={query}
+                        kind={kind}
+                        focusId={graph.selected.id}
+                      />
+                    </div>
+                  )}
+                </section>
+              </>
+            )}
+          </main>
+        </div>
+      )}
     </PageShell>
   );
 }

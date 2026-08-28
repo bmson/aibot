@@ -1,8 +1,8 @@
 'use client';
 
+import { presentKnowledgeGraphRelation } from '@assistant/application/relationship-presentation';
 import { ArrowRight, Minus, Plus, RotateCcw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { loadKnowledgeNeighborhood } from '@/app/profile/knowledge/actions';
 import {
   arrowhead,
   type CanvasNode,
@@ -10,7 +10,6 @@ import {
   CX,
   CY,
   DRAG_THRESHOLD,
-  EXPANSION_LIMIT,
   edgeLine,
   entityHref,
   HIT_R,
@@ -19,7 +18,6 @@ import {
   LABEL_LIMIT,
   type MapEdgeInput,
   type MapEntity,
-  mergeExpansion,
   NODE_R,
   panBy,
   toViewPoint,
@@ -32,22 +30,22 @@ import {
   clipNodeLabel,
   entityKindLabel,
   entityKindPaint,
+  humanizeEntityLabel,
   humanizePredicate,
 } from '@/lib/knowledge';
 import { btnSm, focusRing } from '@/lib/ui';
 
 /**
- * The interactive local map: pan, zoom, select a neighbour to act on it (open
- * re-centres the page; expand grows its connections in place), and page crowded
- * kinds with their "+N more" pill.
+ * The interactive local map: pan, zoom, select a neighbour to open it, and
+ * page crowded kinds with their "+N more" pill.
  *
  * Node actions live in one floating toolbar rather than a per-node badge: a
  * hub has dozens of neighbours, and a button on each was visual noise. The
  * toolbar's controls are real HTML elements with full-size touch targets —
  * SVG nodes stay links, and the drawing stays quiet until you select something.
  *
- * The first hop arrives as server-rendered props; expansion goes through a
- * server action. Rendering stays SVG (no charting dependency): layout is
+ * The bounded first hop arrives as server-rendered props. Rendering stays SVG
+ * (no charting dependency): layout is
  * deterministic trigonometry from local-map-model, so the drawing is
  * snapshot-stable, keyboard-navigable, and never animates under
  * prefers-reduced-motion.
@@ -57,11 +55,6 @@ const WHEEL_ZOOM_IN = 1.12;
 const WHEEL_ZOOM_OUT = 1 / WHEEL_ZOOM_IN;
 const KEY_PAN = 40;
 const KEY_ZOOM = 1.25;
-
-interface ExpansionData {
-  edges: MapEdgeInput[];
-  total: number;
-}
 
 export function LocalMap({
   selected,
@@ -81,12 +74,9 @@ export function LocalMap({
 }) {
   /** Kind → pages revealed so far (1 = the first KIND_PAGE_SIZE). */
   const [revealed, setRevealed] = useState<Record<string, number>>({});
-  /** Node id → its fetched second hop. Canvas derives from this, so a reveal re-layout keeps expansions. */
-  const [expandedData, setExpandedData] = useState<Record<string, ExpansionData>>({});
   /** The canvas node selected for the action toolbar. Not the page's entity. */
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>(INITIAL_VIEWPORT);
-  const [pendingId, setPendingId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [announce, setAnnounce] = useState('');
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -98,8 +88,8 @@ export function LocalMap({
     dragging: boolean;
   } | null>(null);
 
-  // Server navigation or a revalidation (confirm/mark-stale) hands down new
-  // props; the canvas resets to match rather than showing stale expansions.
+  // Server navigation or a revalidation (confirm/mark inaccurate) hands down
+  // new props; the canvas resets to match rather than showing stale map state.
   // Adjusting state during render is the React-sanctioned reset pattern and
   // avoids an effect that would paint the stale frame first.
   const propsKey = `${selected.id}|${initialEdges.map((edge) => `${edge.id}:${edge.reviewStatus}`).join(',')}`;
@@ -107,20 +97,15 @@ export function LocalMap({
   if (seenPropsKey !== propsKey) {
     setSeenPropsKey(propsKey);
     setRevealed({});
-    setExpandedData({});
     setSelectedNodeId(null);
     setViewport(INITIAL_VIEWPORT);
-    setPendingId(null);
     setActiveId(null);
   }
 
-  const canvas = useMemo(() => {
-    let next = initialCanvas(selected, initialEdges, revealed);
-    for (const [parentId, data] of Object.entries(expandedData)) {
-      next = mergeExpansion(next, parentId, data.edges).canvas;
-    }
-    return next;
-  }, [selected, initialEdges, revealed, expandedData]);
+  const canvas = useMemo(
+    () => initialCanvas(selected, initialEdges, revealed),
+    [selected, initialEdges, revealed],
+  );
 
   const nodeById = new Map(canvas.nodes.map((node) => [node.id, node]));
   const realNodes = canvas.nodes.filter((node) => !node.aggregate);
@@ -134,28 +119,6 @@ export function LocalMap({
   const handleReveal = (kindKey: string) => {
     setRevealed((previous) => ({ ...previous, [kindKey]: (previous[kindKey] ?? 1) + 1 }));
     setAnnounce(`Showing more ${entityKindLabel(kindKey).toLocaleLowerCase()} connections.`);
-  };
-
-  const handleExpand = async (node: CanvasNode) => {
-    if (pendingId) return;
-    setPendingId(node.id);
-    try {
-      const result = await loadKnowledgeNeighborhood(node.id, EXPANSION_LIMIT);
-      const merged = mergeExpansion(canvas, node.id, result.edges);
-      setExpandedData((previous) => ({
-        ...previous,
-        [node.id]: { edges: result.edges, total: result.total },
-      }));
-      setAnnounce(
-        merged.added > 0
-          ? `Showing ${merged.added} more connection${merged.added === 1 ? '' : 's'} around ${node.label}.${merged.capped ? ' The map is full; open a node to keep exploring.' : ''}`
-          : `No further connections around ${node.label}.`,
-      );
-    } catch {
-      setAnnounce(`Could not load connections around ${node.label}. Try again.`);
-    } finally {
-      setPendingId(null);
-    }
   };
 
   // ── Pan/zoom wiring ──────────────────────────────────────────────────────
@@ -246,21 +209,22 @@ export function LocalMap({
   const zoomButtonClass = `mobile-touch-target inline-flex size-9 items-center justify-center rounded-lg border border-edge bg-raised/95 text-muted motion-safe:transition-colors hover:text-strong ${focusRing}`;
 
   const nodeLabelVisible = (node: CanvasNode) =>
-    showAllLabels ||
-    node.id === activeId ||
-    node.id === selectedNodeId ||
-    Boolean(expandedData[node.id]) ||
-    Boolean(node.aggregate);
+    showAllLabels || node.id === activeId || node.id === selectedNodeId || Boolean(node.aggregate);
 
-  const description = canvas.edges
-    .map((edge) => {
-      const subject = nodeById.get(edge.subjectId);
-      const object = nodeById.get(edge.objectId);
-      if (!subject || !object) return '';
-      return `${subject.label} ${humanizePredicate(edge.predicate)} ${object.label}`;
-    })
-    .filter(Boolean)
-    .join('; ');
+  const relationshipSentences = useMemo(
+    () =>
+      initialEdges.map((edge) => ({
+        id: edge.id,
+        other: edge.other,
+        sentence: presentKnowledgeGraphRelation({
+          subjectLabel: edge.outbound ? selected.label : edge.other.label,
+          predicate: edge.predicate,
+          objectLabel: edge.outbound ? edge.other.label : selected.label,
+        }).sentence,
+      })),
+    [initialEdges, selected.label],
+  );
+  const description = relationshipSentences.map((relationship) => relationship.sentence).join('; ');
 
   return (
     <div>
@@ -301,7 +265,7 @@ export function LocalMap({
               }
             }}
           >
-            <title id="local-map-title">{`Connections around ${selected.label}`}</title>
+            <title id="local-map-title">{`Connections around ${humanizeEntityLabel(selected.label)}`}</title>
             <desc id="local-map-desc">{description}</desc>
 
             <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
@@ -380,17 +344,13 @@ export function LocalMap({
                         textAnchor="middle"
                         className="fill-muted text-[10.5px] font-medium"
                       >
-                        {node.label}
+                        {humanizeEntityLabel(node.label)}
                       </text>
                     </g>
                   );
                 }
 
                 const paint = entityKindPaint(node.kind);
-                const expansion = expandedData[node.id];
-                const overflow = expansion
-                  ? Math.max(0, expansion.total - expansion.edges.length)
-                  : 0;
                 const isSelected = node.id === selectedNodeId;
                 const anchorLeft = node.x > CX + 40;
                 const labelX = anchorLeft ? node.x - (NODE_R + 6) : node.x + NODE_R + 6;
@@ -413,7 +373,7 @@ export function LocalMap({
                       onBlur={() => setActiveId(null)}
                     >
                       <title>
-                        {`${node.label} — ${entityKindLabel(node.kind)}. Select to open or expand it.`}
+                        {`${humanizeEntityLabel(node.label)} — ${entityKindLabel(node.kind)}. Select to open it.`}
                       </title>
                       {/* Invisible 44px hit disc over the visible node. */}
                       <circle cx={node.x} cy={node.y} r={HIT_R} fill="transparent" />
@@ -441,16 +401,6 @@ export function LocalMap({
                           className={`text-[12px] ${isSelected ? 'fill-strong font-semibold' : 'fill-strong font-medium'}`}
                         >
                           {clipNodeLabel(node.label, 22)}
-                        </text>
-                      ) : null}
-                      {overflow > 0 ? (
-                        <text
-                          x={labelX}
-                          y={node.y + 14}
-                          textAnchor={anchorLeft ? 'end' : 'start'}
-                          className="fill-muted text-[9.5px]"
-                        >
-                          {`+${overflow} more — open to explore`}
                         </text>
                       ) : null}
                     </a>
@@ -527,24 +477,11 @@ export function LocalMap({
                 className={`inline-block size-2 shrink-0 rounded-full ${entityKindPaint(toolbarNode.kind).swatch}`}
               />
               <span className="min-w-0 truncate text-sm font-medium text-strong">
-                {toolbarNode.label}
+                {humanizeEntityLabel(toolbarNode.label)}
               </span>
               <span className="shrink-0 text-xs text-muted">
                 {entityKindLabel(toolbarNode.kind)}
               </span>
-              {expandedData[toolbarNode.id] ? (
-                <span className="shrink-0 px-2 text-xs text-muted">Expanded</span>
-              ) : (
-                <button
-                  type="button"
-                  disabled={pendingId !== null}
-                  onClick={() => void handleExpand(toolbarNode)}
-                  className={btnSm.outline}
-                >
-                  <Plus className="size-3.5" aria-hidden="true" />
-                  {pendingId === toolbarNode.id ? 'Loading…' : 'Expand'}
-                </button>
-              )}
               <a href={hrefFor(toolbarNode.id)} className={btnSm.primary}>
                 Open
                 <ArrowRight className="size-3.5" aria-hidden="true" />
@@ -577,6 +514,24 @@ export function LocalMap({
         </span>
       </div>
 
+      <section className="mt-4" aria-label="Connections shown in this map">
+        <p className="text-xs font-medium tracking-[0.08em] text-muted uppercase">
+          Connections shown
+        </p>
+        <ul className="mt-2 grid gap-2 sm:grid-cols-2">
+          {relationshipSentences.map((relationship) => (
+            <li
+              key={relationship.id}
+              className="rounded-lg bg-sunken/45 px-3 py-2 text-sm leading-5 text-strong"
+            >
+              <a href={hrefFor(relationship.other.id)} className="hover:underline">
+                {relationship.sentence}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
+
       {/* The drawing's content as a navigable list — the equivalent for anyone
           not reading the SVG, and the touch-friendly path on small screens. */}
       <ul className="sr-only">
@@ -591,7 +546,7 @@ export function LocalMap({
             return (
               <li key={node.id}>
                 <a href={hrefFor(node.id)}>
-                  {`${node.label} (${entityKindLabel(node.kind)})${
+                  {`${humanizeEntityLabel(node.label)} (${entityKindLabel(node.kind)})${
                     connecting.length > 0
                       ? ` — ${connecting
                           .map(

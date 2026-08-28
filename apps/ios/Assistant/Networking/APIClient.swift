@@ -162,6 +162,93 @@ struct APIClient: Sendable {
         try await get("api/mobile/v1/workspace")
     }
 
+    func knowledge(query: String = "", kind: String = "", page: Int = 1) async throws -> KnowledgeOverview {
+        var components = URLComponents(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            .init(name: "q", value: query.isEmpty ? nil : query),
+            .init(name: "kind", value: kind.isEmpty ? nil : kind),
+            .init(name: "page", value: String(max(page, 1))),
+        ]
+        guard let url = components?.url else { throw APIError.invalidServerURL }
+        return try await perform(makeRequest(url: url), as: KnowledgeOverview.self)
+    }
+
+    func knowledgeItem(id: String) async throws -> KnowledgeOverview {
+        try await get("api/mobile/v1/knowledge/\(id)")
+    }
+
+    func knowledgeReview() async throws -> KnowledgeReviewInbox {
+        var components = URLComponents(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [.init(name: "mode", value: "review")]
+        guard let url = components?.url else { throw APIError.invalidServerURL }
+        return try await perform(makeRequest(url: url), as: KnowledgeReviewInbox.self)
+    }
+
+    func createKnowledgeConnection(_ mutation: KnowledgeConnectionMutation) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(mutation)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func reviewKnowledgeRelation(id: String, approve: Bool) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge/relations/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["action": approve ? "confirm" : "reject"])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func correctKnowledgeRelation(id: String, mutation: KnowledgeConnectionMutation) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge/relations/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(
+            KnowledgeCorrectionMutation(
+                action: "correct",
+                subjectLabel: mutation.subjectLabel,
+                subjectKind: mutation.subjectKind,
+                subjectId: mutation.subjectId,
+                predicate: mutation.predicate,
+                objectLabel: mutation.objectLabel,
+                objectKind: mutation.objectKind,
+                objectId: mutation.objectId,
+                note: mutation.note
+            )
+        )
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func updateKnowledgeItem(id: String, action: String, value: String) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge/\(id)"))
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        let body: [String: String] = action == "rename"
+            ? ["action": action, "label": value]
+            : ["action": action, "kind": value]
+        request.httpBody = try JSONEncoder().encode(body)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func mergeKnowledgeItem(id: String, targetId: String) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge/\(id)"))
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["action": "merge", "targetId": targetId])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
     func uploadDocument(data: Data, name: String, title: String, mime: String) async throws {
         let boundary = "AssistantBoundary-\(UUID().uuidString)"
         var body = Data()

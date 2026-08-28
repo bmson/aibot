@@ -123,8 +123,13 @@ export function entityKindPaint(kind: string): EntityKindPaint {
  * label decisions stay together.
  */
 export function clipNodeLabel(label: string, max = 18): string {
-  const clean = label.replace(/\s+/g, ' ').trim();
+  const clean = humanizeEntityLabel(label).replace(/\s+/g, ' ').trim();
   return clean.length <= max ? clean : `${clean.slice(0, max - 1)}…`;
+}
+
+/** Canonical labels can contain extraction-era separators; never make people read those in the UI. */
+export function humanizeEntityLabel(label: string): string {
+  return label.replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 /**
