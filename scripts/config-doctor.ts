@@ -1,5 +1,9 @@
 import { loadConfig } from '@assistant/config';
-import { moduleDiagnostics, validateAssistantConfig } from '@assistant/modules/meta';
+import {
+  moduleDiagnostics,
+  proactiveConfigNotes,
+  validateAssistantConfig,
+} from '@assistant/modules/meta';
 
 let config: ReturnType<typeof loadConfig>;
 try {
@@ -17,6 +21,15 @@ console.log('Modules:');
 for (const diagnostic of moduleDiagnostics(config)) {
   const marker = !diagnostic.enabled ? '○' : diagnostic.ready ? '✓' : '!';
   console.log(`  ${marker} ${diagnostic.module}: ${diagnostic.detail}`);
+}
+
+// Settings that are valid but leave the assistant mute. Printed before the
+// pass/fail line because a "Configuration is ready." with an empty inbox behind
+// it is exactly the confusion this whole check exists to prevent.
+const notes = proactiveConfigNotes(config);
+if (notes.length > 0) {
+  console.warn('Proactive behaviour:');
+  for (const note of notes) console.warn(`  ! ${note}`);
 }
 
 const problems = validateAssistantConfig(config);

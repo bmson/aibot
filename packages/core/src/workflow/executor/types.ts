@@ -108,13 +108,23 @@ export interface ExecutorDeps {
    * Out-of-band owner ping for async events the owner would otherwise only see
    * by opening the dashboard: a task that permanently failed (dead-letter), a
    * task stalled on its own budget cap, or a mission that needs a decision.
-   * Delivered to the owner's channel (e.g. SMS) in addition to the dashboard
-   * conversation notice. Best-effort — callers swallow its errors.
+   * Delivered to the owner's channel (e.g. SMS, push) in addition to the
+   * dashboard conversation notice. Best-effort — callers swallow its errors.
+   *
+   * `urgency` chooses whether the nudge policy governs the phone leg. Omitted
+   * it stays `interrupt`, which is what every caller above is: the owner is
+   * the one waiting on a dead-letter or a budget stall, so those are never
+   * held back. Proactive producers — the briefing, the pulse, curiosity —
+   * pass `ambient`, which subjects the ping to quiet hours and the daily cap.
+   *
+   * `conversationId` names the thread that already holds this notice, so the
+   * dashboard leg can skip mirroring a second copy; the phone legs ignore it.
    */
   notifyOwner?: (input: {
-    taskId: string;
+    taskId?: string;
     conversationId: string | null;
     text: string;
+    urgency?: 'ambient' | 'interrupt';
   }) => Promise<void>;
 }
 

@@ -13,6 +13,7 @@ export * from './knowledge-graph.js';
 export * from './location.js';
 export * from './mcp.js';
 export * from './operations.js';
+export * from './proactive-health.js';
 export * from './profile.js';
 export * from './push.js';
 export * from './recall-feedback.js';

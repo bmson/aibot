@@ -13,7 +13,7 @@ import { eq, inArray, like } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import type { ModelRouter } from '../model-router/router.js';
-import { briefingHasNews, runBriefing } from './briefing.js';
+import { briefingHasNews, briefingHeadline, runBriefing } from './briefing.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -297,6 +297,7 @@ describe('runBriefing — richer inputs', () => {
         needsAttention: 0,
         pendingApprovals: 0,
         calendarConflicts: 0,
+        calendarSalient: 0,
         goalDeltas: 0,
         watchHits: 0,
       }),
@@ -308,13 +309,121 @@ describe('runBriefing — richer inputs', () => {
       needsAttention: 0,
       pendingApprovals: 0,
       calendarConflicts: 0,
+      calendarSalient: 0,
       goalDeltas: 0,
       watchHits: 0,
     };
     expect(briefingHasNews({ ...quiet, calendarConflicts: 1 })).toBe(true);
+    expect(briefingHasNews({ ...quiet, calendarSalient: 1 })).toBe(true);
     expect(briefingHasNews({ ...quiet, goalDeltas: 1 })).toBe(true);
     expect(briefingHasNews({ ...quiet, watchHits: 1 })).toBe(true);
     expect(briefingHasNews({ ...quiet, highlights: 1 })).toBe(true);
+  });
+
+  it('pings the phone once, ambient, when the briefing delivers', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    await addMail({
+      id: 'ping',
+      importance: 5,
+      category: 'financial',
+      subject: `${MARKER} invoice due`,
+    });
+    const pings: Array<{ text: string; urgency?: string }> = [];
+    const result = await runBriefing(
+      {
+        db,
+        router: recordingRouter().router,
+        notifyOwner: async (input) => {
+          pings.push(input);
+        },
+      },
+      { now: new Date() },
+    );
+    expect(result.delivered).toBe(true);
+    expect(result.pinged).toBe(true);
+    // Exactly one buzz, marked ambient so quiet hours and the daily cap govern
+    // it — a briefing is something the owner did not just ask for.
+    expect(pings).toHaveLength(1);
+    expect(pings[0]?.urgency).toBe('ambient');
+    expect(pings[0]?.text).toContain('mail highlight');
+  });
+
+  it('still delivers the dashboard copy when no phone channel is wired', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    await addMail({
+      id: 'nophone',
+      importance: 5,
+      category: 'financial',
+      subject: `${MARKER} second invoice`,
+    });
+    const result = await runBriefing({ db, router: recordingRouter().router }, { now: new Date() });
+    expect(result.delivered).toBe(true);
+    expect(result.pinged).toBe(false);
+  });
+
+  it('builds a push headline only from what the notes actually held', () => {
+    const empty = {
+      delivered: true,
+      pinged: false,
+      mailScanned: 40,
+      highlights: 0,
+      needsAttention: 0,
+      pendingApprovals: 0,
+      upcoming: 0,
+      suggested: 0,
+      calendarEvents: 9,
+      calendarConflicts: 0,
+      calendarSalient: 0,
+      goalDeltas: 0,
+      watchHits: 0,
+    };
+    // 40 messages scanned and 9 events seen, but nothing scored: the headline
+    // must not manufacture an item out of the volume it looked at.
+    expect(briefingHeadline(empty)).toBe('Your briefing is ready.');
+
+    const busy = briefingHeadline({
+      ...empty,
+      calendarConflicts: 1,
+      calendarSalient: 2,
+      highlights: 3,
+      pendingApprovals: 1,
+    });
+    expect(busy).toContain('1 calendar conflict');
+    expect(busy).toContain('2 events worth a look');
+    expect(busy).toContain('3 mail highlights');
+    expect(busy).toContain('1 awaiting approval');
+  });
+
+  it('treats a salient event as news even with no conflict', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const start = new Date(Date.now() + 3 * 3600_000).toISOString();
+    const end = new Date(Date.now() + 4 * 3600_000).toISOString();
+    const { router, prompts } = recordingRouter();
+    const result = await runBriefing({
+      db,
+      router,
+      // One event, no overlap: before salience this was silence.
+      calendarReader: async () => ({
+        events: [
+          {
+            summary: `${MARKER} Consultant`,
+            start,
+            end,
+            calendar: 'Personal',
+            allDay: false,
+            eventId: 'evt-salient',
+            location: 'Skolavorduholt 1',
+            organizer: 'clinic@hospital.example',
+            attendees: ['bmson@bmson.com (needsAction)'],
+          },
+        ],
+        complete: true,
+      }),
+    });
+    expect(result.calendarConflicts).toBe(0);
+    expect(result.calendarSalient).toBe(1);
+    expect(result.delivered).toBe(true);
+    expect(prompts[0] ?? '').toContain('Events worth a second look');
   });
 
   it('includes goal deltas, watch hits, and open suggestions in the notes', async (ctx) => {

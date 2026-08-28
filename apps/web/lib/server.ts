@@ -32,6 +32,7 @@ import {
   getImportOverview,
   getMcpConnection,
   getPrimaryConversationId,
+  getProactiveHealth,
   getSettingsOverview,
   getShellStatus,
   handleChatTurn,
@@ -187,6 +188,7 @@ function createApplication() {
     },
     deleteMcpConnection: (id: string) => deleteMcpConnection(db, id),
     getSettings: () => getSettingsOverview(db),
+    getProactiveHealth: () => getProactiveHealth(db),
     updateSettings: (input: { timezone: string; locale: string; signature: string }) =>
       updateAssistantSettings(db, input),
     updateNotificationPrefs: (input: {

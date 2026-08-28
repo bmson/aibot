@@ -1,6 +1,9 @@
 import type { Db, TaskRow } from '@assistant/db';
 import { loadConfig } from '../config.js';
 import type { ModelRouter } from '../model-router/router.js';
+import { curiositySummary, runCuriosity } from '../proactive/curiosity.js';
+import type { ProactiveNotifier } from '../proactive/notify.js';
+import { pulseSummary, runPulse } from '../proactive/pulse.js';
 import { runAnomalyScan } from '../workflow/anomaly.js';
 import { type BriefingCalendarReader, briefingSummary, runBriefing } from '../workflow/briefing.js';
 import { runDream } from '../workflow/dream.js';
@@ -53,7 +56,9 @@ export type CodeJobName =
   | 'dream.run'
   | 'self.maintain'
   | 'health.monitor'
-  | 'watch.suggest';
+  | 'watch.suggest'
+  | 'pulse.check'
+  | 'graph.curiosity';
 
 const CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.extract',
@@ -75,6 +80,8 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'self.maintain',
   'health.monitor',
   'watch.suggest',
+  'pulse.check',
+  'graph.curiosity',
 ]);
 
 /**
@@ -83,7 +90,11 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
  * task rows, and a manually queued job completes without provider work.
  */
 export function isCodeJobEnabled(job: string): boolean {
-  return !job.startsWith('memory.graph_') || loadConfig().GRAPH_RAG_ENABLED;
+  // Everything that reads or writes the knowledge graph rides the same switch —
+  // curiosity included, since a graph that is turned off has no gaps to ask
+  // about and would otherwise produce a question built on nothing.
+  const needsGraph = job.startsWith('memory.graph_') || job.startsWith('graph.');
+  return !needsGraph || loadConfig().GRAPH_RAG_ENABLED;
 }
 
 export interface CodeJobOutcome {
@@ -109,6 +120,12 @@ export async function runCodeJob(
      * the google module is installed (core holds no provider credentials).
      */
     calendarReader?: BriefingCalendarReader;
+    /**
+     * The phone leg for proactive jobs, injected by the composition root.
+     * Without it a job still posts its dashboard copy — the owner just has to
+     * open the app to find it, which is exactly the silence this exists to fix.
+     */
+    notifyOwner?: ProactiveNotifier;
     heartbeat?: () => Promise<void>;
     /**
      * Supplied by the composition root: returns a completion summary when the
@@ -151,6 +168,20 @@ export async function runCodeJob(
           `${r.duplicates} duplicate, ${r.occasionsSaved} occasion(s), from ${r.rowsVisited} message(s) ` +
           `(${r.skippedLowImportance} routine), ${pending} still pending`,
       };
+    }
+    case 'graph.curiosity': {
+      if (!isCodeJobEnabled(job)) {
+        return { done: true, summary: 'curiosity: knowledge graph disabled' };
+      }
+      await deps.heartbeat?.();
+      return {
+        done: true,
+        summary: curiositySummary(await runCuriosity(deps, { taskId: task.id })),
+      };
+    }
+    case 'pulse.check': {
+      await deps.heartbeat?.();
+      return { done: true, summary: pulseSummary(await runPulse(deps, { taskId: task.id })) };
     }
     case 'briefing.compose': {
       await deps.heartbeat?.();

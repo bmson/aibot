@@ -45,12 +45,19 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
       if (!client.configured()) return { events: [], complete: true };
       const res = await listEventsInWindow(client, { timeMin, timeMax, maxResults: 50 });
       return {
+        // Carry the fields salience is judged from. `normalizeEvent` has
+        // produced all of these all along; the port used to drop them, which is
+        // why the briefing could only ever notice an overlap.
         events: res.events.map((event) => ({
           summary: event.summary,
           start: event.start,
           end: event.end,
           calendar: event.calendar,
           allDay: event.allDay,
+          eventId: event.eventId,
+          location: event.location,
+          organizer: event.organizer,
+          attendees: event.attendees,
         })),
         complete: res.complete,
       };
@@ -91,7 +98,16 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
         await channel.deliverApprovalNotice?.(services, task, approvalNoticeEmail(approvals));
       }
     },
-    notifyOwner: ({ taskId, conversationId, text }) =>
-      services.ownerNotifier.notifyOwner({ taskId, conversationId, text }),
+    // `urgency` rides through to the nudge policy: absent it stays `interrupt`
+    // (a dead-letter or budget stall the owner is waiting on, never held), and
+    // proactive producers pass `ambient` so quiet hours and the daily cap
+    // govern whether the phone actually buzzes.
+    notifyOwner: ({ taskId, conversationId, text, urgency }) =>
+      services.ownerNotifier.notifyOwner({
+        ...(taskId ? { taskId } : {}),
+        conversationId,
+        text,
+        ...(urgency ? { urgency } : {}),
+      }),
   };
 }

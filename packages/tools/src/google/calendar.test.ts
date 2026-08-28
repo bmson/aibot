@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ToolRegistry } from '../registry.js';
+import { ownerVisibleOnlyFor } from '../types.js';
 import { registerCalendarTools } from './calendar.js';
 import type { GoogleClient } from './client.js';
+
+/** `risk` may be a tier or a per-call function; tests care about the tier. */
+function riskOf(entry: ReturnType<ToolRegistry['get']>, args: unknown): string | undefined {
+  const risk = entry?.tool.risk;
+  return typeof risk === 'function' ? risk(args as never, {} as never) : risk;
+}
 
 function toolsWith(api: ReturnType<typeof vi.fn>) {
   const registry = new ToolRegistry();
@@ -464,9 +471,11 @@ describe('calendar.availability', () => {
 });
 
 describe('calendar.update_event', () => {
-  it('always needs approval and summarizes the change', () => {
+  it('needs approval by default and summarizes the change', () => {
     const entry = toolsWith(vi.fn()).get('calendar.update_event');
-    expect(entry?.tool.risk).toBe('approval');
+    expect(riskOf(entry, { eventId: 'evt-1', start: '2026-07-24T16:00:00-07:00' })).toBe(
+      'approval',
+    );
     expect(entry?.flags).toMatchObject({ outwardFacing: true });
     const summary = entry?.tool.approvalSummary?.({
       eventId: 'evt-1',
@@ -474,6 +483,61 @@ describe('calendar.update_event', () => {
     });
     expect(summary).toContain('evt-1');
     expect(summary).toContain('move to');
+  });
+
+  it('runs autonomously when the caller claims the event is owner-only', () => {
+    const entry = toolsWith(vi.fn()).get('calendar.update_event');
+    expect(
+      riskOf(entry, { eventId: 'evt-1', start: '2026-07-24T16:00:00-07:00', ownerOnly: true }),
+    ).toBe('autonomous');
+    // ...and it stays autonomous under taint, the same way create_event does.
+    expect(
+      ownerVisibleOnlyFor(entry?.flags ?? {}, {
+        eventId: 'evt-1',
+        start: '2026-07-24T16:00:00-07:00',
+        ownerOnly: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('will not launder an invitation through the owner-only claim', () => {
+    const entry = toolsWith(vi.fn()).get('calendar.update_event');
+    // Adding an attendee contradicts "nobody gets mailed", so the combination
+    // is gated no matter what the caller asserted.
+    const args = { eventId: 'evt-1', ownerOnly: true, addAttendees: ['someone@example.com'] };
+    expect(riskOf(entry, args)).toBe('approval');
+    expect(ownerVisibleOnlyFor(entry?.flags ?? {}, args)).toBe(false);
+  });
+
+  it('refuses an owner-only edit once it sees the event has attendees', async () => {
+    // The declared flag bought the autonomous tier; this fetch is what makes
+    // the claim true. A wrong claim must fail loudly, not mail the attendees.
+    const api = vi.fn().mockResolvedValueOnce({ attendees: [{ email: 'someone@example.com' }] });
+    await expect(
+      toolsWith(api)
+        .get('calendar.update_event')
+        ?.tool.execute(
+          { eventId: 'evt-1', start: '2026-07-24T16:00:00-07:00', ownerOnly: true },
+          {} as never,
+        ),
+    ).rejects.toThrow(/owner-only/i);
+    // Only the verification GET happened — nothing was patched.
+    expect(api).toHaveBeenCalledTimes(1);
+  });
+
+  it('suppresses notifications on a verified owner-only edit', async () => {
+    const api = vi
+      .fn()
+      .mockResolvedValueOnce({ attendees: [] }) // verification GET
+      .mockResolvedValueOnce({ id: 'evt-1' }); // PATCH
+    await toolsWith(api)
+      .get('calendar.update_event')
+      ?.tool.execute(
+        { eventId: 'evt-1', start: '2026-07-24T16:00:00-07:00', ownerOnly: true },
+        {} as never,
+      );
+    const [patchUrl] = api.mock.calls[1] as [string];
+    expect(patchUrl).toContain('sendUpdates=none');
   });
 
   it('PATCHes only the changed fields and merges added attendees onto existing ones', async () => {
@@ -509,5 +573,38 @@ describe('calendar.update_event', () => {
   it('rejects an update with no fields to change', () => {
     const schema = toolsWith(vi.fn()).get('calendar.update_event')?.tool.inputSchema;
     expect(schema?.safeParse({ eventId: 'evt-1' }).success).toBe(false);
+  });
+});
+
+describe('calendar.cancel_event', () => {
+  it('needs approval by default — cancelling mails every attendee', () => {
+    const entry = toolsWith(vi.fn()).get('calendar.cancel_event');
+    expect(riskOf(entry, { eventId: 'evt-1' })).toBe('approval');
+    expect(ownerVisibleOnlyFor(entry?.flags ?? {}, { eventId: 'evt-1' })).toBe(false);
+  });
+
+  it('cancels a private appointment autonomously once verified', async () => {
+    const api = vi
+      .fn()
+      .mockResolvedValueOnce({ attendees: [] }) // verification GET
+      .mockResolvedValueOnce({}); // DELETE
+    const entry = toolsWith(api).get('calendar.cancel_event');
+    expect(riskOf(entry, { eventId: 'evt-1', ownerOnly: true })).toBe('autonomous');
+
+    await entry?.tool.execute({ eventId: 'evt-1', ownerOnly: true }, {} as never);
+    const [deleteUrl, init] = api.mock.calls[1] as [string, RequestInit];
+    expect(init.method).toBe('DELETE');
+    expect(deleteUrl).toContain('sendUpdates=none');
+  });
+
+  it('refuses rather than cancelling on someone else’s behalf', async () => {
+    const api = vi.fn().mockResolvedValueOnce({ attendees: [{ email: 'guest@example.com' }] });
+    await expect(
+      toolsWith(api)
+        .get('calendar.cancel_event')
+        ?.tool.execute({ eventId: 'evt-1', ownerOnly: true }, {} as never),
+    ).rejects.toThrow(/owner-only/i);
+    // The DELETE never went out.
+    expect(api).toHaveBeenCalledTimes(1);
   });
 });
