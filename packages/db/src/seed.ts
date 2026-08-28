@@ -208,6 +208,11 @@ const rateLimitSeed = [
   // need a ceiling that survives a burst of triage tasks.
   { scope: 'tool:web.fetch', maxPerHour: 60, maxPerDay: 300 },
   { scope: 'tool:web.search', maxPerHour: 20, maxPerDay: 100 },
+  // weather.lookup is keyless and stays available at unknown trust (its
+  // destination is hardwired, so there is no egress to strip), which leaves a
+  // free public API reachable by strangers. Generous enough that no real
+  // question is refused, low enough to cap a loop.
+  { scope: 'tool:weather.lookup', maxPerHour: 60, maxPerDay: 300 },
   { scope: 'channel:sms', maxPerHour: 30, maxPerDay: 200 },
   { scope: 'task', maxPerHour: 120, maxPerDay: 1000 },
 ] as const;

@@ -2,7 +2,7 @@ import { ambientSnapshots, createDb, type Db, locationPings } from '@assistant/d
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
-import { fetchWeather, getAmbientBlock, refreshAmbientSnapshot } from './ambient.js';
+import { fetchWeather, geocodePlace, getAmbientBlock, refreshAmbientSnapshot } from './ambient.js';
 import { recordLocationPing } from './location.js';
 
 const DATABASE_URL =
@@ -65,6 +65,71 @@ describe('ambient — weather fetch (pure)', () => {
   it('throws on a non-ok response', async () => {
     const bad = (async () => ({ ok: false, status: 503 }) as Response) as unknown as typeof fetch;
     await expect(fetchWeather(64, -22, bad)).rejects.toThrow('weather fetch failed');
+  });
+
+  describe('geocodePlace', () => {
+    /** One gazetteer hit, in Open-Meteo's shape. */
+    function fakeGeocodeFetch(results: unknown[]) {
+      return (async () =>
+        ({
+          ok: true,
+          json: async () => ({ results }),
+        }) as unknown as Response) as unknown as typeof fetch;
+    }
+
+    it('resolves a named place to coordinates and a full label', async () => {
+      const hit = await geocodePlace(
+        'San Francisco',
+        fakeGeocodeFetch([
+          {
+            name: 'San Francisco',
+            latitude: 37.77493,
+            longitude: -122.41942,
+            admin1: 'California',
+            country: 'United States',
+            timezone: 'America/Los_Angeles',
+          },
+        ]),
+      );
+      expect(hit).toEqual({
+        label: 'San Francisco, California, United States',
+        lat: 37.77493,
+        lng: -122.41942,
+        timezone: 'America/Los_Angeles',
+      });
+    });
+
+    it('returns null when the gazetteer has no match', async () => {
+      // The caller must be able to say "I could not find that place" rather
+      // than silently answering about somewhere else.
+      expect(await geocodePlace('Nowherecity', fakeGeocodeFetch([]))).toBeNull();
+      const empty = (async () =>
+        ({ ok: true, json: async () => ({}) }) as unknown as Response) as unknown as typeof fetch;
+      expect(await geocodePlace('Nowherecity', empty)).toBeNull();
+    });
+
+    it('never calls out for a blank query', async () => {
+      let called = false;
+      const spy = (async () => {
+        called = true;
+        return { ok: true, json: async () => ({}) } as unknown as Response;
+      }) as unknown as typeof fetch;
+      expect(await geocodePlace('   ', spy)).toBeNull();
+      expect(called).toBe(false);
+    });
+
+    it('falls back to the query when the hit carries no usable name parts', async () => {
+      const hit = await geocodePlace(
+        'Somewhere',
+        fakeGeocodeFetch([{ latitude: 1.5, longitude: 2.5 }]),
+      );
+      expect(hit).toMatchObject({ label: 'Somewhere', lat: 1.5, lng: 2.5 });
+    });
+
+    it('throws on a non-ok response', async () => {
+      const bad = (async () => ({ ok: false, status: 429 }) as Response) as unknown as typeof fetch;
+      await expect(geocodePlace('Tokyo', bad)).rejects.toThrow('geocode failed');
+    });
   });
 
   it('parses the coming days, skipping today and dropping malformed entries', async () => {

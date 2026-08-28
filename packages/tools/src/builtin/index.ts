@@ -19,8 +19,10 @@ import { z } from 'zod';
 import { register } from '../register.js';
 import type { ToolRegistry } from '../registry.js';
 import type { WorkspaceStore } from '../workspace-store.js';
+import { lookupWeather } from './weather.js';
 import { extractWebText, fetchPublicWebPage, looksLikeBotChallenge } from './web-fetch.js';
 
+export * from './weather.js';
 // The `web.fetch` machinery lives in web-fetch.ts; re-exported here so the
 // package surface (and the web-watch poller's imports) stay unchanged.
 export * from './web-fetch.js';
@@ -40,6 +42,8 @@ export interface BuiltinDeps {
     taskId?: string;
     urgency?: 'ambient' | 'interrupt';
   }) => Promise<void>;
+  /** Injected in tests; defaults to global fetch (used by `weather.lookup`). */
+  fetchImpl?: (url: string, init?: { signal?: AbortSignal }) => Promise<Response>;
 }
 
 export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps): ToolRegistry {
@@ -380,6 +384,56 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       networkEgress: true,
       blanketAllowIneligible: true,
     },
+  );
+
+  // ── weather ────────────────────────────────────────────────────────────────
+  register(
+    registry,
+    {
+      name: 'weather.lookup',
+      description:
+        'Current conditions and the coming days for a place. Give `place` for anywhere named ("San Francisco", "Tokyo"); omit it only for where the owner is right now. Use this for any weather question the ambient "right now" block does not already answer — another town, or a day past today — rather than saying you have no weather data.',
+      inputSchema: z.object({
+        place: z
+          .string()
+          .max(120)
+          .default('')
+          .describe("Town, city, or region. Leave empty to use the owner's current location."),
+        // Six, not seven: the provider is asked for 7 days and today is
+        // reported as current conditions, so tomorrow onward is all there is.
+        days: z
+          .number()
+          .int()
+          .min(1)
+          .max(6)
+          .default(6)
+          .describe('How many days of forecast to return, starting tomorrow (up to 6).'),
+      }),
+      risk: 'autonomous',
+      acceptsUntrustedInput: true,
+      cacheTtlSeconds: 900,
+      execute: async (args, ctx) =>
+        lookupWeather({
+          db: ctx.db,
+          agentId: ctx.agentId,
+          place: args.place,
+          days: args.days,
+          // Honor task cancellation without losing the helpers' own 10s cap.
+          fetchImpl: (url, init) =>
+            (deps.fetchImpl ?? fetch)(url, {
+              signal: init?.signal ? AbortSignal.any([ctx.signal, init.signal]) : ctx.signal,
+            }),
+        }),
+    },
+    // Deliberately neither networkEgress nor returnsUntrustedContent, unlike
+    // web.fetch/web.search. The destination is hardwired to Open-Meteo — no
+    // argument names a host — so a tainted session cannot use this to reach an
+    // attacker-observable URL, and the reading that comes back is numbers plus a
+    // clipped gazetteer label, not third-party prose. Flagging it either way
+    // would gate "will it rain in Boston tomorrow?" behind an approval card and
+    // strip the owner card from the rest of the turn, for a keyless read-only
+    // lookup that discloses nothing.
+    {},
   );
 
   // ── workspace files ────────────────────────────────────────────────────────

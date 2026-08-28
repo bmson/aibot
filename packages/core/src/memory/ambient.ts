@@ -83,7 +83,7 @@ export interface WeatherNow {
 type FetchLike = (url: string, init?: { signal?: AbortSignal }) => Promise<Response>;
 
 /** Short weekday for a local-date string, pinned to UTC so the server's zone never shifts it. */
-function weekdayName(date: string): string {
+export function weekdayName(date: string): string {
   const parsed = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
   if (!parsed) return date;
   return new Date(
@@ -153,6 +153,60 @@ export async function fetchWeather(
     lowC: Math.round(day?.temperature_2m_min?.[0] ?? cur.temperature_2m),
     precipProbabilityMax: day?.precipitation_probability_max?.[0] ?? 0,
     forecast,
+  };
+}
+
+export interface GeocodedPlace {
+  /** Display label: "San Francisco, California, United States". */
+  label: string;
+  lat: number;
+  lng: number;
+  timezone?: string;
+}
+
+/** Clip a gazetteer string to a sane length so a long entry cannot pad a result. */
+function clipPlacePart(value: unknown, max = 80): string {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '';
+}
+
+/**
+ * Resolve a place name to coordinates via Open-Meteo's free geocoding API (no
+ * key). This is what lets a weather question name somewhere the owner is not —
+ * the ambient block only ever knows where they are right now. Returns null when
+ * the gazetteer has no match, so the caller can say "I could not find that
+ * place" rather than answering about the wrong one.
+ */
+export async function geocodePlace(
+  place: string,
+  fetchImpl: FetchLike = fetch,
+): Promise<GeocodedPlace | null> {
+  const query = place.trim();
+  if (!query) return null;
+  const url =
+    'https://geocoding-api.open-meteo.com/v1/search' +
+    `?name=${encodeURIComponent(query)}&count=1&language=en&format=json`;
+  const res = await fetchImpl(url, { signal: AbortSignal.timeout(WEATHER_TIMEOUT_MS) });
+  if (!res.ok) throw new Error(`geocode failed: ${res.status}`);
+  const data = (await res.json()) as {
+    results?: Array<{
+      name?: string;
+      latitude?: number;
+      longitude?: number;
+      admin1?: string;
+      country?: string;
+      timezone?: string;
+    }>;
+  };
+  const hit = data.results?.[0];
+  if (!hit || typeof hit.latitude !== 'number' || typeof hit.longitude !== 'number') return null;
+  const label = [clipPlacePart(hit.name), clipPlacePart(hit.admin1), clipPlacePart(hit.country)]
+    .filter(Boolean)
+    .join(', ');
+  return {
+    label: label || query.slice(0, 120),
+    lat: hit.latitude,
+    lng: hit.longitude,
+    timezone: clipPlacePart(hit.timezone, 60) || undefined,
   };
 }
 
