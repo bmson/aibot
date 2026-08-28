@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import MapKit
 import UIKit
 
 /// Location for the assistant's ambient context, in two gears:
@@ -102,6 +103,23 @@ final class LocationManager: NSObject, ObservableObject {
     }
 
     private func reverseGeocodeLabel(for location: CLLocation) async -> String {
+        if #available(iOS 26.0, *) {
+            guard let request = MKReverseGeocodingRequest(location: location) else { return "" }
+            let mapItems = try? await request.mapItems
+            if let item = mapItems?.first {
+                return item.addressRepresentations?.cityName ?? item.name ?? ""
+            }
+            return ""
+        } else {
+            return await legacyReverseGeocodeLabel(for: location)
+        }
+    }
+
+    /// MapKit supersedes CLGeocoder on iOS 26. This fallback keeps location
+    /// labels available on earlier supported systems without presenting the
+    /// iOS 26 deprecation to the current code path.
+    @available(iOS, introduced: 2.0, deprecated: 26.0)
+    private func legacyReverseGeocodeLabel(for location: CLLocation) async -> String {
         let geocoder = CLGeocoder()
         let placemarks = try? await geocoder.reverseGeocodeLocation(location)
         let place = placemarks?.first

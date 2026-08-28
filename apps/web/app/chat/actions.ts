@@ -63,3 +63,12 @@ export async function archiveInactiveConversations(): Promise<void> {
   revalidateChatViews();
   redirect('/chat/all');
 }
+
+/** Lightweight source-level signal for the staged GraphRAG rollout. */
+export async function recordRecallFeedbackAction(
+  messageId: string,
+  verdict: 'helpful' | 'not_helpful',
+): Promise<void> {
+  if (!(await isAuthed())) throw new Error('unauthorized');
+  await getApplication().recordRecallFeedback(messageId, verdict);
+}

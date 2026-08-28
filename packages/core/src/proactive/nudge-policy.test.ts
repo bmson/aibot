@@ -114,6 +114,20 @@ describe('nudge policy (integration)', () => {
     ).toBe(true);
   });
 
+  it('atomically reserves an ambient-cap slot across concurrent producers', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    await setPrefs({ ambientDailyCap: 1 });
+    const decisions = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        evaluateOutOfBandPing(db, agent, { urgency: 'ambient', now: MIDDAY }),
+      ),
+    );
+    expect(decisions.filter((decision) => decision.deliver)).toHaveLength(1);
+    expect(decisions.filter((decision) => decision.reason === 'daily-cap')).toHaveLength(3);
+    const rows = await db.select().from(proactivePings).where(eq(proactivePings.agentId, agent.id));
+    expect(rows.filter((row) => row.delivered)).toHaveLength(1);
+  });
+
   it('records every evaluation in the ledger and reports what was held', async (ctx) => {
     if (!dbUp) return ctx.skip();
     await setPrefs({ quietStartMin: 22 * 60, quietEndMin: 7 * 60, ambientDailyCap: 1 });

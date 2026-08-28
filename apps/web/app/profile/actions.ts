@@ -163,6 +163,14 @@ export async function purgeVoiceSamplesAction(): Promise<void> {
   revalidateProfile();
 }
 
+/** Irreversible owner control for the data that drives recall and voice imitation. */
+export async function forgetLongTermMemoryAction(): Promise<void> {
+  await requireOwner();
+  await getApplication().forgetLongTermMemory();
+  revalidateProfile();
+  revalidatePath('/chat', 'layout');
+}
+
 /** Edit the distilled voice profile (description, do's, don'ts, signature). */
 export async function updateVoiceProfileAction(input: {
   description: string;

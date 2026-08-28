@@ -40,6 +40,17 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(metrics.size, CGSize(width: 98, height: 48))
     }
 
+    func testPollingPolicyBacksOffWithoutMakingFreshRepliesFeelSlow() {
+        XCTAssertEqual(PollingPolicy.replyIntervalMilliseconds(attempt: 1, hasTaskID: false), 650)
+        XCTAssertEqual(PollingPolicy.replyIntervalMilliseconds(attempt: 8, hasTaskID: false), 1_500)
+        XCTAssertEqual(PollingPolicy.replyIntervalMilliseconds(attempt: 24, hasTaskID: false), 2_500)
+        XCTAssertEqual(PollingPolicy.replyIntervalMilliseconds(attempt: 4, hasTaskID: true), 3_000)
+        XCTAssertEqual(PollingPolicy.replyIntervalMilliseconds(attempt: 20, hasTaskID: true), 5_000)
+        XCTAssertEqual(PollingPolicy.idleIntervalSeconds(unchangedPolls: 0), 12)
+        XCTAssertEqual(PollingPolicy.idleIntervalSeconds(unchangedPolls: 6), 48)
+        XCTAssertEqual(PollingPolicy.idleIntervalSeconds(unchangedPolls: 10), 90)
+    }
+
     func testChatUpdatesDecodesSupersededRetractions() throws {
         let withRetractions = """
         {"taskStatus":null,"messages":[],"refreshed":[],

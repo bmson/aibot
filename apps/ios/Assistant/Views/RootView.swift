@@ -108,9 +108,11 @@ struct RootView: View {
             value: model.errorMessage
         )
         .task {
+            model.scenePhaseDidChange(scenePhase)
             if model.hasSavedConnection && model.bootstrap == nil { await model.connect() }
         }
         .onChange(of: scenePhase) { _, phase in
+            model.scenePhaseDidChange(phase)
             if phase == .active, model.bootstrap != nil {
                 Task {
                     await NotificationManager.shared.refreshAuthorizationStatus()

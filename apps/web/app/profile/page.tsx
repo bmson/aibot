@@ -9,6 +9,7 @@ import { AddPerson } from '@/app/profile/add-person';
 import { CommitmentsPanel } from '@/app/profile/commitments-panel';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { MemoryOrganizer } from '@/app/profile/memory-organizer';
+import { PrivacyControls } from '@/app/profile/privacy-controls';
 import { type VoiceImportView, VoiceSamplesPanel } from '@/app/profile/voice-samples';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
@@ -341,6 +342,8 @@ export default async function ProfilePage() {
         imports={voiceImportViews}
         profile={voiceProfile}
       />
+
+      <PrivacyControls />
 
       {/* People — one collapsed card per person */}
       <section className="mt-8">

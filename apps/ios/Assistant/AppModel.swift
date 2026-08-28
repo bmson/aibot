@@ -56,6 +56,10 @@ final class AppModel: ObservableObject {
     private var logOrder = ChatLogOrder()
     private var pollTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
+    /// Idle polling is an in-app freshness affordance, never background work.
+    /// Scene transitions cancel it so the OS can suspend the app cleanly and
+    /// we do not wake the server while the owner cannot see a response.
+    private var isSceneActive = true
     private var thoughtClearTask: Task<Void, Never>?
     private var lastNotifiedTaskState: String?
 
@@ -87,13 +91,8 @@ final class AppModel: ObservableObject {
         // the same client call as the in-app buttons, then refreshes so the
         // badge and the Approvals sheet agree with the server.
         NotificationManager.shared.approvalDecisionHandler = { [weak self] approvalId, decision in
-            guard let self, let client = self.client else { return }
-            do {
-                _ = try await client.decideApproval(id: approvalId, decision: decision)
-                await self.refreshAll()
-            } catch {
-                self.errorMessage = error.localizedDescription
-            }
+            guard let self else { return }
+            _ = await self.decideApproval(id: approvalId, decision: decision)
         }
         // APNs token upload for proactive pushes. A rotation re-fires this;
         // a failure is retried on the next launch's registration callback.
@@ -231,7 +230,7 @@ final class AppModel: ObservableObject {
 
             await reconcileBaselineActivity()
             await syncNotificationBadge()
-            startIdlePolling()
+            if isSceneActive { startIdlePolling() }
             await shareLocationIfEnabled(force: true)
 
             // Proactive outreach needs a way to reach the phone: ask for
@@ -335,25 +334,61 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func refreshOverview() async {
+    func scenePhaseDidChange(_ phase: ScenePhase) {
+        let isNowActive = phase == .active
+        guard isSceneActive != isNowActive else { return }
+        isSceneActive = isNowActive
+        if isNowActive {
+            if bootstrap != nil { startIdlePolling() }
+        } else {
+            idleTask?.cancel()
+            idleTask = nil
+        }
+    }
+
+    func refreshOverview(reportFailure: Bool = true) async {
         guard let client else { return }
         do {
             overview = try await client.overview()
             await reconcileBaselineActivity()
+            await syncNotificationBadge()
         }
-        catch { errorMessage = error.localizedDescription }
+        catch where reportFailure { errorMessage = error.localizedDescription }
+        catch { }
     }
 
-    func refreshArchivedActivity() async {
+    func refreshArchivedActivity(reportFailure: Bool = true) async {
         guard let client else { return }
         do { archivedActivity = try await client.activity(archived: true) }
-        catch { errorMessage = error.localizedDescription }
+        catch where reportFailure { errorMessage = error.localizedDescription }
+        catch { }
     }
 
-    func refreshArchivedGoals() async {
+    func refreshArchivedGoals(reportFailure: Bool = true) async {
         guard let client else { return }
         do { archivedGoals = try await client.goals(archived: true) }
-        catch { errorMessage = error.localizedDescription }
+        catch where reportFailure { errorMessage = error.localizedDescription }
+        catch { }
+    }
+
+    /// Mutations already have a successful server response. Let their control
+    /// return immediately and reconcile secondary dashboards without turning a
+    /// slow follow-up GET into a failed user action.
+    private func reconcileAfterMutation(
+        archivedActivity: Bool = false,
+        archivedGoals: Bool = false
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+            async let overviewRefresh: Void = self.refreshOverview(reportFailure: false)
+            async let activityRefresh: Void = archivedActivity
+                ? self.refreshArchivedActivity(reportFailure: false)
+                : ()
+            async let goalsRefresh: Void = archivedGoals
+                ? self.refreshArchivedGoals(reportFailure: false)
+                : ()
+            _ = await (overviewRefresh, activityRefresh, goalsRefresh)
+        }
     }
 
     func updateActivity(_ item: ActivityItem, action: String) async -> Bool {
@@ -361,9 +396,7 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.updateActivity(id: item.id, action: action)
-            async let overviewRefresh: Void = refreshOverview()
-            async let archivedRefresh: Void = refreshArchivedActivity()
-            _ = await (overviewRefresh, archivedRefresh)
+            reconcileAfterMutation(archivedActivity: true)
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -380,7 +413,7 @@ final class AppModel: ObservableObject {
                 action: action,
                 budgetUsdLimit: budgetUsdLimit
             )
-            await refreshOverview()
+            reconcileAfterMutation()
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -392,7 +425,7 @@ final class AppModel: ObservableObject {
         guard let client else { return false }
         do {
             try await client.archiveOldActivity()
-            await refreshOverview()
+            reconcileAfterMutation(archivedActivity: true)
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -405,7 +438,7 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.createGoal(goal)
-            await refreshOverview()
+            reconcileAfterMutation()
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -418,7 +451,7 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.updateGoal(id: id, goal: goal)
-            await refreshOverview()
+            reconcileAfterMutation()
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -433,7 +466,7 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.updateGoal(id: goal.id, action: "delete")
-            await refreshOverview()
+            reconcileAfterMutation(archivedGoals: true)
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -446,9 +479,7 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.updateGoal(id: goal.id, action: "restore")
-            async let overviewRefresh: Void = refreshOverview()
-            async let archivedRefresh: Void = refreshArchivedGoals()
-            _ = await (overviewRefresh, archivedRefresh)
+            reconcileAfterMutation(archivedGoals: true)
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -471,7 +502,7 @@ final class AppModel: ObservableObject {
                 status: status,
                 enabled: enabled
             )
-            await refreshOverview()
+            reconcileAfterMutation()
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -483,7 +514,7 @@ final class AppModel: ObservableObject {
         guard let client else { return false }
         do {
             try await client.archiveInactiveGoals()
-            await refreshOverview()
+            reconcileAfterMutation(archivedGoals: true)
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -1038,44 +1069,74 @@ final class AppModel: ObservableObject {
         await decideApproval(id: item.id, decision: decision)
     }
 
+    /// Keep the approval inbox responsive as soon as the server accepts a
+    /// decision. The original snapshot is restored on failure, so a tap never
+    /// makes an approval silently disappear.
+    private func optimisticallyResolveApproval(id: String) -> OverviewResponse? {
+        guard let current = overview,
+              current.approvals.pending.contains(where: { $0.id == id }) else { return nil }
+        overview = OverviewResponse(
+            generatedAt: current.generatedAt,
+            activity: current.activity,
+            goals: current.goals,
+            approvals: ApprovalInbox(
+                pending: current.approvals.pending.filter { $0.id != id },
+                resolved: current.approvals.resolved
+            ),
+            documents: current.documents
+        )
+        return current
+    }
+
+    private func optimisticallySetDecisionStatus(id: String, status: String) {
+        for messageIndex in messages.indices {
+            for partIndex in messages[messageIndex].parts.indices where messages[messageIndex].parts[partIndex].approvalId == id {
+                messages[messageIndex].parts[partIndex].status = status
+            }
+        }
+    }
+
+    private func performApprovalMutation(
+        id: String,
+        status: String,
+        operation: () async throws -> Void
+    ) async -> Bool {
+        errorMessage = nil
+        let previousOverview = optimisticallyResolveApproval(id: id)
+        let previousMessages = messages
+        optimisticallySetDecisionStatus(id: id, status: status)
+        do {
+            try await operation()
+            reconcileAfterMutation()
+            return true
+        } catch {
+            if let previousOverview { overview = previousOverview }
+            messages = previousMessages
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     /// Inline approve/decline from a chat decision card, keyed by the message
     /// part's approvalId rather than a fetched PendingApproval row.
     func decideApproval(id: String, decision: String) async -> Bool {
         guard let client else { return false }
-        errorMessage = nil
-        do {
+        return await performApprovalMutation(id: id, status: decision) {
             _ = try await client.decideApproval(id: id, decision: decision)
-            await refreshAll()
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
         }
     }
 
     func approveAndRemember(_ item: PendingApproval) async -> Bool {
         guard let client else { return false }
-        errorMessage = nil
-        do {
+        return await performApprovalMutation(id: item.id, status: "approved") {
             _ = try await client.approveAndRemember(id: item.id)
-            await refreshAll()
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
         }
     }
 
     func editAndApprove(_ item: PendingApproval, payload: JSONValue) async -> Bool {
         guard let client else { return false }
-        errorMessage = nil
-        do {
+        return await performApprovalMutation(id: item.id, status: "approved") {
             _ = try await client.editAndApprove(id: item.id, payload: payload)
-            await refreshAll()
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
         }
     }
 
@@ -1207,7 +1268,10 @@ final class AppModel: ObservableObject {
         for attempt in 0..<360 {
             if Task.isCancelled { return }
             if attempt > 0 {
-                try? await Task.sleep(for: .milliseconds(taskId == nil ? 650 : 1_500))
+                try? await Task.sleep(for: .milliseconds(PollingPolicy.replyIntervalMilliseconds(
+                    attempt: attempt,
+                    hasTaskID: taskId != nil
+                )))
             }
             do {
                 let updates = try await client.updates(
@@ -1327,17 +1391,26 @@ final class AppModel: ObservableObject {
     private func startIdlePolling() {
         idleTask?.cancel()
         idleTask = Task { [weak self] in
+            var unchangedPolls = 0
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(12))
-                guard let self, !self.isSending,
+                try? await Task.sleep(for: .seconds(PollingPolicy.idleIntervalSeconds(
+                    unchangedPolls: unchangedPolls
+                )))
+                guard let self, self.isSceneActive else { return }
+                guard !self.isSending,
                       let client = self.client,
-                      let conversationId = self.conversationId else { continue }
+                      let conversationId = self.conversationId else {
+                    unchangedPolls += 1
+                    continue
+                }
                 if let updates = try? await client.updates(
                     conversationId: conversationId,
                     taskId: nil,
                     cursor: self.cursor,
                     refreshIds: self.unresolvedDecisionMessageIDs
                 ) {
+                    let changed = !updates.messages.isEmpty || !updates.refreshed.isEmpty ||
+                        !(updates.superseded?.isEmpty ?? true)
                     let assistantBefore = self.messages.filter { $0.role == .assistant }.count
                     self.merge(updates.messages)
                     self.merge(updates.refreshed)
@@ -1352,6 +1425,9 @@ final class AppModel: ObservableObject {
                             route: .chat
                         )
                     }
+                    unchangedPolls = changed ? 0 : unchangedPolls + 1
+                } else {
+                    unchangedPolls += 1
                 }
             }
         }

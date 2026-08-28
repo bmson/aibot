@@ -29,6 +29,7 @@ import {
   turnFailedReason,
 } from '@/lib/chat-notices';
 import { focusRing } from '@/lib/ui';
+import { recordRecallFeedbackAction } from '../actions';
 import { ActionChips } from './action-chips';
 import { ApprovalGroup } from './approval-group';
 import { ApprovalSummaryCard } from './approval-summary';
@@ -192,7 +193,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
           }
         />
       ) : notificationMode && message.role === 'assistant' && hasText ? (
-        <AssistantUpdate text={fullText} sources={recallSources} />
+        <AssistantUpdate
+          text={fullText}
+          sources={recallSources}
+          messageId={message.id}
+          onFeedback={recordRecallFeedbackAction}
+        />
       ) : hasText ? (
         <div className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
           {message.role === 'assistant' ? (
@@ -206,7 +212,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
             // as its own sheet, the way separate texts from a
             // person stack.
             <div className="group/msg min-w-0 w-full max-w-none">
-              <RecallNote sources={recallSources} />
+              <RecallNote
+                sources={recallSources}
+                messageId={message.id}
+                onFeedback={recordRecallFeedbackAction}
+              />
               <div className="flex min-w-0 flex-col gap-2">
                 {renderedTextParts.map((part, index) => (
                   <div

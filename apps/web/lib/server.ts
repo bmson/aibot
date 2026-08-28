@@ -22,6 +22,8 @@ import {
   dismissOwnerCommitment,
   downloadArtifact,
   editAssistantSkill,
+  exportLongTermMemoryData,
+  forgetLongTermMemory,
   getAssistantIdentity,
   getAssistantTimezone,
   getChatConversationView,
@@ -46,6 +48,7 @@ import {
   purgeImportedSource,
   recordOwnerForeground,
   recordOwnerLocationPing,
+  recordRecallFeedback,
   registerDeviceToken,
   resolveOwnerCommitment,
   restoreChatConversation,
@@ -199,6 +202,8 @@ function createApplication() {
     uploadDocument: (input: { name: string; title?: string; mime?: string; bytes: Buffer }) =>
       uploadDocument(db, workspace, input),
     downloadArtifact: (path: string) => downloadArtifact(db, workspace, path),
+    exportLongTermMemoryData: () => exportLongTermMemoryData(db),
+    forgetLongTermMemory: () => forgetLongTermMemory(db, workspace),
     getImports: () => getImportOverview(db, workspace),
     startImport: (path: string, source: string) =>
       startWorkspaceImport(db, workspace, path, source),
@@ -217,6 +222,8 @@ function createApplication() {
     recordOwnerLocationPing: (body: unknown) => recordOwnerLocationPing(db, body),
     registerDeviceToken: (body: unknown) => registerDeviceToken(db, body),
     recordOwnerForeground: () => recordOwnerForeground(db),
+    recordRecallFeedback: (messageId: string, verdict: 'helpful' | 'not_helpful') =>
+      recordRecallFeedback(db, messageId, verdict),
     listActivity: (input: {
       archived: boolean;
       filter: 'all' | 'needs-you' | 'working' | 'scheduled' | 'completed';

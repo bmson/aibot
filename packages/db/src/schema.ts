@@ -1984,8 +1984,35 @@ export const recallMetrics = pgTable(
   ],
 );
 
+/**
+ * Owner feedback on a recall disclosure. Keep it deliberately aggregate: a
+ * verdict and source count are enough to measure value without duplicating the
+ * query, recalled content, or display labels into analytics storage.
+ */
+export const recallFeedback = pgTable(
+  'recall_feedback',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    messageId: uuid('message_id')
+      .notNull()
+      .references(() => messages.id, { onDelete: 'cascade' }),
+    verdict: text('verdict').notNull(),
+    sourceCount: integer('source_count').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check('recall_feedback_verdict_check', sql`${t.verdict} IN ('helpful','not_helpful')`),
+    uniqueIndex('recall_feedback_message_idx').on(t.messageId),
+    index('recall_feedback_agent_created_idx').on(t.agentId, t.createdAt),
+  ],
+);
+
 export type ResponseCheckRow = typeof responseChecks.$inferSelect;
 export type RecallMetricRow = typeof recallMetrics.$inferSelect;
+export type RecallFeedbackRow = typeof recallFeedback.$inferSelect;
 
 export type CostEventRow = typeof costEvents.$inferSelect;
 export type CostReservationRow = typeof costReservations.$inferSelect;

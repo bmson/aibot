@@ -38,6 +38,7 @@
 		B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000023 /* Views/WorkspaceView.swift */; };
 		B0000000000000000000001C /* Views/MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000025 /* Views/MemoryView.swift */; };
 		B00000000000000000000054 /* Views/KnowledgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000054 /* Views/KnowledgeView.swift */; };
+		B00000000000000000000055 /* Models/PollingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000055 /* Models/PollingPolicy.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -107,6 +108,7 @@
 		C00000000000000000000024 /* Components/ChatDashboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/ChatDashboard.swift; sourceTree = "<group>"; };
 		C00000000000000000000025 /* Views/MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MemoryView.swift; sourceTree = "<group>"; };
 		C00000000000000000000054 /* Views/KnowledgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/KnowledgeView.swift; sourceTree = "<group>"; };
+		C00000000000000000000055 /* Models/PollingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/PollingPolicy.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -161,6 +163,7 @@
 				C00000000000000000000002 /* AppModel.swift */,
 				C00000000000000000000003 /* Design/AssistantTheme.swift */,
 				C00000000000000000000004 /* Models/APIModels.swift */,
+				C00000000000000000000055 /* Models/PollingPolicy.swift */,
 				C00000000000000000000005 /* Networking/KeychainStore.swift */,
 				C00000000000000000000006 /* Networking/APIClient.swift */,
 				C00000000000000000000014 /* System/AssistantActivityAttributes.swift */,
@@ -340,6 +343,7 @@
 				B00000000000000000000002 /* AppModel.swift in Sources */,
 				B00000000000000000000003 /* Design/AssistantTheme.swift in Sources */,
 				B00000000000000000000004 /* Models/APIModels.swift in Sources */,
+				B00000000000000000000055 /* Models/PollingPolicy.swift in Sources */,
 				B00000000000000000000005 /* Networking/KeychainStore.swift in Sources */,
 				B00000000000000000000006 /* Networking/APIClient.swift in Sources */,
 				B00000000000000000000013 /* System/AssistantActivityAttributes.swift in Sources */,

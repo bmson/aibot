@@ -19,7 +19,7 @@ import {
   Sparkles,
   TriangleAlert,
 } from 'lucide-react';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState, useTransition } from 'react';
 
 import type { NoticeKind } from '@/lib/chat-notices';
 import { focusRing } from '@/lib/ui';
@@ -380,7 +380,17 @@ export function NoticeCard({
  * conversational reply. Give them a compact editorial treatment so a string
  * of updates remains scannable without hiding any of the original detail.
  */
-export function AssistantUpdate({ text, sources }: { text: string; sources: RecallSource[] }) {
+export function AssistantUpdate({
+  text,
+  sources,
+  messageId,
+  onFeedback,
+}: {
+  text: string;
+  sources: RecallSource[];
+  messageId: string;
+  onFeedback: (messageId: string, verdict: 'helpful' | 'not_helpful') => Promise<void>;
+}) {
   const attention = /(?:⚠️|anomaly|waiting for you|needs? (?:your )?attention)/i.test(text);
   const reflection = /(?:🌙|while you slept|reflected)/i.test(text);
   const tone: DecisionTone = attention ? 'waiting' : reflection ? 'quiet' : 'info';
@@ -388,7 +398,7 @@ export function AssistantUpdate({ text, sources }: { text: string; sources: Reca
   const label = attention ? 'Needs attention' : reflection ? 'Quiet update' : 'Update';
   return (
     <DecisionCard tone={tone} icon={icon} label={label}>
-      <RecallNote sources={sources} />
+      <RecallNote sources={sources} messageId={messageId} onFeedback={onFeedback} />
       <div className="break-words text-sm leading-6 text-strong [overflow-wrap:anywhere]">
         <MessageMarkdown text={text} />
       </div>
@@ -431,8 +441,71 @@ function friendlyRecallDate(isoDay: string, now: Date = new Date()): string {
   }).format(date);
 }
 
-/** The "recalled from earlier" affordance: what auto-recall drew on for a turn. */
-export function RecallNote({ sources }: { sources: RecallSource[] }) {
+function RecallFeedbackControl({
+  messageId,
+  onFeedback,
+}: {
+  messageId: string;
+  onFeedback: (messageId: string, verdict: 'helpful' | 'not_helpful') => Promise<void>;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [selection, setSelection] = useState<'helpful' | 'not_helpful' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const save = (verdict: 'helpful' | 'not_helpful') => {
+    setError(null);
+    startTransition(async () => {
+      try {
+        await onFeedback(messageId, verdict);
+        setSelection(verdict);
+      } catch {
+        setError('Could not save feedback.');
+      }
+    });
+  };
+  return (
+    <span className="ml-1 inline-flex items-center gap-1 border-l border-current/15 pl-2">
+      <span className="sr-only">Was this recalled context useful?</span>
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => save('helpful')}
+        aria-pressed={selection === 'helpful'}
+        title="This recalled context was useful"
+        className="rounded px-1 py-0.5 text-[11px] font-medium hover:bg-current/10 disabled:opacity-50"
+      >
+        Helpful
+      </button>
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => save('not_helpful')}
+        aria-pressed={selection === 'not_helpful'}
+        title="This recalled context was not useful"
+        className="rounded px-1 py-0.5 text-[11px] font-medium hover:bg-current/10 disabled:opacity-50"
+      >
+        Not useful
+      </button>
+      {error ? (
+        <span role="status" className="sr-only">
+          {error}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** The "recalled from earlier" affordance: provenance plus owner feedback. */
+export function RecallNote({
+  sources,
+  messageId,
+  onFeedback,
+}: {
+  sources: RecallSource[];
+  /** Live streamed provenance has no durable message id, so it is view-only. */
+  messageId?: string;
+  /** Kept at the transport boundary so this shared view stays server-free. */
+  onFeedback?: (messageId: string, verdict: 'helpful' | 'not_helpful') => Promise<void>;
+}) {
   if (sources.length === 0) return null;
   const graphSources = sources.filter((source) => source.kind === 'knowledge_graph');
   const label =
@@ -458,6 +531,9 @@ export function RecallNote({ sources }: { sources: RecallSource[] }) {
           {friendlyRecallDate(source.date)} — {source.label}
         </span>
       ))}
+      {messageId && onFeedback ? (
+        <RecallFeedbackControl messageId={messageId} onFeedback={onFeedback} />
+      ) : null}
     </div>
   );
 }

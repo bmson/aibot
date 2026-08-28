@@ -3072,12 +3072,14 @@ private struct RichResponseCards: View {
         if !details.isEmpty {
             VStack(alignment: .leading, spacing: 3) {
                 ForEach(details) { detail in
-                    Text("\(detail.label): ")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                    + Text(AssistantMarkdown.inlineAttributed(detail.value))
-                        .font(.caption)
-                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    HStack(alignment: .firstTextBaseline, spacing: 0) {
+                        Text("\(detail.label): ")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        Text(AssistantMarkdown.inlineAttributed(detail.value))
+                            .font(.caption)
+                            .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    }
                 }
             }
         }

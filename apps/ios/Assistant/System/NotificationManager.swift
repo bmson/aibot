@@ -22,10 +22,13 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     private let center = UNUserNotificationCenter.current()
     private let uploadedTokenKey = "assistant.push-token-uploaded"
 
-    static let attentionCategory = "ASSISTANT_ATTENTION"
-    static let updateCategory = "ASSISTANT_UPDATE"
-    static let approveAction = "ASSISTANT_APPROVE"
-    static let denyAction = "ASSISTANT_DENY"
+    // These raw identifiers do not touch manager state. Marking them
+    // nonisolated lets UserNotifications delegate callbacks compare them
+    // without crossing the main actor (a Swift 6 error otherwise).
+    nonisolated static let attentionCategory = "ASSISTANT_ATTENTION"
+    nonisolated static let updateCategory = "ASSISTANT_UPDATE"
+    nonisolated static let approveAction = "ASSISTANT_APPROVE"
+    nonisolated static let denyAction = "ASSISTANT_DENY"
 
     private override init() {
         super.init()
