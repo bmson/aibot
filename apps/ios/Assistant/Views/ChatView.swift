@@ -326,13 +326,15 @@ struct ChatView: View {
         }
     }
 
-    private var crownContentClearanceHeight: CGFloat {
-        ActivityCrown.screenClearanceHeight(
+    /// The transcript and the root error banner clear the Island by exactly the
+    /// same distance, from the same origin — both scroll and sit under a stack
+    /// that ignores the top safe area. One expression for both, because the two
+    /// drifting apart is what previously left the banner behind the pill.
+    private var crownContentTopInset: CGFloat {
+        ActivityCrown.overlayTopInset(
             isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
             isExpanded: model.activityThought != nil,
-            islandTopInset: ActivityCrown.islandTopInset(
-                safeAreaTopInset: safeAreaTopInset
-            )
+            safeAreaTopInset: safeAreaTopInset
         )
     }
 
@@ -401,10 +403,12 @@ struct ChatView: View {
             .scrollPosition($transcriptScrollPosition)
             // Reserve real layout room for the crown at the start of the
             // conversation. Unlike the removed clear mask, this cannot slice
-            // through a message bubble or its text.
+            // through a message bubble or its text. The 8pt gap that used to be
+            // added here is inside the clearance now — it is the same gap the
+            // error banner needs, so it belongs with the geometry.
             .contentMargins(
                 .top,
-                crownContentClearanceHeight + 8,
+                crownContentTopInset,
                 for: .scrollContent
             )
             // A live scroll view under an active menu pull can still pan a

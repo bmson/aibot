@@ -255,20 +255,34 @@ struct ActivityCrown: View {
             .joined(separator: ": ")
     }
 
-    /// How far the expanded crown hangs below this device's safe-area edge —
-    /// what a top-aligned overlay inside the chat has to clear to avoid being
-    /// drawn underneath it.
-    static func safeAreaOverhang(
+    /// The breathing room between the Island's lower edge and anything placed
+    /// clear of it.
+    static let overlayClearanceGap: CGFloat = 8
+
+    /// Where a top-aligned surface has to start so nothing at the top of the
+    /// screen draws over it — measured from the physical top edge, which is the
+    /// origin every surface that clears the Island already works in: both
+    /// `RootView`'s stack and the transcript ignore the top safe area.
+    ///
+    /// Idle is not a special case with a smaller number. The crown paints
+    /// nothing then, but the hardware pill is still there and is exactly what
+    /// has to be cleared, so the collapsed geometry stands in for it.
+    ///
+    /// This replaced a `safeAreaOverhang` measured from the safe-area boundary
+    /// instead. That is the right origin for an overlay inside the chat, where
+    /// the error banner used to live — but the banner has since moved up to the
+    /// root, and reading a safe-area-relative number in a stack that ignores the
+    /// safe area put it roughly one top inset too high: underneath the Island.
+    static func overlayTopInset(
         isAccessibilitySize: Bool,
+        isExpanded: Bool,
         safeAreaTopInset: CGFloat
     ) -> CGFloat {
-        let height = isAccessibilitySize
-            ? accessibilityExpandedHeight
-            : standardExpandedHeight
-        return max(
-            0,
-            islandTopInset(safeAreaTopInset: safeAreaTopInset) + height - safeAreaTopInset
-        )
+        screenClearanceHeight(
+            isAccessibilitySize: isAccessibilitySize,
+            isExpanded: isExpanded,
+            islandTopInset: islandTopInset(safeAreaTopInset: safeAreaTopInset)
+        ) + overlayClearanceGap
     }
 }
 
