@@ -1218,6 +1218,7 @@ struct ToolActivity: Codable, Sendable {
     private static let labels: [String: String] = [
         "web.fetch": "Reading a web page",
         "web.search": "Searching the web",
+        "weather.lookup": "Checking the weather",
         "memory.recall": "Recalling memory",
         "memory.save": "Saving a note to memory",
         "contacts.lookup": "Looking up a contact",

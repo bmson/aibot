@@ -150,6 +150,7 @@ export function taskTypeLabel(type: string): string {
  */
 const platformToolLabels: Record<string, { present: string; past: string }> = {
   'web.fetch': { present: 'Reading a web page', past: 'Read a web page' },
+  'weather.lookup': { present: 'Checking the weather', past: 'Checked the weather' },
   'memory.recall': { present: 'Recalling memory', past: 'Recalled memory' },
   'memory.save': { present: 'Saving a note to memory', past: 'Saved a note to memory' },
   'contacts.lookup': { present: 'Looking up a contact', past: 'Looked up a contact' },
