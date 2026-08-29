@@ -48,6 +48,19 @@ GOOGLE_OAUTH_CLIENT_SECRET=...
 The same OAuth client may be used for the web login and assistant account when its redirect URIs and
 consent configuration cover both flows. Add module-specific values from [the module reference](modules.md).
 
+If you forward your own mail to the assistant's mailbox, set the ingest mode as well:
+
+```dotenv
+EMAIL_INGEST_MODE=forwarded
+```
+
+Leaving it at the `direct` default is the single most common reason a working installation stays
+quiet. `direct` means "people write to the assistant", so forwarded mail is dropped as
+unauthenticated — forwarding breaks SPF alignment — or as automated, which is exactly the
+confirmations and invoices carrying the dates worth knowing. Nothing errors: the mail ledger simply
+stays empty, and with it the importance alerts, the briefing's highlights and the pulse's mail
+moments. `pnpm config:check` and **Settings → Noticing** both name this if it happens.
+
 Validate before provisioning:
 
 ```sh
