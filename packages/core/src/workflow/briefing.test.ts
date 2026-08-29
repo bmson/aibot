@@ -327,6 +327,64 @@ describe('runBriefing — richer inputs', () => {
     expect(conflicts).toEqual([]);
   });
 
+  it('still reports two instances of one series that collide on the same calendar', () => {
+    // A moved instance keeps its series id, so identity by recurringEventId
+    // alone would merge a genuine double-booking out of the briefing.
+    const conflicts = findConflicts(
+      [
+        {
+          summary: 'Standup',
+          start: '2026-08-29T16:00:00Z',
+          end: '2026-08-29T16:30:00Z',
+          calendar: 'Work',
+          calendarId: 'work@example.com',
+          recurringEventId: 'series-1',
+          allDay: false,
+        },
+        {
+          summary: 'Standup',
+          start: '2026-08-29T16:15:00Z',
+          end: '2026-08-29T16:45:00Z',
+          calendar: 'Work',
+          calendarId: 'work@example.com',
+          recurringEventId: 'series-1',
+          allDay: false,
+        },
+      ],
+      'America/Los_Angeles',
+    );
+
+    expect(conflicts).toHaveLength(1);
+  });
+
+  it('still merges one series copied onto a second calendar', () => {
+    expect(
+      findConflicts(
+        [
+          {
+            summary: 'Standup',
+            start: '2026-08-29T16:00:00Z',
+            end: '2026-08-29T16:30:00Z',
+            calendar: 'Work',
+            calendarId: 'work@example.com',
+            recurringEventId: 'series-1',
+            allDay: false,
+          },
+          {
+            summary: 'Standup',
+            start: '2026-08-29T16:00:00Z',
+            end: '2026-08-29T16:30:00Z',
+            calendar: 'Personal',
+            calendarId: 'me@example.com',
+            recurringEventId: 'series-1',
+            allDay: false,
+          },
+        ],
+        'America/Los_Angeles',
+      ),
+    ).toEqual([]);
+  });
+
   it('counts a routine calendar as context, never as news', () => {
     // The silence rule, pinned without a database: events alone never deliver.
     expect(

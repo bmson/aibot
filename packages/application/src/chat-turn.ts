@@ -507,6 +507,34 @@ export async function handleChatTurn(
   // all marked prior-turn. This turn itself runs no tools.
   const toolEvidence = await listConversationToolEvidence(db, conversation.id);
   const readRequest = detectPersonalReadRequest(modelHistory);
+  // Owner chat is always owner-trust and untainted here, so the fused
+  // "right now" block (location + weather) is available — "where am I?"
+  // and "should I go for a run?" answer without a mid-task tool call.
+  const ambientBlock = await getAmbientBlock(db, agent.id);
+  // Corpus for the URL-provenance rule, mirroring finalize.ts: every tool
+  // result, plus everything else the turn legitimately saw — the owner's own
+  // words, the recalled context, the ambient block. Deliberately NOT the
+  // assistant's own turns, which must never evidence their own link.
+  const urlCorpus = [
+    JSON.stringify(toolEvidence),
+    modelHistory
+      .filter((message) => message.role === 'user')
+      .map((message) => JSON.stringify(message.parts ?? message))
+      .join('\n'),
+    recallBlock ?? '',
+    ambientBlock ?? '',
+  ].join('\n');
+  // The contract is not cheap — it stringifies the whole ledger and runs the
+  // full matcher set — and both the completion callback and the stream pump
+  // need the same verdict for the same draft. Compute it once.
+  const guardCache = new Map<string, { corrected: boolean; text: string }>();
+  const guardOnce = (draft: string) => {
+    const cached = guardCache.get(draft);
+    if (cached) return cached;
+    const result = guardDraft(draft, toolEvidence, { readRequest, urlCorpus });
+    guardCache.set(draft, result);
+    return result;
+  };
 
   let outcome: StreamOutcome;
   try {
@@ -520,10 +548,7 @@ export async function handleChatTurn(
           ownerCard: await getOwnerCard(db),
           recall: recallBlock,
           openLoops,
-          // Owner chat is always owner-trust and untainted here, so the fused
-          // "right now" block (location + weather) is available — "where am I?"
-          // and "should I go for a run?" answer without a mid-task tool call.
-          ambient: await getAmbientBlock(db, agent.id),
+          ambient: ambientBlock,
           channel: 'dashboard-chat',
         }),
         '',
@@ -546,7 +571,7 @@ export async function handleChatTurn(
           });
           return;
         }
-        const guarded = guardDraft(stripped.text, toolEvidence, { readRequest });
+        const guarded = guardOnce(stripped.text);
         if (guarded.corrected) {
           console.warn('tool-less chat draft claimed unperformed work', {
             taskId: task.id,
@@ -555,8 +580,9 @@ export async function handleChatTurn(
         await finishTask(db, task, {
           status: 'done',
           // Persist the contract-owned replacement, never the unsupported
-          // draft. The live stream still receives the off-course marker below,
-          // while reload/search/recall see only the safe durable answer.
+          // draft. The stream pump below sends the client this same text, so
+          // the live reply and the durable one stay identical — which is what
+          // retireProvisionalReplies matches on to retire the local copy.
           responseText: guarded.text,
           recall: recallSources,
           cues: guarded.corrected ? undefined : stripped.cues,
@@ -604,10 +630,13 @@ export async function handleChatTurn(
   }
 
   // Stream the draft as-is, then run the honesty check on the finished text.
-  // The deltas have already reached the client, so a flagged draft is marked
-  // rather than edited: a data part lands in the live message, and onComplete
-  // persists the same flag as a structured notice part — the chat renders the
-  // "answered without checking" card from either.
+  // The deltas have already reached the client, so a flagged draft cannot be
+  // un-sent — but it must not be what the reader is left holding either. The
+  // marker part carries the contract's replacement, and the chat renders that
+  // in place of the draft, matching what onComplete persisted. Keeping the two
+  // byte-identical is load-bearing: retireProvisionalReplies retires the local
+  // copy by comparing its text against the server's, so a divergence here
+  // leaves the draft and its replacement stacked in the log until a reload.
   const okOutcome = outcome;
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
@@ -623,9 +652,9 @@ export async function handleChatTurn(
         (chunk) => writer.write(chunk as Parameters<typeof writer.write>[0]),
         createCueScanner(),
       );
-      const draft = await okOutcome.text;
-      if (guardDraft(stripCueTags(draft).text, toolEvidence, { readRequest }).corrected) {
-        writer.write({ type: 'data-off-course', data: {} });
+      const guarded = guardOnce(stripCueTags(await okOutcome.text).text);
+      if (guarded.corrected) {
+        writer.write({ type: 'data-off-course', data: { text: guarded.text } });
       }
       writer.write({ type: 'finish', finishReason: 'stop' });
     },

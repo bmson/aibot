@@ -1809,21 +1809,32 @@ function missingReadResponse(labels: string[], evidence: ActionEvidence[]): stri
     .join(' ');
 }
 
+/**
+ * A lookup that could not cover its sources: answer with whatever the ledger
+ * genuinely holds, then name the gap. Blocked, because the missing half is
+ * exactly what the model would otherwise fill in.
+ */
+function coverageGapResponse(
+  request: PersonalReadRequest,
+  evidence: ActionEvidence[],
+  gaps: { labels: string[]; unsupported: ActionKind[] },
+): ResponseContractResult {
+  const verified = currentSuccessfulEvidence(evidence).length
+    ? `${verifiedReadResponse(request, evidence)}\n\n`
+    : '';
+  return {
+    text: `${verified}${missingReadResponse(gaps.labels, evidence)}`,
+    blocked: true,
+    unsupported: gaps.unsupported,
+  };
+}
+
 export function enforcePersonalReadResponse(
   request: PersonalReadRequest,
   evidence: ActionEvidence[],
 ): ResponseContractResult {
   const gaps = requiredReadGaps(request, evidence);
-  if (gaps.labels.length > 0) {
-    const verified = currentSuccessfulEvidence(evidence).length
-      ? `${verifiedReadResponse(request, evidence)}\n\n`
-      : '';
-    return {
-      text: `${verified}${missingReadResponse(gaps.labels, evidence)}`,
-      blocked: true,
-      unsupported: gaps.unsupported,
-    };
-  }
+  if (gaps.labels.length > 0) return coverageGapResponse(request, evidence, gaps);
 
   return {
     text: verifiedReadResponse(request, evidence),
@@ -1847,16 +1858,7 @@ function enforcePersonalReadGrounding(
   const request = opts?.readRequest;
   if (!request) return undefined;
   const gaps = requiredReadGaps(request, evidence);
-  if (gaps.labels.length > 0) {
-    const verified = currentSuccessfulEvidence(evidence).length
-      ? `${verifiedReadResponse(request, evidence)}\n\n`
-      : '';
-    return {
-      text: `${verified}${missingReadResponse(gaps.labels, evidence)}`,
-      blocked: true,
-      unsupported: gaps.unsupported,
-    };
-  }
+  if (gaps.labels.length > 0) return coverageGapResponse(request, evidence, gaps);
   if (request.kind === 'drive' || request.kind === 'memory' || request.kind === 'knowledge_graph') {
     return {
       text: verifiedReadResponse(request, evidence),

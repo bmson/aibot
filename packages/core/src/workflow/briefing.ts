@@ -211,18 +211,30 @@ interface TimedCalendarEvent extends BriefingCalendarEvent {
   endMs: number;
 }
 
+/**
+ * Tokens that two titles sharing them says nothing about. Shared tokens are
+ * the evidence that two rows on different calendars are one event, so a word
+ * that turns up across unrelated commitments is evidence of nothing.
+ *
+ * Function words plus the colour words that name teams, kits, and rooms —
+ * "Gold vs Red" and "Gold vs Blue" are two different fixtures. Abbreviations
+ * like "vs", "at", "fc" and "sc" need no entry: `titleTokens` already drops
+ * everything at two characters or fewer.
+ */
 const TITLE_STOP_WORDS = new Set([
   'the',
   'and',
   'for',
   'with',
-  'vs',
-  'at',
-  'sc',
-  'fc',
-  'gold',
   'red',
   'blue',
+  'gold',
+  'green',
+  'black',
+  'white',
+  'silver',
+  'grey',
+  'gray',
 ]);
 
 function normalizedLocation(value: string | undefined): string {
@@ -263,22 +275,26 @@ function sameRealWorldEvent(
   right: TimedCalendarEvent,
   timeZone: string,
 ): boolean {
+  // A shared iCalUID is the provider saying outright that these are one
+  // invitation, so it settles the question wherever the copies live.
   if (left.iCalUID && right.iCalUID && left.iCalUID === right.iCalUID) return true;
+  // Everything below is inference about copies, so it is only for copies:
+  // two rows on ONE calendar may share a venue, a project name, or a series
+  // and are still separate commitments that can genuinely collide. A moved
+  // instance overlapping its own sibling is exactly the double-booking the
+  // owner most needs named, and merging it away would hide it.
+  if (
+    (left.calendarId && right.calendarId && left.calendarId === right.calendarId) ||
+    (!left.calendarId && !right.calendarId && left.calendar === right.calendar)
+  ) {
+    return false;
+  }
   if (
     left.recurringEventId &&
     right.recurringEventId &&
     left.recurringEventId === right.recurringEventId
   ) {
     return true;
-  }
-  // Heuristic merging is only for cross-calendar copies. Two distinct rows on
-  // one calendar may share a venue and project name and are still real
-  // commitments that can conflict.
-  if (
-    (left.calendarId && right.calendarId && left.calendarId === right.calendarId) ||
-    (!left.calendarId && !right.calendarId && left.calendar === right.calendar)
-  ) {
-    return false;
   }
   if (localDate(left.start, timeZone) !== localDate(right.start, timeZone)) return false;
   const overlap = Math.max(

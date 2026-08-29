@@ -1,5 +1,6 @@
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { rendersAllCards, responseCardPayloads } from './response-card.js';
+import { ResponseCards, rendersAllCards, responseCardPayloads } from './response-card.js';
 
 describe('responseCardPayloads', () => {
   it('collects data-card payloads in order and ignores everything else', () => {
@@ -44,5 +45,64 @@ describe('rendersAllCards', () => {
     ).toBe(true);
     expect(rendersAllCards([{ kind: 'weather' }, { kind: 'email-thread' }])).toBe(false);
     expect(rendersAllCards([{ kind: 'something-newer' }])).toBe(false);
+  });
+});
+
+describe('ResponseCards', () => {
+  const render = (card: Record<string, unknown>) =>
+    renderToStaticMarkup(<ResponseCards cards={[card]} timeZone="UTC" />);
+
+  it('omits confidence entirely when the payload carries none', () => {
+    // NaN in the producer serialises to null, and Number(null) is 0 — a
+    // provenance card must not report an unknown confidence as a measured 0%.
+    const html = render({
+      kind: 'knowledge-graph',
+      id: 'k1',
+      edges: [{ id: 'e1', fromLabel: 'Owner', toLabel: 'Carnival', label: 'attended' }],
+    });
+    expect(html).not.toContain('Confidence');
+  });
+
+  it('renders a confidence that is present, including one arriving as a string', () => {
+    expect(
+      render({
+        kind: 'knowledge-graph',
+        id: 'k2',
+        edges: [{ id: 'e1', fromLabel: 'A', toLabel: 'B', label: 'knows', confidence: 0.6 }],
+      }),
+    ).toContain('Confidence: 60%');
+    expect(
+      render({
+        kind: 'knowledge-graph',
+        id: 'k3',
+        edges: [{ id: 'e1', fromLabel: 'A', toLabel: 'B', label: 'knows', confidence: '0.85' }],
+      }),
+    ).toContain('Confidence: 85%');
+  });
+
+  it('will not put a non-http scheme in an href', () => {
+    // Card URLs come from tool results, so they reach as far as any other
+    // model-adjacent input. React only warns on these; the card has to refuse.
+    const html = render({
+      kind: 'web-search-results',
+      id: 'w1',
+      results: [
+        { url: 'javascript:alert(1)', title: 'Trust me' },
+        { url: 'https://example.com/real', title: 'Real result' },
+      ],
+    });
+    expect(html).not.toContain('javascript:');
+    expect(html).toContain('Trust me');
+    expect(html).toContain('href="https://example.com/real"');
+  });
+
+  it('drops an unsafe Drive link but keeps the file name readable', () => {
+    const html = render({
+      kind: 'drive-results',
+      id: 'd1',
+      files: [{ id: 'f1', name: 'Photos.zip', url: 'data:text/html,<script>x</script>' }],
+    });
+    expect(html).not.toContain('data:text/html');
+    expect(html).toContain('Photos.zip');
   });
 });

@@ -166,6 +166,30 @@ describe('retireProvisionalReplies', () => {
     const log = [durable('s1', 'assistant', 'kept', '2026-08-18T09:00:00.000Z')];
     expect(retireProvisionalReplies(log, new Set(['s1'])).map((m) => m.id)).toEqual(['s1']);
   });
+
+  it('retires a corrected reply against the replacement it streamed', () => {
+    // chat-turn persists the response contract's replacement and streams that
+    // same text on the off-course part. Comparing the raw draft instead would
+    // leave the unsupported wording on screen beside its correction.
+    const streamed = {
+      id: 'streamed',
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: 'I checked your calendar — nothing today.' },
+        { type: 'data-off-course', data: { text: "That's everything I could actually see." } },
+      ],
+    } as unknown as UIMessage;
+    const log = [
+      streamed,
+      durable(
+        's2',
+        'assistant',
+        "That's everything I could actually see.",
+        '2026-08-18T10:00:00.000Z',
+      ),
+    ];
+    expect(retireProvisionalReplies(log, new Set(['s2'])).map((m) => m.id)).toEqual(['s2']);
+  });
 });
 
 describe('date labels', () => {

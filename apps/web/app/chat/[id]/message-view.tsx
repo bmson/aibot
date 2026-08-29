@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { type ReactNode, useEffect, useState, useTransition } from 'react';
 
-import type { NoticeKind } from '@/lib/chat-notices';
+import { type NoticeKind, offCourseReplacement } from '@/lib/chat-notices';
 import { focusRing } from '@/lib/ui';
 import { DecisionCard, type DecisionTone } from './decision-card';
 import { MessageMarkdown } from './markdown';
@@ -152,15 +152,27 @@ export function retireProvisionalUserTurns(log: UIMessage[], serverIds: Set<stri
 }
 
 /**
+ * The words a reply actually shows. Normally its text parts — but a streamed
+ * draft the response contract replaced shows the replacement instead, carried
+ * on its `data-off-course` part, which is also the text chat-turn.ts persisted.
+ * Reading it here is what keeps the streamed copy and its durable twin
+ * comparable when the contract intervenes.
+ */
+function shownText(message: UIMessage): string {
+  return (offCourseReplacement(message.parts) ?? messageText(message)).trim();
+}
+
+/**
  * Retire a locally streamed reply once its persisted twin is in the log.
  *
  * This used to retire every local reply as soon as ANY durable assistant
  * message arrived, which meant a scheduled brief, a watch firing, or inbound
  * mail mirrored into chat would delete a reply the client was still holding —
  * a message visibly disappearing for no reason the reader could see. The text
- * of a streamed reply and its persisted twin are identical by construction
- * (chat-turn.ts persists exactly what it streamed, correction included), so
- * matching on text names the right one instead of the nearest one.
+ * a streamed reply shows and the text of its persisted twin are identical by
+ * construction (chat-turn.ts persists exactly what it streamed, and streams
+ * the contract's replacement when it corrects one), so matching on text names
+ * the right one instead of the nearest one.
  *
  * Matching runs against the whole log rather than one poll page, so a twin that
  * landed while the stream was still live is still reconciled on a later tick.
@@ -169,13 +181,13 @@ export function retireProvisionalReplies(log: UIMessage[], serverIds: Set<string
   const durable: string[] = [];
   for (const message of log) {
     if (message.role === 'assistant' && !isProvisional(message, serverIds)) {
-      durable.push(messageText(message).trim());
+      durable.push(shownText(message));
     }
   }
   if (durable.length === 0) return log;
   return log.filter((message) => {
     if (message.role !== 'assistant' || !isProvisional(message, serverIds)) return true;
-    const at = durable.indexOf(messageText(message).trim());
+    const at = durable.indexOf(shownText(message));
     if (at === -1) return true;
     durable.splice(at, 1);
     return false;

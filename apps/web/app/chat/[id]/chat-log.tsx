@@ -26,6 +26,7 @@ import {
   isDecisionProseNotice,
   isOffCourse,
   noticeKindOf,
+  offCourseReplacement,
   retractionNoticeOf,
   turnFailedReason,
 } from '@/lib/chat-notices';
@@ -98,9 +99,16 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const suggestionParts = parts.filter(
     (part): part is InlineSuggestionPart => part.type === 'suggestion',
   );
-  const textParts = parts.filter(
-    (part): part is Extract<UIMessage['parts'][number], { type: 'text' }> => part.type === 'text',
-  );
+  // A streamed draft the response contract replaced renders as the
+  // replacement — the text the server actually persisted — so reloading
+  // the thread cannot change the answer out from under the reader.
+  const replacement = message.role === 'assistant' ? offCourseReplacement(parts) : null;
+  const textParts = replacement
+    ? [{ type: 'text' as const, text: replacement }]
+    : parts.filter(
+        (part): part is Extract<UIMessage['parts'][number], { type: 'text' }> =>
+          part.type === 'text',
+      );
   // The card repeats the executor's own prose about the same
   // decision — hide the duplicate text, never the persisted
   // message itself.

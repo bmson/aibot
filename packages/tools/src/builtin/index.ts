@@ -18,7 +18,7 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
-import { and, desc, eq, gt, gte, ilike, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
 import { register } from '../register.js';
@@ -31,6 +31,13 @@ export * from './weather.js';
 // The `web.fetch` machinery lives in web-fetch.ts; re-exported here so the
 // package surface (and the web-watch poller's imports) stay unchanged.
 export * from './web-fetch.js';
+
+/**
+ * How much cosine distance a literal word match is worth in `memory.recall`.
+ * Cosine distance runs 0–2, so this reorders neighbours without letting a
+ * keyword hit jump the whole ranking.
+ */
+const LEXICAL_MATCH_BONUS = 0.06;
 
 export interface BuiltinDeps {
   /** Embedding closure (injected by the app — avoids a core↔tools cycle). */
@@ -136,6 +143,15 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       acceptsUntrustedInput: true,
       execute: async (args, ctx) => {
         const [embedding] = await deps.embed([args.query]);
+        const vector = JSON.stringify(embedding);
+        const distance = sql<number>`(${memories.embedding} <=> ${vector}::vector)`;
+        // A literal term the owner used is worth surfacing even when the
+        // embedding ranks it a little lower — a name or a place is exactly
+        // what vector similarity blurs. It is a nudge, not an override:
+        // sorting on the flag itself let one incidental hit displace the
+        // entire semantic ranking, and at this limit that means the right
+        // answer falls off the end. Word-anchored for the same reason —
+        // `%car%` also matches "Oscar" and "scarce".
         const lexicalTerms = args.query
           .toLowerCase()
           .replace(/[^a-z0-9]+/g, ' ')
@@ -144,7 +160,7 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
           .slice(0, 5);
         const lexicalMatch =
           lexicalTerms.length > 0
-            ? or(...lexicalTerms.map((term) => ilike(memories.content, `%${term}%`)))
+            ? sql<boolean>`${memories.content} ~* ${`\\y(${lexicalTerms.join('|')})\\y`}`
             : undefined;
         const rows = await ctx.db
           .select({
@@ -159,7 +175,7 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
             source: memories.source,
             ownerConfirmed: memories.ownerConfirmed,
             createdAt: memories.createdAt,
-            similarity: sql<number>`1 - (${memories.embedding} <=> ${JSON.stringify(embedding)}::vector)`,
+            similarity: sql<number>`1 - ${distance}`,
           })
           .from(memories)
           .where(
@@ -170,8 +186,9 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
             ),
           )
           .orderBy(
-            lexicalMatch ? sql`CASE WHEN ${lexicalMatch} THEN 0 ELSE 1 END` : sql`1`,
-            sql`${memories.embedding} <=> ${JSON.stringify(embedding)}::vector`,
+            lexicalMatch
+              ? sql`${distance} - CASE WHEN ${lexicalMatch} THEN ${sql.raw(String(LEXICAL_MATCH_BONUS))} ELSE 0 END`
+              : distance,
           )
           .limit(args.limit);
         const now = Date.now();

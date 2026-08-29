@@ -40,6 +40,38 @@ function str(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/**
+ * A finite number, or undefined. Never coerce with a bare `Number()`: a card
+ * field that is absent serialises as null, and `Number(null)` is 0 — which on
+ * a provenance card reads as a measured zero rather than "not known".
+ */
+function num(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
+ * A URL safe to put in an href. Card payloads are built from tool results —
+ * search hits, mail and Drive links — so they carry the same reach as any
+ * other model-adjacent input. Prose links get this for free from
+ * react-markdown's URL transform; React itself only warns on a
+ * `javascript:` href, so the cards need their own guard. Callers render plain
+ * text when this returns empty.
+ */
+function cardHref(value: unknown): string {
+  const raw = str(value);
+  if (!raw) return '';
+  try {
+    const protocol = new URL(raw).protocol;
+    return protocol === 'http:' || protocol === 'https:' ? raw : '';
+  } catch {
+    // Not absolute, so not something to link out to either.
+    return '';
+  }
+}
+
 function strs(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
@@ -74,7 +106,7 @@ function pairs(value: unknown): Array<{ label: string; value: string }> {
 function link(value: unknown): { label: string; url: string } | undefined {
   const parsed = rec(value);
   if (!parsed) return undefined;
-  const url = str(parsed.url);
+  const url = cardHref(parsed.url);
   if (!url) return undefined;
   return { label: str(parsed.label) || 'Open', url };
 }
@@ -257,14 +289,20 @@ function WebSearchCard({ data }: { data: Raw }) {
       <ul className="flex flex-col gap-2.5">
         {results.map((result, index) => (
           <li key={str(result.url) || index} className="min-w-0 text-sm">
-            <a
-              href={str(result.url)}
-              target="_blank"
-              rel="noreferrer"
-              className={`font-medium text-accent underline-offset-2 hover:underline ${focusRing}`}
-            >
-              {str(result.title) || str(result.url)}
-            </a>
+            {cardHref(result.url) ? (
+              <a
+                href={cardHref(result.url)}
+                target="_blank"
+                rel="noreferrer"
+                className={`font-medium text-accent underline-offset-2 hover:underline ${focusRing}`}
+              >
+                {str(result.title) || str(result.url)}
+              </a>
+            ) : (
+              <span className="font-medium text-strong">
+                {str(result.title) || str(result.url)}
+              </span>
+            )}
             {str(result.snippet) ? (
               <p className="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-muted">
                 {str(result.snippet)}
@@ -352,13 +390,13 @@ function DriveResultsCard({ data, timeZone }: { data: Raw; timeZone: string }) {
     >
       <ul className="flex flex-col gap-2">
         {files.map((file, index) => {
-          const href = str(file.url);
+          const url = cardHref(file.url);
           const name = str(file.name) || 'Untitled file';
           return (
             <li key={str(file.id) || index} className="flex min-w-0 items-baseline gap-2 text-sm">
-              {href ? (
+              {url ? (
                 <a
-                  href={href}
+                  href={url}
                   target="_blank"
                   rel="noreferrer"
                   className={`min-w-0 truncate font-medium text-accent underline-offset-2 hover:underline ${focusRing}`}
@@ -430,8 +468,8 @@ function KnowledgeGraphCard({ data }: { data: Raw }) {
             ) : null}
             <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted">
               {str(edge.source) ? <span>Source: {str(edge.source)}</span> : null}
-              {Number.isFinite(Number(edge.confidence)) ? (
-                <span>Confidence: {Math.round(Number(edge.confidence) * 100)}%</span>
+              {num(edge.confidence) !== undefined ? (
+                <span>Confidence: {Math.round((num(edge.confidence) as number) * 100)}%</span>
               ) : null}
               <span>
                 {edge.ownerConfirmed === true ? 'Owner-confirmed' : 'Not owner-confirmed'}

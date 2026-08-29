@@ -40,4 +40,20 @@ describe('global knowledge map layout', () => {
   it('returns an empty layout for an empty graph', () => {
     expect(layoutKnowledgeMap({ ...snapshot, nodes: [], edges: [], components: [] })).toEqual([]);
   });
+
+  it('ignores an edge whose endpoint is not on the map', () => {
+    // The node cap can drop an endpoint while its edge survives upstream; the
+    // relaxation must skip that pair rather than read past the node list.
+    const dangling = {
+      ...snapshot,
+      edges: [...snapshot.edges, { ...snapshot.edges[0], id: 'ghost', objectId: 'missing' }],
+    } as KnowledgeMapSnapshot;
+    expect(layoutKnowledgeMap(dangling)).toEqual(layoutKnowledgeMap(snapshot));
+  });
+
+  it('separates two nodes it is asked to lay out in one component', () => {
+    const laid = layoutKnowledgeMap(snapshot);
+    const [a, b] = laid;
+    expect(Math.hypot((a?.x ?? 0) - (b?.x ?? 0), (a?.y ?? 0) - (b?.y ?? 0))).toBeGreaterThan(20);
+  });
 });

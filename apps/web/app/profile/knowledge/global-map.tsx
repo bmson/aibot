@@ -1,14 +1,14 @@
 'use client';
 
-import type { KnowledgeMapSnapshot, KnowledgeSourceImpact } from '@assistant/application';
-import { Minus, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import type { KnowledgeMapSnapshot } from '@assistant/application';
+import { Minus, Plus, RotateCcw } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
-import { forgetKnowledgeMemory, loadKnowledgeSourceImpact } from '@/app/profile/knowledge/actions';
 import {
   GLOBAL_MAP_HEIGHT,
   GLOBAL_MAP_WIDTH,
   layoutKnowledgeMap,
 } from '@/app/profile/knowledge/global-map-model';
+import { SourceImpactForget } from '@/app/profile/knowledge/source-impact-forget';
 import { entityKindLabel, entityKindPaint, humanizePredicate } from '@/lib/knowledge';
 import { btnSm, focusRing } from '@/lib/ui';
 
@@ -22,18 +22,98 @@ const INITIAL_VIEWPORT: Viewport = { x: 0, y: 0, scale: 1 };
 
 export function GlobalKnowledgeMap({ snapshot }: { snapshot: KnowledgeMapSnapshot }) {
   const nodes = useMemo(() => layoutKnowledgeMap(snapshot), [snapshot]);
-  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const [selectedId, setSelectedId] = useState(nodes[0]?.id ?? null);
   const [viewport, setViewport] = useState(INITIAL_VIEWPORT);
-  const [impact, setImpact] = useState<KnowledgeSourceImpact | null>(null);
-  const [pending, setPending] = useState(false);
   const drag = useRef<{ x: number; y: number; viewport: Viewport } | null>(null);
-  const selected = selectedId ? nodeById.get(selectedId) : undefined;
-  const selectedEdges = selected
-    ? snapshot.edges.filter(
-        (edge) => edge.subjectId === selected.id || edge.objectId === selected.id,
-      )
-    : [];
+  // Filters arrive as search params, so this component re-renders in place
+  // with a new snapshot rather than remounting. Falling back keeps the
+  // inspector populated; reading state alone left the whole panel blank
+  // whenever the previous selection filtered out.
+  const selected = (selectedId ? nodeById.get(selectedId) : undefined) ?? nodes[0];
+  const selectedEdges = useMemo(
+    () =>
+      selected
+        ? snapshot.edges.filter(
+            (edge) => edge.subjectId === selected.id || edge.objectId === selected.id,
+          )
+        : [],
+    [snapshot.edges, selected],
+  );
+  const activeId = selected?.id ?? null;
+  // Panning fires setViewport on every pointer move, and only the wrapping
+  // <g> transform changes with it. Memoising the marks keeps a drag from
+  // re-reconciling every node and edge on the map, sixty times a second.
+  const edgeMarks = useMemo(
+    () =>
+      snapshot.edges.map((edge) => {
+        const subject = nodeById.get(edge.subjectId);
+        const object = nodeById.get(edge.objectId);
+        if (!subject || !object) return null;
+        const active = activeId === subject.id || activeId === object.id;
+        return (
+          <line
+            key={edge.id}
+            x1={subject.x}
+            y1={subject.y}
+            x2={object.x}
+            y2={object.y}
+            strokeWidth={active ? 2.6 : 1.2}
+            className={active ? 'stroke-accent' : 'stroke-edge'}
+            opacity={activeId && !active ? 0.28 : 0.72}
+          />
+        );
+      }),
+    [snapshot.edges, nodeById, activeId],
+  );
+  const nodeMarks = useMemo(
+    () =>
+      nodes.map((node) => {
+        const isSelected = node.id === activeId;
+        const radius = Math.min(15, 7 + Math.sqrt(node.degree) * 2);
+        return (
+          // biome-ignore lint/a11y/useSemanticElements: SVG cannot contain an HTML button; the group implements button keyboard semantics.
+          <g
+            key={node.id}
+            role="button"
+            tabIndex={0}
+            aria-label={`${node.label}, ${entityKindLabel(node.kind)}, ${node.degree} connections`}
+            className={`cursor-pointer ${focusRing}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              setSelectedId(node.id);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                // Space scrolls the page otherwise, jumping the map out of view.
+                event.preventDefault();
+                setSelectedId(node.id);
+              }
+            }}
+          >
+            <circle cx={node.x} cy={node.y} r={22} fill="transparent" />
+            <circle
+              cx={node.x}
+              cy={node.y}
+              r={radius}
+              className={entityKindPaint(node.kind).node}
+              strokeWidth={isSelected ? 4 : 2}
+            />
+            {(nodes.length <= 42 || isSelected) && (
+              <text
+                x={node.x}
+                y={node.y + radius + 14}
+                textAnchor="middle"
+                className="fill-strong text-[11px] font-medium"
+              >
+                {node.label.length > 22 ? `${node.label.slice(0, 21)}…` : node.label}
+              </text>
+            )}
+          </g>
+        );
+      }),
+    [nodes, activeId],
+  );
   const zoom = (factor: number) =>
     setViewport((current) => ({
       ...current,
@@ -93,65 +173,8 @@ export function GlobalKnowledgeMap({ snapshot }: { snapshot: KnowledgeMapSnapsho
           }}
         >
           <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
-            {snapshot.edges.map((edge) => {
-              const subject = nodeById.get(edge.subjectId);
-              const object = nodeById.get(edge.objectId);
-              if (!subject || !object) return null;
-              const active = selectedId === subject.id || selectedId === object.id;
-              return (
-                <line
-                  key={edge.id}
-                  x1={subject.x}
-                  y1={subject.y}
-                  x2={object.x}
-                  y2={object.y}
-                  strokeWidth={active ? 2.6 : 1.2}
-                  className={active ? 'stroke-accent' : 'stroke-edge'}
-                  opacity={selectedId && !active ? 0.28 : 0.72}
-                />
-              );
-            })}
-            {nodes.map((node) => {
-              const selectedNode = node.id === selectedId;
-              const radius = Math.min(15, 7 + Math.sqrt(node.degree) * 2);
-              return (
-                // biome-ignore lint/a11y/useSemanticElements: SVG cannot contain an HTML button; the group implements button keyboard semantics.
-                <g
-                  key={node.id}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`${node.label}, ${entityKindLabel(node.kind)}, ${node.degree} connections`}
-                  className={`cursor-pointer ${focusRing}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setSelectedId(node.id);
-                    setImpact(null);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') setSelectedId(node.id);
-                  }}
-                >
-                  <circle cx={node.x} cy={node.y} r={22} fill="transparent" />
-                  <circle
-                    cx={node.x}
-                    cy={node.y}
-                    r={radius}
-                    className={entityKindPaint(node.kind).node}
-                    strokeWidth={selectedNode ? 4 : 2}
-                  />
-                  {(nodes.length <= 42 || selectedNode) && (
-                    <text
-                      x={node.x}
-                      y={node.y + radius + 14}
-                      textAnchor="middle"
-                      className="fill-strong text-[11px] font-medium"
-                    >
-                      {node.label.length > 22 ? `${node.label.slice(0, 21)}…` : node.label}
-                    </text>
-                  )}
-                </g>
-              );
-            })}
+            {edgeMarks}
+            {nodeMarks}
           </g>
         </svg>
         <div className="absolute top-3 right-3 flex flex-col gap-1">
@@ -209,53 +232,17 @@ export function GlobalKnowledgeMap({ snapshot }: { snapshot: KnowledgeMapSnapsho
                       <p className="mt-1 line-clamp-3 text-xs leading-5 text-muted">
                         {edge.sourceContent}
                       </p>
-                      <button
-                        type="button"
-                        className="mt-2 text-xs font-medium text-danger hover:underline"
-                        onClick={async () => {
-                          setImpact(await loadKnowledgeSourceImpact(edge.sourceMemoryId));
-                        }}
-                      >
-                        Forget source…
-                      </button>
+                      {/* The same two-step confirm the cleanup list uses, so
+                          impact copy, loading, and the not-found case stay in
+                          one place rather than diverging per surface. */}
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <SourceImpactForget memoryId={edge.sourceMemoryId} />
+                      </div>
                     </article>
                   );
                 })}
               </div>
             </div>
-            {impact ? (
-              <div className="mt-5 rounded-xl border border-danger/30 bg-danger/5 p-4">
-                <p className="text-sm font-semibold text-strong">Forget this source knowledge?</p>
-                <p className="mt-1 text-xs leading-5 text-muted">
-                  Removes {impact.activeConnectionCount} active connection
-                  {impact.activeConnectionCount === 1 ? '' : 's'} and {impact.orphanedItems.length}{' '}
-                  item
-                  {impact.orphanedItems.length === 1 ? '' : 's'} that would no longer be connected.
-                  {impact.retiredProjectionCount > 0
-                    ? ` It also clears ${impact.retiredProjectionCount} retired derived projection${impact.retiredProjectionCount === 1 ? '' : 's'}.`
-                    : ''}{' '}
-                  The source text is tombstoned so it is not learned again verbatim.
-                </p>
-                <div className="mt-3 flex gap-2">
-                  <button
-                    type="button"
-                    disabled={pending}
-                    className={btnSm.danger}
-                    onClick={async () => {
-                      setPending(true);
-                      await forgetKnowledgeMemory(impact.memoryId);
-                      setImpact(null);
-                      setPending(false);
-                    }}
-                  >
-                    <Trash2 className="size-3.5" /> {pending ? 'Forgetting…' : 'Forget knowledge'}
-                  </button>
-                  <button type="button" className={btnSm.outline} onClick={() => setImpact(null)}>
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : null}
           </>
         ) : null}
       </aside>

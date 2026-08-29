@@ -114,9 +114,28 @@ function asRows<T>(result: unknown): T[] {
   return [];
 }
 
+/**
+ * Entities left with no relation at all. Written once so the cleanup list and
+ * the overview count the same thing — they had drifted into two copies of the
+ * same statement, and ran it twice per page besides.
+ */
+async function orphanedEntityCount(db: Db, agentId: string): Promise<number> {
+  const rows = await db.execute(sql`
+    SELECT count(*)::int AS count
+    FROM knowledge_graph_entities AS entity
+    WHERE entity.agent_id = ${agentId}
+      AND NOT EXISTS (
+        SELECT 1 FROM knowledge_graph_relations AS relation
+        WHERE relation.agent_id = ${agentId}
+          AND (relation.subject_entity_id = entity.id OR relation.object_entity_id = entity.id)
+      )
+  `);
+  return Number(asRows<{ count: number }>(rows)[0]?.count ?? 0);
+}
+
 export async function getKnowledgeCleanupFindings(db: Db): Promise<KnowledgeCleanupFinding[]> {
   const agent = await getAgent(db);
-  const [memoryRows, rejectedRows, sourceRows, orphanRows] = await Promise.all([
+  const [memoryRows, rejectedRows, sourceRows, orphanCount] = await Promise.all([
     db
       .select({
         id: memories.id,
@@ -166,15 +185,7 @@ export async function getKnowledgeCleanupFindings(db: Db): Promise<KnowledgeClea
         ),
       )
       .limit(50),
-    db.execute(sql`
-      SELECT count(*)::int AS count
-      FROM knowledge_graph_entities AS entity
-      WHERE entity.agent_id = ${agent.id}
-        AND NOT EXISTS (
-          SELECT 1 FROM knowledge_graph_relations AS relation
-          WHERE relation.subject_entity_id = entity.id OR relation.object_entity_id = entity.id
-        )
-    `),
+    orphanedEntityCount(db, agent.id),
   ]);
   const findings: KnowledgeCleanupFinding[] = memoryRows.map((memory) => {
     const kind: KnowledgeCleanupKind = memory.quarantined
@@ -234,7 +245,6 @@ export async function getKnowledgeCleanupFindings(db: Db): Promise<KnowledgeClea
       count: 1,
     });
   }
-  const orphanCount = Number(asRows<{ count: number }>(orphanRows)[0]?.count ?? 0);
   if (orphanCount > 0) {
     findings.unshift({
       id: 'projection_orphan:all',
@@ -250,12 +260,27 @@ export async function getKnowledgeCleanupFindings(db: Db): Promise<KnowledgeClea
   return findings;
 }
 
-export async function getKnowledgeWorkspaceOverview(db: Db): Promise<KnowledgeWorkspaceOverview> {
+/**
+ * `graph` and `findings` are accepted rather than always fetched because the
+ * page that renders this header already needs both for the body below it. The
+ * graph overview and the cleanup scan are the two most expensive reads on the
+ * page; running them once and passing them in halves the request.
+ */
+export async function getKnowledgeWorkspaceOverview(
+  db: Db,
+  prefetched: {
+    graph?: Pick<
+      Awaited<ReturnType<typeof getKnowledgeGraphOverview>>,
+      'totalEntities' | 'totalRelations' | 'pendingSources'
+    >;
+    findings?: KnowledgeCleanupFinding[];
+  } = {},
+): Promise<KnowledgeWorkspaceOverview> {
   const agent = await getAgent(db);
-  const [memory, graph, findings, failedRows, orphanRows] = await Promise.all([
+  const [memory, graph, findings, failedRows, orphanedEntities] = await Promise.all([
     getMemoryHealth(db, agent.id),
-    getKnowledgeGraphOverview(db, { pageSize: 1 }),
-    getKnowledgeCleanupFindings(db),
+    prefetched.graph ?? getKnowledgeGraphOverview(db, { pageSize: 1 }),
+    prefetched.findings ?? getKnowledgeCleanupFindings(db),
     db
       .select({ value: count() })
       .from(knowledgeGraphSources)
@@ -266,22 +291,14 @@ export async function getKnowledgeWorkspaceOverview(db: Db): Promise<KnowledgeWo
           inArray(knowledgeGraphSources.status, ['failed', 'quarantined']),
         ),
       ),
-    db.execute(sql`
-      SELECT count(*)::int AS count
-      FROM knowledge_graph_entities AS entity
-      WHERE entity.agent_id = ${agent.id}
-        AND NOT EXISTS (
-          SELECT 1 FROM knowledge_graph_relations AS relation
-          WHERE relation.subject_entity_id = entity.id OR relation.object_entity_id = entity.id
-        )
-    `),
+    orphanedEntityCount(db, agent.id),
   ]);
   return {
     memory,
     graph: {
       activeEntities: graph.totalEntities,
       activeRelations: graph.totalRelations,
-      orphanedEntities: Number(asRows<{ count: number }>(orphanRows)[0]?.count ?? 0),
+      orphanedEntities,
       pendingSources: graph.pendingSources,
       failedSources: Number(failedRows[0]?.value ?? 0),
     },

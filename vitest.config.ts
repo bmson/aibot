@@ -1,13 +1,25 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
+/**
+ * The integration projects drop and recreate their schema, so they may only
+ * ever point at a `_test` database. A contributor's shell usually has
+ * DATABASE_URL aimed at their development database, and a suite invoked
+ * directly once wiped one — so redirect rather than trust it.
+ *
+ * Redirecting instead of throwing is deliberate: refusing outright also
+ * blocked `vitest packages/config` and the web component suites, which never
+ * open a connection, for anyone whose shell had the variable set at all.
+ */
 function safeTestDatabaseUrl(): string {
   const configured = process.env.DATABASE_URL;
   const url = new URL(configured ?? 'postgres://assistant:assistant@localhost:5432/assistant_test');
   const database = decodeURIComponent(url.pathname.replace(/^\//, ''));
+  if (!database) throw new Error('DATABASE_URL names no database.');
   if (!database.endsWith('_test')) {
-    throw new Error(
-      `Refusing to run Vitest against database "${database}". Use pnpm test or set DATABASE_URL to a database ending in _test.`,
+    url.pathname = `/${encodeURIComponent(`${database}_test`)}`;
+    console.warn(
+      `Vitest redirected DATABASE_URL from "${database}" to "${database}_test" — the integration suites recreate the schema they run against.`,
     );
   }
   return url.toString();

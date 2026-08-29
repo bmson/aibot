@@ -339,6 +339,10 @@ export async function listMemoryLibrary(
   const total = Number(totalRow?.value ?? 0);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.min(input.page, totalPages);
+  // One correlated subquery per row, not three. The status used to repeat
+  // `activeConnectionExists` inside a CASE beside this same count, over the
+  // identical three-table join — a count of zero already answers it, and the
+  // rest of the CASE only reads columns the source join has to hand.
   const rows = await db
     .select({
       memory: memories,
@@ -346,16 +350,9 @@ export async function listMemoryLibrary(
       subjectLabel: contacts.name,
       subjectTrust: contacts.trust,
       connectionCount: activeConnectionCount,
-      projectionStatus: sql<MemoryProjectionStatus>`CASE
-        WHEN ${activeConnectionExists} THEN 'connected'
-        WHEN ${knowledgeGraphSources.status} IN ('failed', 'quarantined') THEN 'needs_attention'
-        WHEN ${knowledgeGraphSources.memoryId} IS NULL
-          OR ${knowledgeGraphSources.status} = 'pending'
-          OR ${knowledgeGraphSources.contentHash} <> ${memories.contentHash}
-          OR ${knowledgeGraphSources.extractionVersion} < ${GRAPH_EXTRACTION_VERSION}
-          THEN 'mapping'
-        ELSE 'no_connections'
-      END`,
+      sourceStatus: knowledgeGraphSources.status,
+      sourceContentHash: knowledgeGraphSources.contentHash,
+      sourceExtractionVersion: knowledgeGraphSources.extractionVersion,
     })
     .from(memories)
     .leftJoin(contacts, eq(memories.subjectContactId, contacts.id))
@@ -370,15 +367,53 @@ export async function listMemoryLibrary(
     .limit(pageSize)
     .offset((page - 1) * pageSize);
   return {
-    rows: rows.map((row) => ({
-      ...row,
-      connectionCount: Number(row.connectionCount ?? 0),
-      projectionStatus: row.projectionStatus as MemoryProjectionStatus,
-    })),
+    rows: rows.map(({ sourceStatus, sourceContentHash, sourceExtractionVersion, ...row }) => {
+      const connectionCount = Number(row.connectionCount ?? 0);
+      return {
+        ...row,
+        connectionCount,
+        projectionStatus: projectionStatusOf({
+          connectionCount,
+          sourceStatus,
+          sourceContentHash,
+          sourceExtractionVersion,
+          memoryContentHash: row.memory.contentHash,
+        }),
+      };
+    }),
     total,
     page,
     totalPages,
   };
+}
+
+/**
+ * Why a source has no active graph edge. Distinguishes "nothing to connect"
+ * from "not mapped yet" and from "extraction is stuck", so the library can say
+ * which without surfacing the stale projection rows behind it.
+ */
+function projectionStatusOf(input: {
+  connectionCount: number;
+  sourceStatus: string | null;
+  sourceContentHash: string | null;
+  sourceExtractionVersion: number | null;
+  memoryContentHash: string;
+}): MemoryProjectionStatus {
+  if (input.connectionCount > 0) return 'connected';
+  if (input.sourceStatus === 'failed' || input.sourceStatus === 'quarantined') {
+    return 'needs_attention';
+  }
+  // No checkpoint at all, one still queued, or one that predates the memory's
+  // current text or the current extractor — all of them mean "not mapped yet".
+  if (
+    input.sourceStatus === null ||
+    input.sourceStatus === 'pending' ||
+    input.sourceContentHash !== input.memoryContentHash ||
+    (input.sourceExtractionVersion ?? 0) < GRAPH_EXTRACTION_VERSION
+  ) {
+    return 'mapping';
+  }
+  return 'no_connections';
 }
 
 export interface PersonProfile {

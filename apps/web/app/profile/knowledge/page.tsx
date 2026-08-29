@@ -285,9 +285,15 @@ export default async function KnowledgePage({
       )
     : [];
   const db = getDb();
-  const [overview, graph, library, libraryFilters, findings, map] = await Promise.all([
-    getKnowledgeWorkspaceOverview(db),
+  // The graph overview and the cleanup scan are both needed by the header and
+  // by the body, so they are read once here and handed to the header rather
+  // than fetched again inside it.
+  const [graph, findings] = await Promise.all([
     getKnowledgeGraphOverview(db, { query, kind, entityId: params.entity, page }),
+    getKnowledgeCleanupFindings(db),
+  ]);
+  const [overview, library, libraryFilters, map] = await Promise.all([
+    getKnowledgeWorkspaceOverview(db, { graph, findings }),
     view === 'library'
       ? listMemoryLibrary(db, {
           state,
@@ -302,7 +308,6 @@ export default async function KnowledgePage({
         })
       : Promise.resolve(null),
     view === 'library' ? listMemoryLibraryFilters(db) : Promise.resolve(null),
-    view === 'cleanup' ? getKnowledgeCleanupFindings(db) : Promise.resolve([]),
     view === 'map'
       ? getKnowledgeMapSnapshot(db, {
           query,

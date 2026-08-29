@@ -40,6 +40,13 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
  * Corrections make the graph source dirty through its changed content hash;
  * this short-lived task makes that repair prompt instead of waiting for the
  * next scheduled sweep. A single agent never needs competing graph-sync jobs.
+ *
+ * The pending-job check is an optimisation, not the guard — two owner edits
+ * in the same second would both pass it. The event id is what actually holds:
+ * it is stable per memory and minute, so a duplicate collides on
+ * `external_event_id` and the second enqueue is dropped rather than becoming a
+ * second sweep. A minute of granularity keeps a correction made later from
+ * being swallowed by the earlier one's id.
  */
 async function queueKnowledgeGraphSync(db: Db, agentId: string, memoryId: string): Promise<void> {
   const [active] = await db
@@ -54,9 +61,10 @@ async function queueKnowledgeGraphSync(db: Db, agentId: string, memoryId: string
     )
     .limit(1);
   if (active) return;
+  const minute = new Date().toISOString().slice(0, 16);
   const event = InboundEventSchema.parse({
     source: 'internal',
-    externalEventId: `profile:graph-sync:${memoryId}:${Date.now()}`,
+    externalEventId: `profile:graph-sync:${memoryId}:${minute}`,
     agentId,
     trust: 'assistant',
     payload: { job: 'memory.graph_sync', instruction: 'refresh corrected source knowledge' },

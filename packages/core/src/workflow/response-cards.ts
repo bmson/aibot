@@ -44,6 +44,19 @@ function number(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+/**
+ * A number that may arrive as a string, because Postgres `numeric` columns
+ * come back as text. Returns undefined for anything that is not a finite
+ * number either way — `Number(undefined)` is NaN, which JSON writes as null,
+ * which a renderer coercing back with `Number()` reads as a confident zero.
+ */
+function numeric(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function succeeded(row: ActionEvidence): boolean {
   return row.status === 'succeeded' && row.fromCurrentTask !== false;
 }
@@ -372,7 +385,7 @@ export function knowledgeGraphResponseCards(evidence: ActionEvidence[]): Respons
         sourceMemoryId: string(relationship.sourceMemoryId),
         sourceMemory: string(relationship.sourceMemory),
         source: string(relationship.source),
-        confidence: number(relationship.memoryConfidence) ?? Number(relationship.memoryConfidence),
+        confidence: numeric(relationship.memoryConfidence),
         ownerConfirmed: relationship.ownerConfirmed === true,
         validFrom: string(relationship.validFrom),
         validUntil: string(relationship.validUntil),

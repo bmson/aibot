@@ -179,9 +179,9 @@ export function isDecisionProseNotice(text: string): boolean {
  * The tool-less streaming path's honesty guard marks a reply that claimed work
  * it could not have run (guardDraft in packages/application/src/chat-guard.ts).
  * The marker arrives live as a `data-off-course` stream part and persists as a
- * `notice` part on the message (assistantMessageParts in core) — the text is
- * left as drafted either way, so the chat renders the reply with the
- * "answered without checking" card under it rather than a baked-in confession.
+ * `notice` part on the message (assistantMessageParts in core), and the chat
+ * renders the reply with the "answered without checking" card under it rather
+ * than a baked-in confession.
  */
 export function isOffCourse(parts: unknown[]): boolean {
   for (const part of parts) {
@@ -191,6 +191,27 @@ export function isOffCourse(parts: unknown[]): boolean {
     if (candidate.type === 'notice' && candidate.notice === 'off-course') return true;
   }
   return false;
+}
+
+/**
+ * The response contract's replacement for a flagged draft, carried on the live
+ * `data-off-course` part. The draft itself had already streamed token by token
+ * and cannot be un-sent, so the marker brings the text that was actually
+ * persisted and the reply re-renders as that.
+ *
+ * Only ever present on the streamed copy. The persisted twin needs nothing:
+ * its own text parts already hold the replacement. Keeping the two identical
+ * is what lets `retireProvisionalReplies` recognise them as one reply.
+ */
+export function offCourseReplacement(parts: unknown[]): string | null {
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    const candidate = part as { type?: unknown; data?: unknown };
+    if (candidate.type !== 'data-off-course') continue;
+    const text = (candidate.data as { text?: unknown } | undefined)?.text;
+    if (typeof text === 'string' && text.trim()) return text;
+  }
+  return null;
 }
 
 export type TurnFailureReason = 'model' | 'budget' | 'empty';
