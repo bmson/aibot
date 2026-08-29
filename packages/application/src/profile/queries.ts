@@ -18,12 +18,14 @@ import {
 } from '@assistant/db';
 import {
   and,
+  asc,
   count,
   desc,
   eq,
   gt,
   ilike,
   inArray,
+  isNotNull,
   isNull,
   like,
   or,
@@ -230,12 +232,47 @@ export type MemoryFilter = 'all' | 'verified' | 'untidied';
 export interface MemoryLibrary {
   rows: Array<{
     memory: MemorySnapshot;
+    subjectId: string | null;
     subjectLabel: string | null;
     subjectTrust: string | null;
   }>;
   total: number;
   page: number;
   totalPages: number;
+}
+
+export interface MemoryLibraryFilters {
+  subjects: Array<{ id: string; label: string; trust: string }>;
+  sources: string[];
+}
+
+export async function listMemoryLibraryFilters(db: Db): Promise<MemoryLibraryFilters> {
+  const agent = await getAgent(db);
+  const [subjectRows, sourceRows] = await Promise.all([
+    db
+      .select({ id: contacts.id, label: contacts.name, trust: contacts.trust })
+      .from(memories)
+      .innerJoin(contacts, eq(memories.subjectContactId, contacts.id))
+      .where(and(eq(memories.agentId, agent.id), eq(memories.category, 'knowledge')))
+      .groupBy(contacts.id, contacts.name, contacts.trust)
+      .orderBy(asc(contacts.name)),
+    db
+      .select({ source: memories.source })
+      .from(memories)
+      .where(
+        and(
+          eq(memories.agentId, agent.id),
+          eq(memories.category, 'knowledge'),
+          isNotNull(memories.source),
+        ),
+      )
+      .groupBy(memories.source)
+      .orderBy(asc(memories.source)),
+  ]);
+  return {
+    subjects: subjectRows,
+    sources: sourceRows.flatMap((row) => (row.source ? [row.source] : [])),
+  };
 }
 
 export async function listMemoryLibrary(
@@ -246,6 +283,11 @@ export async function listMemoryLibrary(
     query: string;
     page: number;
     pageSize?: number;
+    subjectId?: string;
+    domain?: string;
+    source?: string;
+    ageDays?: number;
+    connectivity?: 'all' | 'connected' | 'unconnected';
   },
 ): Promise<MemoryLibrary> {
   const agent = await getAgent(db);
@@ -267,13 +309,29 @@ export async function listMemoryLibrary(
     input.query
       ? ilike(memories.content, `%${input.query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`)
       : undefined,
+    input.subjectId ? eq(memories.subjectContactId, input.subjectId) : undefined,
+    input.domain ? eq(memories.domain, input.domain) : undefined,
+    input.source ? eq(memories.source, input.source) : undefined,
+    input.ageDays
+      ? gt(memories.createdAt, sql`now() - (${input.ageDays} * interval '1 day')`)
+      : undefined,
+    input.connectivity === 'connected'
+      ? sql<boolean>`EXISTS (SELECT 1 FROM knowledge_graph_relations AS relation WHERE relation.source_memory_id = ${memories.id})`
+      : input.connectivity === 'unconnected'
+        ? sql<boolean>`NOT EXISTS (SELECT 1 FROM knowledge_graph_relations AS relation WHERE relation.source_memory_id = ${memories.id})`
+        : undefined,
   );
   const [totalRow] = await db.select({ value: count() }).from(memories).where(filters);
   const total = Number(totalRow?.value ?? 0);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.min(input.page, totalPages);
   const rows = await db
-    .select({ memory: memories, subjectLabel: contacts.name, subjectTrust: contacts.trust })
+    .select({
+      memory: memories,
+      subjectId: contacts.id,
+      subjectLabel: contacts.name,
+      subjectTrust: contacts.trust,
+    })
     .from(memories)
     .leftJoin(contacts, eq(memories.subjectContactId, contacts.id))
     .where(filters)

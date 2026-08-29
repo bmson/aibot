@@ -624,15 +624,22 @@ async function hydrateContactLabels(db: Db): Promise<void> {
  * Entities exist to carry edges; one left with none is extraction debris. Scoped
  * to the agent being synced so a run can never reach into another agent's graph.
  */
-async function removeOrphanedEntities(db: Db, agentId?: string): Promise<void> {
-  await db.execute(sql`
+export async function removeOrphanedKnowledgeGraphEntities(
+  db: Db,
+  agentId?: string,
+): Promise<number> {
+  const removed = asRows<{ id: string }>(
+    await db.execute(sql`
     DELETE FROM knowledge_graph_entities AS entity
     WHERE NOT EXISTS (
       SELECT 1 FROM knowledge_graph_relations AS relation
       WHERE relation.subject_entity_id = entity.id OR relation.object_entity_id = entity.id
     )
     ${agentId ? sql`AND entity.agent_id = ${agentId}` : sql``}
-  `);
+    RETURNING id
+  `),
+  );
+  return removed.length;
 }
 
 class GraphSourceLeaseLost extends Error {}
@@ -1000,7 +1007,7 @@ export async function syncKnowledgeGraph(
       quarantined: 0,
     };
     if (rows.length === 0) {
-      await removeOrphanedEntities(db, options.agentId);
+      await removeOrphanedKnowledgeGraphEntities(db, options.agentId);
       return result;
     }
 
@@ -1057,7 +1064,7 @@ export async function syncKnowledgeGraph(
       result.relationships += persisted.relationships;
       result.processed += 1;
     }
-    await removeOrphanedEntities(db, options.agentId);
+    await removeOrphanedKnowledgeGraphEntities(db, options.agentId);
     return result;
   });
 }
@@ -1477,7 +1484,7 @@ export async function backfillKnowledgeGraphDates(
       result.canonicalized += 1;
     }
 
-    await removeOrphanedEntities(db, agentId);
+    await removeOrphanedKnowledgeGraphEntities(db, agentId);
     return result;
   });
 }

@@ -171,6 +171,30 @@ final class AppModel: ObservableObject {
         catch { errorMessage = error.localizedDescription; return nil }
     }
 
+    func knowledgeCleanup() async -> KnowledgeCleanupResponse? {
+        guard let client else { return nil }
+        do { return try await client.knowledgeCleanup() }
+        catch { errorMessage = error.localizedDescription; return nil }
+    }
+
+    func resolveKnowledgeCleanup(action: String, memoryId: String? = nil) async -> Bool {
+        guard let client else { return false }
+        do { try await client.resolveKnowledgeCleanup(action: action, memoryId: memoryId); return true }
+        catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    func knowledgeSourceImpact(id: String) async -> KnowledgeSourceImpact? {
+        guard let client else { return nil }
+        do { return try await client.knowledgeSourceImpact(id: id) }
+        catch { errorMessage = error.localizedDescription; return nil }
+    }
+
+    func forgetKnowledgeSource(id: String) async -> Bool {
+        guard let client else { return false }
+        do { try await client.forgetKnowledgeSource(id: id); return true }
+        catch { errorMessage = error.localizedDescription; return false }
+    }
+
     func createKnowledgeConnection(_ mutation: KnowledgeConnectionMutation) async -> Bool {
         guard let client else { return false }
         do { try await client.createKnowledgeConnection(mutation); return true }

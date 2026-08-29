@@ -151,7 +151,7 @@ struct MemoryView: View {
             NavigationLink {
                 KnowledgeView()
             } label: {
-                Label("Manage knowledge connections", systemImage: "point.3.connected.trianglepath.dotted")
+                Label("Connections and cleanup", systemImage: "point.3.connected.trianglepath.dotted")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.bordered)

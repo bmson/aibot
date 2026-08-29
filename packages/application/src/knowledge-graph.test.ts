@@ -285,8 +285,11 @@ describe('knowledge graph kind filter (integration)', () => {
       kind: 'organization',
       pageSize: 100,
     });
-    expect(overview.matchingEntities).toBe(ENTITY_COUNT);
-    expect(overview.entities).toHaveLength(ENTITY_COUNT);
+    // An earlier owner action rejected one hub edge. The organization at its
+    // other end is now disconnected, so the owner-facing graph omits that
+    // projection rather than presenting an empty node as knowledge.
+    expect(overview.matchingEntities).toBe(ENTITY_COUNT - 1);
+    expect(overview.entities).toHaveLength(ENTITY_COUNT - 1);
     expect(overview.entities.every((entity) => entity.kind === 'organization')).toBe(true);
 
     const topics = await getKnowledgeGraphOverview(db, { query: MARKER, kind: 'topic' });

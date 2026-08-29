@@ -2,6 +2,20 @@ import XCTest
 @testable import Assistant
 
 final class APIModelsTests: XCTestCase {
+    func testKnowledgeCleanupAndImpactDecode() throws {
+        let cleanup = try JSONDecoder().decode(
+            KnowledgeCleanupResponse.self,
+            from: Data(#"{"findings":[{"id":"unreviewed_connection:r1","kind":"unreviewed_connection","title":"Review a new connection","detail":"Ada works at Acme.","memoryId":"m1","relationId":"r1","count":1}]}"#.utf8)
+        )
+        XCTAssertEqual(cleanup.findings.first?.relationId, "r1")
+        let impact = try JSONDecoder().decode(
+            KnowledgeSourceImpact.self,
+            from: Data(#"{"memoryId":"m1","content":"Ada works at Acme.","connectionCount":1,"orphanedItems":[{"id":"e1","label":"Acme"}]}"#.utf8)
+        )
+        XCTAssertEqual(impact.connectionCount, 1)
+        XCTAssertEqual(impact.orphanedItems.first?.label, "Acme")
+    }
+
     @MainActor
     func testMemoryReviewBadgeFollowsLatestServerProjection() {
         let model = AppModel()

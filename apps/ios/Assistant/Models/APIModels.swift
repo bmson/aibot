@@ -916,6 +916,31 @@ struct KnowledgeReviewInbox: Codable, Sendable {
     let relations: [KnowledgeRelation]
 }
 
+struct KnowledgeCleanupFinding: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let kind: String
+    let title: String
+    let detail: String
+    let memoryId: String?
+    let relationId: String?
+    let count: Int
+}
+
+struct KnowledgeCleanupResponse: Codable, Sendable {
+    let findings: [KnowledgeCleanupFinding]
+}
+
+struct KnowledgeSourceImpact: Codable, Sendable {
+    struct Item: Codable, Identifiable, Sendable {
+        let id: String
+        let label: String
+    }
+    let memoryId: String
+    let content: String
+    let connectionCount: Int
+    let orphanedItems: [Item]
+}
+
 struct KnowledgeConnectionMutation: Codable, Sendable {
     let subjectLabel: String
     let subjectKind: String

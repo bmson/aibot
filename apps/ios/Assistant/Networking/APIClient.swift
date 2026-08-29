@@ -190,6 +190,34 @@ struct APIClient: Sendable {
         return try await perform(makeRequest(url: url), as: KnowledgeReviewInbox.self)
     }
 
+    func knowledgeCleanup() async throws -> KnowledgeCleanupResponse {
+        try await get("api/mobile/v1/knowledge/cleanup")
+    }
+
+    func resolveKnowledgeCleanup(action: String, memoryId: String? = nil) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge/cleanup")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        var body = ["action": action]
+        if let memoryId { body["memoryId"] = memoryId }
+        request.httpBody = try JSONEncoder().encode(body)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func knowledgeSourceImpact(id: String) async throws -> KnowledgeSourceImpact {
+        try await get("api/mobile/v1/knowledge/sources/\(id)")
+    }
+
+    func forgetKnowledgeSource(id: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge/sources/\(id)")
+        )
+        request.httpMethod = "DELETE"
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
     func createKnowledgeConnection(_ mutation: KnowledgeConnectionMutation) async throws {
         var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge"))
         request.httpMethod = "POST"

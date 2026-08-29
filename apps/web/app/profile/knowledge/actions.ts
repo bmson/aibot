@@ -2,8 +2,12 @@
 
 import {
   addOwnerKnowledgeGraphFact,
+  cleanKnowledgeProjectionOrphans,
   correctKnowledgeGraphRelation,
+  correctKnowledgeSource,
+  forgetKnowledgeSource,
   getKnowledgeGraphNeighborhood,
+  getKnowledgeSourceImpact,
   type KnowledgeGraphEntityView,
   type KnowledgeGraphNeighborEdge,
   mergeKnowledgeGraphEntities,
@@ -14,6 +18,7 @@ import {
   reviewKnowledgeGraphRelation,
   searchKnowledgeGraphEntities,
 } from '@assistant/application';
+import { approveQuarantinedMemory, confirmMemory } from '@assistant/application/profile';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
 import { getDb, getRouter } from '@/lib/server';
@@ -179,4 +184,43 @@ export async function correctKnowledgeRelation(
     error: null,
     success: 'Corrected connection saved; the earlier connection is now marked inaccurate.',
   };
+}
+
+export async function loadKnowledgeSourceImpact(memoryId: string) {
+  await requireOwner();
+  return getKnowledgeSourceImpact(getDb(), memoryId);
+}
+
+export async function correctKnowledgeMemory(
+  memoryId: string,
+  content: string,
+): Promise<{ error?: string }> {
+  await requireOwner();
+  const result = await correctKnowledgeSource(getDb(), getRouter(), memoryId, content);
+  revalidateKnowledgeGraph();
+  return result;
+}
+
+export async function forgetKnowledgeMemory(memoryId: string): Promise<void> {
+  await requireOwner();
+  await forgetKnowledgeSource(getDb(), memoryId);
+  revalidateKnowledgeGraph();
+}
+
+export async function keepKnowledgeMemory(memoryId: string): Promise<void> {
+  await requireOwner();
+  await confirmMemory(getDb(), memoryId);
+  revalidateKnowledgeGraph();
+}
+
+export async function approveKnowledgeMemory(memoryId: string): Promise<void> {
+  await requireOwner();
+  await approveQuarantinedMemory(getDb(), memoryId);
+  revalidateKnowledgeGraph();
+}
+
+export async function removeDisconnectedKnowledgeItems(): Promise<void> {
+  await requireOwner();
+  await cleanKnowledgeProjectionOrphans(getDb());
+  revalidateKnowledgeGraph();
 }

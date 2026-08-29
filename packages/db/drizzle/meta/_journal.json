@@ -470,6 +470,13 @@
       "when": 1787949317310,
       "tag": "0066_warm_robin_chapel",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1787950000000,
+      "tag": "0067_clean_knowledge_graph_fixtures",
+      "breakpoints": true
     }
   ]
 }

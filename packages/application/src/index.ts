@@ -10,6 +10,7 @@ export * from './goals.js';
 export * from './health.js';
 export * from './imports.js';
 export * from './knowledge-graph.js';
+export * from './knowledge-workspace.js';
 export * from './location.js';
 export * from './mcp.js';
 export * from './operations.js';

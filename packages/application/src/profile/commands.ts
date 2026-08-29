@@ -3,6 +3,7 @@ import { getAgent } from '@assistant/core/chat';
 import { InboundEventSchema } from '@assistant/core/events';
 import { compileOwnerCard } from '@assistant/core/memory/consolidation';
 import { MEMORY_DOMAINS } from '@assistant/core/memory/extraction';
+import { removeOrphanedKnowledgeGraphEntities } from '@assistant/core/memory/knowledge-graph';
 import { isOccasionKind, saveOccasion } from '@assistant/core/memory/occasions';
 import { purgeVoiceSamples } from '@assistant/core/memory/voice-ingest';
 import { enqueueTask } from '@assistant/core/workflow/machine';
@@ -74,6 +75,7 @@ export async function forgetMemory(db: Db, memoryId: string): Promise<void> {
   if (!existing) return;
   await addTombstone(db, existing.contentHash, 'owner_forget');
   await db.delete(memories).where(eq(memories.id, memoryId));
+  await removeOrphanedKnowledgeGraphEntities(db, existing.agentId);
   await compileOwnerCard(db);
 }
 
@@ -113,6 +115,7 @@ export async function rejectQuarantinedMemory(db: Db, memoryId: string): Promise
   if (!existing) return;
   await addTombstone(db, existing.contentHash, 'quarantine_reject');
   await db.delete(memories).where(eq(memories.id, memoryId));
+  await removeOrphanedKnowledgeGraphEntities(db, existing.agentId);
 }
 
 export async function updatePersonRelationship(

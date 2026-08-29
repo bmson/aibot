@@ -284,7 +284,7 @@ export function asGraphEntityKind(value: string | undefined): GraphEntityKind | 
  * edge" counts use this filter. Keep the two sides aligned — the parity is
  * pinned by tests in this package and in core.
  */
-function activeRelationConditions(agentId: string) {
+export function activeKnowledgeGraphWhere(agentId: string) {
   return and(
     eq(knowledgeGraphRelations.agentId, agentId),
     ne(knowledgeGraphRelations.reviewStatus, 'rejected'),
@@ -297,6 +297,27 @@ function activeRelationConditions(agentId: string) {
     gte(knowledgeGraphSources.extractionVersion, GRAPH_EXTRACTION_VERSION),
     isNotNull(knowledgeGraphRelations.evidenceQuote),
   );
+}
+
+/** Owner-facing entity lists contain only nodes that participate in recall-eligible edges. */
+function activeEntityCondition(agentId: string, entity: AnyPgColumn) {
+  return sql<boolean>`EXISTS (
+    SELECT 1
+    FROM knowledge_graph_relations AS active_relation
+    INNER JOIN memories AS active_memory ON active_memory.id = active_relation.source_memory_id
+    INNER JOIN knowledge_graph_sources AS active_source ON active_source.memory_id = active_memory.id
+    WHERE active_relation.agent_id = ${agentId}
+      AND (active_relation.subject_entity_id = ${entity} OR active_relation.object_entity_id = ${entity})
+      AND active_relation.review_status <> 'rejected'
+      AND active_memory.category = 'knowledge'
+      AND active_memory.quarantined = false
+      AND (active_memory.expires_at IS NULL OR active_memory.expires_at > now())
+      AND active_memory.embedding IS NOT NULL
+      AND active_source.status = 'ready'
+      AND active_source.content_hash = active_memory.content_hash
+      AND active_source.extraction_version >= ${GRAPH_EXTRACTION_VERSION}
+      AND active_relation.evidence_quote IS NOT NULL
+  )`;
 }
 
 /** Owner-facing, bounded graph inspection. It reads only source-backed edges. */
@@ -316,6 +337,7 @@ export async function getKnowledgeGraphOverview(
   const pageSize = input.pageSize ?? ENTITY_PAGE_SIZE;
   const entityCondition = and(
     eq(knowledgeGraphEntities.agentId, agent.id),
+    activeEntityCondition(agent.id, knowledgeGraphEntities.id),
     kind ? eq(knowledgeGraphEntities.kind, kind) : undefined,
     query ? ilike(displayLabel(knowledgeGraphEntities), `%${query}%`) : undefined,
   );
@@ -353,17 +375,26 @@ export async function getKnowledgeGraphOverview(
     db
       .select({ value: count() })
       .from(knowledgeGraphEntities)
-      .where(eq(knowledgeGraphEntities.agentId, agent.id)),
-    db
-      .select({ value: count() })
-      .from(knowledgeGraphRelations)
-      .where(eq(knowledgeGraphRelations.agentId, agent.id)),
-    db
-      .select({ value: count() })
-      .from(knowledgeGraphRelations)
       .where(
         and(
-          eq(knowledgeGraphRelations.agentId, agent.id),
+          eq(knowledgeGraphEntities.agentId, agent.id),
+          activeEntityCondition(agent.id, knowledgeGraphEntities.id),
+        ),
+      ),
+    db
+      .select({ value: count() })
+      .from(knowledgeGraphRelations)
+      .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
+      .innerJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
+      .where(activeKnowledgeGraphWhere(agent.id)),
+    db
+      .select({ value: count() })
+      .from(knowledgeGraphRelations)
+      .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
+      .innerJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
+      .where(
+        and(
+          activeKnowledgeGraphWhere(agent.id),
           eq(knowledgeGraphRelations.reviewStatus, 'unreviewed'),
         ),
       ),
@@ -506,7 +537,7 @@ export async function getKnowledgeGraphOverview(
       .from(knowledgeGraphRelations)
       .innerJoin(memories, eq(knowledgeGraphRelations.sourceMemoryId, memories.id))
       .innerJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
-      .where(and(incidentToSelected, activeRelationConditions(agent.id))),
+      .where(and(incidentToSelected, activeKnowledgeGraphWhere(agent.id))),
     findDuplicateKnowledgeGraphEntities(db, selected),
   ]);
   const now = new Date();
@@ -530,7 +561,7 @@ export async function getKnowledgeGraphOverview(
     reviewedAt: row.reviewedAt,
     validFrom: row.validFrom,
     validUntil: row.validUntil,
-    // JS mirror of activeRelationConditions, so the audit list can flag an
+    // JS mirror of activeKnowledgeGraphWhere, so the audit list can flag an
     // edge GraphRAG currently cannot traverse without hiding it from review.
     inRecall:
       row.reviewStatus !== 'rejected' &&
@@ -640,7 +671,7 @@ export async function getKnowledgeGraphNeighborhood(
       eq(knowledgeGraphRelations.subjectEntityId, entity.id),
       eq(knowledgeGraphRelations.objectEntityId, entity.id),
     ),
-    activeRelationConditions(agent.id),
+    activeKnowledgeGraphWhere(agent.id),
     predicates.length > 0 ? inArray(knowledgeGraphRelations.predicate, predicates) : undefined,
   );
   const [rows, [totalRow]] = await Promise.all([
@@ -725,7 +756,7 @@ export async function getKnowledgeGraphMapSummary(
       eq(knowledgeGraphRelations.subjectEntityId, entity.id),
       eq(knowledgeGraphRelations.objectEntityId, entity.id),
     ),
-    activeRelationConditions(agent.id),
+    activeKnowledgeGraphWhere(agent.id),
   );
   const [counts, neighborhood] = await Promise.all([
     db
@@ -825,7 +856,7 @@ export async function getKnowledgeGraphPaths(
           inArray(knowledgeGraphRelations.subjectEntityId, endpointIds),
           inArray(knowledgeGraphRelations.objectEntityId, endpointIds),
         ),
-        activeRelationConditions(agent.id),
+        activeKnowledgeGraphWhere(agent.id),
       ),
     )
     .orderBy(desc(knowledgeGraphRelations.confidence), desc(knowledgeGraphRelations.createdAt))

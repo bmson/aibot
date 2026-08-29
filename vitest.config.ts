@@ -1,6 +1,18 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
+function safeTestDatabaseUrl(): string {
+  const configured = process.env.DATABASE_URL;
+  const url = new URL(configured ?? 'postgres://assistant:assistant@localhost:5432/assistant_test');
+  const database = decodeURIComponent(url.pathname.replace(/^\//, ''));
+  if (!database.endsWith('_test')) {
+    throw new Error(
+      `Refusing to run Vitest against database "${database}". Use pnpm test or set DATABASE_URL to a database ending in _test.`,
+    );
+  }
+  return url.toString();
+}
+
 /**
  * Projects that never touch PostgreSQL run their files in parallel; the
  * integration projects inherit the root's serial setting because they share
@@ -14,6 +26,7 @@ const parallel = (root: string) => ({
 
 export default defineConfig({
   test: {
+    env: { DATABASE_URL: safeTestDatabaseUrl() },
     // Inherited default for the DB-touching projects listed as plain strings.
     fileParallelism: false,
     projects: [

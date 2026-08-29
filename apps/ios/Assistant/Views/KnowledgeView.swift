@@ -1,32 +1,33 @@
 import SwiftUI
 
 /// Native companion to the web knowledge manager. The phone keeps the same
-/// browse, review, and evidence-backed editing model, but intentionally leaves
+/// browse, cleanup, and evidence-backed editing model, but intentionally leaves
 /// the dense graph canvas to a larger screen.
 struct KnowledgeView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var overview: KnowledgeOverview?
-    @State private var review: KnowledgeReviewInbox?
+    @State private var cleanup: KnowledgeCleanupResponse?
     @State private var search = ""
-    @State private var showingReview = false
+    @State private var showingCleanup = false
     @State private var showingConnectionEditor = false
     @State private var correcting: KnowledgeRelation?
     @State private var editingItem = false
     @State private var pendingRelationID: String?
+    @State private var forgettingImpact: KnowledgeSourceImpact?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Picker("Knowledge view", selection: $showingReview) {
-                    Text("Relationships").tag(false)
-                    Text("Review").tag(true)
+                Picker("Knowledge view", selection: $showingCleanup) {
+                    Text("Connections").tag(false)
+                    Text("Cleanup").tag(true)
                 }
                 .pickerStyle(.segmented)
-                .onChange(of: showingReview) { _, _ in Task { await refresh() } }
+                .onChange(of: showingCleanup) { _, _ in Task { await refresh() } }
 
-                if showingReview {
-                    reviewContent
+                if showingCleanup {
+                    cleanupContent
                 } else {
                     relationshipsContent
                 }
@@ -38,7 +39,7 @@ struct KnowledgeView: View {
         .searchable(text: $search, prompt: "Find a person, place, project…")
         .onSubmit(of: .search) { Task { await loadSearch() } }
         .toolbar {
-            if !showingReview, overview?.selected != nil {
+            if !showingCleanup, overview?.selected != nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("Add connection", systemImage: "plus") { showingConnectionEditor = true }
@@ -76,6 +77,29 @@ struct KnowledgeView: View {
                 }
             }
         }
+        .confirmationDialog(
+            "Forget this source knowledge?",
+            isPresented: Binding(
+                get: { forgettingImpact != nil },
+                set: { if !$0 { forgettingImpact = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let impact = forgettingImpact {
+                Button("Forget knowledge", role: .destructive) {
+                    Task {
+                        _ = await model.forgetKnowledgeSource(id: impact.memoryId)
+                        forgettingImpact = nil
+                        await refresh()
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { forgettingImpact = nil }
+        } message: {
+            if let impact = forgettingImpact {
+                Text("This removes \(impact.connectionCount) connections and \(impact.orphanedItems.count) items that would no longer be connected. The source is tombstoned so it is not learned again verbatim.")
+            }
+        }
     }
 
     @ViewBuilder
@@ -92,20 +116,64 @@ struct KnowledgeView: View {
     }
 
     @ViewBuilder
-    private var reviewContent: some View {
+    private var cleanupContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Review inbox").font(.title3.weight(.semibold))
-            Text("Confirm useful connections or mark inaccurate ones. Evidence is always one tap away.")
+            Text("Knowledge cleanup").font(.title3.weight(.semibold))
+            Text("Suggestions never remove saved knowledge until you confirm. Disconnected graph items are derived and safe to clear.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            if let review, review.relations.isEmpty {
-                AssistantEmptyState("Nothing needs review", systemImage: "checkmark.seal")
-            } else if let review {
-                ForEach(review.relations) { relation in relationCard(relation, showCorrection: true) }
+            if let cleanup, cleanup.findings.isEmpty {
+                AssistantEmptyState("Nothing needs cleanup", systemImage: "checkmark.seal")
+            } else if let cleanup {
+                ForEach(cleanup.findings) { finding in cleanupCard(finding) }
             } else {
                 ProgressView().frame(maxWidth: .infinity, minHeight: 180)
             }
         }
+    }
+
+    private func cleanupCard(_ finding: KnowledgeCleanupFinding) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(finding.kind.replacingOccurrences(of: "_", with: " ").uppercased())
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(finding.title).font(.subheadline.weight(.semibold))
+            Text(finding.detail).font(.footnote).foregroundStyle(.secondary)
+            AssistantFlowLayout(spacing: 8) {
+                if finding.kind == "projection_orphan" {
+                    Button("Remove derived items", systemImage: "trash") {
+                        resolveCleanup(action: "remove-orphans", finding: finding)
+                    }.buttonStyle(.bordered)
+                } else if finding.kind == "projection_failed" {
+                    Button("Retry", systemImage: "arrow.clockwise") {
+                        resolveCleanup(action: "retry", finding: finding)
+                    }.buttonStyle(.bordered)
+                } else if finding.kind == "unreviewed_connection", let relationId = finding.relationId {
+                    Button("Confirm connection", systemImage: "checkmark") {
+                        pendingRelationID = relationId
+                        Task {
+                            _ = await model.reviewKnowledgeRelation(id: relationId, approve: true)
+                            pendingRelationID = nil
+                            await refresh()
+                        }
+                    }.buttonStyle(.borderedProminent)
+                } else if finding.kind == "quarantined" {
+                    Button("Approve", systemImage: "checkmark") {
+                        resolveCleanup(action: "approve", finding: finding)
+                    }.buttonStyle(.borderedProminent)
+                } else if finding.memoryId != nil {
+                    Button("Keep", systemImage: "checkmark.shield") {
+                        resolveCleanup(action: "keep", finding: finding)
+                    }.buttonStyle(.bordered)
+                }
+                if let memoryId = finding.memoryId {
+                    Button("Forget", systemImage: "trash", role: .destructive) {
+                        Task { forgettingImpact = await model.knowledgeSourceImpact(id: memoryId) }
+                    }.buttonStyle(.bordered)
+                }
+            }
+        }
+        .assistantCard(in: colorScheme)
     }
 
     private func knowledgeSummary(_ overview: KnowledgeOverview) -> some View {
@@ -219,15 +287,15 @@ struct KnowledgeView: View {
     }
 
     private func refresh() async {
-        if showingReview {
-            review = await model.knowledgeReview()
+        if showingCleanup {
+            cleanup = await model.knowledgeCleanup()
         } else {
             overview = await model.knowledge(query: search)
         }
     }
 
     private func loadSearch() async {
-        showingReview = false
+        showingCleanup = false
         overview = await model.knowledge(query: search)
     }
 
@@ -240,6 +308,13 @@ struct KnowledgeView: View {
         Task {
             _ = await model.reviewKnowledgeRelation(id: relation.id, approve: approve)
             pendingRelationID = nil
+            await refresh()
+        }
+    }
+
+    private func resolveCleanup(action: String, finding: KnowledgeCleanupFinding) {
+        Task {
+            _ = await model.resolveKnowledgeCleanup(action: action, memoryId: finding.memoryId)
             await refresh()
         }
     }
