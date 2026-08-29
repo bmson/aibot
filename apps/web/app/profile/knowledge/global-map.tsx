@@ -227,9 +227,13 @@ export function GlobalKnowledgeMap({ snapshot }: { snapshot: KnowledgeMapSnapsho
               <div className="mt-5 rounded-xl border border-danger/30 bg-danger/5 p-4">
                 <p className="text-sm font-semibold text-strong">Forget this source knowledge?</p>
                 <p className="mt-1 text-xs leading-5 text-muted">
-                  Removes {impact.connectionCount} connection
-                  {impact.connectionCount === 1 ? '' : 's'} and {impact.orphanedItems.length} item
+                  Removes {impact.activeConnectionCount} active connection
+                  {impact.activeConnectionCount === 1 ? '' : 's'} and {impact.orphanedItems.length}{' '}
+                  item
                   {impact.orphanedItems.length === 1 ? '' : 's'} that would no longer be connected.
+                  {impact.retiredProjectionCount > 0
+                    ? ` It also clears ${impact.retiredProjectionCount} retired derived projection${impact.retiredProjectionCount === 1 ? '' : 's'}.`
+                    : ''}{' '}
                   The source text is tombstoned so it is not learned again verbatim.
                 </p>
                 <div className="mt-3 flex gap-2">

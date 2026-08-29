@@ -21,7 +21,7 @@ const snapshot: KnowledgeMapSnapshot = {
   components: [{ id: 0, nodes: 2, edges: 1, label: 'Ada' }],
   totalEdges: 1,
   truncated: false,
-  filters: { query: '', kind: '', predicates: [], review: 'all' },
+  filters: { query: '', kind: '', predicates: [], review: 'all', sourceMemoryId: '' },
 };
 
 describe('global knowledge map layout', () => {

@@ -31,6 +31,9 @@ export type { OrganizeMemoryState, ProminenceLevel } from '@assistant/applicatio
 
 function revalidateProfile(): void {
   revalidatePath('/profile', 'layout');
+  // Memory edits also affect graph eligibility. Keep the workspace in sync
+  // instead of making the owner navigate away and back after a correction.
+  revalidatePath('/profile/knowledge');
 }
 
 export async function resolveCommitmentAction(id: string): Promise<void> {

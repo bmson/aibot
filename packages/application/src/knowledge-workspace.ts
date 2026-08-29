@@ -11,6 +11,7 @@ import {
 import { and, count, desc, eq, ilike, inArray, isNotNull, lte, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
+  activeKnowledgeGraphConnectionCountForMemory,
   activeKnowledgeGraphWhere,
   getKnowledgeGraphOverview,
   type KnowledgeGraphReviewStatus,
@@ -34,6 +35,8 @@ export interface KnowledgeCleanupFinding {
   memoryId: string | null;
   relationId: string | null;
   count: number;
+  /** Extra source-level work folded into this card instead of duplicated beside it. */
+  relatedKinds?: KnowledgeCleanupKind[];
 }
 
 export interface KnowledgeWorkspaceOverview {
@@ -84,13 +87,19 @@ export interface KnowledgeMapSnapshot {
     kind: string;
     predicates: string[];
     review: 'all' | KnowledgeGraphReviewStatus;
+    sourceMemoryId: string;
   };
 }
 
 export interface KnowledgeSourceImpact {
   memoryId: string;
   content: string;
+  /** Legacy total of all stored projections removed with this source. */
   connectionCount: number;
+  /** Connections currently visible on the map and eligible for graph recall. */
+  activeConnectionCount: number;
+  /** Retired, rejected, or stale derived rows that are cleared alongside the source. */
+  retiredProjectionCount: number;
   orphanedItems: Array<{ id: string; label: string }>;
 }
 
@@ -186,6 +195,7 @@ export async function getKnowledgeCleanupFindings(db: Db): Promise<KnowledgeClea
       memoryId: memory.id,
       relationId: null,
       count: 1,
+      relatedKinds: [],
     };
   });
   for (const relation of rejectedRows) {
@@ -201,6 +211,16 @@ export async function getKnowledgeCleanupFindings(db: Db): Promise<KnowledgeClea
     });
   }
   for (const source of sourceRows) {
+    const relatedSourceFinding = findings.find(
+      (finding) => finding.memoryId === source.memoryId && finding.relationId === null,
+    );
+    if (relatedSourceFinding) {
+      relatedSourceFinding.relatedKinds = [
+        ...(relatedSourceFinding.relatedKinds ?? []),
+        'projection_failed',
+      ];
+      continue;
+    }
     findings.push({
       id: `projection_failed:${source.memoryId}`,
       kind: 'projection_failed',
@@ -265,7 +285,7 @@ export async function getKnowledgeWorkspaceOverview(db: Db): Promise<KnowledgeWo
       pendingSources: graph.pendingSources,
       failedSources: Number(failedRows[0]?.value ?? 0),
     },
-    cleanupCount: findings.length,
+    cleanupCount: findings.reduce((total, finding) => total + finding.count, 0),
   };
 }
 
@@ -276,6 +296,7 @@ export async function getKnowledgeMapSnapshot(
     kind?: string;
     predicates?: string[];
     review?: 'all' | KnowledgeGraphReviewStatus;
+    sourceMemoryId?: string;
   } = {},
 ): Promise<KnowledgeMapSnapshot> {
   const agent = await getAgent(db);
@@ -285,12 +306,14 @@ export async function getKnowledgeMapSnapshot(
   const kind = input.kind ?? '';
   const predicates = (input.predicates ?? []).filter(Boolean).slice(0, 20);
   const review = input.review ?? 'all';
+  const sourceMemoryId = input.sourceMemoryId ?? '';
   const filters = and(
     activeKnowledgeGraphWhere(agent.id),
     query ? or(ilike(subject.label, `%${query}%`), ilike(object.label, `%${query}%`)) : undefined,
     kind ? or(eq(subject.kind, kind), eq(object.kind, kind)) : undefined,
     predicates.length > 0 ? inArray(knowledgeGraphRelations.predicate, predicates) : undefined,
     review !== 'all' ? eq(knowledgeGraphRelations.reviewStatus, review) : undefined,
+    sourceMemoryId ? eq(knowledgeGraphRelations.sourceMemoryId, sourceMemoryId) : undefined,
   );
   const [rows, [totalRow]] = await Promise.all([
     db
@@ -396,7 +419,7 @@ export async function getKnowledgeMapSnapshot(
     components,
     totalEdges,
     truncated: totalEdges > edges.length,
-    filters: { query, kind, predicates, review },
+    filters: { query, kind, predicates, review, sourceMemoryId },
   };
 }
 
@@ -428,14 +451,26 @@ export async function getKnowledgeSourceImpact(
     )
   `),
   );
-  const [relationCount] = await db
-    .select({ value: count() })
-    .from(knowledgeGraphRelations)
-    .where(eq(knowledgeGraphRelations.sourceMemoryId, memoryId));
+  const [[relationCount], [activeRelationCount]] = await Promise.all([
+    db
+      .select({ value: count() })
+      .from(knowledgeGraphRelations)
+      .where(eq(knowledgeGraphRelations.sourceMemoryId, memoryId)),
+    db
+      .select({ value: activeKnowledgeGraphConnectionCountForMemory(agent.id, memories.id) })
+      .from(memories)
+      .where(and(eq(memories.id, memoryId), eq(memories.agentId, agent.id)))
+      .limit(1),
+  ]);
+  const connectionCount = Number(relationCount?.value ?? 0);
+  const activeConnectionCount = Number(activeRelationCount?.value ?? 0);
   return {
     memoryId,
     content: memory.content,
-    connectionCount: Number(relationCount?.value ?? 0),
+    // Kept for native clients released before the active/retired split.
+    connectionCount,
+    activeConnectionCount,
+    retiredProjectionCount: Math.max(0, connectionCount - activeConnectionCount),
     orphanedItems: rows,
   };
 }

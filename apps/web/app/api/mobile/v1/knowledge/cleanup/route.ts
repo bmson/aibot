@@ -5,7 +5,7 @@ import {
   getKnowledgeCleanupFindings,
   retryQuarantinedKnowledgeGraphSources,
 } from '@assistant/application';
-import { confirmMemory } from '@assistant/application/profile';
+import { restoreMemory } from '@assistant/application/profile';
 import { getDb } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -25,7 +25,7 @@ export async function POST(request: Request): Promise<Response> {
   else if (action === 'retry') await retryQuarantinedKnowledgeGraphSources(getDb());
   else if (action === 'forget' && memoryId) await forgetKnowledgeSource(getDb(), memoryId);
   else if (action === 'approve' && memoryId) await approveQuarantinedMemory(getDb(), memoryId);
-  else if (action === 'keep' && memoryId) await confirmMemory(getDb(), memoryId);
+  else if (action === 'keep' && memoryId) await restoreMemory(getDb(), memoryId);
   else return mobileJson({ error: 'invalid cleanup action' }, { status: 400 });
   return mobileJson({ ok: true });
 }

@@ -4,6 +4,7 @@ import {
   CARD_AUTO_MIN_IMPORTANCE,
 } from '@assistant/core/memory/consolidation';
 import { getMemoryHealth, type MemoryHealth } from '@assistant/core/memory/health';
+import { GRAPH_EXTRACTION_VERSION } from '@assistant/core/memory/knowledge-graph';
 import { detectOccasionInText, listOccasionsForContact } from '@assistant/core/memory/occasions';
 import { type VoiceSampleStats, voiceSampleStats } from '@assistant/core/memory/voice-ingest';
 import {
@@ -11,6 +12,7 @@ import {
   type Db,
   findDuplicateContactSuggestions,
   importSources,
+  knowledgeGraphSources,
   memories,
   ownerCard,
   tasks,
@@ -32,6 +34,10 @@ import {
   type SQL,
   sql,
 } from 'drizzle-orm';
+import {
+  activeKnowledgeGraphConnectionCountForMemory,
+  activeKnowledgeGraphRelationExistsForMemory,
+} from '../knowledge-graph.js';
 
 export interface MemorySnapshot {
   id: string;
@@ -235,11 +241,17 @@ export interface MemoryLibrary {
     subjectId: string | null;
     subjectLabel: string | null;
     subjectTrust: string | null;
+    /** Direct recall-eligible graph edges supported by this exact memory. */
+    connectionCount: number;
+    /** Explains why a source has no active graph edge without surfacing stale projections. */
+    projectionStatus: MemoryProjectionStatus;
   }>;
   total: number;
   page: number;
   totalPages: number;
 }
+
+export type MemoryProjectionStatus = 'connected' | 'mapping' | 'needs_attention' | 'no_connections';
 
 export interface MemoryLibraryFilters {
   subjects: Array<{ id: string; label: string; trust: string }>;
@@ -292,6 +304,8 @@ export async function listMemoryLibrary(
 ): Promise<MemoryLibrary> {
   const agent = await getAgent(db);
   const pageSize = input.pageSize ?? 60;
+  const activeConnectionExists = activeKnowledgeGraphRelationExistsForMemory(agent.id, memories.id);
+  const activeConnectionCount = activeKnowledgeGraphConnectionCountForMemory(agent.id, memories.id);
   const unexpired = or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`));
   const stateCondition: SQL | undefined =
     input.state === 'review'
@@ -316,9 +330,9 @@ export async function listMemoryLibrary(
       ? gt(memories.createdAt, sql`now() - (${input.ageDays} * interval '1 day')`)
       : undefined,
     input.connectivity === 'connected'
-      ? sql<boolean>`EXISTS (SELECT 1 FROM knowledge_graph_relations AS relation WHERE relation.source_memory_id = ${memories.id})`
+      ? activeConnectionExists
       : input.connectivity === 'unconnected'
-        ? sql<boolean>`NOT EXISTS (SELECT 1 FROM knowledge_graph_relations AS relation WHERE relation.source_memory_id = ${memories.id})`
+        ? sql<boolean>`NOT ${activeConnectionExists}`
         : undefined,
   );
   const [totalRow] = await db.select({ value: count() }).from(memories).where(filters);
@@ -331,9 +345,21 @@ export async function listMemoryLibrary(
       subjectId: contacts.id,
       subjectLabel: contacts.name,
       subjectTrust: contacts.trust,
+      connectionCount: activeConnectionCount,
+      projectionStatus: sql<MemoryProjectionStatus>`CASE
+        WHEN ${activeConnectionExists} THEN 'connected'
+        WHEN ${knowledgeGraphSources.status} IN ('failed', 'quarantined') THEN 'needs_attention'
+        WHEN ${knowledgeGraphSources.memoryId} IS NULL
+          OR ${knowledgeGraphSources.status} = 'pending'
+          OR ${knowledgeGraphSources.contentHash} <> ${memories.contentHash}
+          OR ${knowledgeGraphSources.extractionVersion} < ${GRAPH_EXTRACTION_VERSION}
+          THEN 'mapping'
+        ELSE 'no_connections'
+      END`,
     })
     .from(memories)
     .leftJoin(contacts, eq(memories.subjectContactId, contacts.id))
+    .leftJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
     .where(filters)
     .orderBy(
       desc(memories.pinned),
@@ -343,7 +369,16 @@ export async function listMemoryLibrary(
     )
     .limit(pageSize)
     .offset((page - 1) * pageSize);
-  return { rows, total, page, totalPages };
+  return {
+    rows: rows.map((row) => ({
+      ...row,
+      connectionCount: Number(row.connectionCount ?? 0),
+      projectionStatus: row.projectionStatus as MemoryProjectionStatus,
+    })),
+    total,
+    page,
+    totalPages,
+  };
 }
 
 export interface PersonProfile {

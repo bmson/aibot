@@ -1327,9 +1327,9 @@ export async function pendingKnowledgeGraphSourceCount(db: Db, agentId?: string)
 }
 
 /**
- * Owner-directed recovery for sources quarantined after persistent provider or
- * parsing failures. Set a retry deadline due now rather than marking it
- * pending: the normal atomic claim still owns the next extraction attempt.
+ * Owner-directed recovery for graph sources blocked by provider or parsing
+ * failures. Set a retry deadline due now rather than marking them pending: the
+ * normal atomic claim still owns the next extraction attempt.
  */
 export async function retryQuarantinedKnowledgeGraphSources(
   db: Db,
@@ -1339,7 +1339,12 @@ export async function retryQuarantinedKnowledgeGraphSources(
     .select({ memoryId: knowledgeGraphSources.memoryId })
     .from(knowledgeGraphSources)
     .innerJoin(memories, eq(memories.id, knowledgeGraphSources.memoryId))
-    .where(and(eq(memories.agentId, agentId), eq(knowledgeGraphSources.status, 'quarantined')));
+    .where(
+      and(
+        eq(memories.agentId, agentId),
+        inArray(knowledgeGraphSources.status, ['failed', 'quarantined']),
+      ),
+    );
   const memoryIds = sourceRows.map((row) => row.memoryId);
   if (memoryIds.length === 0) return 0;
   const retried = await db
@@ -1354,11 +1359,48 @@ export async function retryQuarantinedKnowledgeGraphSources(
     .where(
       and(
         inArray(knowledgeGraphSources.memoryId, memoryIds),
-        eq(knowledgeGraphSources.status, 'quarantined'),
+        inArray(knowledgeGraphSources.status, ['failed', 'quarantined']),
       ),
     )
     .returning({ memoryId: knowledgeGraphSources.memoryId });
   return retried.length;
+}
+
+/**
+ * Re-open exactly one blocked projection after an owner accepts its source.
+ * A ready checkpoint stays intact; a missing checkpoint is picked up by the
+ * normal sync as a new source. This only turns a prior extraction failure into
+ * a runnable retry, never makes an untrusted memory graph-eligible by itself.
+ */
+export async function retryBlockedKnowledgeGraphSource(
+  db: Db,
+  agentId: string,
+  memoryId: string,
+): Promise<boolean> {
+  const [source] = await db
+    .select({ status: knowledgeGraphSources.status })
+    .from(knowledgeGraphSources)
+    .innerJoin(memories, eq(memories.id, knowledgeGraphSources.memoryId))
+    .where(and(eq(knowledgeGraphSources.memoryId, memoryId), eq(memories.agentId, agentId)))
+    .limit(1);
+  if (!source || !['failed', 'quarantined'].includes(source.status)) return false;
+  const [requeued] = await db
+    .update(knowledgeGraphSources)
+    .set({
+      status: 'failed',
+      attempts: 0,
+      lastError: null,
+      nextRetryAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(knowledgeGraphSources.memoryId, memoryId),
+        inArray(knowledgeGraphSources.status, ['failed', 'quarantined']),
+      ),
+    )
+    .returning({ memoryId: knowledgeGraphSources.memoryId });
+  return Boolean(requeued);
 }
 
 /**

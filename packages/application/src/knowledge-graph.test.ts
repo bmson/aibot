@@ -21,6 +21,12 @@ import {
   retypeKnowledgeGraphEntity,
   searchKnowledgeGraphEntities,
 } from './knowledge-graph.js';
+import {
+  getKnowledgeCleanupFindings,
+  getKnowledgeMapSnapshot,
+  getKnowledgeSourceImpact,
+} from './knowledge-workspace.js';
+import { listMemoryLibrary } from './profile/queries.js';
 
 /**
  * The review page used to report the graph as smaller than it is: a 60-row cap
@@ -40,6 +46,7 @@ let db: Db;
 let dbUp = false;
 let agentId: string;
 let hubId: string;
+let sourceMemoryId: string;
 
 /** A fixed non-null embedding: recall eligibility requires one. */
 function unitVector(): number[] {
@@ -84,6 +91,7 @@ beforeAll(async () => {
       })
       .returning({ id: memories.id });
     if (!memory) throw new Error('test memory was not created');
+    sourceMemoryId = memory.id;
 
     // The edges below are recall-eligible only with a ready, current
     // checkpoint whose hash matches the memory — the same contract GraphRAG
@@ -154,6 +162,18 @@ afterAll(async () => {
 });
 
 describe('knowledge graph overview (integration)', () => {
+  it("reports each library memory's active source-backed connection count", async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const library = await listMemoryLibrary(db, {
+      state: 'in-use',
+      filter: 'all',
+      query: MARKER,
+      page: 1,
+    });
+    const row = library.rows.find((item) => item.memory.id === sourceMemoryId);
+    expect(row?.connectionCount).toBe(ENTITY_COUNT);
+  });
+
   it('reports the true match count, not the size of the page it returned', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const overview = await getKnowledgeGraphOverview(db, { query: MARKER, pageSize: 20 });
@@ -214,6 +234,190 @@ describe('knowledge graph overview (integration)', () => {
     const after = await getKnowledgeGraphOverview(db, { query: MARKER, entityId: hubId });
     expect(after.selectedActiveRelationTotal).toBe(ENTITY_COUNT - 1);
     expect(after.selectedRelationTotal).toBe(ENTITY_COUNT);
+  });
+});
+
+describe('knowledge workspace map (integration)', () => {
+  it('focuses a map on exactly one source memory without exposing other edges', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const snapshot = await getKnowledgeMapSnapshot(db, { sourceMemoryId });
+    expect(snapshot.filters.sourceMemoryId).toBe(sourceMemoryId);
+    expect(snapshot.edges.length).toBeGreaterThan(0);
+    expect(snapshot.edges.every((edge) => edge.sourceMemoryId === sourceMemoryId)).toBe(true);
+  });
+});
+
+describe('knowledge workspace source truth (integration)', () => {
+  it('uses the recall-eligible edge contract for library filters and projection states', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [staleMemory, blockedMemory] = await db
+      .insert(memories)
+      .values([
+        {
+          agentId,
+          category: 'knowledge',
+          kind: 'fact',
+          content: `${MARKER} stale source`,
+          contentHash: `${MARKER}-stale-current`,
+          confidence: '0.80',
+          embedding: unitVector(),
+        },
+        {
+          agentId,
+          category: 'knowledge',
+          kind: 'fact',
+          content: `${MARKER} blocked source`,
+          contentHash: `${MARKER}-blocked-current`,
+          confidence: '0.80',
+          quarantined: true,
+          embedding: unitVector(),
+        },
+      ])
+      .returning({ id: memories.id, contentHash: memories.contentHash });
+    if (!staleMemory || !blockedMemory) throw new Error('test sources were not created');
+    const entities = await db
+      .insert(knowledgeGraphEntities)
+      .values(
+        ['stale subject', 'stale object'].map((label) => ({
+          agentId,
+          canonicalKey: `event:${MARKER} ${label}`,
+          label: `${MARKER} ${label}`,
+          kind: 'event',
+        })),
+      )
+      .returning({ id: knowledgeGraphEntities.id });
+    const [subject, object] = entities;
+    if (!subject || !object) throw new Error('test graph entities were not created');
+    await db.insert(knowledgeGraphSources).values([
+      {
+        memoryId: staleMemory.id,
+        contentHash: `${MARKER}-stale-old`,
+        status: 'ready',
+        extractionVersion: GRAPH_EXTRACTION_VERSION,
+      },
+      {
+        memoryId: blockedMemory.id,
+        contentHash: blockedMemory.contentHash,
+        status: 'quarantined',
+        extractionVersion: GRAPH_EXTRACTION_VERSION,
+      },
+    ]);
+    await db.insert(knowledgeGraphRelations).values({
+      agentId,
+      subjectEntityId: subject.id,
+      predicate: 'relates_to',
+      objectEntityId: object.id,
+      sourceMemoryId: staleMemory.id,
+      evidenceQuote: `${MARKER} stale source`,
+      sourceFingerprint: `${MARKER}-stale-relation`,
+      ordinal: 1,
+      confidence: '0.80',
+    });
+
+    const [connected, unconnected, review, findings] = await Promise.all([
+      listMemoryLibrary(db, {
+        state: 'in-use',
+        filter: 'all',
+        query: MARKER,
+        page: 1,
+        connectivity: 'connected',
+      }),
+      listMemoryLibrary(db, {
+        state: 'in-use',
+        filter: 'all',
+        query: MARKER,
+        page: 1,
+        connectivity: 'unconnected',
+      }),
+      listMemoryLibrary(db, { state: 'review', filter: 'all', query: MARKER, page: 1 }),
+      getKnowledgeCleanupFindings(db),
+    ]);
+    expect(connected.rows.some((row) => row.memory.id === staleMemory.id)).toBe(false);
+    expect(unconnected.rows.find((row) => row.memory.id === staleMemory.id)).toMatchObject({
+      connectionCount: 0,
+      projectionStatus: 'mapping',
+    });
+    expect(review.rows.find((row) => row.memory.id === blockedMemory.id)).toMatchObject({
+      connectionCount: 0,
+      projectionStatus: 'needs_attention',
+    });
+    const sourceFinding = findings.find((finding) => finding.memoryId === blockedMemory.id);
+    expect(sourceFinding).toMatchObject({ kind: 'quarantined' });
+    expect(sourceFinding?.relatedKinds).toContain('projection_failed');
+    expect(
+      findings.some(
+        (finding) => finding.memoryId === blockedMemory.id && finding.kind === 'projection_failed',
+      ),
+    ).toBe(false);
+  });
+
+  it('separates active graph effects from retired projections in a forget preview', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [memory] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: `${MARKER} impact source`,
+        contentHash: `${MARKER}-impact`,
+        confidence: '0.90',
+        embedding: unitVector(),
+      })
+      .returning({ id: memories.id });
+    if (!memory) throw new Error('impact source was not created');
+    const entities = await db
+      .insert(knowledgeGraphEntities)
+      .values(
+        ['impact subject', 'impact active', 'impact retired'].map((label) => ({
+          agentId,
+          canonicalKey: `event:${MARKER} ${label}`,
+          label: `${MARKER} ${label}`,
+          kind: 'event',
+        })),
+      )
+      .returning({ id: knowledgeGraphEntities.id });
+    const [subject, active, retired] = entities;
+    if (!subject || !active || !retired) throw new Error('impact entities were not created');
+    await db.insert(knowledgeGraphSources).values({
+      memoryId: memory.id,
+      contentHash: `${MARKER}-impact`,
+      status: 'ready',
+      extractionVersion: GRAPH_EXTRACTION_VERSION,
+    });
+    await db.insert(knowledgeGraphRelations).values([
+      {
+        agentId,
+        subjectEntityId: subject.id,
+        predicate: 'relates_to',
+        objectEntityId: active.id,
+        sourceMemoryId: memory.id,
+        evidenceQuote: `${MARKER} impact active`,
+        sourceFingerprint: `${MARKER}-impact-active`,
+        ordinal: 1,
+        confidence: '0.90',
+      },
+      {
+        agentId,
+        subjectEntityId: subject.id,
+        predicate: 'relates_to',
+        objectEntityId: retired.id,
+        sourceMemoryId: memory.id,
+        evidenceQuote: `${MARKER} impact retired`,
+        sourceFingerprint: `${MARKER}-impact-retired`,
+        ordinal: 2,
+        confidence: '0.90',
+        reviewStatus: 'rejected',
+      },
+    ]);
+
+    const impact = await getKnowledgeSourceImpact(db, memory.id);
+    expect(impact).toMatchObject({
+      connectionCount: 2,
+      activeConnectionCount: 1,
+      retiredProjectionCount: 1,
+    });
+    expect(impact?.orphanedItems).toHaveLength(3);
   });
 });
 

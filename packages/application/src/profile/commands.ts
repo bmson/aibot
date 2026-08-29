@@ -3,7 +3,10 @@ import { getAgent } from '@assistant/core/chat';
 import { InboundEventSchema } from '@assistant/core/events';
 import { compileOwnerCard } from '@assistant/core/memory/consolidation';
 import { MEMORY_DOMAINS } from '@assistant/core/memory/extraction';
-import { removeOrphanedKnowledgeGraphEntities } from '@assistant/core/memory/knowledge-graph';
+import {
+  removeOrphanedKnowledgeGraphEntities,
+  retryBlockedKnowledgeGraphSource,
+} from '@assistant/core/memory/knowledge-graph';
 import { isOccasionKind, saveOccasion } from '@assistant/core/memory/occasions';
 import { purgeVoiceSamples } from '@assistant/core/memory/voice-ingest';
 import { enqueueTask } from '@assistant/core/workflow/machine';
@@ -33,12 +36,76 @@ export interface WorkspaceDeletePort {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/**
+ * Corrections make the graph source dirty through its changed content hash;
+ * this short-lived task makes that repair prompt instead of waiting for the
+ * next scheduled sweep. A single agent never needs competing graph-sync jobs.
+ */
+async function queueKnowledgeGraphSync(db: Db, agentId: string, memoryId: string): Promise<void> {
+  const [active] = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.agentId, agentId),
+        inArray(tasks.status, ['pending', 'running']),
+        sql`${tasks.trigger} #>> '{payload,job}' = 'memory.graph_sync'`,
+      ),
+    )
+    .limit(1);
+  if (active) return;
+  const event = InboundEventSchema.parse({
+    source: 'internal',
+    externalEventId: `profile:graph-sync:${memoryId}:${Date.now()}`,
+    agentId,
+    trust: 'assistant',
+    payload: { job: 'memory.graph_sync', instruction: 'refresh corrected source knowledge' },
+  });
+  await enqueueTask(db, { event, type: 'scheduled' });
+}
+
+/** Resolve a source only in the single owner's memory space. */
+async function ownerMemory(db: Db, memoryId: string) {
+  const agent = await getAgent(db);
+  const [memory] = await db
+    .select()
+    .from(memories)
+    .where(and(eq(memories.id, memoryId), eq(memories.agentId, agent.id)))
+    .limit(1);
+  return memory;
+}
+
 export async function confirmMemory(db: Db, memoryId: string): Promise<void> {
+  const existing = await ownerMemory(db, memoryId);
+  if (!existing) return;
   await db
     .update(memories)
     .set({ confidence: '1.00', ownerConfirmed: true, quarantined: false })
-    .where(eq(memories.id, memoryId));
+    .where(and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId)));
   await compileOwnerCard(db);
+}
+
+/**
+ * An expired or superseded fact is a suggestion to review, not an irreversible
+ * deletion. When its owner keeps it, bring it back into the active library
+ * instead of merely acknowledging a cleanup card that would immediately
+ * reappear.
+ */
+export async function restoreMemory(db: Db, memoryId: string): Promise<void> {
+  const existing = await ownerMemory(db, memoryId);
+  if (!existing) return;
+  await db
+    .update(memories)
+    .set({
+      expiresAt: null,
+      supersededById: null,
+      confidence: '1.00',
+      ownerConfirmed: true,
+      quarantined: false,
+    })
+    .where(and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId)));
+  await compileOwnerCard(db);
+  await queueKnowledgeGraphSync(db, existing.agentId, memoryId);
 }
 
 export async function correctMemory(
@@ -49,7 +116,7 @@ export async function correctMemory(
 ): Promise<{ error?: string }> {
   const trimmed = content.trim();
   if (trimmed.length < 3) return { error: 'Correction is too short.' };
-  const [existing] = await db.select().from(memories).where(eq(memories.id, memoryId)).limit(1);
+  const existing = await ownerMemory(db, memoryId);
   if (!existing) return { error: 'Fact not found.' };
   await addTombstone(db, existing.contentHash, 'owner_correct');
   const [embedding] = await router.embed([trimmed]);
@@ -65,16 +132,19 @@ export async function correctMemory(
       originTrust: 'owner',
       quarantined: false,
     })
-    .where(eq(memories.id, memoryId));
+    .where(and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId)));
   await compileOwnerCard(db);
+  await queueKnowledgeGraphSync(db, existing.agentId, memoryId);
   return {};
 }
 
 export async function forgetMemory(db: Db, memoryId: string): Promise<void> {
-  const [existing] = await db.select().from(memories).where(eq(memories.id, memoryId)).limit(1);
+  const existing = await ownerMemory(db, memoryId);
   if (!existing) return;
   await addTombstone(db, existing.contentHash, 'owner_forget');
-  await db.delete(memories).where(eq(memories.id, memoryId));
+  await db
+    .delete(memories)
+    .where(and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId)));
   await removeOrphanedKnowledgeGraphEntities(db, existing.agentId);
   await compileOwnerCard(db);
 }
@@ -86,13 +156,13 @@ export async function setMemoryProminence(
   memoryId: string,
   level: ProminenceLevel,
 ): Promise<void> {
+  const existing = await ownerMemory(db, memoryId);
+  if (!existing) return;
+  const ownMemory = and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId));
   if (level === 'always') {
-    await db.update(memories).set({ pinned: true }).where(eq(memories.id, memoryId));
+    await db.update(memories).set({ pinned: true }).where(ownMemory);
   } else if (level === 'minor') {
-    await db
-      .update(memories)
-      .set({ pinned: false, importance: 1 })
-      .where(eq(memories.id, memoryId));
+    await db.update(memories).set({ pinned: false, importance: 1 }).where(ownMemory);
   } else {
     await db
       .update(memories)
@@ -100,21 +170,30 @@ export async function setMemoryProminence(
         pinned: false,
         importance: sql`CASE WHEN ${memories.importance} <= 1 THEN 3 ELSE ${memories.importance} END`,
       })
-      .where(eq(memories.id, memoryId));
+      .where(ownMemory);
   }
   await compileOwnerCard(db);
 }
 
 export async function approveQuarantinedMemory(db: Db, memoryId: string): Promise<void> {
-  await db.update(memories).set({ quarantined: false }).where(eq(memories.id, memoryId));
+  const existing = await ownerMemory(db, memoryId);
+  if (!existing) return;
+  await db
+    .update(memories)
+    .set({ quarantined: false })
+    .where(and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId)));
+  await retryBlockedKnowledgeGraphSource(db, existing.agentId, memoryId);
   await compileOwnerCard(db);
+  await queueKnowledgeGraphSync(db, existing.agentId, memoryId);
 }
 
 export async function rejectQuarantinedMemory(db: Db, memoryId: string): Promise<void> {
-  const [existing] = await db.select().from(memories).where(eq(memories.id, memoryId)).limit(1);
+  const existing = await ownerMemory(db, memoryId);
   if (!existing) return;
   await addTombstone(db, existing.contentHash, 'quarantine_reject');
-  await db.delete(memories).where(eq(memories.id, memoryId));
+  await db
+    .delete(memories)
+    .where(and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId)));
   await removeOrphanedKnowledgeGraphEntities(db, existing.agentId);
 }
 

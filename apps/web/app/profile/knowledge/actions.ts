@@ -18,7 +18,7 @@ import {
   reviewKnowledgeGraphRelation,
   searchKnowledgeGraphEntities,
 } from '@assistant/application';
-import { approveQuarantinedMemory, confirmMemory } from '@assistant/application/profile';
+import { approveQuarantinedMemory, restoreMemory } from '@assistant/application/profile';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
 import { getDb, getRouter } from '@/lib/server';
@@ -209,7 +209,7 @@ export async function forgetKnowledgeMemory(memoryId: string): Promise<void> {
 
 export async function keepKnowledgeMemory(memoryId: string): Promise<void> {
   await requireOwner();
-  await confirmMemory(getDb(), memoryId);
+  await restoreMemory(getDb(), memoryId);
   revalidateKnowledgeGraph();
 }
 

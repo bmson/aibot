@@ -937,8 +937,14 @@ struct KnowledgeSourceImpact: Codable, Sendable {
     }
     let memoryId: String
     let content: String
+    /// Legacy total retained while older servers roll out the active/retired split.
     let connectionCount: Int
+    let activeConnectionCount: Int?
+    let retiredProjectionCount: Int?
     let orphanedItems: [Item]
+
+    var activeConnections: Int { activeConnectionCount ?? connectionCount }
+    var retiredProjections: Int { retiredProjectionCount ?? 0 }
 }
 
 struct KnowledgeConnectionMutation: Codable, Sendable {

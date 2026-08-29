@@ -21,6 +21,7 @@ import {
   MetaLine,
   textareaClass,
 } from '@/lib/ui';
+import { ActionMenu } from '@/lib/ui-client';
 
 /** Plain-serializable fact view, built server-side in page.tsx. */
 export interface FactView {
@@ -42,6 +43,11 @@ export interface FactView {
   subjectLabel?: string | null;
   createdLabel: string;
   validityLabel: string;
+  /** The workspace supplies these so source facts do not hide their graph impact. */
+  workspace?: boolean;
+  connectionCount?: number;
+  projectionStatus?: 'connected' | 'mapping' | 'needs_attention' | 'no_connections';
+  mapHref?: string;
 }
 
 const PROMINENCE_OPTIONS: Array<{ level: ProminenceLevel; label: string; hint: string }> = [
@@ -133,6 +139,29 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
               Minor detail
             </Badge>
           ) : null}
+          {fact.workspace ? (
+            fact.connectionCount ? (
+              <Badge tone="accent" size="xs">
+                {fact.connectionCount} connection{fact.connectionCount === 1 ? '' : 's'}
+              </Badge>
+            ) : fact.projectionStatus === 'mapping' ? (
+              <Badge tone="amber" size="xs" title="This source is queued or waiting to be mapped.">
+                Mapping connections
+              </Badge>
+            ) : fact.projectionStatus === 'needs_attention' ? (
+              <Badge
+                tone="red"
+                size="xs"
+                title="Graph processing needs a retry before this source can map."
+              >
+                Mapping needs attention
+              </Badge>
+            ) : (
+              <Badge tone="neutral" size="xs">
+                No connections
+              </Badge>
+            )
+          ) : null}
           {fact.validityLabel ? (
             <span className="text-xs text-muted">{fact.validityLabel}</span>
           ) : null}
@@ -199,15 +228,6 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
                 {pendingAction === 'confirm' ? 'Confirming…' : 'Confirm'}
               </button>
             ) : null}
-            <ProminenceControl
-              fact={fact}
-              pending={pending}
-              pendingAction={pendingAction}
-              pendingIcon={pendingIcon}
-              onSelect={(level) =>
-                runAction(`prominence:${level}`, () => setFactProminence(fact.id, level))
-              }
-            />
             <button
               type="button"
               disabled={pending}
@@ -219,35 +239,106 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
             >
               {editing ? 'Close' : 'Correct'}
             </button>
-            {confirmingForget ? (
-              <>
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => runAction('forget', () => forgetFact(fact.id))}
-                  className={btnSm.danger}
-                >
-                  {pendingAction === 'forget' ? pendingIcon : null}
-                  {pendingAction === 'forget' ? 'Forgetting…' : 'Really forget'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmingForget(false)}
-                  className={outlineButton}
-                >
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => setConfirmingForget(true)}
-                className={dangerOutlineButton}
-                title="Deletes the fact and tombstones it so it can never be re-extracted"
+            {fact.workspace && fact.mapHref && (fact.connectionCount ?? 0) > 0 ? (
+              <Link href={fact.mapHref} className={outlineButton}>
+                Inspect connections
+              </Link>
+            ) : null}
+            {fact.workspace ? (
+              <ActionMenu
+                label="More"
+                size="sm"
+                panelClassName="w-72 p-3"
+                triggerTitle="More memory actions"
               >
-                Forget
-              </button>
+                <div className="grid gap-3">
+                  <ProminenceControl
+                    fact={fact}
+                    pending={pending}
+                    pendingAction={pendingAction}
+                    pendingIcon={pendingIcon}
+                    onSelect={(level) =>
+                      runAction(`prominence:${level}`, () => setFactProminence(fact.id, level))
+                    }
+                  />
+                  {fact.mapHref && (fact.connectionCount ?? 0) > 0 ? (
+                    <Link href={fact.mapHref} className={`${dangerOutlineButton} w-fit`}>
+                      Forget with impact preview
+                    </Link>
+                  ) : confirmingForget ? (
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={pending}
+                        onClick={() => runAction('forget', () => forgetFact(fact.id))}
+                        className={btnSm.danger}
+                      >
+                        {pendingAction === 'forget' ? pendingIcon : null}
+                        {pendingAction === 'forget' ? 'Forgetting…' : 'Really forget'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmingForget(false)}
+                        className={outlineButton}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => setConfirmingForget(true)}
+                      className={`${dangerOutlineButton} w-fit`}
+                      title="Deletes the fact and tombstones it so it can never be re-extracted"
+                    >
+                      Forget
+                    </button>
+                  )}
+                </div>
+              </ActionMenu>
+            ) : (
+              <>
+                <ProminenceControl
+                  fact={fact}
+                  pending={pending}
+                  pendingAction={pendingAction}
+                  pendingIcon={pendingIcon}
+                  onSelect={(level) =>
+                    runAction(`prominence:${level}`, () => setFactProminence(fact.id, level))
+                  }
+                />
+                {confirmingForget ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => runAction('forget', () => forgetFact(fact.id))}
+                      className={btnSm.danger}
+                    >
+                      {pendingAction === 'forget' ? pendingIcon : null}
+                      {pendingAction === 'forget' ? 'Forgetting…' : 'Really forget'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingForget(false)}
+                      className={outlineButton}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => setConfirmingForget(true)}
+                    className={dangerOutlineButton}
+                    title="Deletes the fact and tombstones it so it can never be re-extracted"
+                  >
+                    Forget
+                  </button>
+                )}
+              </>
             )}
           </>
         )}
@@ -261,6 +352,12 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
             rows={2}
             className={textareaClass}
           />
+          {fact.workspace ? (
+            <p className="text-xs leading-5 text-muted">
+              Saving immediately removes any stale graph connection from recall and queues it for a
+              fresh extraction.
+            </p>
+          ) : null}
           {error ? <p className="text-xs text-red-600 dark:text-red-400">{error}</p> : null}
           <div>
             <button

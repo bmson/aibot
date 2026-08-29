@@ -34,6 +34,7 @@ import {
   isNull,
   ne,
   or,
+  type SQL,
   sql,
 } from 'drizzle-orm';
 import { type AnyPgColumn, alias } from 'drizzle-orm/pg-core';
@@ -297,6 +298,57 @@ export function activeKnowledgeGraphWhere(agentId: string) {
     gte(knowledgeGraphSources.extractionVersion, GRAPH_EXTRACTION_VERSION),
     isNotNull(knowledgeGraphRelations.evidenceQuote),
   );
+}
+
+/**
+ * The library starts from a memory row rather than a graph relation join. Keep
+ * its connected/unconnected filter on the exact same source-backed contract as
+ * the map and GraphRAG, instead of treating stale projection rows as live
+ * knowledge.
+ */
+function activeKnowledgeGraphRelationForMemorySql(
+  agentId: string,
+  memoryId: SQL | AnyPgColumn,
+): SQL {
+  return sql`
+    active_relation.agent_id = ${agentId}
+    AND active_relation.source_memory_id = ${memoryId}
+    AND active_relation.review_status <> 'rejected'
+    AND active_memory.category = 'knowledge'
+    AND active_memory.quarantined = false
+    AND (active_memory.expires_at IS NULL OR active_memory.expires_at > now())
+    AND active_memory.embedding IS NOT NULL
+    AND active_source.status = 'ready'
+    AND active_source.content_hash = active_memory.content_hash
+    AND active_source.extraction_version >= ${GRAPH_EXTRACTION_VERSION}
+    AND active_relation.evidence_quote IS NOT NULL
+  `;
+}
+
+export function activeKnowledgeGraphRelationExistsForMemory(
+  agentId: string,
+  memoryId: SQL | AnyPgColumn,
+): SQL<boolean> {
+  return sql<boolean>`EXISTS (
+    SELECT 1
+    FROM knowledge_graph_relations AS active_relation
+    INNER JOIN memories AS active_memory ON active_memory.id = active_relation.source_memory_id
+    INNER JOIN knowledge_graph_sources AS active_source ON active_source.memory_id = active_memory.id
+    WHERE ${activeKnowledgeGraphRelationForMemorySql(agentId, memoryId)}
+  )`;
+}
+
+export function activeKnowledgeGraphConnectionCountForMemory(
+  agentId: string,
+  memoryId: SQL | AnyPgColumn,
+): SQL<number> {
+  return sql<number>`(
+    SELECT count(*)::int
+    FROM knowledge_graph_relations AS active_relation
+    INNER JOIN memories AS active_memory ON active_memory.id = active_relation.source_memory_id
+    INNER JOIN knowledge_graph_sources AS active_source ON active_source.memory_id = active_memory.id
+    WHERE ${activeKnowledgeGraphRelationForMemorySql(agentId, memoryId)}
+  )`;
 }
 
 /** Owner-facing entity lists contain only nodes that participate in recall-eligible edges. */

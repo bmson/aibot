@@ -97,9 +97,16 @@ struct KnowledgeView: View {
             Button("Cancel", role: .cancel) { forgettingImpact = nil }
         } message: {
             if let impact = forgettingImpact {
-                Text("This removes \(impact.connectionCount) connections and \(impact.orphanedItems.count) items that would no longer be connected. The source is tombstoned so it is not learned again verbatim.")
+                Text(forgetImpactMessage(impact))
             }
         }
+    }
+
+    private func forgetImpactMessage(_ impact: KnowledgeSourceImpact) -> String {
+        let retired = impact.retiredProjections > 0
+            ? " It also clears \(impact.retiredProjections) retired derived projections."
+            : ""
+        return "This removes \(impact.activeConnections) active connections and \(impact.orphanedItems.count) items that would no longer be connected.\(retired) The source is tombstoned so it is not learned again verbatim."
     }
 
     @ViewBuilder
@@ -161,8 +168,8 @@ struct KnowledgeView: View {
                     Button("Approve", systemImage: "checkmark") {
                         resolveCleanup(action: "approve", finding: finding)
                     }.buttonStyle(.borderedProminent)
-                } else if finding.memoryId != nil {
-                    Button("Keep", systemImage: "checkmark.shield") {
+                } else if ["expired", "superseded"].contains(finding.kind), finding.memoryId != nil {
+                    Button("Keep as current", systemImage: "checkmark.shield") {
                         resolveCleanup(action: "keep", finding: finding)
                     }.buttonStyle(.bordered)
                 }
