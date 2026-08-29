@@ -393,6 +393,36 @@ if [ -z "$CANARY_VALUE" ]; then
 fi
 CHAT_RECALL_VALUE="$(envval CHAT_RECALL_ENABLED)"
 CHAT_RECALL_VALUE="${CHAT_RECALL_VALUE:-true}"
+# ── mail ingest ──────────────────────────────────────────────────────────────
+# These decide whether the assistant reads the owner's mail at all, and they
+# were unreachable in production until now: `--set-env-vars` REPLACES the whole
+# environment, so a setting this script does not name cannot be set — a console
+# edit survives only until the next provisioning run, which silently wipes it.
+#
+# EMAIL_INGEST_MODE is the one that bites. It defaults to `direct`, which is for
+# people writing TO the assistant. An owner who points a forwarding rule at this
+# mailbox and leaves the default has their mail dropped as unauthenticated
+# (forwarding breaks SPF alignment) or as automated — exactly the confirmations
+# and invoices carrying the dates. Nothing errors; the inbox ledger just stays
+# empty, and with it the importance alerts, the briefing's highlights and the
+# pulse's mail moments.
+#
+# Each is forwarded only when set, so an unset value keeps the schema default
+# rather than pinning it here where it would drift from @assistant/config.
+MAIL_ENV=""
+mail_env_add() {
+  local value
+  value="$(envval "$1")"
+  [ -n "$value" ] && MAIL_ENV="${MAIL_ENV}|$1=${value}"
+  return 0
+}
+mail_env_add EMAIL_INGEST_MODE
+mail_env_add EMAIL_INGEST_IMPORTANCE_THRESHOLD
+mail_env_add EMAIL_INGEST_NOTIFY_THRESHOLD
+mail_env_add EMAIL_INGEST_MAX_TRIAGE_PER_DAY
+mail_env_add EMAIL_OUTBOUND_DOMAINS
+mail_env_add GMAIL_SYNC_ENABLED
+
 GMAIL_TOPIC_VALUE=""
 GMAIL_PUSH_IDENTITY=""
 if module_enabled google; then
@@ -403,7 +433,7 @@ gcloud run deploy assistant-agent \
   --image "${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/agent:latest" \
   --region "$REGION" --allow-unauthenticated --service-account "$AGENT_SA" \
   --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3 --concurrency 4 --timeout 900 \
-  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|GMAIL_PUBSUB_TOPIC=${GMAIL_TOPIC_VALUE}|GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_IDENTITY}|APNS_KEY_ID=${APNS_KEY_ID}|APNS_TEAM_ID=${APNS_TEAM_ID}|APNS_BUNDLE_ID=${APNS_BUNDLE_ID}|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|BROWSER_DRIVER=cloudrun|BROWSER_JOB_NAME=assistant-browser|CODE_DRIVER=cloudrun|CODE_JOB_NAME=assistant-code|PROCESSOR_DRIVER=cloudrun|PROCESSOR_JOB_NAME=assistant-processor|TRACES_BUCKET=${TRACES_BUCKET}|CANARY_ENABLED=${CANARY_VALUE}|CANARY_MAX_COST_USD=0.03|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none${SEARCH_ENV}${GITHUB_ENV}${TWILIO_ENV}${SELF_URL_ENV}" \
+  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|GMAIL_PUBSUB_TOPIC=${GMAIL_TOPIC_VALUE}|GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_IDENTITY}|APNS_KEY_ID=${APNS_KEY_ID}|APNS_TEAM_ID=${APNS_TEAM_ID}|APNS_BUNDLE_ID=${APNS_BUNDLE_ID}|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|BROWSER_DRIVER=cloudrun|BROWSER_JOB_NAME=assistant-browser|CODE_DRIVER=cloudrun|CODE_JOB_NAME=assistant-code|PROCESSOR_DRIVER=cloudrun|PROCESSOR_JOB_NAME=assistant-processor|TRACES_BUCKET=${TRACES_BUCKET}|CANARY_ENABLED=${CANARY_VALUE}|CANARY_MAX_COST_USD=0.03|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none${SEARCH_ENV}${GITHUB_ENV}${TWILIO_ENV}${MAIL_ENV}${SELF_URL_ENV}" \
   --set-secrets "$AGENT_SECRETS" \
   --quiet
 
@@ -537,12 +567,20 @@ else
   echo "── pub/sub skipped (google module disabled)"
 fi
 
+# The Settings "Noticing" card reports which ingest mode is live, and it reads
+# the web service's own config. Without this the card would confidently print
+# `direct` while the agent ran `forwarded` — a diagnostic that lies is worse
+# than no diagnostic, since this one exists precisely to explain silence.
+WEB_MAIL_ENV=""
+WEB_INGEST_MODE="$(envval EMAIL_INGEST_MODE)"
+[ -n "$WEB_INGEST_MODE" ] && WEB_MAIL_ENV="|EMAIL_INGEST_MODE=${WEB_INGEST_MODE}"
+
 echo "── deploying web service"
 gcloud run deploy assistant-web \
   --image "${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/web:latest" \
   --region "$REGION" --allow-unauthenticated --service-account "$WEB_SA" \
   --memory 1Gi --cpu 1 --min-instances 0 --max-instances 2 --timeout 300 \
-  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|AUTH_TRUST_HOST=true|AUTH_DEV_BYPASS=false|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none" \
+  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|AUTH_TRUST_HOST=true|AUTH_DEV_BYPASS=false|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none${WEB_MAIL_ENV}" \
   --set-secrets "DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,AUTH_SECRET=auth-secret:latest,AUTH_GOOGLE_ID=google-oauth-client-id:latest,AUTH_GOOGLE_SECRET=google-oauth-client-secret:latest,MOBILE_API_TOKEN=mobile-api-token:latest,MCP_ENC_KEY=mcp-enc-key:latest" \
   --quiet
 
