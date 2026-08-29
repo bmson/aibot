@@ -19,6 +19,10 @@ export function guardDraft(
   text: string,
   evidence: ActionEvidence[],
   opts?: { readRequest?: PersonalReadRequest | null },
-): { corrected: boolean } {
-  return { corrected: enforceResponseContract(text, evidence, opts).blocked };
+): { corrected: boolean; text: string } {
+  const checked = enforceResponseContract(text, evidence, {
+    ...opts,
+    urlCorpus: JSON.stringify(evidence),
+  });
+  return { corrected: checked.blocked || checked.text !== text, text: checked.text };
 }

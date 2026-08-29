@@ -50,4 +50,15 @@ describe('MessageMarkdown', () => {
     expect(html).toContain('align-top');
     expect(html).toContain('Receipts');
   });
+
+  it('routes Mermaid fences to the diagram renderer instead of exposing a raw code block', () => {
+    const html = renderToStaticMarkup(
+      <MessageMarkdown text={'```mermaid\ngraph LR\n  A --> B\n```'} />,
+    );
+
+    expect(html).toContain('Diagram');
+    expect(html).toContain('Rendering diagram');
+    expect(html).toContain('View diagram source');
+    expect(html).not.toContain('MERMAID</div>');
+  });
 });

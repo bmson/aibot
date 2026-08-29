@@ -17,7 +17,9 @@ export interface ResponseCard {
     | 'email-thread'
     | 'sheet-rows'
     | 'resource'
-    | 'status';
+    | 'status'
+    | 'knowledge-graph'
+    | 'calendar-conflicts';
   id: string;
   [key: string]: unknown;
 }
@@ -324,6 +326,7 @@ export function driveResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
             url: string(file.url),
           }))
       : [];
+    if (files.length === 0) return [];
     return [
       {
         kind: 'drive-results' as const,
@@ -331,6 +334,59 @@ export function driveResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
         title: 'Drive files',
         query: string(args?.query),
         files,
+      },
+    ];
+  });
+}
+
+/** Knowledge cards are a direct projection of the active graph tool ledger. */
+export function knowledgeGraphResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
+  return evidence.flatMap((row, index) => {
+    if (!succeeded(row) || row.toolName !== 'memory.graph_snapshot') return [];
+    const result = record(row.result);
+    const args = record(row.args);
+    const relationships = Array.isArray(result?.relationships)
+      ? result.relationships.map(record).filter((item): item is RecordValue => !!item)
+      : [];
+    if (relationships.length === 0) return [];
+    const nodes = new Map<string, { id: string; label: string; type: string }>();
+    const edges = relationships.map((relationship, relationshipIndex) => {
+      const subjectId = string(relationship.subjectId) || `subject-${relationshipIndex}`;
+      const objectId = string(relationship.objectId) || `object-${relationshipIndex}`;
+      nodes.set(subjectId, {
+        id: subjectId,
+        label: string(relationship.subjectLabel) || 'Unknown',
+        type: string(relationship.subjectKind) || 'concept',
+      });
+      nodes.set(objectId, {
+        id: objectId,
+        label: string(relationship.objectLabel) || 'Unknown',
+        type: string(relationship.objectKind) || 'concept',
+      });
+      return {
+        id: string(relationship.id) || `relationship-${relationshipIndex}`,
+        from: subjectId,
+        to: objectId,
+        label: string(relationship.predicate).replaceAll('_', ' '),
+        evidenceQuote: string(relationship.evidenceQuote),
+        sourceMemoryId: string(relationship.sourceMemoryId),
+        sourceMemory: string(relationship.sourceMemory),
+        source: string(relationship.source),
+        confidence: number(relationship.memoryConfidence) ?? Number(relationship.memoryConfidence),
+        ownerConfirmed: relationship.ownerConfirmed === true,
+        validFrom: string(relationship.validFrom),
+        validUntil: string(relationship.validUntil),
+      };
+    });
+    return [
+      {
+        kind: 'knowledge-graph' as const,
+        id: `knowledge-graph-${index}-${string(args?.query) || 'query'}`,
+        title: 'Saved connections',
+        query: string(args?.query),
+        complete: result?.complete !== false,
+        nodes: [...nodes.values()],
+        edges,
       },
     ];
   });
@@ -747,6 +803,7 @@ export function responseCardsForFinal(input: {
     ...emailResponseCards(input.evidence),
     ...threadResponseCards(input.evidence),
     ...documentResponseCards(input.evidence),
+    ...knowledgeGraphResponseCards(input.evidence),
     ...driveResponseCards(input.evidence),
     ...sheetRowsResponseCards(input.evidence),
     ...searchResponseCards(input.evidence),

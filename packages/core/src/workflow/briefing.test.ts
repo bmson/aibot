@@ -13,7 +13,7 @@ import { eq, inArray, like } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import type { ModelRouter } from '../model-router/router.js';
-import { briefingHasNews, briefingHeadline, runBriefing } from './briefing.js';
+import { briefingHasNews, briefingHeadline, findConflicts, runBriefing } from './briefing.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -272,7 +272,8 @@ describe('runBriefing — richer inputs', () => {
     if (!dbUp) return ctx.skip();
     const day = new Date(Date.now() + 24 * 3600 * 1000);
     const at = (h: number) => new Date(day.getTime() + h * 3600 * 1000).toISOString();
-    const { router, prompts } = recordingRouter();
+    const digest = `${MARKER} conflict digest`;
+    const { router, prompts } = recordingRouter(digest);
     const result = await runBriefing({
       db,
       router,
@@ -286,6 +287,44 @@ describe('runBriefing — richer inputs', () => {
     const prompt = prompts[0] ?? '';
     expect(prompt).toContain(`${MARKER} Dentist`);
     expect(prompt).toContain('overlaps');
+    const [posted] = await db
+      .select({ parts: messages.parts })
+      .from(messages)
+      .where(eq(messages.text, digest));
+    expect(posted?.parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'data-card',
+          data: expect.objectContaining({ kind: 'calendar-conflicts' }),
+        }),
+      ]),
+    );
+  });
+
+  it('merges duplicate match listings from family and team calendars', () => {
+    const conflicts = findConflicts(
+      [
+        {
+          summary: 'Palo Alto v United (12:00)',
+          start: '2026-08-29T18:15:00Z',
+          end: '2026-08-29T20:30:00Z',
+          calendar: 'Family',
+          allDay: false,
+          location: 'Mayfield Soccer Complex',
+        },
+        {
+          summary: '26/27 U13B Azul @ Palo Alto SC 13/14B Gold',
+          start: '2026-08-29T19:00:00Z',
+          end: '2026-08-29T20:10:00Z',
+          calendar: 'SF United Soccer',
+          allDay: false,
+          location: 'Mayfield Soccer Complex',
+        },
+      ],
+      'America/Los_Angeles',
+    );
+
+    expect(conflicts).toEqual([]);
   });
 
   it('counts a routine calendar as context, never as news', () => {

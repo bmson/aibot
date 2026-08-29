@@ -61,4 +61,19 @@ describe('seedContext', () => {
 
     expect(seeded).toEqual([{ role: 'user', content: 'Keep searching.' }]);
   });
+
+  it('seeds an ordinary scheduled task from its trigger instead of stale chat history', async () => {
+    listMessages.mockResolvedValue([
+      { role: 'user', text: 'Pull the Carnaval photos' },
+      { role: 'assistant', text: 'I will look in Drive.' },
+    ]);
+    const instruction = 'Reminder for the owner: Get sunglasses from the car and pack them.';
+
+    const seeded = await seedContext(
+      {} as Db,
+      task({ type: 'scheduled', goalId: null, instruction }),
+    );
+
+    expect(seeded).toEqual([{ role: 'user', content: instruction }]);
+  });
 });

@@ -77,6 +77,15 @@ export async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]
     if (isUnattendedGoalSession(task) && initialInstruction) {
       return [...conversationWindow, { role: 'user', content: initialInstruction } as ModelMessage];
     }
+
+    // A scheduled firing is a new instruction, not a continuation of whatever
+    // the owner happened to discuss last in the bound chat. In production a
+    // reminder inherited a photo-search conversation, searched Drive, and
+    // silently dropped the reminder text. Goal sessions are the sole scheduled
+    // exception above because their durable work chat is intentional context.
+    if (task.type === 'scheduled' && initialInstruction) {
+      return [{ role: 'user', content: initialInstruction } as ModelMessage];
+    }
     if (conversationWindow.length > 0) return conversationWindow;
 
     // A newly-created Goal work chat deliberately does not render the

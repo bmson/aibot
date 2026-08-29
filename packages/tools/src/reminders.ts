@@ -66,6 +66,7 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
           timezone: agent.timezone,
           taskTemplate: {
             type: 'scheduled',
+            job: 'reminder.notify',
             maxSteps: 3,
             budgetUsdLimit: '0.05',
             reminderText: args.text,

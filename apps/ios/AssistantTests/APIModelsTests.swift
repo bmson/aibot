@@ -2,6 +2,14 @@ import XCTest
 @testable import Assistant
 
 final class APIModelsTests: XCTestCase {
+    func testDecodesRetractedMessageWithoutRenderingItsOriginalAsMarkdown() throws {
+        let data = #"{"id":"m1","role":"assistant","parts":[{"type":"text","text":"This response was retracted."},{"type":"notice","notice":"retracted","reason":"Unsupported source data.","originalText":"[Fake link](https://example.invalid)","repairId":"repair-v1"}]}"#.data(using: .utf8)!
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        XCTAssertEqual(message.noticeKind, .retracted)
+        XCTAssertEqual(message.retractionReason, "Unsupported source data.")
+        XCTAssertEqual(message.retractedOriginalText, "[Fake link](https://example.invalid)")
+    }
+
     func testKnowledgeCleanupAndImpactDecode() throws {
         let cleanup = try JSONDecoder().decode(
             KnowledgeCleanupResponse.self,

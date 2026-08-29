@@ -39,6 +39,9 @@
 		B0000000000000000000001C /* Views/MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000025 /* Views/MemoryView.swift */; };
 		B00000000000000000000054 /* Views/KnowledgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000054 /* Views/KnowledgeView.swift */; };
 		B00000000000000000000055 /* Models/PollingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000055 /* Models/PollingPolicy.swift */; };
+		B00000000000000000000056 /* Components/MermaidDiagramView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000056 /* Components/MermaidDiagramView.swift */; };
+		B00000000000000000000057 /* mermaid.min.js in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000057 /* mermaid.min.js */; };
+		B00000000000000000000058 /* mermaid-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000058 /* mermaid-LICENSE.txt */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -109,6 +112,9 @@
 		C00000000000000000000025 /* Views/MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MemoryView.swift; sourceTree = "<group>"; };
 		C00000000000000000000054 /* Views/KnowledgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/KnowledgeView.swift; sourceTree = "<group>"; };
 		C00000000000000000000055 /* Models/PollingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/PollingPolicy.swift; sourceTree = "<group>"; };
+		C00000000000000000000056 /* Components/MermaidDiagramView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/MermaidDiagramView.swift; sourceTree = "<group>"; };
+		C00000000000000000000057 /* mermaid.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/mermaid.min.js; sourceTree = "<group>"; };
+		C00000000000000000000058 /* mermaid-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Resources/mermaid-LICENSE.txt; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -175,6 +181,7 @@
 				C00000000000000000000008 /* Components/StatusPill.swift */,
 				C00000000000000000000009 /* Components/MessageBubble.swift */,
 				C00000000000000000000053 /* Components/OnDeviceCardParser.swift */,
+				C00000000000000000000056 /* Components/MermaidDiagramView.swift */,
 				C0000000000000000000000A /* Views/RootView.swift */,
 				C0000000000000000000000B /* Views/ChatView.swift */,
 				C0000000000000000000000C /* Views/ActivityView.swift */,
@@ -186,6 +193,8 @@
 				C00000000000000000000025 /* Views/MemoryView.swift */,
 				C00000000000000000000054 /* Views/KnowledgeView.swift */,
 				C00000000000000000000011 /* Assets.xcassets */,
+				C00000000000000000000057 /* mermaid.min.js */,
+				C00000000000000000000058 /* mermaid-LICENSE.txt */,
 				C00000000000000000000012 /* Info.plist */,
 				C00000000000000000000052 /* Assistant.entitlements */,
 			);
@@ -315,6 +324,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				B00000000000000000000011 /* Assets.xcassets in Resources */,
+				B00000000000000000000057 /* mermaid.min.js in Resources */,
+				B00000000000000000000058 /* mermaid-LICENSE.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -344,6 +355,7 @@
 				B00000000000000000000003 /* Design/AssistantTheme.swift in Sources */,
 				B00000000000000000000004 /* Models/APIModels.swift in Sources */,
 				B00000000000000000000055 /* Models/PollingPolicy.swift in Sources */,
+				B00000000000000000000056 /* Components/MermaidDiagramView.swift in Sources */,
 				B00000000000000000000005 /* Networking/KeychainStore.swift in Sources */,
 				B00000000000000000000006 /* Networking/APIClient.swift in Sources */,
 				B00000000000000000000013 /* System/AssistantActivityAttributes.swift in Sources */,

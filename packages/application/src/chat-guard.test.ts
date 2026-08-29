@@ -7,12 +7,13 @@ describe('guardDraft', () => {
     const draft =
       'I checked your primary calendar and the shared "Family" calendar — no flights in the next 3 weeks.';
     // The draft is marked, never edited: it already streamed to the client.
-    expect(guardDraft(draft, [])).toEqual({ corrected: true });
+    expect(guardDraft(draft, [])).toMatchObject({ corrected: true });
+    expect(guardDraft(draft, []).text).not.toBe(draft);
   });
 
   it('leaves ordinary conversation untouched', () => {
     const draft = 'Embeddings map text to vectors so similar meanings land near each other.';
-    expect(guardDraft(draft, [])).toEqual({ corrected: false });
+    expect(guardDraft(draft, [])).toEqual({ corrected: false, text: draft });
   });
 
   it('keeps a truthful recap of a prior-turn artifact untouched', () => {
@@ -25,7 +26,7 @@ describe('guardDraft', () => {
         fromCurrentTask: false,
       },
     ]);
-    expect(guarded).toEqual({ corrected: false });
+    expect(guarded).toEqual({ corrected: false, text: draft });
   });
 
   it('flags a fresh send claim even when an earlier turn really sent one', () => {
@@ -40,6 +41,6 @@ describe('guardDraft', () => {
     // could otherwise push a genuine unsupported claim past the contract's
     // bounded-gap matchers. Verify the strip-then-guard order keeps catching it.
     const draft = 'I checked [face: happy_squint] your calendar — no flights in the next 3 weeks.';
-    expect(guardDraft(stripCueTags(draft).text, [])).toEqual({ corrected: true });
+    expect(guardDraft(stripCueTags(draft).text, [])).toMatchObject({ corrected: true });
   });
 });

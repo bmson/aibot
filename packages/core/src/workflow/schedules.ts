@@ -552,6 +552,8 @@ export async function runDueSchedules(
       instruction?: string;
       /** Code-job schedules run a registered function instead of the model loop. */
       job?: string;
+      /** Typed reminder payload consumed by the deterministic reminder job. */
+      reminderText?: string;
       budgetUsdLimit?: string;
       maxSteps?: number;
       goalId?: string;
@@ -627,6 +629,7 @@ export async function runDueSchedules(
         instruction: template.instruction ?? row.name,
         ...(template.goalId ? { goalId: template.goalId } : {}),
         ...(template.job ? { job: template.job } : {}),
+        ...(template.reminderText ? { reminderText: template.reminderText } : {}),
         ...(template.taintedOrigin ? { taintedOrigin: true } : {}),
       },
     });

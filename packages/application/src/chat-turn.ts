@@ -554,9 +554,12 @@ export async function handleChatTurn(
         }
         await finishTask(db, task, {
           status: 'done',
-          responseText: stripped.text,
+          // Persist the contract-owned replacement, never the unsupported
+          // draft. The live stream still receives the off-course marker below,
+          // while reload/search/recall see only the safe durable answer.
+          responseText: guarded.text,
           recall: recallSources,
-          cues: stripped.cues,
+          cues: guarded.corrected ? undefined : stripped.cues,
           offCourse: guarded.corrected,
         });
       },

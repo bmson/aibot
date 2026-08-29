@@ -54,6 +54,9 @@ struct MessagePart: Codable, Hashable, Sendable {
     var purpose: String?
     var approvalCount: Int?
     var status: String?
+    var originalText: String?
+    var reason: String?
+    var repairId: String?
     var proposedBudgetUsd: Double?
     /// Auto-recall provenance. Optional keeps an older server and all prior
     /// message parts decodable while GraphRAG rolls out.
@@ -155,6 +158,14 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
             .filter { $0.type == "notice" }
             .compactMap { $0.notice.flatMap(ChatNoticeKind.init(rawValue:)) }
             .first
+    }
+
+    var retractedOriginalText: String? {
+        parts.first { $0.type == "notice" && $0.notice == "retracted" }?.originalText
+    }
+
+    var retractionReason: String? {
+        parts.first { $0.type == "notice" && $0.notice == "retracted" }?.reason
     }
 
     /// The tool-less chat path's honesty guard marked this reply: it claimed
@@ -331,6 +342,7 @@ enum ChatNoticeKind: String, Codable, Sendable {
     case parked
     case needsAttention = "needs-attention"
     case turnFailed = "turn-failed"
+    case retracted
 }
 
 enum CompanionFace: String, Codable, Sendable {

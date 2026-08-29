@@ -1,8 +1,10 @@
 import type { Db, TaskRow } from '@assistant/db';
+import { getOrCreateNotificationsConversation, persistMessage } from '../chat.js';
 import { loadConfig } from '../config.js';
 import type { ModelRouter } from '../model-router/router.js';
 import { curiositySummary, runCuriosity } from '../proactive/curiosity.js';
 import type { ProactiveNotifier } from '../proactive/notify.js';
+import { pingOwner } from '../proactive/notify.js';
 import { pulseSummary, runPulse } from '../proactive/pulse.js';
 import { runAnomalyScan } from '../workflow/anomaly.js';
 import { type BriefingCalendarReader, briefingSummary, runBriefing } from '../workflow/briefing.js';
@@ -40,6 +42,7 @@ import { runVoiceIngest } from './voice-ingest.js';
 export type CodeJobName =
   | 'memory.extract'
   | 'email.extract'
+  | 'reminder.notify'
   | 'briefing.compose'
   | 'memory.consolidate'
   | 'memory.graph_sync'
@@ -63,6 +66,7 @@ export type CodeJobName =
 const CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.extract',
   'email.extract',
+  'reminder.notify',
   'briefing.compose',
   'memory.consolidate',
   'memory.graph_sync',
@@ -141,6 +145,44 @@ export async function runCodeJob(
   const unavailable = deps.jobUnavailable?.(job);
   if (unavailable) return { done: true, summary: unavailable };
   switch (job) {
+    case 'reminder.notify': {
+      const payload = (
+        task.trigger as {
+          payload?: { reminderText?: unknown; instruction?: unknown };
+        } | null
+      )?.payload;
+      const reminderText =
+        typeof payload?.reminderText === 'string' && payload.reminderText.trim()
+          ? payload.reminderText.trim()
+          : typeof payload?.instruction === 'string'
+            ? payload.instruction
+                .replace(/^Reminder for the owner:\s*/i, '')
+                .split(/\n\n/)[0]
+                ?.trim()
+            : '';
+      if (!reminderText) {
+        return { done: true, summary: 'reminder: missing reminder text' };
+      }
+      const conversationId =
+        task.conversationId ?? (await getOrCreateNotificationsConversation(deps.db, task.agentId));
+      await persistMessage(deps.db, {
+        conversationId,
+        taskId: task.id,
+        role: 'assistant',
+        origin: 'assistant',
+        parts: [{ type: 'text', text: reminderText }],
+        text: reminderText,
+      });
+      const pinged = await pingOwner(deps.notifyOwner, {
+        taskId: task.id,
+        conversationId,
+        text: reminderText,
+      });
+      return {
+        done: true,
+        summary: `reminder: delivered${pinged ? ' and pinged' : ''}`,
+      };
+    }
     case 'memory.extract': {
       await deps.heartbeat?.();
       const r = await runMemoryExtraction(deps, { taskId: task.id });

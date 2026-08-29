@@ -26,6 +26,7 @@ import {
   isDecisionProseNotice,
   isOffCourse,
   noticeKindOf,
+  retractionNoticeOf,
   turnFailedReason,
 } from '@/lib/chat-notices';
 import { focusRing } from '@/lib/ui';
@@ -134,6 +135,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   // Both recoveries resend the words that opened this turn.
   const offCourse = message.role === 'assistant' && isOffCourse(parts);
   const failedReason = message.role === 'assistant' ? turnFailedReason(parts) : null;
+  const retraction = message.role === 'assistant' ? retractionNoticeOf(parts) : null;
   const date = messageDate(message);
   // A chat is one continuous discussion — per-message clock times
   // are noise there, and the reply's own footer carries the "when"
@@ -167,6 +169,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
         <NoticeCard
           kind={noticeKind}
           text={fullText}
+          originalText={retraction?.originalText}
+          retractionReason={retraction?.reason}
           actions={
             noticeKind === 'turn-failed' ? (
               <>

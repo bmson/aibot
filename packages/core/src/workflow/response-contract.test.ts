@@ -1613,4 +1613,68 @@ describe('groundReadDraft', () => {
     expect(result.grounded).toBe(false);
     expect(result.reasons.join(' ')).toMatch(/Wells Fargo/);
   });
+
+  it('renders an empty Drive search from the ledger and drops fabricated links', () => {
+    const result = enforceResponseContract(
+      'I found 2023 Carnaval Costumes.jpg at https://drive.google.com/file/d/fake/view',
+      [
+        {
+          toolName: 'drive.search',
+          status: 'succeeded',
+          args: { query: 'carnival parade' },
+          result: { files: [] },
+        },
+      ],
+      {
+        readRequest: {
+          kind: 'drive',
+          queryTerms: ['carnival', 'parade'],
+          firstToolName: 'drive.search',
+          requiresThreadRead: false,
+        },
+      },
+    );
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe('I searched Drive for “carnival parade” and found no matching files.');
+    expect(result.text).not.toContain('drive.google.com');
+  });
+
+  it('keeps uncertainty and provenance in a durable-memory answer', () => {
+    const result = enforceResponseContract(
+      'You definitely went in 2023.',
+      [
+        {
+          toolName: 'memory.recall',
+          status: 'succeeded',
+          args: { query: 'carnival parade san francisco' },
+          result: {
+            memories: [
+              {
+                id: 'm1',
+                content: 'Owner attended the Carnival Parade on May 25, 2014.',
+                source: 'baldvin-and-katie-calendar',
+                confidence: '0.60',
+                ownerConfirmed: false,
+                unconfirmed: true,
+              },
+            ],
+          },
+        },
+      ],
+      {
+        readRequest: {
+          kind: 'memory',
+          queryTerms: ['carnival', 'parade', 'san', 'francisco'],
+          firstToolName: 'memory.recall',
+          requiresThreadRead: false,
+        },
+      },
+    );
+
+    expect(result.text).toContain('May 25, 2014');
+    expect(result.text).toContain('confidence: 60%');
+    expect(result.text).toContain('not owner-confirmed');
+    expect(result.text).not.toContain('2023');
+  });
 });

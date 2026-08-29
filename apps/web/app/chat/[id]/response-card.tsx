@@ -11,6 +11,7 @@
  * an older or newer server build may carry more or less than these types name.
  */
 import {
+  AlertTriangle,
   Bell,
   CalendarDays,
   CheckCircle2,
@@ -18,6 +19,7 @@ import {
   CloudSun,
   FileText,
   FolderOpen,
+  GitBranch,
   Globe,
   Mail,
   MapPin,
@@ -402,6 +404,124 @@ function DocumentResultsCard({ data }: { data: Raw }) {
   );
 }
 
+function KnowledgeGraphCard({ data }: { data: Raw }) {
+  const edges = recs(data.edges);
+  return (
+    <CardShell icon={GitBranch} label={str(data.title) || 'Saved connections'}>
+      <div className="flex flex-col gap-3">
+        {edges.map((edge, index) => (
+          <article key={str(edge.id) || index} className="relative pl-4">
+            <span className="absolute top-1 bottom-1 left-0 w-px bg-accent/35" aria-hidden="true" />
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-sm">
+              <span className="rounded-full bg-accent/10 px-2.5 py-1 font-medium text-strong">
+                {str(edge.fromLabel) ||
+                  str(recs(data.nodes).find((node) => str(node.id) === str(edge.from))?.label) ||
+                  'Unknown'}
+              </span>
+              <span className="text-xs text-accent">—{str(edge.label) || 'connected to'}→</span>
+              <span className="rounded-full bg-sunken px-2.5 py-1 font-medium text-strong">
+                {str(edge.toLabel) ||
+                  str(recs(data.nodes).find((node) => str(node.id) === str(edge.to))?.label) ||
+                  'Unknown'}
+              </span>
+            </div>
+            {str(edge.evidenceQuote) ? (
+              <p className="mt-2 text-xs leading-5 text-strong">“{str(edge.evidenceQuote)}”</p>
+            ) : null}
+            <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted">
+              {str(edge.source) ? <span>Source: {str(edge.source)}</span> : null}
+              {Number.isFinite(Number(edge.confidence)) ? (
+                <span>Confidence: {Math.round(Number(edge.confidence) * 100)}%</span>
+              ) : null}
+              <span>
+                {edge.ownerConfirmed === true ? 'Owner-confirmed' : 'Not owner-confirmed'}
+              </span>
+            </div>
+          </article>
+        ))}
+      </div>
+      {data.complete === false ? (
+        <p className="mt-3 text-xs text-muted">More matching connections are available.</p>
+      ) : null}
+    </CardShell>
+  );
+}
+
+function CalendarConflictsCard({ data, timeZone }: { data: Raw; timeZone: string }) {
+  const conflicts = recs(data.conflicts);
+  return (
+    <CardShell icon={AlertTriangle} label={str(data.title) || 'Schedule conflict'}>
+      <div className="flex flex-col gap-4">
+        {conflicts.map((conflict, index) => {
+          const groups = recs(conflict.groups);
+          return (
+            <section key={str(conflict.id) || index} aria-label={`Conflict ${index + 1}`}>
+              <p className="mb-2 text-xs font-medium text-accent">
+                Overlap{' '}
+                {timeRange(
+                  str(conflict.overlapStart),
+                  str(conflict.overlapEnd),
+                  str(data.timeZone) || timeZone,
+                )}
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {groups.map((group) => {
+                  const events = recs(group.events);
+                  const event = events[0];
+                  if (!event) return null;
+                  const groupKey = events
+                    .map(
+                      (source) =>
+                        str(source.id) ||
+                        `${str(source.calendar)}:${str(source.title)}:${str(source.start)}`,
+                    )
+                    .join('|');
+                  return (
+                    <div
+                      key={groupKey || `${str(event.title)}:${str(event.start)}`}
+                      className="rounded-lg border border-edge/70 bg-sunken/35 p-3"
+                    >
+                      <p className="text-sm font-medium text-strong">
+                        {str(event.title) || 'Untitled event'}
+                      </p>
+                      <p className="mt-1 text-xs text-muted">
+                        {timeRange(
+                          str(event.start),
+                          str(event.end),
+                          str(data.timeZone) || timeZone,
+                        )}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {events.map((source, sourceIndex) => (
+                          <span
+                            key={str(source.id) || sourceIndex}
+                            className="rounded-full border border-edge px-2 py-0.5 text-[10px] text-muted"
+                          >
+                            {str(source.calendar) || 'Calendar'}
+                          </span>
+                        ))}
+                      </div>
+                      {str(event.location) ? (
+                        <p className="mt-2 flex items-center gap-1 text-xs text-muted">
+                          <MapPin className="size-3" aria-hidden="true" />
+                          {str(event.location)}
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+      {data.complete === false ? (
+        <p className="mt-3 text-xs text-muted">Some calendars could not be checked.</p>
+      ) : null}
+    </CardShell>
+  );
+}
+
 function ResponseCardView({ data, timeZone }: { data: Raw; timeZone: string }) {
   switch (data.kind) {
     case 'weather':
@@ -422,6 +542,10 @@ function ResponseCardView({ data, timeZone }: { data: Raw; timeZone: string }) {
       return <DriveResultsCard data={data} timeZone={timeZone} />;
     case 'document-results':
       return <DocumentResultsCard data={data} />;
+    case 'knowledge-graph':
+      return <KnowledgeGraphCard data={data} />;
+    case 'calendar-conflicts':
+      return <CalendarConflictsCard data={data} timeZone={timeZone} />;
     default:
       // email-thread, sheet-rows, resource and anything newer keep the prose
       // fallback — an unportable card kind never renders as a broken box.
@@ -439,6 +563,7 @@ export function responseCardPayloads(parts: unknown[]): Raw[] {
     const parsed = rec(part);
     if (parsed?.type !== 'data-card') continue;
     const data = rec(parsed.data);
+    if (data?.kind === 'drive-results' && recs(data.files).length === 0) continue;
     if (data) out.push(data);
   }
   return out;
@@ -457,6 +582,8 @@ export function rendersAllCards(cards: Raw[]): boolean {
       'reminder',
       'drive-results',
       'document-results',
+      'knowledge-graph',
+      'calendar-conflicts',
     ].includes(str(card.kind)),
   );
 }

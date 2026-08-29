@@ -94,6 +94,20 @@ function renderPlan(plan: Plan): string {
 function readLookupDirective(request: PersonalReadRequest): string {
   const terms =
     request.queryTerms.length > 0 ? ` Search terms: ${request.queryTerms.join(' ')}.` : '';
+  if (request.kind === 'drive') {
+    return [
+      '\nThis is a private Drive lookup. Search the assistant-accessible Drive now.',
+      `Use only literal file names, metadata, and URLs returned by the successful search in this task.${terms}`,
+      'A zero-result search is a complete answer. Never create a plausible file name, album, description, or Drive URL.',
+    ].join('\n');
+  }
+  if (request.kind === 'memory' || request.kind === 'knowledge_graph') {
+    return [
+      `\nThis is a private ${request.kind === 'knowledge_graph' ? 'knowledge-graph' : 'durable-memory'} lookup. Read the owner-backed source now.`,
+      `Use only literal facts, connections, confidence, dates, and evidence returned by this task.${terms}`,
+      'Say when a record is unconfirmed or low confidence. A zero-result lookup is a complete answer; do not reconstruct a story from earlier assistant prose.',
+    ].join('\n');
+  }
   return [
     '\nThis is a private calendar/email lookup. Do not ask which calendar, provider, inbox, or account to use.',
     request.kind === 'calendar'
@@ -115,6 +129,13 @@ function readLookupDirective(request: PersonalReadRequest): string {
  * one than a model told only to be careful.
  */
 function readAnswerDirective(request: PersonalReadRequest): string {
+  if (request.kind === 'drive' || request.kind === 'memory' || request.kind === 'knowledge_graph') {
+    return [
+      '\nThe required private lookup has run. Write the answer now with no more tool calls.',
+      'Every named file, link, date, fact, entity, and relationship must appear literally in the successful result from this task.',
+      'Keep uncertainty and source provenance visible. If the result is empty, say so directly and stop.',
+    ].join('\n');
+  }
   return [
     '\nEvery lookup this needed has run, and the results are in this conversation. Write the answer now, in the agenda or rundown shape from your voice rules — no tool calls on this turn.',
     'You may reformat and convert times into the owner\u2019s timezone, shorten a long title, decide what leads, and leave out what does not matter. You may not move a time, rename an event, or add one.',
@@ -127,11 +148,17 @@ function readAnswerDirective(request: PersonalReadRequest): string {
 
 function readRoutingFailure(request: PersonalReadRequest, toolName: string): string {
   const source =
-    request.kind === 'calendar'
-      ? 'the calendar'
-      : request.kind === 'email'
-        ? 'Gmail'
-        : 'the calendar and Gmail';
+    request.kind === 'drive'
+      ? 'Drive'
+      : request.kind === 'memory'
+        ? 'durable memory'
+        : request.kind === 'knowledge_graph'
+          ? 'the knowledge graph'
+          : request.kind === 'calendar'
+            ? 'the calendar'
+            : request.kind === 'email'
+              ? 'Gmail'
+              : 'the calendar and Gmail';
   return `I couldn't get into ${source} just now — ${toolName} didn't come back, so I have nothing real to tell you yet. Ask me again in a minute and I'll re-run it.`;
 }
 

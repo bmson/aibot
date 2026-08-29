@@ -58,6 +58,20 @@ final class AssistantMarkdownTests: XCTestCase {
         XCTAssertEqual(text, "const a = 1;\nconst b = 2;")
     }
 
+    func testParsesMermaidFenceAsARecognizableDiagramBlock() {
+        let source = """
+        ```mermaid
+        graph LR
+          A --> B
+        ```
+        """
+        guard case let .code(language, text) = AssistantMarkdown.blocks(in: source).first else {
+            return XCTFail("expected a diagram code block")
+        }
+        XCTAssertEqual(language, "mermaid")
+        XCTAssertEqual(text, "graph LR\n  A --> B")
+    }
+
     func testParsesTableHeadersAndRows() {
         let source = """
         | Item | Estimate |

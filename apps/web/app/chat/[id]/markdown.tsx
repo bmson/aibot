@@ -1,8 +1,9 @@
 'use client';
 
-import { memo } from 'react';
+import { isValidElement, memo, type ReactElement } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { MermaidDiagram } from './mermaid-diagram';
 
 const remarkPlugins = [remarkGfm];
 
@@ -104,12 +105,25 @@ const components: Components = {
       className={`break-words rounded bg-sunken px-1 py-0.5 font-mono text-[0.85em] [overflow-wrap:anywhere] ${className ?? ''}`}
     />
   ),
-  pre: ({ node: _node, ...props }) => (
-    <pre
-      {...props}
-      className="my-3 max-w-full overscroll-x-contain overflow-x-auto rounded-xl bg-[#10131a] p-4 font-mono text-xs leading-5 text-zinc-100 first:mt-0 last:mb-0 dark:bg-black/40 [&_code]:break-normal [&_code]:rounded-none [&_code]:bg-transparent [&_code]:p-0 [&_code]:whitespace-pre [&_code]:[overflow-wrap:normal]"
-    />
-  ),
+  pre: ({ node: _node, children, ...props }) => {
+    const child = isValidElement(children)
+      ? (children as ReactElement<{ className?: string; children?: unknown }>)
+      : null;
+    if (
+      child?.props.className?.split(/\s+/).includes('language-mermaid') &&
+      typeof child.props.children === 'string'
+    ) {
+      return <MermaidDiagram source={child.props.children.replace(/\n$/, '')} />;
+    }
+    return (
+      <pre
+        {...props}
+        className="my-3 max-w-full overscroll-x-contain overflow-x-auto rounded-xl bg-[#10131a] p-4 font-mono text-xs leading-5 text-zinc-100 first:mt-0 last:mb-0 dark:bg-black/40 [&_code]:break-normal [&_code]:rounded-none [&_code]:bg-transparent [&_code]:p-0 [&_code]:whitespace-pre [&_code]:[overflow-wrap:normal]"
+      >
+        {children}
+      </pre>
+    );
+  },
   table: ({ node: _node, children, ...props }) => (
     <div className="my-3 max-w-full overscroll-x-contain overflow-x-auto rounded-xl border border-edge first:mt-0 last:mb-0">
       <table

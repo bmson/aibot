@@ -5,7 +5,13 @@
  * model room to invent a plausible calendar or inbox answer.
  */
 
-export type PersonalReadKind = 'calendar' | 'email' | 'calendar_email';
+export type PersonalReadKind =
+  | 'calendar'
+  | 'email'
+  | 'calendar_email'
+  | 'drive'
+  | 'memory'
+  | 'knowledge_graph';
 
 export interface PersonalReadTimeWindow {
   timeMin: string;
@@ -22,7 +28,10 @@ export interface PersonalReadRequest {
     | 'calendar.list_events'
     | 'calendar.search_events'
     | 'calendar.availability'
-    | 'gmail.search';
+    | 'gmail.search'
+    | 'drive.search'
+    | 'memory.recall'
+    | 'memory.graph_snapshot';
   /** A metadata-only Gmail hit is not enough to answer a detail question. */
   requiresThreadRead: boolean;
   /** Runtime-resolved range; the model never chooses the date window. */
@@ -58,6 +67,15 @@ export interface ReadToolEvidence {
 const CALENDAR_SURFACE =
   /\b(?:calendars?|schedule|agenda|appointments?|events?|meetings?|interviews?|calls?|chats?|flights?|reservations?)\b/i;
 const EMAIL_SURFACE = /\b(?:inbox|mailbox|e-?mails?|mail|messages?|threads?)\b/i;
+const DRIVE_SURFACE = /\b(?:(?:google\s+)?drive|drive files?)\b/i;
+const MEDIA_FILE_READ =
+  /^\s*(?:please\s+)?(?:pull|open|find|show|search)(?:\s+me)?\b[^.!?]*\b(?:photos?|files?|albums?)\b/i;
+const KNOWLEDGE_GRAPH_SURFACE =
+  /\b(?:(?:memory|knowledge)\s+graph|graph\s+(?:my\s+)?(?:memory|knowledge)|saved\s+connections?)\b/i;
+const MEMORY_SURFACE =
+  /\b(?:memor(?:y|ies)|remember(?:ed)?|saved facts?|what you know|knowledge about me)\b/i;
+const AUTOBIOGRAPHICAL_READ =
+  /\b(?:when|where)\s+did\s+i\b|\bhave\s+i\s+ever\b|\bdid\s+i\s+(?:attend|visit|see|go|meet|live|work|travel)\b/i;
 const AVAILABILITY_SURFACE =
   /\b(?:availability|available|busy|conflicts?|free|open\s+(?:time|slots?))\b/i;
 const CALENDAR_TIME_REFERENCE =
@@ -564,6 +582,57 @@ function emailQueryTerms(text: string): string[] {
   return [...new Set(candidates.slice(0, 2))];
 }
 
+const PRIVATE_QUERY_GENERIC = new Set([
+  'drive',
+  'file',
+  'files',
+  'photo',
+  'photos',
+  'album',
+  'albums',
+  'memory',
+  'memories',
+  'knowledge',
+  'graph',
+  'remember',
+  'saved',
+  'fact',
+  'facts',
+  'look',
+  'pull',
+  'open',
+  'find',
+  'show',
+  'see',
+  'attend',
+  'visit',
+  'went',
+  'meet',
+  'live',
+  'work',
+  'travel',
+]);
+
+function privateQueryTerms(text: string): string[] {
+  return [
+    ...new Set(
+      text
+        .toLowerCase()
+        .replace(/[^a-z0-9'’-]+/g, ' ')
+        .split(/\s+/)
+        .map((word) => word.replace(/(?:['’]s)$/i, ''))
+        .filter(
+          (word) =>
+            word.length > 2 &&
+            !/^\d+$/.test(word) &&
+            !QUERY_STOP_WORDS.has(word) &&
+            !QUERY_MODIFIERS.has(word) &&
+            !PRIVATE_QUERY_GENERIC.has(word),
+        ),
+    ),
+  ].slice(0, 5);
+}
+
 /**
  * Identify private account lookups from the latest owner turn. Recent context
  * is used only for terse verification follow-ups such as "are you sure?".
@@ -595,6 +664,46 @@ export function detectPersonalReadRequest(
     .map(messageText)
     .join('\n');
   const verification = VERIFY.test(latest);
+  const recentOwnerTurns = messages
+    .slice(Math.max(0, latestIndex - 8), latestIndex)
+    .filter((message) => message.role === 'user')
+    .map(readIntentText)
+    .filter(Boolean);
+  const contextualPrivateTerms = () => {
+    const own = privateQueryTerms(latest);
+    if (own.length > 0) return own;
+    for (const prior of [...recentOwnerTurns].reverse()) {
+      const priorTerms = privateQueryTerms(prior);
+      if (priorTerms.length > 0) return priorTerms;
+    }
+    return [];
+  };
+  const graphRead = KNOWLEDGE_GRAPH_SURFACE.test(latest);
+  const driveRead =
+    !graphRead &&
+    (DRIVE_SURFACE.test(latest) || MEDIA_FILE_READ.test(latest)) &&
+    (READ_OR_QUESTION.test(latest) || /^\s*(?:pull|open|find|show)\b/i.test(latest));
+  const memoryRead =
+    !graphRead &&
+    !driveRead &&
+    ((MEMORY_SURFACE.test(latest) && (READ_OR_QUESTION.test(latest) || verification)) ||
+      AUTOBIOGRAPHICAL_READ.test(latest));
+  if (graphRead || driveRead || memoryRead) {
+    const kind: PersonalReadKind = graphRead ? 'knowledge_graph' : driveRead ? 'drive' : 'memory';
+    return {
+      kind,
+      queryTerms: contextualPrivateTerms(),
+      firstToolName:
+        kind === 'knowledge_graph'
+          ? 'memory.graph_snapshot'
+          : kind === 'drive'
+            ? 'drive.search'
+            : 'memory.recall',
+      requiresThreadRead: false,
+      ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+      ...(verification ? { verification: true } : {}),
+    };
+  }
   // A terse correction such as "was that made up?" carries no subject of its
   // own. Reuse the prior assistant claim only as a search hypothesis — never as
   // answer evidence — so the runtime can actually verify the named item.
@@ -733,6 +842,11 @@ function matchingGmailSearch(row: ReadToolEvidence, request: PersonalReadRequest
     : queryIncludes(query, request.queryTerms);
 }
 
+function matchingPrivateRead(row: ReadToolEvidence, request: PersonalReadRequest): boolean {
+  if (!succeeded(row) || row.toolName !== request.firstToolName) return false;
+  return queryIncludes(argsRecord(row)?.query, request.queryTerms);
+}
+
 export function gmailSearchThreadIds(
   evidence: ReadonlyArray<ReadToolEvidence>,
   request?: PersonalReadRequest,
@@ -812,6 +926,10 @@ export function nextRequiredReadTool(
   request: PersonalReadRequest,
   evidence: ReadonlyArray<ReadToolEvidence>,
 ): string | undefined {
+  if (request.kind === 'drive' || request.kind === 'memory' || request.kind === 'knowledge_graph') {
+    if (evidence.some((row) => matchingPrivateRead(row, request))) return undefined;
+    return attempts(evidence, request.firstToolName) < 2 ? request.firstToolName : undefined;
+  }
   const calendarSucceeded = evidence.some((row) => matchingCalendarRead(row, request));
   if (request.kind !== 'email' && !calendarSucceeded) {
     if (attempts(evidence, request.firstToolName) < 2) return request.firstToolName;
@@ -873,6 +991,15 @@ export function groundReadToolInput(
     const target =
       nextGmailThreadId(evidence, request) ?? gmailThreadIdsToRead(evidence, request)[0];
     if (target) return { ...input, threadId: target };
+  }
+  if (toolName === 'drive.search') {
+    return { query: request.queryTerms.join(' ') || 'recent', maxResults: 20 };
+  }
+  if (toolName === 'memory.recall') {
+    return { query: request.queryTerms.join(' ') || 'owner history', limit: 10 };
+  }
+  if (toolName === 'memory.graph_snapshot') {
+    return { query: request.queryTerms.join(' ') || 'owner', limit: 20 };
   }
   return input;
 }

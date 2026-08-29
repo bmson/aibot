@@ -15,6 +15,7 @@ import {
   type LucideIcon,
   MoonStar,
   PauseCircle,
+  RotateCcw,
   ShieldCheck,
   Sparkles,
   TriangleAlert,
@@ -336,17 +337,22 @@ const NOTICE_PRESENTATION = {
   parked: { tone: 'system', icon: PauseCircle, label: 'Paused — resumes on its own' },
   'needs-attention': { tone: 'waiting', icon: TriangleAlert, label: 'Needs you' },
   'turn-failed': { tone: 'system', icon: CircleX, label: 'Didn’t go through' },
+  retracted: { tone: 'system', icon: RotateCcw, label: 'Retracted response' },
 } as const satisfies Record<NoticeKind, { tone: DecisionTone; icon: LucideIcon; label: string }>;
 
 export function NoticeCard({
   kind,
   text,
   actions,
+  originalText,
+  retractionReason,
 }: {
   kind: NoticeKind;
   text: string;
   /** Recovery affordances — a turn-failed card's retry, for instance. */
   actions?: ReactNode;
+  originalText?: string;
+  retractionReason?: string;
 }) {
   const { tone, icon, label } = NOTICE_PRESENTATION[kind];
   return (
@@ -369,6 +375,21 @@ export function NoticeCard({
             replaced a reply that claimed more than the evidence supported — nothing was sent or
             changed outside this chat.
           </p>
+        </details>
+      ) : null}
+      {kind === 'retracted' ? (
+        <details className="mt-2">
+          <summary className="disclosure flex cursor-pointer select-none items-center gap-2 text-xs text-muted">
+            View original response
+          </summary>
+          <p className="mt-2 text-xs leading-5 text-muted">
+            {retractionReason ?? 'This response was not supported by verified source data.'}
+          </p>
+          {originalText ? (
+            <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-sunken p-3 font-sans text-xs leading-5 text-muted">
+              {originalText}
+            </pre>
+          ) : null}
         </details>
       ) : null}
     </DecisionCard>

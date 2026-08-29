@@ -1,4 +1,4 @@
-import { createDb, type Db, type TaskRow, tasks } from '@assistant/db';
+import { createDb, type Db, messages, type TaskRow, tasks } from '@assistant/db';
 import { eq, inArray } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
@@ -59,6 +59,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (dbUp && createdTaskIds.length) {
+    await db.delete(messages).where(inArray(messages.taskId, createdTaskIds));
     await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
@@ -83,6 +84,7 @@ describe('codeJobName', () => {
     expect(codeJobName(taskWith({ job: 'dream.run' }))).toBe('dream.run');
     expect(codeJobName(taskWith({ job: 'self.maintain' }))).toBe('self.maintain');
     expect(codeJobName(taskWith({ job: 'health.monitor' }))).toBe('health.monitor');
+    expect(codeJobName(taskWith({ job: 'reminder.notify' }))).toBe('reminder.notify');
     expect(codeJobName(taskWith({ job: 'rm -rf /' }))).toBeNull();
     expect(codeJobName(taskWith({ instruction: 'do things' }))).toBeNull();
     expect(codeJobName({ trigger: null } as never)).toBeNull();
@@ -138,5 +140,32 @@ describe('code job execution (integration)', () => {
     const [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(row?.status).toBe('done');
     expect(row?.progress).toMatch(/^extraction:/);
+  });
+
+  it('delivers the exact reminder payload without inheriting stale chat history', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const reminderText = 'Get sunglasses from the car and pack them';
+    const event: InboundEvent = {
+      source: 'schedule',
+      agentId,
+      trust: 'assistant',
+      payload: {
+        schedule: 'reminder-test',
+        job: 'reminder.notify',
+        reminderText,
+        instruction: `Reminder for the owner: ${reminderText}\n\nOld chat: Pull the photos`,
+      },
+    };
+    const { task } = await enqueueTask(db, { event, type: 'scheduled' });
+    createdTaskIds.push(task.id);
+
+    const result = await executeTask(
+      { db, router: fakeRouter, dispatcher: explodingDispatcher },
+      task.id,
+    );
+    expect(result.outcome).toBe('done');
+    const delivered = await db.select().from(messages).where(eq(messages.taskId, task.id));
+    expect(delivered.map((message) => message.text)).toEqual([reminderText]);
+    expect(delivered[0]?.text).not.toContain('photos');
   });
 });

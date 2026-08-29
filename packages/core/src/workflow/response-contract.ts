@@ -873,11 +873,39 @@ function matchingGmailThreadRows(
   });
 }
 
+function matchingPrivateReadRows(
+  request: PersonalReadRequest,
+  current: ActionEvidence[],
+): ActionEvidence[] {
+  return current.filter((row) => {
+    if (row.toolName !== request.firstToolName) return false;
+    const query = record(row.args)?.query;
+    if (typeof query !== 'string') return false;
+    const lower = query.toLowerCase();
+    return request.queryTerms.every((term) => lower.includes(term.toLowerCase()));
+  });
+}
+
 function requiredReadGaps(
   request: PersonalReadRequest,
   evidence: ActionEvidence[],
 ): { labels: string[]; unsupported: ActionKind[] } {
   const current = currentSuccessfulEvidence(evidence);
+  if (request.kind === 'drive' || request.kind === 'memory' || request.kind === 'knowledge_graph') {
+    if (matchingPrivateReadRows(request, current).length > 0) {
+      return { labels: [], unsupported: [] };
+    }
+    return {
+      labels: [
+        request.kind === 'drive'
+          ? 'a successful Drive search using the requested terms'
+          : request.kind === 'memory'
+            ? 'a successful durable-memory lookup using the requested terms'
+            : 'a successful active knowledge-graph lookup using the requested terms',
+      ],
+      unsupported: [request.kind === 'drive' ? 'workspace' : 'memory'],
+    };
+  }
   const calendars = matchingCalendarRows(request, current);
   const gmailSearches = matchingGmailSearchRows(request, current);
   const gmailHits = gmailSearches.flatMap((row) => resultItems(row, 'results'));
@@ -1430,6 +1458,83 @@ export function groundReadDraft(
  */
 function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvidence[]): string {
   const current = currentSuccessfulEvidence(evidence);
+  if (request.kind === 'drive') {
+    const rows = matchingPrivateReadRows(request, current);
+    const files = uniqueRecords(
+      rows.flatMap((row) => resultItems(row, 'files')),
+      (file) =>
+        stringField(file, 'fileId') || stringField(file, 'url') || stringField(file, 'name'),
+    );
+    const query = stringField(record(rows[0]?.args) ?? {}, 'query');
+    if (files.length === 0) {
+      return `I searched Drive${query ? ` for “${query}”` : ''} and found no matching files.`;
+    }
+    return [
+      `I found ${files.length} matching Drive ${files.length === 1 ? 'file' : 'files'}:`,
+      ...files.map((file) => {
+        const name = stringField(file, 'name') || 'Untitled file';
+        const modified = stringField(file, 'modifiedTime');
+        const url = stringField(file, 'url');
+        return `- ${name}${modified ? ` — modified ${modified}` : ''}${url ? ` — ${url}` : ''}`;
+      }),
+    ].join('\n');
+  }
+  if (request.kind === 'memory') {
+    const memories = uniqueRecords(
+      matchingPrivateReadRows(request, current).flatMap((row) => resultItems(row, 'memories')),
+      (memory) => stringField(memory, 'id') || stringField(memory, 'content'),
+    );
+    if (memories.length === 0) return 'I found no supported saved memories for that.';
+    return [
+      `I found ${memories.length} saved ${memories.length === 1 ? 'record' : 'records'}:`,
+      ...memories.map((memory) => {
+        const content = stringField(memory, 'content');
+        const source = stringField(memory, 'source');
+        const confidence = Number(memory.confidence);
+        const unconfirmed = memory.unconfirmed === true || memory.ownerConfirmed !== true;
+        const details = [
+          source ? `source: ${source}` : '',
+          Number.isFinite(confidence) ? `confidence: ${Math.round(confidence * 100)}%` : '',
+          unconfirmed ? 'not owner-confirmed' : 'owner-confirmed',
+        ].filter(Boolean);
+        return `- ${content}${details.length ? ` (${details.join(', ')})` : ''}`;
+      }),
+    ].join('\n');
+  }
+  if (request.kind === 'knowledge_graph') {
+    const relations = uniqueRecords(
+      matchingPrivateReadRows(request, current).flatMap((row) => resultItems(row, 'relationships')),
+      (relation) => stringField(relation, 'id'),
+    );
+    if (relations.length === 0) {
+      return 'I found no active, source-backed knowledge-graph connections for that.';
+    }
+    return [
+      `I found ${relations.length} active source-backed ${relations.length === 1 ? 'connection' : 'connections'}:`,
+      ...relations.flatMap((relation) => {
+        const subject = stringField(relation, 'subjectLabel');
+        const predicate = stringField(relation, 'predicate').replaceAll('_', ' ');
+        const object = stringField(relation, 'objectLabel');
+        const evidenceQuote = stringField(relation, 'evidenceQuote');
+        const sourceMemory = stringField(relation, 'sourceMemory');
+        const source = stringField(relation, 'source');
+        const confidence = Number(relation.memoryConfidence);
+        const unconfirmed = relation.unconfirmed === true || relation.ownerConfirmed !== true;
+        return [
+          `- ${subject} —${predicate}→ ${object}`,
+          evidenceQuote ? `  Evidence: “${evidenceQuote}”` : '',
+          sourceMemory ? `  Saved fact: ${sourceMemory}` : '',
+          `  ${[
+            source ? `source: ${source}` : '',
+            Number.isFinite(confidence) ? `confidence: ${Math.round(confidence * 100)}%` : '',
+            unconfirmed ? 'not owner-confirmed' : 'owner-confirmed',
+          ]
+            .filter(Boolean)
+            .join(', ')}`,
+        ].filter(Boolean);
+      }),
+    ].join('\n');
+  }
   const where =
     request.kind === 'email'
       ? 'the mail'
@@ -1750,6 +1855,14 @@ function enforcePersonalReadGrounding(
       text: `${verified}${missingReadResponse(gaps.labels, evidence)}`,
       blocked: true,
       unsupported: gaps.unsupported,
+    };
+  }
+  if (request.kind === 'drive' || request.kind === 'memory' || request.kind === 'knowledge_graph') {
+    return {
+      text: verifiedReadResponse(request, evidence),
+      blocked: false,
+      unsupported: [],
+      groundingFallback: ['private lookup rendered directly from the current task ledger'],
     };
   }
   const grounding = groundReadDraft(text, request, evidence, opts?.groundingCorpus ?? '');

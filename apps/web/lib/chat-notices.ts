@@ -103,14 +103,47 @@ export function isContractNotice(text: string): boolean {
  * Messages written before a marker existed carry none and keep rendering as
  * prose — nothing rewrites the past.
  */
-export type NoticeKind = 'response-contract' | 'parked' | 'needs-attention' | 'turn-failed';
+export type NoticeKind =
+  | 'response-contract'
+  | 'parked'
+  | 'needs-attention'
+  | 'turn-failed'
+  | 'retracted';
 
 const NOTICE_KINDS = new Set<string>([
   'response-contract',
   'parked',
   'needs-attention',
   'turn-failed',
+  'retracted',
 ]);
+
+export interface RetractionNoticePart {
+  type: 'notice';
+  notice: 'retracted';
+  originalText: string;
+  reason: string;
+  repairId?: string;
+}
+
+export function retractionNoticeOf(parts: unknown[]): RetractionNoticePart | null {
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    const candidate = part as Record<string, unknown>;
+    if (candidate.type !== 'notice' || candidate.notice !== 'retracted') continue;
+    if (typeof candidate.originalText !== 'string' || typeof candidate.reason !== 'string') {
+      continue;
+    }
+    return {
+      type: 'notice',
+      notice: 'retracted',
+      originalText: candidate.originalText,
+      reason: candidate.reason,
+      ...(typeof candidate.repairId === 'string' ? { repairId: candidate.repairId } : {}),
+    };
+  }
+  return null;
+}
 
 export function noticeKindOf(parts: unknown[]): NoticeKind | null {
   for (const part of parts) {

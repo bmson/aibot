@@ -13,6 +13,35 @@ const turn = (text: string, prior = '') => [
 ];
 
 describe('detectPersonalReadRequest', () => {
+  it('routes autobiographical memory, graph, and Drive reads through grounded tools', () => {
+    expect(
+      detectPersonalReadRequest(turn('When did I see the carnival parade in San Francisco?')),
+    ).toMatchObject({
+      kind: 'memory',
+      firstToolName: 'memory.recall',
+      queryTerms: ['carnival', 'parade', 'san', 'francisco'],
+    });
+    expect(detectPersonalReadRequest(turn('Look at my memory graph'))).toMatchObject({
+      kind: 'knowledge_graph',
+      firstToolName: 'memory.graph_snapshot',
+    });
+    expect(
+      detectPersonalReadRequest([
+        { role: 'user', content: 'When did I see the carnival parade in San Francisco?' },
+        { role: 'assistant', content: 'I found a saved record.' },
+        { role: 'user', content: 'Pull the photos' },
+      ]),
+    ).toMatchObject({
+      kind: 'drive',
+      firstToolName: 'drive.search',
+      queryTerms: ['carnival', 'parade', 'san', 'francisco'],
+    });
+  });
+
+  it('does not treat an unrelated question containing files as a Drive lookup', () => {
+    expect(detectPersonalReadRequest(turn('What files are emitted by TypeScript?'))).toBeNull();
+  });
+
   it('routes implicit day questions to all-calendar reads', () => {
     expect(detectPersonalReadRequest(turn('What is happening on Monday?'))).toMatchObject({
       kind: 'calendar',

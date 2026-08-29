@@ -43,7 +43,12 @@ struct MessageBubble: View {
                message.role == .assistant,
                decisionParts.isEmpty,
                !message.text.isEmpty {
-                noticeCard(noticeKind, text: message.text)
+                noticeCard(
+                    noticeKind,
+                    text: message.text,
+                    originalText: message.retractedOriginalText,
+                    retractionReason: message.retractionReason
+                )
             } else if !message.text.isEmpty && !usesPrimaryCards && !message.visibleTextBubbles.isEmpty {
                 messageText
                 if message.role == .assistant, !message.recallSources.isEmpty {
@@ -618,7 +623,12 @@ struct MessageBubble: View {
         .overlay { shape.strokeBorder(tint.opacity(0.25), lineWidth: 0.9) }
     }
 
-    private func noticeCard(_ kind: ChatNoticeKind, text: String) -> some View {
+    private func noticeCard(
+        _ kind: ChatNoticeKind,
+        text: String,
+        originalText: String?,
+        retractionReason: String?
+    ) -> some View {
         let presentation: (title: String, symbol: String, tint: Color) = switch kind {
         case .responseContract:
             (
@@ -642,6 +652,12 @@ struct MessageBubble: View {
             (
                 "Didn’t go through",
                 "xmark.circle.fill",
+                AssistantTheme.inkMuted(for: colorScheme)
+            )
+        case .retracted:
+            (
+                "Retracted response",
+                "arrow.uturn.backward.circle.fill",
                 AssistantTheme.inkMuted(for: colorScheme)
             )
         }
@@ -681,6 +697,24 @@ struct MessageBubble: View {
                 }
                 .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.97))
                 .accessibilityHint("Sends the same message again")
+            }
+            if kind == .retracted {
+                DisclosureGroup("View original response") {
+                    if let retractionReason {
+                        Text(retractionReason)
+                            .font(.caption)
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    }
+                    if let originalText, !originalText.isEmpty {
+                        Text(originalText)
+                            .font(.caption)
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 6)
+                    }
+                }
+                .font(.caption.weight(.medium))
             }
         }
         .padding(15)
@@ -777,6 +811,33 @@ enum MessageResponseCard: Identifiable {
         var id: String { name.lowercased() }
     }
 
+    struct KnowledgeEdge: Identifiable {
+        let id: String
+        let subject: String
+        let predicate: String
+        let object: String
+        let evidence: String
+        let source: String
+        let confidence: Double?
+        let ownerConfirmed: Bool
+    }
+
+    struct ConflictEvent: Identifiable {
+        let id: String
+        let title: String
+        let start: String
+        let end: String
+        let calendar: String
+        let location: String
+    }
+
+    struct CalendarConflict: Identifiable {
+        let id: String
+        let overlapStart: String
+        let overlapEnd: String
+        let groups: [[ConflictEvent]]
+    }
+
     case agenda(title: String, subtitle: String, items: [AgendaItem])
     case event(id: String, start: String, time: String, title: String, location: String, attendees: [String], calendars: [String], calendarLinkURL: String?, meetingLinkURL: String?)
     case weather(location: String, temperature: String, condition: String, details: [WeatherDetail])
@@ -792,6 +853,8 @@ enum MessageResponseCard: Identifiable {
     case sheetRows(id: String, sheetName: String, rows: [[String]], totalRows: Int, linkURL: String?)
     case resource(id: String, resourceType: String, title: String, subtitle: String, details: [Detail], linkLabel: String?, linkURL: String?)
     case status(id: String, title: String, detail: String, symbol: String, details: [Detail], linkLabel: String?, linkURL: String?)
+    case knowledgeGraph(id: String, title: String, edges: [KnowledgeEdge], complete: Bool)
+    case calendarConflicts(id: String, title: String, conflicts: [CalendarConflict], complete: Bool)
 
     var id: String {
         switch self {
@@ -813,6 +876,8 @@ enum MessageResponseCard: Identifiable {
         case let .sheetRows(id, _, _, _, _): id
         case let .resource(id, _, _, _, _, _, _): id
         case let .status(id, _, _, _, _, _, _): id
+        case let .knowledgeGraph(id, _, _, _): id
+        case let .calendarConflicts(id, _, _, _): id
         }
     }
 
@@ -938,11 +1003,81 @@ enum MessageResponseCard: Identifiable {
                     )
                 }
             }()
+            guard !files.isEmpty else { return nil }
             self = .drive(
                 id: data["id"]?.string ?? "drive-results",
                 title: data["title"]?.string ?? "Drive files",
                 query: data["query"]?.string ?? "",
                 files: files
+            )
+        case "knowledge-graph":
+            let nodes: [String: String] = {
+                guard case let .array(values)? = data["nodes"] else { return [:] }
+                return Dictionary(uniqueKeysWithValues: values.compactMap { value in
+                    guard case let .object(node) = value,
+                          let id = node["id"]?.string else { return nil }
+                    return (id, node["label"]?.string ?? "Unknown")
+                })
+            }()
+            let edges: [KnowledgeEdge] = {
+                guard case let .array(values)? = data["edges"] else { return [] }
+                return values.enumerated().compactMap { index, value in
+                    guard case let .object(edge) = value else { return nil }
+                    return .init(
+                        id: edge["id"]?.string ?? "edge-\(index)",
+                        subject: nodes[edge["from"]?.string ?? ""] ?? "Unknown",
+                        predicate: edge["label"]?.string ?? "connected to",
+                        object: nodes[edge["to"]?.string ?? ""] ?? "Unknown",
+                        evidence: edge["evidenceQuote"]?.string ?? "",
+                        source: edge["source"]?.string ?? "",
+                        confidence: edge["confidence"]?.numberValue,
+                        ownerConfirmed: edge["ownerConfirmed"]?.boolValue ?? false
+                    )
+                }
+            }()
+            guard !edges.isEmpty else { return nil }
+            self = .knowledgeGraph(
+                id: data["id"]?.string ?? "knowledge-graph",
+                title: data["title"]?.string ?? "Saved connections",
+                edges: edges,
+                complete: data["complete"]?.boolValue ?? true
+            )
+        case "calendar-conflicts":
+            let conflicts: [CalendarConflict] = {
+                guard case let .array(values)? = data["conflicts"] else { return [] }
+                return values.enumerated().compactMap { index, value in
+                    guard case let .object(conflict) = value,
+                          case let .array(groupValues)? = conflict["groups"] else { return nil }
+                    let groups = groupValues.compactMap { groupValue -> [ConflictEvent]? in
+                        guard case let .object(group) = groupValue,
+                              case let .array(eventValues)? = group["events"] else { return nil }
+                        return eventValues.enumerated().compactMap { eventIndex, eventValue in
+                            guard case let .object(event) = eventValue else { return nil }
+                            return .init(
+                                id: event["id"]?.string ?? "event-\(eventIndex)",
+                                title: event["title"]?.string ?? "Untitled event",
+                                start: event["start"]?.string ?? "",
+                                end: event["end"]?.string ?? "",
+                                calendar: event["calendar"]?.string ?? "Calendar",
+                                location: event["location"]?.string ?? ""
+                            )
+                        }
+                    }
+                    guard groups.count == 2 else { return nil }
+                    return .init(
+                        id: conflict["id"]?.string ?? "conflict-\(index)",
+                        overlapStart: conflict["overlapStart"]?.string ?? "",
+                        overlapEnd: conflict["overlapEnd"]?.string ?? "",
+                        groups: groups
+                    )
+                }
+            }()
+            guard !conflicts.isEmpty else { return nil }
+            self = .calendarConflicts(
+                id: data["id"]?.string ?? "calendar-conflicts",
+                title: data["title"]?.string ?? "Schedule conflict",
+                conflicts: conflicts,
+                complete: data["complete"]?.boolValue ?? true
             )
         case "web-search-results":
             let results: [SearchResult] = {
@@ -1983,6 +2118,10 @@ private struct RichResponseCards: View {
                     resourceCard(resourceType: resourceType, title: title, subtitle: subtitle, details: details, linkLabel: linkLabel, linkURL: linkURL)
                 case let .status(_, title, detail, symbol, details, linkLabel, linkURL):
                     statusCard(title: title, detail: detail, symbol: symbol, details: details, linkLabel: linkLabel, linkURL: linkURL)
+                case let .knowledgeGraph(_, title, edges, complete):
+                    knowledgeGraphCard(title: title, edges: edges, complete: complete)
+                case let .calendarConflicts(_, title, conflicts, complete):
+                    calendarConflictsCard(title: title, conflicts: conflicts, complete: complete)
                 }
             }
         }
@@ -2725,6 +2864,113 @@ private struct RichResponseCards: View {
                         .padding(.vertical, index == 0 ? 0 : 12)
                         if index < files.count - 1 {
                             Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                        }
+                    }
+                }
+            }
+        }
+        .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
+    }
+
+    private func knowledgeGraphCard(
+        title: String,
+        edges: [MessageResponseCard.KnowledgeEdge],
+        complete: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            resultHeader(
+                title: title,
+                subtitle: complete ? "Active, source-backed" : "Showing the closest matches",
+                countLabel: "\(edges.count) \(edges.count == 1 ? "connection" : "connections")"
+            )
+            ForEach(edges) { edge in
+                HStack(alignment: .top, spacing: 10) {
+                    Capsule()
+                        .fill(AssistantTheme.accent(for: colorScheme).opacity(0.42))
+                        .frame(width: 2)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Text(edge.subject)
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(AssistantTheme.accent(for: colorScheme).opacity(0.10), in: Capsule())
+                            Text("—\(edge.predicate)→")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                            Text(edge.object)
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
+                        if !edge.evidence.isEmpty {
+                            Text("“\(edge.evidence)”")
+                                .font(.caption)
+                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Text([
+                            edge.source.isEmpty ? nil : "Source: \(edge.source)",
+                            edge.confidence.map { "Confidence: \(Int(($0 * 100).rounded()))%" },
+                            edge.ownerConfirmed ? "Owner-confirmed" : "Not owner-confirmed"
+                        ].compactMap { $0 }.joined(separator: " · "))
+                            .font(.caption2)
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
+    }
+
+    private func calendarConflictsCard(
+        title: String,
+        conflicts: [MessageResponseCard.CalendarConflict],
+        complete: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            resultHeader(
+                title: title,
+                subtitle: complete ? "Confirmed overlaps" : "Calendar coverage is partial",
+                countLabel: "\(conflicts.count)"
+            )
+            ForEach(conflicts) { conflict in
+                VStack(alignment: .leading, spacing: 10) {
+                    Label(
+                        "Overlap \(cardTime(conflict.overlapStart))–\(cardTime(conflict.overlapEnd))",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                    ForEach(Array(conflict.groups.enumerated()), id: \.offset) { _, events in
+                        if let event = events.first {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(event.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                Text("\(cardTime(event.start))–\(cardTime(event.end))")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                HStack(spacing: 5) {
+                                    ForEach(events) { source in
+                                        Text(source.calendar)
+                                            .font(.caption2.weight(.medium))
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 4)
+                                            .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
+                                    }
+                                }
+                                if !event.location.isEmpty {
+                                    Label(event.location, systemImage: "mappin.and.ellipse")
+                                        .font(.caption)
+                                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                }
+                            }
+                            .padding(12)
+                            .background(AssistantTheme.sunken(for: colorScheme).opacity(0.52), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
                     }
                 }
@@ -3602,6 +3848,9 @@ private struct AssistantMarkdownView: View {
             .padding(.leading, 1)
 
         case let .code(language, text):
+            if language?.lowercased() == "mermaid" {
+                MermaidDiagramView(source: text)
+            } else {
             VStack(alignment: .leading, spacing: language == nil ? 0 : 8) {
                 if let language, !language.isEmpty {
                     Text(language.uppercased())
@@ -3635,6 +3884,7 @@ private struct AssistantMarkdownView: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel(language.map { "\($0) code block" } ?? "Code block")
+            }
 
         case .divider:
             Capsule()

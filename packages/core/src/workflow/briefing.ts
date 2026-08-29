@@ -74,6 +74,10 @@ export interface BriefingCalendarEvent {
    * them already — until now the port simply dropped them on the floor.
    */
   eventId?: string;
+  calendarId?: string;
+  /** Provider-stable identity used to collapse the same event across calendars. */
+  iCalUID?: string;
+  recurringEventId?: string;
   location?: string;
   organizer?: string;
   /** Raw "email (responseStatus)" strings, as the calendar adapter renders them. */
@@ -195,10 +199,106 @@ export interface BriefingResult {
   watchHits: number;
 }
 
-interface CalendarConflict {
-  a: string;
-  b: string;
-  at: string;
+export interface CalendarConflict {
+  a: BriefingCalendarEvent[];
+  b: BriefingCalendarEvent[];
+  overlapStart: string;
+  overlapEnd: string;
+}
+
+interface TimedCalendarEvent extends BriefingCalendarEvent {
+  startMs: number;
+  endMs: number;
+}
+
+const TITLE_STOP_WORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'with',
+  'vs',
+  'at',
+  'sc',
+  'fc',
+  'gold',
+  'red',
+  'blue',
+]);
+
+function normalizedLocation(value: string | undefined): string {
+  return (value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function titleTokens(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/\b\d{1,2}:\d{2}(?:am|pm)?\b/g, ' ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(/\s+/)
+      .filter((token) => token.length > 2 && !TITLE_STOP_WORDS.has(token)),
+  );
+}
+
+function localDate(iso: string, timeZone: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date);
+  } catch {
+    return date.toISOString().slice(0, 10);
+  }
+}
+
+function sameRealWorldEvent(
+  left: TimedCalendarEvent,
+  right: TimedCalendarEvent,
+  timeZone: string,
+): boolean {
+  if (left.iCalUID && right.iCalUID && left.iCalUID === right.iCalUID) return true;
+  if (
+    left.recurringEventId &&
+    right.recurringEventId &&
+    left.recurringEventId === right.recurringEventId
+  ) {
+    return true;
+  }
+  // Heuristic merging is only for cross-calendar copies. Two distinct rows on
+  // one calendar may share a venue and project name and are still real
+  // commitments that can conflict.
+  if (
+    (left.calendarId && right.calendarId && left.calendarId === right.calendarId) ||
+    (!left.calendarId && !right.calendarId && left.calendar === right.calendar)
+  ) {
+    return false;
+  }
+  if (localDate(left.start, timeZone) !== localDate(right.start, timeZone)) return false;
+  const overlap = Math.max(
+    0,
+    Math.min(left.endMs, right.endMs) - Math.max(left.startMs, right.startMs),
+  );
+  const shorter = Math.min(left.endMs - left.startMs, right.endMs - right.startMs);
+  const startsClose = Math.abs(left.startMs - right.startMs) <= 60 * 60 * 1000;
+  if (overlap <= 0 || (overlap / shorter < 0.5 && !startsClose)) return false;
+
+  const leftLocation = normalizedLocation(left.location);
+  const rightLocation = normalizedLocation(right.location);
+  const sameLocation =
+    Boolean(leftLocation && rightLocation) &&
+    (leftLocation === rightLocation ||
+      leftLocation.includes(rightLocation) ||
+      rightLocation.includes(leftLocation));
+  const leftTokens = titleTokens(left.summary);
+  const sharedTokens = [...titleTokens(right.summary)].filter((token) => leftTokens.has(token));
+  return sameLocation ? sharedTokens.length >= 1 : sharedTokens.length >= 2;
 }
 
 /**
@@ -206,7 +306,10 @@ interface CalendarConflict {
  * the owner would want named, and the composer may only ever relay the pairs
  * found here. All-day rows carry no overlap meaning and are excluded.
  */
-function findConflicts(events: ReadonlyArray<BriefingCalendarEvent>): CalendarConflict[] {
+export function findConflicts(
+  events: ReadonlyArray<BriefingCalendarEvent>,
+  timeZone = 'UTC',
+): CalendarConflict[] {
   const timed = events
     .map((event) => ({ ...event, startMs: Date.parse(event.start), endMs: Date.parse(event.end) }))
     .filter(
@@ -217,17 +320,67 @@ function findConflicts(events: ReadonlyArray<BriefingCalendarEvent>): CalendarCo
         event.endMs > event.startMs,
     )
     .sort((a, b) => a.startMs - b.startMs);
-  const conflicts: CalendarConflict[] = [];
+  const parents = timed.map((_, index) => index);
+  const root = (index: number): number => {
+    let current = index;
+    while (parents[current] !== current) current = parents[current] as number;
+    return current;
+  };
+  const unite = (a: number, b: number) => {
+    const left = root(a);
+    const right = root(b);
+    if (left !== right) parents[right] = left;
+  };
   for (let i = 0; i < timed.length; i++) {
-    const earlier = timed[i];
-    if (!earlier) continue;
     for (let j = i + 1; j < timed.length; j++) {
-      const later = timed[j];
+      const left = timed[i];
+      const right = timed[j];
+      if (!left || !right || right.startMs >= left.endMs) break;
+      if (sameRealWorldEvent(left, right, timeZone)) unite(i, j);
+    }
+  }
+  const grouped = new Map<number, TimedCalendarEvent[]>();
+  timed.forEach((event, index) => {
+    const group = grouped.get(root(index)) ?? [];
+    group.push(event);
+    grouped.set(root(index), group);
+  });
+  const groups = [...grouped.values()]
+    .map((group) => ({
+      events: group,
+      startMs: Math.min(...group.map((event) => event.startMs)),
+      endMs: Math.max(...group.map((event) => event.endMs)),
+    }))
+    .sort((a, b) => a.startMs - b.startMs);
+  const conflicts: CalendarConflict[] = [];
+  for (let i = 0; i < groups.length; i++) {
+    const earlier = groups[i];
+    if (!earlier) continue;
+    for (let j = i + 1; j < groups.length; j++) {
+      const later = groups[j];
       if (!later || later.startMs >= earlier.endMs) break;
-      conflicts.push({ a: earlier.summary, b: later.summary, at: earlier.start });
+      conflicts.push({
+        a: earlier.events,
+        b: later.events,
+        overlapStart: new Date(Math.max(earlier.startMs, later.startMs)).toISOString(),
+        overlapEnd: new Date(Math.min(earlier.endMs, later.endMs)).toISOString(),
+      });
     }
   }
   return conflicts.slice(0, MAX_CONFLICTS);
+}
+
+function localDateTime(value: string, timeZone: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
 }
 
 /**
@@ -367,7 +520,7 @@ export async function runBriefing(
 
     const highlights = mail.filter((row) => row.importance >= 3).slice(0, MAX_HIGHLIGHTS);
     const upcoming = upcomingFrom(mail, now);
-    const conflicts = calendar ? findConflicts(calendar.events) : [];
+    const conflicts = calendar ? findConflicts(calendar.events, agent.timezone) : [];
     // Salience is judged against the owner's own addresses so an unanswered
     // invitation can be told from one they already accepted, and an in-house
     // organizer from an outside one.
@@ -410,7 +563,10 @@ export async function runBriefing(
     if (conflicts.length > 0) {
       lines.push(
         'Calendar conflicts in the next day or two:',
-        ...conflicts.map((c) => `- "${c.a}" overlaps "${c.b}" (starting ${c.at})`),
+        ...conflicts.map(
+          (c) =>
+            `- "${c.a[0]?.summary ?? 'Untitled event'}" overlaps "${c.b[0]?.summary ?? 'Untitled event'}" (${localDateTime(c.overlapStart, agent.timezone)} to ${localDateTime(c.overlapEnd, agent.timezone)})`,
+        ),
       );
     }
     if (salient.length > 0) {
@@ -528,6 +684,33 @@ export async function runBriefing(
     // ids; a proposal the producer already made returns null and is skipped, so
     // a daily briefing never re-asks a question that was already answered.
     const parts: unknown[] = [];
+    if (conflicts.length > 0) {
+      parts.push({
+        type: 'data-card',
+        data: {
+          kind: 'calendar-conflicts',
+          id: `calendar-conflicts-${opts.taskId ?? now.toISOString()}`,
+          title: conflicts.length === 1 ? 'Schedule conflict' : 'Schedule conflicts',
+          timeZone: agent.timezone,
+          complete: calendar?.complete ?? false,
+          conflicts: conflicts.map((conflict, index) => ({
+            id: `conflict-${index + 1}`,
+            overlapStart: conflict.overlapStart,
+            overlapEnd: conflict.overlapEnd,
+            groups: [conflict.a, conflict.b].map((events) => ({
+              events: events.map((event) => ({
+                id: event.eventId ?? `${event.calendar}-${event.start}-${event.summary}`,
+                title: event.summary,
+                start: event.start,
+                end: event.end,
+                calendar: event.calendar,
+                location: event.location ?? '',
+              })),
+            })),
+          })),
+        },
+      });
+    }
     for (const entry of upcoming) {
       const proposal = proposalFor(entry);
       if (!proposal) continue;

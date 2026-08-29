@@ -4,17 +4,22 @@ import {
   saveOccasion,
   upcomingOccasions,
 } from '@assistant/core';
+import { GRAPH_EXTRACTION_VERSION } from '@assistant/core/memory/knowledge-graph';
 import {
   findContactsByName,
   goals,
   isTombstoned,
+  knowledgeGraphEntities,
+  knowledgeGraphRelations,
+  knowledgeGraphSources,
   memories,
   messages,
   resolveSubjectContact,
   tasks,
   toolCalls,
 } from '@assistant/db';
-import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, ilike, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
 import { register } from '../register.js';
 import type { ToolRegistry } from '../registry.js';
@@ -131,8 +136,19 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       acceptsUntrustedInput: true,
       execute: async (args, ctx) => {
         const [embedding] = await deps.embed([args.query]);
+        const lexicalTerms = args.query
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, ' ')
+          .split(/\s+/)
+          .filter((term) => term.length > 2)
+          .slice(0, 5);
+        const lexicalMatch =
+          lexicalTerms.length > 0
+            ? or(...lexicalTerms.map((term) => ilike(memories.content, `%${term}%`)))
+            : undefined;
         const rows = await ctx.db
           .select({
+            id: memories.id,
             content: memories.content,
             category: memories.category,
             kind: memories.kind,
@@ -140,6 +156,8 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
             confidence: memories.confidence,
             validFrom: memories.validFrom,
             validUntil: memories.validUntil,
+            source: memories.source,
+            ownerConfirmed: memories.ownerConfirmed,
             createdAt: memories.createdAt,
             similarity: sql<number>`1 - (${memories.embedding} <=> ${JSON.stringify(embedding)}::vector)`,
           })
@@ -151,7 +169,10 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
               or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
             ),
           )
-          .orderBy(sql`${memories.embedding} <=> ${JSON.stringify(embedding)}::vector`)
+          .orderBy(
+            lexicalMatch ? sql`CASE WHEN ${lexicalMatch} THEN 0 ELSE 1 END` : sql`1`,
+            sql`${memories.embedding} <=> ${JSON.stringify(embedding)}::vector`,
+          )
           .limit(args.limit);
         const now = Date.now();
         return {
@@ -160,7 +181,8 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
             // Flag a fact the model must not treat as settled: low confidence, or
             // a validity window that has lapsed (stale but not yet superseded).
             unconfirmed:
-              Number(r.confidence) < 0.5 ||
+              r.ownerConfirmed !== true ||
+              Number(r.confidence) < 0.7 ||
               (r.validUntil ? new Date(r.validUntil).getTime() < now : false),
           })),
         };
@@ -170,6 +192,78 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     // quarantined at write time (extraction) — so what recall returns is
     // owner-vetted state. Grounding a task in its own memory must not strip
     // the owner card from every later step.
+    { confidentialRead: true },
+  );
+
+  register(
+    registry,
+    {
+      name: 'memory.graph_snapshot',
+      description:
+        'Read active, source-backed knowledge-graph connections relevant to a query. Returns direct relationships plus the exact source memory and evidence. Never infer missing nodes or edges.',
+      inputSchema: z.object({
+        query: z.string().min(2).max(500),
+        limit: z.number().int().min(1).max(50).default(20),
+      }),
+      risk: 'autonomous',
+      acceptsUntrustedInput: true,
+      execute: async (args, ctx) => {
+        const subject = alias(knowledgeGraphEntities, 'snapshot_subject');
+        const object = alias(knowledgeGraphEntities, 'snapshot_object');
+        const [embedding] = await deps.embed([args.query]);
+        const vector = JSON.stringify(embedding);
+        const rows = await ctx.db
+          .select({
+            id: knowledgeGraphRelations.id,
+            subjectId: subject.id,
+            subjectLabel: sql<string>`COALESCE(${subject.preferredLabel}, ${subject.label})`,
+            subjectKind: subject.kind,
+            predicate: knowledgeGraphRelations.predicate,
+            objectId: object.id,
+            objectLabel: sql<string>`COALESCE(${object.preferredLabel}, ${object.label})`,
+            objectKind: object.kind,
+            sourceMemoryId: memories.id,
+            sourceMemory: memories.content,
+            source: memories.source,
+            memoryConfidence: memories.confidence,
+            ownerConfirmed: memories.ownerConfirmed,
+            evidenceQuote: knowledgeGraphRelations.evidenceQuote,
+            relationshipConfidence: knowledgeGraphRelations.confidence,
+            validFrom: knowledgeGraphRelations.validFrom,
+            validUntil: knowledgeGraphRelations.validUntil,
+            similarity: sql<number>`1 - (${memories.embedding} <=> ${vector}::vector)`,
+          })
+          .from(knowledgeGraphRelations)
+          .innerJoin(memories, eq(memories.id, knowledgeGraphRelations.sourceMemoryId))
+          .innerJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
+          .innerJoin(subject, eq(subject.id, knowledgeGraphRelations.subjectEntityId))
+          .innerJoin(object, eq(object.id, knowledgeGraphRelations.objectEntityId))
+          .where(
+            and(
+              eq(knowledgeGraphRelations.agentId, ctx.agentId),
+              ne(knowledgeGraphRelations.reviewStatus, 'rejected'),
+              eq(memories.category, 'knowledge'),
+              eq(memories.quarantined, false),
+              or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
+              isNotNull(memories.embedding),
+              eq(knowledgeGraphSources.status, 'ready'),
+              eq(knowledgeGraphSources.contentHash, memories.contentHash),
+              gte(knowledgeGraphSources.extractionVersion, GRAPH_EXTRACTION_VERSION),
+              isNotNull(knowledgeGraphRelations.evidenceQuote),
+            ),
+          )
+          .orderBy(sql`${memories.embedding} <=> ${vector}::vector`)
+          .limit(args.limit);
+        return {
+          query: args.query,
+          complete: rows.length < args.limit,
+          relationships: rows.map((row) => ({
+            ...row,
+            unconfirmed: row.ownerConfirmed !== true || Number(row.memoryConfidence) < 0.7,
+          })),
+        };
+      },
+    },
     { confidentialRead: true },
   );
 

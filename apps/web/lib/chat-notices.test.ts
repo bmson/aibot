@@ -5,6 +5,7 @@ import {
   isContractNotice,
   isDecisionProseNotice,
   noticeKindOf,
+  retractionNoticeOf,
 } from './chat-notices.js';
 
 describe('chat notices', () => {
@@ -145,12 +146,39 @@ describe('noticeKindOf', () => {
     ).toBe('response-contract');
     expect(noticeKindOf([{ type: 'notice', notice: 'parked' }])).toBe('parked');
     expect(noticeKindOf([{ type: 'notice', notice: 'needs-attention' }])).toBe('needs-attention');
+    expect(noticeKindOf([{ type: 'notice', notice: 'retracted' }])).toBe('retracted');
     expect(noticeKindOf([{ type: 'text', text: 'x' }, { type: 'recall' }])).toBeNull();
   });
 
   it('ignores a kind it does not know, so an unrecognised marker stays prose', () => {
     expect(noticeKindOf([{ type: 'notice', notice: 'something-newer' }])).toBeNull();
     expect(noticeKindOf([null, 'text', { type: 'notice' }])).toBeNull();
+  });
+});
+
+describe('retractionNoticeOf', () => {
+  it('preserves the original as inert disclosure data with an audit reason', () => {
+    expect(
+      retractionNoticeOf([
+        {
+          type: 'notice',
+          notice: 'retracted',
+          reason: 'Unsupported source data.',
+          originalText: '[Fake link](https://example.invalid)',
+          repairId: 'repair-v1',
+        },
+      ]),
+    ).toEqual({
+      type: 'notice',
+      notice: 'retracted',
+      reason: 'Unsupported source data.',
+      originalText: '[Fake link](https://example.invalid)',
+      repairId: 'repair-v1',
+    });
+  });
+
+  it('rejects incomplete retraction markers', () => {
+    expect(retractionNoticeOf([{ type: 'notice', notice: 'retracted' }])).toBeNull();
   });
 });
 

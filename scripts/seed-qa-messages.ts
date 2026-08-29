@@ -43,6 +43,11 @@ const markdown = [
   'console.log(`about $${total}`);',
   '```',
   '',
+  '```mermaid',
+  'graph LR',
+  '  A[Saved memory] -->|supports| B[Knowledge connection]',
+  '```',
+  '',
   '| Item | Estimate | Booked |',
   '| --- | --- | --- |',
   '| Flights | $420 | no |',
@@ -62,6 +67,12 @@ const conversationId = primary[0].id;
 
 await db.delete(messages).where(eq(messages.channelMessageId, FIXTURE_TAG));
 await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-user`));
+await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-cards`));
+
+if (process.argv.includes('--cleanup')) {
+  console.log('QA messages removed');
+  process.exit(0);
+}
 
 await db.insert(messages).values([
   {
@@ -79,6 +90,82 @@ await db.insert(messages).values([
     text: markdown,
     parts: [{ type: 'text', text: markdown }],
     channelMessageId: FIXTURE_TAG,
+  },
+  {
+    conversationId,
+    role: 'assistant',
+    origin: 'assistant',
+    text: 'Structured grounding and calendar-conflict QA fallback.',
+    parts: [
+      { type: 'text', text: 'Structured grounding and calendar-conflict QA fallback.' },
+      {
+        type: 'data-card',
+        data: {
+          kind: 'knowledge-graph',
+          id: `${FIXTURE_TAG}-graph`,
+          title: 'Source-backed connection',
+          complete: true,
+          nodes: [
+            { id: 'owner', label: 'Owner' },
+            { id: 'parade', label: 'Carnival Parade' },
+          ],
+          edges: [
+            {
+              id: 'edge-1',
+              from: 'owner',
+              to: 'parade',
+              label: 'attended',
+              evidenceQuote: 'Owner attended the Carnival Parade',
+              source: 'Calendar import · May 25, 2014',
+              confidence: 0.6,
+              ownerConfirmed: false,
+            },
+          ],
+        },
+      },
+      {
+        type: 'data-card',
+        data: {
+          kind: 'calendar-conflicts',
+          id: `${FIXTURE_TAG}-conflicts`,
+          title: 'Schedule conflict',
+          timeZone: 'America/Los_Angeles',
+          complete: true,
+          conflicts: [
+            {
+              id: 'conflict-1',
+              overlapStart: '2026-08-29T19:00:00.000Z',
+              overlapEnd: '2026-08-29T19:30:00.000Z',
+              groups: [
+                {
+                  events: [
+                    {
+                      id: 'event-1',
+                      title: 'Team practice',
+                      start: '2026-08-29T18:30:00.000Z',
+                      end: '2026-08-29T19:30:00.000Z',
+                      calendar: 'Family',
+                    },
+                  ],
+                },
+                {
+                  events: [
+                    {
+                      id: 'event-2',
+                      title: 'School pickup',
+                      start: '2026-08-29T19:00:00.000Z',
+                      end: '2026-08-29T20:00:00.000Z',
+                      calendar: 'Personal',
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+    channelMessageId: `${FIXTURE_TAG}-cards`,
   },
 ]);
 

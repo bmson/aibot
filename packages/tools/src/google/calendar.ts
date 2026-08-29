@@ -30,6 +30,8 @@ interface CalendarEntry {
 
 interface RawEvent {
   id: string;
+  iCalUID?: string;
+  recurringEventId?: string;
   summary?: string;
   description?: string;
   location?: string;
@@ -124,6 +126,8 @@ function normalizeEvent(raw: RawEvent, calendar: CalendarEntry) {
 
   return {
     eventId: raw.id,
+    iCalUID: raw.iCalUID,
+    recurringEventId: raw.recurringEventId,
     // Which calendar this came from — without it a merged list can't say
     // whether something is on the work calendar or the family one.
     calendar: calendar.name,

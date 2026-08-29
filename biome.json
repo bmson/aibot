@@ -9,6 +9,7 @@
       "!**/.cache",
       "!**/node_modules",
       "!**/drizzle",
+      "!apps/ios/Assistant/Resources/mermaid.min.js",
       "!apps/web/app/globals.css",
       "!apps/web/next-env.d.ts"
     ]
