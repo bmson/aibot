@@ -118,3 +118,31 @@ describe('agent app', () => {
     expect(res.status).toBe(413);
   });
 });
+
+describe('unhandled errors', () => {
+  it('names the route that threw, and still answers 500', async () => {
+    // Hono's default handler logs a bare stack with no route on it, so a 500
+    // in production could only be attributed by correlating timestamps against
+    // the request log. The body must not change — only the log line.
+    const app = createApp();
+    app.get('/boom', () => {
+      throw new Error('kaboom');
+    });
+    const logged: unknown[][] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args);
+    };
+    try {
+      const res = await app.request('/boom');
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe('Internal Server Error');
+    } finally {
+      console.error = original;
+    }
+    expect(logged.some((args) => String(args[0]).includes('unhandled error: GET /boom'))).toBe(
+      true,
+    );
+    expect(logged.some((args) => String(args[1]).includes('kaboom'))).toBe(true);
+  });
+});

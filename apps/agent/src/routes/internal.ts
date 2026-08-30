@@ -106,17 +106,22 @@ internal.post('/sweep', async (c) => {
     () => renotifyStalledAttention(deps.db, executorDeps(deps).notifyOwner),
     0,
   );
-  const agent = await getAgent(deps.db);
-  const fired = await step(
-    'runDueSchedules',
-    () => runDueSchedules(deps.db, agent.timezone),
-    [] as Awaited<ReturnType<typeof runDueSchedules>>,
-  );
-  const budgetNotices = await step(
-    'emitBudgetNotices',
-    () => emitBudgetNotices(deps.db, agent.id),
-    [] as string[],
-  );
+  // Guarded like every other step: this one read used to sit outside the
+  // guards, so a single database blip threw the WHOLE sweep — including
+  // purgeExpired below, which is what releases held cost reservations. A
+  // minute-by-minute sweep that dies on a blip turns a transient fault into a
+  // tightening budget.
+  const agent = await step('getAgent', () => getAgent(deps.db), null);
+  const fired = agent
+    ? await step(
+        'runDueSchedules',
+        () => runDueSchedules(deps.db, agent.timezone),
+        [] as Awaited<ReturnType<typeof runDueSchedules>>,
+      )
+    : [];
+  const budgetNotices = agent
+    ? await step('emitBudgetNotices', () => emitBudgetNotices(deps.db, agent.id), [] as string[])
+    : [];
   // Backstop: re-notify everything due (sleep wake-ups, retries, lost notifications).
   // Locally the poller executes these itself; in prod Cloud Tasks calls back.
   const due = await step(
@@ -208,18 +213,51 @@ internal.get('/canaries/status', async (c) => {
   return c.json({ latest });
 });
 
+/**
+ * Which checks in a run actually failed, and what each said.
+ *
+ * The alert used to carry only the verdict — "The latest canary run failed." —
+ * so every red hour began with a database query to learn anything at all. The
+ * run row already holds the reason; this puts it in the log line. A skipped
+ * check (Twilio unconfigured, say) is not a failure and is left out.
+ */
+export function failedCanaryChecks(
+  latest: { checks?: Record<string, unknown> } | null | undefined,
+): {
+  failed: string[];
+  reasons: Record<string, string>;
+} {
+  const failed: string[] = [];
+  const reasons: Record<string, string> = {};
+  for (const [name, value] of Object.entries(latest?.checks ?? {})) {
+    if (!value || typeof value !== 'object') continue;
+    const check = value as { ok?: unknown; skipped?: unknown; detail?: unknown };
+    if (check.ok === true || check.skipped === true) continue;
+    failed.push(name);
+    if (typeof check.detail === 'string' && check.detail) {
+      reasons[name] = check.detail.slice(0, 500);
+    }
+  }
+  return { failed, reasons };
+}
+
 internal.on(['GET', 'POST'], '/canaries/health', async (c) => {
   const latest = await latestCanaryRun(buildDeps().db);
   const health = evaluateCanaryHealth(latest);
-  if (!health.ok && health.state !== 'running') {
-    console.error(
-      JSON.stringify({
-        msg: 'canary_alert',
-        state: health.state,
-        detail: health.detail,
-        runId: latest?.runId,
-      }),
-    );
+  if (!health.ok) {
+    const { failed, reasons } = failedCanaryChecks(latest);
+    const line = JSON.stringify({
+      msg: 'canary_alert',
+      state: health.state,
+      detail: health.detail,
+      runId: latest?.runId,
+      ...(latest?.error ? { runError: latest.error.slice(0, 500) } : {}),
+      ...(failed.length > 0 ? { failed, reasons } : {}),
+    });
+    // A run still inside its 10-minute window is not yet news, but it used to
+    // be logged NOWHERE while still answering 503 — an alert with no trace.
+    if (health.state === 'running') console.warn(line);
+    else console.error(line);
   }
   return c.json({ health, latest }, health.ok ? 200 : 503);
 });
