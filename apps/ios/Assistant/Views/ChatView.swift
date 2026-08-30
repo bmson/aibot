@@ -23,6 +23,37 @@ enum PullMenuMotion {
         return progress * progress * (3 - (2 * progress))
     }
 
+    /// The composer starts above the device safe area, then sheds only the
+    /// portion of that inset the lifted conversation has already cleared.
+    /// Driving this explicitly avoids SwiftUI dropping the entire inset when
+    /// an offset surface first crosses the safe-area boundary.
+    static func residualBottomSafeAreaInset(
+        deviceInset: CGFloat,
+        revealProgress: CGFloat
+    ) -> CGFloat {
+        max(deviceInset, 0) * (1 - unit(revealProgress))
+    }
+
+    /// Corner rounding is binary once the conversation becomes a sheet. The
+    /// reveal progress still drives its shadow, but never its silhouette.
+    static func sheetCornerRadius(isActive: Bool, fullRadius: CGFloat) -> CGFloat {
+        isActive ? max(fullRadius, 0) : 0
+    }
+
+    /// Returns a bottom-up row rank for a row-major collection. Items in the
+    /// same visual row share a rank; zero is the first row to become visible.
+    static func bottomUpFadeRank(
+        itemIndex: Int,
+        itemCount: Int,
+        columns: Int
+    ) -> Int {
+        guard itemIndex >= 0, itemCount > 0, columns > 0 else { return 0 }
+        let boundedIndex = min(itemIndex, itemCount - 1)
+        let rowCount = (itemCount + columns - 1) / columns
+        let row = boundedIndex / columns
+        return max(rowCount - row - 1, 0)
+    }
+
     /// Converts an upward drag into a stable, bounded menu reveal. Keeping
     /// this independent from the scroll view makes a reversing finger return
     /// along the same path rather than letting UIKit's rubber-band add motion.
@@ -205,6 +236,9 @@ struct ChatView: View {
     @State private var menuCloseGestureIsHorizontal = false
     @State private var menuPullTranscriptCompensation: CGFloat = 0
     @State private var menuOpen = false
+    // Radius is a sheet state, not a reveal-progress effect. It switches on
+    // at the first real pull point and stays on until a close spring finishes.
+    @State private var menuSurfaceRounded = false
     @State private var menuDetentReached = false
     @State private var menuDetentFeedback = 0
     @State private var menuAutonomyFeedback = 0
@@ -259,7 +293,10 @@ struct ChatView: View {
                 .background(stageBackdrop.ignoresSafeArea(.container))
                 .clipShape(
                     RoundedRectangle(
-                        cornerRadius: menuSheetCornerRadius * menuSurfaceProgress,
+                        cornerRadius: PullMenuMotion.sheetCornerRadius(
+                            isActive: menuSurfaceRounded,
+                            fullRadius: menuSheetCornerRadius
+                        ),
                         style: .continuous
                     )
                 )
@@ -551,7 +588,11 @@ struct ChatView: View {
                     // it; otherwise that proposal can turn the end spacer
                     // into a whole blank transcript screen.
                     .fixedSize(horizontal: false, vertical: true)
-                    .safeAreaPadding(.bottom)
+                    // At rest, nil preserves SwiftUI's keyboard-aware default.
+                    // During a menu transition, use a continuous residual inset
+                    // instead of letting the transformed surface drop it in one
+                    // frame as it crosses the device safe-area boundary.
+                    .safeAreaPadding(.bottom, composerBottomSafeAreaInset)
                     .offset(y: menuPullActive ? menuPullComposerOffset : 0)
                     .onGeometryChange(for: CGFloat.self) { geometry in
                         geometry.size.height
@@ -688,6 +729,14 @@ struct ChatView: View {
         PullMenuMotion.smoothStep(menuRevealProgress)
     }
 
+    private var composerBottomSafeAreaInset: CGFloat? {
+        guard menuSurfaceRounded else { return nil }
+        return PullMenuMotion.residualBottomSafeAreaInset(
+            deviceInset: deviceBottomSafeAreaInset,
+            revealProgress: menuRevealProgress
+        )
+    }
+
     private func organicProgress(_ value: CGFloat) -> CGFloat {
         let progress = min(max(value, 0), 1)
         let remaining = 1 - progress
@@ -768,6 +817,7 @@ struct ChatView: View {
                     var transaction = Transaction(animation: nil)
                     transaction.disablesAnimations = true
                     withTransaction(transaction) {
+                        menuSurfaceRounded = true
                         menuPullTranscriptCompensation = 0
                     }
                 }
@@ -1095,8 +1145,16 @@ struct ChatView: View {
     ) -> some View {
         // Opacity only: the tiles used to also rise 24pt while fading in,
         // which — uncovered progressively by the lifting sheet — read as the
-        // items stretching. The staggered fade keeps the cascade on its own.
-        let visibility = menuVisibilityProgress(after: 0.18 + (CGFloat(index) * 0.045))
+        // items stretching. Reveal paired rows from the physical bottom edge,
+        // matching the order in which the lifting surface exposes them. The
+        // extra-large horizontal strip is one row and fades as a group.
+        let columns = usesExtraLargeAccessibilityMenu ? 8 : 2
+        let fadeRank = PullMenuMotion.bottomUpFadeRank(
+            itemIndex: index,
+            itemCount: 8,
+            columns: columns
+        )
+        let visibility = menuVisibilityProgress(after: 0.18 + (CGFloat(fadeRank) * 0.09))
 
         return Button(action: action) {
             pullMenuButtonSurface(isSelected: isSelected) {
@@ -1302,12 +1360,28 @@ struct ChatView: View {
             menuPullDistance = currentRevealDistance
             menuCloseDragDistance = 0
             menuPullTranscriptCompensation = 0
+            if open {
+                menuSurfaceRounded = true
+            }
         }
 
         menuOpen = open
         withAnimation(menuTransitionAnimation(open: open)) {
             menuPullActive = false
             menuPullDistance = open ? menuRevealHeight : 0
+        } completion: {
+            // A close can be reversed before its spring settles. Only clear the
+            // radius when the surface is still closed and no new pull owns it.
+            guard !menuOpen,
+                  !menuPullActive,
+                  visibleMenuRevealDistance <= 0.5
+            else { return }
+
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                menuSurfaceRounded = false
+            }
         }
     }
 

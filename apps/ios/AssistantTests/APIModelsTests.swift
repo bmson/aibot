@@ -1418,6 +1418,95 @@ final class APIModelsTests: XCTestCase {
         )
     }
 
+    func testPullMenuPresentationKeepsClearanceAndRevealsRowsBottomUp() {
+        XCTAssertEqual(
+            PullMenuMotion.residualBottomSafeAreaInset(
+                deviceInset: 34,
+                revealProgress: 0
+            ),
+            34,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            PullMenuMotion.residualBottomSafeAreaInset(
+                deviceInset: 34,
+                revealProgress: 0.5
+            ),
+            17,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            PullMenuMotion.residualBottomSafeAreaInset(
+                deviceInset: 34,
+                revealProgress: 1
+            ),
+            0,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            PullMenuMotion.residualBottomSafeAreaInset(
+                deviceInset: 34,
+                revealProgress: -1
+            ),
+            34,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            PullMenuMotion.residualBottomSafeAreaInset(
+                deviceInset: 34,
+                revealProgress: 2
+            ),
+            0,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            PullMenuMotion.residualBottomSafeAreaInset(
+                deviceInset: -10,
+                revealProgress: 0.5
+            ),
+            0,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            PullMenuMotion.sheetCornerRadius(isActive: false, fullRadius: 34),
+            0
+        )
+        XCTAssertEqual(
+            PullMenuMotion.sheetCornerRadius(isActive: true, fullRadius: 34),
+            34
+        )
+        XCTAssertEqual(
+            PullMenuMotion.sheetCornerRadius(isActive: true, fullRadius: -10),
+            0
+        )
+
+        // Normal layouts contain four paired rows. The bottom pair appears
+        // first, and both destinations in every row share a fade rank.
+        XCTAssertEqual(
+            (0..<8).map {
+                PullMenuMotion.bottomUpFadeRank(
+                    itemIndex: $0,
+                    itemCount: 8,
+                    columns: 2
+                )
+            },
+            [3, 3, 2, 2, 1, 1, 0, 0]
+        )
+
+        // The accessibility layout presents every destination in one
+        // horizontal row, so it fades as one group.
+        XCTAssertEqual(
+            (0..<8).map {
+                PullMenuMotion.bottomUpFadeRank(
+                    itemIndex: $0,
+                    itemCount: 8,
+                    columns: 8
+                )
+            },
+            Array(repeating: 0, count: 8)
+        )
+    }
+
     func testWorkspaceCostBreakdownsAcceptPostgresAggregateCounts() throws {
         // PostgreSQL count(*) may reach an older mobile API deployment as a
         // JSON string, while the current endpoint normalizes it to a number.
