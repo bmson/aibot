@@ -24,6 +24,7 @@ import {
   or,
   sql,
 } from 'drizzle-orm';
+import { compactChatMessageParts } from './chat-card.js';
 import { type Cue, companionPersonaLines, cueMessageParts, splitAtBreaks } from './chat-cues.js';
 import type { RecallSource } from './memory/recall.js';
 import { claimTask, completeTask, type TaskLease } from './workflow/machine.js';
@@ -74,7 +75,7 @@ export function assistantMessageParts(
   // Companion cues stripped from the reply text; the dashboard reads them to
   // animate its face and offer quick-reply chips.
   if (opts?.cues && opts.cues.length > 0) parts.push(...cueMessageParts(opts.cues));
-  return parts;
+  return compactChatMessageParts(text, parts);
 }
 
 const DEFAULT_MESSAGE_LIMIT = 100;

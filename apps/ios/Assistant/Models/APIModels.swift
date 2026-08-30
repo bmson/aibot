@@ -57,10 +57,25 @@ struct MessagePart: Codable, Hashable, Sendable {
     var originalText: String?
     var reason: String?
     var repairId: String?
+    var presentation: ChatCardPresentation?
     var proposedBudgetUsd: Double?
     /// Auto-recall provenance. Optional keeps an older server and all prior
     /// message parts decodable while GraphRAG rolls out.
     var sources: [MessageRecallSource]? = nil
+}
+
+struct ChatCardFact: Codable, Hashable, Sendable {
+    let label: String
+    let value: String
+}
+
+struct ChatCardPresentation: Codable, Hashable, Sendable {
+    let version: Int
+    let headline: String
+    let summary: String
+    let facts: [ChatCardFact]?
+    let detailLabel: String?
+    let diagnostics: [String]?
 }
 
 struct MessageRecallSource: Codable, Hashable, Sendable {
@@ -158,6 +173,10 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
             .filter { $0.type == "notice" }
             .compactMap { $0.notice.flatMap(ChatNoticeKind.init(rawValue:)) }
             .first
+    }
+
+    var noticePresentation: ChatCardPresentation? {
+        parts.first { $0.type == "notice" && $0.presentation?.version == 1 }?.presentation
     }
 
     var retractedOriginalText: String? {

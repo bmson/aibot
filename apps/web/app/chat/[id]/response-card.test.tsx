@@ -105,4 +105,33 @@ describe('ResponseCards', () => {
     expect(html).not.toContain('data:text/html');
     expect(html).toContain('Photos.zip');
   });
+
+  it('shows three result rows at first glance and discloses the rest', () => {
+    const html = render({
+      kind: 'web-search-results',
+      id: 'search-1',
+      results: Array.from({ length: 5 }, (_, index) => ({
+        id: `r${index}`,
+        title: `Result ${index + 1}`,
+        url: `https://example.com/${index}`,
+        snippet: `Snippet ${index + 1}`,
+      })),
+    });
+    expect(html).toContain('2 more');
+    expect(html.indexOf('Result 3')).toBeLessThan(html.indexOf('2 more'));
+    expect(html.indexOf('2 more')).toBeLessThan(html.indexOf('Result 4'));
+  });
+
+  it('shows three cards before grouping additional cards', () => {
+    const cards = Array.from({ length: 5 }, (_, index) => ({
+      kind: 'status',
+      id: `status-${index}`,
+      title: `Status ${index + 1}`,
+      detail: `Detail ${index + 1}`,
+    }));
+    const html = renderToStaticMarkup(<ResponseCards cards={cards} timeZone="UTC" />);
+    expect(html).toContain('2 more results');
+    expect(html.indexOf('Status 3')).toBeLessThan(html.indexOf('2 more results'));
+    expect(html.indexOf('2 more results')).toBeLessThan(html.indexOf('Status 4'));
+  });
 });

@@ -26,6 +26,7 @@ import {
   isDecisionProseNotice,
   isOffCourse,
   noticeKindOf,
+  noticePresentationOf,
   offCourseReplacement,
   retractionNoticeOf,
   turnFailedReason,
@@ -138,6 +139,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
     fullText !== ''
       ? (noticeKindOf(parts) ?? (isContractNotice(fullText) ? 'response-contract' : null))
       : null;
+  const noticePresentation = noticeKind === null ? null : noticePresentationOf(parts);
   // An off-course reply keeps its text (it had already streamed)
   // and adds the marker card; a turn-failed notice IS the card.
   // Both recoveries resend the words that opened this turn.
@@ -177,6 +179,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
         <NoticeCard
           kind={noticeKind}
           text={fullText}
+          presentation={noticePresentation}
           originalText={retraction?.originalText}
           retractionReason={retraction?.reason}
           actions={

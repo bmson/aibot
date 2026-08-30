@@ -12,7 +12,6 @@
 import { CircleCheck, CircleX, Clock, type LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
-import { microLabelClass } from '@/lib/ui';
 
 /**
  * `waiting` is the only tone that means "nothing moves until you answer" — it
@@ -29,28 +28,28 @@ export type DecisionTone = 'waiting' | 'info' | 'quiet' | 'system';
  * scroller's overflow-x, leaving the card open-sided. A border is inside the
  * box, so it survives at any width.
  */
-const TONES: Record<DecisionTone, { edge: string; band: string; chip: string; label: string }> = {
+const TONES: Record<DecisionTone, { edge: string; rail: string; chip: string; label: string }> = {
   waiting: {
     edge: 'border-amber-300/80 dark:border-amber-700/70',
-    band: 'border-amber-200/70 bg-amber-50/80 dark:border-amber-900/60 dark:bg-amber-950/40',
+    rail: 'bg-amber-400 dark:bg-amber-500',
     chip: 'bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300',
     label: 'text-amber-800 dark:text-amber-300',
   },
   info: {
     edge: 'border-edge/70',
-    band: 'border-edge/60 bg-sunken/40',
+    rail: 'bg-gradient-to-b from-accent via-accent to-sky-300',
     chip: 'bg-accent/10 text-accent',
     label: 'text-accent',
   },
   quiet: {
     edge: 'border-edge/70',
-    band: 'border-edge/60 bg-sunken/40',
+    rail: 'bg-sky-300 dark:bg-sky-500',
     chip: 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300',
     label: 'text-sky-700 dark:text-sky-300',
   },
   system: {
     edge: 'border-edge/70',
-    band: 'border-edge/60 bg-sunken/40',
+    rail: 'bg-edge',
     chip: 'bg-sunken text-muted',
     label: 'text-muted',
   },
@@ -85,15 +84,19 @@ export function DecisionCard({
     <section
       data-decision-card="true"
       data-tone={tone}
-      className={`paper ${CARD_WIDTH} overflow-hidden rounded-xl border bg-raised ${styles.edge}`}
+      className={`paper relative ${CARD_WIDTH} overflow-hidden rounded-2xl border bg-raised ${styles.edge}`}
     >
+      <span
+        className={`absolute top-4 bottom-4 left-0 w-0.5 rounded-full ${styles.rail}`}
+        aria-hidden="true"
+      />
       <div
         data-decision-card-header="true"
-        className={`flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 sm:px-5 ${styles.band}`}
+        className="flex flex-wrap items-center justify-between gap-2 px-4 pt-4 sm:px-5"
       >
-        <p className={`flex min-w-0 items-center gap-2.5 ${microLabelClass} ${styles.label}`}>
+        <p className={`flex min-w-0 items-center gap-2 text-xs font-medium ${styles.label}`}>
           <span
-            className={`inline-flex size-6 shrink-0 items-center justify-center rounded-md ${styles.chip}`}
+            className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full ${styles.chip}`}
           >
             <Icon className="size-3.5" aria-hidden="true" />
           </span>
@@ -101,7 +104,7 @@ export function DecisionCard({
         </p>
         {action}
       </div>
-      <div data-decision-card-body="true" className="min-w-0 px-4 py-4 sm:px-5">
+      <div data-decision-card-body="true" className="min-w-0 px-4 pt-3 pb-4 sm:px-5">
         {children}
       </div>
     </section>

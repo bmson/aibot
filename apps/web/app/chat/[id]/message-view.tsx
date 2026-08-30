@@ -21,7 +21,7 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import { type ReactNode, useEffect, useState, useTransition } from 'react';
-
+import type { ChatCardPresentation } from '@/lib/chat-notices';
 import { type NoticeKind, offCourseReplacement } from '@/lib/chat-notices';
 import { focusRing } from '@/lib/ui';
 import { DecisionCard, type DecisionTone } from './decision-card';
@@ -355,38 +355,67 @@ const NOTICE_PRESENTATION = {
 export function NoticeCard({
   kind,
   text,
+  presentation,
   actions,
   originalText,
   retractionReason,
 }: {
   kind: NoticeKind;
   text: string;
+  presentation?: ChatCardPresentation | null;
   /** Recovery affordances — a turn-failed card's retry, for instance. */
   actions?: ReactNode;
   originalText?: string;
   retractionReason?: string;
 }) {
   const { tone, icon, label } = NOTICE_PRESENTATION[kind];
+  const headline = presentation?.headline ?? label;
+  const summary = presentation?.summary ?? text;
+  const diagnostics = presentation?.diagnostics ?? [];
   return (
     <DecisionCard tone={tone} icon={icon} label={label}>
-      <div
-        className={`break-words text-sm leading-6 [overflow-wrap:anywhere] ${
-          kind === 'response-contract' ? 'text-muted' : 'text-strong'
-        }`}
-      >
-        <MessageMarkdown text={text} />
-      </div>
+      <h3 className="text-base leading-6 font-semibold tracking-[-0.015em] text-strong">
+        {headline}
+      </h3>
+      <p className="mt-1 max-w-[68ch] break-words text-sm leading-5 text-muted [overflow-wrap:anywhere]">
+        {summary}
+      </p>
+      {presentation?.facts?.length ? (
+        <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5">
+          {presentation.facts.map((fact, index) => (
+            <div
+              key={`${fact.label}-${index.toString()}`}
+              className="flex items-baseline gap-1.5 text-xs"
+            >
+              <dt className="text-muted">{fact.label}</dt>
+              <dd className="font-medium text-strong">{fact.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
       {actions ? <div className="mt-3 flex flex-wrap items-center gap-2">{actions}</div> : null}
-      {kind === 'response-contract' ? (
-        <details className="mt-2">
-          <summary className="disclosure flex items-center gap-2 cursor-pointer text-xs text-muted select-none">
-            Why am I seeing this?
+      {diagnostics.length > 0 || kind === 'response-contract' ? (
+        <details className="mt-3 border-t border-edge/60 pt-2.5">
+          <summary className="disclosure flex cursor-pointer select-none items-center gap-2 text-xs font-medium text-muted">
+            {presentation?.detailLabel ?? 'Details'}
           </summary>
-          <p className="mt-1 max-w-prose text-xs leading-4 text-muted">
-            The assistant only reports actions backed by a completed tool result. This notice
-            replaced a reply that claimed more than the evidence supported — nothing was sent or
-            changed outside this chat.
-          </p>
+          <div className="mt-2 max-h-72 overflow-auto rounded-xl bg-sunken/55 px-3 py-2.5 text-xs leading-5 text-muted">
+            {diagnostics.length > 0 ? (
+              diagnostics.map((item, index) => (
+                <p
+                  key={`${index.toString()}-${item.slice(0, 20)}`}
+                  className="break-words [overflow-wrap:anywhere]"
+                >
+                  {item}
+                </p>
+              ))
+            ) : (
+              <p>
+                The assistant only reports actions backed by completed tool results. Nothing was
+                sent or changed outside this chat.
+              </p>
+            )}
+          </div>
         </details>
       ) : null}
       {kind === 'retracted' ? (

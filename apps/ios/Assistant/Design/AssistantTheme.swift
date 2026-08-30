@@ -32,6 +32,8 @@ enum AssistantAppearance: String, CaseIterable, Identifiable {
 enum AssistantTheme {
     /// Shared outer geometry for every content card in the app.
     static let cardCornerRadius: CGFloat = 20
+    /// Chat records are a step tighter than dashboard cards: precise, not soft.
+    static let chatCardCornerRadius: CGFloat = 18
     static let conversationCornerRadius: CGFloat = 27
     static let canvas = Color(hex: 0xEEF5F0)
     static let canvasDark = Color(hex: 0x121A15)

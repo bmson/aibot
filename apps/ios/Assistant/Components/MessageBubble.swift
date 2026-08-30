@@ -46,6 +46,7 @@ struct MessageBubble: View {
                 noticeCard(
                     noticeKind,
                     text: message.text,
+                    compact: message.noticePresentation,
                     originalText: message.retractedOriginalText,
                     retractionReason: message.retractionReason
                 )
@@ -626,57 +627,75 @@ struct MessageBubble: View {
     private func noticeCard(
         _ kind: ChatNoticeKind,
         text: String,
+        compact: ChatCardPresentation?,
         originalText: String?,
         retractionReason: String?
     ) -> some View {
-        let presentation: (title: String, symbol: String, tint: Color) = switch kind {
+        let presentation: (label: String, headline: String, summary: String, symbol: String, tint: Color) = switch kind {
         case .responseContract:
             (
                 "Checked result",
+                "Verified result",
+                compact?.summary ?? compactSummary(text),
                 "checkmark.shield.fill",
                 AssistantTheme.accent(for: colorScheme)
             )
         case .parked:
             (
                 "Paused",
+                "Work paused",
+                compact?.summary ?? "This work will resume automatically when its limit resets.",
                 "pause.circle.fill",
                 AssistantTheme.warning(for: colorScheme)
             )
         case .needsAttention:
             (
                 "Needs your attention",
+                "Your input is needed",
+                compact?.summary ?? compactSummary(text),
                 "exclamationmark.triangle.fill",
                 AssistantTheme.warning(for: colorScheme)
             )
         case .turnFailed:
             (
                 "Didn’t go through",
+                "Message didn’t go through",
+                compact?.summary ?? "Nothing was changed. You can try the request again.",
                 "xmark.circle.fill",
                 AssistantTheme.inkMuted(for: colorScheme)
             )
         case .retracted:
             (
                 "Retracted response",
+                "Response retracted",
+                compact?.summary ?? "This response was removed because its claims were not sufficiently supported.",
                 "arrow.uturn.backward.circle.fill",
                 AssistantTheme.inkMuted(for: colorScheme)
             )
         }
-        let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: AssistantTheme.chatCardCornerRadius, style: .continuous)
+        let diagnostics = compact?.diagnostics ?? (text == presentation.summary ? [] : [text])
         return VStack(alignment: .leading, spacing: 10) {
-            Label(presentation.title, systemImage: presentation.symbol)
-                .font(.caption.weight(.bold))
-                .textCase(.uppercase)
-                .tracking(0.6)
+            Label(presentation.label, systemImage: presentation.symbol)
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(presentation.tint)
-            AssistantMarkdownView(
-                source: text,
-                baseFontSize: messageFontSize,
-                ink: AssistantTheme.ink(for: colorScheme),
-                mutedInk: AssistantTheme.inkMuted(for: colorScheme),
-                codeSurface: AssistantTheme.sunken(for: colorScheme),
-                accent: AssistantTheme.accent(for: colorScheme)
-            )
-            .textSelection(.enabled)
+            Text(compact?.headline ?? presentation.headline)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+            Text(presentation.summary)
+                .font(.subheadline)
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            if let facts = compact?.facts?.prefix(3), !facts.isEmpty {
+                AssistantFlowLayout(spacing: 8) {
+                    ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in
+                        Text("\(fact.label)  \(fact.value)")
+                            .font(.caption)
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    }
+                }
+            }
             // A failed turn's recovery is one tap: the same words again.
             if kind == .turnFailed, let retry, let userPrompt {
                 Button {
@@ -716,11 +735,40 @@ struct MessageBubble: View {
                 }
                 .font(.caption.weight(.medium))
             }
+            if kind != .retracted,
+               !diagnostics.isEmpty {
+                DisclosureGroup(compact?.detailLabel ?? "Details") {
+                    Text(diagnostics.joined(separator: "\n\n"))
+                        .font(.caption)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(
+                            AssistantTheme.sunken(for: colorScheme).opacity(0.58),
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        )
+                }
+                .font(.caption.weight(.medium))
+            }
         }
-        .padding(15)
+        .padding(16)
+        .padding(.leading, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(AssistantTheme.bubblePaper(for: colorScheme), in: shape)
         .overlay { shape.strokeBorder(presentation.tint.opacity(0.25), lineWidth: 0.9) }
+        .overlay(alignment: .leading) {
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [presentation.tint, AssistantTheme.chatAccent(mood: .coolSky)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: 2)
+                .padding(.vertical, 16)
+        }
         .contextMenu {
             Button {
                 UIPasteboard.general.string = text
@@ -728,6 +776,13 @@ struct MessageBubble: View {
                 Label("Copy notice", systemImage: "doc.on.doc")
             }
         }
+    }
+
+    private func compactSummary(_ value: String) -> String {
+        let oneLine = value.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard oneLine.count > 160 else { return oneLine }
+        return String(oneLine.prefix(159)).trimmingCharacters(in: .whitespaces) + "…"
     }
 }
 
@@ -2037,6 +2092,18 @@ private struct RichResponseCards: View {
         let meetingLinkURL: String?
     }
 
+    private enum DisplayItem: Identifiable {
+        case day(EventDayGroup)
+        case card(MessageResponseCard)
+
+        var id: String {
+            switch self {
+            case let .day(group): "day-\(group.id)"
+            case let .card(card): "card-\(card.id)"
+            }
+        }
+    }
+
     private struct EventAttendee: Identifiable {
         let name: String
         let status: String?
@@ -2081,52 +2148,81 @@ private struct RichResponseCards: View {
         }
     }
 
+    private var displayItems: [DisplayItem] {
+        eventDayGroups.map(DisplayItem.day) + nonEventCards.map(DisplayItem.card)
+    }
+
     var body: some View {
+        let preview = Array(displayItems.prefix(3))
+        let overflow = Array(displayItems.dropFirst(3))
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(eventDayGroups) { group in
-                eventDayCard(group)
+            ForEach(preview) { item in
+                displayItem(item)
             }
-            ForEach(nonEventCards) { card in
-                switch card {
-                case let .agenda(title, subtitle, items):
-                    agendaCard(title: title, subtitle: subtitle, items: items)
-                case .event:
-                    EmptyView()
-                case let .weather(location, temperature, condition, details):
-                    weatherCard(location: location, temperature: temperature, condition: condition, details: details)
-                case let .duration(title, duration, detail, confidence):
-                    durationCard(title: title, duration: duration, detail: detail, confidence: confidence)
-                case let .interviewPrep(title, people, techStack, nextSteps):
-                    interviewPrepCard(title: title, people: people, techStack: techStack, nextSteps: nextSteps)
-                case let .reminder(_, title, schedule, nextFires, enabled):
-                    reminderCard(title: title, schedule: schedule, nextFires: nextFires, enabled: enabled)
-                case let .emails(_, title, query, mailbox, complete, estimate, messages):
-                    emailResultsCard(title: title, query: query, mailbox: mailbox, complete: complete, estimate: estimate, messages: messages)
-                case let .documents(_, title, query, passages):
-                    documentResultsCard(title: title, query: query, passages: passages)
-                case let .drive(_, title, query, files):
-                    driveResultsCard(title: title, query: query, files: files)
-                case let .search(_, title, query, results):
-                    searchResultsCard(title: title, query: query, results: results)
-                case let .availability(_, timeMin, timeMax, busy, calendarsChecked, complete, note):
-                    availabilityCard(timeMin: timeMin, timeMax: timeMax, busy: busy, calendarsChecked: calendarsChecked, complete: complete, note: note)
-                case let .thread(_, subject, messageCount, messages):
-                    threadCard(subject: subject, messageCount: messageCount, messages: messages)
-                case let .sheetRows(_, sheetName, rows, totalRows, linkURL):
-                    sheetRowsCard(sheetName: sheetName, rows: rows, totalRows: totalRows, linkURL: linkURL)
-                case let .resource(_, resourceType, title, subtitle, details, linkLabel, linkURL):
-                    resourceCard(resourceType: resourceType, title: title, subtitle: subtitle, details: details, linkLabel: linkLabel, linkURL: linkURL)
-                case let .status(_, title, detail, symbol, details, linkLabel, linkURL):
-                    statusCard(title: title, detail: detail, symbol: symbol, details: details, linkLabel: linkLabel, linkURL: linkURL)
-                case let .knowledgeGraph(_, title, edges, complete):
-                    knowledgeGraphCard(title: title, edges: edges, complete: complete)
-                case let .calendarConflicts(_, title, conflicts, complete):
-                    calendarConflictsCard(title: title, conflicts: conflicts, complete: complete)
+            if !overflow.isEmpty {
+                DisclosureGroup("\(overflow.count) more \(overflow.count == 1 ? "result" : "results")") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(overflow) { item in
+                            displayItem(item)
+                        }
+                    }
                 }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                .padding(14)
+                .background(
+                    AssistantTheme.raised(for: colorScheme),
+                    in: RoundedRectangle(cornerRadius: AssistantTheme.chatCardCornerRadius, style: .continuous)
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private func displayItem(_ item: DisplayItem) -> some View {
+        switch item {
+        case let .day(group):
+            eventDayCard(group)
+        case let .card(card):
+            switch card {
+            case let .agenda(title, subtitle, items):
+                agendaCard(title: title, subtitle: subtitle, items: items)
+            case .event:
+                EmptyView()
+            case let .weather(location, temperature, condition, details):
+                weatherCard(location: location, temperature: temperature, condition: condition, details: details)
+            case let .duration(title, duration, detail, confidence):
+                durationCard(title: title, duration: duration, detail: detail, confidence: confidence)
+            case let .interviewPrep(title, people, techStack, nextSteps):
+                interviewPrepCard(title: title, people: people, techStack: techStack, nextSteps: nextSteps)
+            case let .reminder(_, title, schedule, nextFires, enabled):
+                reminderCard(title: title, schedule: schedule, nextFires: nextFires, enabled: enabled)
+            case let .emails(_, title, query, mailbox, complete, estimate, messages):
+                emailResultsCard(title: title, query: query, mailbox: mailbox, complete: complete, estimate: estimate, messages: messages)
+            case let .documents(_, title, query, passages):
+                documentResultsCard(title: title, query: query, passages: passages)
+            case let .drive(_, title, query, files):
+                driveResultsCard(title: title, query: query, files: files)
+            case let .search(_, title, query, results):
+                searchResultsCard(title: title, query: query, results: results)
+            case let .availability(_, timeMin, timeMax, busy, calendarsChecked, complete, note):
+                availabilityCard(timeMin: timeMin, timeMax: timeMax, busy: busy, calendarsChecked: calendarsChecked, complete: complete, note: note)
+            case let .thread(_, subject, messageCount, messages):
+                threadCard(subject: subject, messageCount: messageCount, messages: messages)
+            case let .sheetRows(_, sheetName, rows, totalRows, linkURL):
+                sheetRowsCard(sheetName: sheetName, rows: rows, totalRows: totalRows, linkURL: linkURL)
+            case let .resource(_, resourceType, title, subtitle, details, linkLabel, linkURL):
+                resourceCard(resourceType: resourceType, title: title, subtitle: subtitle, details: details, linkLabel: linkLabel, linkURL: linkURL)
+            case let .status(_, title, detail, symbol, details, linkLabel, linkURL):
+                statusCard(title: title, detail: detail, symbol: symbol, details: details, linkLabel: linkLabel, linkURL: linkURL)
+            case let .knowledgeGraph(_, title, edges, complete):
+                knowledgeGraphCard(title: title, edges: edges, complete: complete)
+            case let .calendarConflicts(_, title, conflicts, complete):
+                calendarConflictsCard(title: title, conflicts: conflicts, complete: complete)
+            }
+        }
     }
 
     private struct EventDayGroup: Identifiable {
@@ -2713,6 +2809,42 @@ private struct RichResponseCards: View {
         .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
     }
 
+    @ViewBuilder
+    private func compactResultRows<Item: Identifiable, Row: View>(
+        _ items: [Item],
+        @ViewBuilder row: @escaping (Item) -> Row
+    ) -> some View {
+        let preview = Array(items.prefix(3))
+        let overflow = Array(items.dropFirst(3))
+        VStack(alignment: .leading, spacing: 10) {
+            resultRows(preview, row: row)
+            if !overflow.isEmpty {
+                DisclosureGroup("\(overflow.count) more") {
+                    resultRows(overflow, row: row)
+                        .padding(.top, 8)
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func resultRows<Item: Identifiable, Row: View>(
+        _ items: [Item],
+        @ViewBuilder row: @escaping (Item) -> Row
+    ) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                row(item)
+                    .padding(.vertical, index == 0 ? 0 : 12)
+                if index < items.count - 1 {
+                    Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                }
+            }
+        }
+    }
+
     private func emailResultsCard(
         title: String,
         query: String,
@@ -2732,36 +2864,30 @@ private struct RichResponseCards: View {
                     .font(.subheadline)
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(AssistantMarkdown.inlineAttributed(message.sender.isEmpty ? message.recipient : message.sender))
-                                    .font(.caption.weight(.semibold))
+                compactResultRows(messages) { message in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(AssistantMarkdown.inlineAttributed(message.sender.isEmpty ? message.recipient : message.sender))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .lineLimit(1)
+                            Spacer(minLength: 4)
+                            if !message.date.isEmpty {
+                                Text(cardDate(message.date))
+                                    .font(.caption2)
                                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                                     .lineLimit(1)
-                                Spacer(minLength: 4)
-                                if !message.date.isEmpty {
-                                    Text(cardDate(message.date))
-                                        .font(.caption2)
-                                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                        .lineLimit(1)
-                                }
-                            }
-                            Text(AssistantMarkdown.inlineAttributed(message.subject))
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                                .fixedSize(horizontal: false, vertical: true)
-                            if !message.snippet.isEmpty {
-                                Text(AssistantMarkdown.inlineAttributed(message.snippet))
-                                    .font(.caption)
-                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
-                        .padding(.vertical, index == 0 ? 0 : 12)
-                        if index < messages.count - 1 {
-                            Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                        Text(AssistantMarkdown.inlineAttributed(message.subject))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
+                        if !message.snippet.isEmpty {
+                            Text(AssistantMarkdown.inlineAttributed(message.snippet))
+                                .font(.caption)
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .lineLimit(2)
                         }
                     }
                 }
@@ -2782,36 +2908,30 @@ private struct RichResponseCards: View {
                     .font(.subheadline)
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(passages.enumerated()), id: \.element.id) { index, passage in
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack(alignment: .firstTextBaseline) {
-                                Text(AssistantMarkdown.inlineAttributed(passage.document))
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Spacer(minLength: 6)
-                                if let similarity = passage.similarity {
-                                    Text("\(Int((similarity * 100).rounded()))% match")
-                                        .font(.caption2.monospacedDigit())
-                                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                }
-                            }
-                            if !passage.source.isEmpty {
-                                Text(AssistantMarkdown.inlineAttributed(passage.source))
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                            }
-                            if !passage.snippet.isEmpty {
-                                Text(AssistantMarkdown.inlineAttributed(passage.snippet))
-                                    .font(.caption)
+                compactResultRows(passages) { passage in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(AssistantMarkdown.inlineAttributed(passage.document))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 6)
+                            if let similarity = passage.similarity {
+                                Text("\(Int((similarity * 100).rounded()))% match")
+                                    .font(.caption2.monospacedDigit())
                                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
-                        .padding(.vertical, index == 0 ? 0 : 12)
-                        if index < passages.count - 1 {
-                            Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                        if !passage.source.isEmpty {
+                            Text(AssistantMarkdown.inlineAttributed(passage.source))
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                        }
+                        if !passage.snippet.isEmpty {
+                            Text(AssistantMarkdown.inlineAttributed(passage.snippet))
+                                .font(.caption)
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .lineLimit(2)
                         }
                     }
                 }
@@ -2832,39 +2952,33 @@ private struct RichResponseCards: View {
                     .font(.subheadline)
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(files.enumerated()), id: \.element.id) { index, file in
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: fileSymbol(file.mimeType))
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                                .frame(width: 22)
-                            VStack(alignment: .leading, spacing: 4) {
-                                if let url = URL(string: file.url) {
-                                    Link(destination: url) {
-                                        Text(AssistantMarkdown.inlineAttributed(file.name))
-                                            .font(.subheadline.weight(.semibold))
-                                    }
-                                } else {
+                compactResultRows(files) { file in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: fileSymbol(file.mimeType))
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                            .frame(width: 22)
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let url = URL(string: file.url) {
+                                Link(destination: url) {
                                     Text(AssistantMarkdown.inlineAttributed(file.name))
                                         .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                                 }
-                                let metadata = [file.mimeType, file.size, file.modifiedTime.isEmpty ? "" : cardDate(file.modifiedTime)]
-                                    .filter { !$0.isEmpty }
-                                    .joined(separator: " · ")
-                                if !metadata.isEmpty {
-                                    Text(metadata)
-                                        .font(.caption)
-                                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                }
+                            } else {
+                                Text(AssistantMarkdown.inlineAttributed(file.name))
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                             }
-                            Spacer(minLength: 0)
+                            let metadata = [file.mimeType, file.size, file.modifiedTime.isEmpty ? "" : cardDate(file.modifiedTime)]
+                                .filter { !$0.isEmpty }
+                                .joined(separator: " · ")
+                            if !metadata.isEmpty {
+                                Text(metadata)
+                                    .font(.caption)
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            }
                         }
-                        .padding(.vertical, index == 0 ? 0 : 12)
-                        if index < files.count - 1 {
-                            Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
-                        }
+                        Spacer(minLength: 0)
                     }
                 }
             }
@@ -2995,39 +3109,33 @@ private struct RichResponseCards: View {
                     .font(.subheadline)
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
-                        VStack(alignment: .leading, spacing: 4) {
-                            if let url = URL(string: result.url) {
-                                Link(destination: url) {
-                                    Text(AssistantMarkdown.inlineAttributed(result.title))
-                                        .font(.subheadline.weight(.semibold))
-                                        .multilineTextAlignment(.leading)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                            } else {
+                compactResultRows(results) { result in
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let url = URL(string: result.url) {
+                            Link(destination: url) {
                                 Text(AssistantMarkdown.inlineAttributed(result.title))
                                     .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                                     .multilineTextAlignment(.leading)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            Text(searchResultHost(result.url))
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                                .lineLimit(1)
-                            if !result.snippet.isEmpty {
-                                Text(AssistantMarkdown.inlineAttributed(result.snippet))
-                                    .font(.caption)
-                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
+                        } else {
+                            Text(AssistantMarkdown.inlineAttributed(result.title))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .padding(.vertical, index == 0 ? 0 : 12)
-                        if index < results.count - 1 {
-                            Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                        Text(searchResultHost(result.url))
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                            .lineLimit(1)
+                        if !result.snippet.isEmpty {
+                            Text(AssistantMarkdown.inlineAttributed(result.snippet))
+                                .font(.caption)
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .lineLimit(2)
                         }
                     }
                 }
@@ -3412,20 +3520,39 @@ private extension View {
         colorSchemeContrast: ColorSchemeContrast,
         inset: CGFloat
     ) -> some View {
-        padding(inset)
+        let shape = RoundedRectangle(
+            cornerRadius: AssistantTheme.chatCardCornerRadius,
+            style: .continuous
+        )
+        return padding(inset)
+            .padding(.leading, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 AssistantTheme.raised(for: colorScheme),
-                in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
+                in: shape
             )
             .overlay {
-                RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
-                    .stroke(
-                        AssistantTheme.ink(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.22 : 0.09),
-                        lineWidth: 1
-                    )
+                shape.stroke(
+                    AssistantTheme.ink(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.22 : 0.09),
+                    lineWidth: 1
+                )
             }
-            .shadow(color: .black.opacity(colorScheme == .dark ? 0.16 : 0.07), radius: 14, y: 5)
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                AssistantTheme.accent(for: colorScheme),
+                                AssistantTheme.chatAccent(mood: .coolSky),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 2)
+                    .padding(.vertical, 16)
+            }
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0.10 : 0.045), radius: 12, y: 4)
     }
 
     func resultCardSurface(colorScheme: ColorScheme, colorSchemeContrast: ColorSchemeContrast) -> some View {

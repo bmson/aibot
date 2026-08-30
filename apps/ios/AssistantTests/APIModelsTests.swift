@@ -355,6 +355,16 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(items.first?.title, "Design review")
     }
 
+    func testNoticePresentationDecodesAdditively() throws {
+        let data = #"{"id":"notice-1","role":"assistant","parts":[{"type":"text","text":"full diagnostic text"},{"type":"notice","notice":"needs-attention","presentation":{"version":1,"headline":"Choose locations","summary":"Remote only or specific cities?","facts":[{"label":"Goal","value":"Job search"}],"detailLabel":"Technical details","diagnostics":["web.fetch approval expired"]}}]}"#.data(using: .utf8)!
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        XCTAssertEqual(message.noticePresentation?.headline, "Choose locations")
+        XCTAssertEqual(message.noticePresentation?.summary, "Remote only or specific cities?")
+        XCTAssertEqual(message.noticePresentation?.facts?.first?.value, "Job search")
+        XCTAssertEqual(message.noticePresentation?.diagnostics, ["web.fetch approval expired"])
+        XCTAssertEqual(message.text, "full diagnostic text")
+    }
+
     func testCalendarEventCardCarriesOnlyStructuredDetails() {
         let card = MessagePart(
             type: "data-card",

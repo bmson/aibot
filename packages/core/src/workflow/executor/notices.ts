@@ -2,6 +2,7 @@ import type { Db, TaskRow } from '@assistant/db';
 import { goals } from '@assistant/db';
 import { eq, sql } from 'drizzle-orm';
 import { persistMessage } from '../../chat.js';
+import { compactChatMessageParts } from '../../chat-card.js';
 import { markAttentionNotified } from '../machine.js';
 import { GOAL_BLOCKED_PREFIX } from '../schedules.js';
 import type { ExecutorDeps } from './types.js';
@@ -76,7 +77,9 @@ export async function postConversationNotice(
       origin: 'assistant',
       // A decision card speaks for itself: no duplicated prose part. The prose
       // still lands in `text` (model history and channel bodies read that).
-      parts: carriesOwnCard(extraParts) ? extraParts : [{ type: 'text', text }, ...extraParts],
+      parts: carriesOwnCard(extraParts)
+        ? extraParts
+        : compactChatMessageParts(text, [{ type: 'text', text }, ...extraParts], task.id),
       text,
     });
     return true;

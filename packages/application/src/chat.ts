@@ -8,6 +8,7 @@ import {
   listMessagesByIds,
   setConversationModel,
 } from '@assistant/core/chat';
+import { compactChatMessageParts } from '@assistant/core/chat-card';
 import {
   approvals,
   conversations,
@@ -361,7 +362,11 @@ function toUiMessages(rows: PersistedMessage[]): UIMessage[] {
     .map((row) => ({
       id: row.id,
       role: row.role as 'user' | 'assistant',
-      parts: row.parts as UIMessage['parts'],
+      parts: compactChatMessageParts(
+        row.text,
+        Array.isArray(row.parts) ? row.parts : [],
+        row.taskId ?? undefined,
+      ) as UIMessage['parts'],
       // `taskId` rides along so hydration can resolve an approval summary
       // written before the part carried its own approval ids — see
       // hydrateChatApprovals. The client reads only `createdAt`.

@@ -167,6 +167,64 @@ const NOTICE_KINDS = new Set<string>([
   'retracted',
 ]);
 
+export interface ChatCardPresentation {
+  version: 1;
+  headline: string;
+  summary: string;
+  facts?: Array<{ label: string; value: string }>;
+  detailLabel?: string;
+  diagnostics?: string[];
+}
+
+function presentationOf(value: unknown): ChatCardPresentation | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Record<string, unknown>;
+  if (
+    candidate.version !== 1 ||
+    typeof candidate.headline !== 'string' ||
+    typeof candidate.summary !== 'string'
+  ) {
+    return null;
+  }
+  const headline = candidate.headline.trim();
+  const summary = candidate.summary.trim();
+  if (!headline || !summary) return null;
+  const facts = Array.isArray(candidate.facts)
+    ? candidate.facts
+        .flatMap((fact) => {
+          if (!fact || typeof fact !== 'object') return [];
+          const entry = fact as Record<string, unknown>;
+          return typeof entry.label === 'string' && typeof entry.value === 'string'
+            ? [{ label: entry.label, value: entry.value }]
+            : [];
+        })
+        .slice(0, 3)
+    : undefined;
+  const diagnostics = Array.isArray(candidate.diagnostics)
+    ? candidate.diagnostics.filter((item): item is string => typeof item === 'string')
+    : undefined;
+  return {
+    version: 1,
+    headline,
+    summary,
+    ...(facts?.length ? { facts } : {}),
+    ...(typeof candidate.detailLabel === 'string' ? { detailLabel: candidate.detailLabel } : {}),
+    ...(diagnostics?.length ? { diagnostics } : {}),
+  };
+}
+
+/** Compact hierarchy attached by core/application, if this client understands it. */
+export function noticePresentationOf(parts: unknown[]): ChatCardPresentation | null {
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    const candidate = part as Record<string, unknown>;
+    if (candidate.type !== 'notice') continue;
+    const presentation = presentationOf(candidate.presentation);
+    if (presentation) return presentation;
+  }
+  return null;
+}
+
 export interface RetractionNoticePart {
   type: 'notice';
   notice: 'retracted';

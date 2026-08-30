@@ -27,12 +27,13 @@ import {
   Video,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { focusRing, microLabelClass } from '@/lib/ui';
+import { focusRing } from '@/lib/ui';
 
 // Cards fill the transcript column, matching the native chat surface. The
 // column itself owns the readable desktop measure; a second, narrower card cap
 // made structured results look disconnected from the conversation around them.
 const CARD_WIDTH = 'min-w-0 w-full max-w-none';
+const PREVIEW_LIMIT = 3;
 
 type Raw = Record<string, unknown>;
 
@@ -147,16 +148,32 @@ function CardShell({
 }) {
   return (
     <section
-      className={`paper ${CARD_WIDTH} overflow-hidden rounded-xl border border-edge/70 bg-raised`}
+      className={`paper relative ${CARD_WIDTH} overflow-hidden rounded-2xl border border-edge/70 bg-raised`}
     >
-      <div className="flex items-center gap-2.5 border-b border-edge/60 bg-sunken/40 px-4 py-2.5 sm:px-5">
-        <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent">
+      <span
+        className="absolute top-4 bottom-4 left-0 w-0.5 rounded-full bg-gradient-to-b from-accent via-accent to-sky-300"
+        aria-hidden="true"
+      />
+      <div className="flex items-center gap-2 px-4 pt-4 sm:px-5">
+        <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
           <Icon className="size-3.5" aria-hidden="true" />
         </span>
-        <p className={`${microLabelClass} min-w-0 truncate text-accent`}>{label}</p>
+        <p className="min-w-0 truncate text-xs font-medium text-accent">{label}</p>
       </div>
-      <div className="min-w-0 px-4 py-3.5 sm:px-5">{children}</div>
+      <div className="min-w-0 px-4 pt-3 pb-4 sm:px-5">{children}</div>
     </section>
+  );
+}
+
+function CardOverflow({ count, children }: { count: number; children: ReactNode }) {
+  if (count <= 0) return null;
+  return (
+    <details className="mt-3 border-t border-edge/60 pt-2.5">
+      <summary className="disclosure flex cursor-pointer select-none items-center gap-2 text-xs font-medium text-muted">
+        {count} more
+      </summary>
+      <div className="mt-3">{children}</div>
+    </details>
   );
 }
 
@@ -246,33 +263,39 @@ function CalendarEventCard({ data }: { data: Raw }) {
 
 function EmailResultsCard({ data, timeZone }: { data: Raw; timeZone: string }) {
   const messages = recs(data.messages);
+  const renderMessage = (message: Raw, index: number) => (
+    <li key={str(message.id) || index} className="min-w-0 text-sm">
+      <p className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+        <span className="min-w-0 truncate font-medium text-strong">
+          {str(message.sender) || 'Unknown sender'}
+        </span>
+        {str(message.date) ? (
+          <span className="shrink-0 text-xs text-muted">
+            {shortDate(str(message.date), timeZone)}
+          </span>
+        ) : null}
+      </p>
+      <p className="min-w-0 truncate text-sm text-strong">{str(message.subject)}</p>
+      {str(message.snippet) ? (
+        <p className="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-muted">
+          {str(message.snippet)}
+        </p>
+      ) : null}
+    </li>
+  );
   return (
     <CardShell
       icon={Mail}
       label={str(data.query) ? `Email — “${str(data.query)}”` : 'Email results'}
     >
       <ul className="flex flex-col gap-2.5">
-        {messages.map((message, index) => (
-          <li key={str(message.id) || index} className="min-w-0 text-sm">
-            <p className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-              <span className="min-w-0 truncate font-medium text-strong">
-                {str(message.sender) || 'Unknown sender'}
-              </span>
-              {str(message.date) ? (
-                <span className="shrink-0 text-xs text-muted">
-                  {shortDate(str(message.date), timeZone)}
-                </span>
-              ) : null}
-            </p>
-            <p className="min-w-0 truncate text-sm text-strong">{str(message.subject)}</p>
-            {str(message.snippet) ? (
-              <p className="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-muted">
-                {str(message.snippet)}
-              </p>
-            ) : null}
-          </li>
-        ))}
+        {messages.slice(0, PREVIEW_LIMIT).map(renderMessage)}
       </ul>
+      <CardOverflow count={Math.max(0, messages.length - PREVIEW_LIMIT)}>
+        <ul className="flex flex-col gap-2.5">
+          {messages.slice(PREVIEW_LIMIT).map(renderMessage)}
+        </ul>
+      </CardOverflow>
       {data.complete === false ? (
         <p className="mt-2 text-xs text-muted">
           Showing what the search returned — more may exist.
@@ -284,33 +307,33 @@ function EmailResultsCard({ data, timeZone }: { data: Raw; timeZone: string }) {
 
 function WebSearchCard({ data }: { data: Raw }) {
   const results = recs(data.results);
+  const renderResult = (result: Raw, index: number) => (
+    <li key={str(result.url) || index} className="min-w-0 text-sm">
+      {cardHref(result.url) ? (
+        <a
+          href={cardHref(result.url)}
+          target="_blank"
+          rel="noreferrer"
+          className={`font-medium text-accent underline-offset-2 hover:underline ${focusRing}`}
+        >
+          {str(result.title) || str(result.url)}
+        </a>
+      ) : (
+        <span className="font-medium text-strong">{str(result.title) || str(result.url)}</span>
+      )}
+      {str(result.snippet) ? (
+        <p className="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-muted">
+          {str(result.snippet)}
+        </p>
+      ) : null}
+    </li>
+  );
   return (
     <CardShell icon={Globe} label={str(data.query) ? `Web — “${str(data.query)}”` : 'Web results'}>
-      <ul className="flex flex-col gap-2.5">
-        {results.map((result, index) => (
-          <li key={str(result.url) || index} className="min-w-0 text-sm">
-            {cardHref(result.url) ? (
-              <a
-                href={cardHref(result.url)}
-                target="_blank"
-                rel="noreferrer"
-                className={`font-medium text-accent underline-offset-2 hover:underline ${focusRing}`}
-              >
-                {str(result.title) || str(result.url)}
-              </a>
-            ) : (
-              <span className="font-medium text-strong">
-                {str(result.title) || str(result.url)}
-              </span>
-            )}
-            {str(result.snippet) ? (
-              <p className="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-muted">
-                {str(result.snippet)}
-              </p>
-            ) : null}
-          </li>
-        ))}
-      </ul>
+      <ul className="flex flex-col gap-2.5">{results.slice(0, PREVIEW_LIMIT).map(renderResult)}</ul>
+      <CardOverflow count={Math.max(0, results.length - PREVIEW_LIMIT)}>
+        <ul className="flex flex-col gap-2.5">{results.slice(PREVIEW_LIMIT).map(renderResult)}</ul>
+      </CardOverflow>
     </CardShell>
   );
 }
@@ -383,61 +406,69 @@ function ReminderCard({ data }: { data: Raw }) {
 
 function DriveResultsCard({ data, timeZone }: { data: Raw; timeZone: string }) {
   const files = recs(data.files);
+  const renderFile = (file: Raw, index: number) => {
+    const url = cardHref(file.url);
+    const name = str(file.name) || 'Untitled file';
+    return (
+      <li key={str(file.id) || index} className="flex min-w-0 items-baseline gap-2 text-sm">
+        {url ? (
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className={`min-w-0 truncate font-medium text-accent underline-offset-2 hover:underline ${focusRing}`}
+          >
+            {name}
+          </a>
+        ) : (
+          <span className="min-w-0 truncate font-medium text-strong">{name}</span>
+        )}
+        {str(file.modifiedTime) ? (
+          <span className="shrink-0 text-xs text-muted">
+            {shortDate(str(file.modifiedTime), timeZone)}
+          </span>
+        ) : null}
+      </li>
+    );
+  };
   return (
     <CardShell
       icon={FolderOpen}
       label={str(data.query) ? `Drive — “${str(data.query)}”` : 'Drive files'}
     >
-      <ul className="flex flex-col gap-2">
-        {files.map((file, index) => {
-          const url = cardHref(file.url);
-          const name = str(file.name) || 'Untitled file';
-          return (
-            <li key={str(file.id) || index} className="flex min-w-0 items-baseline gap-2 text-sm">
-              {url ? (
-                <a
-                  href={url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className={`min-w-0 truncate font-medium text-accent underline-offset-2 hover:underline ${focusRing}`}
-                >
-                  {name}
-                </a>
-              ) : (
-                <span className="min-w-0 truncate font-medium text-strong">{name}</span>
-              )}
-              {str(file.modifiedTime) ? (
-                <span className="shrink-0 text-xs text-muted">
-                  {shortDate(str(file.modifiedTime), timeZone)}
-                </span>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
+      <ul className="flex flex-col gap-2">{files.slice(0, PREVIEW_LIMIT).map(renderFile)}</ul>
+      <CardOverflow count={Math.max(0, files.length - PREVIEW_LIMIT)}>
+        <ul className="flex flex-col gap-2">{files.slice(PREVIEW_LIMIT).map(renderFile)}</ul>
+      </CardOverflow>
     </CardShell>
   );
 }
 
 function DocumentResultsCard({ data }: { data: Raw }) {
   const passages = recs(data.passages);
+  const renderPassage = (passage: Raw, index: number) => (
+    <li key={str(passage.id) || index} className="min-w-0 text-sm">
+      <p className="font-medium text-strong">{str(passage.document)}</p>
+      {str(passage.snippet) ? (
+        <p className="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-muted">
+          {str(passage.snippet)}
+        </p>
+      ) : null}
+    </li>
+  );
   return (
     <CardShell
       icon={FileText}
       label={str(data.query) ? `Documents — “${str(data.query)}”` : 'Document matches'}
     >
       <ul className="flex flex-col gap-2.5">
-        {passages.map((passage, index) => (
-          <li key={str(passage.id) || index} className="min-w-0 text-sm">
-            <p className="font-medium text-strong">{str(passage.document)}</p>
-            {str(passage.snippet) ? (
-              <p className="mt-0.5 line-clamp-3 break-words text-xs leading-5 text-muted">
-                {str(passage.snippet)}
-              </p>
-            ) : null}
-          </li>
-        ))}
+        {passages.slice(0, PREVIEW_LIMIT).map(renderPassage)}
       </ul>
+      <CardOverflow count={Math.max(0, passages.length - PREVIEW_LIMIT)}>
+        <ul className="flex flex-col gap-2.5">
+          {passages.slice(PREVIEW_LIMIT).map(renderPassage)}
+        </ul>
+      </CardOverflow>
     </CardShell>
   );
 }
@@ -627,11 +658,25 @@ export function rendersAllCards(cards: Raw[]): boolean {
 }
 
 export function ResponseCards({ cards, timeZone }: { cards: Raw[]; timeZone: string }) {
+  const preview = cards.slice(0, PREVIEW_LIMIT);
+  const overflow = cards.slice(PREVIEW_LIMIT);
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      {cards.map((card, index) => (
+      {preview.map((card, index) => (
         <ResponseCardView key={str(card.id) || index} data={card} timeZone={timeZone} />
       ))}
+      {overflow.length > 0 ? (
+        <details className="paper rounded-2xl border border-edge/70 bg-raised px-4 py-3">
+          <summary className="disclosure flex cursor-pointer select-none items-center gap-2 text-xs font-medium text-muted">
+            {overflow.length} more {overflow.length === 1 ? 'result' : 'results'}
+          </summary>
+          <div className="mt-3 flex min-w-0 flex-col gap-2">
+            {overflow.map((card, index) => (
+              <ResponseCardView key={str(card.id) || index} data={card} timeZone={timeZone} />
+            ))}
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }

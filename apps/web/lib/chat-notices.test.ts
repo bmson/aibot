@@ -5,6 +5,7 @@ import {
   isContractNotice,
   isDecisionProseNotice,
   noticeKindOf,
+  noticePresentationOf,
   retractionNoticeOf,
 } from './chat-notices.js';
 
@@ -181,6 +182,47 @@ describe('noticeKindOf', () => {
   it('ignores a kind it does not know, so an unrecognised marker stays prose', () => {
     expect(noticeKindOf([{ type: 'notice', notice: 'something-newer' }])).toBeNull();
     expect(noticeKindOf([null, 'text', { type: 'notice' }])).toBeNull();
+  });
+});
+
+describe('noticePresentationOf', () => {
+  it('accepts a bounded compact hierarchy and at most three facts', () => {
+    expect(
+      noticePresentationOf([
+        {
+          type: 'notice',
+          notice: 'needs-attention',
+          presentation: {
+            version: 1,
+            headline: 'Choose locations',
+            summary: 'Remote only or specific cities?',
+            facts: [
+              { label: 'One', value: '1' },
+              { label: 'Two', value: '2' },
+              { label: 'Three', value: '3' },
+              { label: 'Four', value: '4' },
+            ],
+            detailLabel: 'Technical details',
+            diagnostics: ['web.fetch approval expired'],
+          },
+        },
+      ]),
+    ).toEqual({
+      version: 1,
+      headline: 'Choose locations',
+      summary: 'Remote only or specific cities?',
+      facts: [
+        { label: 'One', value: '1' },
+        { label: 'Two', value: '2' },
+        { label: 'Three', value: '3' },
+      ],
+      detailLabel: 'Technical details',
+      diagnostics: ['web.fetch approval expired'],
+    });
+  });
+
+  it('ignores malformed envelopes', () => {
+    expect(noticePresentationOf([{ type: 'notice', presentation: { version: 1 } }])).toBeNull();
   });
 });
 

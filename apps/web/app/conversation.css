@@ -244,16 +244,13 @@ body:has(.chat-viewport) {
   border-bottom-right-radius: 0.625rem;
 }
 
-/* Cards are records placed into the thread, not another speaking bubble. A
-   restrained lift lets their paper plane separate from both voices while the
-   header band keeps the state readable at a glance.
-
-   Tone is carried by the card's own border, its header band, and the chip —
-   all four edges the same weight. There used to be a 2px bar across the top
-   as well, which only made the top border read heavier and darker than the
-   other three without saying anything the band had not already said. */
+/* Cards are records placed into the thread, not floating modal slabs. The
+   intelligence rail supplies the one deliberate assistant signature; the
+   surrounding paper stays quiet so the outcome leads. */
 [data-decision-card="true"] {
-  box-shadow: 0 10px 26px rgb(0 0 0 / 0.08);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.035),
+    0 8px 24px rgb(0 0 0 / 0.045);
 }
 
 /* Consecutive turns from one speaker are one thought, not a pile of unrelated
