@@ -3,6 +3,8 @@ import {
   geocodePlace,
   latestLocation,
   loadConfig,
+  placeQueryCandidates,
+  type WeatherHour,
   type WeatherNow,
   weekdayName,
 } from '@assistant/core';
@@ -35,11 +37,62 @@ export interface WeatherForecastRow {
   precipProbabilityMax: number;
 }
 
+/** Parts of the day a question can name without giving an hour. */
+export const TIME_OF_DAY_BANDS = {
+  'early-morning': [5, 8],
+  morning: [8, 11],
+  midday: [11, 14],
+  afternoon: [14, 17],
+  evening: [17, 21],
+  // Stops at midnight rather than wrapping: a wrapped row would carry the next
+  // day's hours under this day's weekday, and every row must name its own day.
+  night: [21, 24],
+} as const satisfies Record<string, readonly [number, number]>;
+
+export type TimeOfDayBand = keyof typeof TIME_OF_DAY_BANDS;
+
+/** Aggregate of the hours inside one requested window. */
+export interface WeatherWindowRow {
+  date: string;
+  /** "Mon" — same contract as a forecast row: every row names its day. */
+  weekday: string;
+  /** "11:00–14:00", local to the place. */
+  window: string;
+  label?: TimeOfDayBand;
+  description: string;
+  lowC: number;
+  highC: number;
+  feelsLikeLowC?: number;
+  feelsLikeHighC?: number;
+  precipProbabilityMax: number;
+  windKmhMax: number;
+}
+
+export interface WeatherTarget {
+  date: string;
+  weekday: string;
+  /** The PLACE's zone — these hours are local to it, not to the owner. */
+  timezone?: string;
+  windows: WeatherWindowRow[];
+  /** Hour rows for the requested window only; empty when the whole day was asked for. */
+  hours: WeatherHour[];
+  /** The day's own forecast row, so a window can be read against its day. */
+  day?: WeatherForecastRow;
+  /** The provider returned no hourly block; `day` is still real. */
+  hourlyUnavailable?: boolean;
+  /** The requested window has already elapsed. */
+  inThePast?: boolean;
+}
+
 export interface WeatherLookupResult {
   /** Where this answer is actually about, as resolved — never the raw query. */
   place: string;
   /** True when the place came from the owner's current location, not the query. */
   usedCurrentLocation: boolean;
+  /** The raw string as asked, when the tool had to broaden it to a town. */
+  resolvedFrom?: string;
+  /** True when `place` is a town standing in for a venue or address. Say so. */
+  broadened?: boolean;
   current: {
     tempC: number;
     description: string;
@@ -50,6 +103,8 @@ export interface WeatherLookupResult {
     humidity?: number;
   };
   forecast: WeatherForecastRow[];
+  /** Present only when a date or time was asked for. */
+  target?: WeatherTarget;
 }
 
 /** Shape the raw reading into the day-named rows the response contract expects. */
@@ -82,41 +137,221 @@ export function toLookupResult(
   };
 }
 
+/** Cap on hour rows returned, so the result stays inside the 8 KB tool clip. */
+const MAX_TARGET_HOURS = 12;
+
 export interface WeatherLookupInput {
   db: Db;
   agentId: string;
   /** A named place; omitted/empty means "where the owner is now". */
   place?: string;
   days: number;
+  /** Local date to focus on, YYYY-MM-DD, in the PLACE's timezone. */
+  date?: string;
+  /** A named part of the day, when no exact hour is known. */
+  timeOfDay?: TimeOfDayBand;
+  /** Local start hour, 0-23, when the time is known exactly. */
+  startHour?: number;
+  /** Local end hour, inclusive. Defaults to `startHour` + 2. */
+  endHour?: number;
   fetchImpl?: FetchLike;
+}
+
+function pad(hour: number): string {
+  return `${hour}`.padStart(2, '0');
+}
+
+/** Roll a set of hours into the one row an owner reads. */
+function summariseWindow(
+  hours: WeatherHour[],
+  date: string,
+  from: number,
+  to: number,
+  label?: TimeOfDayBand,
+): WeatherWindowRow | null {
+  if (hours.length === 0) return null;
+  const temps = hours.map((hour) => hour.tempC);
+  const feels = hours
+    .map((hour) => hour.feelsLikeC)
+    .filter((value): value is number => typeof value === 'number');
+  // The description is the one an owner plans around: whichever hour is wettest
+  // when rain is a real prospect, otherwise the hour that typifies the window.
+  const wettest = hours.reduce((worst, hour) =>
+    hour.precipProbability > worst.precipProbability ? hour : worst,
+  );
+  const counts = new Map<number, number>();
+  for (const hour of hours) counts.set(hour.code, (counts.get(hour.code) ?? 0) + 1);
+  const modal = [...counts.entries()].reduce((best, entry) => (entry[1] > best[1] ? entry : best));
+  const typical = hours.find((hour) => hour.code === modal[0]) ?? hours[0];
+  const chosen = wettest.precipProbability >= 30 ? wettest : (typical ?? wettest);
+  return {
+    date,
+    weekday: weekdayName(date),
+    window: `${pad(from)}:00–${pad(to)}:00`,
+    ...(label ? { label } : {}),
+    description: chosen.description,
+    lowC: Math.min(...temps),
+    highC: Math.max(...temps),
+    ...(feels.length > 0
+      ? { feelsLikeLowC: Math.min(...feels), feelsLikeHighC: Math.max(...feels) }
+      : {}),
+    precipProbabilityMax: Math.max(...hours.map((hour) => hour.precipProbability)),
+    windKmhMax: Math.max(...hours.map((hour) => hour.windKmh)),
+  };
+}
+
+/**
+ * `now` as a "YYYY-MM-DDTHH:MM" wall clock in the given zone, so it can be
+ * compared to Open-Meteo's local timestamps by plain string ordering. Returns
+ * undefined when the zone is unknown or unusable, and the caller then skips the
+ * comparison rather than guessing with the server's clock.
+ */
+function localStamp(now: Date, timeZone: string | undefined): string | undefined {
+  if (!timeZone) return undefined;
+  try {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      })
+        .formatToParts(now)
+        .map((part) => [part.type, part.value]),
+    );
+    const hour = parts.hour === '24' ? '00' : parts.hour;
+    return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}`;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface WeatherTargetSpec {
+  date: string;
+  timeOfDay?: TimeOfDayBand;
+  startHour?: number;
+  endHour?: number;
+}
+
+/**
+ * Build the time-of-day view for one date. Hours are selected by matching the
+ * local date string, never by arithmetic on the index: a DST day has 23 or 25
+ * entries and every index after the change is off by one.
+ */
+export function buildTarget(
+  weather: WeatherNow,
+  spec: WeatherTargetSpec,
+  now: Date = new Date(),
+): WeatherTarget {
+  const day = weather.forecast.find((entry) => entry.date === spec.date);
+  const dayRow: WeatherForecastRow | undefined = day
+    ? {
+        date: day.date,
+        weekday: weekdayName(day.date),
+        description: day.description,
+        lowC: day.lowC,
+        highC: day.highC,
+        precipProbabilityMax: day.precipProbabilityMax,
+      }
+    : undefined;
+  const base: WeatherTarget = {
+    date: spec.date,
+    weekday: weekdayName(spec.date),
+    ...(weather.timezone ? { timezone: weather.timezone } : {}),
+    windows: [],
+    hours: [],
+    ...(dayRow ? { day: dayRow } : {}),
+  };
+  const onDate = (weather.hourly ?? []).filter((hour) => hour.date === spec.date);
+  if (onDate.length === 0) return { ...base, hourlyUnavailable: true };
+
+  // A band is half-open — "midday" 11–14 means 11, 12 and 13 — while an explicit
+  // startHour/endHour pair names two real hours the owner will be standing
+  // outside for, so its end is inclusive. Both label the window the same way.
+  const explicit = spec.startHour !== undefined;
+  const band = spec.timeOfDay ? TIME_OF_DAY_BANDS[spec.timeOfDay] : undefined;
+  const from = explicit ? (spec.startHour as number) : band?.[0];
+  const to = explicit ? (spec.endHour ?? Math.min(23, (spec.startHour as number) + 2)) : band?.[1];
+  const endIsInclusive = explicit;
+
+  if (from === undefined || to === undefined) {
+    // A date with no time: summarise each named band so the model can pick.
+    const windows = Object.entries(TIME_OF_DAY_BANDS)
+      .map(([label, [start, end]]) =>
+        summariseWindow(
+          onDate.filter((hour) => hour.hour >= start && hour.hour < end),
+          spec.date,
+          start,
+          end,
+          label as TimeOfDayBand,
+        ),
+      )
+      .filter((row): row is WeatherWindowRow => row !== null);
+    return { ...base, windows };
+  }
+
+  const hours = onDate.filter(
+    (hour) => hour.hour >= from && (endIsInclusive ? hour.hour <= to : hour.hour < to),
+  );
+  if (hours.length === 0) return { ...base, hourlyUnavailable: true };
+  const window = summariseWindow(hours, spec.date, from, to, spec.timeOfDay);
+  // "Already happened" is worth saying rather than quietly reporting the past.
+  // Compared as local wall-clock strings, for the same reason the hours are
+  // matched that way: parsing "2026-08-29T13:00" through Date would read the
+  // place's clock as the server's, which is wrong by however far apart they are.
+  const last = hours[hours.length - 1];
+  const nowThere = localStamp(now, weather.timezone);
+  const inThePast = Boolean(last && nowThere && last.time < nowThere);
+  return {
+    ...base,
+    windows: window ? [window] : [],
+    hours: hours.slice(0, MAX_TARGET_HOURS),
+    ...(inThePast ? { inThePast: true } : {}),
+  };
 }
 
 /**
  * Resolve a place (named, or the owner's latest location ping) and read the
- * weather there. Returns a `{ error }` shape rather than throwing for the two
- * ordinary misses — an unknown place name, and no location on file — because
- * both are answers the model should relay, not failures worth a retry.
+ * weather there. Returns a `{ error }` shape rather than throwing for the
+ * ordinary misses — an unknown place name, no location on file, a date outside
+ * the forecast — because each is an answer the model should act on, not a
+ * failure worth a retry of the same call.
  */
 export async function lookupWeather(
   input: WeatherLookupInput,
-): Promise<WeatherLookupResult | { error: string }> {
+): Promise<WeatherLookupResult | { error: string; retryWith?: string; tried?: string[] }> {
   const { db, agentId, days, fetchImpl } = input;
-  const named = input.place?.trim();
+  const named = input.place?.trim().slice(0, 200);
 
   let place: string;
   let lat: number;
   let lng: number;
+  let broadenedFrom: string | undefined;
 
   if (named) {
     const found = await geocodePlace(named, fetchImpl);
     if (!found) {
+      const { candidates } = placeQueryCandidates(named);
       return {
-        error: `no place named "${named.slice(0, 120)}" was found — ask which place is meant`,
+        // The old copy said "ask which place is meant", and the model duly
+        // asked the owner to go and check a weather service. Name the next
+        // move instead: this source knows towns, so come back with the town.
+        error:
+          `"${named.slice(0, 120)}" is not a town or city this weather source knows — it holds ` +
+          'towns, cities and regions, not venues, parks, stadiums or street addresses. Call ' +
+          'weather.lookup again with the town or city it is in, taking it from the address or ' +
+          'the calendar event you already have. Only ask the owner if no town can be determined.',
+        retryWith: 'city',
+        tried: candidates,
       };
     }
     place = found.label;
     lat = found.lat;
     lng = found.lng;
+    if (found.broadened) broadenedFrom = named;
   } else {
     const ping = await latestLocation(db, agentId, loadConfig().LOCATION_RETENTION_DAYS);
     if (!ping) {
@@ -130,7 +365,37 @@ export async function lookupWeather(
     lng = Number(ping.lng);
   }
 
-  const weather = await fetchWeather(lat, lng, fetchImpl);
+  // Only pay for hourly rows when the question is actually about a time.
+  const wantsTarget =
+    input.date !== undefined || input.timeOfDay !== undefined || input.startHour !== undefined;
+  const weather = await fetchWeather(lat, lng, fetchImpl, { hourly: wantsTarget });
   if (!weather) return { error: `no weather reading is available for ${place} right now` };
-  return toLookupResult(place, !named, weather, days);
+
+  const result = toLookupResult(place, !named, weather, days);
+  const withPlace = broadenedFrom
+    ? { ...result, resolvedFrom: broadenedFrom, broadened: true }
+    : result;
+  if (!wantsTarget) return withPlace;
+
+  // Without an explicit date the target is the soonest day we hold: today when
+  // an hour is still ahead of us, otherwise tomorrow.
+  const date = input.date ?? weather.hourly?.[0]?.date ?? weather.forecast[0]?.date;
+  if (!date) return withPlace;
+  const covered = weather.hourly?.map((hour) => hour.date) ?? [];
+  const known = new Set([...covered, ...weather.forecast.map((entry) => entry.date)]);
+  if (input.date && known.size > 0 && !known.has(input.date)) {
+    const dates = [...known].sort();
+    return {
+      error: `the forecast covers ${dates[0]} through ${dates[dates.length - 1]}; ${input.date} is outside it`,
+    };
+  }
+  return {
+    ...withPlace,
+    target: buildTarget(weather, {
+      date,
+      ...(input.timeOfDay ? { timeOfDay: input.timeOfDay } : {}),
+      ...(input.startHour === undefined ? {} : { startHour: input.startHour }),
+      ...(input.endHour === undefined ? {} : { endHour: input.endHour }),
+    }),
+  };
 }

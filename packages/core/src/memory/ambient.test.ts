@@ -2,7 +2,13 @@ import { ambientSnapshots, createDb, type Db, locationPings } from '@assistant/d
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
-import { fetchWeather, geocodePlace, getAmbientBlock, refreshAmbientSnapshot } from './ambient.js';
+import {
+  fetchWeather,
+  geocodePlace,
+  getAmbientBlock,
+  placeQueryCandidates,
+  refreshAmbientSnapshot,
+} from './ambient.js';
 import { recordLocationPing } from './location.js';
 
 const DATABASE_URL =
@@ -150,6 +156,121 @@ describe('ambient — weather fetch (pure)', () => {
         lowC: 9,
         highC: 13,
         precipProbabilityMax: 80,
+      },
+    ]);
+  });
+});
+
+describe('placeQueryCandidates', () => {
+  // The gazetteer holds settlements, so the ladder is over single components:
+  // a comma-joined string may match nothing where its town matches cleanly.
+  const cases: Array<[string, string[], string[]]> = [
+    ['San Francisco', ['San Francisco'], []],
+    ['Paris, France', ['Paris, France', 'Paris', 'France'], ['France']],
+    // Most specific first: Reykjavík before Iceland, or a city question gets
+    // answered with a country centroid — for Iceland, a glacier.
+    ['Reykjavík, Iceland', ['Reykjavík, Iceland', 'Reykjavík', 'Iceland'], ['Iceland']],
+    // The reported failure's location string: the street never becomes a rung,
+    // and the state is kept as a hint rather than queried on its own.
+    [
+      'Crocker Amazon Soccer Fields, 1580 Geneva Ave, San Francisco, CA 94112',
+      [
+        'Crocker Amazon Soccer Fields, 1580 Geneva Ave, San Francisco, CA 94112',
+        'Crocker Amazon Soccer Fields',
+        'San Francisco',
+      ],
+      ['San Francisco', 'CA'],
+    ],
+    // A bare venue has nothing to broaden to. That is not a gap in the ladder —
+    // it is why the miss error has to ask for the town.
+    ['Crocker Amazon Soccer Fields', ['Crocker Amazon Soccer Fields'], []],
+    ['  ', [], []],
+  ];
+
+  for (const [input, candidates, hints] of cases) {
+    it(`splits ${JSON.stringify(input)}`, () => {
+      expect(placeQueryCandidates(input)).toEqual({ candidates, hints });
+    });
+  }
+
+  it('never returns more rungs than the attempt cap', () => {
+    const long = 'A Venue, B Town, C County, D Region, E Country';
+    expect(placeQueryCandidates(long).candidates.length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('ambient — hourly is opt-in', () => {
+  function urlSpy(body: unknown) {
+    const urls: string[] = [];
+    const impl = (async (url: string) => {
+      urls.push(url);
+      return { ok: true, json: async () => body } as unknown as Response;
+    }) as unknown as typeof fetch;
+    return { impl, urls };
+  }
+
+  const DAILY_BODY = {
+    current: { temperature_2m: 11, weather_code: 3, wind_speed_10m: 9 },
+    daily: {
+      time: ['2026-08-28', '2026-08-29'],
+      weather_code: [3, 0],
+      temperature_2m_max: [14, 16],
+      temperature_2m_min: [8, 9],
+      precipitation_probability_max: [10, 0],
+    },
+  };
+
+  it('asks for no hourly block by default, so the snapshot payload is unchanged', () => {
+    // refreshAmbientSnapshot calls fetchWeather with three arguments and reads
+    // only current/daily. Seven days of hourly rows would roughly triple a
+    // payload it rewrites every half hour.
+    const { impl, urls } = urlSpy(DAILY_BODY);
+    return fetchWeather(64, -22, impl).then((weather) => {
+      expect(urls[0]).not.toContain('hourly=');
+      expect(weather?.hourly).toBeUndefined();
+    });
+  });
+
+  it('parses hour rows when asked, dropping any the provider left incomplete', async () => {
+    const { impl, urls } = urlSpy({
+      ...DAILY_BODY,
+      timezone: 'Atlantic/Reykjavik',
+      hourly: {
+        time: ['2026-08-29T11:00', '2026-08-29T12:00', '2026-08-29T13:00'],
+        // The middle row is missing its temperature and must be dropped rather
+        // than shifting every later row by one.
+        temperature_2m: [12, null, 14],
+        apparent_temperature: [11, 11, 13],
+        weather_code: [0, 0, 61],
+        precipitation_probability: [5, 5, 70],
+        wind_speed_10m: [10, 10, 18],
+      },
+    });
+    const weather = await fetchWeather(64, -22, impl, { hourly: true });
+    expect(urls[0]).toContain('hourly=temperature_2m');
+    expect(weather?.timezone).toBe('Atlantic/Reykjavik');
+    expect(weather?.hourly).toEqual([
+      {
+        time: '2026-08-29T11:00',
+        date: '2026-08-29',
+        hour: 11,
+        tempC: 12,
+        feelsLikeC: 11,
+        code: 0,
+        description: 'clear',
+        precipProbability: 5,
+        windKmh: 10,
+      },
+      {
+        time: '2026-08-29T13:00',
+        date: '2026-08-29',
+        hour: 13,
+        tempC: 14,
+        feelsLikeC: 13,
+        code: 61,
+        description: 'light rain',
+        precipProbability: 70,
+        windKmh: 18,
       },
     ]);
   });

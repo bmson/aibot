@@ -503,13 +503,18 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     {
       name: 'weather.lookup',
       description:
-        'Current conditions and the coming days for a place. Give `place` for anywhere named ("San Francisco", "Tokyo"); omit it only for where the owner is right now. Use this for any weather question the ambient "right now" block does not already answer — another town, or a day past today — rather than saying you have no weather data.',
+        'Current conditions, the coming days, and — when you ask for a date or a time — the weather at that hour. Give `place` for anywhere named ("San Francisco", "Tokyo"); omit it only for where the owner is right now. This source knows towns, cities and regions, NOT venues, parks or street addresses: a full location string works because the tool falls back to the town inside it and tells you it did, but a bare venue name ("Crocker Amazon Soccer Fields") does not resolve — pass the town it is in. If this returns a not-found error, call again with the town rather than telling the owner to check a weather service. Use this for any weather question the ambient "right now" block does not already answer — another town, or a day past today.',
       inputSchema: z.object({
         place: z
           .string()
-          .max(120)
+          // 200, not 120: a calendar location carries the venue AND the address,
+          // and that whole string is exactly what the town fallback needs. A
+          // shorter cap rejects the call outright instead of clipping it.
+          .max(200)
           .default('')
-          .describe("Town, city, or region. Leave empty to use the owner's current location."),
+          .describe(
+            "Town, city, or region — or a full location string, whose town will be used. Leave empty to use the owner's current location.",
+          ),
         // Six, not seven: the provider is asked for 7 days and today is
         // reported as current conditions, so tomorrow onward is all there is.
         days: z
@@ -519,6 +524,34 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
           .max(6)
           .default(6)
           .describe('How many days of forecast to return, starting tomorrow (up to 6).'),
+        // None of these carry a default: a default would make every weather
+        // question fetch hourly data it does not need, and would change the
+        // cached-result key for calls that mean the same thing.
+        date: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .optional()
+          .describe(
+            "Local date to focus on (YYYY-MM-DD), resolved from the current-date line. Read in the PLACE's own timezone. Omit for a general forecast.",
+          ),
+        timeOfDay: z
+          .enum(['early-morning', 'morning', 'midday', 'afternoon', 'evening', 'night'])
+          .optional()
+          .describe('The part of the day the owner named ("around midday", "after work").'),
+        startHour: z
+          .number()
+          .int()
+          .min(0)
+          .max(23)
+          .optional()
+          .describe('Local start hour when the time is known exactly — an event at 13:00 is 13.'),
+        endHour: z
+          .number()
+          .int()
+          .min(0)
+          .max(23)
+          .optional()
+          .describe('Local end hour, inclusive. Defaults to startHour + 2.'),
       }),
       risk: 'autonomous',
       acceptsUntrustedInput: true,
@@ -528,6 +561,10 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
           db: ctx.db,
           agentId: ctx.agentId,
           place: args.place,
+          ...(args.date === undefined ? {} : { date: args.date }),
+          ...(args.timeOfDay === undefined ? {} : { timeOfDay: args.timeOfDay }),
+          ...(args.startHour === undefined ? {} : { startHour: args.startHour }),
+          ...(args.endHour === undefined ? {} : { endHour: args.endHour }),
           days: args.days,
           // Honor task cancellation without losing the helpers' own 10s cap.
           fetchImpl: (url, init) =>
