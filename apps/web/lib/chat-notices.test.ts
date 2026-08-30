@@ -44,6 +44,34 @@ describe('approvalSummaryOf', () => {
       approvalSummaryOf([{ type: 'approval-summary', purpose: 'Check plans', approvalCount: 0 }]),
     ).toBeNull();
   });
+
+  it('carries the hydrated live state so an answered summary can settle', () => {
+    expect(
+      approvalSummaryOf([
+        {
+          type: 'approval-summary',
+          purpose: 'Find an open cafe nearby',
+          approvalCount: 2,
+          pendingCount: 0,
+          outcomes: [
+            { id: 'a1', summary: 'Email the cafe', status: 'denied' },
+            { id: 'a2', summary: 'Book a table', status: 'approved' },
+            { id: 'a3', summary: 'ignored', status: 'not-a-status' },
+            { summary: 'no id', status: 'approved' },
+          ],
+        },
+      ]),
+    ).toEqual({
+      type: 'approval-summary',
+      purpose: 'Find an open cafe nearby',
+      approvalCount: 2,
+      pendingCount: 0,
+      outcomes: [
+        { id: 'a1', summary: 'Email the cafe', status: 'denied' },
+        { id: 'a2', summary: 'Book a table', status: 'approved' },
+      ],
+    });
+  });
 });
 
 describe('isContractNotice', () => {

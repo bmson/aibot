@@ -3,10 +3,46 @@ const CHAT_NOTICES = {
     'This chat still has active work. Finish, cancel, or pause it before archiving.',
 } as const;
 
+export type ApprovalOutcomeStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'missing';
+
+export interface ApprovalSummaryOutcome {
+  /** The approval's own id — stable across polls, so it keys the receipt list. */
+  id: string;
+  summary: string;
+  status: ApprovalOutcomeStatus;
+}
+
 export interface ApprovalSummaryPart {
   type: 'approval-summary';
   purpose: string;
   approvalCount: number;
+  /**
+   * Live state, attached by hydrateChatApprovals in the application layer.
+   * Absent on a row it could not resolve (a legacy summary whose task is
+   * gone), and the card then falls back to the frozen `approvalCount`.
+   */
+  pendingCount?: number;
+  outcomes?: ApprovalSummaryOutcome[];
+}
+
+const OUTCOME_STATUSES = new Set(['pending', 'approved', 'denied', 'expired', 'missing']);
+
+function outcomesOf(value: unknown): ApprovalSummaryOutcome[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const outcomes: ApprovalSummaryOutcome[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const candidate = entry as { id?: unknown; summary?: unknown; status?: unknown };
+    if (typeof candidate.id !== 'string' || !candidate.id) continue;
+    if (typeof candidate.summary !== 'string' || typeof candidate.status !== 'string') continue;
+    if (!OUTCOME_STATUSES.has(candidate.status)) continue;
+    outcomes.push({
+      id: candidate.id,
+      summary: candidate.summary,
+      status: candidate.status as ApprovalOutcomeStatus,
+    });
+  }
+  return outcomes.length > 0 ? outcomes : undefined;
 }
 
 /** Validate the dashboard-only summary the approval notifier persists. */
@@ -17,13 +53,26 @@ export function approvalSummaryOf(parts: unknown[]): ApprovalSummaryPart | null 
       type?: unknown;
       purpose?: unknown;
       approvalCount?: unknown;
+      pendingCount?: unknown;
     };
     if (candidate.type !== 'approval-summary' || typeof candidate.purpose !== 'string') continue;
     const purpose = candidate.purpose.trim();
     if (!purpose || typeof candidate.approvalCount !== 'number') continue;
     const approvalCount = Math.trunc(candidate.approvalCount);
     if (!Number.isSafeInteger(approvalCount) || approvalCount < 1) continue;
-    return { type: 'approval-summary', purpose, approvalCount };
+    const pending =
+      typeof candidate.pendingCount === 'number' && Number.isSafeInteger(candidate.pendingCount)
+        ? Math.max(0, Math.trunc(candidate.pendingCount))
+        : undefined;
+    return {
+      type: 'approval-summary',
+      purpose,
+      approvalCount,
+      ...(pending === undefined ? {} : { pendingCount: pending }),
+      ...(outcomesOf((part as { outcomes?: unknown }).outcomes)
+        ? { outcomes: outcomesOf((part as { outcomes?: unknown }).outcomes) }
+        : {}),
+    };
   }
   return null;
 }

@@ -246,25 +246,14 @@ body:has(.chat-viewport) {
 
 /* Cards are records placed into the thread, not another speaking bubble. A
    restrained lift lets their paper plane separate from both voices while the
-   header band keeps the state readable at a glance. */
+   header band keeps the state readable at a glance.
+
+   Tone is carried by the card's own border, its header band, and the chip —
+   all four edges the same weight. There used to be a 2px bar across the top
+   as well, which only made the top border read heavier and darker than the
+   other three without saying anything the band had not already said. */
 [data-decision-card="true"] {
-  position: relative;
   box-shadow: 0 10px 26px rgb(0 0 0 / 0.08);
-}
-
-[data-decision-card="true"]::before {
-  position: absolute;
-  z-index: 1;
-  inset: 0 0 auto;
-  height: 2px;
-  background: var(--accent-paper);
-  content: "";
-  opacity: 0.45;
-}
-
-[data-decision-card="true"][data-tone="waiting"]::before {
-  background: #d97706;
-  opacity: 0.7;
 }
 
 /* Consecutive turns from one speaker are one thought, not a pile of unrelated

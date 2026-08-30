@@ -115,6 +115,40 @@ function isSuggestionPart(part: unknown): part is { type: 'suggestion'; suggesti
   );
 }
 
+/**
+ * The dashboard mirror of a parked task's approvals. Unlike an `approval` part
+ * it names no single approval, so it used to be the one decision card with no
+ * live state at all: it kept saying "1 action is waiting for review" long after
+ * the owner had answered on the Approvals page. `approvalIds` is what makes it
+ * hydratable; rows written before it fall back to the message's own task.
+ */
+interface ApprovalSummaryPart {
+  type: 'approval-summary';
+  purpose: string;
+  approvalCount: number;
+  approvalIds?: string[];
+}
+
+function isApprovalSummaryPart(part: unknown): part is ApprovalSummaryPart {
+  return (
+    Boolean(part) &&
+    typeof part === 'object' &&
+    (part as { type?: unknown }).type === 'approval-summary' &&
+    typeof (part as { purpose?: unknown }).purpose === 'string'
+  );
+}
+
+function summaryApprovalIds(part: ApprovalSummaryPart): string[] {
+  return Array.isArray(part.approvalIds)
+    ? part.approvalIds.filter((id): id is string => typeof id === 'string')
+    : [];
+}
+
+function messageTaskId(message: UIMessage): string | undefined {
+  const taskId = (message.metadata as { taskId?: unknown } | undefined)?.taskId;
+  return typeof taskId === 'string' ? taskId : undefined;
+}
+
 function detailLabel(key: string): string {
   const words = key
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -328,7 +362,10 @@ function toUiMessages(rows: PersistedMessage[]): UIMessage[] {
       id: row.id,
       role: row.role as 'user' | 'assistant',
       parts: row.parts as UIMessage['parts'],
-      metadata: { createdAt: row.createdAt.toISOString() },
+      // `taskId` rides along so hydration can resolve an approval summary
+      // written before the part carried its own approval ids — see
+      // hydrateChatApprovals. The client reads only `createdAt`.
+      metadata: { createdAt: row.createdAt.toISOString(), taskId: row.taskId ?? undefined },
     }));
 }
 
@@ -359,19 +396,56 @@ export async function hydrateChatApprovals(
       ),
     ),
   ];
-  if (!approvalIds.length && !budgetTaskIds.length && !suggestionIds.length) return messages;
+  // A summary either names its approvals or, on a row written before it did,
+  // stands for whatever its task is currently waiting on.
+  const summaryIds = new Set<string>();
+  const summaryTaskIds = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.parts as unknown[]) {
+      if (!isApprovalSummaryPart(part)) continue;
+      const ids = summaryApprovalIds(part);
+      if (ids.length > 0) for (const id of ids) summaryIds.add(id);
+      else {
+        const taskId = messageTaskId(message);
+        if (taskId) summaryTaskIds.add(taskId);
+      }
+    }
+  }
+  const lookupApprovalIds = [...new Set([...approvalIds, ...summaryIds])];
+  if (
+    !lookupApprovalIds.length &&
+    !summaryTaskIds.size &&
+    !budgetTaskIds.length &&
+    !suggestionIds.length
+  ) {
+    return messages;
+  }
 
-  const [approvalRows, budgetTasks, suggestionRows] = await Promise.all([
-    approvalIds.length
+  const [approvalRows, summaryTaskRows, budgetTasks, suggestionRows] = await Promise.all([
+    lookupApprovalIds.length
       ? db
           .select({
             id: approvals.id,
+            taskId: approvals.taskId,
+            summary: approvals.summary,
             status: approvals.status,
             payload: approvals.payload,
             expiresAt: approvals.expiresAt,
           })
           .from(approvals)
-          .where(inArray(approvals.id, approvalIds))
+          .where(inArray(approvals.id, lookupApprovalIds))
+      : [],
+    summaryTaskIds.size
+      ? db
+          .select({
+            id: approvals.id,
+            taskId: approvals.taskId,
+            summary: approvals.summary,
+            status: approvals.status,
+            expiresAt: approvals.expiresAt,
+          })
+          .from(approvals)
+          .where(inArray(approvals.taskId, [...summaryTaskIds]))
       : [],
     budgetTaskIds.length
       ? db
@@ -395,9 +469,44 @@ export async function hydrateChatApprovals(
   const suggestionById = new Map(suggestionRows.map((row) => [row.id, row]));
   const approvalById = new Map(approvalRows.map((row) => [row.id, row]));
   const taskById = new Map(budgetTasks.map((task) => [task.id, task]));
+  const summaryByTask = new Map<string, typeof summaryTaskRows>();
+  for (const row of summaryTaskRows) {
+    summaryByTask.set(row.taskId, [...(summaryByTask.get(row.taskId) ?? []), row]);
+  }
+  /** An approval's state as the log should read it — pending lapses on time. */
+  const settled = (row: { status: string; expiresAt: Date }): InlineApprovalStatus =>
+    row.status === 'pending' && row.expiresAt <= now
+      ? 'expired'
+      : (row.status as InlineApprovalStatus);
+
   return messages.map((message) => ({
     ...message,
     parts: (message.parts as unknown[]).map((part) => {
+      if (isApprovalSummaryPart(part)) {
+        const ids = summaryApprovalIds(part);
+        const taskId = messageTaskId(message);
+        const rows = ids.length
+          ? ids.flatMap((id) => {
+              const row = approvalById.get(id);
+              return row ? [row] : [];
+            })
+          : taskId
+            ? (summaryByTask.get(taskId) ?? [])
+            : [];
+        // Nothing to resolve it against (a legacy row whose task is gone):
+        // leave the persisted wording alone rather than claim it settled.
+        if (rows.length === 0) return part;
+        const outcomes = rows.map((row) => ({
+          id: row.id,
+          summary: row.summary,
+          status: settled(row),
+        }));
+        return {
+          ...part,
+          pendingCount: outcomes.filter((outcome) => outcome.status === 'pending').length,
+          outcomes,
+        };
+      }
       if (isBudgetRequestPart(part)) {
         const task = taskById.get(part.taskId);
         const status = !task

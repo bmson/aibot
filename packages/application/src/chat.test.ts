@@ -130,6 +130,97 @@ describe('hydrateChatApprovals', () => {
     const hydrated = await hydrateChatApprovals(db, messages);
     expect(hydrated[0]?.parts).toMatchObject([{ type: 'budget-request', status: 'approved' }]);
   });
+
+  it('settles an approval summary once the approvals it names are answered', async () => {
+    // The summary card has no status of its own, so before this it kept
+    // reporting the count frozen in at write time — "1 action is waiting for
+    // review" long after the owner had declined it.
+    const where = vi.fn().mockResolvedValue([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        taskId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        summary: 'Email the cafe',
+        status: 'denied',
+        payload: {},
+        expiresAt: new Date('2027-01-01T00:00:00.000Z'),
+      },
+    ]);
+    const from = vi.fn(() => ({ where }));
+    const db = { select: vi.fn(() => ({ from })) } as unknown as Db;
+
+    const hydrated = await hydrateChatApprovals(db, [
+      {
+        id: 'message-1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'approval-summary',
+            purpose: 'Find an open cafe nearby',
+            approvalCount: 1,
+            approvalIds: ['11111111-1111-4111-8111-111111111111'],
+          },
+        ] as unknown as UIMessage['parts'],
+      },
+    ] satisfies UIMessage[]);
+
+    expect(hydrated[0]?.parts).toMatchObject([
+      {
+        type: 'approval-summary',
+        pendingCount: 0,
+        outcomes: [
+          {
+            id: '11111111-1111-4111-8111-111111111111',
+            summary: 'Email the cafe',
+            status: 'denied',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('resolves a summary written before it carried ids through its own task', async () => {
+    const where = vi.fn().mockResolvedValue([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        taskId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        summary: 'Email the cafe',
+        status: 'pending',
+        expiresAt: new Date('2027-01-01T00:00:00.000Z'),
+      },
+    ]);
+    const from = vi.fn(() => ({ where }));
+    const db = { select: vi.fn(() => ({ from })) } as unknown as Db;
+
+    const hydrated = await hydrateChatApprovals(db, [
+      {
+        id: 'message-1',
+        role: 'assistant',
+        metadata: {
+          createdAt: '2026-08-26T08:00:00.000Z',
+          taskId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        },
+        parts: [
+          { type: 'approval-summary', purpose: 'Find an open cafe nearby', approvalCount: 1 },
+        ] as unknown as UIMessage['parts'],
+      },
+    ] as unknown as UIMessage[]);
+
+    expect(hydrated[0]?.parts).toMatchObject([{ type: 'approval-summary', pendingCount: 1 }]);
+  });
+
+  it('leaves a summary alone when there is nothing to resolve it against', async () => {
+    const db = { select: vi.fn() } as unknown as Db;
+    const parts = [
+      { type: 'approval-summary', purpose: 'Find an open cafe nearby', approvalCount: 2 },
+    ] as unknown as UIMessage['parts'];
+
+    const hydrated = await hydrateChatApprovals(db, [
+      { id: 'message-1', role: 'assistant', parts } satisfies UIMessage,
+    ]);
+
+    expect(hydrated[0]?.parts).toEqual(parts);
+    expect(db.select).not.toHaveBeenCalled();
+  });
 });
 
 describe('collapseRuntimeMessageDuplicates', () => {

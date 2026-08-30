@@ -97,19 +97,34 @@ export function shouldMirrorIntoPrimary(
   return !sourceConversationId || sourceConversationId !== primaryConversationId;
 }
 
-export function approvalSummaryNotice(approvals: ReadonlyArray<{ purpose?: string }>): {
+export function approvalSummaryNotice(
+  approvals: ReadonlyArray<{ purpose?: string; id?: string }>,
+): {
   text: string;
   extraParts: readonly unknown[];
 } {
   const purpose =
     approvals.find((approval) => approval.purpose?.trim())?.purpose?.trim() ?? 'Continue this task';
   const approvalCount = approvals.length;
+  // Naming the approvals is what lets the card stop saying "waiting for
+  // review" once they are answered: without them the count is frozen at
+  // whatever it was when the notice was written. See hydrateChatApprovals.
+  const approvalIds = approvals
+    .map((approval) => approval.id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
   return {
     text: [
       `Approval needed to continue: ${purpose}`,
       `${approvalCount} ${approvalCount === 1 ? 'action is' : 'actions are'} waiting for review in Approvals.`,
     ].join('\n'),
-    extraParts: [{ type: 'approval-summary', purpose, approvalCount }],
+    extraParts: [
+      {
+        type: 'approval-summary',
+        purpose,
+        approvalCount,
+        ...(approvalIds.length > 0 ? { approvalIds } : {}),
+      },
+    ],
   };
 }
 
