@@ -23,15 +23,11 @@ enum PullMenuMotion {
         return progress * progress * (3 - (2 * progress))
     }
 
-    /// The composer starts above the device safe area, then sheds only the
-    /// portion of that inset the lifted conversation has already cleared.
-    /// Driving this explicitly avoids SwiftUI dropping the entire inset when
-    /// an offset surface first crosses the safe-area boundary.
-    static func residualBottomSafeAreaInset(
-        deviceInset: CGFloat,
-        revealProgress: CGFloat
-    ) -> CGFloat {
-        max(deviceInset, 0) * (1 - unit(revealProgress))
+    /// Keep the composer's local clearance invariant while its parent sheet
+    /// moves. Interpolating this inset against reveal progress makes the input
+    /// travel at a different apparent speed and collapse toward the sheet edge.
+    static func fixedBottomSafeAreaInset(deviceInset: CGFloat) -> CGFloat {
+        max(deviceInset, 0)
     }
 
     /// Corner rounding is binary once the conversation becomes a sheet. The
@@ -589,9 +585,10 @@ struct ChatView: View {
                     // into a whole blank transcript screen.
                     .fixedSize(horizontal: false, vertical: true)
                     // At rest, nil preserves SwiftUI's keyboard-aware default.
-                    // During a menu transition, use a continuous residual inset
-                    // instead of letting the transformed surface drop it in one
-                    // frame as it crosses the device safe-area boundary.
+                    // Once this surface becomes a sheet, preserve that same
+                    // device clearance for the whole transition. The parent
+                    // owns all reveal motion; the input never animates its own
+                    // bottom margin against the drag.
                     .safeAreaPadding(.bottom, composerBottomSafeAreaInset)
                     .offset(y: menuPullActive ? menuPullComposerOffset : 0)
                     .onGeometryChange(for: CGFloat.self) { geometry in
@@ -731,9 +728,8 @@ struct ChatView: View {
 
     private var composerBottomSafeAreaInset: CGFloat? {
         guard menuSurfaceRounded else { return nil }
-        return PullMenuMotion.residualBottomSafeAreaInset(
-            deviceInset: deviceBottomSafeAreaInset,
-            revealProgress: menuRevealProgress
+        return PullMenuMotion.fixedBottomSafeAreaInset(
+            deviceInset: deviceBottomSafeAreaInset
         )
     }
 

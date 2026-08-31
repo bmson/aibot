@@ -1460,50 +1460,12 @@ final class APIModelsTests: XCTestCase {
 
     func testPullMenuPresentationKeepsClearanceAndRevealsRowsBottomUp() {
         XCTAssertEqual(
-            PullMenuMotion.residualBottomSafeAreaInset(
-                deviceInset: 34,
-                revealProgress: 0
-            ),
+            PullMenuMotion.fixedBottomSafeAreaInset(deviceInset: 34),
             34,
             accuracy: 0.001
         )
         XCTAssertEqual(
-            PullMenuMotion.residualBottomSafeAreaInset(
-                deviceInset: 34,
-                revealProgress: 0.5
-            ),
-            17,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            PullMenuMotion.residualBottomSafeAreaInset(
-                deviceInset: 34,
-                revealProgress: 1
-            ),
-            0,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            PullMenuMotion.residualBottomSafeAreaInset(
-                deviceInset: 34,
-                revealProgress: -1
-            ),
-            34,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            PullMenuMotion.residualBottomSafeAreaInset(
-                deviceInset: 34,
-                revealProgress: 2
-            ),
-            0,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            PullMenuMotion.residualBottomSafeAreaInset(
-                deviceInset: -10,
-                revealProgress: 0.5
-            ),
+            PullMenuMotion.fixedBottomSafeAreaInset(deviceInset: -10),
             0,
             accuracy: 0.001
         )
