@@ -8,6 +8,7 @@ enum AssistantRoute: String, Hashable, Identifiable, CaseIterable {
     case activity
     case goals
     case approvals
+    case cards
     case memory
     case documents
     case skills
@@ -30,6 +31,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var workspace: WorkspaceResponse?
     @Published private(set) var memoryReviewCount = 0
     @Published private(set) var mcpConnections: [McpConnection] = []
+    @Published private(set) var savedCards: [SavedCardRecord] = []
     @Published private(set) var activeConversation: ConversationView?
     @Published private(set) var personProfiles: [String: PersonProfileResponse] = [:]
     @Published private(set) var messages: [ChatMessage] = []
@@ -621,6 +623,27 @@ final class AppModel: ObservableObject {
             applyMemoryHealth(loaded.memory.health)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    func refreshCards() async {
+        guard let client else { return }
+        do {
+            savedCards = try await client.cards().cards
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func dismissCard(_ card: SavedCardRecord) async -> Bool {
+        guard let client else { return false }
+        do {
+            try await client.dismissCard(id: card.id)
+            savedCards.removeAll { $0.id == card.id }
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
         }
     }
 

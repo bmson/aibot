@@ -19,7 +19,8 @@ export interface ResponseCard {
     | 'resource'
     | 'status'
     | 'knowledge-graph'
-    | 'calendar-conflicts';
+    | 'calendar-conflicts'
+    | 'generated-card';
   id: string;
   [key: string]: unknown;
 }

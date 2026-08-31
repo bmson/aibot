@@ -671,7 +671,10 @@ export async function processForwardedIngest(
       });
   }
 
-  if (score.importance < threshold) {
+  if (
+    score.importance < threshold &&
+    !(deps.config.PROACTIVE_CARDS_ENABLED && score.cardCandidate)
+  ) {
     console.log(
       `email-sync: ingested ${from} ("${subject.slice(0, 40)}") at importance ${score.importance} — stored without triage`,
     );

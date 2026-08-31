@@ -23,10 +23,21 @@ import {
   Globe,
   Mail,
   MapPin,
+  MessageCircle,
+  Music,
+  Package,
+  Plane,
+  RotateCw,
+  Sparkles,
+  Star,
+  Ticket,
+  Trophy,
   Users,
   Video,
 } from 'lucide-react';
+import Image from 'next/image';
 import type { ReactNode } from 'react';
+import { useState } from 'react';
 import { focusRing } from '@/lib/ui';
 
 // Cards fill the transcript column, matching the native chat surface. The
@@ -591,7 +602,243 @@ function CalendarConflictsCard({ data, timeZone }: { data: Raw; timeZone: string
   );
 }
 
-function ResponseCardView({ data, timeZone }: { data: Raw; timeZone: string }) {
+const generatedIcons = {
+  ticket: Ticket,
+  plane: Plane,
+  sport: Trophy,
+  package: Package,
+  calendar: CalendarDays,
+  map: MapPin,
+  music: Music,
+  star: Star,
+  generic: Sparkles,
+} as const;
+
+const accentClass: Record<string, string> = {
+  mint: 'from-emerald-500/18 via-teal-400/8 to-transparent',
+  sky: 'from-sky-500/18 via-cyan-400/8 to-transparent',
+  amber: 'from-amber-500/20 via-orange-400/8 to-transparent',
+  rose: 'from-rose-500/18 via-pink-400/8 to-transparent',
+  violet: 'from-violet-500/18 via-indigo-400/8 to-transparent',
+  slate: 'from-slate-500/16 via-slate-400/6 to-transparent',
+};
+
+function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) => void }) {
+  const [revealed, setRevealed] = useState<Set<string>>(new Set());
+  const spec = rec(data.spec);
+  const version = num(spec?.version);
+  if (!spec || version !== 1 || !str(spec.title)) return null;
+  const facts = new Map(recs(spec.facts).map((fact) => [str(fact.id), fact]));
+  const blocks = recs(spec.blocks);
+  const actions = recs(spec.actions);
+  const Icon = generatedIcons[str(spec.icon) as keyof typeof generatedIcons] ?? Sparkles;
+  const fact = (id: unknown) => facts.get(str(id));
+  const value = (id: unknown) => str(fact(id)?.value);
+  const visibleValue = (id: unknown) => {
+    const item = fact(id);
+    if (!item) return '';
+    return item.sensitive === true && !revealed.has(str(item.id)) ? '••••••••' : str(item.value);
+  };
+  const toggleReveal = (id: string) =>
+    setRevealed((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  return (
+    <section
+      aria-label={str(spec.accessibilityLabel) || str(spec.title)}
+      className="paper relative min-w-0 w-full overflow-hidden rounded-[1.4rem] border border-edge/70 bg-raised"
+    >
+      <div
+        className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${accentClass[str(spec.accent)] ?? accentClass.mint}`}
+      />
+      <div
+        className="absolute top-5 bottom-5 left-0 w-0.5 rounded-full bg-accent"
+        aria-hidden="true"
+      />
+      <div className="relative px-4 py-4 sm:px-5">
+        <header className="flex items-start gap-3">
+          <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl border border-accent/20 bg-raised/80 text-accent shadow-sm">
+            <Icon className="size-4" aria-hidden="true" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="font-mono text-[10px] tracking-[0.12em] text-accent uppercase">
+              {str(spec.sourceLabel)}
+            </p>
+            <h3 className="mt-0.5 text-base font-semibold tracking-[-0.015em] text-strong">
+              {str(spec.title)}
+            </h3>
+            {str(spec.subtitle) ? (
+              <p className="mt-0.5 text-xs text-muted">{str(spec.subtitle)}</p>
+            ) : null}
+          </div>
+        </header>
+
+        <div className="mt-4 grid gap-3">
+          {blocks.map((block) => {
+            const type = str(block.type);
+            const blockKey = JSON.stringify(block);
+            if (type === 'hero') {
+              return (
+                <div key={blockKey} className="border-y border-edge/60 py-3">
+                  <p className="text-xl font-semibold tracking-[-0.025em] text-strong">
+                    {visibleValue(block.titleFact)}
+                  </p>
+                  {value(block.subtitleFact) ? (
+                    <p className="mt-1 text-sm text-muted">{visibleValue(block.subtitleFact)}</p>
+                  ) : null}
+                </div>
+              );
+            }
+            if (type === 'facts' || type === 'timeline') {
+              const items = Array.isArray(block.factIds) ? block.factIds : [];
+              return (
+                <dl
+                  key={blockKey}
+                  className={
+                    type === 'timeline'
+                      ? 'grid gap-2 border-l border-accent/30 pl-3'
+                      : 'grid grid-cols-2 gap-x-5 gap-y-3'
+                  }
+                >
+                  {items.map((id) => {
+                    const item = fact(id);
+                    if (!item) return null;
+                    return (
+                      <div key={str(item.id)} className="min-w-0">
+                        <dt className="font-mono text-[10px] tracking-[0.08em] text-muted uppercase">
+                          {str(item.label) || 'Detail'}
+                        </dt>
+                        <dd className="mt-0.5 break-words text-sm font-medium text-strong">
+                          {visibleValue(item.id)}
+                        </dd>
+                      </div>
+                    );
+                  })}
+                </dl>
+              );
+            }
+            if (type === 'score') {
+              return (
+                <div
+                  key={blockKey}
+                  className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-xl border border-edge/60 bg-raised/65 p-3 text-center"
+                >
+                  <div>
+                    <p className="text-xs text-muted">{visibleValue(block.leftLabelFact)}</p>
+                    <p className="mt-1 font-mono text-2xl font-semibold text-strong">
+                      {visibleValue(block.leftValueFact)}
+                    </p>
+                  </div>
+                  <span className="text-xs text-muted">—</span>
+                  <div>
+                    <p className="text-xs text-muted">{visibleValue(block.rightLabelFact)}</p>
+                    <p className="mt-1 font-mono text-2xl font-semibold text-strong">
+                      {visibleValue(block.rightValueFact)}
+                    </p>
+                  </div>
+                </div>
+              );
+            }
+            if (type === 'code') {
+              const item = fact(block.valueFact);
+              if (!item) return null;
+              const shown = revealed.has(str(item.id)) || item.sensitive !== true;
+              return (
+                <button
+                  key={blockKey}
+                  type="button"
+                  onClick={() => toggleReveal(str(item.id))}
+                  className={`rounded-xl border border-dashed border-edge bg-sunken/45 px-4 py-3 text-left ${focusRing}`}
+                >
+                  <span className="block font-mono text-[10px] tracking-[0.12em] text-muted uppercase">
+                    {shown ? str(block.format) : 'Tap to reveal'}
+                  </span>
+                  <span className="mt-1 block break-all font-mono text-sm font-semibold tracking-[0.08em] text-strong">
+                    {shown ? str(item.value) : '•••• •••• ••••'}
+                  </span>
+                </button>
+              );
+            }
+            if (type === 'note')
+              return (
+                <p key={blockKey} className="text-sm leading-6 text-muted">
+                  {visibleValue(block.factId)}
+                </p>
+              );
+            if (type === 'image') {
+              const src = cardHref(value(block.urlFact));
+              return src ? (
+                <Image
+                  key={blockKey}
+                  src={`/api/card-image?url=${encodeURIComponent(src)}`}
+                  alt={value(block.altFact) || ''}
+                  className="max-h-64 w-full rounded-xl border border-edge/60 object-cover"
+                  width={1200}
+                  height={640}
+                  unoptimized
+                />
+              ) : null;
+            }
+            return null;
+          })}
+        </div>
+
+        {actions.length > 0 ? (
+          <div className="mt-4 flex flex-wrap gap-2 border-t border-edge/60 pt-3">
+            {actions.map((action) => {
+              const type = str(action.type);
+              const id = str(action.id);
+              const target = fact(action.factId);
+              if (type === 'open_url' && target && cardHref(target.value))
+                return (
+                  <CardLink key={id} href={cardHref(target.value)} label={str(action.label)} />
+                );
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  className={`inline-flex h-7 items-center gap-1.5 rounded-full border border-edge px-3 text-xs font-medium text-strong hover:bg-sunken ${focusRing}`}
+                  onClick={() => {
+                    if (type === 'copy_value' && target)
+                      void navigator.clipboard.writeText(str(target.value));
+                    if (type === 'reveal_sensitive' && target) toggleReveal(str(target.id));
+                    if (type === 'ask_assistant' && str(action.prompt) && onSend)
+                      onSend(str(action.prompt));
+                    if (type === 'refresh' && onSend)
+                      onSend(
+                        `Refresh saved card ${str(data.id)} (“${str(spec.title)}”) using current source data.`,
+                      );
+                  }}
+                >
+                  {type === 'refresh' ? (
+                    <RotateCw className="size-3" aria-hidden="true" />
+                  ) : type === 'ask_assistant' ? (
+                    <MessageCircle className="size-3" aria-hidden="true" />
+                  ) : null}
+                  {str(action.label)}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function ResponseCardView({
+  data,
+  timeZone,
+  onSend,
+}: {
+  data: Raw;
+  timeZone: string;
+  onSend?: (text: string) => void;
+}) {
   switch (data.kind) {
     case 'weather':
       return <WeatherCard data={data} />;
@@ -615,6 +862,8 @@ function ResponseCardView({ data, timeZone }: { data: Raw; timeZone: string }) {
       return <KnowledgeGraphCard data={data} />;
     case 'calendar-conflicts':
       return <CalendarConflictsCard data={data} timeZone={timeZone} />;
+    case 'generated-card':
+      return <GeneratedCard data={data} onSend={onSend} />;
     default:
       // email-thread, sheet-rows, resource and anything newer keep the prose
       // fallback — an unportable card kind never renders as a broken box.
@@ -640,8 +889,17 @@ export function responseCardPayloads(parts: unknown[]): Raw[] {
 
 /** True when every card on the message is one this surface can render. */
 export function rendersAllCards(cards: Raw[]): boolean {
-  return cards.every((card) =>
-    [
+  return cards.every((card) => {
+    if (str(card.kind) === 'generated-card') {
+      const spec = rec(card.spec);
+      return (
+        num(spec?.version) === 1 &&
+        !!str(spec?.title) &&
+        recs(spec?.facts).length > 0 &&
+        recs(spec?.blocks).length > 0
+      );
+    }
+    return [
       'weather',
       'calendar-event',
       'email-results',
@@ -653,17 +911,30 @@ export function rendersAllCards(cards: Raw[]): boolean {
       'document-results',
       'knowledge-graph',
       'calendar-conflicts',
-    ].includes(str(card.kind)),
-  );
+    ].includes(str(card.kind));
+  });
 }
 
-export function ResponseCards({ cards, timeZone }: { cards: Raw[]; timeZone: string }) {
+export function ResponseCards({
+  cards,
+  timeZone,
+  onSend,
+}: {
+  cards: Raw[];
+  timeZone: string;
+  onSend?: (text: string) => void;
+}) {
   const preview = cards.slice(0, PREVIEW_LIMIT);
   const overflow = cards.slice(PREVIEW_LIMIT);
   return (
     <div className="flex min-w-0 flex-col gap-2">
       {preview.map((card, index) => (
-        <ResponseCardView key={str(card.id) || index} data={card} timeZone={timeZone} />
+        <ResponseCardView
+          key={str(card.id) || index}
+          data={card}
+          timeZone={timeZone}
+          onSend={onSend}
+        />
       ))}
       {overflow.length > 0 ? (
         <details className="paper rounded-2xl border border-edge/70 bg-raised px-4 py-3">
@@ -672,7 +943,12 @@ export function ResponseCards({ cards, timeZone }: { cards: Raw[]; timeZone: str
           </summary>
           <div className="mt-3 flex min-w-0 flex-col gap-2">
             {overflow.map((card, index) => (
-              <ResponseCardView key={str(card.id) || index} data={card} timeZone={timeZone} />
+              <ResponseCardView
+                key={str(card.id) || index}
+                data={card}
+                timeZone={timeZone}
+                onSend={onSend}
+              />
             ))}
           </div>
         </details>

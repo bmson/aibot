@@ -1025,8 +1025,8 @@ struct ChatView: View {
                     }
                 }
                 pullMenuRow {
-                    pullMenuButton("Capabilities", icon: "puzzlepiece.extension", index: 6) {
-                        openRoute(.capabilities)
+                    pullMenuButton("Cards", icon: "rectangle.stack", index: 6) {
+                        openRoute(.cards)
                     }
                     pullMenuButton("More", icon: "ellipsis", index: 7) {
                         openRoute(.settings)
@@ -1086,8 +1086,8 @@ struct ChatView: View {
         ) {
             openRoute(.memory)
         }
-        pullMenuButton("Capabilities", icon: "puzzlepiece.extension", index: 6) {
-            openRoute(.capabilities)
+        pullMenuButton("Cards", icon: "rectangle.stack", index: 6) {
+            openRoute(.cards)
         }
         pullMenuButton("More", icon: "ellipsis", index: 7) {
             openRoute(.settings)

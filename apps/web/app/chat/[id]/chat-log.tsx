@@ -283,7 +283,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
         <InlineBudgetRequest key={part.taskId} part={part} />
       ))}
       <SuggestionCard parts={suggestionParts} />
-      {renderCards ? <ResponseCards cards={cards} timeZone={agentTimezone} /> : null}
+      {renderCards ? (
+        <ResponseCards cards={cards} timeZone={agentTimezone} onSend={onSend} />
+      ) : null}
       {offCourse ? (
         <OffCourseCard
           active={!busy}

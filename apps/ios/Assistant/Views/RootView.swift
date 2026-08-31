@@ -177,6 +177,7 @@ struct RootView: View {
             case .activity: ActivityView()
             case .goals: GoalsView()
             case .approvals: ApprovalsView()
+            case .cards: CardsView()
             case .memory: MemoryView()
             case .documents: WorkspaceView(area: .documents)
             case .skills: WorkspaceView(area: .skills)
@@ -273,5 +274,43 @@ struct RootView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Waking your assistant")
         }
+    }
+}
+
+struct CardsView: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 14) {
+                if model.savedCards.isEmpty {
+                    ContentUnavailableView(
+                        "No active cards",
+                        systemImage: "rectangle.stack",
+                        description: Text("Ask about a booking, event, delivery, or score—or let the assistant notice one from connected mail.")
+                    )
+                    .frame(minHeight: 320)
+                } else {
+                    ForEach(model.savedCards) { card in
+                        if let parsed = MessageResponseCard(part: card.messagePart) {
+                            VStack(alignment: .trailing, spacing: 8) {
+                                RichResponseCards(cards: [parsed])
+                                Button("Dismiss", systemImage: "archivebox") {
+                                    Task { _ = await model.dismissCard(card) }
+                                }
+                                .font(.caption.weight(.semibold))
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(16)
+        }
+        .navigationTitle("Cards")
+        .assistantSubmenuChrome()
+        .refreshable { await model.refreshCards() }
+        .task { await model.refreshCards() }
     }
 }

@@ -162,6 +162,20 @@ struct APIClient: Sendable {
         try await get("api/mobile/v1/workspace")
     }
 
+    func cards() async throws -> SavedCardsResponse {
+        try await get("api/mobile/v1/cards")
+    }
+
+    func dismissCard(id: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/cards/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["action": "dismiss"])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
     func knowledge(query: String = "", kind: String = "", page: Int = 1) async throws -> KnowledgeOverview {
         var components = URLComponents(
             url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge"),

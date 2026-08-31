@@ -1,3 +1,4 @@
+import { loadConfig } from '@assistant/config';
 import type { Db, TaskRow } from '@assistant/db';
 import { messages, responseChecks, tasks, toolCalls } from '@assistant/db';
 import type { ModelMessage } from 'ai';
@@ -11,6 +12,7 @@ import {
 import { type Cue, stripCueTags } from '../../chat-cues.js';
 import { isForwardedIngest } from '../../email-provenance.js';
 import type { PendingFinal, TaskState } from '../../events.js';
+import { generateEvidenceCard, persistGeneratedCard } from '../../generative-card.js';
 import type { RecallSource } from '../../memory/recall.js';
 import { recordSkillOutcome } from '../../memory/skills.js';
 import { type ArtifactIntent, artifactExecutionFailure } from '../artifact-intent.js';
@@ -373,12 +375,43 @@ export async function stageModelFinalResponse(
   const text = checked.text;
   // Cards are a view of the same ledger that the response contract used; prose
   // is deliberately not parsed here, so a fluent answer cannot invent a card.
-  pending.responseCards = responseCardsForFinal({
+  const specializedCards = responseCardsForFinal({
     evidence,
     readRequest: contractOptions.readRequest,
     ambient: readContext?.groundingCorpus,
     requestText: latestUserText(window),
   });
+  if (specializedCards.length > 0) {
+    pending.responseCards = specializedCards;
+  } else if (!checked.blocked && loadConfig().GENERATIVE_CARDS_ENABLED) {
+    const sourceText = [
+      latestUserText(window) ?? task.title ?? '',
+      window
+        .filter((message) => message.role === 'user')
+        .map((message) =>
+          typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
+        )
+        .join('\n'),
+    ].join('\n');
+    const generated = await generateEvidenceCard({
+      router: deps.router,
+      taskId: task.id,
+      sourceText,
+      evidence,
+      sourceKey: task.externalEventId ?? task.id,
+    });
+    if (generated) {
+      const durable = await persistGeneratedCard(deps.db, {
+        agentId: task.agentId,
+        conversationId: task.conversationId,
+        payload: generated,
+      }).catch((error) => {
+        console.error('generated card persistence failed', error);
+        return generated;
+      });
+      pending.responseCards = [durable];
+    }
+  }
   // Stamp the contract verdict on pending; recordQualitySignals reads it from
   // the single funnel in finalizePendingResponse, so every terminal path — not
   // just this prose-model one — persists its verdict and loop-health counters.

@@ -85,7 +85,7 @@ struct MessageBubble: View {
             }
 
             if message.role == .assistant, !responseCards.isEmpty {
-                RichResponseCards(cards: responseCards)
+                RichResponseCards(cards: responseCards, onSend: retry)
             }
 
             if message.role == .assistant, message.isOffCourse, !isStreaming {
@@ -893,6 +893,39 @@ enum MessageResponseCard: Identifiable {
         let groups: [[ConflictEvent]]
     }
 
+    struct GeneratedFact: Identifiable {
+        let id: String
+        let label: String
+        let value: String
+        let sensitive: Bool
+    }
+
+    struct GeneratedBlock: Identifiable {
+        let id: String
+        let type: String
+        let values: [String: JSONValue]
+    }
+
+    struct GeneratedAction: Identifiable {
+        let id: String
+        let type: String
+        let label: String
+        let factId: String?
+        let prompt: String?
+    }
+
+    struct GeneratedCard {
+        let id: String
+        let title: String
+        let subtitle: String
+        let sourceLabel: String
+        let icon: String
+        let accessibilityLabel: String
+        let facts: [GeneratedFact]
+        let blocks: [GeneratedBlock]
+        let actions: [GeneratedAction]
+    }
+
     case agenda(title: String, subtitle: String, items: [AgendaItem])
     case event(id: String, start: String, time: String, title: String, location: String, attendees: [String], calendars: [String], calendarLinkURL: String?, meetingLinkURL: String?)
     case weather(location: String, temperature: String, condition: String, details: [WeatherDetail])
@@ -910,6 +943,7 @@ enum MessageResponseCard: Identifiable {
     case status(id: String, title: String, detail: String, symbol: String, details: [Detail], linkLabel: String?, linkURL: String?)
     case knowledgeGraph(id: String, title: String, edges: [KnowledgeEdge], complete: Bool)
     case calendarConflicts(id: String, title: String, conflicts: [CalendarConflict], complete: Bool)
+    case generated(GeneratedCard)
 
     var id: String {
         switch self {
@@ -933,6 +967,7 @@ enum MessageResponseCard: Identifiable {
         case let .status(id, _, _, _, _, _, _): id
         case let .knowledgeGraph(id, _, _, _): id
         case let .calendarConflicts(id, _, _, _): id
+        case let .generated(card): card.id
         }
     }
 
@@ -1239,6 +1274,60 @@ enum MessageResponseCard: Identifiable {
                 linkLabel: link?["label"]?.string,
                 linkURL: link?["url"]?.string
             )
+        case "generated-card":
+            guard let spec = data["spec"]?.objectValue,
+                  spec["version"]?.integerValue == 1,
+                  let title = spec["title"]?.string, !title.isEmpty else { return nil }
+            let facts: [GeneratedFact] = {
+                guard case let .array(values)? = spec["facts"] else { return [] }
+                return values.compactMap { value in
+                    guard case let .object(fact) = value,
+                          let id = fact["id"]?.string,
+                          let value = fact["value"]?.string else { return nil }
+                    return .init(
+                        id: id,
+                        label: fact["label"]?.string ?? "Detail",
+                        value: value,
+                        sensitive: fact["sensitive"]?.boolValue ?? false
+                    )
+                }
+            }()
+            let blocks: [GeneratedBlock] = {
+                guard case let .array(values)? = spec["blocks"] else { return [] }
+                return values.enumerated().compactMap { index, value in
+                    guard case let .object(block) = value,
+                          let type = block["type"]?.string else { return nil }
+                    return .init(id: "\(index)-\(type)", type: type, values: block)
+                }
+            }()
+            let actions: [GeneratedAction] = {
+                guard case let .array(values)? = spec["actions"] else { return [] }
+                return values.compactMap { value in
+                    guard case let .object(action) = value,
+                          let id = action["id"]?.string,
+                          let type = action["type"]?.string,
+                          let label = action["label"]?.string else { return nil }
+                    return .init(
+                        id: id,
+                        type: type,
+                        label: label,
+                        factId: action["factId"]?.string,
+                        prompt: action["prompt"]?.string
+                    )
+                }
+            }()
+            guard !facts.isEmpty, !blocks.isEmpty else { return nil }
+            self = .generated(.init(
+                id: data["id"]?.string ?? "generated-\(title)",
+                title: title,
+                subtitle: spec["subtitle"]?.string ?? "",
+                sourceLabel: spec["sourceLabel"]?.string ?? "Assistant card",
+                icon: spec["icon"]?.string ?? "generic",
+                accessibilityLabel: spec["accessibilityLabel"]?.string ?? title,
+                facts: facts,
+                blocks: blocks,
+                actions: actions
+            ))
         default:
             return nil
         }
@@ -2079,7 +2168,7 @@ enum WeatherPresentation {
     }
 }
 
-private struct RichResponseCards: View {
+struct RichResponseCards: View {
     private struct EventRow: Identifiable {
         let id: String
         let start: String
@@ -2112,6 +2201,12 @@ private struct RichResponseCards: View {
     }
 
     let cards: [MessageResponseCard]
+    let onSend: ((String) -> Void)?
+
+    init(cards: [MessageResponseCard], onSend: ((String) -> Void)? = nil) {
+        self.cards = cards
+        self.onSend = onSend
+    }
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -2221,6 +2316,8 @@ private struct RichResponseCards: View {
                 knowledgeGraphCard(title: title, edges: edges, complete: complete)
             case let .calendarConflicts(_, title, conflicts, complete):
                 calendarConflictsCard(title: title, conflicts: conflicts, complete: complete)
+            case let .generated(card):
+                generatedCard(card)
             }
         }
     }
@@ -3419,6 +3516,190 @@ private struct RichResponseCards: View {
             Spacer(minLength: 0)
         }
         .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
+    }
+
+    private func generatedCard(_ card: MessageResponseCard.GeneratedCard) -> some View {
+        let facts = Dictionary(uniqueKeysWithValues: card.facts.map { ($0.id, $0) })
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: generatedSymbol(card.icon))
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                    .frame(width: 36, height: 36)
+                    .background(
+                        AssistantTheme.accent(for: colorScheme).opacity(0.10),
+                        in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    )
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(card.sourceLabel.uppercased())
+                        .font(.caption2.monospaced().weight(.semibold))
+                        .tracking(1.1)
+                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                    Text(card.title)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    if !card.subtitle.isEmpty {
+                        Text(card.subtitle)
+                            .font(.caption)
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    }
+                }
+            }
+
+            ForEach(card.blocks) { block in
+                generatedBlock(block, facts: facts)
+            }
+
+            if !card.actions.isEmpty {
+                Divider()
+                AssistantFlowLayout(spacing: 8) {
+                    ForEach(card.actions) { action in
+                        generatedAction(action, card: card, facts: facts)
+                    }
+                }
+            }
+        }
+        .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(card.accessibilityLabel)
+    }
+
+    @ViewBuilder
+    private func generatedBlock(
+        _ block: MessageResponseCard.GeneratedBlock,
+        facts: [String: MessageResponseCard.GeneratedFact]
+    ) -> some View {
+        switch block.type {
+        case "hero":
+            if let id = block.values["titleFact"]?.string, let fact = facts[id] {
+                VStack(alignment: .leading, spacing: 5) {
+                    generatedFactValue(fact, prominent: true)
+                    if let subtitleId = block.values["subtitleFact"]?.string,
+                       let subtitle = facts[subtitleId] {
+                        generatedFactValue(subtitle, prominent: false)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 12)
+                .overlay(alignment: .top) { Divider() }
+                .overlay(alignment: .bottom) { Divider() }
+            }
+        case "facts", "timeline":
+            let ids = block.values["factIds"]?.arrayStrings ?? []
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 14) {
+                ForEach(ids, id: \.self) { id in
+                    if let fact = facts[id] {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(fact.label.uppercased())
+                                .font(.caption2.monospaced().weight(.medium))
+                                .tracking(0.7)
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            generatedFactValue(fact, prominent: false)
+                        }
+                    }
+                }
+            }
+        case "score":
+            HStack(spacing: 12) {
+                scoreSide(label: facts[block.values["leftLabelFact"]?.string ?? ""], value: facts[block.values["leftValueFact"]?.string ?? ""])
+                Text("—").foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                scoreSide(label: facts[block.values["rightLabelFact"]?.string ?? ""], value: facts[block.values["rightValueFact"]?.string ?? ""])
+            }
+            .padding(12)
+            .background(AssistantTheme.sunken(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        case "code":
+            if let id = block.values["valueFact"]?.string, let fact = facts[id] {
+                if fact.sensitive {
+                    DisclosureGroup("Reveal \(fact.label.lowercased())") {
+                        Text(fact.value).font(.callout.monospaced().weight(.semibold)).textSelection(.enabled)
+                    }
+                    .font(.caption.weight(.semibold))
+                } else {
+                    Text(fact.value).font(.callout.monospaced().weight(.semibold)).textSelection(.enabled)
+                }
+            }
+        case "note":
+            if let id = block.values["factId"]?.string, let fact = facts[id] {
+                generatedFactValue(fact, prominent: false)
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func generatedFactValue(_ fact: MessageResponseCard.GeneratedFact, prominent: Bool) -> some View {
+        if fact.sensitive {
+            DisclosureGroup("Reveal") {
+                Text(fact.value).font(.callout.monospaced()).textSelection(.enabled)
+            }
+            .font(.caption.weight(.semibold))
+        } else {
+            Text(fact.value)
+                .font(prominent ? .title3.weight(.semibold) : .callout.weight(.medium))
+                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                .textSelection(.enabled)
+        }
+    }
+
+    private func scoreSide(
+        label: MessageResponseCard.GeneratedFact?,
+        value: MessageResponseCard.GeneratedFact?
+    ) -> some View {
+        VStack(spacing: 4) {
+            Text(label?.value ?? "").font(.caption).foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            Text(value?.value ?? "").font(.title2.monospaced().weight(.bold))
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func generatedSymbol(_ icon: String) -> String {
+        switch icon {
+        case "ticket": "ticket.fill"
+        case "plane": "airplane"
+        case "sport": "trophy.fill"
+        case "package": "shippingbox.fill"
+        case "calendar": "calendar"
+        case "map": "map.fill"
+        case "music": "music.note"
+        case "star": "star.fill"
+        default: "sparkles"
+        }
+    }
+
+    @ViewBuilder
+    private func generatedAction(
+        _ action: MessageResponseCard.GeneratedAction,
+        card: MessageResponseCard.GeneratedCard,
+        facts: [String: MessageResponseCard.GeneratedFact]
+    ) -> some View {
+        let fact = action.factId.flatMap { facts[$0] }
+        if action.type == "open_url",
+           let value = fact?.value,
+           let url = URL(string: value),
+           ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+            Link(action.label, destination: url)
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.bordered)
+        } else {
+            Button(action.label) {
+                switch action.type {
+                case "copy_value":
+                    if let value = fact?.value { UIPasteboard.general.string = value }
+                case "ask_assistant":
+                    if let prompt = action.prompt { onSend?(prompt) }
+                case "refresh":
+                    onSend?("Refresh saved card \(card.id) (“\(card.title)”) using current source data.")
+                default:
+                    break
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .buttonStyle(.bordered)
+            .disabled(
+                (action.type == "ask_assistant" || action.type == "refresh") && onSend == nil
+            )
+        }
     }
 
     @ViewBuilder

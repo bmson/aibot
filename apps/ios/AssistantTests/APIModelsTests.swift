@@ -355,6 +355,36 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(items.first?.title, "Design review")
     }
 
+    func testGeneratedCardDecodesVersionedFactsAndSensitiveCodes() {
+        let card = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("generated-card"),
+                "id": .string("ticket-1"),
+                "spec": .object([
+                    "version": .number(1),
+                    "title": .string("Movie ticket"),
+                    "sourceLabel": .string("Cinema email"),
+                    "accessibilityLabel": .string("Movie ticket for Dune"),
+                    "facts": .array([
+                        .object(["id": .string("movie"), "label": .string("Movie"), "value": .string("Dune: Part Two")]),
+                        .object(["id": .string("code"), "label": .string("Ticket code"), "value": .string("MV-4829-AX"), "sensitive": .bool(true)]),
+                    ]),
+                    "blocks": .array([
+                        .object(["type": .string("hero"), "titleFact": .string("movie")]),
+                        .object(["type": .string("code"), "valueFact": .string("code")]),
+                    ]),
+                ]),
+            ])
+        )
+        guard case let .generated(generated)? = MessageResponseCard(part: card) else {
+            return XCTFail("Expected a generated card")
+        }
+        XCTAssertEqual(generated.title, "Movie ticket")
+        XCTAssertEqual(generated.facts.first?.value, "Dune: Part Two")
+        XCTAssertTrue(generated.facts.last?.sensitive == true)
+    }
+
     func testNoticePresentationDecodesAdditively() throws {
         let data = #"{"id":"notice-1","role":"assistant","parts":[{"type":"text","text":"full diagnostic text"},{"type":"notice","notice":"needs-attention","presentation":{"version":1,"headline":"Choose locations","summary":"Remote only or specific cities?","facts":[{"label":"Goal","value":"Job search"}],"detailLabel":"Technical details","diagnostics":["web.fetch approval expired"]}}]}"#.data(using: .utf8)!
         let message = try JSONDecoder().decode(ChatMessage.self, from: data)
@@ -1540,6 +1570,7 @@ final class APIModelsTests: XCTestCase {
                 .activity,
                 .goals,
                 .approvals,
+                .cards,
                 .memory,
                 .documents,
                 .skills,

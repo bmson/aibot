@@ -714,6 +714,28 @@ struct WorkspaceResponse: Codable, Sendable {
     let imports: WorkspaceImports?
 }
 
+struct SavedCardsResponse: Codable, Sendable {
+    let cards: [SavedCardRecord]
+}
+
+struct SavedCardRecord: Codable, Identifiable, Sendable {
+    let id: String
+    let revisionId: String
+    let status: String
+    let spec: JSONValue
+    let conversationId: String?
+    let updatedAt: String
+
+    var messagePart: MessagePart {
+        .init(type: "data-card", data: .object([
+            "kind": .string("generated-card"),
+            "id": .string(id),
+            "revisionId": .string(revisionId),
+            "spec": spec,
+        ]))
+    }
+}
+
 struct WorkspaceImports: Codable, Sendable {
     let sources: [WorkspaceImportSource]
     let unstartedFiles: [WorkspaceImportFile]

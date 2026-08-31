@@ -41,6 +41,15 @@ describe('rendersAllCards', () => {
         { kind: 'calendar-event' },
         { kind: 'knowledge-graph' },
         { kind: 'calendar-conflicts' },
+        {
+          kind: 'generated-card',
+          spec: {
+            version: 1,
+            title: 'Ticket',
+            facts: [{ id: 'title', value: 'Show' }],
+            blocks: [{ type: 'hero', titleFact: 'title' }],
+          },
+        },
       ]),
     ).toBe(true);
     expect(rendersAllCards([{ kind: 'weather' }, { kind: 'email-thread' }])).toBe(false);
@@ -133,5 +142,46 @@ describe('ResponseCards', () => {
     expect(html).toContain('2 more results');
     expect(html.indexOf('Status 3')).toBeLessThan(html.indexOf('2 more results'));
     expect(html.indexOf('2 more results')).toBeLessThan(html.indexOf('Status 4'));
+  });
+
+  it('renders a generated ticket from native blocks and conceals its bearer code', () => {
+    const html = render({
+      kind: 'generated-card',
+      id: 'ticket-1',
+      spec: {
+        version: 1,
+        title: 'Movie ticket',
+        sourceLabel: 'Cinema email',
+        icon: 'ticket',
+        accent: 'violet',
+        accessibilityLabel: 'Movie ticket for Dune',
+        facts: [
+          { id: 'movie', label: 'Movie', value: 'Dune: Part Two', source: 'mail' },
+          {
+            id: 'code',
+            label: 'Ticket code',
+            value: 'MV-4829-AX',
+            source: 'mail',
+            sensitive: true,
+          },
+        ],
+        blocks: [
+          { type: 'hero', titleFact: 'movie' },
+          { type: 'code', valueFact: 'code', format: 'text' },
+        ],
+        actions: [],
+      },
+    });
+    expect(html).toContain('Dune: Part Two');
+    expect(html).toContain('Tap to reveal');
+    expect(html).not.toContain('MV-4829-AX');
+  });
+
+  it('keeps prose fallback for an unsupported generated-card schema version', () => {
+    expect(
+      rendersAllCards([
+        { kind: 'generated-card', id: 'future', spec: { version: 2, title: 'Future' } },
+      ]),
+    ).toBe(false);
   });
 });

@@ -235,6 +235,54 @@ export const messages = pgTable(
   ],
 );
 
+// ── Generative cards ────────────────────────────────────────────────────────
+
+/**
+ * The current saved-card lifecycle. Chat messages keep an immutable copy of
+ * the revision they displayed; this table points the Cards hub at the newest
+ * grounded revision without rewriting transcript history.
+ */
+export const generatedCards = pgTable(
+  'generated_cards',
+  {
+    id: uuid('id').primaryKey(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id').references(() => conversations.id, {
+      onDelete: 'set null',
+    }),
+    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'set null' }),
+    status: text('status').notNull().default('active'),
+    sourceLabel: text('source_label').notNull(),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    currentRevisionId: uuid('current_revision_id').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    check('generated_cards_status_check', sql`${t.status} IN ('active','dismissed','expired')`),
+    uniqueIndex('generated_cards_agent_source_idx').on(t.agentId, t.sourceFingerprint),
+    index('generated_cards_agent_status_idx').on(t.agentId, t.status, t.updatedAt),
+  ],
+);
+
+/** Immutable, auditable snapshots. The JSON value is a validated CardSpecV1. */
+export const generatedCardRevisions = pgTable(
+  'generated_card_revisions',
+  {
+    id: uuid('id').primaryKey(),
+    cardId: uuid('card_id')
+      .notNull()
+      .references(() => generatedCards.id, { onDelete: 'cascade' }),
+    version: smallint('version').notNull().default(1),
+    spec: jsonb('spec').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('generated_card_revisions_card_idx').on(t.cardId, t.createdAt)],
+);
+
 /**
  * Explicit conversational open loops. These are owner-private continuity
  * records, not instructions: extraction may create or update them, but only

@@ -7,6 +7,7 @@ export * from './config.js';
 export * from './cost.js';
 export * from './email-provenance.js';
 export * from './events.js';
+export * from './generative-card.js';
 export * from './mcp-secrets.js';
 export * from './memory/index.js';
 export * from './model-router/index.js';

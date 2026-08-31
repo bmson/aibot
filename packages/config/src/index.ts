@@ -26,6 +26,11 @@ const booleanString = z
   .default('false')
   .transform((value) => value === 'true');
 
+const enabledBooleanString = z
+  .enum(['true', 'false'])
+  .default('true')
+  .transform((value) => value === 'true');
+
 /**
  * The single authoritative configuration schema for every app, package, worker,
  * and deployment script. Values stay flat because they map one-to-one to
@@ -245,6 +250,10 @@ const ConfigSchema = z.object({
   CANARY_ENABLED: booleanString,
   CANARY_MAX_COST_USD: z.coerce.number().min(0.01).max(0.1).default(0.03),
   CHAT_RECALL_ENABLED: booleanString,
+  /** Evidence-grounded native card composition in final responses. */
+  GENERATIVE_CARDS_ENABLED: enabledBooleanString,
+  /** Allow cardable inbound mail to earn a card task below the urgency threshold. */
+  PROACTIVE_CARDS_ENABLED: enabledBooleanString,
   /** Explicit opt-in: graph-backed personal-memory recall, layered over chat recall. */
   GRAPH_RAG_ENABLED: booleanString,
   /**

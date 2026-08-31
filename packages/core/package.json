@@ -11,6 +11,7 @@
     "./config": "./src/config.ts",
     "./cost": "./src/cost.ts",
     "./events": "./src/events.ts",
+    "./generative-card": "./src/generative-card.ts",
     "./memory/ambient": "./src/memory/ambient.ts",
     "./memory/consolidation": "./src/memory/consolidation.ts",
     "./memory/commitments": "./src/memory/commitments.ts",

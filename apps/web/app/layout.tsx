@@ -103,6 +103,13 @@ const navItems: Array<Omit<NavDestination, 'count'>> = [
     aliases: [],
   },
   {
+    href: '/cards',
+    label: 'Cards',
+    command: '/cards',
+    hint: 'Tickets, travel, scores, and saved live information',
+    aliases: ['wallet', 'passes'],
+  },
+  {
     href: '/tasks',
     label: 'Activity',
     command: '/activity',
