@@ -135,15 +135,18 @@ export async function GET(request: Request): Promise<Response> {
       },
       // `label` carries the same human wording the web settings page shows,
       // so the phone never has to keep its own copy of the dictionaries.
-      schedules: settings.schedules.map((schedule) => ({
-        id: schedule.id,
-        name: schedule.name,
-        label: scheduleLabels[schedule.name] ?? null,
-        cron: schedule.cron,
-        enabled: schedule.enabled,
-        nextRunAt: schedule.nextRunAt,
-        lastRunAt: schedule.lastRunAt,
-      })),
+      schedules: settings.schedules
+        .filter((schedule) => !schedule.name.startsWith('reminder:'))
+        .map((schedule) => ({
+          id: schedule.id,
+          name: schedule.name,
+          label: scheduleLabels[schedule.name] ?? null,
+          cron: schedule.cron,
+          enabled: schedule.enabled,
+          nextRunAt: schedule.nextRunAt,
+          lastRunAt: schedule.lastRunAt,
+        })),
+      reminders: settings.reminders,
       policies: settings.policies.map((policy) => ({
         id: policy.id,
         toolName: policy.toolName,

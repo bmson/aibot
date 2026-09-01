@@ -23,11 +23,20 @@ enum PullMenuMotion {
         return progress * progress * (3 - (2 * progress))
     }
 
-    /// Keep the composer's local clearance invariant while its parent sheet
-    /// moves. Interpolating this inset against reveal progress makes the input
-    /// travel at a different apparent speed and collapse toward the sheet edge.
-    static func fixedBottomSafeAreaInset(deviceInset: CGFloat) -> CGFloat {
-        max(deviceInset, 0)
+    /// The composer is positioned in the conversation surface's own coordinate
+    /// space. This spacing never depends on reveal progress, gesture phase, or
+    /// the device safe area; the green surface is the sole owner of vertical
+    /// menu motion.
+    static let composerSurfaceBottomSpacing: CGFloat = 12
+
+    /// Only transcript-owned activity may release its bottom anchor. Menu
+    /// reveal is a transform of the entire conversation surface and must never
+    /// participate in this decision.
+    static func shouldPinTranscriptToBottom(
+        userIsDraggingTranscript: Bool,
+        isSending: Bool
+    ) -> Bool {
+        !userIsDraggingTranscript && !isSending
     }
 
     /// Corner rounding is binary once the conversation becomes a sheet. The
@@ -55,6 +64,21 @@ enum PullMenuMotion {
     /// along the same path rather than letting UIKit's rubber-band add motion.
     static func openingDistance(translationY: CGFloat, revealHeight: CGFloat) -> CGFloat {
         min(max(-translationY, 0), max(revealHeight, 0))
+    }
+
+    /// Resolve the full sheet travel once, including the device's bottom safe
+    /// area, instead of adding that inset again as the finger moves.
+    static func menuRevealHeight(
+        contentHeight: CGFloat,
+        bottomSafeAreaInset: CGFloat
+    ) -> CGFloat {
+        max(contentHeight, 0) + max(bottomSafeAreaInset, 0)
+    }
+
+    /// The green conversation is a rigid transform: one point of live reveal
+    /// always produces exactly one point of surface movement.
+    static func conversationSurfaceOffset(revealDistance: CGFloat) -> CGFloat {
+        max(revealDistance, 0)
     }
 
     static func projectedOpeningDistance(
@@ -230,7 +254,6 @@ struct ChatView: View {
     @State private var menuOpenGestureIsHorizontal = false
     @State private var menuCloseGestureStartedAt: Date?
     @State private var menuCloseGestureIsHorizontal = false
-    @State private var menuPullTranscriptCompensation: CGFloat = 0
     @State private var menuOpen = false
     // Radius is a sheet state, not a reveal-progress effect. It switches on
     // at the first real pull point and stays on until a close spring finishes.
@@ -249,10 +272,17 @@ struct ChatView: View {
     @State private var composerFocused = false
 
     // The menu is a short, two-column directory rather than a tiny icon grid.
-    // Its reveal follows the actual rows below so it still tracks the finger
-    // when Dynamic Type gives each destination more breathing room.
-    private var menuRevealHeight: CGFloat {
+    // Its content follows Dynamic Type; the reveal adds the device bottom inset
+    // once so the menu frame and green surface share one physical distance.
+    private var menuContentHeight: CGFloat {
         26 + 4 + 11 + menuActionsHeight
+    }
+
+    private var menuRevealHeight: CGFloat {
+        PullMenuMotion.menuRevealHeight(
+            contentHeight: menuContentHeight,
+            bottomSafeAreaInset: deviceBottomSafeAreaInset
+        )
     }
 
     private var menuActionsHeight: CGFloat {
@@ -301,8 +331,14 @@ struct ChatView: View {
                     radius: 28 * menuSurfaceProgress,
                     y: 14 * menuSurfaceProgress
                 )
-                .offset(y: -conversationRevealDistance)
+                // Resolve the complete green surface edge-to-edge before it is
+                // transformed. When `ignoresSafeArea` wrapped the offset view,
+                // SwiftUI recomputed the ScrollView's bottom content inset as
+                // the sheet crossed the device boundary; the transcript then
+                // slid by roughly one home-indicator inset while the composer
+                // stayed put. With offset outermost, this is one rigid layer.
                 .ignoresSafeArea(.container)
+                .offset(y: -conversationRevealDistance)
                 // At the largest accessibility sizes the destination row is
                 // horizontally scrollable, so the lifted conversation owns
                 // one of the dedicated vertical-close regions instead of a
@@ -402,202 +438,197 @@ struct ChatView: View {
         let transcriptItems = model.messages.transcriptItems()
 
         return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    if model.messages.isEmpty {
-                        emptyConversation
-                    } else {
-                        ForEach(transcriptItems) { item in
-                            transcriptRow(item, motionIsReduced: motionIsReduced)
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        if model.messages.isEmpty {
+                            emptyConversation
+                        } else {
+                            ForEach(transcriptItems) { item in
+                                transcriptRow(item, motionIsReduced: motionIsReduced)
+                            }
                         }
+                        // The composer is a sibling layer above the transcript, so
+                        // reserve its measured height only after the final message.
+                        // This preserves the underlay while scrolling but lets the
+                        // last card clear the input at the transcript's bottom edge.
+                        Color.clear
+                            .frame(height: composerHeight + 18)
+                            .id("bottom")
                     }
-                    // The composer is an overlay, so reserve its measured
-                    // height only after the final message. This preserves the
-                    // underlay while scrolling but lets the last card clear
-                    // the input at the transcript's bottom edge.
-                    Color.clear
-                        .frame(height: composerHeight + 18)
-                        .id("bottom")
-                }
-                .padding(.horizontal, 16)
-                // Keyed to the identity list rather than the messages
-                // themselves: without an animation transaction the row
-                // transitions above never played at all, but animating on the
-                // full array would re-animate the bubble's geometry on every
-                // streamed token.
-                .animation(
-                    reduceMotion ? nil : .snappy(duration: 0.3, extraBounce: 0.02),
-                    value: model.messages.map(\.id)
-                )
-            }
-            .ignoresSafeArea(.container, edges: [.top, .bottom])
-            .scrollClipDisabled()
-            .scrollIndicators(.hidden)
-            .scrollPosition($transcriptScrollPosition)
-            // Reserve real layout room for the crown at the start of the
-            // conversation. Unlike the removed clear mask, this cannot slice
-            // through a message bubble or its text. The 8pt gap that used to be
-            // added here is inside the clearance now — it is the same gap the
-            // error banner needs, so it belongs with the geometry.
-            .contentMargins(
-                .top,
-                crownContentTopInset,
-                for: .scrollContent
-            )
-            // A live scroll view under an active menu pull can still pan a
-            // fraction independently of the composer. That compresses the
-            // latest-message spacer during a slow pull, making the input look
-            // attached to the bubble. Freeze it from the first pull point,
-            // not only after the sheet has committed open.
-            .scrollDisabled(menuOpen || menuPullActive)
-            .scrollDismissesKeyboard(.interactively)
-            // Pin to the bottom only when the reader is at rest and nothing
-            // is streaming: the anchor fights a finger on the transcript, and
-            // while a reply streams in it force-scrolls the view down with
-            // every token instead of letting the text grow below the fold.
-            // A live transcript belongs at its newest edge. The briefing
-            // cards are a dashboard, though, so their first card should be
-            // the opening view rather than the prompt launcher at the end.
-            .defaultScrollAnchor(
-                model.messages.isEmpty ? .top : (pinsTranscriptToBottom ? .bottom : nil)
-            )
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                let contentFits = geometry.contentSize.height <= geometry.containerSize.height + 1
-                return contentFits || geometry.visibleRect.maxY >= geometry.contentSize.height - 64
-            } action: { _, atBottom in
-                isAtBottom = atBottom
-                if atBottom {
-                    hasUnseenMessages = false
-                }
-            }
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                let contentFits = geometry.contentSize.height <= geometry.containerSize.height + 1
-                return contentFits || geometry.visibleRect.maxY >= geometry.contentSize.height - 2
-            } action: { _, atOpeningEdge in
-                isAtMenuOpeningEdge = atOpeningEdge
-            }
-            // A ScrollView may adjust its content offset while its pan is
-            // being cancelled. Mirror that exact adjustment on the composer
-            // during a menu pull so its clearance from the latest bubble is
-            // invariant instead of briefly compressing or expanding.
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                guard menuPullActive else { return 0 }
-                return transcriptContentDisplacement(for: geometry)
-            } action: { _, displacement in
-                guard menuPullActive else { return }
-                var transaction = Transaction(animation: nil)
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    menuPullTranscriptCompensation = displacement
-                }
-            }
-            // Recorded outside view state on purpose — see
-            // `TranscriptScrollTracker`. Jump to latest reads it to stop an
-            // in-flight scroll exactly where the transcript currently sits.
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                geometry.contentOffset.y + geometry.contentInsets.top
-            } action: { _, position in
-                transcriptScroll.contentPosition = position
-            }
-            .onScrollPhaseChange { _, newPhase, _ in
-                transcriptScrollPhase = newPhase
-            }
-            // The crown already covers its own footprint. A full-width clear
-            // band here cut straight through visible message bubbles, so keep
-            // the transcript opaque at the top and soften only its lower edge.
-            .mask {
-                VStack(spacing: 0) {
-                    Color.black
-
-                    LinearGradient(
-                        stops: [
-                            .init(color: .black, location: 0),
-                            .init(color: .black.opacity(0.9), location: 0.72),
-                            .init(color: .black.opacity(0.72), location: 1),
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
+                    .padding(.horizontal, 16)
+                    // Keyed to the identity list rather than the messages
+                    // themselves: without an animation transaction the row
+                    // transitions above never played at all, but animating on the
+                    // full array would re-animate the bubble's geometry on every
+                    // streamed token.
+                    .animation(
+                        reduceMotion ? nil : .snappy(duration: 0.3, extraBounce: 0.02),
+                        value: model.messages.map(\.id)
                     )
-                    .frame(height: 52)
                 }
-            }
-            .animation(
-                reduceMotion ? nil : .easeInOut(duration: 0.22),
-                value: model.activityThought != nil
-            )
-            .onAppear {
-                positionInitialConversationIfNeeded(using: proxy)
-            }
-            .onChange(of: model.messages) { oldMessages, newMessages in
-                if newMessages.isEmpty {
-                    hasPositionedInitialConversation = false
-                } else if !hasPositionedInitialConversation {
-                    positionInitialConversationIfNeeded(using: proxy)
-                } else if isAtBottom {
-                    // While a finger is on the transcript the gesture owns the
-                    // scroll position — re-anchoring here would fight the drag.
-                    guard !userIsDraggingTranscript else { return }
-                    let isStreamingUpdate = newMessages.count == oldMessages.count
-                        && newMessages.last?.id.hasPrefix("stream-") == true
-                    // Streaming text must not scroll the view: the bubble grows
-                    // below the fold and Jump to latest takes the reader down.
-                    // Only brand-new messages get the animated reveal.
-                    if !isStreamingUpdate {
-                        scrollToBottom(using: proxy)
+                .ignoresSafeArea(.container, edges: [.top, .bottom])
+                .scrollClipDisabled()
+                .scrollIndicators(.hidden)
+                .scrollPosition($transcriptScrollPosition)
+                // Menu reveal is a transform of the parent surface. SwiftUI's
+                // automatic content-offset preservation must not counter-transform
+                // this child ScrollView as the surface crosses safe-area geometry.
+                // Disable that adjustment only while the menu owns the surface;
+                // normal message, keyboard, and Dynamic Type updates retain the
+                // platform behavior at rest.
+                .transaction { transaction in
+                    if menuOwnsConversationSurface {
+                        transaction.scrollContentOffsetAdjustmentBehavior = .disabled
                     }
-                } else {
-                    hasUnseenMessages = true
                 }
-            }
-            .onChange(of: scrollRequest) { _, _ in
-                scrollToBottom(using: proxy)
-            }
-            .onChange(of: model.latestQuickReplies) { _, replies in
-                // Suggestions only render while the composer is unfocused, and
-                // sendDraft deliberately keeps the keyboard up — so a reply's
-                // quick replies were never reachable without dismissing it by
-                // hand. Yield focus when one actually arrives, unless the
-                // reader has already started typing a follow-up.
-                guard !replies.isEmpty, !model.isSending, draft.isEmpty else { return }
-                composerFocused = false
-            }
-            .onChange(of: composerHeight) { previousHeight, _ in
-                // Only the first measurement needs help landing on the latest
-                // message. Ongoing changes — the keyboard animating in, the
-                // field growing — are followed automatically by the bottom
-                // scroll anchor inside the keyboard's own animation; an
-                // explicit scroll here stepped the transcript in jumps.
-                guard previousHeight == 0 else { return }
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
+                // Reserve real layout room for the crown at the start of the
+                // conversation. Unlike the removed clear mask, this cannot slice
+                // through a message bubble or its text. The 8pt gap that used to be
+                // added here is inside the clearance now — it is the same gap the
+                // error banner needs, so it belongs with the geometry.
+                .contentMargins(
+                    .top,
+                    crownContentTopInset,
+                    for: .scrollContent
+                )
+                // Never toggle `scrollDisabled` as the menu moves. That cancels
+                // UIScrollView's active pan by changing its environment and makes
+                // SwiftUI re-anchor the transcript inside the moving surface.
+                .scrollDismissesKeyboard(.interactively)
+                // Pin to the bottom only when the reader is at rest and nothing
+                // is streaming: the anchor fights a finger on the transcript, and
+                // while a reply streams in it force-scrolls the view down with
+                // every token instead of letting the text grow below the fold.
+                // A live transcript belongs at its newest edge. The briefing
+                // cards are a dashboard, though, so their first card should be
+                // the opening view rather than the prompt launcher at the end.
+                .defaultScrollAnchor(
+                    model.messages.isEmpty ? .top : (pinsTranscriptToBottom ? .bottom : nil)
+                )
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    let contentFits =
+                        geometry.contentSize.height <= geometry.containerSize.height + 1
+                    return contentFits
+                        || geometry.visibleRect.maxY >= geometry.contentSize.height - 64
+                } action: { _, atBottom in
+                    isAtBottom = atBottom
+                    if atBottom {
+                        hasUnseenMessages = false
+                    }
                 }
-            }
-            // Keep the transcript edge-to-edge and place the translucent
-            // composer above it. Cards should remain scrollable beneath the
-            // input instead of ending at an artificial bottom inset.
-            .overlay(alignment: .bottom) {
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    let contentFits =
+                        geometry.contentSize.height <= geometry.containerSize.height + 1
+                    return contentFits
+                        || geometry.visibleRect.maxY >= geometry.contentSize.height - 2
+                } action: { _, atOpeningEdge in
+                    isAtMenuOpeningEdge = atOpeningEdge
+                }
+                // Recorded outside view state on purpose — see
+                // `TranscriptScrollTracker`. Jump to latest reads it to stop an
+                // in-flight scroll exactly where the transcript currently sits.
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentOffset.y + geometry.contentInsets.top
+                } action: { _, position in
+                    transcriptScroll.contentPosition = position
+                }
+                .onScrollPhaseChange { _, newPhase, _ in
+                    transcriptScrollPhase = newPhase
+                }
+                // The crown already covers its own footprint. A full-width clear
+                // band here cut straight through visible message bubbles, so keep
+                // the transcript opaque at the top and soften only its lower edge.
+                .mask {
+                    VStack(spacing: 0) {
+                        Color.black
+
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black, location: 0),
+                                .init(color: .black.opacity(0.9), location: 0.72),
+                                .init(color: .black.opacity(0.72), location: 1),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: 52)
+                    }
+                }
+                .animation(
+                    reduceMotion ? nil : .easeInOut(duration: 0.22),
+                    value: model.activityThought != nil
+                )
+                .onAppear {
+                    positionInitialConversationIfNeeded(using: proxy)
+                }
+                .onChange(of: model.messages) { oldMessages, newMessages in
+                    if newMessages.isEmpty {
+                        hasPositionedInitialConversation = false
+                    } else if !hasPositionedInitialConversation {
+                        positionInitialConversationIfNeeded(using: proxy)
+                    } else if isAtBottom {
+                        // While a finger is on the transcript the gesture owns the
+                        // scroll position — re-anchoring here would fight the drag.
+                        guard !userIsDraggingTranscript else { return }
+                        let isStreamingUpdate =
+                            newMessages.count == oldMessages.count
+                            && newMessages.last?.id.hasPrefix("stream-") == true
+                        // Streaming text must not scroll the view: the bubble grows
+                        // below the fold and Jump to latest takes the reader down.
+                        // Only brand-new messages get the animated reveal.
+                        if !isStreamingUpdate {
+                            scrollToBottom(using: proxy)
+                        }
+                    } else {
+                        hasUnseenMessages = true
+                    }
+                }
+                .onChange(of: scrollRequest) { _, _ in
+                    scrollToBottom(using: proxy)
+                }
+                .onChange(of: model.latestQuickReplies) { _, replies in
+                    // Suggestions only render while the composer is unfocused, and
+                    // sendDraft deliberately keeps the keyboard up — so a reply's
+                    // quick replies were never reachable without dismissing it by
+                    // hand. Yield focus when one actually arrives, unless the
+                    // reader has already started typing a follow-up.
+                    guard !replies.isEmpty, !model.isSending, draft.isEmpty else { return }
+                    composerFocused = false
+                }
+                .onChange(of: composerHeight) { previousHeight, _ in
+                    // Only the first measurement needs help landing on the latest
+                    // message. Ongoing changes — the keyboard animating in, the
+                    // field growing — are followed automatically by the bottom
+                    // scroll anchor inside the keyboard's own animation; an
+                    // explicit scroll here stepped the transcript in jumps.
+                    guard previousHeight == 0 else { return }
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                }
+
+                // Keep the transcript and composer as sibling layers. When the
+                // composer was a ScrollView overlay, UIKit's pan recognizer
+                // still received pulls that began on the input and shifted the
+                // transcript before the menu gesture took over.
                 composer
-                    // An overlay receives the scroll view's full height as a
-                    // proposal. Keep the composer intrinsic before measuring
-                    // it; otherwise that proposal can turn the end spacer
-                    // into a whole blank transcript screen.
                     .fixedSize(horizontal: false, vertical: true)
-                    // At rest, nil preserves SwiftUI's keyboard-aware default.
-                    // Once this surface becomes a sheet, preserve that same
-                    // device clearance for the whole transition. The parent
-                    // owns all reveal motion; the input never animates its own
-                    // bottom margin against the drag.
-                    .safeAreaPadding(.bottom, composerBottomSafeAreaInset)
-                    .offset(y: menuPullActive ? menuPullComposerOffset : 0)
+                    // A plain, explicit padding is deliberate. Safe-area
+                    // padding is recomputed when this transformed surface
+                    // crosses the device safe-area boundary, and an offset
+                    // would let transcript cancellation move the field without
+                    // moving its green background. The parent surface alone
+                    // owns every point of reveal motion.
+                    .padding(.bottom, PullMenuMotion.composerSurfaceBottomSpacing)
                     .onGeometryChange(for: CGFloat.self) { geometry in
                         geometry.size.height
                     } action: { height in
                         composerHeight = height
                     }
-            }
-            .overlay(alignment: .bottom) {
+
                 if showsJumpToLatest {
                     jumpToLatestButton {
                         jumpFeedback += 1
@@ -618,27 +649,6 @@ struct ChatView: View {
 
     private var menuRevealProgress: CGFloat {
         min(max(visibleMenuRevealDistance / menuRevealHeight, 0), 1)
-    }
-
-    /// The content's position relative to its resting bottom anchor. Applying
-    /// this to the composer during a pull keeps the message/input gap fixed if
-    /// UIKit briefly repositions the ScrollView while its pan is disabled.
-    private func transcriptContentDisplacement(for geometry: ScrollGeometry) -> CGFloat {
-        let minimumOffset = -geometry.contentInsets.top
-        let contentBottomOffset = geometry.contentSize.height
-            - geometry.containerSize.height
-            + geometry.contentInsets.bottom
-        let restingBottomOffset = max(minimumOffset, contentBottomOffset)
-        return restingBottomOffset - geometry.contentOffset.y
-    }
-
-    /// The correction above exists for the few points UIKit snaps the
-    /// transcript when it cancels the pan at pull start — never for the much
-    /// larger geometry drift of the keyboard leaving mid-pull. Unbounded,
-    /// that excursion pushed the input below the fold or off the clipped
-    /// sheet entirely and stretched the bubble-to-input gap.
-    private var menuPullComposerOffset: CGFloat {
-        min(max(menuPullTranscriptCompensation, -20), 20)
     }
 
     @ViewBuilder
@@ -703,12 +713,12 @@ struct ChatView: View {
     }
 
     private var conversationRevealDistance: CGFloat {
-        // The menu frame is bottom-aligned to the container safe area while
-        // its background bleeds under the home indicator. The conversation is
-        // edge-to-edge, so it has to travel the same physical distance: the
-        // reveal plus the device's bottom inset. Scale the inset with the live
-        // drag so both surfaces remain attached for the entire gesture.
-        visibleMenuRevealDistance + (deviceBottomSafeAreaInset * menuRevealProgress)
+        // The safe-area allowance is part of `menuRevealHeight`, so the live
+        // surface transform is exactly the finger/reveal distance. Adding an
+        // interpolated inset here made the whole conversation outrun the menu.
+        PullMenuMotion.conversationSurfaceOffset(
+            revealDistance: visibleMenuRevealDistance
+        )
     }
 
     private var deviceBottomSafeAreaInset: CGFloat {
@@ -724,13 +734,6 @@ struct ChatView: View {
 
     private var menuSurfaceProgress: CGFloat {
         PullMenuMotion.smoothStep(menuRevealProgress)
-    }
-
-    private var composerBottomSafeAreaInset: CGFloat? {
-        guard menuSurfaceRounded else { return nil }
-        return PullMenuMotion.fixedBottomSafeAreaInset(
-            deviceInset: deviceBottomSafeAreaInset
-        )
     }
 
     private func organicProgress(_ value: CGFloat) -> CGFloat {
@@ -814,7 +817,6 @@ struct ChatView: View {
                     transaction.disablesAnimations = true
                     withTransaction(transaction) {
                         menuSurfaceRounded = true
-                        menuPullTranscriptCompensation = 0
                     }
                 }
 
@@ -943,13 +945,10 @@ struct ChatView: View {
                     endPoint: .bottom
                 )
             }
-            // The edge-to-edge conversation travels the reveal plus the
-            // device's bottom inset, but this frame starts at the safe area —
-            // without bleeding upward by the same inset (plus the sheet's
-            // corner radius), the window backing showed through the band's
-            // top strip and painted the sheet's rounded corners a wrong gray
-            // instead of the menu's canvas.
-            .padding(.top, -(deviceBottomSafeAreaInset + menuSheetCornerRadius))
+            // The frame already includes the bottom safe-area allowance. Bleed
+            // upward only through the sheet's rounded corner so the window
+            // backing cannot show through that curve.
+            .padding(.top, -menuSheetCornerRadius)
             .ignoresSafeArea(.container, edges: .bottom)
             .allowsHitTesting(false)
         }
@@ -1355,7 +1354,6 @@ struct ChatView: View {
         withTransaction(normalizationTransaction) {
             menuPullDistance = currentRevealDistance
             menuCloseDragDistance = 0
-            menuPullTranscriptCompensation = 0
             if open {
                 menuSurfaceRounded = true
             }
@@ -1485,8 +1483,9 @@ struct ChatView: View {
                 // The input itself is the bottom-edge grab region. Keeping
                 // this recognizer off the outer composer lets the quick-reply
                 // strip retain its native horizontal scroll gesture. Observe
-                // the pull simultaneously so a stationary first touch still
-                // reaches the TextField and focuses it immediately.
+                // the pull simultaneously and wait for real movement so the
+                // text view and send button retain native tap, caret, and
+                // selection handling.
                 .simultaneousGesture(
                     pullMenuOpenGesture(
                         requiresTranscriptBottom: false,
@@ -1842,7 +1841,10 @@ struct ChatView: View {
         // `errorMessage` let any transient failure — including a non-fatal
         // overview refresh — hide the button for as long as the unrelated
         // banner stayed up, which is why it was sometimes missing.
-        !isAtBottom
+        !menuPullActive
+            && !menuOpen
+            && !menuSurfaceRounded
+            && !isAtBottom
             && !model.messages.isEmpty
     }
 
@@ -1964,7 +1966,17 @@ struct ChatView: View {
     }
 
     private var pinsTranscriptToBottom: Bool {
-        !userIsDraggingTranscript && !menuPullActive && !model.isSending
+        // Menu reveal is a transform of the whole conversation surface, not a
+        // transcript state. Keeping it out of this condition prevents the log
+        // from dropping its bottom anchor on the first pull sample.
+        PullMenuMotion.shouldPinTranscriptToBottom(
+            userIsDraggingTranscript: userIsDraggingTranscript,
+            isSending: model.isSending
+        )
+    }
+
+    private var menuOwnsConversationSurface: Bool {
+        menuPullActive || menuOpen || menuCloseDragDistance > 0
     }
 
     private func scrollToBottom(using proxy: ScrollViewProxy) {

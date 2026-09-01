@@ -1,3 +1,8 @@
+import {
+  cancelReminderSchedule,
+  reminderScheduleIsActive,
+  reminderScheduleTemplate,
+} from '@assistant/core';
 import { getAgent } from '@assistant/core/chat';
 import { countHeldPings } from '@assistant/core/proactive/nudge-policy';
 import { agents, approvalPolicies, type Db, notificationPrefs, schedules } from '@assistant/db';
@@ -16,6 +21,13 @@ export interface NotificationPrefsView {
 export interface SettingsOverview {
   agent: Awaited<ReturnType<typeof getAgent>>;
   schedules: Array<typeof schedules.$inferSelect>;
+  reminders: Array<{
+    id: string;
+    text: string;
+    kind: 'once' | 'recurring';
+    status: 'scheduled' | 'delivering';
+    nextRunAt: Date | null;
+  }>;
   policies: Array<typeof approvalPolicies.$inferSelect>;
   goalAutomationCount: number;
   notificationPrefs: NotificationPrefsView;
@@ -48,11 +60,26 @@ export async function getSettingsOverview(db: Db): Promise<SettingsOverview> {
     db.select().from(notificationPrefs),
   ]);
   const directSchedules = scheduleRows.filter((schedule) => !schedule.name.startsWith('goal:'));
+  const reminders = directSchedules
+    .filter(
+      (schedule) => schedule.name.startsWith('reminder:') && reminderScheduleIsActive(schedule),
+    )
+    .map((schedule) => {
+      const template = reminderScheduleTemplate(schedule.taskTemplate);
+      return {
+        id: schedule.id,
+        text: template.reminderText ?? '',
+        kind: template.reminderKind ?? ('recurring' as const),
+        status: schedule.enabled ? ('scheduled' as const) : ('delivering' as const),
+        nextRunAt: schedule.nextRunAt,
+      };
+    });
   const prefs = prefsRows.find((row) => row.agentId === agent.id);
   const heldLast24h = await countHeldPings(db, agent.id, new Date(Date.now() - 24 * 3600 * 1000));
   return {
     agent,
     schedules: directSchedules,
+    reminders,
     policies,
     goalAutomationCount: scheduleRows.length - directSchedules.length,
     notificationPrefs: {
@@ -138,6 +165,11 @@ export async function setRecurringJobEnabled(
     .update(schedules)
     .set({ enabled, ...(enabled ? { nextRunAt: null } : {}), updatedAt: sql`now()` })
     .where(eq(schedules.id, scheduleId));
+}
+
+export async function deleteReminder(db: Db, reminderId: string): Promise<boolean> {
+  const agent = await getAgent(db);
+  return (await cancelReminderSchedule(db, agent.id, reminderId)).cancelled;
 }
 
 export async function setApprovalPolicyEnabled(

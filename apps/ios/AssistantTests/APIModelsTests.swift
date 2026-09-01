@@ -422,6 +422,63 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(meetingLink, "https://zoom.us/j/12345")
     }
 
+    func testProactiveAlertCardDecodesGroundedDetails() {
+        let part = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("proactive-alert"),
+                "id": .string("event-lead-1"),
+                "category": .string("event"),
+                "urgencyLabel": .string("Starts in 30 min"),
+                "title": .string("Annual Physical"),
+                "startsAt": .string("2026-09-02T16:00:00.000Z"),
+                "details": .array([
+                    .object(["label": .string("Location"), "value": .string("One Medical")]),
+                ]),
+            ])
+        )
+        guard case let .proactiveAlert(id, category, urgency, title, summary, startsAt, dueAt, details)? = MessageResponseCard(part: part) else {
+            return XCTFail("Expected a proactive alert card")
+        }
+        XCTAssertEqual(id, "event-lead-1")
+        XCTAssertEqual(category, "event")
+        XCTAssertEqual(urgency, "Starts in 30 min")
+        XCTAssertEqual(title, "Annual Physical")
+        XCTAssertEqual(summary, "")
+        XCTAssertEqual(startsAt, "2026-09-02T16:00:00.000Z")
+        XCTAssertEqual(dueAt, "")
+        XCTAssertEqual(details.first?.value, "One Medical")
+    }
+
+    func testLegacyTextCardsReformatSuppliedCalendarExamplesConservatively() {
+        let agendaText = "Tomorrow has five upcoming events: 1) U13B Azul soccer practice from 6:30-8:00 PM at Crocker Amazon fields (outside usual hours). 2) Coffee with Tine at 9:00 AM at Home Coffee Roasters on Clement. 3) Technical interviews with Clay from 1:00-2:00 PM. 4) Kung Fu class at 4:45 PM at Tat Wong Academy on Geary. 5) Freyja's swim lesson at 5:15 PM at La Petite Baleen on Mason."
+        guard case let .agenda(title, subtitle, items)? = MessageResponseCard.inferredLegacy(from: agendaText).first else {
+            return XCTFail("Expected the numbered calendar paragraph to become an agenda")
+        }
+        XCTAssertEqual(title, "Tomorrow")
+        XCTAssertEqual(subtitle, "5 upcoming events")
+        XCTAssertEqual(items.count, 5)
+        XCTAssertEqual(items[0].time, "6:30-8:00 PM")
+        XCTAssertEqual(items[0].detail, "Crocker Amazon fields (outside usual hours)")
+        XCTAssertEqual(items[2].title, "Technical interviews with Clay")
+
+        let alertText = "\"Annual Physical\" starts in 30 minutes at One Medical, 559 Clay St. it is at One Medical, 559 Clay St; family@example.com called it."
+        guard case let .proactiveAlert(_, category, urgency, title, summary, _, _, details)? = MessageResponseCard.inferredLegacy(from: alertText).first else {
+            return XCTFail("Expected the historical event notice to become an alert")
+        }
+        XCTAssertEqual(category, "event")
+        XCTAssertEqual(urgency, "Starts in 30 min")
+        XCTAssertEqual(title, "Annual Physical")
+        XCTAssertEqual(summary, "")
+        XCTAssertEqual(details.first?.value, "One Medical, 559 Clay St")
+
+        XCTAssertTrue(
+            MessageResponseCard.inferredLegacy(
+                from: "Try these: 1) Bring water. 2) Leave a little early."
+            ).isEmpty
+        )
+    }
+
     func testOtherStructuredCardsDecodeCompleteToolBackedData() {
         let reminder = MessagePart(
             type: "data-card",
@@ -537,6 +594,26 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(statusDetails.first?.value, "ada@example.com")
         XCTAssertNil(statusLinkLabel)
         XCTAssertNil(statusLinkURL)
+    }
+
+    func testWorkspaceSettingsDecodesManagedReminders() throws {
+        let data = Data(
+            #"{"agent":{"name":"Assistant","timezone":"America/Los_Angeles","locale":"en-US","signature":""},"schedules":[],"reminders":[{"id":"reminder-1","text":"Get sunglasses from the car","kind":"once","status":"scheduled","nextRunAt":"2026-09-02T20:00:00.000Z"},{"id":"reminder-2","text":"Take vitamins","kind":"recurring","status":"delivering","nextRunAt":null}],"policies":[],"goalAutomationCount":0}"#.utf8
+        )
+
+        let settings = try JSONDecoder().decode(WorkspaceSettings.self, from: data)
+        XCTAssertEqual(settings.reminders.map(\.text), ["Get sunglasses from the car", "Take vitamins"])
+        XCTAssertFalse(settings.reminders[0].repeats)
+        XCTAssertTrue(settings.reminders[1].repeats)
+        XCTAssertTrue(settings.reminders[1].isDelivering)
+
+        let legacy = Data(
+            #"{"agent":{"name":"Assistant","timezone":"UTC","locale":"en-US","signature":""},"schedules":[],"policies":[],"goalAutomationCount":0}"#.utf8
+        )
+        XCTAssertEqual(
+            try JSONDecoder().decode(WorkspaceSettings.self, from: legacy).reminders.count,
+            0
+        )
     }
 
     func testResponseCardsDecodeWebSearchResultsAndAvailability() {
@@ -1460,13 +1537,39 @@ final class APIModelsTests: XCTestCase {
 
     func testPullMenuPresentationKeepsClearanceAndRevealsRowsBottomUp() {
         XCTAssertEqual(
-            PullMenuMotion.fixedBottomSafeAreaInset(deviceInset: 34),
-            34,
+            PullMenuMotion.composerSurfaceBottomSpacing,
+            12,
+            accuracy: 0.001
+        )
+        XCTAssertTrue(
+            PullMenuMotion.shouldPinTranscriptToBottom(
+                userIsDraggingTranscript: false,
+                isSending: false
+            )
+        )
+        XCTAssertFalse(
+            PullMenuMotion.shouldPinTranscriptToBottom(
+                userIsDraggingTranscript: true,
+                isSending: false
+            )
+        )
+        XCTAssertFalse(
+            PullMenuMotion.shouldPinTranscriptToBottom(
+                userIsDraggingTranscript: false,
+                isSending: true
+            )
+        )
+        XCTAssertEqual(
+            PullMenuMotion.menuRevealHeight(
+                contentHeight: 383,
+                bottomSafeAreaInset: 34
+            ),
+            417,
             accuracy: 0.001
         )
         XCTAssertEqual(
-            PullMenuMotion.fixedBottomSafeAreaInset(deviceInset: -10),
-            0,
+            PullMenuMotion.conversationSurfaceOffset(revealDistance: 137),
+            137,
             accuracy: 0.001
         )
         XCTAssertEqual(

@@ -272,6 +272,116 @@ function CalendarEventCard({ data }: { data: Raw }) {
   );
 }
 
+function calendarDayLabel(value: string, timeZone: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return 'Schedule';
+  return new Intl.DateTimeFormat('en-US', {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+    timeZone,
+  }).format(date);
+}
+
+function CalendarDayCard({ data }: { data: Raw }) {
+  const events = recs(data.events);
+  return (
+    <CardShell
+      icon={CalendarDays}
+      label={`${str(data.title) || 'Schedule'} · ${events.length.toString()} ${events.length === 1 ? 'event' : 'events'}`}
+    >
+      <ol className="flex flex-col gap-4">
+        {events.map((event, index) => {
+          const calendar = link(event.calendarLink);
+          const meeting = link(event.meetingLink);
+          return (
+            <li
+              key={str(event.id) || index}
+              className="grid min-w-0 grid-cols-[5.5rem_1fr] gap-3 border-t border-edge/55 pt-4 first:border-0 first:pt-0"
+            >
+              <span className="font-mono text-xs font-semibold text-accent">{str(event.time)}</span>
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-strong">{str(event.title)}</span>
+                {str(event.location) ? (
+                  <span className="mt-1 flex items-start gap-1.5 text-xs leading-5 text-muted">
+                    <MapPin className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                    <span>{str(event.location)}</span>
+                  </span>
+                ) : null}
+                {strs(event.calendars)[0] ? (
+                  <span className="mt-1 block text-xs text-muted">{strs(event.calendars)[0]}</span>
+                ) : null}
+                {calendar || meeting ? (
+                  <span className="mt-2 flex flex-wrap gap-2">
+                    {calendar ? <CardLink href={calendar.url} label={calendar.label} /> : null}
+                    {meeting ? <CardLink href={meeting.url} label={meeting.label} /> : null}
+                  </span>
+                ) : null}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </CardShell>
+  );
+}
+
+function AgendaCard({ data }: { data: Raw }) {
+  const items = recs(data.items);
+  return (
+    <CardShell icon={CalendarDays} label={str(data.title) || 'Your schedule'}>
+      {str(data.subtitle) ? <p className="mb-3 text-xs text-muted">{str(data.subtitle)}</p> : null}
+      <ol className="flex flex-col gap-3">
+        {items.map((item, index) => (
+          <li
+            key={str(item.id) || `${str(item.time)}-${index.toString()}`}
+            className="grid min-w-0 grid-cols-[5.5rem_1fr] gap-3 border-t border-edge/55 pt-3 first:border-0 first:pt-0"
+          >
+            <span className="font-mono text-xs font-semibold text-accent">{str(item.time)}</span>
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-strong">{str(item.title)}</span>
+              {str(item.detail) ? (
+                <span className="mt-0.5 block text-xs leading-5 text-muted">
+                  {str(item.detail)}
+                </span>
+              ) : null}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </CardShell>
+  );
+}
+
+function ProactiveAlertCard({ data, timeZone }: { data: Raw; timeZone: string }) {
+  const category = str(data.category);
+  const Icon = category === 'email' ? Mail : category === 'commitment' ? Bell : Clock;
+  const details = pairs(data.details);
+  const startsAt = str(data.startsAt);
+  const dueAt = str(data.dueAt);
+  const temporal = startsAt || dueAt;
+  return (
+    <CardShell icon={Icon} label={str(data.urgencyLabel) || 'Worth your attention'}>
+      <p className="text-base font-semibold leading-6 text-strong">{str(data.title)}</p>
+      {str(data.summary) ? (
+        <p className="mt-1 text-sm leading-6 text-muted">{str(data.summary)}</p>
+      ) : null}
+      {temporal || details.length > 0 ? (
+        <div className="mt-3 border-t border-edge/55 pt-3">
+          <DetailRows
+            items={[
+              ...(temporal
+                ? [{ label: startsAt ? 'Starts' : 'Due', value: shortDate(temporal, timeZone) }]
+                : []),
+              ...details.filter((item) => item.label !== 'Due'),
+            ]}
+          />
+        </div>
+      ) : null}
+    </CardShell>
+  );
+}
+
 function EmailResultsCard({ data, timeZone }: { data: Raw; timeZone: string }) {
   const messages = recs(data.messages);
   const renderMessage = (message: Raw, index: number) => (
@@ -840,6 +950,11 @@ function ResponseCardView({
   onSend?: (text: string) => void;
 }) {
   switch (data.kind) {
+    case 'calendar-day':
+      return <CalendarDayCard data={data} />;
+    case 'calendar':
+    case 'agenda':
+      return <AgendaCard data={data} />;
     case 'weather':
       return <WeatherCard data={data} />;
     case 'calendar-event':
@@ -862,6 +977,8 @@ function ResponseCardView({
       return <KnowledgeGraphCard data={data} />;
     case 'calendar-conflicts':
       return <CalendarConflictsCard data={data} timeZone={timeZone} />;
+    case 'proactive-alert':
+      return <ProactiveAlertCard data={data} timeZone={timeZone} />;
     case 'generated-card':
       return <GeneratedCard data={data} onSend={onSend} />;
     default:
@@ -884,7 +1001,65 @@ export function responseCardPayloads(parts: unknown[]): Raw[] {
     if (data?.kind === 'drive-results' && recs(data.files).length === 0) continue;
     if (data) out.push(data);
   }
-  return out;
+  if (out.length > 0) return out;
+  const text = parts
+    .map(rec)
+    .filter((part): part is Raw => part?.type === 'text')
+    .map((part) => str(part.text))
+    .join('')
+    .trim();
+  return legacyTextCards(text);
+}
+
+function legacyTextCards(text: string): Raw[] {
+  if (!text) return [];
+  const alert = /^"([^"]{1,120})" starts in (\d{1,3}) minutes?(?: at (.*?))?\.\s+/i.exec(text);
+  if (alert?.[1] && alert[2]) {
+    const location = str(alert[3]);
+    return [
+      {
+        kind: 'proactive-alert',
+        id: `legacy-event-${alert[1]}-${alert[2]}`,
+        category: 'event',
+        urgencyLabel: `Starts in ${alert[2]} min`,
+        title: alert[1],
+        details: location ? [{ label: 'Location', value: location }] : [],
+      },
+    ];
+  }
+
+  const chunks = text.split(/\s+(?=\d+\)\s)/).filter((chunk) => /^\d+\)\s/.test(chunk));
+  if (chunks.length < 2) return [];
+  const clock = String.raw`\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?`;
+  const items = chunks.map((chunk, index) => {
+    const value = chunk.replace(/^\d+\)\s*/, '').replace(/\s+$/, '');
+    const ranged = new RegExp(
+      `^(.*?)\\s+from\\s+(${clock}\\s*[–-]\\s*${clock})(?:\\s+at\\s+(.+?))?\\.?$`,
+      'i',
+    ).exec(value);
+    const single = new RegExp(`^(.*?)\\s+at\\s+(${clock})(?:\\s+at\\s+(.+?))?\\.?$`, 'i').exec(
+      value,
+    );
+    const match = ranged ?? single;
+    if (!match?.[1] || !match[2]) return null;
+    return {
+      id: `legacy-agenda-${index.toString()}`,
+      time: match[2].trim().replace(/\.$/, '').toUpperCase(),
+      title: match[1].trim(),
+      detail: (match[3] ?? '').replace(/\.$/, '').trim(),
+    };
+  });
+  if (items.some((item) => item === null)) return [];
+  const lead = text.slice(0, text.indexOf('1)')).trim().replace(/:$/, '');
+  return [
+    {
+      kind: 'agenda',
+      id: `legacy-agenda-${items.length.toString()}`,
+      title: /tomorrow/i.test(lead) ? 'Tomorrow' : 'Your schedule',
+      subtitle: `${items.length.toString()} upcoming events`,
+      items,
+    },
+  ];
 }
 
 /** True when every card on the message is one this surface can render. */
@@ -901,6 +1076,8 @@ export function rendersAllCards(cards: Raw[]): boolean {
     }
     return [
       'weather',
+      'calendar',
+      'agenda',
       'calendar-event',
       'email-results',
       'web-search-results',
@@ -911,6 +1088,7 @@ export function rendersAllCards(cards: Raw[]): boolean {
       'document-results',
       'knowledge-graph',
       'calendar-conflicts',
+      'proactive-alert',
     ].includes(str(card.kind));
   });
 }
@@ -924,8 +1102,22 @@ export function ResponseCards({
   timeZone: string;
   onSend?: (text: string) => void;
 }) {
-  const preview = cards.slice(0, PREVIEW_LIMIT);
-  const overflow = cards.slice(PREVIEW_LIMIT);
+  const eventGroups = new Map<string, Raw[]>();
+  for (const event of cards.filter((card) => str(card.kind) === 'calendar-event')) {
+    const label = calendarDayLabel(str(event.start), timeZone);
+    eventGroups.set(label, [...(eventGroups.get(label) ?? []), event]);
+  }
+  const displayCards: Raw[] = [
+    ...[...eventGroups.entries()].map(([title, events]) => ({
+      kind: 'calendar-day',
+      id: `calendar-day-${title}`,
+      title,
+      events,
+    })),
+    ...cards.filter((card) => str(card.kind) !== 'calendar-event'),
+  ];
+  const preview = displayCards.slice(0, PREVIEW_LIMIT);
+  const overflow = displayCards.slice(PREVIEW_LIMIT);
   return (
     <div className="flex min-w-0 flex-col gap-2">
       {preview.map((card, index) => (

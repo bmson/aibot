@@ -64,6 +64,30 @@ describe('response cards', () => {
     expect(result[0]?.calendars).toEqual(['Family', 'Work']);
   });
 
+  it('builds calendar cards from successful evidence even when wording detection missed', () => {
+    const result = calendarResponseCards([
+      {
+        toolName: 'calendar.list_events',
+        status: 'succeeded',
+        result: {
+          events: [
+            {
+              eventId: 'coffee',
+              calendarId: 'family',
+              calendar: 'Family',
+              summary: 'Coffee with Tine',
+              start: '2026-09-02T09:00:00-07:00',
+              end: '2026-09-02T10:00:00-07:00',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(result).toMatchObject([
+      { kind: 'calendar-event', title: 'Coffee with Tine', time: '9:00 AM–10:00 AM' },
+    ]);
+  });
+
   it('keeps an event calendar link separate from its video meeting link', () => {
     const result = calendarResponseCards(
       [

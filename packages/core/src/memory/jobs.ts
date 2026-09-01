@@ -1,4 +1,5 @@
-import type { Db, TaskRow } from '@assistant/db';
+import { type Db, type ScheduleRow, schedules, type TaskRow } from '@assistant/db';
+import { and, eq, sql } from 'drizzle-orm';
 import { getOrCreateNotificationsConversation, persistMessage } from '../chat.js';
 import { loadConfig } from '../config.js';
 import type { ModelRouter } from '../model-router/router.js';
@@ -148,7 +149,13 @@ export async function runCodeJob(
     case 'reminder.notify': {
       const payload = (
         task.trigger as {
-          payload?: { reminderText?: unknown; instruction?: unknown };
+          payload?: {
+            reminderText?: unknown;
+            instruction?: unknown;
+            reminderKind?: unknown;
+            scheduleId?: unknown;
+            schedule?: unknown;
+          };
         } | null
       )?.payload;
       const reminderText =
@@ -163,25 +170,84 @@ export async function runCodeJob(
       if (!reminderText) {
         return { done: true, summary: 'reminder: missing reminder text' };
       }
-      const conversationId =
-        task.conversationId ?? (await getOrCreateNotificationsConversation(deps.db, task.agentId));
-      await persistMessage(deps.db, {
-        conversationId,
-        taskId: task.id,
-        role: 'assistant',
-        origin: 'assistant',
-        parts: [{ type: 'text', text: reminderText }],
-        text: reminderText,
-      });
-      const pinged = await pingOwner(deps.notifyOwner, {
-        taskId: task.id,
-        conversationId,
-        text: reminderText,
-      });
-      return {
-        done: true,
-        summary: `reminder: delivered${pinged ? ' and pinged' : ''}`,
+      const scheduleId = typeof payload?.scheduleId === 'string' ? payload.scheduleId : null;
+      const scheduleName = typeof payload?.schedule === 'string' ? payload.schedule : null;
+      const managedSchedule = Boolean(scheduleId || scheduleName?.startsWith('reminder:'));
+      const [initialSchedule] = managedSchedule
+        ? await deps.db
+            .select()
+            .from(schedules)
+            .where(
+              and(
+                eq(schedules.agentId, task.agentId),
+                scheduleId
+                  ? eq(schedules.id, scheduleId)
+                  : eq(schedules.name, scheduleName as string),
+              ),
+            )
+            .limit(1)
+        : [undefined];
+      if (managedSchedule && !initialSchedule) {
+        return { done: true, summary: 'reminder: cancelled before delivery' };
+      }
+
+      const deliver = async (database: Db, schedule?: ScheduleRow): Promise<CodeJobOutcome> => {
+        const template = (schedule?.taskTemplate ?? {}) as {
+          reminderKind?: 'once' | 'recurring';
+          reminderCancelledAt?: string;
+          reminderDeliveredAt?: string;
+        };
+        if (
+          template.reminderCancelledAt ||
+          template.reminderDeliveredAt ||
+          (schedule && template.reminderKind !== 'once' && !schedule.enabled)
+        ) {
+          return { done: true, summary: 'reminder: cancelled before delivery' };
+        }
+        const conversationId =
+          task.conversationId ??
+          (await getOrCreateNotificationsConversation(database, task.agentId));
+        await persistMessage(database, {
+          conversationId,
+          taskId: task.id,
+          role: 'assistant',
+          origin: 'assistant',
+          parts: [{ type: 'text', text: reminderText }],
+          text: reminderText,
+        });
+        const pinged = await pingOwner(deps.notifyOwner, {
+          taskId: task.id,
+          conversationId,
+          text: reminderText,
+        });
+        if (schedule && template.reminderKind === 'once') {
+          await database
+            .update(schedules)
+            .set({
+              taskTemplate: { ...template, reminderDeliveredAt: new Date().toISOString() },
+              updatedAt: sql`now()`,
+            })
+            .where(eq(schedules.id, schedule.id));
+        }
+        return {
+          done: true,
+          summary: `reminder: delivered${pinged ? ' and pinged' : ''}`,
+        };
       };
+
+      if (!initialSchedule) return deliver(deps.db);
+      return deps.db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${initialSchedule.id}))`);
+        const [lockedSchedule] = await tx
+          .select()
+          .from(schedules)
+          .where(eq(schedules.id, initialSchedule.id))
+          .limit(1);
+        if (!lockedSchedule) {
+          return { done: true, summary: 'reminder: cancelled before delivery' };
+        }
+        return deliver(tx as unknown as Db, lockedSchedule);
+      });
     }
     case 'memory.extract': {
       await deps.heartbeat?.();

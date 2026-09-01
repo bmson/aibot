@@ -20,6 +20,7 @@ export interface ResponseCard {
     | 'status'
     | 'knowledge-graph'
     | 'calendar-conflicts'
+    | 'proactive-alert'
     | 'generated-card';
   id: string;
   [key: string]: unknown;
@@ -95,6 +96,15 @@ function sameEvent(a: RecordValue, b: RecordValue): boolean {
 }
 
 function formatTime(value: string, timeZone?: string): string {
+  if (!timeZone) {
+    const local = /T(\d{2}):(\d{2})/.exec(value);
+    if (local?.[1] && local[2]) {
+      const hour = Number(local[1]);
+      const minute = local[2];
+      const suffix = hour >= 12 ? 'PM' : 'AM';
+      return `${hour % 12 || 12}:${minute} ${suffix}`;
+    }
+  }
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return value;
   return new Intl.DateTimeFormat('en-US', {
@@ -121,7 +131,6 @@ export function calendarResponseCards(
   evidence: ActionEvidence[],
   request?: PersonalReadRequest | null,
 ): ResponseCard[] {
-  if (request?.kind !== 'calendar' && request?.kind !== 'calendar_email') return [];
   const events = evidence.flatMap((row) => {
     if (!succeeded(row) || !/^calendar\.(?:list_events|search_events)$/.test(row.toolName))
       return [];
@@ -230,7 +239,7 @@ export function reminderResponseCards(evidence: ActionEvidence[]): ResponseCard[
       kind: 'reminder',
       id: `reminder-${reminderId}`,
       title,
-      schedule: string(value.cron),
+      schedule: string(value.schedule) || string(value.cron),
       nextFires: string(value.nextFires),
       enabled: value.enabled !== false,
     });
@@ -590,7 +599,7 @@ export function statusResponseCards(evidence: ActionEvidence[]): ResponseCard[] 
           kind: 'status' as const,
           id: `reminder-cancelled-${string(result.reminderId) || index}`,
           title: 'Reminder cancelled',
-          detail: 'This recurring reminder will no longer run.',
+          detail: 'This reminder will no longer run.',
           symbol: 'bell.slash.fill',
         },
       ];

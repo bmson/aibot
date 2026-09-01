@@ -17,6 +17,7 @@ import {
   deleteDocument,
   deleteImportedSource,
   deleteMcpConnection,
+  deleteReminder,
   dismissAnomalyRecord,
   dismissImprovementProposal,
   dismissOwnerCommitment,
@@ -197,6 +198,7 @@ function createApplication() {
       ambientDailyCap: string;
     }) => updateNotificationPrefs(db, input),
     setScheduleEnabled: (id: string, enabled: boolean) => setRecurringJobEnabled(db, id, enabled),
+    deleteReminder: (id: string) => deleteReminder(db, id),
     setPolicyEnabled: (id: string, enabled: boolean) => setApprovalPolicyEnabled(db, id, enabled),
     deletePolicy: (id: string) => deleteApprovalPolicy(db, id),
     getDocuments: () => getDocumentsOverview(db),

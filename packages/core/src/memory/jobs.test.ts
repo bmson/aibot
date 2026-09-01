@@ -1,4 +1,5 @@
-import { createDb, type Db, messages, type TaskRow, tasks } from '@assistant/db';
+import { randomUUID } from 'node:crypto';
+import { createDb, type Db, messages, schedules, type TaskRow, tasks } from '@assistant/db';
 import { eq, inArray } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
@@ -17,6 +18,7 @@ let db: Db;
 let dbUp = false;
 let agentId: string;
 const createdTaskIds: string[] = [];
+const createdScheduleIds: string[] = [];
 
 /** Extraction with no extractable conversations returns empty — the fake never gets called for facts. */
 const fakeRouter = {
@@ -61,6 +63,9 @@ afterAll(async () => {
   if (dbUp && createdTaskIds.length) {
     await db.delete(messages).where(inArray(messages.taskId, createdTaskIds));
     await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
+  }
+  if (dbUp && createdScheduleIds.length) {
+    await db.delete(schedules).where(inArray(schedules.id, createdScheduleIds));
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
 });
@@ -167,5 +172,47 @@ describe('code job execution (integration)', () => {
     const delivered = await db.select().from(messages).where(eq(messages.taskId, task.id));
     expect(delivered.map((message) => message.text)).toEqual([reminderText]);
     expect(delivered[0]?.text).not.toContain('photos');
+  });
+
+  it('suppresses a queued reminder after its schedule is cancelled', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const reminderText = 'This must not be delivered';
+    const [schedule] = await db
+      .insert(schedules)
+      .values({
+        agentId,
+        name: `reminder:${randomUUID()}`,
+        cron: '0 9 * * *',
+        enabled: false,
+        taskTemplate: {
+          reminderKind: 'recurring',
+          reminderText,
+          reminderCancelledAt: new Date().toISOString(),
+        },
+      })
+      .returning();
+    if (!schedule) throw new Error('failed to create reminder schedule fixture');
+    createdScheduleIds.push(schedule.id);
+    const event: InboundEvent = {
+      source: 'schedule',
+      agentId,
+      trust: 'assistant',
+      payload: {
+        scheduleId: schedule.id,
+        schedule: schedule.name,
+        job: 'reminder.notify',
+        reminderText,
+      },
+    };
+    const { task } = await enqueueTask(db, { event, type: 'scheduled' });
+    createdTaskIds.push(task.id);
+
+    const result = await executeTask(
+      { db, router: fakeRouter, dispatcher: explodingDispatcher },
+      task.id,
+    );
+    expect(result.outcome).toBe('done');
+    const delivered = await db.select().from(messages).where(eq(messages.taskId, task.id));
+    expect(delivered).toEqual([]);
   });
 });

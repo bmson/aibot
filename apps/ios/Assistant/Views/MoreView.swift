@@ -28,6 +28,18 @@ struct MoreView: View {
 
             Section {
                 notificationRow
+                NavigationLink {
+                    RemindersView()
+                } label: {
+                    HStack {
+                        Label("Reminders", systemImage: "bell.and.waves.left.and.right")
+                        Spacer(minLength: 12)
+                        if let count = model.workspace?.settings.reminders.count, count > 0 {
+                            Text("\(count)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             } header: {
                 Text("Notifications")
             } footer: {
@@ -369,6 +381,108 @@ struct MoreView: View {
         }
     }
 
+}
+
+private struct RemindersView: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var reminderToRemove: WorkspaceReminder?
+    @State private var removalInFlight: String?
+
+    private var reminders: [WorkspaceReminder] {
+        model.workspace?.settings.reminders ?? []
+    }
+
+    var body: some View {
+        List {
+            if reminders.isEmpty {
+                AssistantEmptyState(
+                    "No active reminders",
+                    systemImage: "bell.slash",
+                    description: "Ask in chat to be reminded once, daily, or on selected days."
+                )
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+            } else {
+                Section {
+                    ForEach(reminders) { reminder in
+                        reminderRow(reminder)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button("Remove", systemImage: "trash", role: .destructive) {
+                                    reminderToRemove = reminder
+                                }
+                            }
+                    }
+                } footer: {
+                    Text("Removing a reminder stops queued and future alerts. Earlier chat messages stay in the conversation.")
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .navigationTitle("Reminders")
+        .assistantSubmenuChrome()
+        .refreshable { await model.refreshWorkspace() }
+        .task {
+            if model.workspace == nil { await model.refreshWorkspace() }
+        }
+        .confirmationDialog(
+            "Remove this reminder?",
+            isPresented: Binding(
+                get: { reminderToRemove != nil },
+                set: { if !$0 { reminderToRemove = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let reminder = reminderToRemove {
+                Button("Remove reminder", role: .destructive) {
+                    removalInFlight = reminder.id
+                    Task {
+                        _ = await model.deleteReminder(reminder)
+                        removalInFlight = nil
+                    }
+                    reminderToRemove = nil
+                }
+                Button("Cancel", role: .cancel) { reminderToRemove = nil }
+            }
+        } message: {
+            if let reminder = reminderToRemove {
+                Text(reminder.text)
+            }
+        }
+    }
+
+    private func reminderRow(_ reminder: WorkspaceReminder) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            AssistantGlyph(
+                systemName: reminder.repeats ? "repeat" : "bell",
+                tint: AssistantTheme.accent(for: colorScheme)
+            )
+            VStack(alignment: .leading, spacing: 5) {
+                Text(reminder.text)
+                    .font(.body.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(reminderDetail(reminder))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button("Remove", systemImage: "trash", role: .destructive) {
+                reminderToRemove = reminder
+            }
+            .labelStyle(.iconOnly)
+            .frame(minWidth: 44, minHeight: 44)
+            .disabled(removalInFlight != nil)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func reminderDetail(_ reminder: WorkspaceReminder) -> String {
+        if reminder.isDelivering { return "Delivering now · \(reminder.repeats ? "Repeats" : "Once")" }
+        let cadence = reminder.repeats ? "Repeats" : "Once"
+        guard let nextRunAt = reminder.nextRunAt else { return cadence }
+        return "\(cadence) · Next \(relative(nextRunAt))"
+    }
 }
 
 private struct AgentSettingsEditor: View {

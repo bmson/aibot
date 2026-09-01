@@ -554,6 +554,7 @@ export async function runDueSchedules(
       job?: string;
       /** Typed reminder payload consumed by the deterministic reminder job. */
       reminderText?: string;
+      reminderKind?: 'once' | 'recurring';
       budgetUsdLimit?: string;
       maxSteps?: number;
       goalId?: string;
@@ -630,6 +631,8 @@ export async function runDueSchedules(
         ...(template.goalId ? { goalId: template.goalId } : {}),
         ...(template.job ? { job: template.job } : {}),
         ...(template.reminderText ? { reminderText: template.reminderText } : {}),
+        ...(template.reminderKind ? { reminderKind: template.reminderKind } : {}),
+        scheduleId: row.id,
         ...(template.taintedOrigin ? { taintedOrigin: true } : {}),
       },
     });
@@ -645,11 +648,20 @@ export async function runDueSchedules(
 
     await db
       .update(schedules)
-      .set({
-        lastRunAt: sql`now()`,
-        nextRunAt: nextRun(row.cron, agentTimezone),
-        updatedAt: sql`now()`,
-      })
+      .set(
+        template.reminderKind === 'once'
+          ? {
+              enabled: false,
+              lastRunAt: sql`now()`,
+              nextRunAt: null,
+              updatedAt: sql`now()`,
+            }
+          : {
+              lastRunAt: sql`now()`,
+              nextRunAt: nextRun(row.cron, agentTimezone),
+              updatedAt: sql`now()`,
+            },
+      )
       .where(eq(schedules.id, row.id));
   }
   return fired;

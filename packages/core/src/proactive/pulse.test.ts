@@ -45,6 +45,13 @@ describe('selectPulseMoment', () => {
     key: 'k',
     text: 't',
     priority: 1,
+    card: {
+      kind: 'proactive-alert',
+      id: 'k',
+      category: 'commitment',
+      urgencyLabel: 'Due soon',
+      title: 'Test commitment',
+    },
     ...over,
   });
 
@@ -81,6 +88,16 @@ describe('eventLeadMoments', () => {
     const found = eventLeadMoments([travelling], NOW);
     expect(found).toHaveLength(1);
     expect(found[0]?.text).toContain('Laugavegur 12');
+    expect(found[0]?.card).toMatchObject({
+      kind: 'proactive-alert',
+      category: 'event',
+      urgencyLabel: 'Starts in 35 min',
+      title: 'Dentist',
+      details: [
+        { label: 'Location', value: 'Laugavegur 12' },
+        { label: 'Calendar', value: 'Personal' },
+      ],
+    });
   });
 
   it('ignores all-day entries and anything already started', () => {
@@ -173,10 +190,22 @@ describe('runPulse', () => {
     expect(pings).toHaveLength(1);
 
     const posted = await db
-      .select({ text: messages.text })
+      .select({ text: messages.text, parts: messages.parts })
       .from(messages)
       .where(like(messages.text, `%${MARKER}%your appointment%`));
     expect(posted.length).toBeGreaterThan(0);
+    expect(posted[0]?.parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'data-card',
+          data: expect.objectContaining({
+            kind: 'proactive-alert',
+            category: 'email',
+            urgencyLabel: 'Needs a reply',
+          }),
+        }),
+      ]),
+    );
   });
 
   it('never says the same moment twice, and respects the minimum gap', async (ctx) => {

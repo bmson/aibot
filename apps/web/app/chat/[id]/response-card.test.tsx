@@ -41,6 +41,7 @@ describe('rendersAllCards', () => {
         { kind: 'calendar-event' },
         { kind: 'knowledge-graph' },
         { kind: 'calendar-conflicts' },
+        { kind: 'proactive-alert' },
         {
           kind: 'generated-card',
           spec: {
@@ -60,6 +61,82 @@ describe('rendersAllCards', () => {
 describe('ResponseCards', () => {
   const render = (card: Record<string, unknown>) =>
     renderToStaticMarkup(<ResponseCards cards={[card]} timeZone="UTC" />);
+
+  it('reformats the historical inline numbered calendar reply as an agenda', () => {
+    const cards = responseCardPayloads([
+      {
+        type: 'text',
+        text: 'Tomorrow has two upcoming events: 1) Coffee with Tine at 9:00 AM at Home Coffee Roasters. 2) Technical interviews with Clay from 1:00-2:00 PM.',
+      },
+    ]);
+    expect(cards).toMatchObject([
+      {
+        kind: 'agenda',
+        title: 'Tomorrow',
+        items: [
+          { time: '9:00 AM', title: 'Coffee with Tine', detail: 'Home Coffee Roasters' },
+          { time: '1:00-2:00 PM', title: 'Technical interviews with Clay' },
+        ],
+      },
+    ]);
+    const html = renderToStaticMarkup(<ResponseCards cards={cards} timeZone="UTC" />);
+    expect(html).toContain('2 upcoming events');
+    expect(html).not.toContain('Tomorrow has two');
+  });
+
+  it('reformats the historical starts-in notice without exposing salience diagnostics', () => {
+    const cards = responseCardPayloads([
+      {
+        type: 'text',
+        text: '"Annual Physical" starts in 30 minutes at One Medical, 559 Clay St. it is at One Medical, 559 Clay St; family@example.com called it.',
+      },
+    ]);
+    expect(cards).toMatchObject([
+      {
+        kind: 'proactive-alert',
+        urgencyLabel: 'Starts in 30 min',
+        title: 'Annual Physical',
+        details: [{ label: 'Location', value: 'One Medical, 559 Clay St' }],
+      },
+    ]);
+    expect(JSON.stringify(cards)).not.toContain('called it');
+  });
+
+  it('keeps ordinary numbered prose as prose', () => {
+    expect(
+      responseCardPayloads([
+        { type: 'text', text: 'Try these: 1) Bring water. 2) Leave a little early.' },
+      ]),
+    ).toEqual([]);
+  });
+
+  it('groups calendar event payloads into one day schedule', () => {
+    const html = renderToStaticMarkup(
+      <ResponseCards
+        timeZone="America/Los_Angeles"
+        cards={[
+          {
+            kind: 'calendar-event',
+            id: 'e1',
+            start: '2026-09-02T09:00:00-07:00',
+            time: '9:00 AM–10:00 AM',
+            title: 'Coffee with Tine',
+          },
+          {
+            kind: 'calendar-event',
+            id: 'e2',
+            start: '2026-09-02T13:00:00-07:00',
+            time: '1:00 PM–2:00 PM',
+            title: 'Technical interviews',
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain('Wednesday, Sep 2 · 2 events');
+    expect(html.match(/paper/g)?.length).toBe(1);
+    expect(html).toContain('Coffee with Tine');
+    expect(html).toContain('Technical interviews');
+  });
 
   it('omits confidence entirely when the payload carries none', () => {
     // NaN in the producer serialises to null, and Number(null) is 0 — a

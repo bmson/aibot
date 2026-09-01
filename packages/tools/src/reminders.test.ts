@@ -84,6 +84,32 @@ describe('reminder tools', () => {
     ).rejects.toBeTruthy();
   });
 
+  it('creates an exact one-time reminder and disables it after one enqueue', async () => {
+    if (!dbUp) return;
+    const firesAt = new Date(Date.now() + 60 * 60 * 1000);
+    const created = (await tool('reminder.create')?.execute(
+      { text: 'one time only', at: firesAt.toISOString() },
+      ctx(),
+    )) as { kind: string; reminderId: string };
+    expect(created.kind).toBe('once');
+    await db
+      .update(schedules)
+      .set({ nextRunAt: new Date(Date.now() - 1000) })
+      .where(eq(schedules.id, created.reminderId));
+
+    const agent = await getAgent(db);
+    const first = await runDueSchedules(db, agent.timezone);
+    const [row] = await db.select().from(schedules).where(eq(schedules.id, created.reminderId));
+    const mine = first.find((f) => f.schedule === row?.name);
+    expect(mine).toBeTruthy();
+    if (mine) firedTaskIds.push(mine.taskId);
+    expect(row?.enabled).toBe(false);
+    expect(row?.nextRunAt).toBeNull();
+
+    const second = await runDueSchedules(db, agent.timezone);
+    expect(second.some((f) => f.schedule === row?.name)).toBe(false);
+  });
+
   it('lists active reminders and cancels one by id', async () => {
     if (!dbUp) return;
     const created = (await tool('reminder.create')?.execute(
@@ -103,6 +129,61 @@ describe('reminder tools', () => {
     const [row] = await db.select().from(schedules).where(eq(schedules.id, created.reminderId));
     expect(row?.enabled).toBe(false);
     expect(row?.nextRunAt).toBeNull();
+  });
+
+  it('cancels a uniquely named reminder and reports ambiguous text', async () => {
+    if (!dbUp) return;
+    const sunglasses = (await tool('reminder.create')?.execute(
+      { text: 'Get sunglasses from the car', time: '10:00' },
+      ctx(),
+    )) as { reminderId: string };
+    await tool('reminder.create')?.execute({ text: 'Pack gym bag', time: '10:05' }, ctx());
+    const cancelled = (await tool('reminder.cancel')?.execute(
+      { query: 'sunglasses reminder' },
+      ctx(),
+    )) as { cancelled: boolean; reminderId?: string };
+    expect(cancelled).toMatchObject({ cancelled: true, reminderId: sunglasses.reminderId });
+
+    await tool('reminder.create')?.execute({ text: 'Buy sunglasses', time: '10:10' }, ctx());
+    await tool('reminder.create')?.execute({ text: 'Clean sunglasses', time: '10:15' }, ctx());
+    const ambiguous = (await tool('reminder.cancel')?.execute({ query: 'sunglasses' }, ctx())) as {
+      cancelled: boolean;
+      reason?: string;
+      matches?: unknown[];
+    };
+    expect(ambiguous.cancelled).toBe(false);
+    expect(ambiguous.reason).toBe('ambiguous');
+    expect(ambiguous.matches).toHaveLength(2);
+  });
+
+  it('cancels a queued reminder delivery before a worker claims it', async () => {
+    if (!dbUp) return;
+    const created = (await tool('reminder.create')?.execute(
+      { text: 'queued cancellation test', time: '10:20' },
+      ctx(),
+    )) as { reminderId: string };
+    await db
+      .update(schedules)
+      .set({ nextRunAt: new Date(Date.now() - 1000) })
+      .where(eq(schedules.id, created.reminderId));
+    const agent = await getAgent(db);
+    const fired = await runDueSchedules(db, agent.timezone);
+    const [schedule] = await db
+      .select()
+      .from(schedules)
+      .where(eq(schedules.id, created.reminderId));
+    const queued = fired.find((item) => item.schedule === schedule?.name);
+    expect(queued).toBeTruthy();
+    if (!queued) return;
+    firedTaskIds.push(queued.taskId);
+
+    const result = (await tool('reminder.cancel')?.execute(
+      { query: 'queued cancellation' },
+      ctx(),
+    )) as { cancelled: boolean; queuedTasksCancelled?: number };
+    expect(result).toMatchObject({ cancelled: true, queuedTasksCancelled: 1 });
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, queued.taskId));
+    expect(task?.status).toBe('cancelled');
   });
 
   it('fires as a scheduled task via runDueSchedules', async () => {

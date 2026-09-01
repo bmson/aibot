@@ -441,6 +441,14 @@ struct APIClient: Sendable {
         try await setEnabled(path: "settings/schedules/\(id)", enabled: enabled)
     }
 
+    func deleteReminder(id: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/settings/reminders/\(id)")
+        )
+        request.httpMethod = "DELETE"
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
     func setPolicyEnabled(id: String, enabled: Bool) async throws {
         try await setEnabled(path: "settings/policies/\(id)", enabled: enabled)
     }

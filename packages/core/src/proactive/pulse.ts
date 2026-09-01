@@ -11,6 +11,7 @@ import { getAgent, postOwnerNotice } from '../chat.js';
 import { loadConfig } from '../config.js';
 import { withSpan } from '../otel.js';
 import type { BriefingCalendarReader } from '../workflow/briefing.js';
+import type { ResponseCard } from '../workflow/response-cards.js';
 import { createSuggestion } from '../workflow/suggestions.js';
 import { type EventSalience, salientEvents } from './calendar-salience.js';
 import { type ProactiveNotifier, pingOwner } from './notify.js';
@@ -82,6 +83,8 @@ export interface PulseMoment {
   text: string;
   /** Higher wins when several moments are live at once. */
   priority: number;
+  /** Grounded presentation for chat; text remains the push and compatibility fallback. */
+  card: ResponseCard;
   /** An optional proposal to attach, promoted only if the owner accepts it. */
   suggestion?: { summary: string; proposedAction: string; sourceRef: string };
 }
@@ -154,6 +157,22 @@ export function eventLeadMoments(salient: readonly EventSalience[], now: Date): 
       // Keyed on the event and its start so a moved event earns a fresh nudge.
       key: `event-lead:${scored.event.eventId ?? scored.event.summary}:${scored.event.start}`,
       text: `"${scored.event.summary}" starts in ${inMinutes} minute${inMinutes === 1 ? '' : 's'}${where}. ${scored.reasons.join('; ')}.`,
+      card: {
+        kind: 'proactive-alert',
+        id: `event-lead:${scored.event.eventId ?? scored.event.summary}:${scored.event.start}`,
+        category: 'event',
+        urgencyLabel: `Starts in ${inMinutes} min`,
+        title: scored.event.summary,
+        startsAt: scored.event.start,
+        details: [
+          ...(scored.event.location?.trim()
+            ? [{ label: 'Location', value: scored.event.location.trim() }]
+            : []),
+          ...(scored.event.calendar?.trim()
+            ? [{ label: 'Calendar', value: scored.event.calendar.trim() }]
+            : []),
+        ],
+      },
       // Time-boxed and about to expire: nothing else the pulse finds is more
       // urgent than something the owner is about to be late for.
       priority: 100,
@@ -182,6 +201,15 @@ function mailMoment(row: {
     kind: 'mail-action',
     key: `mail-action:${row.channelMessageId}`,
     text: `Still unanswered from ${row.fromEmail}: "${row.subject}" — ${row.reason}`,
+    card: {
+      kind: 'proactive-alert',
+      id: `mail-action:${row.channelMessageId}`,
+      category: 'email',
+      urgencyLabel: 'Needs a reply',
+      title: row.subject,
+      summary: row.reason,
+      details: [{ label: 'From', value: row.fromEmail }],
+    },
     priority: 60 + row.importance,
     suggestion: {
       summary: `Deal with "${row.subject}" from ${row.fromEmail}?`,
@@ -205,6 +233,16 @@ function commitmentMoment(row: {
     kind: 'commitment-due',
     key: `commitment-due:${row.id}`,
     text: `"${row.title}" is due ${when}${row.nextAction ? ` — next: ${row.nextAction}` : ''}.`,
+    card: {
+      kind: 'proactive-alert',
+      id: `commitment-due:${row.id}`,
+      category: 'commitment',
+      urgencyLabel: 'Due soon',
+      title: row.title,
+      summary: row.nextAction ? `Next: ${row.nextAction}` : undefined,
+      dueAt: row.dueAt.toISOString(),
+      details: [{ label: 'Due', value: row.dueAt.toISOString() }],
+    },
     priority: 50,
   };
 }
@@ -371,7 +409,7 @@ export async function runPulse(
     // The proposal is created before the message so the card can carry a real
     // id, and returns null when this producer already asked — the same
     // discipline the briefing follows.
-    const parts: unknown[] = [];
+    const parts: unknown[] = [{ type: 'data-card', data: moment.card }];
     if (moment.suggestion) {
       const created = await createSuggestion(db, {
         agentId: agent.id,

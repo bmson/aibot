@@ -826,6 +826,19 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func deleteReminder(_ reminder: WorkspaceReminder) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.deleteReminder(id: reminder.id)
+            await refreshWorkspace()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     func setPolicy(_ policy: WorkspacePolicy, enabled: Bool) async -> Bool {
         guard let client else { return false }
         errorMessage = nil

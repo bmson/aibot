@@ -290,6 +290,12 @@ struct MessageBubble: View {
         let explicit = message.parts.compactMap(MessageResponseCard.init(part:))
         guard explicit.isEmpty else { return explicit }
 
+        // Exact compatibility formats produced by earlier server builds are
+        // safe without a user prompt: they are narrow, deterministic shapes,
+        // not a general attempt to reinterpret prose.
+        let legacy = MessageResponseCard.inferredLegacy(from: message.text)
+        guard legacy.isEmpty else { return legacy }
+
         if #available(iOS 26.0, *),
            let analysis = onDeviceCardAnalysis,
            let userPrompt,
@@ -757,18 +763,6 @@ struct MessageBubble: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(AssistantTheme.bubblePaper(for: colorScheme), in: shape)
         .overlay { shape.strokeBorder(presentation.tint.opacity(0.25), lineWidth: 0.9) }
-        .overlay(alignment: .leading) {
-            Capsule()
-                .fill(
-                    LinearGradient(
-                        colors: [presentation.tint, AssistantTheme.chatAccent(mood: .coolSky)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .frame(width: 2)
-                .padding(.vertical, 16)
-        }
         .contextMenu {
             Button {
                 UIPasteboard.general.string = text
@@ -943,6 +937,7 @@ enum MessageResponseCard: Identifiable {
     case status(id: String, title: String, detail: String, symbol: String, details: [Detail], linkLabel: String?, linkURL: String?)
     case knowledgeGraph(id: String, title: String, edges: [KnowledgeEdge], complete: Bool)
     case calendarConflicts(id: String, title: String, conflicts: [CalendarConflict], complete: Bool)
+    case proactiveAlert(id: String, category: String, urgency: String, title: String, summary: String, startsAt: String, dueAt: String, details: [Detail])
     case generated(GeneratedCard)
 
     var id: String {
@@ -967,6 +962,7 @@ enum MessageResponseCard: Identifiable {
         case let .status(id, _, _, _, _, _, _): id
         case let .knowledgeGraph(id, _, _, _): id
         case let .calendarConflicts(id, _, _, _): id
+        case let .proactiveAlert(id, _, _, _, _, _, _, _): id
         case let .generated(card): card.id
         }
     }
@@ -1274,6 +1270,18 @@ enum MessageResponseCard: Identifiable {
                 linkLabel: link?["label"]?.string,
                 linkURL: link?["url"]?.string
             )
+        case "proactive-alert":
+            guard let title = data["title"]?.string else { return nil }
+            self = .proactiveAlert(
+                id: data["id"]?.string ?? "proactive-alert-\(title)",
+                category: data["category"]?.string ?? "event",
+                urgency: data["urgencyLabel"]?.string ?? "Worth your attention",
+                title: title,
+                summary: data["summary"]?.string ?? "",
+                startsAt: data["startsAt"]?.string ?? "",
+                dueAt: data["dueAt"]?.string ?? "",
+                details: Self.details(from: data)
+            )
         case "generated-card":
             guard let spec = data["spec"]?.objectValue,
                   spec["version"]?.integerValue == 1,
@@ -1365,6 +1373,86 @@ enum MessageResponseCard: Identifiable {
             if let prep = inferredInterviewPrep(text) { return [prep] }
         }
         return []
+    }
+
+    static func inferredLegacy(from text: String) -> [Self] {
+        if let alert = inferredLegacyAlert(text) { return [alert] }
+        if let agenda = inferredNumberedAgenda(text) { return [agenda] }
+        return []
+    }
+
+    private static func inferredLegacyAlert(_ text: String) -> Self? {
+        let pattern = #"^\"([^\"]{1,120})\" starts in (\d{1,3}) minutes?(?: at (.*?))?\.\s+"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let titleRange = Range(match.range(at: 1), in: text),
+              let minutesRange = Range(match.range(at: 2), in: text) else { return nil }
+        let title = String(text[titleRange])
+        let minutes = String(text[minutesRange])
+        let location = Range(match.range(at: 3), in: text).map { String(text[$0]) } ?? ""
+        return .proactiveAlert(
+            id: "legacy-event-\(title)-\(minutes)",
+            category: "event",
+            urgency: "Starts in \(minutes) min",
+            title: title,
+            summary: "",
+            startsAt: "",
+            dueAt: "",
+            details: location.isEmpty ? [] : [.init(label: "Location", value: location)]
+        )
+    }
+
+    private static func inferredNumberedAgenda(_ text: String) -> Self? {
+        let marker = try? NSRegularExpression(pattern: #"(?:^|\s)(\d+)\)\s"#)
+        guard let marker else { return nil }
+        let fullRange = NSRange(text.startIndex..., in: text)
+        let matches = marker.matches(in: text, range: fullRange)
+        guard matches.count >= 2 else { return nil }
+        var items: [AgendaItem] = []
+        for index in matches.indices {
+            guard let start = Range(matches[index].range, in: text)?.upperBound else { return nil }
+            let end: String.Index
+            if index + 1 < matches.count,
+               let next = Range(matches[index + 1].range, in: text)?.lowerBound {
+                end = next
+            } else {
+                end = text.endIndex
+            }
+            let chunk = String(text[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let item = numberedAgendaItem(chunk) else { return nil }
+            items.append(item)
+        }
+        guard let firstMarker = Range(matches[0].range, in: text)?.lowerBound else { return nil }
+        let lead = String(text[..<firstMarker]).lowercased()
+        return .agenda(
+            title: lead.contains("tomorrow") ? "Tomorrow" : "Your schedule",
+            subtitle: "\(items.count) upcoming events",
+            items: Array(items.prefix(10))
+        )
+    }
+
+    private static func numberedAgendaItem(_ value: String) -> AgendaItem? {
+        let clock = #"\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?"#
+        let patterns = [
+            #"^(.*?)\s+from\s+("# + clock + #"\s*[–-]\s*"# + clock + #")(?:\s+at\s+(.+?))?\.?$"#,
+            #"^(.*?)\s+at\s+("# + clock + #")(?:\s+at\s+(.+?))?\.?$"#,
+        ]
+        for pattern in patterns {
+            guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                  let match = expression.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)),
+                  let titleRange = Range(match.range(at: 1), in: value),
+                  let timeRange = Range(match.range(at: 2), in: value) else { continue }
+            let detail = Range(match.range(at: 3), in: value)
+                .map { String(value[$0]).trimmingCharacters(in: CharacterSet(charactersIn: " .")) } ?? ""
+            return .init(
+                time: String(value[timeRange])
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                    .uppercased(),
+                title: String(value[titleRange]).trimmingCharacters(in: .whitespacesAndNewlines),
+                detail: detail
+            )
+        }
+        return nil
     }
 
     static func hasCardSignals(in text: String) -> Bool {
@@ -2316,6 +2404,16 @@ struct RichResponseCards: View {
                 knowledgeGraphCard(title: title, edges: edges, complete: complete)
             case let .calendarConflicts(_, title, conflicts, complete):
                 calendarConflictsCard(title: title, conflicts: conflicts, complete: complete)
+            case let .proactiveAlert(_, category, urgency, title, summary, startsAt, dueAt, details):
+                proactiveAlertCard(
+                    category: category,
+                    urgency: urgency,
+                    title: title,
+                    summary: summary,
+                    startsAt: startsAt,
+                    dueAt: dueAt,
+                    details: details
+                )
             case let .generated(card):
                 generatedCard(card)
             }
@@ -3518,6 +3616,64 @@ struct RichResponseCards: View {
         .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
     }
 
+    private func proactiveAlertCard(
+        category: String,
+        urgency: String,
+        title: String,
+        summary: String,
+        startsAt: String,
+        dueAt: String,
+        details: [MessageResponseCard.Detail]
+    ) -> some View {
+        let symbol = switch category {
+        case "email": "envelope.badge.fill"
+        case "commitment": "bell.badge.fill"
+        default: "calendar.badge.clock"
+        }
+        let temporal = startsAt.isEmpty ? dueAt : startsAt
+        let temporalLabel = startsAt.isEmpty ? "Due" : "Starts"
+        let visibleDetails = details.filter { !($0.label == "Due" && !dueAt.isEmpty) }
+        let accessibilityDetails = visibleDetails.map { "\($0.label), \($0.value)" }
+        let accessibilityTemporal = temporal.isEmpty ? [] : ["\(temporalLabel), \(cardDate(temporal))"]
+        return HStack(alignment: .top, spacing: 13) {
+            Image(systemName: symbol)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                .frame(width: 42, height: 42)
+                .background(
+                    AssistantTheme.accent(for: colorScheme).opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                )
+            VStack(alignment: .leading, spacing: 6) {
+                Text(urgency.uppercased())
+                    .font(.caption2.monospacedDigit().weight(.bold))
+                    .tracking(0.7)
+                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                Text(AssistantMarkdown.inlineAttributed(title))
+                    .font(.headline)
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                if !summary.isEmpty {
+                    Text(AssistantMarkdown.inlineAttributed(summary))
+                        .font(.subheadline)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !temporal.isEmpty {
+                    detailRows([.init(label: temporalLabel, value: cardDate(temporal))])
+                }
+                detailRows(visibleDetails)
+            }
+            Spacer(minLength: 0)
+        }
+        .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            ([urgency, title, summary].filter { !$0.isEmpty } + accessibilityTemporal + accessibilityDetails)
+                .joined(separator: ", ")
+        )
+    }
+
     private func generatedCard(_ card: MessageResponseCard.GeneratedCard) -> some View {
         let facts = Dictionary(uniqueKeysWithValues: card.facts.map { ($0.id, $0) })
         return VStack(alignment: .leading, spacing: 16) {
@@ -3817,21 +3973,6 @@ private extension View {
                     AssistantTheme.ink(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.22 : 0.09),
                     lineWidth: 1
                 )
-            }
-            .overlay(alignment: .leading) {
-                Capsule()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                AssistantTheme.accent(for: colorScheme),
-                                AssistantTheme.chatAccent(mood: .coolSky),
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .frame(width: 2)
-                    .padding(.vertical, 16)
             }
             .shadow(color: .black.opacity(colorScheme == .dark ? 0.10 : 0.045), radius: 12, y: 4)
     }

@@ -1040,8 +1040,31 @@ struct WorkspaceSkill: Codable, Identifiable, Sendable {
 struct WorkspaceSettings: Codable, Sendable {
     let agent: WorkspaceAgentSettings
     let schedules: [WorkspaceSchedule]
+    let reminders: [WorkspaceReminder]
     let policies: [WorkspacePolicy]
     let goalAutomationCount: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case agent, schedules, reminders, policies, goalAutomationCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        agent = try container.decode(WorkspaceAgentSettings.self, forKey: .agent)
+        schedules = try container.decode([WorkspaceSchedule].self, forKey: .schedules)
+        reminders = try container.decodeIfPresent([WorkspaceReminder].self, forKey: .reminders) ?? []
+        policies = try container.decode([WorkspacePolicy].self, forKey: .policies)
+        goalAutomationCount = try container.decode(Int.self, forKey: .goalAutomationCount)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(agent, forKey: .agent)
+        try container.encode(schedules, forKey: .schedules)
+        try container.encode(reminders, forKey: .reminders)
+        try container.encode(policies, forKey: .policies)
+        try container.encode(goalAutomationCount, forKey: .goalAutomationCount)
+    }
 }
 
 struct WorkspaceAgentSettings: Codable, Sendable {
@@ -1063,6 +1086,17 @@ struct WorkspaceSchedule: Codable, Identifiable, Sendable {
     let lastRunAt: String?
 
     var displayName: String { label ?? name.sentenceCaseIdentifier }
+}
+
+struct WorkspaceReminder: Codable, Identifiable, Sendable {
+    let id: String
+    let text: String
+    let kind: String
+    let status: String
+    let nextRunAt: String?
+
+    var repeats: Bool { kind == "recurring" }
+    var isDelivering: Bool { status == "delivering" }
 }
 
 struct WorkspacePolicy: Codable, Identifiable, Sendable {
