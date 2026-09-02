@@ -641,7 +641,7 @@ struct ChatView: View {
             .allowsHitTesting(!menuOpen)
             // Match the visual modal state for assistive navigation: the
             // transcript remains mounted behind the lifted sheet, but it
-            // should not compete with the eight revealed destinations.
+            // should not compete with the revealed destinations.
             .accessibilityHidden(menuOpen)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: showsJumpToLatest)
         }
@@ -1023,7 +1023,15 @@ struct ChatView: View {
                     pullMenuButton("Cards", icon: "rectangle.stack", index: 6) {
                         openRoute(.cards)
                     }
-                    pullMenuButton("More", icon: "ellipsis", index: 7) {
+                    pullMenuButton("People", icon: "person.2", index: 7) {
+                        openRoute(.people)
+                    }
+                }
+                // Nine destinations do not pair evenly. More takes the last
+                // row alone, which reads as a footer to the directory rather
+                // than an orphan beside an empty slot.
+                pullMenuRow {
+                    pullMenuButton("More", icon: "ellipsis", index: 8) {
                         openRoute(.settings)
                     }
                 }
@@ -1048,7 +1056,11 @@ struct ChatView: View {
             .padding(.vertical, 6)
     }
 
-    // Eight primary destinations. The lower-traffic areas (Documents, Skills,
+    /// How many destinations the menu reveals. The fade staggers bottom-up by
+    /// row, so this has to match the buttons actually rendered below.
+    private var pullMenuItemCount: Int { 9 }
+
+    // Nine primary destinations. The lower-traffic areas (Documents, Skills,
     // Costs, Anomalies, Improvements) live under More, keeping this directory
     // focused on the routes people revisit during a conversation.
     @ViewBuilder
@@ -1143,10 +1155,10 @@ struct ChatView: View {
         // items stretching. Reveal paired rows from the physical bottom edge,
         // matching the order in which the lifting surface exposes them. The
         // extra-large horizontal strip is one row and fades as a group.
-        let columns = usesExtraLargeAccessibilityMenu ? 8 : 2
+        let columns = usesExtraLargeAccessibilityMenu ? pullMenuItemCount : 2
         let fadeRank = PullMenuMotion.bottomUpFadeRank(
             itemIndex: index,
-            itemCount: 8,
+            itemCount: pullMenuItemCount,
             columns: columns
         )
         let visibility = menuVisibilityProgress(after: 0.18 + (CGFloat(fadeRank) * 0.09))

@@ -234,7 +234,7 @@ struct MemoryView: View {
             if let people = memory.people {
                 ViewThatFits(in: .horizontal) {
                     HStack {
-                        sectionHeading("People", count: people.count)
+                        peopleHeading(count: people.count)
                         Spacer()
                         Button("Add", systemImage: "person.badge.plus") {
                             showingPersonCreator = true
@@ -242,7 +242,7 @@ struct MemoryView: View {
                         .buttonStyle(.bordered)
                     }
                     VStack(alignment: .leading, spacing: 8) {
-                        sectionHeading("People", count: people.count)
+                        peopleHeading(count: people.count)
                         Button("Add", systemImage: "person.badge.plus") {
                             showingPersonCreator = true
                         }
@@ -305,6 +305,23 @@ struct MemoryView: View {
             Spacer(minLength: 0)
         }
         .assistantPanel(in: colorScheme)
+    }
+
+    /// Memory keeps the person editors; browsing lives in People, so the
+    /// heading links there rather than duplicating the directory.
+    private func peopleHeading(count: Int) -> some View {
+        HStack(spacing: 7) {
+            sectionHeading("People", count: count)
+            Spacer(minLength: 8)
+            Button {
+                model.presentedRoute = .people
+            } label: {
+                Label("Open People", systemImage: "person.2")
+                    .font(.caption.weight(.semibold))
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.borderless)
+        }
     }
 
     private func personCard(_ person: WorkspacePerson) -> some View {

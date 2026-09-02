@@ -10,6 +10,7 @@ enum AssistantRoute: String, Hashable, Identifiable, CaseIterable {
     case approvals
     case cards
     case memory
+    case people
     case documents
     case skills
     case capabilities
@@ -34,6 +35,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var savedCards: [SavedCardRecord] = []
     @Published private(set) var activeConversation: ConversationView?
     @Published private(set) var personProfiles: [String: PersonProfileResponse] = [:]
+    /// The People directory, loaded when that screen opens.
+    @Published private(set) var people: [PersonSummary] = []
+    @Published private(set) var peopleLoaded = false
+    /// Cards keyed by contact id, so reopening a person is instant and a
+    /// tapped relationship can push straight through to the other person.
+    @Published private(set) var personCards: [String: PersonCard] = [:]
     @Published private(set) var messages: [ChatMessage] = []
     @Published private(set) var isLoading = false
     @Published private(set) var isSending = false
@@ -990,6 +997,22 @@ final class AppModel: ObservableObject {
             errorMessage = error.localizedDescription
             return false
         }
+    }
+
+    func loadPeople() async {
+        guard let client else { return }
+        do {
+            people = try await client.people().people
+            peopleLoaded = true
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func loadPersonCard(id: String) async {
+        guard let client else { return }
+        do { personCards[id] = try await client.personCard(id: id) }
+        catch { errorMessage = error.localizedDescription }
     }
 
     func loadPersonProfile(id: String) async {

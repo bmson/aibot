@@ -559,6 +559,16 @@ struct APIClient: Sendable {
         try await get("api/mobile/v1/memory/people/\(id)")
     }
 
+    /// The People directory. Separate from `memory/people`, which is the
+    /// editing contract — this is the read the People screens render from.
+    func people() async throws -> PersonDirectoryResponse {
+        try await get("api/mobile/v1/people")
+    }
+
+    func personCard(id: String) async throws -> PersonCard {
+        try await get("api/mobile/v1/people/\(id)")
+    }
+
     func addOccasion(personId: String, occasion: OccasionMutation) async throws {
         var request = makeRequest(
             url: configuration.baseURL.appending(

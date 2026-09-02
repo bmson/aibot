@@ -38,6 +38,7 @@
 		B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000023 /* Views/WorkspaceView.swift */; };
 		B0000000000000000000001C /* Views/MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000025 /* Views/MemoryView.swift */; };
 		B00000000000000000000054 /* Views/KnowledgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000054 /* Views/KnowledgeView.swift */; };
+		B00000000000000000000059 /* Views/PeopleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000059 /* Views/PeopleView.swift */; };
 		B00000000000000000000055 /* Models/PollingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000055 /* Models/PollingPolicy.swift */; };
 		B00000000000000000000056 /* Components/MermaidDiagramView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000056 /* Components/MermaidDiagramView.swift */; };
 		B00000000000000000000057 /* mermaid.min.js in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000057 /* mermaid.min.js */; };
@@ -111,6 +112,7 @@
 		C00000000000000000000024 /* Components/ChatDashboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/ChatDashboard.swift; sourceTree = "<group>"; };
 		C00000000000000000000025 /* Views/MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MemoryView.swift; sourceTree = "<group>"; };
 		C00000000000000000000054 /* Views/KnowledgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/KnowledgeView.swift; sourceTree = "<group>"; };
+		C00000000000000000000059 /* Views/PeopleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PeopleView.swift; sourceTree = "<group>"; };
 		C00000000000000000000055 /* Models/PollingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/PollingPolicy.swift; sourceTree = "<group>"; };
 		C00000000000000000000056 /* Components/MermaidDiagramView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/MermaidDiagramView.swift; sourceTree = "<group>"; };
 		C00000000000000000000057 /* mermaid.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/mermaid.min.js; sourceTree = "<group>"; };
@@ -192,6 +194,7 @@
 				C00000000000000000000023 /* Views/WorkspaceView.swift */,
 				C00000000000000000000025 /* Views/MemoryView.swift */,
 				C00000000000000000000054 /* Views/KnowledgeView.swift */,
+				C00000000000000000000059 /* Views/PeopleView.swift */,
 				C00000000000000000000011 /* Assets.xcassets */,
 				C00000000000000000000057 /* mermaid.min.js */,
 				C00000000000000000000058 /* mermaid-LICENSE.txt */,
@@ -377,6 +380,7 @@
 				B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */,
 				B0000000000000000000001C /* Views/MemoryView.swift in Sources */,
 				B00000000000000000000054 /* Views/KnowledgeView.swift in Sources */,
+				B00000000000000000000059 /* Views/PeopleView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
