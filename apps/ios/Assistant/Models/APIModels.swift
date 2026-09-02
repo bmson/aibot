@@ -870,6 +870,96 @@ struct PersonMergeOption: Codable, Identifiable, Sendable {
     let label: String
 }
 
+// MARK: - People
+
+/// One row of the People directory.
+///
+/// Every label arrives already rendered by `/api/mobile/v1/people`. The rules
+/// behind them — when a birth year may become an age, when a start date may
+/// become a duration — live in the application layer, so this client formats
+/// nothing and cannot drift from the web.
+struct PersonSummary: Codable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let initials: String
+    let relationship: String
+    let group: String
+    /// Empty for the "other" bucket, which is a placement rather than a label.
+    let groupLabel: String
+    let trust: String
+    let location: String?
+    let factCount: Int
+    /// "18 March · turns 40 in 7 months", or nil when none is recorded.
+    let birthday: String?
+    /// Days until the next birthday, for the "Coming up" section.
+    let birthdayDaysUntil: Int?
+    /// "Last contact today", or nil when nothing has been recorded.
+    let lastContact: String?
+}
+
+struct PersonDirectoryResponse: Codable, Sendable {
+    let generatedAt: String
+    let people: [PersonSummary]
+}
+
+/// One person↔person connection. `sentence` is composed server-side because
+/// the grammar is not mechanical: symmetric predicates read "A and B are
+/// partners", directed ones "A is B's parent".
+struct PersonRelationSummary: Codable, Identifiable, Sendable {
+    let id: String
+    let sentence: String
+    let otherLabel: String
+    let otherInitials: String
+    /// Set when the other end is a contact this app can open.
+    let otherContactId: String?
+    /// "10 years" / "Since 2019" / empty when the source states no span.
+    let span: String
+    let unreviewed: Bool
+}
+
+/// A connection to a place, employer, or event rather than to a person.
+struct PersonConnectionSummary: Codable, Identifiable, Sendable {
+    let id: String
+    let sentence: String
+    let span: String
+}
+
+/// Something that happened, dated to the day.
+struct PersonEventSummary: Codable, Identifiable, Sendable {
+    let id: String
+    let content: String
+    /// "Today" / "2 August" / "14 November 2025".
+    let date: String
+    /// True when the date is the assistant's write time, not a stated one.
+    let dateIsRecordTime: Bool
+}
+
+struct PersonReminder: Codable, Sendable {
+    let headline: String
+    let detail: String
+}
+
+/// The full person card.
+struct PersonCard: Codable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let initials: String
+    let relationship: String
+    let group: String
+    let groupLabel: String
+    let trust: String
+    let location: String?
+    let birthday: String?
+    let lastContact: String?
+    let howWeMet: [String]
+    let relations: [PersonRelationSummary]
+    let connections: [PersonConnectionSummary]
+    let events: [PersonEventSummary]
+    let eventsAreRecent: Bool
+    let reminder: PersonReminder?
+    let factCount: Int
+}
+
 struct WorkspaceMemoryCard: Codable, Sendable {
     let content: String
     let compiledAt: String

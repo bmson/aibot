@@ -1585,30 +1585,31 @@ final class APIModelsTests: XCTestCase {
             0
         )
 
-        // Normal layouts contain four paired rows. The bottom pair appears
-        // first, and both destinations in every row share a fade rank.
+        // Normal layouts pair the destinations into rows. The bottom row
+        // appears first, and every destination in a row shares a fade rank.
+        // Nine destinations leave the last row holding More on its own.
         XCTAssertEqual(
-            (0..<8).map {
+            (0..<9).map {
                 PullMenuMotion.bottomUpFadeRank(
                     itemIndex: $0,
-                    itemCount: 8,
+                    itemCount: 9,
                     columns: 2
                 )
             },
-            [3, 3, 2, 2, 1, 1, 0, 0]
+            [4, 4, 3, 3, 2, 2, 1, 1, 0]
         )
 
         // The accessibility layout presents every destination in one
         // horizontal row, so it fades as one group.
         XCTAssertEqual(
-            (0..<8).map {
+            (0..<9).map {
                 PullMenuMotion.bottomUpFadeRank(
                     itemIndex: $0,
-                    itemCount: 8,
-                    columns: 8
+                    itemCount: 9,
+                    columns: 9
                 )
             },
-            Array(repeating: 0, count: 8)
+            Array(repeating: 0, count: 9)
         )
     }
 
@@ -1637,6 +1638,7 @@ final class APIModelsTests: XCTestCase {
                 .approvals,
                 .cards,
                 .memory,
+                .people,
                 .documents,
                 .skills,
                 .capabilities,

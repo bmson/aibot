@@ -47,6 +47,12 @@ struct RootView: View {
                             .navigationDestination(item: $model.presentedRoute) { route in
                                 destination(for: route, safeAreaTopInset: safeAreaTopInset)
                             }
+                            // Registered on the same stack as the routes, so a
+                            // relationship row can push from one person to the
+                            // next without leaving People.
+                            .navigationDestination(for: AssistantPersonLink.self) { link in
+                                PersonCardScreen(personId: link.id)
+                            }
                     }
                         .transition(.opacity)
                 }
@@ -179,6 +185,7 @@ struct RootView: View {
             case .approvals: ApprovalsView()
             case .cards: CardsView()
             case .memory: MemoryView()
+            case .people: PeopleView()
             case .documents: WorkspaceView(area: .documents)
             case .skills: WorkspaceView(area: .skills)
             case .capabilities: WorkspaceView(area: .capabilities)

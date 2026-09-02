@@ -19,6 +19,7 @@
     "./operations": "./src/operations.ts",
     "./people": "./src/people.ts",
     "./people-presentation": "./src/people-presentation.ts",
+    "./people-view": "./src/people-view.ts",
     "./profile": "./src/profile.ts",
     "./relationship-presentation": "./src/relationship-presentation.ts",
     "./settings": "./src/settings.ts",
