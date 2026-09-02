@@ -3348,8 +3348,10 @@ struct RichResponseCards: View {
                                     Label(event.location, systemImage: "mappin.and.ellipse")
                                         .font(.caption)
                                         .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(12)
                             .background(AssistantTheme.sunken(for: colorScheme).opacity(0.52), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
