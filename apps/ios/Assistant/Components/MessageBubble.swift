@@ -4,6 +4,9 @@ import UIKit
 struct MessageBubble: View {
     let message: ChatMessage
     let userPrompt: String?
+    /// Only the newest prose reply carries answer context. Historical cards
+    /// stay quiet. This is a static card header and scrolls with the reply.
+    let isCurrentAnswer: Bool
     let isStreaming: Bool
     let openApprovals: () -> Void
     /// The off-course card's fix: resend the prompt through the executor.
@@ -25,9 +28,12 @@ struct MessageBubble: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .body) private var messageFontSize = 14.0
     @ScaledMetric(relativeTo: .body) private var bubbleHorizontalInset: CGFloat = 20
     @ScaledMetric(relativeTo: .body) private var bubbleVerticalInset: CGFloat = 15
+    @ScaledMetric(relativeTo: .caption) private var answerContextLabelFontSize = 12.0
+    @ScaledMetric(relativeTo: .caption) private var answerContextPromptFontSize = 12.0
     // Orientation lines and lead-ins stay out of the transcript on purpose:
     // once a reply has cards, the cards are the answer — no prose floats
     // above or below them.
@@ -118,8 +124,11 @@ struct MessageBubble: View {
             // A reply split by [break] cues stacks as separate sheets, the way
             // separate texts from a person stack — one paper bubble per text
             // part, copy still takes the whole reply.
-            ForEach(Array(message.visibleTextBubbles.enumerated()), id: \.offset) { _, bubble in
-                assistantBubble(bubble)
+            ForEach(Array(message.visibleTextBubbles.enumerated()), id: \.offset) { index, bubble in
+                assistantBubble(
+                    bubble,
+                    showsAnswerContext: isCurrentAnswer && index == 0
+                )
             }
         } else {
             Text(message.text)
@@ -205,22 +214,34 @@ struct MessageBubble: View {
 
     /// One assistant bubble's worth of paper. The whole reply remains the
     /// copy unit no matter how many bubbles it was split into.
-    private func assistantBubble(_ text: String) -> some View {
-        AssistantMarkdownView(
-            source: text,
-            baseFontSize: messageFontSize,
-            ink: AssistantTheme.bubblePaperInk(for: colorScheme),
-            mutedInk: AssistantTheme.inkMuted(for: colorScheme),
-            codeSurface: AssistantTheme.sunken(for: colorScheme),
-            accent: AssistantTheme.accent(for: colorScheme)
-        )
+    private func assistantBubble(_ text: String, showsAnswerContext: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if showsAnswerContext, let prompt = normalizedUserPrompt {
+                currentAnswerContext(prompt)
+            }
+
+            AssistantMarkdownView(
+                source: text,
+                baseFontSize: messageFontSize,
+                ink: AssistantTheme.bubblePaperInk(for: colorScheme),
+                mutedInk: AssistantTheme.inkMuted(for: colorScheme),
+                codeSurface: AssistantTheme.sunken(for: colorScheme),
+                accent: AssistantTheme.accent(for: colorScheme)
+            )
             .textSelection(.enabled)
             .padding(.horizontal, resolvedBubbleHorizontalInset)
             .padding(.vertical, resolvedBubbleVerticalInset)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
             .background(
                 AssistantTheme.bubblePaper(for: colorScheme),
                 in: RoundedRectangle(
+                    cornerRadius: AssistantTheme.conversationCornerRadius,
+                    style: .continuous
+                )
+            )
+            .clipShape(
+                RoundedRectangle(
                     cornerRadius: AssistantTheme.conversationCornerRadius,
                     style: .continuous
                 )
@@ -251,6 +272,57 @@ struct MessageBubble: View {
                     Label("Copy reply", systemImage: "doc.on.doc")
                 }
             }
+    }
+
+    private var normalizedUserPrompt: String? {
+        guard let userPrompt else { return nil }
+        let normalized = userPrompt
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private func currentAnswerContext(_ prompt: String) -> some View {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 3) {
+                    currentAnswerLabel
+                    currentAnswerPrompt(prompt, lineLimit: 2)
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    currentAnswerLabel
+                    currentAnswerPrompt(prompt, lineLimit: 1)
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .padding(.horizontal, resolvedBubbleHorizontalInset)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AssistantTheme.sunken(for: colorScheme))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(AssistantTheme.bubblePaperInk(for: colorScheme).opacity(0.08))
+                .frame(height: 0.75)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Current answer to: \(prompt)")
+    }
+
+    private var currentAnswerLabel: some View {
+        Text("Current answer")
+            .font(.system(size: answerContextLabelFontSize, weight: .semibold, design: .rounded))
+            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func currentAnswerPrompt(_ prompt: String, lineLimit: Int) -> some View {
+        Text(prompt)
+            .font(.system(size: answerContextPromptFontSize, weight: .regular))
+            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            .lineLimit(lineLimit)
+            .truncationMode(.tail)
     }
 
     private var recallNote: some View {
@@ -4031,6 +4103,7 @@ enum AssistantMarkdown {
         /// rather than committing to a flat list of a single kind.
         case list([ListNode])
         case quote(String)
+        case equation(String)
         case code(language: String?, text: String)
         case divider
         case table(headers: [String], rows: [[String]])
@@ -4125,6 +4198,18 @@ enum AssistantMarkdown {
                 continue
             }
 
+            if line.trimmingCharacters(in: .whitespaces) == "$$" {
+                index += 1
+                var formula: [String] = []
+                while index < lines.count, lines[index].trimmingCharacters(in: .whitespaces) != "$$" {
+                    formula.append(lines[index])
+                    index += 1
+                }
+                if index < lines.count { index += 1 }
+                result.append(.equation(formula.joined(separator: "\n")))
+                continue
+            }
+
             if quoteLineContent(line) != nil {
                 var quoteLines: [String] = []
                 while index < lines.count, let content = quoteLineContent(lines[index]) {
@@ -4163,15 +4248,36 @@ enum AssistantMarkdown {
             // is a real break, kept as "\n" here and rendered as one via
             // preservingSoftBreaks at the view. Folding to a space collapsed
             // structured answers — one found email per line — into a block.
-            result.append(.paragraph(paragraphLines.joined(separator: "\n")))
+            let paragraph = paragraphLines.joined(separator: "\n")
+            if isStandaloneBoldQuote(paragraph) {
+                result.append(.quote(paragraph))
+            } else {
+                result.append(.paragraph(paragraph))
+            }
         }
 
-        return result
+        return result.enumerated().map { index, block in
+            guard case let .paragraph(text) = block,
+                  index + 1 < result.count,
+                  text.hasPrefix("**"), text.hasSuffix("**") else { return block }
+            let label = String(text.dropFirst(2).dropLast(2)).trimmingCharacters(in: .whitespaces)
+            if ["example", "note", "tip"].contains(label.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ":"))) { return block }
+            guard !label.isEmpty, label.count <= 60,
+                  !label.contains("\n"), !label.contains("**"),
+                  let last = label.last, !".!?\"”'’".contains(last) else { return block }
+            switch result[index + 1] {
+            case .list, .code, .table:
+                return .heading(level: 2, text: label)
+            default:
+                return block
+            }
+        }
     }
 
     private static func startsBlock(at index: Int, in lines: [String]) -> Bool {
         let line = lines[index]
         return isCodeFence(line)
+            || line.trimmingCharacters(in: .whitespaces) == "$$"
             || heading(in: line) != nil
             || isDivider(line)
             || quoteLineContent(line) != nil
@@ -4221,6 +4327,55 @@ enum AssistantMarkdown {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard trimmed.first == ">" else { return nil }
         return String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// A model asked for a quote-style callout will often return a single bold
+    /// quoted paragraph instead of `>` syntax. Match only that unambiguous
+    /// shape so normal bold copy remains an ordinary paragraph.
+    static func isStandaloneBoldQuote(_ source: String) -> Bool {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.contains("\n"),
+              trimmed.hasPrefix("**"),
+              trimmed.hasSuffix("**"),
+              trimmed.count > 8 else { return false }
+
+        let inner = String(trimmed.dropFirst(2).dropLast(2))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let quotePairs: [(Character, Character)] = [
+            ("“", "”"),
+            ("\"", "\""),
+            ("‘", "’"),
+            ("'", "'"),
+        ]
+        guard let first = inner.first, let last = inner.last else { return false }
+        return quotePairs.contains { $0.0 == first && $0.1 == last }
+    }
+
+    /// A readable native fallback for elementary arithmetic TeX. Unsupported
+    /// expressions retain their source notation; this is not a full TeX engine.
+    static func readableEquation(_ source: String) -> String {
+        var value = source
+        for (command, symbol) in [("\\times", "×"), ("\\cdot", "·"), ("\\div", "÷"), ("\\leq", "≤"), ("\\geq", "≥"), ("\\left", ""), ("\\right", "")] {
+            value = value.replacingOccurrences(of: command, with: symbol)
+        }
+        let superscripts = ["0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹", "t": "ᵗ", "n": "ⁿ"]
+        for (plain, superscript) in superscripts {
+            value = value.replacingOccurrences(of: "^{\(plain)}", with: superscript)
+            value = value.replacingOccurrences(of: "\\^\(plain)(?![0-9A-Za-z])", with: superscript, options: .regularExpression)
+        }
+        return value
+    }
+
+    static func readableInlineVariables(_ source: String) -> String {
+        guard let expression = try? NSRegularExpression(pattern: #"`+[^`]*`+|(?<!\$)\$([A-Za-z])\$(?!\$)"#) else { return source }
+        var result = source
+        for match in expression.matches(in: source, range: NSRange(source.startIndex..., in: source)).reversed() {
+            guard match.range(at: 1).location != NSNotFound,
+                  let variable = Range(match.range(at: 1), in: result),
+                  let full = Range(match.range, in: result) else { continue }
+            result.replaceSubrange(full, with: String(result[variable]))
+        }
+        return result
     }
 
     /// Leading indent in columns (a tab counts as four) so nesting survives
@@ -4355,9 +4510,21 @@ private struct AssistantMarkdownView: View {
         AssistantMarkdown.blocks(in: source)
     }
 
+    /// A response card can use the full row for evidence such as tables and
+    /// code, but prose should stop at a comfortable reading measure on iPad.
+    private let proseMaxWidth: CGFloat = 560
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                if case let .heading(level, _) = block, level <= 2, index > 0,
+                   blocks[index - 1] != .divider {
+                    Rectangle()
+                        .fill(ink.opacity(0.12))
+                        .frame(height: 0.75)
+                        .padding(.top, 5)
+                        .accessibilityHidden(true)
+                }
                 blockView(block)
             }
         }
@@ -4369,45 +4536,69 @@ private struct AssistantMarkdownView: View {
     private func blockView(_ block: AssistantMarkdown.Block) -> some View {
         switch block {
         case let .heading(level, text):
-            markdownText(text)
-                .font(headingFont(for: level))
+            markdownText(text, font: headingFont(for: level))
                 .tracking(level <= 2 ? -0.22 : -0.12)
                 .lineSpacing(1)
                 .padding(.top, level <= 2 ? 2 : 0)
+                .frame(maxWidth: proseMaxWidth, alignment: .leading)
                 .accessibilityAddTraits(.isHeader)
 
         case let .paragraph(text):
             markdownText(text)
+                .frame(maxWidth: proseMaxWidth, alignment: .leading)
 
         case let .list(nodes):
             listNodesView(nodes)
-            .accessibilityElement(children: .contain)
+                .frame(maxWidth: proseMaxWidth, alignment: .leading)
+                .accessibilityElement(children: .contain)
 
         case let .quote(text):
             HStack(alignment: .top, spacing: 10) {
-                Capsule()
-                    .fill(accent.opacity(0.48))
-                    .frame(width: 3)
-                    .padding(.vertical, 1)
-                markdownText(text)
-                    .foregroundStyle(mutedInk)
+                Image(systemName: "quote.opening")
+                    .font(.system(size: baseFontSize, weight: .medium))
+                    .foregroundStyle(accent)
+                    .padding(.top, 2)
+                    .accessibilityHidden(true)
+                if AssistantMarkdown.isStandaloneBoldQuote(text) {
+                    markdownText(text).italic()
+                } else {
+                    AnyView(AssistantMarkdownView(
+                        source: text, baseFontSize: baseFontSize, ink: ink,
+                        mutedInk: mutedInk, codeSurface: codeSurface, accent: accent
+                    ))
                     .italic()
+                }
             }
-            .padding(.vertical, 4)
-            .padding(.leading, 1)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: proseMaxWidth, alignment: .leading)
+            .background(codeSurface.opacity(0.56), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(ink.opacity(0.07), lineWidth: 0.75)
+            }
+
+        case let .equation(text):
+            markdownText(AssistantMarkdown.readableEquation(text), font: .system(size: baseFontSize, design: .monospaced))
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(codeSurface.opacity(0.56), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
         case let .code(language, text):
             if language?.lowercased() == "mermaid" {
                 MermaidDiagramView(source: text)
             } else {
-            VStack(alignment: .leading, spacing: language == nil ? 0 : 8) {
-                if let language, !language.isEmpty {
-                    Text(language.uppercased())
-                        .font(.system(size: max(9, baseFontSize * 0.67), weight: .semibold, design: .rounded))
-                        .tracking(0.7)
-                        .foregroundStyle(mutedInk)
-                        .accessibilityHidden(true)
-                }
+            VStack(alignment: .leading, spacing: 0) {
+                Label(language?.isEmpty == false ? language! : "Code", systemImage: "chevron.left.forwardslash.chevron.right")
+                    .font(.system(size: max(12, baseFontSize * 0.85), weight: .medium))
+                    .foregroundStyle(mutedInk)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Rectangle()
+                    .fill(ink.opacity(0.09))
+                    .frame(height: 0.75)
+                    .accessibilityHidden(true)
                 // The transcript is a LazyVStack, which proposes zero height
                 // to children while it measures — a horizontal ScrollView
                 // whose content is `fixedSize(horizontal: true)` then
@@ -4415,7 +4606,7 @@ private struct AssistantMarkdownView: View {
                 // wraps to the bubble instead: on a phone, wrapping is more
                 // readable than a sideways pan, and the text stays selectable.
                 Text(text.isEmpty ? " " : text)
-                    .font(.system(size: max(11, baseFontSize * 0.84), design: .monospaced))
+                    .font(.system(size: max(12, baseFontSize * 0.9), design: .monospaced))
                     .foregroundStyle(ink)
                     .lineSpacing(3)
                     .textSelection(.enabled)
@@ -4425,11 +4616,11 @@ private struct AssistantMarkdownView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 13)
                     .padding(.vertical, 12)
-                    .background(codeSurface.opacity(0.82), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(ink.opacity(0.075), lineWidth: 0.75)
-                    }
+            }
+            .background(codeSurface.opacity(0.56), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(ink.opacity(0.09), lineWidth: 0.75)
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel(language.map { "\($0) code block" } ?? "Code block")
@@ -4454,12 +4645,12 @@ private struct AssistantMarkdownView: View {
                         ForEach(Array(zip(headers, row).enumerated()), id: \.offset) { _, pair in
                             let (header, cell) = pair
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(header)
+                                Text(AssistantMarkdown.inlineAttributed(header))
                                     .font(.system(size: baseFontSize * 0.8, weight: .semibold))
                                     .foregroundStyle(mutedInk)
+                                    .fixedSize(horizontal: false, vertical: true)
                                     .frame(width: 88, alignment: .trailing)
-                                markdownText(cell.isEmpty ? "—" : cell, inline: true)
-                                    .font(.system(size: baseFontSize * 0.92))
+                                markdownText(cell.isEmpty ? "—" : cell, inline: true, font: .system(size: baseFontSize * 0.92))
                             }
                         }
                     }
@@ -4483,11 +4674,12 @@ private struct AssistantMarkdownView: View {
         }
     }
 
-    private func markdownText(_ source: String, strikethrough: Bool = false, inline: Bool = false) -> some View {
+    private func markdownText(_ source: String, strikethrough: Bool = false, inline: Bool = false, font: Font? = nil) -> some View {
         // Table cells use inline-only interpretation: a block-level construct
         // inside a cell (a heading marker, a hard break) would otherwise tear
         // the row layout apart.
-        let withBreaks = inline ? source : AssistantMarkdown.preservingSoftBreaks(source)
+        let readable = AssistantMarkdown.readableInlineVariables(source)
+        let withBreaks = inline ? readable : AssistantMarkdown.preservingSoftBreaks(readable)
         let attributed = (try? AttributedString(
             markdown: withBreaks,
             options: .init(
@@ -4496,7 +4688,7 @@ private struct AssistantMarkdownView: View {
         )) ?? AttributedString(source)
 
         return Text(attributed)
-            .font(.system(size: baseFontSize, weight: .regular))
+            .font(font ?? .system(size: baseFontSize, weight: .regular))
             .tracking(-0.08)
             .foregroundStyle(ink)
             .lineSpacing(2.5)

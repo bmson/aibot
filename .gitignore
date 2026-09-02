@@ -31,3 +31,4 @@ seed-data/voice/*.txt
 # Xcode user state
 **/xcuserdata/
 **/*.xcuserstate
+.artifacts/

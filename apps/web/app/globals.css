@@ -1,3 +1,4 @@
+@import "katex/dist/katex.min.css";
 @import "tailwindcss";
 
 /* Class-strategy dark mode: the theme toggle stamps `.dark` on <html>; a no-flash

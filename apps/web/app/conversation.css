@@ -229,6 +229,54 @@ body:has(.chat-viewport) {
   background: #10131a;
 }
 
+/* The card keeps a generous surface for tables and code, while ordinary prose
+   stops at a comfortable reading measure. Evidence blocks still use the full
+   card width and can scroll horizontally without squeezing their contents. */
+.bubble-assistant .message-markdown > :where(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
+  max-width: 72ch;
+}
+
+/* The prompt reference is part of the card, never a pinned transcript overlay. */
+.bubble-assistant[data-current-answer="true"] {
+  overflow: clip;
+}
+
+/* Rules mark a new named section, not every paragraph. A first heading (or one
+   immediately after an explicit rule) does not need another separator. */
+.message-markdown > :where(h1, h2):not(:first-child) {
+  border-top: 1px solid var(--edge);
+  padding-top: 1rem;
+}
+
+.message-markdown > hr + :where(h1, h2):not(:first-child) {
+  border-top: 0;
+  padding-top: 0;
+}
+
+/* Nested lists are supporting detail inside a list item, so they tighten up
+   instead of inheriting the full block rhythm of a top-level list. */
+.bubble-assistant .message-markdown li :where(ul, ol) {
+  margin-block: 0.375rem;
+}
+
+.message-markdown :where(td, th) code {
+  font-size: 1em;
+}
+
+.bubble-assistant .katex-display {
+  max-width: 100%;
+  margin-block: 0.75rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* KaTeX exposes safe break points between relation/operator groups. Let long
+   arithmetic wrap there on phones, while each indivisible term stays intact. */
+.bubble-assistant .katex-display > .katex {
+  white-space: normal;
+  text-align: left;
+}
+
 /* Your own voice: no fill at all, so the stage shows through it, and a white
    hairline to hold the shape. Nothing is layered over the green, which is why
    this one takes no shadow either — a shadow under a transparent shape is a
@@ -244,9 +292,9 @@ body:has(.chat-viewport) {
   border-bottom-right-radius: 0.625rem;
 }
 
-/* Cards are records placed into the thread, not floating modal slabs. The
-   intelligence rail supplies the one deliberate assistant signature; the
-   surrounding paper stays quiet so the outcome leads. */
+/* Cards are records placed into the thread, not floating modal slabs. Their
+   compact header band supplies hierarchy; the surrounding paper stays quiet
+   so the outcome leads. */
 [data-decision-card="true"] {
   box-shadow:
     0 1px 2px rgb(0 0 0 / 0.035),
@@ -271,6 +319,16 @@ body:has(.chat-viewport) {
 
 .bubble-assistant table th {
   white-space: nowrap;
+}
+
+@media (max-width: 639px) {
+  .bubble-assistant table {
+    table-layout: fixed;
+  }
+
+  .bubble-assistant table th {
+    white-space: normal;
+  }
 }
 
 /* Quick-reply chips (action-chips.tsx) sit in a row under a reply and read as

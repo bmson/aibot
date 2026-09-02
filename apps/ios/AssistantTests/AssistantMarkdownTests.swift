@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import Assistant
 
 /// Locks in the block parser's behavior on the shapes LLM replies actually
@@ -6,6 +7,54 @@ import XCTest
 /// regression in the chat bubble's markdown is caught by a test instead of a
 /// blank screenshot.
 final class AssistantMarkdownTests: XCTestCase {
+    /// Reuses the two generated prompt runs without bundling private QA output
+    /// into the app. XCTest keeps the native renders as reviewable attachments.
+    @MainActor
+    func testReadabilityCorpusSnapshots() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let corpusDirectory = repository.appendingPathComponent(".artifacts/chat-readability")
+        guard FileManager.default.fileExists(atPath: corpusDirectory.appendingPathComponent("baseline-responses.json").path) else {
+            throw XCTSkip("Generate the optional readability corpus before running visual QA")
+        }
+        struct Corpus: Decodable {
+            struct Response: Decodable {
+                let index: Int
+                let prompt: String
+                let response: String
+            }
+            let responses: [Response]
+        }
+        for run in ["baseline", "reframed"] {
+            let data = try Data(contentsOf: corpusDirectory.appendingPathComponent("\(run)-responses.json"))
+            let corpus = try JSONDecoder().decode(Corpus.self, from: data)
+            XCTAssertEqual(corpus.responses.count, 30)
+            for item in corpus.responses {
+                let view = MessageBubble(
+                    message: .optimistic(role: .assistant, text: item.response),
+                    userPrompt: item.prompt,
+                    isCurrentAnswer: true,
+                    isStreaming: false,
+                    openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil
+                )
+                .padding(16)
+                .frame(width: 390)
+                .background(AssistantTheme.stage)
+                .environment(\.colorScheme, .light)
+                let renderer = ImageRenderer(content: view)
+                renderer.scale = 2
+                renderer.proposedSize = ProposedViewSize(width: 390, height: nil)
+                let image = try XCTUnwrap(renderer.uiImage, "Could not render \(run) \(item.index)")
+                XCTAssertGreaterThan(image.size.height, 70)
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "\(run)-\(String(format: "%02d", item.index))-native"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
     func testParsesNestedUnorderedList() {
         let source = """
         - Flights from KEF, direct
@@ -85,6 +134,40 @@ final class AssistantMarkdownTests: XCTestCase {
         }
         XCTAssertEqual(headers, ["Item", "Estimate"])
         XCTAssertEqual(rows, [["Flights", "$420"], ["Stay", "$680"]])
+    }
+
+    func testPromotesStandaloneBoldQuotationToCallout() {
+        let source = "**“Clarity is kindness.”**"
+        let blocks = AssistantMarkdown.blocks(in: source)
+        XCTAssertEqual(blocks, [.quote(source)])
+        XCTAssertTrue(AssistantMarkdown.isStandaloneBoldQuote(source))
+    }
+
+    func testLeavesOrdinaryBoldParagraphAsParagraph() {
+        let source = "**Important:** keep the copy short."
+        XCTAssertEqual(AssistantMarkdown.blocks(in: source), [.paragraph(source)])
+        XCTAssertFalse(AssistantMarkdown.isStandaloneBoldQuote(source))
+    }
+
+    func testShortBoldListLabelBecomesSectionHeading() {
+        let blocks = AssistantMarkdown.blocks(in: "**Risks**\n\n- Delay")
+        XCTAssertEqual(blocks.first, .heading(level: 2, text: "Risks"))
+        let sentence = AssistantMarkdown.blocks(in: "**Keep it simple.**\n\n- Next")
+        XCTAssertEqual(sentence.first, .paragraph("**Keep it simple.**"))
+    }
+
+    func testDisplayArithmeticKeepsCurrencyAndFormatsOperators() {
+        let blocks = AssistantMarkdown.blocks(in: "$$\nA = P \\times (1 + r)^t\n$$")
+        XCTAssertEqual(blocks, [.equation("A = P \\times (1 + r)^t")])
+        XCTAssertEqual(AssistantMarkdown.readableEquation("A = P \\times (1 + r)^t"), "A = P × (1 + r)ᵗ")
+        XCTAssertEqual(AssistantMarkdown.readableInlineVariables("$A$ is $1,000, not $1,050"), "A is $1,000, not $1,050")
+        XCTAssertEqual(AssistantMarkdown.readableInlineVariables("`const x = $A$` then $A$"), "`const x = $A$` then A")
+    }
+
+    func testCurrencyIsNotInterpretedAsMarkdownMath() {
+        let source = "Budget: $1,000; forecast: $1,050."
+        let rendered = AssistantMarkdown.inlineAttributed(source)
+        XCTAssertEqual(String(rendered.characters), source)
     }
 
     func testTablePadsShortRowsToHeaderWidth() {

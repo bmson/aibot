@@ -134,6 +134,8 @@ describe('ResponseCards', () => {
     );
     expect(html).toContain('Wednesday, Sep 2 · 2 events');
     expect(html.match(/paper/g)?.length).toBe(1);
+    expect(html).toContain('data-response-card="true"');
+    expect(html).toContain('<header');
     expect(html).toContain('Coffee with Tine');
     expect(html).toContain('Technical interviews');
   });

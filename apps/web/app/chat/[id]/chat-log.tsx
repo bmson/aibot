@@ -236,10 +236,21 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 {renderedTextParts.map((part, index) => (
                   <div
                     key={`${message.id}-${index.toString()}`}
+                    data-current-answer={isLast && index === 0 ? 'true' : undefined}
                     className={`bubble-assistant min-w-0 max-w-full rounded-[1.375rem] px-4 py-3 text-sm leading-6 ${
                       streamingCaret && index === renderedTextParts.length - 1 ? 'chat-caret' : ''
                     }`}
                   >
+                    {isLast && index === 0 && precedingUserText ? (
+                      <div className="answer-context -mx-4 -mt-3 mb-3 flex min-w-0 items-center gap-2 border-b border-edge/70 bg-sunken px-4 py-2">
+                        <span className="shrink-0 text-xs font-semibold text-accent">
+                          Current answer
+                        </span>
+                        <span className="min-w-0 truncate text-xs text-muted">
+                          {precedingUserText}
+                        </span>
+                      </div>
+                    ) : null}
                     <MessageMarkdown text={part.text} />
                   </div>
                 ))}

@@ -688,6 +688,11 @@ struct ChatView: View {
         MessageBubble(
             message: message,
             userPrompt: model.messages[..<index].reversed().first(where: { $0.role == .user })?.text,
+            isCurrentAnswer: message.role == .assistant
+                && !message.visibleTextBubbles.isEmpty
+                && !model.messages.dropFirst(index + 1).contains(where: {
+                    $0.role == .assistant && !$0.visibleTextBubbles.isEmpty
+                }),
             isStreaming: message.id.hasPrefix("stream-") && model.isSending,
             openApprovals: { model.present(.approvals) },
             runForReal: model.isSending ? nil : { text in model.send(text, force: true) },

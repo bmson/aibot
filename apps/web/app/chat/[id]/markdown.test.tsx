@@ -3,6 +3,19 @@ import { describe, expect, it } from 'vitest';
 import { MessageMarkdown } from './markdown';
 
 describe('MessageMarkdown', () => {
+  it('renders hard breaks only once while retaining soft breaks', () => {
+    const html = renderToStaticMarkup(<MessageMarkdown text={'**Label**  \nDetail\nNext'} />);
+    expect(html).toContain('<br/>Detail\nNext');
+    expect(html).not.toContain('<br/>\n');
+  });
+
+  it('promotes short bold list labels but not emphasized sentences', () => {
+    const html = renderToStaticMarkup(
+      <MessageMarkdown text={'**Risks**\n\n- Delay\n\n**Keep it simple.**\n\n- Next'} />,
+    );
+    expect(html).toMatch(/<h2[^>]*><strong[^>]*>Risks<\/strong><\/h2>/);
+    expect(html).toMatch(/<p[^>]*><strong[^>]*>Keep it simple\.<\/strong><\/p>/);
+  });
   it('renders common assistant formatting with the restrained type hierarchy', () => {
     const html = renderToStaticMarkup(
       <MessageMarkdown
@@ -49,6 +62,84 @@ describe('MessageMarkdown', () => {
     expect(html).toContain('[font-variant-numeric:tabular-nums]');
     expect(html).toContain('align-top');
     expect(html).toContain('Receipts');
+  });
+
+  it('offers label-value records for wide tables on phones', () => {
+    const html = renderToStaticMarkup(
+      <MessageMarkdown
+        text={
+          '| Day | Activity | Duration | Notes |\n| --- | --- | --- | --- |\n| Mon | Run | 30 min | Easy pace |'
+        }
+      />,
+    );
+    expect(html).toContain('data-mobile-table-records="true"');
+    expect(html).toContain('hidden sm:table');
+    expect(html).toContain('<dt');
+    expect(html).toContain('<dd');
+    expect(html).toContain('Easy pace');
+  });
+
+  it('renders display math without treating currency ranges as formulas', () => {
+    const html = renderToStaticMarkup(
+      <MessageMarkdown
+        text={'**Principal:** $1,000\n\n$$\nA = P(1 + r)^t\n$$\n\nFrom $1,000 to $1,050.'}
+      />,
+    );
+
+    expect(html).toContain('class="katex-display"');
+    expect(html).toContain('$1,000');
+    expect(html).toContain('$1,050');
+  });
+
+  it('keeps mixed Markdown currency inside equations readable and code literal', () => {
+    const html = renderToStaticMarkup(
+      <MessageMarkdown
+        text={'$$\nA = 1000 \\times 1.05 = **$1,050**\n$$\n\n$A$ is the amount.\n\n`$A$`'}
+      />,
+    );
+    expect(html).toContain('katex-display');
+    expect(html).not.toContain('katex-error');
+    expect(html).toContain('A is the amount.');
+    expect(html).toContain('$A$</code>');
+  });
+
+  it('gives a standalone bold quote the shared callout surface', () => {
+    const html = renderToStaticMarkup(
+      <MessageMarkdown
+        text={'**"If it is not verified, it is not done."**\n\nCheck the evidence.'}
+      />,
+    );
+
+    expect(html).toContain('data-quote-callout="true"');
+    expect(html).toContain('bg-sunken/55');
+    expect(html).toContain('Check the evidence.');
+  });
+
+  it('allows a hostile long token to wrap inside fenced code', () => {
+    const url = 'https://example.com/a/very/long/path/with?many=parameters&that=need&safe=wrapping';
+    const html = renderToStaticMarkup(<MessageMarkdown text={`\`\`\`text\n${url}\n\`\`\``} />);
+
+    expect(html).toContain('whitespace-pre-wrap');
+    expect(html).toContain('[overflow-wrap:anywhere]');
+    expect(html).toContain(url.replaceAll('&', '&amp;'));
+  });
+
+  it('gives code a semantic header without duplicating inline-code chrome', () => {
+    const html = renderToStaticMarkup(<MessageMarkdown text={'```swift\nlet count = 3\n```'} />);
+    expect(html).toContain('data-code-card="true"');
+    expect(html).toContain('>swift</span>');
+    expect(html).toContain('lucide-code');
+    expect(html).toContain('[&amp;_code]:text-[1em]');
+  });
+
+  it('uses a quiet, decorative icon for quotation callouts', () => {
+    const html = renderToStaticMarkup(
+      <MessageMarkdown text={'> Keep the important part clear.'} />,
+    );
+    expect(html).toContain('<blockquote');
+    expect(html).toContain('lucide-quote');
+    expect(html).toContain('aria-hidden="true"');
+    expect(html).toContain('Keep the important part clear.');
   });
 
   it('routes Mermaid fences to the diagram renderer instead of exposing a raw code block', () => {

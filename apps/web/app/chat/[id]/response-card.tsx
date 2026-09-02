@@ -159,18 +159,15 @@ function CardShell({
 }) {
   return (
     <section
+      data-response-card="true"
       className={`paper relative ${CARD_WIDTH} overflow-hidden rounded-2xl border border-edge/70 bg-raised`}
     >
-      <span
-        className="absolute top-4 bottom-4 left-0 w-0.5 rounded-full bg-gradient-to-b from-accent via-accent to-sky-300"
-        aria-hidden="true"
-      />
-      <div className="flex items-center gap-2 px-4 pt-4 sm:px-5">
+      <header className="flex items-center gap-2 border-b border-edge/60 bg-sunken/35 px-4 py-2.5 sm:px-5">
         <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
           <Icon className="size-3.5" aria-hidden="true" />
         </span>
         <p className="min-w-0 truncate text-xs font-medium text-accent">{label}</p>
-      </div>
+      </header>
       <div className="min-w-0 px-4 pt-3 pb-4 sm:px-5">{children}</div>
     </section>
   );
@@ -760,14 +757,11 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
   return (
     <section
       aria-label={str(spec.accessibilityLabel) || str(spec.title)}
+      data-response-card="true"
       className="paper relative min-w-0 w-full overflow-hidden rounded-[1.4rem] border border-edge/70 bg-raised"
     >
       <div
         className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${accentClass[str(spec.accent)] ?? accentClass.mint}`}
-      />
-      <div
-        className="absolute top-5 bottom-5 left-0 w-0.5 rounded-full bg-accent"
-        aria-hidden="true"
       />
       <div className="relative px-4 py-4 sm:px-5">
         <header className="flex items-start gap-3">
