@@ -299,7 +299,7 @@ struct MessageBubble: View {
         }
         .padding(.horizontal, resolvedBubbleHorizontalInset)
         .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: answerContextMinimumHeight, alignment: .leading)
         .background(AssistantTheme.sunken(for: colorScheme))
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -308,6 +308,18 @@ struct MessageBubble: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Current answer to: \(prompt)")
+    }
+
+    /// The band is the sheet's own header, so it has to clear the sheet's
+    /// corner. A continuous corner sweeps roughly 1.5× its radius along each
+    /// edge, and at 27pt that is longer than the band was tall: both ends were
+    /// pure curve, the divider cut the sweep mid-arc, and the result read as a
+    /// pill floating in the paper rather than the top of it. Sizing the band to
+    /// the corner lets the top edge straighten out between two corners that are
+    /// the bubble's own. Accessibility sizes already exceed this and are
+    /// unaffected.
+    private var answerContextMinimumHeight: CGFloat {
+        AssistantTheme.conversationCornerRadius * 1.55
     }
 
     private var currentAnswerLabel: some View {
