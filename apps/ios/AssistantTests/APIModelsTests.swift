@@ -1638,6 +1638,7 @@ final class APIModelsTests: XCTestCase {
                 .approvals,
                 .cards,
                 .memory,
+                .people,
                 .documents,
                 .skills,
                 .capabilities,
