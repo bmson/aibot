@@ -426,7 +426,7 @@ struct MessageBubble: View {
                     Text(code)
                         .font(.caption.monospaced().weight(.bold))
                         .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
+                        .padding(.vertical, 7)
                         .background(AssistantTheme.warning(for: colorScheme).opacity(0.12), in: Capsule())
                 }
             }
@@ -2555,7 +2555,7 @@ struct RichResponseCards: View {
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                         .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
+                        .padding(.vertical, 5)
                         .background(AssistantTheme.accent(for: colorScheme).opacity(0.12), in: Capsule())
                         .accessibilityLabel(imminence == "Now" ? "Happening now" : "Starts \(imminence.lowercased())")
                 }
@@ -2728,7 +2728,7 @@ struct RichResponseCards: View {
                     .font(.caption.monospacedDigit().weight(.medium))
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 9)
                     .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
             }
 
@@ -3011,7 +3011,7 @@ struct RichResponseCards: View {
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                                 .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
+                                .padding(.vertical, 7)
                                 .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
                         }
                     }
@@ -3286,7 +3286,7 @@ struct RichResponseCards: View {
                             Text(edge.subject)
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
+                                .padding(.vertical, 7)
                                 .background(AssistantTheme.accent(for: colorScheme).opacity(0.10), in: Capsule())
                             Text("—\(edge.predicate)→")
                                 .font(.caption2.weight(.medium))
@@ -3294,7 +3294,7 @@ struct RichResponseCards: View {
                             Text(edge.object)
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
+                                .padding(.vertical, 7)
                                 .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
                         }
                         .fixedSize(horizontal: false, vertical: true)
@@ -3352,7 +3352,7 @@ struct RichResponseCards: View {
                                         Text(source.calendar)
                                             .font(.caption2.weight(.medium))
                                             .padding(.horizontal, 7)
-                                            .padding(.vertical, 4)
+                                            .padding(.vertical, 6)
                                             .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
                                     }
                                 }
@@ -3981,7 +3981,7 @@ struct RichResponseCards: View {
                 .font(.caption.monospacedDigit().weight(.semibold))
                 .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 .padding(.horizontal, 8)
-                .padding(.vertical, 5)
+                .padding(.vertical, 7)
                 .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
         }
     }
