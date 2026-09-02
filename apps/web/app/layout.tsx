@@ -124,11 +124,20 @@ const navItems: Array<Omit<NavDestination, 'count'>> = [
     aliases: [],
   },
   {
+    href: '/people',
+    label: 'People',
+    command: '/people',
+    hint: 'Everyone you know, and how you are connected',
+    aliases: ['contacts', 'relations', 'relationships'],
+  },
+  {
     href: '/profile',
     label: 'Memory',
     command: '/memory',
+    // 'people' no longer belongs here: it is its own destination, and leaving
+    // the alias behind would send the word to the wrong page.
     hint: 'What the assistant knows about you',
-    aliases: ['profile', 'people'],
+    aliases: ['profile'],
   },
   {
     href: '/documents',

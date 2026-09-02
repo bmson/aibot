@@ -16,6 +16,7 @@ import {
   Target,
   TrendingUp,
   TriangleAlert,
+  Users,
 } from 'lucide-react';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
 
@@ -48,6 +49,7 @@ const destinationIcons: Record<string, LucideIcon> = {
   '/cards': CreditCard,
   '/tasks': ListChecks,
   '/goals': Target,
+  '/people': Users,
   '/profile': Brain,
   '/documents': FileText,
   '/skills': Lightbulb,

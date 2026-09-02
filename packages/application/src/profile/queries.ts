@@ -30,6 +30,7 @@ import {
   isNotNull,
   isNull,
   like,
+  ne,
   or,
   type SQL,
   sql,
@@ -96,6 +97,35 @@ const PROFILE_CONTACT_LIMIT = 500;
 const PROFILE_FACT_LIMIT = 250;
 const QUARANTINE_LIMIT = 100;
 const VOICE_IMPORT_LIMIT = 5;
+
+const CARD_DOMAINS = [
+  'identity',
+  'work',
+  'home',
+  'relationships',
+  'preferences',
+  'health',
+  'other',
+] as const;
+
+/**
+ * Which owner facts the compiled card would pick: everything pinned, plus the
+ * most important few per domain. Shared by the overview and the About page so
+ * the "In profile" marker on a fact row means the same thing on both.
+ */
+function selectedCardFactIds(ownerFacts: MemorySnapshot[]): Set<string> {
+  const ids = new Set<string>();
+  for (const domain of CARD_DOMAINS) {
+    const facts = ownerFacts.filter((memory) => (memory.domain ?? 'other') === domain);
+    for (const memory of facts.filter((fact) => fact.pinned)) ids.add(memory.id);
+    for (const memory of facts
+      .filter((fact) => !fact.pinned && fact.importance >= CARD_AUTO_MIN_IMPORTANCE)
+      .slice(0, CARD_AUTO_FACTS_PER_DOMAIN)) {
+      ids.add(memory.id);
+    }
+  }
+  return ids;
+}
 
 /** Load the complete memory overview without exposing persistence to Next.js. */
 export async function getProfileOverview(db: Db): Promise<ProfileOverview> {
@@ -179,24 +209,7 @@ export async function getProfileOverview(db: Db): Promise<ProfileOverview> {
   ]);
   const factCounts = new Map(factCountRows.map((row) => [row.contactId ?? '', Number(row.value)]));
 
-  const cardFactIds = new Set<string>();
-  for (const domain of [
-    'identity',
-    'work',
-    'home',
-    'relationships',
-    'preferences',
-    'health',
-    'other',
-  ]) {
-    const facts = ownerFacts.filter((memory) => (memory.domain ?? 'other') === domain);
-    for (const memory of facts.filter((fact) => fact.pinned)) cardFactIds.add(memory.id);
-    for (const memory of facts
-      .filter((fact) => !fact.pinned && fact.importance >= CARD_AUTO_MIN_IMPORTANCE)
-      .slice(0, CARD_AUTO_FACTS_PER_DOMAIN)) {
-      cardFactIds.add(memory.id);
-    }
-  }
+  const cardFactIds = selectedCardFactIds(ownerFacts);
 
   return {
     ...(owner ? { owner } : {}),
@@ -229,6 +242,167 @@ export async function getProfileOverview(db: Db): Promise<ProfileOverview> {
     })),
     memoryHealth,
     latestOrganizer: latestOrganizerRows[0] ?? null,
+  };
+}
+
+/**
+ * The Memory hub's own read.
+ *
+ * `getProfileOverview` returns everything the old single-page Memory screen
+ * needed — owner facts, the voice corpus, the people list — and is still the
+ * shape the mobile workspace endpoint serves, so it stays as it is. The hub
+ * only shows health, the review inbox, and counts to route by, and loading six
+ * unused result sets to render four numbers is a cost paid on every visit.
+ */
+export interface MemoryHubOverview {
+  owner?: ContactSnapshot;
+  quarantined: MemorySnapshot[];
+  memoryHealth: MemoryHealth;
+  latestOrganizer: { id: string; status: string; progress: string; updatedAt: Date } | null;
+  card: { compiledAt: Date; empty: boolean } | null;
+  ownerFactCount: number;
+  peopleCount: number;
+}
+
+export async function getMemoryHubOverview(db: Db): Promise<MemoryHubOverview> {
+  const agent = await getAgent(db);
+  const active = and(
+    eq(memories.agentId, agent.id),
+    eq(memories.category, 'knowledge'),
+    eq(memories.quarantined, false),
+    or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
+  );
+  const [owner] = await db.select().from(contacts).where(eq(contacts.trust, 'owner')).limit(1);
+
+  const [quarantined, [card], memoryHealth, latestOrganizerRows, [ownerFactRow], [peopleRow]] =
+    await Promise.all([
+      db
+        .select()
+        .from(memories)
+        .where(
+          and(
+            eq(memories.agentId, agent.id),
+            eq(memories.category, 'knowledge'),
+            eq(memories.quarantined, true),
+            or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
+          ),
+        )
+        .orderBy(desc(memories.createdAt))
+        .limit(QUARANTINE_LIMIT),
+      db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
+      getMemoryHealth(db, agent.id),
+      db
+        .select({
+          id: tasks.id,
+          status: tasks.status,
+          progress: tasks.progress,
+          updatedAt: tasks.updatedAt,
+        })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.agentId, agent.id),
+            sql`${tasks.trigger} #>> '{payload,job}' = 'memory.consolidate'`,
+          ),
+        )
+        .orderBy(desc(tasks.createdAt))
+        .limit(1),
+      owner
+        ? db
+            .select({ value: count() })
+            .from(memories)
+            .where(and(active, eq(memories.subjectContactId, owner.id)))
+        : Promise.resolve([{ value: 0 }]),
+      db.select({ value: count() }).from(contacts).where(ne(contacts.trust, 'owner')),
+    ]);
+
+  return {
+    ...(owner ? { owner } : {}),
+    quarantined,
+    memoryHealth,
+    latestOrganizer: latestOrganizerRows[0] ?? null,
+    card: card ? { compiledAt: card.compiledAt, empty: card.content.trim() === '' } : null,
+    ownerFactCount: Number(ownerFactRow?.value ?? 0),
+    peopleCount: Number(peopleRow?.value ?? 0),
+  };
+}
+
+/** Everything `/profile/about` renders: the owner's facts and the compiled card. */
+export interface OwnerFactsView {
+  owner?: ContactSnapshot;
+  ownerFacts: MemorySnapshot[];
+  card: { content: string; compiledAt: Date } | null;
+  cardFactIds: string[];
+}
+
+export async function getOwnerFactsView(db: Db): Promise<OwnerFactsView> {
+  const agent = await getAgent(db);
+  const active = and(
+    eq(memories.agentId, agent.id),
+    eq(memories.category, 'knowledge'),
+    eq(memories.quarantined, false),
+    or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
+  );
+  const [owner] = await db.select().from(contacts).where(eq(contacts.trust, 'owner')).limit(1);
+  const [ownerFacts, [card]] = await Promise.all([
+    owner
+      ? db
+          .select()
+          .from(memories)
+          .where(and(active, eq(memories.subjectContactId, owner.id)))
+          .orderBy(desc(memories.pinned), desc(memories.importance), desc(memories.confidence))
+          .limit(PROFILE_FACT_LIMIT)
+      : Promise.resolve([]),
+    db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
+  ]);
+
+  return {
+    ...(owner ? { owner } : {}),
+    ownerFacts,
+    card: card ? { content: card.content, compiledAt: card.compiledAt } : null,
+    cardFactIds: [...selectedCardFactIds(ownerFacts)],
+  };
+}
+
+/** Everything `/profile/voice` renders. */
+export interface VoiceOverview {
+  voiceStats: VoiceSampleStats;
+  voiceProfile: ProfileOverview['voiceProfile'];
+  voiceImports: ProfileOverview['voiceImports'];
+}
+
+export async function getVoiceOverview(db: Db): Promise<VoiceOverview> {
+  const [voiceStats, voiceImports, [voice]] = await Promise.all([
+    voiceSampleStats(db),
+    db
+      .select()
+      .from(importSources)
+      .where(like(importSources.source, 'voice-samples%'))
+      .orderBy(desc(importSources.updatedAt))
+      .limit(VOICE_IMPORT_LIMIT),
+    db.select().from(voiceProfile).where(eq(voiceProfile.id, 1)).limit(1),
+  ]);
+  return {
+    voiceStats,
+    voiceProfile: {
+      description: voice?.description ?? '',
+      dos: Array.isArray(voice?.dos)
+        ? voice.dos.filter((d): d is string => typeof d === 'string')
+        : [],
+      donts: Array.isArray(voice?.donts)
+        ? voice.donts.filter((d): d is string => typeof d === 'string')
+        : [],
+      signature: voice?.signature ?? '',
+    },
+    voiceImports: voiceImports.map((row) => ({
+      source: row.source,
+      status: row.status,
+      itemsTotal: row.itemsTotal,
+      itemsProcessed: row.itemsProcessed,
+      memoriesSaved: row.memoriesSaved,
+      taskId: row.taskId,
+      error: row.error,
+    })),
   };
 }
 

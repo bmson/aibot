@@ -3,6 +3,10 @@
  * Run against a dev server with AUTH_DEV_BYPASS=true:
  *   pnpm tsx scripts/visual-qa.ts [baseUrl]
  * Output lands in /tmp/visual-qa/.
+ *
+ * Set QA_PERSON_ID to also shoot a person's card (`pnpm tsx
+ * scripts/demo-people.ts` prints ids), and QA_BROWSER_PATH to use a Chromium
+ * already on the machine when `playwright install` cannot reach its CDN.
  */
 
 import { mkdirSync } from 'node:fs';
@@ -23,7 +27,16 @@ const pages: Array<{ name: string; path: string; wait?: number }> = [
   { name: 'documents', path: '/documents' },
   { name: 'skills', path: '/skills' },
   { name: 'profile', path: '/profile' },
+  { name: 'profile-about', path: '/profile/about' },
+  { name: 'profile-voice', path: '/profile/voice' },
+  { name: 'profile-data', path: '/profile/data' },
   { name: 'profile-memories', path: '/profile/memories' },
+  { name: 'people', path: '/people' },
+  // The person page needs a real id. `pnpm tsx scripts/demo-people.ts` prints
+  // the ids it creates; pass one to shoot the card itself.
+  ...(process.env.QA_PERSON_ID
+    ? [{ name: 'person', path: `/people/${process.env.QA_PERSON_ID}` }]
+    : []),
   { name: 'anomalies', path: '/anomalies' },
   { name: 'improvements', path: '/improvements' },
   { name: 'suggestions', path: '/suggestions' },
@@ -35,10 +48,16 @@ const viewports = [
   { name: 'phone', width: 390, height: 844 },
 ];
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(
+  process.env.QA_BROWSER_PATH ? { executablePath: process.env.QA_BROWSER_PATH } : {},
+);
 for (const viewport of viewports) {
   const context = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
+    // Cards reveal on scroll via `animation-timeline: view()`. A full-page
+    // screenshot never scrolls, so without this everything below the first
+    // viewport is captured at opacity 0 and the shot looks half-empty.
+    reducedMotion: 'reduce',
     deviceScaleFactor: viewport.name === 'phone' ? 2 : 1,
     isMobile: viewport.name === 'phone',
     hasTouch: viewport.name === 'phone',
