@@ -151,7 +151,16 @@ export function PersonControls({
 }
 
 /** Deleting a person also tombstones their facts, so it asks first. */
-export function DeletePerson({ contactId, name }: { contactId: string; name: string }) {
+export function DeletePerson({
+  contactId,
+  name,
+  returnTo = '/people',
+}: {
+  contactId: string;
+  name: string;
+  /** Where to land once the person no longer exists to navigate back to. */
+  returnTo?: string;
+}) {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -166,7 +175,7 @@ export function DeletePerson({ contactId, name }: { contactId: string; name: str
         setConfirming(false);
         return;
       }
-      router.push('/profile');
+      router.push(returnTo);
       router.refresh();
     });
   };

@@ -34,6 +34,10 @@ function revalidateProfile(): void {
   // Memory edits also affect graph eligibility. Keep the workspace in sync
   // instead of making the owner navigate away and back after a correction.
   revalidatePath('/profile/knowledge');
+  // The People section reads the same contacts, occasions, and facts, so a
+  // rename or a new occasion has to land there too — these actions are shared
+  // by both surfaces.
+  revalidatePath('/people', 'layout');
 }
 
 export async function resolveCommitmentAction(id: string): Promise<void> {

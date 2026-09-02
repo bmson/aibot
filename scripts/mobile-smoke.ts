@@ -19,7 +19,11 @@ const testedRoutes = [
   '/approvals',
   '/goals',
   '/tasks',
+  '/people',
   '/profile',
+  '/profile/about',
+  '/profile/voice',
+  '/profile/data',
   '/profile/memories',
   '/documents',
   '/skills',
@@ -513,6 +517,10 @@ try {
     ['/approvals', '/chat'],
     ['/settings', '/chat'],
     ['/profile/memories', '/profile'],
+    ['/people', '/chat'],
+    ['/profile/about', '/profile'],
+    ['/profile/voice', '/profile'],
+    ['/profile/data', '/profile'],
     ['/import', '/documents'],
   ] as const) {
     await openRoute(page, route);
