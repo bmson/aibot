@@ -225,6 +225,24 @@ struct RootView: View {
                 .font(.footnote)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
+            // Only transport failures carry a retry. A server that answered on
+            // the merits would just answer the same way again.
+            if let retry = model.errorRetry {
+                Button {
+                    // Dismiss first: a second failure then animates in as a new
+                    // banner rather than silently replacing identical text.
+                    model.dismissError()
+                    Task { @MainActor in await retry() }
+                } label: {
+                    Text("Retry")
+                        .font(.footnote.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .frame(height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion))
+                .accessibilityLabel("Retry")
+            }
             Button {
                 model.dismissError()
             } label: {

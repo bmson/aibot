@@ -188,13 +188,21 @@ writing them down.
 
 ### Deployment
 
-- **`assistant-web` deploys with `--min-instances 0`** (`infra/gcp/deploy.sh`).
-  For an assistant opened a handful of times a day, that means effectively every
-  session pays a Next.js standalone cold start plus a fresh pool before the
-  first byte. `--min-instances 1` trades a few dollars a month for the app
-  feeling instant on open. Left alone because it is a cost decision, not an
-  engineering one — but it is the single largest remaining contributor to "the
-  app feels slow to open", and it belongs in front of whoever pays the bill.
+- **`assistant-web` deployed with `--min-instances 0`** (`infra/gcp/deploy.sh`).
+  For an assistant opened a handful of times a day, that meant effectively every
+  session paid a Next.js standalone cold start plus a fresh pool before the
+  first byte. Compounding it, every Cloud Scheduler job targets `${AGENT_URL}`,
+  so the *agent* was kept permanently warm by the every-minute sweep while the
+  web service — the only thing the iOS app and the browser talk to — was
+  reliably cold.
+
+  **Now fixed**, as part of tracking down "The request timed out" on app open:
+  the web service deploys with `--min-instances 1`, and both services with
+  `--cpu-boost`. This was the single largest contributor to "the app feels slow
+  to open". It remains a cost decision — on the order of $10–25/month for the
+  held instance — so the cheaper substitute, if that is ever unwanted, is a
+  scheduler keepalive against `${WEB_URL}/api/health` (`make_job` hardcodes
+  `${AGENT_URL}` today and would need a URL parameter).
 
 ---
 

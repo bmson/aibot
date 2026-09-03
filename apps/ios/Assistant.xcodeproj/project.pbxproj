@@ -26,6 +26,7 @@
 		B00000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000011 /* Assets.xcassets */; };
 		B00000000000000000000012 /* APIModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000020 /* APIModelsTests.swift */; };
 		B00000000000000000000050 /* AssistantMarkdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000050 /* AssistantMarkdownTests.swift */; };
+		B00000000000000000000051 /* APIClientRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000051 /* APIClientRetryTests.swift */; };
 		B00000000000000000000013 /* System/AssistantActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000014 /* System/AssistantActivityAttributes.swift */; };
 		B00000000000000000000014 /* System/LiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000015 /* System/LiveActivityManager.swift */; };
 		B00000000000000000000015 /* System/NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000016 /* System/NotificationManager.swift */; };
@@ -106,6 +107,7 @@
 		C00000000000000000000019 /* AssistantActivityExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AssistantActivityExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C00000000000000000000020 /* APIModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModelsTests.swift; sourceTree = "<group>"; };
 		C00000000000000000000050 /* AssistantMarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantMarkdownTests.swift; sourceTree = "<group>"; };
+		C00000000000000000000051 /* APIClientRetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClientRetryTests.swift; sourceTree = "<group>"; };
 		C00000000000000000000021 /* AssistantTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AssistantTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C00000000000000000000022 /* Components/ActivityCrown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/ActivityCrown.swift; sourceTree = "<group>"; };
 		C00000000000000000000023 /* Views/WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WorkspaceView.swift; sourceTree = "<group>"; };
@@ -209,6 +211,7 @@
 			children = (
 				C00000000000000000000020 /* APIModelsTests.swift */,
 				C00000000000000000000050 /* AssistantMarkdownTests.swift */,
+				C00000000000000000000051 /* APIClientRetryTests.swift */,
 			);
 			path = AssistantTests;
 			sourceTree = "<group>";
@@ -390,6 +393,7 @@
 			files = (
 				B00000000000000000000012 /* APIModelsTests.swift in Sources */,
 				B00000000000000000000050 /* AssistantMarkdownTests.swift in Sources */,
+				B00000000000000000000051 /* APIClientRetryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
