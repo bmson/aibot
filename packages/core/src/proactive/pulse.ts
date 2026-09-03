@@ -152,11 +152,17 @@ export function eventLeadMoments(salient: readonly EventSalience[], now: Date): 
     if (away > lead) continue;
     const inMinutes = Math.max(1, Math.round(away));
     const where = travels ? ` at ${(scored.event.location ?? '').trim()}` : '';
+    // The headline already says where it is. Salience keeps `it is at …` as the
+    // marker that decides the travel lead time above, but repeating the address
+    // one clause later is how the owner ends up reading it twice.
+    const why = scored.reasons.filter((reason) => !reason.startsWith('it is at'));
     moments.push({
       kind: 'event-lead',
       // Keyed on the event and its start so a moved event earns a fresh nudge.
       key: `event-lead:${scored.event.eventId ?? scored.event.summary}:${scored.event.start}`,
-      text: `"${scored.event.summary}" starts in ${inMinutes} minute${inMinutes === 1 ? '' : 's'}${where}. ${scored.reasons.join('; ')}.`,
+      text:
+        `"${scored.event.summary}" starts in ${inMinutes} minute${inMinutes === 1 ? '' : 's'}${where}.` +
+        (why.length > 0 ? ` ${why.join('; ')}.` : ''),
       card: {
         kind: 'proactive-alert',
         id: `event-lead:${scored.event.eventId ?? scored.event.summary}:${scored.event.start}`,

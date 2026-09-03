@@ -1,5 +1,7 @@
 import type { Config } from '@assistant/config';
 import {
+  BACKGROUND_NOTICE_MARKER,
+  backgroundNoticeIds,
   buildSystemPrompt,
   createChatTask,
   encodeMessageCursor,
@@ -145,14 +147,20 @@ function acceptedStreamResponse(taskId: string, headers: Record<string, string>)
   return createUIMessageStreamResponse({ stream, headers });
 }
 
-function boundedModelHistory(rows: Awaited<ReturnType<typeof listMessages>>): UIMessage[] {
+function boundedModelHistory(
+  rows: Awaited<ReturnType<typeof listMessages>>,
+  notices: ReadonlySet<string>,
+): UIMessage[] {
   const newestFirst = [...rows]
     .reverse()
     .filter((row) => row.role === 'user' || row.role === 'assistant');
   const selected: UIMessage[] = [];
   let bytes = 0;
   for (const row of newestFirst) {
-    const text = row.text;
+    // A delivered reminder or pulse alert sits in this thread like any reply.
+    // Name it, or the model answers the owner's question and then reads the
+    // notice back to them as part of the answer.
+    const text = notices.has(row.id) ? `${BACKGROUND_NOTICE_MARKER}\n${row.text}` : row.text;
     const nextBytes = byteLength(text);
     // Keep a contiguous recent suffix; silently reaching far around one huge
     // message produces misleading context.
@@ -304,7 +312,8 @@ export async function handleChatTurn(
   const historyRows = await listMessages(db, conversation.id, {
     limit: MODEL_HISTORY_LIMIT,
   });
-  const modelHistory = boundedModelHistory(historyRows);
+  const noticeRows = await backgroundNoticeIds(db, historyRows);
+  const modelHistory = boundedModelHistory(historyRows, noticeRows);
 
   // Triage: conversation streams below; action requests go to the executor.
   // On triage failure default to the executor — a slow honest answer beats a
@@ -315,9 +324,11 @@ export async function handleChatTurn(
   // conversation. Failed-action follow-ups also return to the executor when
   // the preceding assistant turn committed to an action. Only the genuinely
   // ambiguous rest falls through to the model.
+  // A notice is not the assistant committing to an action, so it must not be
+  // what a failed-action follow-up is judged against.
   const priorAssistantText = [...modelHistory.slice(0, -1)]
     .reverse()
-    .find((message) => message.role === 'assistant');
+    .find((message) => message.role === 'assistant' && !noticeRows.has(message.id));
   if (
     autonomousRequested ||
     forceRequested ||

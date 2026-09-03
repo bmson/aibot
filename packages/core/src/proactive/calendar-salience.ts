@@ -102,6 +102,32 @@ function organizerEmail(organizer: string): string {
 }
 
 /**
+ * Google mints synthetic organizer addresses for calendars nobody convened: a
+ * subscribed ICS feed, a shared group calendar, a bookable room. They are ids,
+ * not people, so "<id> called it" is both meaningless to the owner and a leak
+ * of an internal identifier into a notification. Treat them as no organizer at
+ * all — neither the external-organizer score nor its reason applies.
+ */
+function isSyntheticOrganizer(email: string): boolean {
+  const domain = domainOf(email);
+  return domain === 'calendar.google.com' || domain.endsWith('.calendar.google.com');
+}
+
+/**
+ * What the owner should see for an organizer. A display name when the field
+ * carries one, otherwise the bare address; the reason is skipped entirely when
+ * neither names a person.
+ */
+function organizerLabel(organizer: string): string | null {
+  const raw = organizer.trim();
+  const angled = /^(.*?)\s*<([^>]+)>\s*$/.exec(raw);
+  const name = angled?.[1]?.trim().replace(/^["']|["']$/g, '') ?? '';
+  if (name) return name;
+  const email = organizerEmail(raw);
+  return email.includes('@') && !isSyntheticOrganizer(email) ? email : null;
+}
+
+/**
  * A `location` holding only a link is a video call, not a place to travel to.
  * Conference URLs routinely land in the location field, and treating one as
  * "you need to leave" would nudge the owner about a meeting they take at their
@@ -168,9 +194,15 @@ export function scoreCalendarEvent(
   }
 
   const organizer = organizerEmail(event.organizer ?? '');
-  if (organizer.includes('@') && !self.has(organizer) && !selfDomains.has(domainOf(organizer))) {
+  if (
+    organizer.includes('@') &&
+    !self.has(organizer) &&
+    !selfDomains.has(domainOf(organizer)) &&
+    !isSyntheticOrganizer(organizer)
+  ) {
     score += WEIGHTS.externalOrganizer;
-    reasons.push(`${organizer} called it`);
+    const label = organizerLabel(event.organizer ?? '');
+    if (label) reasons.push(`${label} called it`);
   }
 
   return { event, score, reasons };
