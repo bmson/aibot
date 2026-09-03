@@ -22,6 +22,11 @@ enum AssistantRoute: String, Hashable, Identifiable, CaseIterable {
     var id: Self { self }
 }
 
+/// An action the error banner can offer when a failure is worth another go.
+/// Sendable so it can be handed to the `Task` the banner's button starts;
+/// capturing `AppModel` is safe because global-actor isolation makes it so.
+typealias RetryAction = @MainActor @Sendable () async -> Void
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var presentedRoute: AssistantRoute?
@@ -47,7 +52,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var toolActivity: [ToolActivity] = []
     @Published private(set) var activityThought: AssistantThought?
     @Published private(set) var activityDetail: String?
-    @Published var errorMessage: String?
+    /// Setting a message always retires the previous retry: an error that
+    /// arrives from somewhere else must not inherit the last one's action.
+    /// `report(_:retry:)` sets the message first, then the retry.
+    @Published var errorMessage: String? {
+        didSet { errorRetry = nil }
+    }
+    /// Offered by the banner when the failure was the network rather than the
+    /// server's answer. Re-running a request the server rejected on its merits
+    /// would only reproduce the rejection, so those get no retry.
+    @Published var errorRetry: RetryAction?
     /// Text of a turn that failed to send, handed back to the composer so the
     /// words are never lost to a network or server failure. ChatView consumes it.
     @Published private(set) var restorableDraft: String?
@@ -65,6 +79,16 @@ final class AppModel: ObservableObject {
     private var logOrder = ChatLogOrder()
     private var pollTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
+    /// The turn in flight, kept so returning to the foreground can pick the
+    /// reply back up. Backgrounding cancels `pollTask`; the server carries on.
+    private var resumableTurn: (taskId: String?, streamID: String)?
+    /// When the app was last backgrounded, for deciding whether the connection
+    /// pool has had time to go stale.
+    private var backgroundedAt: Date?
+    /// How long backgrounded before the pool is assumed dead. Short, because
+    /// being wrong costs one TCP handshake and being right saves the owner a
+    /// full inactivity timeout staring at a spinner.
+    private static let staleConnectionSeconds: TimeInterval = 30
     /// Idle polling is an in-app freshness affordance, never background work.
     /// Scene transitions cancel it so the OS can suspend the app cleanly and
     /// we do not wake the server while the owner cannot see a response.
@@ -258,7 +282,10 @@ final class AppModel: ObservableObject {
                 // Non-fatal: the app is connected and usable, the dashboard
                 // sections are just empty. Surfacing it keeps the failure
                 // visible instead of presenting stale counts as current.
-                errorMessage = error.localizedDescription
+                report(error, retry: { [weak self] in
+                    guard let self else { return }
+                    await self.refreshOverview()
+                })
             }
 
             await reconcileBaselineActivity()
@@ -278,8 +305,17 @@ final class AppModel: ObservableObject {
             await notifications.registerForRemoteNotificationsIfAuthorized()
             await reportForegroundActivity()
         } catch {
-            errorMessage = error.localizedDescription
-            if bootstrap == nil { showingConnection = true }
+            report(error, retry: { [weak self] in
+                guard let self else { return }
+                await self.connect()
+            })
+            // A cold server or a dead socket is not a bad pairing. Sending the
+            // owner to the connection form for one of those reads as "the app
+            // is broken" and invites them to re-enter a key that was fine —
+            // so only an answer from the server sends them there.
+            if bootstrap == nil, (error as? APIError)?.isTransport != true {
+                showingConnection = true
+            }
         }
         isLoading = false
     }
@@ -352,30 +388,87 @@ final class AppModel: ObservableObject {
         return false
     }
 
+    /// Surface a failure, offering a retry only when the cause was the network.
+    /// The message is set first so its `didSet` cannot clear the retry after.
+    private func report(_ error: Error, retry: RetryAction? = nil) {
+        errorMessage = error.localizedDescription
+        errorRetry = (error as? APIError)?.isTransport == true ? retry : nil
+    }
+
     func refreshAll() async {
         guard let client else { return }
+        // Kept separate for the same reason `connect()` separates them: these
+        // fetch different things, and a failing dashboard query should not
+        // throw away a bootstrap that arrived perfectly well.
         do {
-            async let boot = client.bootstrap()
-            async let overview = client.overview()
-            let (loadedBoot, loadedOverview) = try await (boot, overview)
-            apply(loadedBoot, preservingLocalMessages: isSending)
-            self.overview = loadedOverview
-            await reconcileBaselineActivity()
-            await syncNotificationBadge()
+            apply(try await client.bootstrap(), preservingLocalMessages: isSending)
         } catch {
-            errorMessage = error.localizedDescription
+            report(error, retry: { [weak self] in
+                guard let self else { return }
+                await self.refreshAll()
+            })
+            return
         }
+        do {
+            overview = try await client.overview()
+        } catch {
+            report(error, retry: { [weak self] in
+                guard let self else { return }
+                await self.refreshOverview()
+            })
+        }
+        await reconcileBaselineActivity()
+        await syncNotificationBadge()
     }
 
     func scenePhaseDidChange(_ phase: ScenePhase) {
+        // Only a real backgrounding tears down work. `.inactive` is also the
+        // app switcher and a pulled-down Control Center, and cancelling a live
+        // turn for those would be worse than the problem being solved.
+        if phase == .background { didEnterBackground() }
+
         let isNowActive = phase == .active
         guard isSceneActive != isNowActive else { return }
         isSceneActive = isNowActive
         if isNowActive {
+            discardStaleConnectionsIfNeeded()
             if bootstrap != nil { startIdlePolling() }
+            resumeInterruptedTurn()
         } else {
             idleTask?.cancel()
             idleTask = nil
+        }
+    }
+
+    private func didEnterBackground() {
+        backgroundedAt = Date()
+        // pollTask holds the SSE stream and the reply poll. Left running it is
+        // suspended with the app, its socket dies unnoticed during suspension,
+        // and it resurfaces as "The request timed out" the moment the owner
+        // comes back. Cancel it here and resume from the cursor instead — the
+        // server is still working on the turn either way.
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    /// Runs before RootView's foreground refresh fires. That ordering is the
+    /// point: otherwise the refresh is what discovers the dead socket, and
+    /// discovering it that way costs a full timeout.
+    private func discardStaleConnectionsIfNeeded() {
+        guard let backgroundedAt else { return }
+        self.backgroundedAt = nil
+        guard Date().timeIntervalSince(backgroundedAt) >= Self.staleConnectionSeconds else { return }
+        Transport.shared.reset()
+    }
+
+    /// A turn interrupted by backgrounding is still running on the server, so
+    /// pick the reply up from the cursor rather than leaving the composer
+    /// spinning against a task that no longer exists.
+    private func resumeInterruptedTurn() {
+        guard isSending, pollTask == nil, let turn = resumableTurn else { return }
+        pollTask = Task { [weak self] in
+            guard let self else { return }
+            await self.pollForReply(taskId: turn.taskId, streamID: turn.streamID)
         }
     }
 
@@ -386,7 +479,12 @@ final class AppModel: ObservableObject {
             await reconcileBaselineActivity()
             await syncNotificationBadge()
         }
-        catch where reportFailure { errorMessage = error.localizedDescription }
+        catch where reportFailure {
+            report(error, retry: { [weak self] in
+                guard let self else { return }
+                await self.refreshOverview()
+            })
+        }
         catch { }
     }
 
@@ -1092,6 +1190,10 @@ final class AppModel: ObservableObject {
         thoughtClearTask?.cancel()
 
         pollTask?.cancel()
+        // Recorded before the send, not after the receipt: backgrounding during
+        // the stream is exactly the case this exists for, and at that point
+        // there is no taskId yet. Polling by cursor alone still finds the reply.
+        resumableTurn = (taskId: nil, streamID: streamID)
         pollTask = Task { [weak self] in
             guard let self else { return }
             // `ensure`, not `start`: starting ends every live activity first,
@@ -1122,6 +1224,7 @@ final class AppModel: ObservableObject {
                     await self.publishThought(.startingWork, detail: text)
                 }
                 if let receiptCursor = receipt.cursor { self.cursor = receiptCursor }
+                self.resumableTurn = (taskId: receipt.taskId, streamID: streamID)
                 await self.pollForReply(taskId: receipt.taskId, streamID: streamID)
             } catch is CancellationError {
                 return
@@ -1137,6 +1240,7 @@ final class AppModel: ObservableObject {
                 self.restorableDraft = text
                 self.errorMessage = error.localizedDescription
                 self.isSending = false
+                self.resumableTurn = nil
                 self.setActivityThought(.stopped, proposedDetail: error.localizedDescription)
                 await LiveActivityManager.shared.finish(
                     thought: .stopped,
@@ -1228,6 +1332,7 @@ final class AppModel: ObservableObject {
         guard isSending else { return }
         pollTask?.cancel()
         pollTask = nil
+        resumableTurn = nil
         isSending = false
         toolActivity = []
         messages.removeAll { $0.id.hasPrefix("stream-") && $0.text.isEmpty }
@@ -1399,6 +1504,7 @@ final class AppModel: ObservableObject {
         }
         toolActivity = []
         isSending = false
+        resumableTurn = nil
         await refreshOverview()
 
         let reply = messages.reversed().first(where: { $0.role == .assistant && !$0.text.isEmpty })?.text
