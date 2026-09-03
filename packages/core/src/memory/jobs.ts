@@ -212,7 +212,24 @@ export async function runCodeJob(
           taskId: task.id,
           role: 'assistant',
           origin: 'assistant',
-          parts: [{ type: 'text', text: reminderText }],
+          // A delivered reminder lands in the owner's primary thread, beside
+          // their chat replies. The card is what tells them apart — on screen,
+          // and in the window a later chat turn is seeded from (see
+          // backgroundNoticeIds in chat.ts). Without it a fired reminder reads
+          // as the assistant's own last conversational turn.
+          parts: [
+            { type: 'text', text: reminderText },
+            {
+              type: 'data-card',
+              data: {
+                kind: 'proactive-alert',
+                id: `reminder-fired:${task.id}`,
+                category: 'commitment',
+                urgencyLabel: 'Reminder',
+                title: reminderText,
+              },
+            },
+          ],
           text: reminderText,
         });
         const pinged = await pingOwner(deps.notifyOwner, {

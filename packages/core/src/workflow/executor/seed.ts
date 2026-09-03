@@ -2,7 +2,7 @@ import type { Db, TaskRow } from '@assistant/db';
 import { conversations, messages } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { and, asc, desc, eq, gt } from 'drizzle-orm';
-import { listMessages } from '../../chat.js';
+import { BACKGROUND_NOTICE_MARKER, backgroundNoticeIds, listMessages } from '../../chat.js';
 import type { TaskState } from '../../events.js';
 import { isKnownSenderReplyTask, isUnattendedGoalSession } from './context-helpers.js';
 
@@ -60,13 +60,20 @@ export async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]
       ];
     }
     const rows = await listMessages(db, task.conversationId);
-    const conversationWindow = rows
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .slice(-20)
-      .map(
-        (m) =>
-          ({ role: m.role as 'user' | 'assistant', content: m.text || '(empty)' }) as ModelMessage,
-      );
+    const recent = rows.filter((m) => m.role === 'user' || m.role === 'assistant').slice(-20);
+    // A reminder that fired, a pulse alert, a briefing — all of these land in
+    // the owner's primary thread, which is the same thread they chat in. Seeded
+    // as bare assistant turns they are indistinguishable from replies, and a
+    // model asked a question with one sitting at the end of its window answers
+    // the question and then repeats the notice back. Name them instead.
+    const notices = await backgroundNoticeIds(db, recent);
+    const conversationWindow = recent.map((m) => {
+      const text = m.text || '(empty)';
+      return {
+        role: m.role as 'user' | 'assistant',
+        content: notices.has(m.id) ? `${BACKGROUND_NOTICE_MARKER}\n${text}` : text,
+      } as ModelMessage;
+    });
     const initialInstruction = triggerInstruction(task);
 
     // A goal's work chat is intentionally reused across automatic sessions.

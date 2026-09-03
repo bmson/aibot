@@ -78,11 +78,32 @@ describe('scoreCalendarEvent', () => {
   });
 
   it('recognises an outside organizer but not an in-house one', () => {
-    const outside = scoreCalendarEvent(event({ organizer: 'Dr Ling <clinic@hospital.is>' }), ctx);
-    expect(outside.reasons).toContain('clinic@hospital.is called it');
+    // The owner reads this sentence, so it names the person when the field
+    // carries a name and falls back to the bare address only when it does not.
+    const named = scoreCalendarEvent(event({ organizer: 'Dr Ling <clinic@hospital.is>' }), ctx);
+    expect(named.reasons).toContain('Dr Ling called it');
+    expect(named.reasons).not.toContain('clinic@hospital.is called it');
+
+    const bare = scoreCalendarEvent(event({ organizer: 'clinic@hospital.is' }), ctx);
+    expect(bare.reasons).toContain('clinic@hospital.is called it');
 
     const inside = scoreCalendarEvent(event({ organizer: 'owner@example.com' }), ctx);
     expect(inside.reasons.some((r) => r.endsWith('called it'))).toBe(false);
+  });
+
+  it('ignores the synthetic organizer Google mints for a subscribed calendar', () => {
+    // A subscribed ICS feed, a shared group calendar and a bookable room all
+    // organize themselves. Nobody called the meeting, and the id is an internal
+    // identifier the owner should never be shown.
+    for (const organizer of [
+      'sjp0f5m7cp05qdr1ls2c1j4v1na0uvl1@import.calendar.google.com',
+      'abc123@group.calendar.google.com',
+      'room-4@resource.calendar.google.com',
+    ]) {
+      const scored = scoreCalendarEvent(event({ organizer }), ctx);
+      expect(scored.reasons.some((r) => r.endsWith('called it'))).toBe(false);
+      expect(scored.reasons.join(' ')).not.toContain('calendar.google.com');
+    }
   });
 
   it('scores an all-day entry and a crowded meeting', () => {
