@@ -12,10 +12,15 @@ import {
 import { type Cue, stripCueTags } from '../../chat-cues.js';
 import { isForwardedIngest } from '../../email-provenance.js';
 import type { PendingFinal, TaskState } from '../../events.js';
-import { generateEvidenceCard, persistGeneratedCard } from '../../generative-card.js';
+import {
+  type GeneratedCardPayload,
+  generateEvidenceCard,
+  persistGeneratedCard,
+} from '../../generative-card.js';
 import type { RecallSource } from '../../memory/recall.js';
 import { recordSkillOutcome } from '../../memory/skills.js';
 import { type ArtifactIntent, artifactExecutionFailure } from '../artifact-intent.js';
+import { CARD_NOT_BUILT, requestedCardIntent } from '../card-intent.js';
 import { isGoalWorkEvidence } from '../goal-evidence.js';
 import {
   checkpointTask,
@@ -372,7 +377,6 @@ export async function stageModelFinalResponse(
       reasons: checked.groundingFallback,
     });
   }
-  const text = checked.text;
   // Cards are a view of the same ledger that the response contract used; prose
   // is deliberately not parsed here, so a fluent answer cannot invent a card.
   const specializedCards = responseCardsForFinal({
@@ -381,9 +385,19 @@ export async function stageModelFinalResponse(
     ambient: readContext?.groundingCorpus,
     requestText: latestUserText(window),
   });
-  if (specializedCards.length > 0) {
-    pending.responseCards = specializedCards;
-  } else if (!checked.blocked && loadConfig().GENERATIVE_CARDS_ENABLED) {
+  // An explicit "make that into a card" must reach the grounded compiler even
+  // when a handwritten card already matched this turn. Without this, the
+  // resource card for a docs.create — or the email-results card for the very
+  // lookup the owner is pointing at — silently swallowed the request, which is
+  // how an asked-for card came back as a Google Doc. Unrequested turns keep the
+  // original precedence: one handwritten card, or the generative fallback.
+  const cardRequested = requestedCardIntent(latestUserText(window) ?? '');
+  let generatedCard: GeneratedCardPayload | undefined;
+  if (
+    (cardRequested || specializedCards.length === 0) &&
+    !checked.blocked &&
+    loadConfig().GENERATIVE_CARDS_ENABLED
+  ) {
     const sourceText = [
       latestUserText(window) ?? task.title ?? '',
       window
@@ -399,9 +413,10 @@ export async function stageModelFinalResponse(
       sourceText,
       evidence,
       sourceKey: task.externalEventId ?? task.id,
+      explicitRequest: cardRequested,
     });
     if (generated) {
-      const durable = await persistGeneratedCard(deps.db, {
+      generatedCard = await persistGeneratedCard(deps.db, {
         agentId: task.agentId,
         conversationId: task.conversationId,
         payload: generated,
@@ -409,9 +424,16 @@ export async function stageModelFinalResponse(
         console.error('generated card persistence failed', error);
         return generated;
       });
-      pending.responseCards = [durable];
     }
   }
+  const cards = [...(generatedCard ? [generatedCard] : []), ...specializedCards];
+  if (cards.length > 0) pending.responseCards = cards;
+  // A requested card that could not be grounded must say so. Staying quiet let
+  // the prose claim a card the Cards page never received.
+  const text =
+    cardRequested && !generatedCard && !checked.blocked
+      ? `${checked.text.trimEnd()}\n\n${CARD_NOT_BUILT}`
+      : checked.text;
   // Stamp the contract verdict on pending; recordQualitySignals reads it from
   // the single funnel in finalizePendingResponse, so every terminal path — not
   // just this prose-model one — persists its verdict and loop-health counters.

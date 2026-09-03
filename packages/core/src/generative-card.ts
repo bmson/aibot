@@ -143,14 +143,38 @@ export function validateGroundedCard(
   return card;
 }
 
-function evidenceText(evidence: ActionEvidence[], sourceText: string): string {
-  const current = evidence
-    .filter((row) => row.status === 'succeeded' && row.fromCurrentTask !== false)
+function evidenceText(
+  evidence: ActionEvidence[],
+  sourceText: string,
+  includePrior = false,
+): string {
+  const succeeded = evidence.filter((row) => row.status === 'succeeded');
+  const current = succeeded
+    .filter((row) => row.fromCurrentTask !== false)
     .map((row, index) => `TOOL_${index + 1} ${row.toolName}\n${JSON.stringify(row.result)}`);
-  return [`SOURCE_MESSAGE\n${sourceText}`, ...current].join('\n\n').slice(0, 24_000);
+  // "Make THAT into a card" always points back at an earlier turn's results, so
+  // without the prior scope every fact fails the verbatim grounding check below
+  // and the compiler returns null on the one request that was explicit. Prior
+  // rows lead so they survive the corpus truncation.
+  const prior = includePrior
+    ? succeeded
+        .filter((row) => row.fromCurrentTask === false)
+        .map(
+          (row, index) => `PRIOR_TOOL_${index + 1} ${row.toolName}\n${JSON.stringify(row.result)}`,
+        )
+    : [];
+  return [`SOURCE_MESSAGE\n${sourceText}`, ...prior, ...current].join('\n\n').slice(0, 24_000);
 }
 
-function worthTrying(sourceText: string, evidence: ActionEvidence[]): boolean {
+function worthTrying(
+  sourceText: string,
+  evidence: ActionEvidence[],
+  explicitRequest = false,
+): boolean {
+  // The keyword sniff exists only to avoid a model call on turns nobody asked
+  // about. The owner asking for a card is reason enough on its own — "make that
+  // into a card for me" carries none of these words.
+  if (explicitRequest) return true;
   if (evidence.some((row) => row.status === 'succeeded' && row.fromCurrentTask !== false))
     return true;
   return /\b(ticket|boarding|flight|gate|score|reservation|booking|delivery|package|pass|receipt|appointment|concert|movie|showtime|fixture|itinerary)\b/i.test(
@@ -164,9 +188,12 @@ export async function generateEvidenceCard(input: {
   sourceText: string;
   evidence: ActionEvidence[];
   sourceKey?: string;
+  /** The owner asked for a card in so many words; widen the corpus and always try. */
+  explicitRequest?: boolean;
 }): Promise<GeneratedCardPayload | null> {
-  if (!worthTrying(input.sourceText, input.evidence)) return null;
-  const corpus = evidenceText(input.evidence, input.sourceText);
+  const explicitRequest = input.explicitRequest ?? false;
+  if (!worthTrying(input.sourceText, input.evidence, explicitRequest)) return null;
+  const corpus = evidenceText(input.evidence, input.sourceText, explicitRequest);
   try {
     const result = await input.router.object('rewrite', {
       taskId: input.taskId,
