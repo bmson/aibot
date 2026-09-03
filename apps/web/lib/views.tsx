@@ -181,6 +181,21 @@ export function actionLabel(toolName: string): string {
   );
 }
 
+/**
+ * Past tense for the step trail inside an answer card.
+ *
+ * Same vocabulary as the task log, different fallback: `actionLabel` spells an
+ * unnamed tool out as its dotted name ("web fetch"), which reads fine in a log
+ * of calls but is a tool identifier sitting in the middle of an answer. Here an
+ * unnamed tool is named by what it touched instead.
+ */
+export function stepActionLabel(toolName: string): string {
+  const known = modulePastLabels.get(toolName) ?? platformToolLabels[toolName]?.past;
+  if (known) return known;
+  const source = toolName.split('.')[0] ?? toolName;
+  return `Checked ${source.replaceAll('_', ' ')}`;
+}
+
 const trustLabels: Record<string, string> = {
   owner: 'You',
   assistant: 'Assistant',

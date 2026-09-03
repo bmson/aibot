@@ -39,6 +39,8 @@ import Image from 'next/image';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { focusRing } from '@/lib/ui';
+import { CardSteps, cardStepsOf } from './card-steps';
+import { SensitiveValue } from './sensitive-value';
 
 // Cards fill the transcript column, matching the native chat surface. The
 // column itself owns the readable desktop measure; a second, narrower card cap
@@ -741,11 +743,6 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
   const Icon = generatedIcons[str(spec.icon) as keyof typeof generatedIcons] ?? Sparkles;
   const fact = (id: unknown) => facts.get(str(id));
   const value = (id: unknown) => str(fact(id)?.value);
-  const visibleValue = (id: unknown) => {
-    const item = fact(id);
-    if (!item) return '';
-    return item.sensitive === true && !revealed.has(str(item.id)) ? '••••••••' : str(item.value);
-  };
   const toggleReveal = (id: string) =>
     setRevealed((current) => {
       const next = new Set(current);
@@ -753,6 +750,27 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
       else next.add(id);
       return next;
     });
+  /**
+   * A fact as the card shows it. A sensitive one is a real button that masks
+   * and unmasks itself — it used to render as bullets with no way to read it
+   * except an optional `reveal_sensitive` action the compiler often left off,
+   * so the number the card existed for was simply not there.
+   */
+  const shownValue = (id: unknown, className?: string) => {
+    const item = fact(id);
+    if (!item) return null;
+    const text = str(item.value);
+    if (item.sensitive !== true) return text;
+    return (
+      <SensitiveValue
+        value={text}
+        label={str(item.label)}
+        revealed={revealed.has(str(item.id))}
+        onToggle={() => toggleReveal(str(item.id))}
+        className={className}
+      />
+    );
+  };
 
   return (
     <section
@@ -789,10 +807,10 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
               return (
                 <div key={blockKey} className="border-y border-edge/60 py-3">
                   <p className="text-xl font-semibold tracking-[-0.025em] text-strong">
-                    {visibleValue(block.titleFact)}
+                    {shownValue(block.titleFact, 'text-xl font-semibold tracking-[-0.025em]')}
                   </p>
                   {value(block.subtitleFact) ? (
-                    <p className="mt-1 text-sm text-muted">{visibleValue(block.subtitleFact)}</p>
+                    <p className="mt-1 text-sm text-muted">{shownValue(block.subtitleFact)}</p>
                   ) : null}
                 </div>
               );
@@ -817,7 +835,7 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
                           {str(item.label) || 'Detail'}
                         </dt>
                         <dd className="mt-0.5 break-words text-sm font-medium text-strong">
-                          {visibleValue(item.id)}
+                          {shownValue(item.id, 'text-sm font-medium')}
                         </dd>
                       </div>
                     );
@@ -832,16 +850,16 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
                   className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-xl border border-edge/60 bg-raised/65 p-3 text-center"
                 >
                   <div>
-                    <p className="text-xs text-muted">{visibleValue(block.leftLabelFact)}</p>
+                    <p className="text-xs text-muted">{shownValue(block.leftLabelFact)}</p>
                     <p className="mt-1 font-mono text-2xl font-semibold text-strong">
-                      {visibleValue(block.leftValueFact)}
+                      {shownValue(block.leftValueFact, 'text-2xl font-semibold')}
                     </p>
                   </div>
                   <span className="text-xs text-muted">—</span>
                   <div>
-                    <p className="text-xs text-muted">{visibleValue(block.rightLabelFact)}</p>
+                    <p className="text-xs text-muted">{shownValue(block.rightLabelFact)}</p>
                     <p className="mt-1 font-mono text-2xl font-semibold text-strong">
-                      {visibleValue(block.rightValueFact)}
+                      {shownValue(block.rightValueFact, 'text-2xl font-semibold')}
                     </p>
                   </div>
                 </div>
@@ -850,19 +868,26 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
             if (type === 'code') {
               const item = fact(block.valueFact);
               if (!item) return null;
-              const shown = revealed.has(str(item.id)) || item.sensitive !== true;
+              const sensitive = item.sensitive === true;
+              const shown = revealed.has(str(item.id)) || !sensitive;
+              const name = str(item.label).toLowerCase() || 'code';
               return (
                 <button
                   key={blockKey}
                   type="button"
                   onClick={() => toggleReveal(str(item.id))}
+                  aria-pressed={sensitive ? shown : undefined}
+                  aria-label={sensitive ? `${shown ? 'Hide' : 'Show'} ${name}` : undefined}
                   className={`rounded-xl border border-dashed border-edge bg-sunken/45 px-4 py-3 text-left ${focusRing}`}
                 >
                   <span className="block font-mono text-[10px] tracking-[0.12em] text-muted uppercase">
                     {shown ? str(block.format) : 'Tap to reveal'}
                   </span>
+                  {/* One asterisk per character, in the face the value itself
+                      uses, so revealing rewrites the line instead of resizing
+                      it. */}
                   <span className="mt-1 block break-all font-mono text-sm font-semibold tracking-[0.08em] text-strong">
-                    {shown ? str(item.value) : '•••• •••• ••••'}
+                    {shown ? str(item.value) : '*'.repeat(str(item.value).length)}
                   </span>
                 </button>
               );
@@ -870,7 +895,7 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
             if (type === 'note')
               return (
                 <p key={blockKey} className="text-sm leading-6 text-muted">
-                  {visibleValue(block.factId)}
+                  {shownValue(block.factId)}
                 </p>
               );
             if (type === 'image') {
@@ -929,6 +954,10 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
             })}
           </div>
         ) : null}
+        {/* Last element in the card, after the actions: the answer first, then
+            the affordances that act on it, then — for whoever wants it — where
+            it came from. */}
+        <CardSteps steps={cardStepsOf(data.steps)} />
       </div>
     </section>
   );

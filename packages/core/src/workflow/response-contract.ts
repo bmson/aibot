@@ -18,6 +18,12 @@ export interface ActionEvidence {
    * Absent means "this task" so existing callers keep the strict behaviour.
    */
   fromCurrentTask?: boolean;
+  /**
+   * The call's position in its task's step loop. The contract never reads it;
+   * it is here so a caller that selects the ledger for the contract can also
+   * put the rows back in execution order (see card-steps.ts).
+   */
+  step?: number;
 }
 
 type ActionKind =
