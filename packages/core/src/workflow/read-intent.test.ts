@@ -122,6 +122,52 @@ describe('detectPersonalReadRequest', () => {
     });
   });
 
+  // The reported miss: the owner asked whether a hotel email had arrived and got
+  // "I don't see any emails in your inbox" from a turn that ran no tools. Mail
+  // ARRIVES, so a receipt question carries no read verb for READ_OR_QUESTION to
+  // find, and the request never reached gmail.search.
+  it('routes receipt-shaped email questions, which name no read verb', () => {
+    expect(
+      detectPersonalReadRequest(turn('Have I gotten an email about the hotel this weekend?')),
+    ).toMatchObject({
+      kind: 'email',
+      firstToolName: 'gmail.search',
+      // "this weekend" is a date filter, never a search term: Gmail ANDs terms,
+      // and no travel confirmation contains the word "weekend".
+      mailQuery: 'hotel newer_than:14d',
+    });
+    expect(detectPersonalReadRequest(turn('Any email about my hotel booking?'))).toMatchObject({
+      kind: 'email',
+      mailQuery: 'hotel',
+    });
+    expect(detectPersonalReadRequest(turn('Has the invoice email arrived?'))).toMatchObject({
+      kind: 'email',
+      mailQuery: 'invoice',
+    });
+  });
+
+  it('reads a terse challenge that names its own sender', () => {
+    expect(
+      detectPersonalReadRequest(
+        turn(
+          'Nothing from tripit?',
+          "I don't see any emails in your inbox about a hotel this weekend.",
+        ),
+      ),
+    ).toMatchObject({ kind: 'email', mailQuery: 'tripit', verification: true });
+  });
+
+  it('does not mistake an acknowledgement or idle chat for a receipt question', () => {
+    for (const text of [
+      'I got your email, thanks',
+      'any thoughts on the plan?',
+      'has that ever happened to you?',
+      'I read the email you drafted, looks good',
+    ]) {
+      expect(detectPersonalReadRequest(turn(text)), text).toBeNull();
+    }
+  });
+
   it('keeps generic inbox and importance requests broad but explicit', () => {
     expect(detectPersonalReadRequest(turn("What's in my inbox?"))).toMatchObject({
       kind: 'email',

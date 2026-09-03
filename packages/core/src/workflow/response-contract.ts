@@ -94,9 +94,17 @@ function completedActionClaim(
   const status = `(?:${statuses})`;
   const article = String.raw`(?:a|an|the|your|all)?\s*`;
 
+  // A terse first-person recap drops the pronoun ("Sent the email", "…, and sent
+  // the client an email"), so the verb may OPEN a clause. It must not match
+  // mid-clause: there the subject is almost always somebody else — "TripIt sent
+  // you an email", "Hotels.com emailed your confirmation" — and reporting what a
+  // sender did is not a claim that the assistant did it. That false positive
+  // threw away correct answers to ordinary "did I get mail about X" questions.
+  const clauseStart = String.raw`(?:(?:^|\n)\s*(?:[-*•]\s*)?|[.!?;:—]\s*|,\s*(?:(?:and|then|also|but)\s+)?|\b(?:and|then|also|but)\s+)`;
+  const leadIn = String.raw`(?:(?:just|already|now|successfully|then)\s+)*`;
   const actionBeforeObject = new RegExp(
-    String.raw`\b${action}\b[^.\n]{0,44}\b${article}${object}\b`,
-    'i',
+    String.raw`${clauseStart}${leadIn}${action}\b[^.\n]{0,44}\b${article}${object}\b`,
+    'im',
   );
   const firstPersonAction = new RegExp(
     String.raw`${FIRST_PERSON_PREFIX}(?!(?:not|never)\b)${action}\b[^.\n]{0,80}\b${object}\b`,
@@ -154,10 +162,28 @@ const memoryClaim =
 // Negative-result narration of a read: "found no flights on your calendar",
 // "nothing in your inbox", "your calendar is clear". A model that never ran a
 // read tool asserting emptiness is the same fabrication as a fake "I checked".
-const emptyCalendarClaim =
-  /\b(?:no|none|nothing|zero)\b[^.\n]{0,40}\b(?:on|in)\s+(?:your|the|my|either|any)\b[^.\n]{0,30}\b(?:calendar|schedule|agenda)\b|\byour (?:calendar|schedule) (?:is|looks|appears) (?:clear|empty|free|wide open)\b/i;
-const emptyInboxClaim =
-  /\b(?:no|none|nothing|zero)\b[^.\n]{0,40}\bin\s+(?:your|the|my)\b[^.\n]{0,30}\b(?:inbox|mailbox|e-?mail)\b|\byour inbox (?:is|looks|appears) (?:clear|empty)\b/i;
+//
+// NEGATED_ANY is the third arm, and in practice the common one: a model with no
+// tools reaches for "I don't see any emails in your inbox" far more readily than
+// for "nothing in your inbox". It needs its own arm because the negation sits on
+// the verb here rather than on the noun.
+const NEGATED_ANY = String.raw`\b(?:do(?:es)?n(?:'|’)?t|did\s?n(?:'|’)?t|can(?:'|’)?t|cannot|could\s?n(?:'|’)?t|won(?:'|’)?t|am\s+not|(?:'|’)m\s+not|is\s+not|isn(?:'|’)?t|not)\s+(?:seeing|see|find|finding|show(?:ing)?|have|having)\b[^.\n]{0,30}\bany(?:thing)?\b`;
+const emptyCalendarClaim = new RegExp(
+  [
+    String.raw`\b(?:no|none|nothing|zero)\b[^.\n]{0,40}\b(?:on|in)\s+(?:your|the|my|either|any)\b[^.\n]{0,30}\b(?:calendar|schedule|agenda)\b`,
+    String.raw`\byour (?:calendar|schedule) (?:is|looks|appears) (?:clear|empty|free|wide open)\b`,
+    String.raw`${NEGATED_ANY}[^.\n]{0,40}\b(?:calendar|schedule|agenda|events?|appointments?|meetings?)\b`,
+  ].join('|'),
+  'i',
+);
+const emptyInboxClaim = new RegExp(
+  [
+    String.raw`\b(?:no|none|nothing|zero)\b[^.\n]{0,40}\bin\s+(?:your|the|my)\b[^.\n]{0,30}\b(?:inbox|mailbox|e-?mail)\b`,
+    String.raw`\byour inbox (?:is|looks|appears) (?:clear|empty)\b`,
+    String.raw`${NEGATED_ANY}[^.\n]{0,40}\b(?:inbox|mailbox|e-?mails?|mail|messages?)\b`,
+  ].join('|'),
+  'i',
+);
 const INBOX_WRITE_ACTIONS =
   'archived|unarchived|flagged|unflagged|starred|unstarred|labeled|labelled|marked|moved';
 const INBOX_WRITE_OBJECTS = 'e-?mails?|messages?|threads?|inbox|it|them';
@@ -451,7 +477,10 @@ function claimedKinds(text: string): ActionKind[] {
       text,
       OUTBOUND_OBJECTS,
       'sent|delivered|contacted|emailed|texted|messaged|called|replied|forwarded|reached out to|notified|pinged',
-      'sent|delivered|contacted|emailed|texted|messaged|called|replied|forwarded|reached out to|notified|pinged|confirmed',
+      // "confirmed" is not a send. It is what booking and travel mail says about
+      // itself ("your reservation is confirmed"), and the action verbs above
+      // already cover every way an outbound message actually completes.
+      'sent|delivered|contacted|emailed|texted|messaged|called|replied|forwarded|reached out to|notified|pinged',
     ) ||
     firstPersonCompletedAction(
       text,

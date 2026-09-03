@@ -41,6 +41,15 @@ describe('looksLikeActionRequest', () => {
       'what do I have planned this weekend',
       'What is happening on Monday?',
       'When is my Clay interview?',
+      // Receipt-shaped questions: mail arrives, it is not "checked". These name
+      // no possessive surface, and some name no mail word at all — the reported
+      // miss answered one of them from memory on the tool-less path.
+      'Have I gotten an email about the hotel this weekend?',
+      'Any email about my hotel booking?',
+      'anything from the landlord?',
+      'did Sarah ever get back to me',
+      'Has the invoice arrived?',
+      'has Clay emailed me yet?',
     ]) {
       expect(looksLikeActionRequest(t), `should be an action: ${t}`).toBe(true);
     }
@@ -64,6 +73,8 @@ describe('looksLikeActionRequest', () => {
       'show me how embeddings work',
       "what's on your mind?",
       'I read the email you drafted, looks good',
+      'has that ever happened to you?',
+      'I got your email, thanks',
       '',
       '   ',
     ]) {
