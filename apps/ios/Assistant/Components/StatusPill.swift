@@ -22,7 +22,7 @@ struct StatusPill: View {
         .font(.caption2.weight(.semibold))
         .foregroundStyle(color)
         .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.vertical, 7)
         .background(color.opacity(0.12), in: Capsule())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Status: \(label)")

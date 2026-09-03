@@ -701,7 +701,7 @@ private struct MCPConnectionsView: View {
                                 .font(.caption2.monospaced().weight(.medium))
                                 .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                                 .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
+                                .padding(.vertical, 7)
                                 .background(AssistantTheme.accent(for: colorScheme).opacity(0.1), in: Capsule())
                         }
                         if connection.tools.count > 5 {
@@ -709,7 +709,7 @@ private struct MCPConnectionsView: View {
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                                 .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
+                                .padding(.vertical, 7)
                                 .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
                         }
                     }
@@ -816,7 +816,7 @@ private struct MCPConnectionsView: View {
             .font(.caption2.weight(.semibold))
             .foregroundStyle(statusColor(connection))
             .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .padding(.vertical, 7)
             .background(statusColor(connection).opacity(0.11), in: Capsule())
     }
 

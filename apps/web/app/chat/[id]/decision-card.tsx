@@ -84,7 +84,7 @@ export function DecisionCard({
     <section
       data-decision-card="true"
       data-tone={tone}
-      className={`paper relative ${CARD_WIDTH} overflow-hidden rounded-2xl border bg-raised ${styles.edge}`}
+      className={`paper relative ${CARD_WIDTH} overflow-hidden rounded-[var(--radius-card)] border bg-raised ${styles.edge}`}
     >
       <span
         className={`absolute top-4 bottom-4 left-0 w-0.5 rounded-full ${styles.rail}`}
@@ -162,7 +162,9 @@ export function DecisionReceipt({
 /** Where settled receipts live once a card has nothing left to ask. */
 export function DecisionReceipts({ children }: { children: ReactNode }) {
   return (
-    <div className={`paper ${CARD_WIDTH} rounded-xl border border-edge/50 bg-raised px-4 py-2`}>
+    <div
+      className={`paper ${CARD_WIDTH} rounded-[var(--radius-card)] border border-edge/50 bg-raised px-4 py-2`}
+    >
       {children}
     </div>
   );

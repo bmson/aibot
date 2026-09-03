@@ -160,7 +160,7 @@ function CardShell({
   return (
     <section
       data-response-card="true"
-      className={`paper relative ${CARD_WIDTH} overflow-hidden rounded-2xl border border-edge/70 bg-raised`}
+      className={`paper relative ${CARD_WIDTH} overflow-hidden rounded-[var(--radius-card)] border border-edge/70 bg-raised`}
     >
       <header className="flex items-center gap-2 border-b border-edge/60 bg-sunken/35 px-4 py-2.5 sm:px-5">
         <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
@@ -758,7 +758,7 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
     <section
       aria-label={str(spec.accessibilityLabel) || str(spec.title)}
       data-response-card="true"
-      className="paper relative min-w-0 w-full overflow-hidden rounded-[1.4rem] border border-edge/70 bg-raised"
+      className="paper relative min-w-0 w-full overflow-hidden rounded-[var(--radius-card)] border border-edge/70 bg-raised"
     >
       <div
         className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${accentClass[str(spec.accent)] ?? accentClass.mint}`}
@@ -1123,7 +1123,7 @@ export function ResponseCards({
         />
       ))}
       {overflow.length > 0 ? (
-        <details className="paper rounded-2xl border border-edge/70 bg-raised px-4 py-3">
+        <details className="paper rounded-[var(--radius-card)] border border-edge/70 bg-raised px-4 py-3">
           <summary className="disclosure flex cursor-pointer select-none items-center gap-2 text-xs font-medium text-muted">
             {overflow.length} more {overflow.length === 1 ? 'result' : 'results'}
           </summary>
