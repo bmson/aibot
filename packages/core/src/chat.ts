@@ -174,17 +174,17 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * followed by that morning's reminder and calendar alert read back to them,
  * because a delivered notice sits in the window looking exactly like the
  * assistant's own last turn.
+ * v36: name the CARD surface in the artifact rules. The rules enumerated only
+ * docs/sheets/slides, so "make that into a card" — a creation request the
+ * prompt forbids leaving unfulfilled — was answered with a Google Doc.
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 35;
+export const PROMPT_VERSION = 36;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is
 // byte-stable across steps and provider prompt caching can hold it.
-// v35: name the CARD surface in the artifact rules. The rules enumerated only
-// docs/sheets/slides, so "make that into a card" — a creation request the
-// prompt forbids leaving unfulfilled — was answered with a Google Doc.
 
 export function buildSystemPrompt(
   agent: AgentRow,
