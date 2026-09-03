@@ -1747,3 +1747,157 @@ final class APIModelsTests: XCTestCase {
         )
     }
 }
+
+/// `CardText` turns raw mail headers into display strings. Every case here is a
+/// shape Gmail actually sends, so the assertions are about real input, not
+/// invented input.
+final class CardTextTests: XCTestCase {
+    private let reference = Date(timeIntervalSince1970: 1_788_401_284) // 2026-09-02T19:08:04-07:00
+
+    // MARK: Timestamps
+
+    func testParsesGmailDateHeaders() {
+        // Every spelling below is the same instant, so they all land on it.
+        let expected = reference.timeIntervalSince1970
+        for header in [
+            "Wed, 2 Sep 2026 19:08:04 -0700",
+            "Wed, 02 Sep 2026 19:08:04 -0700",
+            "Wed, 2 Sep 2026 19:08:04 -0700 (PDT)",
+            "2 Sep 2026 19:08:04 -0700",
+            "Wed, 2 Sep 26 19:08:04 -0700",
+        ] {
+            let date = CardText.timestamp(header)
+            XCTAssertNotNil(date, "failed to parse \(header)")
+            XCTAssertEqual(date?.timeIntervalSince1970, expected, "wrong instant for \(header)")
+        }
+    }
+
+    func testParsesGmailHeadersWithOptionalSecondsAndAlphabeticZones() {
+        XCTAssertEqual(
+            CardText.timestamp("Wed, 2 Sep 2026 19:08 -0700")?.timeIntervalSince1970,
+            reference.timeIntervalSince1970 - 4
+        )
+        XCTAssertEqual(
+            CardText.timestamp("Wed, 2 Sep 2026 19:08:04 GMT")?.timeIntervalSince1970,
+            reference.timeIntervalSince1970 - 7 * 3600
+        )
+    }
+
+    func testISO8601StillWins() {
+        XCTAssertEqual(
+            CardText.timestamp("2026-09-03T02:08:04Z")?.timeIntervalSince1970,
+            reference.timeIntervalSince1970
+        )
+        XCTAssertEqual(
+            CardText.timestamp("2026-09-03T02:08:04.250Z")?.timeIntervalSince1970,
+            reference.timeIntervalSince1970 + 0.25
+        )
+    }
+
+    func testRejectsWhatIsNotADate() {
+        XCTAssertNil(CardText.timestamp("today"))
+        XCTAssertNil(CardText.timestamp(""))
+        XCTAssertNil(CardText.timestamp("   "))
+        XCTAssertNil(CardText.timestamp("not a date"))
+    }
+
+    // MARK: Date labels
+
+    private var fixedCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles") ?? .gmt
+        return calendar
+    }()
+
+    private func label(_ value: String, now: Date) -> String? {
+        CardText.compactDateLabel(
+            value,
+            now: now,
+            calendar: fixedCalendar,
+            locale: Locale(identifier: "en_US")
+        )
+    }
+
+    func testTodayIsATimeThisYearIsADayOlderEarnsItsYear() {
+        let sameDay = reference.addingTimeInterval(3600)
+        XCTAssertEqual(label("Wed, 2 Sep 2026 19:08:04 -0700", now: sameDay), "7:08 PM")
+
+        let laterThatYear = reference.addingTimeInterval(60 * 24 * 3600)
+        XCTAssertEqual(label("Wed, 2 Sep 2026 19:08:04 -0700", now: laterThatYear), "Sep 2")
+
+        let nextYear = reference.addingTimeInterval(400 * 24 * 3600)
+        XCTAssertEqual(label("Wed, 2 Sep 2026 19:08:04 -0700", now: nextYear), "Sep 2, 2026")
+    }
+
+    /// The regression this whole change exists for: the row used to print the
+    /// raw header, which the single-line column then cut mid-second.
+    func testAGmailHeaderNeverRendersAsARawHeader() {
+        let stamp = label("Wed, 2 Sep 2026 19:08:04 -0700 (PDT)", now: reference.addingTimeInterval(400 * 24 * 3600))
+        XCTAssertEqual(stamp, "Sep 2, 2026")
+        XCTAssertFalse(stamp?.contains(":0") ?? true)
+        XCTAssertFalse(stamp?.contains("-0700") ?? true)
+    }
+
+    func testShortUnparseableValuesPassThroughAndLongOnesAreDropped() {
+        XCTAssertEqual(label("today", now: reference), "today")
+        XCTAssertNil(label("", now: reference))
+        XCTAssertNil(label("an unparseable forty character date value", now: reference))
+    }
+
+    // MARK: Sender names
+
+    func testSenderNameKeepsTheHumanAndDropsTheMachine() {
+        let cases: [(String, String)] = [
+            ("\"Support at TripIt\" <support@tripit.com>", "Support at TripIt"),
+            ("Support at TripIt <support@tripit.com>", "Support at TripIt"),
+            ("<support@tripit.com>", "support@tripit.com"),
+            ("support@tripit.com", "support@tripit.com"),
+            ("\"support@tripit.com\" <support@tripit.com>", "support@tripit.com"),
+            ("\"Doe, Jane\" <jane@example.com>", "Doe, Jane"),
+            ("\"Jane \\\"JD\\\" Doe\" <jane@example.com>", "Jane \"JD\" Doe"),
+            ("", ""),
+            ("   ", ""),
+        ]
+        for (input, expected) in cases {
+            XCTAssertEqual(CardText.senderName(input), expected, "input: \(input)")
+        }
+    }
+
+    func testSenderNameCountsTheRestOfTheList() {
+        XCTAssertEqual(
+            CardText.senderName("\"Doe, Jane\" <jane@example.com>, bob@example.com"),
+            "Doe, Jane +1"
+        )
+        XCTAssertEqual(
+            CardText.senderName("a@example.com, b@example.com, c@example.com"),
+            "a@example.com +2"
+        )
+    }
+
+    /// Deliberate: a half-decoded encoded-word reads as our bug, the address
+    /// never does.
+    func testEncodedWordFallsBackToTheAddress() {
+        XCTAssertEqual(
+            CardText.senderName("=?UTF-8?B?U3VwcG9ydA==?= <support@tripit.com>"),
+            "support@tripit.com"
+        )
+    }
+
+    // MARK: Links
+
+    func testGmailURLAddressesTheMessageInTheRightAccount() {
+        XCTAssertEqual(
+            CardText.gmailURL(id: "18f0a2b3c4d5e6f7", mailbox: "assistant@example.com")?.absoluteString,
+            "https://mail.google.com/mail/?authuser=assistant@example.com#all/18f0a2b3c4d5e6f7"
+        )
+        XCTAssertEqual(
+            CardText.gmailURL(id: "18f0a2b3c4d5e6f7", mailbox: "")?.absoluteString,
+            "https://mail.google.com/mail/u/0/#all/18f0a2b3c4d5e6f7"
+        )
+    }
+
+    func testGmailURLRefusesASynthesisedID() {
+        XCTAssertNil(CardText.gmailURL(id: "email-0-0", mailbox: "assistant@example.com"))
+        XCTAssertNil(CardText.gmailURL(id: "", mailbox: "assistant@example.com"))
+    }
+}
