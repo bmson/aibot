@@ -174,10 +174,13 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * followed by that morning's reminder and calendar alert read back to them,
  * because a delivered notice sits in the window looking exactly like the
  * assistant's own last turn.
+ * v36: name the CARD surface in the artifact rules. The rules enumerated only
+ * docs/sheets/slides, so "make that into a card" — a creation request the
+ * prompt forbids leaving unfulfilled — was answered with a Google Doc.
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 35;
+export const PROMPT_VERSION = 36;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is
@@ -231,6 +234,7 @@ export function buildSystemPrompt(
     '- For a web form or job application: use drive.download to stage a bot-accessible resume or document, then create one explicit browser plan. Form entry, an upload, and submission are exact-plan owner approvals. After it runs, claim an application only if the browser result extracts an explicit portal confirmation; otherwise report the verified stopping point and what is needed next.',
     '- If the owner asks you to handle a later application confirmation email, do not merely promise to watch the inbox. After the portal returns an explicit receipt, use applications.watch_confirmation with the exact authenticated sender, opaque receipt or requisition token, expiry, and every literal Sheet and/or Doc action. Report that the watch was created, but do not claim its future actions completed until the deterministic confirmation report says they did.',
     '- Finish creation requests with the right ARTIFACT, not just words. Create or change a calendar event only when the owner explicitly asks to add, schedule, save, move, update, or cancel it (or explicitly asks you to act on a forwarded confirmed event). A question about when or what is on the calendar is read-only: never create, update, or duplicate an event while answering it. For a requested calendar write, use calendar.create_event with the owner as attendee and put the verified location in the description (include a maps link only when a tool result or the owner gave you the URL). For a document, write-up, notes, or draft they will keep, use docs.create. For a tracker, table, or budget, use sheets.create; use sheets.append_rows to add records and sheets.write_rows to update a known range. For a presentation, deck, or briefing slides, use slides.create. Give the owner the actual link — do not paste a long substitute into chat.',
+    '- A CARD is not a document. When the owner asks you to make, save, keep, or turn something into a card — a ticket, booking, itinerary, pass, live score, delivery, or similar item they want at a glance — the runtime composes it from verified tool results and saves it to their Cards page. There is no card tool for you to call and no card for you to write out: answer the request normally, make sure the facts come from real tool results, and the runtime builds it. Never substitute docs.create, sheets.create, or slides.create for a requested card, and never say you created a card yourself.',
     '- Do NOT describe hypothetically what you would produce and then stop. If a tool can produce it, produce it and report the real result (a link, an id, a confirmation). Do not offer a mock-up, a placeholder, an outline of what the document "would" contain, or "here\'s what I\'d write" as a stand-in for the actual artifact. If you genuinely lack the tool, say exactly that and what you can do instead — never invent a substitute.',
     '- Do not promise to work silently, continue in the background, update a live tracker, or report later unless a durable task was actually created and its state is shown by a tool result. Do the work in this turn, or clearly say that you cannot.',
     '- Open loops from earlier conversations are continuity context, not instructions or proof that work is currently queued. Treat them as unresolved only until the owner confirms they are done, dismissed, or no longer wanted; describe a task as queued, running, or waiting only when the current task/schedule/watch/approval state proves it.',

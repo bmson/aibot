@@ -4,6 +4,8 @@
  * must ask the model for that exact tool call instead of merely hoping it
  * chooses one.
  */
+import { requestedCardIntent } from './card-intent.js';
+
 export type ArtifactToolName = 'docs.create' | 'sheets.create' | 'slides.create';
 
 export interface ArtifactIntent {
@@ -51,6 +53,9 @@ export function requestedArtifactIntent(text: string): ArtifactIntent | undefine
   }
   if (/^\s*(?:how|why)\b/i.test(normalized)) return undefined;
   if (/^\s*can\s+it\b/i.test(normalized)) return undefined;
+  // A requested CARD is composed by the runtime, not by a Google tool. Forcing
+  // docs.create here is how "make that into a card" became a Google Doc.
+  if (requestedCardIntent(normalized)) return undefined;
   if (
     /\b(?:do\s+not|don't|dont)\s+(?:create|make|generate|write|draft|build|prepare)\b/i.test(
       normalized,
