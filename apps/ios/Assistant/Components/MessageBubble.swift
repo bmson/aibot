@@ -4152,7 +4152,7 @@ enum CardText {
         if let date = iso8601.date(from: trimmed) ?? iso8601Fractional.date(from: trimmed) {
             return date
         }
-        let header = strippingTrailingComment(trimmed)
+        let header = expandingTwoDigitYear(strippingTrailingComment(trimmed))
         for formatter in rfc5322Formatters {
             if let date = formatter.date(from: header) { return date }
         }
@@ -4169,6 +4169,20 @@ enum CardText {
         return String(value[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// RFC 5322 §4.3: an obsolete two-digit year 00–49 means 20xx, 50–99 means
+    /// 19xx. This has to happen before parsing rather than as a `yy` pattern,
+    /// because `DateFormatter` accepts a short year for `yyyy` when parsing: the
+    /// four-digit pattern matches `Wed, 2 Sep 26 …` first and reads it as the
+    /// year 26 AD, so a `yy` pattern further down the list is never reached.
+    private static func expandingTwoDigitYear(_ value: String) -> String {
+        // Two digits standing alone between the month and the time.
+        guard let match = value.range(
+            of: #"(?<=\s)\d{2}(?=\s+\d{1,2}:)"#,
+            options: .regularExpression
+        ), let year = Int(value[match]) else { return value }
+        return value.replacingCharacters(in: match, with: String(year < 50 ? 2000 + year : 1900 + year))
+    }
+
     private static let iso8601 = ISO8601DateFormatter()
 
     private static let iso8601Fractional: ISO8601DateFormatter = {
@@ -4182,9 +4196,9 @@ enum CardText {
     ///
     /// `d` also parses `02` and `HH` also parses `9`, so single- and two-digit
     /// days and hours need no separate patterns — only the genuinely different
-    /// grammars below do. Order is load-bearing: `Z` before `zzz`, because ICU's
-    /// `z` will opportunistically accept `-0700` and produce a worse parse, and
-    /// the obsolete two-digit year last so it never steals a four-digit one.
+    /// grammars below do, and a two-digit year is normalised away before these
+    /// are tried. Order is load-bearing: `Z` before `zzz`, because ICU's `z`
+    /// will opportunistically accept `-0700` and produce a worse parse.
     private static let rfc5322Formatters: [DateFormatter] = [
         "EEE, d MMM yyyy HH:mm:ss Z",
         "d MMM yyyy HH:mm:ss Z",
@@ -4194,8 +4208,6 @@ enum CardText {
         // Obsolete alphabetic zones still in the wild: `GMT`, `UT`, `PDT`.
         "EEE, d MMM yyyy HH:mm:ss zzz",
         "d MMM yyyy HH:mm:ss zzz",
-        "EEE, d MMM yy HH:mm:ss Z",
-        "d MMM yy HH:mm:ss Z",
     ].map(CardText.rfc5322Formatter(_:))
 
     private static func rfc5322Formatter(_ format: String) -> DateFormatter {

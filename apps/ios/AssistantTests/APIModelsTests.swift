@@ -1764,6 +1764,7 @@ final class CardTextTests: XCTestCase {
             "Wed, 02 Sep 2026 19:08:04 -0700",
             "Wed, 2 Sep 2026 19:08:04 -0700 (PDT)",
             "2 Sep 2026 19:08:04 -0700",
+            // RFC 5322's obsolete two-digit year: 26 is 2026, not the year 26.
             "Wed, 2 Sep 26 19:08:04 -0700",
         ] {
             let date = CardText.timestamp(header)
@@ -1810,12 +1811,18 @@ final class CardTextTests: XCTestCase {
     }()
 
     private func label(_ value: String, now: Date) -> String? {
-        CardText.compactDateLabel(
+        return CardText.compactDateLabel(
             value,
             now: now,
             calendar: fixedCalendar,
             locale: Locale(identifier: "en_US")
         )
+        // `Date.FormatStyle` separates the time from AM/PM with U+202F, a
+        // narrow no-break space. That is correct output and the card wants it;
+        // it just cannot be typed into an expectation below, so both sides of
+        // the comparison get ordinary spaces.
+        .map { $0.replacingOccurrences(of: "\u{202F}", with: " ")
+                 .replacingOccurrences(of: "\u{00A0}", with: " ") }
     }
 
     func testTodayIsATimeThisYearIsADayOlderEarnsItsYear() {
