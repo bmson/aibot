@@ -13,15 +13,24 @@ function routerReturning(outcome: unknown): ModelRouter {
 
 describe('bulkByHeaders', () => {
   it('recognises the standard bulk-mail headers', () => {
-    expect(bulkByHeaders(payload({ 'List-Unsubscribe': '<mailto:x@y.com>' }))).toBe(true);
     expect(bulkByHeaders(payload({ Precedence: 'bulk' }))).toBe(true);
     expect(bulkByHeaders(payload({ Precedence: 'LIST' }))).toBe(true);
     expect(bulkByHeaders(payload({ 'List-Id': '<news.example.com>' }))).toBe(true);
+    expect(bulkByHeaders(payload({ 'X-Campaign-Id': 'c-1' }))).toBe(true);
+    expect(
+      bulkByHeaders(
+        payload({ 'List-Id': '<news.example.com>', 'List-Unsubscribe': '<mailto:x@y.com>' }),
+      ),
+    ).toBe(true);
   });
 
   it('does not treat ordinary mail as bulk', () => {
     expect(bulkByHeaders(payload({ From: 'anna@example.com', Subject: 'Lunch?' }))).toBe(false);
     expect(bulkByHeaders(undefined)).toBe(false);
+  });
+
+  it('does not settle a lone List-Unsubscribe, which transactional senders also set', () => {
+    expect(bulkByHeaders(payload({ 'List-Unsubscribe': '<mailto:x@y.com>' }))).toBe(false);
   });
 });
 
@@ -32,7 +41,10 @@ describe('scoreEmailImportance', () => {
       from: 'news@example.com',
       subject: 'ONE DAY ONLY',
       body: 'buy things',
-      payload: payload({ 'List-Unsubscribe': '<mailto:u@example.com>' }),
+      payload: payload({
+        'List-Id': '<promos.example.com>',
+        'List-Unsubscribe': '<mailto:u@example.com>',
+      }),
       contentTrust: 'unknown',
       authenticated: true,
     });
@@ -40,6 +52,37 @@ describe('scoreEmailImportance', () => {
     expect(score.importance).toBe(1);
     expect(score.category).toBe('bulk');
     expect(router.object).not.toHaveBeenCalled();
+  });
+
+  // The reported miss: a TripIt itinerary for a hotel booking carries
+  // List-Unsubscribe and nothing else, and the header short-circuit scored it
+  // bulk/1 with no dates before any classifier read the body — so it never
+  // reached triage, the briefing, or memory extraction.
+  it('scores a travel confirmation whose only bulk signal is List-Unsubscribe', async () => {
+    const router = routerReturning({
+      ok: true,
+      object: {
+        category: 'travel',
+        importance: 4,
+        actionable: false,
+        cardCandidate: true,
+        dates: [{ iso: '2026-09-05', what: 'hotel check-in' }],
+        reason: 'hotel booking confirmation',
+      },
+    });
+    const score = await scoreEmailImportance(router, {
+      from: 'no-reply@tripit.com',
+      subject: 'Your TripIt itinerary for Fwd: Hotels.com travel confirmation - Sat, Sep 5',
+      body: 'Your itinerary is ready.',
+      payload: payload({ 'List-Unsubscribe': '<mailto:u@tripit.com>' }),
+      contentTrust: 'unknown',
+      authenticated: true,
+    });
+
+    expect(router.object).toHaveBeenCalled();
+    expect(score.category).toBe('travel');
+    expect(score.importance).toBe(4);
+    expect(score.dates).toHaveLength(1);
   });
 
   it('returns the model score for ordinary mail', async () => {

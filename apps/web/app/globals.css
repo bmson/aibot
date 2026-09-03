@@ -62,6 +62,11 @@
   --radius-shell: 1rem;
   --radius-shell-inset-6: 0.625rem;
   --radius-shell-inset-8: 0.5rem;
+  /* Every card is cut to the composer's corner. A card is an answer to what
+     was typed in that field, so the two read as one geometry instead of the
+     card sitting a step tighter than the input below it. Inner wells, rows,
+     and chips keep their smaller radii — they are nested, not cards. */
+  --radius-card: var(--radius-shell);
   --shadow-soft: 0 1px 2px rgb(23 32 34 / 0.055), 0 6px 18px rgb(23 32 34 / 0.045);
   --shadow-overlay: 0 2px 6px rgb(23 32 34 / 0.07), 0 12px 30px rgb(23 32 34 / 0.08);
   /* Native control chrome follows the theme: without color-scheme the browser

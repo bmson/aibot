@@ -169,6 +169,11 @@ function unresolvedDecisionIds(log: UIMessage[]): string[] {
 /** Poll cadence while a task is running, versus the open thread sitting idle. */
 const ACTIVE_POLL_MS = 2_500;
 const IDLE_POLL_MS = 12_000;
+/**
+ * A poll that has not answered in this long is not going to answer usefully —
+ * the next tick asks again from the same cursor anyway.
+ */
+const POLL_TIMEOUT_MS = 15_000;
 /** How long to keep claiming live progress for one turn before saying so. */
 const TURN_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -291,7 +296,12 @@ export function useChatPolling({
         if (cursorRef.current) query.set('cursor', cursorRef.current);
         const refreshIds = unresolvedDecisionIds(logRef.current);
         if (refreshIds.length > 0) query.set('refresh', refreshIds.join(','));
-        const res = await fetch(`/api/chat/status?${query.toString()}`);
+        // Bounded, because poll() awaits this before rescheduling: without a
+        // deadline one hung request stalls the whole loop for as long as the
+        // server is willing to hold it, and nothing throws to raise trouble.
+        const res = await fetch(`/api/chat/status?${query.toString()}`, {
+          signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
+        });
         // A dead session never recovers by polling — say so and stop asking.
         if (res.status === 401 || res.status === 403) {
           pollFailures = 0;

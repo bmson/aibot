@@ -89,11 +89,22 @@ const SYSTEM = [
  * These headers are sender-controlled, so a sender can forge them — but only to
  * make their OWN message score lower and stay quiet, which is not something an
  * attacker wants. Suppressing someone else's alert would mean adding headers to
- * someone else's mail, which this does not enable. The message is still stored
- * and searchable either way; only the interrupt is suppressed.
+ * someone else's mail, which this does not enable.
+ *
+ * `List-Unsubscribe` deliberately does NOT count on its own. Airlines, hotels,
+ * banks and ticketing platforms all stamp it on genuine transactional mail —
+ * a TripIt itinerary carries it — and treating it as conclusive scored exactly
+ * the confirmations carrying the owner's dates as bulk, at importance 1 with an
+ * empty `dates` array, without ever reading the body. Real list mail sets more
+ * than one of these, so corroboration costs nothing and buys back the class of
+ * message this pipeline exists for.
+ *
+ * Suppression only affects the interrupt and the local ingest ledger. It is not
+ * a search filter: `gmail.search` queries Gmail's own index and is unaffected
+ * either way. Note that the local store has no lexical index — recall over it is
+ * embedding-only — so "stored" is not the same as "findable by keyword".
  */
 export function bulkByHeaders(payload: GmailPayload | undefined): boolean {
-  if (gmailHeader(payload, 'List-Unsubscribe')) return true;
   const precedence = gmailHeader(payload, 'Precedence').trim().toLowerCase();
   if (precedence === 'bulk' || precedence === 'list' || precedence === 'junk') return true;
   if (gmailHeader(payload, 'List-Id')) return true;

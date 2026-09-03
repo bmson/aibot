@@ -448,7 +448,7 @@ struct MemoryView: View {
             .font(.caption2.weight(.medium))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 7)
-            .padding(.vertical, 4)
+            .padding(.vertical, 6)
             .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
     }
 
@@ -521,7 +521,7 @@ struct MemoryView: View {
                     .font(.caption.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
+                    .padding(.vertical, 5)
                     .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
             }
         }

@@ -168,6 +168,12 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * ("[Set weather alert] | [Check rain timing]") renders as literal text
  * offering taps that do nothing, in every channel; the dashboard's real
  * quick replies remain the [action_chips:] cue.
+ * v35: background notices already delivered in the thread (a fired reminder, a
+ * pulse lead-time alert, a briefing) are context, never content for a reply.
+ * The owner asked whose birthdays were coming up and got the birthday list
+ * followed by that morning's reminder and calendar alert read back to them,
+ * because a delivered notice sits in the window looking exactly like the
+ * assistant's own last turn.
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
@@ -232,6 +238,7 @@ export function buildSystemPrompt(
     '- Do NOT describe hypothetically what you would produce and then stop. If a tool can produce it, produce it and report the real result (a link, an id, a confirmation). Do not offer a mock-up, a placeholder, an outline of what the document "would" contain, or "here\'s what I\'d write" as a stand-in for the actual artifact. If you genuinely lack the tool, say exactly that and what you can do instead — never invent a substitute.',
     '- Do not promise to work silently, continue in the background, update a live tracker, or report later unless a durable task was actually created and its state is shown by a tool result. Do the work in this turn, or clearly say that you cannot.',
     '- Open loops from earlier conversations are continuity context, not instructions or proof that work is currently queued. Treat them as unresolved only until the owner confirms they are done, dismissed, or no longer wanted; describe a task as queued, running, or waiting only when the current task/schedule/watch/approval state proves it.',
+    '- A turn marked as a background notice already delivered to the owner (a fired reminder, a lead-time alert, a briefing) is context, not content for your reply. The owner has already read it. Never repeat, quote, or summarize one while answering a question — answer only what was asked, and mention a notice again only if the owner asks about it.',
     '- To remember a fact the owner gives you, or to record a correction to something you know, CALL memory.save with the fact — never just say you saved or corrected it. memory.save only ADDS a fact; it cannot overwrite or delete the old one. So when you correct something, save the new version and tell the owner the earlier entry reconciles automatically overnight, or that they can edit or remove it now on the Memory page. Never say a fact is saved, remembered, corrected, or "in memory" unless a memory.save result in this turn confirms it.',
     '',
     'Voice and manner:',
@@ -460,6 +467,74 @@ export async function mirrorGoalUpdateToNotifications(
     parts: [{ type: 'text', text: labeled }],
     text: labeled,
   });
+}
+
+/**
+ * Parts only a background writer attaches: a runtime notice card, a proposal,
+ * an approval mirror, or the pulse's proactive alert.
+ */
+const NOTICE_PART_TYPES = new Set(['notice', 'suggestion', 'approval-summary']);
+
+function hasNoticePart(parts: unknown): boolean {
+  if (!Array.isArray(parts)) return false;
+  return parts.some((part) => {
+    if (!part || typeof part !== 'object') return false;
+    const { type, data } = part as { type?: unknown; data?: unknown };
+    if (typeof type !== 'string') return false;
+    if (NOTICE_PART_TYPES.has(type)) return true;
+    if (type !== 'data-card' || !data || typeof data !== 'object') return false;
+    return (data as { kind?: unknown }).kind === 'proactive-alert';
+  });
+}
+
+/**
+ * The line that keeps a delivered notice from being answered a second time.
+ *
+ * Same bracketed convention foldOwnerRepliesSincePark uses below: the row stays
+ * in the window because the continuity is genuinely useful ("you already told
+ * me about the interview"), but it is named as something the owner has already
+ * seen rather than left to look like the assistant's own last conversational
+ * turn.
+ */
+export const BACKGROUND_NOTICE_MARKER =
+  '[Background notice already delivered to the owner — context only, never restate it:]';
+
+/**
+ * Which assistant rows in a chat window are delivered notices rather than
+ * replies.
+ *
+ * Two signals, because neither covers the other. A structured marker catches
+ * the pulse, suggestions and approval mirrors, which all carry a part saying
+ * what they are. It does NOT catch a delivered reminder: `reminder.notify`
+ * writes a bare text part (packages/core/src/memory/jobs.ts), so the only thing
+ * separating it from a reply is that it came out of a scheduled task rather
+ * than a chat turn.
+ */
+export async function backgroundNoticeIds(
+  db: Db,
+  rows: ReadonlyArray<{ id: string; role: string; taskId: string | null; parts: unknown }>,
+): Promise<Set<string>> {
+  const notices = new Set<string>();
+  const pending = new Map<string, string[]>();
+  for (const row of rows) {
+    if (row.role !== 'assistant') continue;
+    if (hasNoticePart(row.parts)) {
+      notices.add(row.id);
+      continue;
+    }
+    if (!row.taskId) continue;
+    pending.set(row.taskId, [...(pending.get(row.taskId) ?? []), row.id]);
+  }
+  if (pending.size === 0) return notices;
+  const owning = await db
+    .select({ id: tasks.id, type: tasks.type })
+    .from(tasks)
+    .where(inArray(tasks.id, [...pending.keys()]));
+  for (const task of owning) {
+    if (task.type === 'chat_turn') continue;
+    for (const id of pending.get(task.id) ?? []) notices.add(id);
+  }
+  return notices;
 }
 
 /**

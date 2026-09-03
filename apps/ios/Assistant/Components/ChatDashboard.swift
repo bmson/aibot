@@ -484,7 +484,7 @@ private struct DashboardTag: View {
         .font(.caption.weight(.medium))
         .foregroundStyle(AssistantTheme.accent(for: colorScheme))
         .padding(.horizontal, 9)
-        .padding(.vertical, 5)
+        .padding(.vertical, 7)
         .background(
             AssistantTheme.accent(for: colorScheme).opacity(colorScheme == .dark ? 0.15 : 0.09),
             in: Capsule()

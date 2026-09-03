@@ -30,11 +30,14 @@ enum AssistantAppearance: String, CaseIterable, Identifiable {
 }
 
 enum AssistantTheme {
-    /// Shared outer geometry for every content card in the app.
-    static let cardCornerRadius: CGFloat = 20
-    /// Chat records are a step tighter than dashboard cards: precise, not soft.
-    static let chatCardCornerRadius: CGFloat = 18
+    /// The composer, the message bubbles, and every card share this corner.
+    /// A card is an answer to what was typed in that field, so the two are cut
+    /// from one geometry rather than the card sitting a step tighter.
     static let conversationCornerRadius: CGFloat = 27
+    /// Shared outer geometry for every content card in the app.
+    static let cardCornerRadius: CGFloat = Self.conversationCornerRadius
+    /// Chat records are cards too, and carry the same corner as the rest.
+    static let chatCardCornerRadius: CGFloat = Self.cardCornerRadius
     static let canvas = Color(hex: 0xEEF5F0)
     static let canvasDark = Color(hex: 0x121A15)
     static let raised = Color.white
@@ -195,9 +198,10 @@ extension View {
         modifier(AssistantSubmenuChrome())
     }
 
-    /// The one card spec: 16pt padding, radius 20, hairline stroke. Warning
-    /// cards (memory review, approvals) pass a surface and stroke tint so
-    /// they keep the same geometry instead of hand-rolling a near-copy.
+    /// The one card spec: 16pt padding, the shared card radius, hairline
+    /// stroke. Warning cards (memory review, approvals) pass a surface and
+    /// stroke tint so they keep the same geometry instead of hand-rolling a
+    /// near-copy.
     func assistantCard(
         in scheme: ColorScheme,
         surface: Color? = nil,

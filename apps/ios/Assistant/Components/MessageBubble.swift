@@ -299,7 +299,7 @@ struct MessageBubble: View {
         }
         .padding(.horizontal, resolvedBubbleHorizontalInset)
         .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: answerContextMinimumHeight, alignment: .leading)
         .background(AssistantTheme.sunken(for: colorScheme))
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -308,6 +308,18 @@ struct MessageBubble: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Current answer to: \(prompt)")
+    }
+
+    /// The band is the sheet's own header, so it has to clear the sheet's
+    /// corner. A continuous corner sweeps roughly 1.5× its radius along each
+    /// edge, and at 27pt that is longer than the band was tall: both ends were
+    /// pure curve, the divider cut the sweep mid-arc, and the result read as a
+    /// pill floating in the paper rather than the top of it. Sizing the band to
+    /// the corner lets the top edge straighten out between two corners that are
+    /// the bubble's own. Accessibility sizes already exceed this and are
+    /// unaffected.
+    private var answerContextMinimumHeight: CGFloat {
+        AssistantTheme.conversationCornerRadius * 1.55
     }
 
     private var currentAnswerLabel: some View {
@@ -414,7 +426,7 @@ struct MessageBubble: View {
                     Text(code)
                         .font(.caption.monospaced().weight(.bold))
                         .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
+                        .padding(.vertical, 7)
                         .background(AssistantTheme.warning(for: colorScheme).opacity(0.12), in: Capsule())
                 }
             }
@@ -714,7 +726,7 @@ struct MessageBubble: View {
             (
                 "Checked result",
                 "Verified result",
-                compact?.summary ?? compactSummary(text),
+                compact?.summary ?? CardText.compactSummary(text),
                 "checkmark.shield.fill",
                 AssistantTheme.accent(for: colorScheme)
             )
@@ -730,7 +742,7 @@ struct MessageBubble: View {
             (
                 "Needs your attention",
                 "Your input is needed",
-                compact?.summary ?? compactSummary(text),
+                compact?.summary ?? CardText.compactSummary(text),
                 "exclamationmark.triangle.fill",
                 AssistantTheme.warning(for: colorScheme)
             )
@@ -842,13 +854,6 @@ struct MessageBubble: View {
                 Label("Copy notice", systemImage: "doc.on.doc")
             }
         }
-    }
-
-    private func compactSummary(_ value: String) -> String {
-        let oneLine = value.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard oneLine.count > 160 else { return oneLine }
-        return String(oneLine.prefix(159)).trimmingCharacters(in: .whitespaces) + "…"
     }
 }
 
@@ -2543,7 +2548,7 @@ struct RichResponseCards: View {
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                         .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
+                        .padding(.vertical, 5)
                         .background(AssistantTheme.accent(for: colorScheme).opacity(0.12), in: Capsule())
                         .accessibilityLabel(imminence == "Now" ? "Happening now" : "Starts \(imminence.lowercased())")
                 }
@@ -2597,7 +2602,7 @@ struct RichResponseCards: View {
     /// The one thing on a schedule that changes what you do next: what is
     /// happening right now or starts within the hour.
     private func eventImminence(_ event: EventRow) -> String? {
-        guard let start = cardISO8601Date(event.start) else { return nil }
+        guard let start = cardTimestamp(event.start) else { return nil }
         let minutes = Int((start.timeIntervalSinceNow / 60).rounded(.down))
         if minutes > 0, minutes <= 60 { return "In \(minutes) min" }
         if minutes <= 0, minutes >= -15 { return "Now" }
@@ -2716,7 +2721,7 @@ struct RichResponseCards: View {
                     .font(.caption.monospacedDigit().weight(.medium))
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 9)
                     .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
             }
 
@@ -2999,7 +3004,7 @@ struct RichResponseCards: View {
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                                 .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
+                                .padding(.vertical, 7)
                                 .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
                         }
                     }
@@ -3124,7 +3129,8 @@ struct RichResponseCards: View {
             resultHeader(
                 title: title,
                 subtitle: query.isEmpty ? mailbox : query,
-                countLabel: emailCountLabel(messages: messages, estimate: estimate, complete: complete)
+                countLabel: emailCountLabel(messages: messages, estimate: estimate, complete: complete),
+                subtitleStyle: .query
             )
             if messages.isEmpty {
                 Text("No matching messages.")
@@ -3132,30 +3138,11 @@ struct RichResponseCards: View {
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
             } else {
                 compactResultRows(messages) { message in
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(AssistantMarkdown.inlineAttributed(message.sender.isEmpty ? message.recipient : message.sender))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                .lineLimit(1)
-                            Spacer(minLength: 4)
-                            if !message.date.isEmpty {
-                                Text(cardDate(message.date))
-                                    .font(.caption2)
-                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                    .lineLimit(1)
-                            }
-                        }
-                        Text(AssistantMarkdown.inlineAttributed(message.subject))
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                            .fixedSize(horizontal: false, vertical: true)
-                        if !message.snippet.isEmpty {
-                            Text(AssistantMarkdown.inlineAttributed(message.snippet))
-                                .font(.caption)
-                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                .lineLimit(2)
-                        }
+                    if let url = CardText.gmailURL(id: message.id, mailbox: mailbox) {
+                        Link(destination: url) { emailRow(message) }
+                            .accessibilityHint("Opens in Gmail")
+                    } else {
+                        emailRow(message)
                     }
                 }
             }
@@ -3274,7 +3261,7 @@ struct RichResponseCards: View {
                             Text(edge.subject)
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
+                                .padding(.vertical, 7)
                                 .background(AssistantTheme.accent(for: colorScheme).opacity(0.10), in: Capsule())
                             Text("—\(edge.predicate)→")
                                 .font(.caption2.weight(.medium))
@@ -3282,7 +3269,7 @@ struct RichResponseCards: View {
                             Text(edge.object)
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
+                                .padding(.vertical, 7)
                                 .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
                         }
                         .fixedSize(horizontal: false, vertical: true)
@@ -3340,7 +3327,7 @@ struct RichResponseCards: View {
                                         Text(source.calendar)
                                             .font(.caption2.weight(.medium))
                                             .padding(.horizontal, 7)
-                                            .padding(.vertical, 4)
+                                            .padding(.vertical, 6)
                                             .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
                                     }
                                 }
@@ -3348,8 +3335,10 @@ struct RichResponseCards: View {
                                     Label(event.location, systemImage: "mappin.and.ellipse")
                                         .font(.caption)
                                         .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(12)
                             .background(AssistantTheme.sunken(for: colorScheme).opacity(0.52), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
@@ -3475,7 +3464,7 @@ struct RichResponseCards: View {
     /// reads as if it belonged to the first day of the range.
     private func availabilityTimeLabel(start: String, end: String, spansMultipleDays: Bool) -> String {
         let range = "\(cardTime(start))–\(cardTime(end))"
-        guard spansMultipleDays, let date = cardISO8601Date(start) else { return range }
+        guard spansMultipleDays, let date = cardTimestamp(start) else { return range }
         return "\(date.formatted(.dateTime.weekday(.abbreviated))) · \(range)"
     }
 
@@ -3489,7 +3478,7 @@ struct RichResponseCards: View {
     }
 
     private func availabilitySpansMultipleDays(timeMin: String, timeMax: String) -> Bool {
-        guard let start = cardISO8601Date(timeMin), let end = cardISO8601Date(timeMax) else {
+        guard let start = cardTimestamp(timeMin), let end = cardTimestamp(timeMax) else {
             return false
         }
         return !Calendar.current.isDate(start, inSameDayAs: end)
@@ -3525,21 +3514,22 @@ struct RichResponseCards: View {
                     ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(AssistantMarkdown.inlineAttributed(message.sender))
+                                Text(CardText.senderName(message.sender))
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                                     .lineLimit(1)
-                                    .truncationMode(.middle)
-                                Spacer(minLength: 4)
-                                if !message.date.isEmpty {
-                                    Text(cardDate(message.date))
-                                        .font(.caption2)
+                                    .truncationMode(.tail)
+                                Spacer(minLength: 6)
+                                if let stamp = CardText.compactDateLabel(message.date) {
+                                    Text(stamp)
+                                        .font(.caption2.monospacedDigit())
                                         .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                                         .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
                                 }
                             }
                             if !message.excerpt.isEmpty {
-                                Text(AssistantMarkdown.inlineAttributed(message.excerpt))
+                                Text(message.excerpt)
                                     .font(.caption)
                                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                                     .lineLimit(usesAccessibilityLayout ? nil : 3)
@@ -3948,7 +3938,20 @@ struct RichResponseCards: View {
         }
     }
 
-    private func resultHeader(title: String, subtitle: String, countLabel: String) -> some View {
+    /// Not every subtitle is a sentence. A Gmail query or a filter string is
+    /// machine input — it belongs on the card as provenance, but it must never
+    /// out-shout an actual result.
+    private enum ResultHeaderSubtitle {
+        case prominent
+        case query
+    }
+
+    private func resultHeader(
+        title: String,
+        subtitle: String,
+        countLabel: String,
+        subtitleStyle: ResultHeaderSubtitle = .prominent
+    ) -> some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title.uppercased())
@@ -3956,10 +3959,19 @@ struct RichResponseCards: View {
                     .tracking(0.8)
                     .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                 if !subtitle.isEmpty {
-                    Text(AssistantMarkdown.inlineAttributed(subtitle))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                        .fixedSize(horizontal: false, vertical: true)
+                    switch subtitleStyle {
+                    case .prominent:
+                        Text(AssistantMarkdown.inlineAttributed(subtitle))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
+                    case .query:
+                        Text(subtitle)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            .lineLimit(usesAccessibilityLayout ? 3 : 2)
+                            .truncationMode(.tail)
+                    }
                 }
             }
             Spacer(minLength: 8)
@@ -3967,9 +3979,55 @@ struct RichResponseCards: View {
                 .font(.caption.monospacedDigit().weight(.semibold))
                 .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 .padding(.horizontal, 8)
-                .padding(.vertical, 5)
+                .padding(.vertical, 7)
                 .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
         }
+    }
+
+    /// One found message. Every field here is a raw mail header or a snippet a
+    /// stranger wrote, so all three render as plain text — see `CardText`.
+    private func emailRow(_ message: MessageResponseCard.EmailResult) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(CardText.senderName(message.sender.isEmpty ? message.recipient : message.sender))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .lineLimit(1)
+                    // Tail, not middle: the front of a name carries the identity.
+                    .truncationMode(.tail)
+                Spacer(minLength: 6)
+                if let stamp = CardText.compactDateLabel(message.date) {
+                    Text(stamp)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        .lineLimit(1)
+                        // A few glyphs of fact. The sender is the field with
+                        // slack in it, so the sender is what gives way — without
+                        // this the stack happily clips the date to `19:0…`.
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+            }
+            Text(message.subject)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                .lineLimit(usesAccessibilityLayout ? nil : 2)
+                .truncationMode(.tail)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if !message.snippet.isEmpty {
+                Text(CardText.compactSummary(message.snippet))
+                    .font(.caption)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .lineLimit(usesAccessibilityLayout ? nil : 2)
+                    .truncationMode(.tail)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .contentShape(Rectangle())
+        // One email per VoiceOver swipe rather than four fragments.
+        .accessibilityElement(children: .combine)
     }
 
     private func emailCountLabel(messages: [MessageResponseCard.EmailResult], estimate: Int?, complete: Bool) -> String {
@@ -3978,21 +4036,18 @@ struct RichResponseCards: View {
     }
 
     private func cardDate(_ value: String) -> String {
-        guard let date = cardISO8601Date(value) else { return value }
+        guard let date = cardTimestamp(value) else { return value }
         return date.formatted(date: .abbreviated, time: .shortened)
     }
 
     private func cardTime(_ value: String) -> String {
-        guard let date = cardISO8601Date(value) else { return value }
+        guard let date = cardTimestamp(value) else { return value }
         return date.formatted(date: .omitted, time: .shortened)
     }
 
-    private func cardISO8601Date(_ value: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: value) ?? fractionalFormatter.date(from: value)
-    }
+    /// ISO 8601 from the Google APIs, or a raw RFC 5322 header off a Gmail
+    /// message. Not ISO-only any more, so not named as if it were.
+    private func cardTimestamp(_ value: String) -> Date? { CardText.timestamp(value) }
 
     private func resourceSymbol(_ resourceType: String) -> String {
         switch resourceType {
@@ -4078,6 +4133,261 @@ private extension JSONValue {
     var integerValue: Int? {
         guard let numberValue, numberValue.rounded() == numberValue else { return nil }
         return Int(numberValue)
+    }
+}
+
+/// Cards carry third-party text: a Gmail `Date:` header, an RFC 5322 mailbox,
+/// a snippet written by a stranger. None of it is assistant prose, so none of it
+/// goes through the Markdown parser — it gets parsed for what it actually is, or
+/// shown as plain text.
+enum CardText {
+    // MARK: Timestamps
+
+    /// Cards carry timestamps in two shapes: ISO 8601 from the Google APIs, and
+    /// a raw RFC 5322 `Date:` header straight off a Gmail message. Anything that
+    /// parses as neither is not a date, and the caller decides what to do.
+    static func timestamp(_ value: String) -> Date? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let date = iso8601.date(from: trimmed) ?? iso8601Fractional.date(from: trimmed) {
+            return date
+        }
+        let header = expandingTwoDigitYear(strippingTrailingComment(trimmed))
+        for formatter in rfc5322Formatters {
+            if let date = formatter.date(from: header) { return date }
+        }
+        return nil
+    }
+
+    /// `Wed, 2 Sep 2026 19:08:04 -0700 (PDT)` — that trailing zone name is legal
+    /// RFC 5322 comment syntax that no `DateFormatter` pattern accepts, so it
+    /// comes off before the patterns are tried.
+    private static func strippingTrailingComment(_ value: String) -> String {
+        guard let range = value.range(of: #"\s*\([^()]*\)\s*$"#, options: .regularExpression) else {
+            return value
+        }
+        return String(value[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// RFC 5322 §4.3: an obsolete two-digit year 00–49 means 20xx, 50–99 means
+    /// 19xx. This has to happen before parsing rather than as a `yy` pattern,
+    /// because `DateFormatter` accepts a short year for `yyyy` when parsing: the
+    /// four-digit pattern matches `Wed, 2 Sep 26 …` first and reads it as the
+    /// year 26 AD, so a `yy` pattern further down the list is never reached.
+    private static func expandingTwoDigitYear(_ value: String) -> String {
+        // Two digits standing alone between the month and the time.
+        guard let match = value.range(
+            of: #"(?<=\s)\d{2}(?=\s+\d{1,2}:)"#,
+            options: .regularExpression
+        ), let year = Int(value[match]) else { return value }
+        return value.replacingCharacters(in: match, with: String(year < 50 ? 2000 + year : 1900 + year))
+    }
+
+    private static let iso8601 = ISO8601DateFormatter()
+
+    private static let iso8601Fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    /// Built once at first use: `DateFormatter` construction is expensive and a
+    /// card formats a date on every row of every render.
+    ///
+    /// `d` also parses `02` and `HH` also parses `9`, so single- and two-digit
+    /// days and hours need no separate patterns — only the genuinely different
+    /// grammars below do, and a two-digit year is normalised away before these
+    /// are tried. Order is load-bearing: `Z` before `zzz`, because ICU's `z`
+    /// will opportunistically accept `-0700` and produce a worse parse.
+    private static let rfc5322Formatters: [DateFormatter] = [
+        "EEE, d MMM yyyy HH:mm:ss Z",
+        "d MMM yyyy HH:mm:ss Z",
+        // RFC 5322 makes seconds optional.
+        "EEE, d MMM yyyy HH:mm Z",
+        "d MMM yyyy HH:mm Z",
+        // Obsolete alphabetic zones still in the wild: `GMT`, `UT`, `PDT`.
+        "EEE, d MMM yyyy HH:mm:ss zzz",
+        "d MMM yyyy HH:mm:ss zzz",
+    ].map(CardText.rfc5322Formatter(_:))
+
+    private static func rfc5322Formatter(_ format: String) -> DateFormatter {
+        let formatter = DateFormatter()
+        // Fixed-format input: the locale must not follow the device, or `Sep`
+        // and `Wed` stop parsing the moment someone switches to French.
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        // Only consulted if a header somehow arrives with no zone at all.
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = format
+        return formatter
+    }
+
+    /// The stamp on an email row, sized to what the reader needs: today is a
+    /// time, this year is a day, anything older earns its year. Mail clients
+    /// have converged on this for a reason — it is the smallest label that is
+    /// never ambiguous.
+    static func compactDateLabel(
+        for date: Date,
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
+        let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+        if calendar.isDate(date, inSameDayAs: now) {
+            return style.hour(.defaultDigits(amPM: .abbreviated)).minute(.twoDigits).format(date)
+        }
+        if calendar.component(.year, from: date) == calendar.component(.year, from: now) {
+            return style.month(.abbreviated).day().format(date)
+        }
+        return style.month(.abbreviated).day().year().format(date)
+    }
+
+    /// The row's stamp from the raw card field: a parsed date, or a short
+    /// unparseable value passed through (a server can still send `today`), or
+    /// nothing at all. A wall of raw header is worse than an empty column.
+    static func compactDateLabel(
+        _ value: String,
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String? {
+        if let date = timestamp(value) {
+            return compactDateLabel(for: date, now: now, calendar: calendar, locale: locale)
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= passthroughDateLimit else { return nil }
+        return trimmed
+    }
+
+    /// Anything short enough to fit the column is trusted; anything longer is a
+    /// header we failed to parse, and is dropped rather than shown in pieces.
+    private static let passthroughDateLimit = 12
+
+    // MARK: Prose
+
+    /// One line of someone else's writing, sized for a preview: newlines and
+    /// runs of space collapse, and anything past a long sentence is cut.
+    static func compactSummary(_ value: String) -> String {
+        let oneLine = value.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard oneLine.count > 160 else { return oneLine }
+        return String(oneLine.prefix(159)).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
+    // MARK: Links
+
+    /// Gmail publishes no deep-link contract, but `#all/<id>` has addressed a
+    /// message or thread by id for years, and `authuser` picks the account the
+    /// search actually ran against — the card carries it as `mailbox`.
+    static func gmailURL(id: String, mailbox: String) -> URL? {
+        // When Gmail returns neither a message nor a thread id the server
+        // synthesises `email-<card>-<row>`, which addresses nothing.
+        guard !id.isEmpty, !id.hasPrefix("email-") else { return nil }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "mail.google.com"
+        if mailbox.isEmpty {
+            components.path = "/mail/u/0/"
+        } else {
+            components.path = "/mail/"
+            components.queryItems = [URLQueryItem(name: "authuser", value: mailbox)]
+        }
+        components.fragment = "all/\(id)"
+        return components.url
+    }
+
+    // MARK: Mailboxes
+
+    /// Gmail hands the card a raw `From` header. The row wants the human, not
+    /// the machine: `"Support at TripIt" <support@tripit.com>` is a sender
+    /// called Support at TripIt, and the address is noise the reader already
+    /// trusts the client to have got right.
+    static func senderName(_ value: String) -> String {
+        let mailboxes = splitMailboxes(value)
+        guard let first = mailboxes.first else { return "" }
+        let name = displayName(ofMailbox: first)
+        guard mailboxes.count > 1 else { return name }
+        return "\(name) +\(mailboxes.count - 1)"
+    }
+
+    /// Splits on the commas that separate mailboxes — not the ones inside
+    /// `"Doe, Jane"`, and not the ones inside an address.
+    private static func splitMailboxes(_ value: String) -> [String] {
+        var parts: [String] = []
+        var current = ""
+        var inQuotes = false
+        var inAngle = false
+        var escaped = false
+        for character in value {
+            if escaped {
+                current.append(character)
+                escaped = false
+                continue
+            }
+            switch character {
+            case "\\" where inQuotes:
+                current.append(character)
+                escaped = true
+            case "\"":
+                inQuotes.toggle()
+                current.append(character)
+            case "<" where !inQuotes:
+                inAngle = true
+                current.append(character)
+            case ">" where !inQuotes:
+                inAngle = false
+                current.append(character)
+            case "," where !inQuotes && !inAngle:
+                parts.append(current)
+                current = ""
+            default:
+                current.append(character)
+            }
+        }
+        parts.append(current)
+        return parts
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private static func displayName(ofMailbox mailbox: String) -> String {
+        guard let open = mailbox.lastIndex(of: "<"),
+              let close = mailbox.lastIndex(of: ">"),
+              open < close
+        else {
+            // A bare address, or a name with no address behind it.
+            return unquoted(mailbox)
+        }
+        let address = String(mailbox[mailbox.index(after: open)..<close])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = unquoted(String(mailbox[..<open]).trimmingCharacters(in: .whitespacesAndNewlines))
+        if name.isEmpty { return address }
+        if name.caseInsensitiveCompare(address) == .orderedSame { return address }
+        // A MIME encoded-word is left undecoded on purpose. A partial RFC 2047
+        // decoder is worse than none: adjacent words that split a multi-byte
+        // character across the boundary render as `Suppo??t`, which reads as our
+        // bug rather than the sender's. The address is always correct.
+        if name.contains("=?"), name.contains("?="), !address.isEmpty { return address }
+        return name
+    }
+
+    /// Unwraps an RFC 5322 quoted-string in one pass, so an escaped quote
+    /// survives intact.
+    private static func unquoted(_ value: String) -> String {
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count >= 2, text.hasPrefix("\""), text.hasSuffix("\"") else { return text }
+        var result = ""
+        var escaped = false
+        for character in text.dropFirst().dropLast() {
+            if escaped {
+                result.append(character)
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else {
+                result.append(character)
+            }
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

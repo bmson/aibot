@@ -188,7 +188,7 @@ struct ApprovalsView: View {
                 Text(item.approval.shortCode)
                     .font(.caption.monospaced().weight(.semibold))
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
+                    .padding(.vertical, 7)
                     .background(
                         AssistantTheme.warning(for: colorScheme).opacity(0.12),
                         in: Capsule()
@@ -223,7 +223,7 @@ struct ApprovalsView: View {
                     ForEach(labels, id: \.0) { label in
                         Label(label.0, systemImage: label.1)
                             .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
+                            .padding(.vertical, 7)
                             .background(AssistantTheme.warning(for: colorScheme).opacity(0.1), in: Capsule())
                     }
                 }

@@ -5,12 +5,65 @@ struct APIConfiguration: Equatable, Sendable {
     let token: String
 }
 
+/// Owns the app's URLSession so its connection pool can be discarded wholesale.
+///
+/// `URLSession.shared` cannot be used for this: its configuration is immutable,
+/// so `waitsForConnectivity` can never be set, and it can never be invalidated.
+/// Its pool is process-global and survives suspension — which is the whole
+/// problem. While the app is backgrounded the peer forgets the socket (NAT
+/// eviction, a Wi-Fi/cellular handoff, the server's own keep-alive timeout) but
+/// iOS keeps the entry. The next request is handed a connection that is already
+/// dead, writes into a black hole, and never sees a byte back, so the
+/// inactivity timer runs its full course before failing.
+final class Transport: @unchecked Sendable {
+    static let shared = Transport()
+
+    private let lock = NSLock()
+    private var _session: URLSession
+
+    private init() { _session = Self.makeSession() }
+
+    private static func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.default
+        // A launch off the lock screen can beat the radio. Waiting is better
+        // than failing a request the network was a moment away from carrying.
+        configuration.waitsForConnectivity = true
+        // Inactivity, not wall clock. Short enough that a stalled connection is
+        // reported while the owner is still looking at the screen.
+        configuration.timeoutIntervalForRequest = 30
+        // A whole-task ceiling, where the default of seven days is none at all.
+        // It has to clear the longest legitimate task rather than the typical
+        // one: this bounds an SSE turn and a document upload, not just a GET.
+        // 900s is the agent's own Cloud Run request timeout (infra/gcp/deploy.sh),
+        // so nothing the server will still be working on gets cut off here.
+        configuration.timeoutIntervalForResource = 900
+        return URLSession(configuration: configuration)
+    }
+
+    var session: URLSession {
+        lock.withLock { _session }
+    }
+
+    /// Drop every pooled connection and start clean. Called when the app returns
+    /// from the background, where the pool is most likely to be holding sockets
+    /// the other end has already forgotten.
+    func reset() {
+        lock.withLock {
+            _session.invalidateAndCancel()
+            _session = Self.makeSession()
+        }
+    }
+}
+
 enum APIError: LocalizedError {
     case invalidServerURL
     case invalidResponse
     case unauthorized
     case server(status: Int, message: String)
     case decoding(model: String, detail: String)
+    /// The request never reached the server, or its answer never came back.
+    /// Distinct from every other case, all of which mean the server replied.
+    case transport(URLError)
 
     var errorDescription: String? {
         switch self {
@@ -19,6 +72,29 @@ enum APIError: LocalizedError {
         case .unauthorized: "The access key was not accepted by this Assistant server."
         case let .server(_, message): message
         case let .decoding(model, detail): "Could not read the \(model) response: \(detail)."
+        case let .transport(error): Self.transportDescription(error)
+        }
+    }
+
+    /// A transport failure is worth trying again; a server that answered on the
+    /// merits is not. The banner uses this to decide whether to offer Retry.
+    var isTransport: Bool {
+        if case .transport = self { return true }
+        return false
+    }
+
+    /// Say what the owner can act on. Foundation's own copy for these codes —
+    /// "The request timed out." — names the symptom and not the situation, and
+    /// reads like a bug in the app rather than a server still waking up.
+    private static func transportDescription(_ error: URLError) -> String {
+        switch error.code {
+        case .notConnectedToInternet:
+            "You appear to be offline."
+        case .timedOut, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
+             .networkConnectionLost:
+            "Couldn't reach your assistant — it may still be waking up."
+        default:
+            error.localizedDescription
         }
     }
 
@@ -47,12 +123,16 @@ enum APIError: LocalizedError {
 
 struct APIClient: Sendable {
     let configuration: APIConfiguration
-    private let session: URLSession
+    /// A test seam. Production passes nothing and reads `Transport.shared` on
+    /// every call, so a pool reset reaches clients that were built before it.
+    private let sessionOverride: URLSession?
 
-    init(configuration: APIConfiguration, session: URLSession = .shared) {
+    init(configuration: APIConfiguration, session: URLSession? = nil) {
         self.configuration = configuration
-        self.session = session
+        self.sessionOverride = session
     }
+
+    private var session: URLSession { sessionOverride ?? Transport.shared.session }
 
     func bootstrap() async throws -> BootstrapResponse {
         try await get("api/mobile/v1/bootstrap")
@@ -702,7 +782,7 @@ struct APIClient: Sendable {
         )
         request.httpBody = try JSONEncoder().encode(body)
 
-        let (bytes, response) = try await session.bytes(for: request)
+        let (bytes, response) = try await stream(request)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         // Error bodies are small JSON with owner-facing copy; drain them so the
         // banner shows the server's own words rather than a stock status string.
@@ -771,9 +851,60 @@ struct APIClient: Sendable {
         return try await perform(request, as: ApprovalResult.self)
     }
 
+    /// One retry, for reads only.
+    ///
+    /// A connection pooled across a suspension is routinely dead on the other
+    /// end, and the first request after foregrounding is the one that finds
+    /// out — by stalling for the full inactivity timeout. Resetting the pool is
+    /// what makes the second attempt worth making: without it the retry is
+    /// handed the same dead socket and fails the same way.
+    ///
+    /// Reads only, because a write may well have reached the server before the
+    /// answer went missing. Replaying `sendMessage` or an approval decision
+    /// could double it, and a duplicated turn is worse than a visible failure.
+    private func load(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        do {
+            return try await session.data(for: request)
+        } catch let error as URLError where Self.isRetryable(error) && Self.isRead(request) {
+            // Only the shared pool can have gone stale behind our back; an
+            // injected session belongs to whoever injected it.
+            if sessionOverride == nil { Transport.shared.reset() }
+            do {
+                return try await session.data(for: request)
+            } catch let retried as URLError {
+                throw APIError.transport(retried)
+            }
+        } catch let error as URLError {
+            throw APIError.transport(error)
+        }
+    }
+
+    /// The streaming counterpart to `load`. Never retried, for the same reason.
+    private func stream(_ request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
+        do {
+            return try await session.bytes(for: request)
+        } catch let error as URLError {
+            throw APIError.transport(error)
+        }
+    }
+
+    /// Failures a fresh connection plausibly fixes. A rejected certificate or
+    /// an unsupported URL is not one of them: those fail again, identically.
+    private static func isRetryable(_ error: URLError) -> Bool {
+        switch error.code {
+        case .timedOut, .networkConnectionLost, .cannotConnectToHost, .dnsLookupFailed:
+            true
+        default:
+            false
+        }
+    }
+
+    private static func isRead(_ request: URLRequest) -> Bool {
+        (request.httpMethod ?? "GET").uppercased() == "GET"
+    }
+
     private func makeRequest(url: URL) -> URLRequest {
         var request = URLRequest(url: url)
-        request.timeoutInterval = 60
         request.setValue("application/json", forHTTPHeaderField: "accept")
         if !configuration.token.isEmpty {
             request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "authorization")
@@ -782,7 +913,7 @@ struct APIClient: Sendable {
     }
 
     private func perform<T: Decodable>(_ request: URLRequest, as type: T.Type) async throws -> T {
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await load(request)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         try await validate(http, data: data)
         do {
