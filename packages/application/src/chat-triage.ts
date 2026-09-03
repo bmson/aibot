@@ -47,6 +47,15 @@ const READ_PHRASE = new RegExp(
   ].join('|'),
 );
 
+// Mail and replies ARRIVE; they are not "checked". These phrasings name no
+// possessive surface and often no mail word at all ("anything from the
+// landlord?"), so READ_PHRASE cannot see them and detectPersonalReadRequest —
+// which needs a mail/calendar surface word — declines too. The cheap classifier
+// has been left to call them, and calling one "conversation" drops the request
+// onto the tool-less path, where the model can only guess at what arrived.
+const RECEIPT_PHRASE =
+  /\b(?:any|anything|something|nothing)\s+(?:new\s+|yet\s+)?from\s+\w|\b(?:hear|heard)\s+(?:back\s+)?from\b|\bget(?:ting)?\s+back\s+to\s+me\b|\b(?:has|have|did)\s+[\w.'’-]+\s+(?:e-?mailed?|written|replied|responded|got(?:ten)?\s+back|sent)\b|\b(?:has|have|did)\s+(?:the|my|our|any)\s+[\w\s'’-]{0,30}?(?:arrived?|come\s+in|came\s+in|shown?\s+up|landed)\b/i;
+
 // Leading politeness/filler to peel off before looking for an imperative verb.
 const LEADING_FILLER =
   /^(hey|hi|hello|yo|ok|okay|so|also|and|then|now|please|pls|kindly|just|quick|quickly|could you|can you|would you|will you|can u|would u|i need (?:you )?to|i'?d like (?:you )?to|i want (?:you )?to|i'?d like|let'?s|lets|go ahead and)\b[\s,:-]*/;
@@ -106,6 +115,7 @@ export function looksLikeActionRequest(text: string, priorAssistantText = ''): b
     LEADING_ACTION.test(t) ||
     ACTION_PHRASE.test(t) ||
     READ_PHRASE.test(t) ||
+    RECEIPT_PHRASE.test(t) ||
     looksLikeWeatherLookup(text, t) ||
     (FAILED_ACTION_FOLLOW_UP.test(t) &&
       PRIOR_ACTION_COMMITMENT.test(priorAssistantText.toLowerCase()))

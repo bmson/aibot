@@ -158,6 +158,45 @@ describe('response execution contract', () => {
     });
   });
 
+  // Reporting what a SENDER did is not a claim that the assistant sent anything.
+  // This used to throw away correct answers: an honest "TripIt sent you an
+  // email" was rewritten to "Still needed: the requested outbound message".
+  it.each([
+    'TripIt sent you an email confirming the hotel for Saturday.',
+    'Hotels.com emailed your travel confirmation on Sep 2.',
+    'Yes — TripIt sent an email on Wed, Sep 2 with the Hotels.com itinerary.',
+    'They replied to your message yesterday.',
+  ])('publishes a mailbox answer that narrates what a sender did: %s', (text) => {
+    const result = enforceResponseContract(text, [
+      {
+        toolName: 'gmail.search',
+        status: 'succeeded',
+        result: {
+          results: [{ threadId: 't1' }],
+          mailboxSearched: 'assistant@example.com',
+          complete: true,
+        },
+      },
+    ]);
+    expect(result.blocked).toBe(false);
+    expect(result.unsupported).not.toContain('outbound');
+    expect(result.text).toBe(text);
+  });
+
+  // A model that never ran a read asserting emptiness is the same fabrication
+  // as a fake "I checked" — and it reaches for the negated form far more often
+  // than for "nothing in your inbox".
+  it.each([
+    ["I don't see any emails in your inbox about a hotel this weekend.", 'inbox_read'],
+    ["I didn't find any emails in your inbox.", 'inbox_read'],
+    ["I'm not seeing any messages from them.", 'inbox_read'],
+    ["I don't see any conflicts on your calendar.", 'calendar_read'],
+  ] as const)('flags a negated-any empty read with no evidence: %s', (text, kind) => {
+    const result = enforceResponseContract(text, []);
+    expect(result.blocked).toBe(true);
+    expect(result.unsupported).toContain(kind);
+  });
+
   it.each([
     'The hiring manager has been emailed with your follow-up.',
     'They have been notified about the schedule change.',

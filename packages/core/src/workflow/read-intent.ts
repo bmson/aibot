@@ -88,7 +88,23 @@ const WHY_LOOKUP = /\bwhy\b/i;
 const DAY_SCHEDULE =
   /\bwhat(?:(?:'|’)s| is)?\s+(?:happening|going on|coming up|planned|scheduled)\b|\bwhat\s+(?:am i|are we)\s+doing\b|\bwhat\s+do\s+i\s+have\s+(?:(?:on|this|next)\s+)?(?:today|tomorrow|week(?:end)?|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|\bwhat(?:(?:'|’)s| is)\s+on\s+(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
 const VERIFY =
-  /\b(?:are you sure|double[- ]check|verify|you checked|did you check|don(?:'|’)t see|do not see|not on my|why did you say|was that made up|made that up|is that real|actually there)\b/i;
+  /\b(?:are you sure|are you certain|double[- ]check|verify|you checked|did you check|don(?:'|’)t see|do not see|not on my|why did you say|was that made up|made that up|is that real|actually there|nothing (?:from|in|there)|none from|not even|really\?)\b/i;
+// Mail *arrives*; it is not "looked at". A receipt question names no read verb
+// and no possessive surface — "have I gotten an email about X", "any mail from
+// the landlord" — so READ_OR_QUESTION, which is built around opening a surface,
+// never matches one. Gated on EMAIL_SURFACE at the call site, which is what
+// keeps terms this broad from dragging ordinary chat into a forced read.
+const RECEIPT_TERMS =
+  /\b(?:any|anything|got|gotten|get|receive[ds]?|hear|heard|arrive[ds]?|came\s+in|come\s+in|show(?:ed)?\s+up|land(?:ed)?)\b/i;
+// A receipt question is a QUESTION. "I got your email, thanks" is not one, and
+// answering it with a mailbox search would be absurd.
+const RECEIPT_OPENER =
+  /^\s*(?:(?:so|and|but|ok|okay|hey|also|please|pls|just)\b[\s,]*)*(?:have|has|haven(?:'|’)?t|hasn(?:'|’)?t|did|didn(?:'|’)?t|any|anything|is|was|were|are|nothing)\b/i;
+
+function receiptQuestion(text: string): boolean {
+  if (!RECEIPT_TERMS.test(text)) return false;
+  return text.includes('?') || RECEIPT_OPENER.test(text);
+}
 const MUTATION_LEAD =
   /^\s*(?:(?:please|can you|could you|would you|i want you to)\s+)*(?:add|archive|block|book|cancel|create|delete|edit|forward|hold|invite|label|mark|move|reply|reschedule|schedule|send|update)\b/i;
 const READ_THEN_MUTATION =
@@ -339,10 +355,22 @@ function gmailQuery(text: string, terms: string[]): string {
     if (!parts.includes('in:inbox')) parts.push('in:inbox');
     parts.push('is:unread');
   }
+  // Relative wording is a DATE FILTER, never a search term: Gmail ANDs terms, so
+  // a stray "weekend" turns a findable question into a confident empty result.
+  // Mail confirming a *future* event still arrived in the past, so every one of
+  // these maps to a lookback window and never to a forward bound. Order matters —
+  // "last week" must settle before the bare-week arm sees it.
   const recentDays = /\b(?:last|past)\s+(\d{1,2})\s+days?\b/i.exec(text)?.[1];
   if (recentDays) parts.push(`newer_than:${Math.max(1, Number(recentDays))}d`);
   else if (/\b(?:last|past)\s+week\b/i.test(text)) parts.push('newer_than:7d');
-  else if (/\b(?:last|past)\s+month\b/i.test(text)) parts.push('newer_than:30d');
+  else if (/\b(?:last|past|this|next|coming)\s+month\b/i.test(text)) {
+    parts.push('newer_than:30d');
+  } else if (/\b(?:next|coming)\s+(?:week|weekend)\b/i.test(text)) parts.push('newer_than:30d');
+  else if (
+    /\b(?:this|the)\s+(?:week|weekend)\b|\b(?:today|tonight|tomorrow|recently|lately)\b/i.test(text)
+  ) {
+    parts.push('newer_than:14d');
+  }
   return parts.join(' ').trim() || '-in:spam -in:trash';
 }
 
@@ -355,12 +383,16 @@ const QUERY_STOP_WORDS = new Set([
   'any',
   'anything',
   'are',
+  'arrive',
+  'arrived',
   'at',
   'back',
+  'came',
   'check',
   'checked',
   'calendar',
   'calendars',
+  'come',
   'claimed',
   'confirmed',
   'did',
@@ -372,9 +404,12 @@ const QUERY_STOP_WORDS = new Set([
   'from',
   'get',
   'got',
+  'gotten',
   'had',
   'has',
   'have',
+  'hear',
+  'heard',
   'i',
   'in',
   'is',
@@ -386,6 +421,7 @@ const QUERY_STOP_WORDS = new Set([
   'next',
   'no',
   'not',
+  'nothing',
   'of',
   'on',
   'our',
@@ -430,6 +466,8 @@ const QUERY_MODIFIERS = new Set([
   'initial',
   'manager',
   'monday',
+  'month',
+  'months',
   'onsite',
   'panel',
   'phone',
@@ -448,6 +486,7 @@ const QUERY_MODIFIERS = new Set([
   'thursday',
   'today',
   'tomorrow',
+  'tonight',
   'tuesday',
   'upcoming',
   'urgent',
@@ -455,6 +494,9 @@ const QUERY_MODIFIERS = new Set([
   'virtual',
   'wednesday',
   'week',
+  'weekend',
+  'weekends',
+  'weeks',
   'yesterday',
 ]);
 
@@ -520,6 +562,10 @@ function queryTerms(text: string): string[] {
           !QUERY_STOP_WORDS.has(word) &&
           !QUERY_MODIFIERS.has(word) &&
           MONTH_NUMBER[word] === undefined &&
+          // Receipt questions reach this path now, and Gmail ANDs terms: the
+          // word "email" in "any email about my hotel booking" is the surface
+          // being searched, never a thing to search for.
+          !EMAIL_SURFACE.test(word) &&
           !SCHEDULED_THING.test(word),
       );
 
@@ -707,7 +753,12 @@ export function detectPersonalReadRequest(
   // A terse correction such as "was that made up?" carries no subject of its
   // own. Reuse the prior assistant claim only as a search hypothesis — never as
   // answer evidence — so the runtime can actually verify the named item.
-  const contextualQuery = verification && queryTerms(latest).length === 0;
+  // A terse challenge that still names a sender ("nothing from tripit?") carries
+  // its own subject, and reaching back to context would search for the thing the
+  // owner is disputing instead of the thing they named. Only a subject-less
+  // challenge ("are you sure?") needs the prior turn.
+  const namesSender = /\bfrom\s+[a-z0-9][\w.'’-]*/i.test(latest);
+  const contextualQuery = verification && queryTerms(latest).length === 0 && !namesSender;
   const hypothesis = contextualQuery ? recentContext : latest;
   let terms = queryTerms(hypothesis);
   const scheduledNoun = SCHEDULED_THING.exec(hypothesis)?.[1]?.toLowerCase();
@@ -737,7 +788,8 @@ export function detectPersonalReadRequest(
       (READ_OR_QUESTION.test(latest) || verification || whyLookup)) ||
     (verification && CALENDAR_SURFACE.test(recentContext));
   const email =
-    (EMAIL_SURFACE.test(latest) && (READ_OR_QUESTION.test(latest) || verification)) ||
+    (EMAIL_SURFACE.test(latest) &&
+      (READ_OR_QUESTION.test(latest) || receiptQuestion(latest) || verification)) ||
     (verification && EMAIL_SURFACE.test(recentContext));
   const availability =
     AVAILABILITY_SURFACE.test(latest) &&
