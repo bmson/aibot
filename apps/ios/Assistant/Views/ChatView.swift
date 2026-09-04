@@ -727,11 +727,19 @@ struct ChatView: View {
     }
 
     private var deviceBottomSafeAreaInset: CGFloat {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first(where: \.isKeyWindow)?
-            .safeAreaInsets.bottom ?? 0
+        // This is physical menu geometry, not the view's current layout safe
+        // area. GeometryProxy.safeAreaInsets.bottom can expand to include the
+        // software keyboard; feeding that height into the always-mounted menu
+        // makes the conversation surface keep its full-screen height and leaves
+        // the composer behind the keyboard.
+        max(
+            UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap(\.windows)
+                .first(where: \.isKeyWindow)?
+                .safeAreaInsets.bottom ?? 0,
+            0
+        )
     }
 
     /// Corner radius the lifted conversation sheet rounds to at full reveal.
