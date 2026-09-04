@@ -68,6 +68,8 @@ const conversationId = primary[0].id;
 await db.delete(messages).where(eq(messages.channelMessageId, FIXTURE_TAG));
 await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-user`));
 await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-cards`));
+await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-answer`));
+await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-answer-user`));
 
 if (process.argv.includes('--cleanup')) {
   console.log('QA messages removed');
@@ -90,6 +92,78 @@ await db.insert(messages).values([
     text: markdown,
     parts: [{ type: 'text', text: markdown }],
     channelMessageId: FIXTURE_TAG,
+  },
+  // One request, one card: the mailbox search and the thread behind this
+  // answer are the collapsed step trail at the bottom of it, and the booking
+  // reference is masked until it is tapped.
+  {
+    conversationId,
+    role: 'user',
+    origin: 'owner',
+    text: 'Make a card for my hotel reservation, it’s in my mailbox under 73535835545212.',
+    parts: [
+      {
+        type: 'text',
+        text: 'Make a card for my hotel reservation, it’s in my mailbox under 73535835545212.',
+      },
+    ],
+    channelMessageId: `${FIXTURE_TAG}-answer-user`,
+  },
+  {
+    conversationId,
+    role: 'assistant',
+    origin: 'assistant',
+    text: 'Your Hotel Kabuki reservation is saved as a card.',
+    parts: [
+      { type: 'text', text: 'Your Hotel Kabuki reservation is saved as a card.' },
+      {
+        type: 'data-card',
+        data: {
+          kind: 'generated-card',
+          id: `${FIXTURE_TAG}-hotel`,
+          steps: [
+            {
+              tool: 'gmail.search',
+              count: '1 result',
+              detail: 'from:Katie hotels.com 73535835545212',
+            },
+            {
+              tool: 'gmail.read_thread',
+              count: '1 message',
+              detail: 'Fwd: Hotels.com travel confirmation — Hotel Kabuki, Sep 4–5',
+            },
+            { tool: 'calendar.search_events', failed: true, error: 'Calendar timed out' },
+          ],
+          spec: {
+            version: 1,
+            title: 'Hotel Kabuki',
+            subtitle: 'Tomorrow, 3:00 PM check-in',
+            sourceLabel: 'Hotel',
+            icon: 'star',
+            accent: 'violet',
+            accessibilityLabel: 'Hotel Kabuki reservation',
+            facts: [
+              { id: 'nights', label: 'Nights', value: 'Sep 4 – Sep 5', source: 'mail' },
+              { id: 'room', label: 'Room', value: 'King, garden view', source: 'mail' },
+              { id: 'address', label: 'Address', value: '1625 Post St, SF', source: 'mail' },
+              {
+                id: 'reference',
+                label: 'Booking reference',
+                value: '73535835545212',
+                source: 'mail',
+                sensitive: true,
+              },
+            ],
+            blocks: [
+              { type: 'facts', factIds: ['nights', 'room', 'address'] },
+              { type: 'code', valueFact: 'reference', format: 'text' },
+            ],
+            actions: [],
+          },
+        },
+      },
+    ],
+    channelMessageId: `${FIXTURE_TAG}-answer`,
   },
   {
     conversationId,

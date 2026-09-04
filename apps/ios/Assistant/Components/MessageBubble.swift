@@ -985,6 +985,18 @@ enum MessageResponseCard: Identifiable {
         let prompt: String?
     }
 
+    /// One call behind a composed card, as the runtime reported it
+    /// (core/workflow/card-steps.ts). The lookups that fed the card no longer
+    /// arrive as cards of their own — they arrive as these.
+    struct CardStep: Identifiable {
+        let id: String
+        let tool: String
+        let count: String
+        let detail: String
+        let failed: Bool
+        let error: String
+    }
+
     struct GeneratedCard {
         let id: String
         let title: String
@@ -995,6 +1007,7 @@ enum MessageResponseCard: Identifiable {
         let facts: [GeneratedFact]
         let blocks: [GeneratedBlock]
         let actions: [GeneratedAction]
+        let steps: [CardStep]
     }
 
     case agenda(title: String, subtitle: String, items: [AgendaItem])
@@ -1401,6 +1414,24 @@ enum MessageResponseCard: Identifiable {
                     )
                 }
             }()
+            // Provenance rides on the card payload, not on the spec: the spec
+            // is the model-authored layout, and the trail is read off the tool
+            // ledger. A build that sends no steps simply has no row to show.
+            let steps: [CardStep] = {
+                guard case let .array(values)? = data["steps"] else { return [] }
+                return values.enumerated().compactMap { index, value in
+                    guard case let .object(step) = value,
+                          let tool = step["tool"]?.string, !tool.isEmpty else { return nil }
+                    return .init(
+                        id: "\(index)-\(tool)",
+                        tool: tool,
+                        count: step["count"]?.string ?? "",
+                        detail: step["detail"]?.string ?? "",
+                        failed: step["failed"]?.boolValue ?? false,
+                        error: step["error"]?.string ?? ""
+                    )
+                }
+            }()
             guard !facts.isEmpty, !blocks.isEmpty else { return nil }
             self = .generated(.init(
                 id: data["id"]?.string ?? "generated-\(title)",
@@ -1411,7 +1442,8 @@ enum MessageResponseCard: Identifiable {
                 accessibilityLabel: spec["accessibilityLabel"]?.string ?? title,
                 facts: facts,
                 blocks: blocks,
-                actions: actions
+                actions: actions,
+                steps: steps
             ))
         default:
             return nil
@@ -3776,6 +3808,13 @@ struct RichResponseCards: View {
                     }
                 }
             }
+
+            // Last in the card, after the actions: the answer, then what acts
+            // on it, then — for whoever wants it — where it came from.
+            if !card.steps.isEmpty {
+                Divider()
+                GeneratedCardSteps(steps: card.steps)
+            }
         }
         .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
         .accessibilityElement(children: .contain)
@@ -3828,10 +3867,7 @@ struct RichResponseCards: View {
         case "code":
             if let id = block.values["valueFact"]?.string, let fact = facts[id] {
                 if fact.sensitive {
-                    DisclosureGroup("Reveal \(fact.label.lowercased())") {
-                        Text(fact.value).font(.callout.monospaced().weight(.semibold)).textSelection(.enabled)
-                    }
-                    .font(.caption.weight(.semibold))
+                    SensitiveCardValue(fact: fact, format: block.values["format"]?.string ?? "")
                 } else {
                     Text(fact.value).font(.callout.monospaced().weight(.semibold)).textSelection(.enabled)
                 }
@@ -3848,10 +3884,9 @@ struct RichResponseCards: View {
     @ViewBuilder
     private func generatedFactValue(_ fact: MessageResponseCard.GeneratedFact, prominent: Bool) -> some View {
         if fact.sensitive {
-            DisclosureGroup("Reveal") {
-                Text(fact.value).font(.callout.monospaced()).textSelection(.enabled)
-            }
-            .font(.caption.weight(.semibold))
+            // It used to be a disclosure labeled "Reveal" — no idea what it was
+            // about to reveal, and no way to put the number away again.
+            SensitiveCardValue(fact: fact, prominent: prominent)
         } else {
             Text(fact.value)
                 .font(prominent ? .title3.weight(.semibold) : .callout.weight(.medium))
@@ -4073,6 +4108,158 @@ struct RichResponseCards: View {
         if lower.contains("cloud") { return "cloud.fill" }
         if lower.contains("wind") { return "wind" }
         return "sun.max.fill"
+    }
+}
+
+/// The work behind an answer card, folded into the card itself.
+///
+/// The lookups that composed this card — the mailbox search, the thread it
+/// opened — used to arrive as cards of their own, so one request came back as
+/// three. They arrive as a step trail now, and this is the one quiet row it
+/// gets: closed until someone wants to know where the numbers came from, and
+/// closed again on the next card, because the state lives here rather than in
+/// the transcript.
+private struct GeneratedCardSteps: View {
+    let steps: [MessageResponseCard.CardStep]
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var expanded = false
+
+    private var failedCount: Int { steps.filter(\.failed).count }
+
+    private var collapsedLabel: String {
+        let found = "Found in \(steps.count) \(steps.count == 1 ? "step" : "steps")"
+        return failedCount == 0 ? found : "\(found), \(failedCount) failed"
+    }
+
+    /// Steps sit on an inset surface so they read as subordinate to the card's
+    /// own content.
+    private var stepRows: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(steps) { step in
+                stepRow(step)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+    }
+
+    /// A short trail grows the card; a long one scrolls in place instead. The
+    /// scroll view appears only in the second case — an unconstrained one is
+    /// greedy, and it would take height from the card that nothing needs.
+    @ViewBuilder
+    private var stepList: some View {
+        if steps.count > 4 {
+            ScrollView(.vertical) { stepRows }.frame(maxHeight: 200)
+        } else {
+            stepRows
+        }
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            stepList
+                .background(
+                    AssistantTheme.sunken(for: colorScheme),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+                .padding(.top, 8)
+        } label: {
+            Text(expanded ? "Hide steps" : collapsedLabel)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .tint(AssistantTheme.accent(for: colorScheme))
+        .accessibilityHint(expanded ? "Hides the steps behind this card" : "Shows the steps behind this card")
+    }
+
+    private func stepRow(_ step: MessageResponseCard.CardStep) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                // User-facing language, never the dotted call the runtime made.
+                Text(ToolStepLabel.past(for: step.tool))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                Spacer(minLength: 0)
+                if !step.count.isEmpty {
+                    Text(step.count)
+                        .font(.caption2)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                }
+            }
+            // A reason is a sentence, so it gets its own line instead of the
+            // count's slot, where it would squeeze the action name off the row.
+            if step.failed {
+                Text(step.error.isEmpty ? "Did not finish" : step.error)
+                    .font(.caption2)
+                    .foregroundStyle(AssistantTheme.errorInk(for: colorScheme))
+            }
+            if !step.detail.isEmpty {
+                Text(step.detail)
+                    .font(.caption2)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .lineLimit(2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            AssistantTheme.raised(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A value the card holds back: a booking reference, a ticket code.
+///
+/// Masked with one asterisk per character in the value's own monospace face,
+/// so revealing rewrites the line instead of resizing it, and named for what
+/// it shows — VoiceOver announces "Show booking reference", never a run of
+/// asterisks read out one at a time.
+private struct SensitiveCardValue: View {
+    let fact: MessageResponseCard.GeneratedFact
+    var prominent = false
+    /// The caption a `code` block puts above the value ("qr", "text").
+    var format: String = ""
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var revealed = false
+
+    private var name: String {
+        let label = fact.label.trimmingCharacters(in: .whitespaces).lowercased()
+        return label.isEmpty ? "value" : label
+    }
+
+    var body: some View {
+        Button {
+            revealed.toggle()
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                if !format.isEmpty {
+                    Text(revealed ? format.uppercased() : "Tap to reveal")
+                        .font(.caption2.monospaced().weight(.medium))
+                        .tracking(1.1)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(revealed ? fact.value : String(repeating: "*", count: fact.value.count))
+                        .font(prominent ? .title3.monospaced().weight(.semibold) : .callout.monospaced())
+                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                        .multilineTextAlignment(.leading)
+                    // Touch has no hover to reveal that this is a control, so
+                    // the control says so itself.
+                    Image(systemName: revealed ? "eye.slash" : "eye")
+                        .font(.caption2)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        .accessibilityHidden(true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(revealed ? "Hide \(name)" : "Show \(name)")
+        .accessibilityAddTraits(revealed ? [.isSelected] : [])
     }
 }
 

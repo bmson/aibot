@@ -1464,6 +1464,63 @@ struct ToolActivity: Codable, Sendable {
     ]
 }
 
+/// Past tense for one call in an answer card's step trail.
+///
+/// `ToolActivity.labels` names a call that is happening — right for the crown
+/// and the live activity, wrong for a trail of work that is over. Kept beside
+/// that map so a new tool gets both tenses in one edit, and deliberately the
+/// same vocabulary as the web client's `stepActionLabel`
+/// (apps/web/lib/views.tsx): one step must not read two ways on two surfaces.
+enum ToolStepLabel {
+    static func past(for toolName: String) -> String {
+        if let known = labels[toolName] { return known }
+        // A tool with no phrase of its own is named for what it touched, never
+        // shown as the dotted identifier the runtime called.
+        let source = toolName.split(separator: ".").first.map(String.init) ?? toolName
+        return "Checked \(source.replacingOccurrences(of: "_", with: " "))"
+    }
+
+    private static let labels: [String: String] = [
+        "web.fetch": "Read a web page",
+        "web.search": "Searched the web",
+        "weather.lookup": "Checked the weather",
+        "memory.recall": "Recalled memory",
+        "memory.save": "Saved a note to memory",
+        "contacts.lookup": "Looked up a contact",
+        "conversations.search": "Searched past chats",
+        "goals.update_progress": "Updated goal progress",
+        "mission.update": "Updated ongoing work",
+        "task.schedule": "Scheduled follow-up work",
+        "owner.notify": "Left you a note",
+        "code.execute": "Ran code",
+        "documents.search": "Searched documents",
+        "browser.plan": "Planned a browser task",
+        "browser.execute": "Ran a browser task",
+        "gmail.send": "Sent an email",
+        "gmail.create_draft": "Drafted an email",
+        "gmail.search": "Searched email",
+        "gmail.modify": "Tidied email",
+        "calendar.create_event": "Created a calendar event",
+        "calendar.update_event": "Updated a calendar event",
+        "calendar.search_events": "Checked the calendar",
+        "calendar.list_events": "Checked the calendar",
+        "docs.create": "Created a document",
+        "docs.append": "Updated a document",
+        "docs.get": "Read a document",
+        "docs.share": "Shared a document",
+        "sheets.create": "Created a spreadsheet",
+        "sheets.append_rows": "Updated a spreadsheet",
+        "sheets.write_rows": "Updated a spreadsheet",
+        "sheets.get_rows": "Read a spreadsheet",
+        "slides.create": "Created a presentation",
+        "slides.append": "Updated a presentation",
+        "drive.search": "Searched Drive",
+        "drive.read": "Read a Drive file",
+        "drive.ingest": "Filed a Drive document",
+        "sms.send": "Sent a text message",
+    ]
+}
+
 struct ApprovalResult: Codable, Sendable {
     let ok: Bool
     let taskId: String

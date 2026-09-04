@@ -256,6 +256,112 @@ describe('ResponseCards', () => {
     expect(html).not.toContain('MV-4829-AX');
   });
 
+  it('masks a sensitive fact as a named button, one asterisk per character', () => {
+    const html = render({
+      kind: 'generated-card',
+      id: 'hotel-1',
+      spec: {
+        version: 1,
+        title: 'Hotel Kabuki',
+        sourceLabel: 'Hotel',
+        accessibilityLabel: 'Hotel Kabuki reservation',
+        facts: [
+          {
+            id: 'ref',
+            label: 'Booking reference',
+            value: '73535845212',
+            source: 'mail',
+            sensitive: true,
+          },
+        ],
+        blocks: [{ type: 'facts', factIds: ['ref'] }],
+        actions: [],
+      },
+    });
+    expect(html).not.toContain('73535845212');
+    expect(html).toContain('***********');
+    expect(html).toContain('aria-label="Show booking reference"');
+    expect(html).toContain('aria-pressed="false"');
+    // Same face and character count on both sides of the toggle, so revealing
+    // rewrites the line instead of reflowing it.
+    expect(html).toContain('font-mono');
+  });
+
+  it('folds the work behind an answer card into one closed row', () => {
+    const html = render({
+      kind: 'generated-card',
+      id: 'hotel-2',
+      steps: [
+        { tool: 'gmail.search', count: '1 result', detail: 'from:Katie hotels.com 73535845212' },
+        { tool: 'gmail.read_thread', count: '1 message', detail: 'Fwd: travel confirmation' },
+        { tool: 'nowhere.at_all', count: '1 record' },
+      ],
+      spec: {
+        version: 1,
+        title: 'Hotel Kabuki',
+        sourceLabel: 'Hotel',
+        accessibilityLabel: 'Hotel Kabuki reservation',
+        facts: [{ id: 'name', label: 'Hotel', value: 'Hotel Kabuki', source: 'mail' }],
+        blocks: [{ type: 'hero', titleFact: 'name' }],
+        actions: [],
+      },
+    });
+    expect(html).toContain('Found in 3 steps');
+    expect(html).toContain('aria-expanded="false"');
+    // Closed, and out of the accessibility tree until it is opened.
+    expect(/<ul id="[^"]+" hidden/.test(html)).toBe(true);
+    // User-facing language, never the dotted call the runtime made.
+    expect(html).toContain('Searched email');
+    expect(html).toContain('Checked nowhere');
+    expect(html).not.toContain('gmail.search');
+  });
+
+  it('counts one step as one step and says which of them failed', () => {
+    const card = (steps: Array<Record<string, unknown>>) => ({
+      kind: 'generated-card',
+      id: 'steps',
+      steps,
+      spec: {
+        version: 1,
+        title: 'Card',
+        sourceLabel: 'Mail',
+        accessibilityLabel: 'Card',
+        facts: [{ id: 'a', label: 'A', value: 'One', source: 'mail' }],
+        blocks: [{ type: 'hero', titleFact: 'a' }],
+        actions: [],
+      },
+    });
+    expect(render(card([{ tool: 'gmail.search' }]))).toContain('Found in 1 step');
+    const withFailure = render(
+      card([
+        { tool: 'gmail.search', count: '1 result' },
+        { tool: 'gmail.read_thread', count: '1 message' },
+        { tool: 'web.fetch', failed: true, error: 'Upstream returned 503' },
+      ]),
+    );
+    expect(withFailure).toContain('Found in 3 steps, 1 failed');
+    expect(withFailure).toContain('Upstream returned 503');
+  });
+
+  it('offers no steps affordance when the answer took no tool calls', () => {
+    const html = render({
+      kind: 'generated-card',
+      id: 'no-steps',
+      steps: [],
+      spec: {
+        version: 1,
+        title: 'Card',
+        sourceLabel: 'Mail',
+        accessibilityLabel: 'Card',
+        facts: [{ id: 'a', label: 'A', value: 'One', source: 'mail' }],
+        blocks: [{ type: 'hero', titleFact: 'a' }],
+        actions: [],
+      },
+    });
+    expect(html).not.toContain('Found in');
+    expect(html).not.toContain('aria-expanded');
+  });
+
   it('keeps prose fallback for an unsupported generated-card schema version', () => {
     expect(
       rendersAllCards([

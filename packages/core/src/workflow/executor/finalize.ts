@@ -21,6 +21,7 @@ import type { RecallSource } from '../../memory/recall.js';
 import { recordSkillOutcome } from '../../memory/skills.js';
 import { type ArtifactIntent, artifactExecutionFailure } from '../artifact-intent.js';
 import { CARD_NOT_BUILT, requestedCardIntent } from '../card-intent.js';
+import { responseCardSteps } from '../card-steps.js';
 import { isGoalWorkEvidence } from '../goal-evidence.js';
 import {
   checkpointTask,
@@ -56,6 +57,9 @@ const EVIDENCE_COLUMNS = {
   args: toolCalls.args,
   result: toolCalls.result,
   error: toolCalls.error,
+  // Not read by the response contract — it is what puts the step trail on an
+  // answer card in the order the work actually happened.
+  step: toolCalls.step,
 } as const;
 
 export async function stopForUnsavedGoalProgress(
@@ -426,7 +430,24 @@ export async function stageModelFinalResponse(
       });
     }
   }
-  const cards = [...(generatedCard ? [generatedCard] : []), ...specializedCards];
+  /*
+   * A composed card IS the answer, and the specialized cards behind it are the
+   * lookups that fed it — the mailbox search, the thread it opened. Sending all
+   * three answered one request with three cards, two of them the assistant's
+   * homework. The composed card takes the trail instead: same provenance, one
+   * card, folded into a row the reader can open.
+   *
+   * The trail rides on the chat payload only. `persistGeneratedCard` has
+   * already stored the card itself, so what the Cards page keeps stays the
+   * card — not the story of the turn that happened to build it.
+   *
+   * With no composed card the specialized cards ARE the answer ("show me that
+   * email"), and they keep the rendering they have always had.
+   */
+  const steps = generatedCard ? responseCardSteps(evidence) : [];
+  const cards = generatedCard
+    ? [{ ...generatedCard, ...(steps.length > 0 ? { steps } : {}) }]
+    : specializedCards;
   if (cards.length > 0) pending.responseCards = cards;
   // A requested card that could not be grounded must say so. Staying quiet let
   // the prose claim a card the Cards page never received.
