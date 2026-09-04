@@ -64,18 +64,7 @@ struct ApprovalsView: View {
                     decision == "approved" ? "Approve and continue" : "Deny action",
                     role: decision == "denied" ? .destructive : nil
                 ) {
-                    decisionInFlightID = item.id
-                    decisionInFlightAction = decision
-                    Task {
-                        let succeeded = await model.decide(item, decision: decision)
-                        decisionInFlightID = nil
-                        decisionInFlightAction = nil
-                        if succeeded {
-                            decisionSuccessFeedback += 1
-                        } else {
-                            decisionErrorFeedback += 1
-                        }
-                    }
+                    applyDecision(item, decision: decision)
                     pendingDecision = nil
                 }
                 Button("Cancel", role: .cancel) { pendingDecision = nil }
@@ -237,7 +226,7 @@ struct ApprovalsView: View {
     @ViewBuilder
     private func approvalActions(_ item: PendingApproval) -> some View {
         approvalActionButton(
-            "Deny action",
+            "Deny",
             decision: "denied",
             item: item,
             role: .destructive,
@@ -245,7 +234,7 @@ struct ApprovalsView: View {
         )
 
         approvalActionButton(
-            "Approve and continue",
+            "Approve",
             decision: "approved",
             item: item,
             prominent: true
@@ -270,9 +259,12 @@ struct ApprovalsView: View {
             }
         } label: {
             Label("More", systemImage: "ellipsis.circle")
-                .frame(maxWidth: .infinity)
+                .font(.subheadline.weight(.medium))
+                .frame(minHeight: 32)
         }
         .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .controlSize(.small)
         .disabled(decisionInFlightID != nil)
     }
 
@@ -289,11 +281,13 @@ struct ApprovalsView: View {
 
         if prominent {
             Button {
-                pendingDecision = (item, decision)
+                applyDecision(item, decision: decision)
             } label: {
                 approvalActionLabel(title, isApplying: isApplyingThisDecision)
             }
             .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
             .tint(AssistantTheme.accent(for: colorScheme))
             .disabled(decisionInFlightID != nil)
             .accessibilityLabel(isApplyingThisDecision ? "Applying \(title.lowercased())" : title)
@@ -306,6 +300,8 @@ struct ApprovalsView: View {
                 approvalActionLabel(title, isApplying: isApplyingThisDecision)
             }
             .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
             .tint(.red)
             .disabled(decisionInFlightID != nil)
             .accessibilityLabel(isApplyingThisDecision ? "Applying \(title.lowercased())" : title)
@@ -322,8 +318,25 @@ struct ApprovalsView: View {
             }
             Text(isApplying ? "Applying…" : title)
         }
-        .frame(maxWidth: .infinity)
+        .font(.subheadline.weight(.semibold))
+        .frame(minHeight: 32)
         .contentTransition(.opacity)
+    }
+
+    private func applyDecision(_ item: PendingApproval, decision: String) {
+        guard decisionInFlightID == nil else { return }
+        decisionInFlightID = item.id
+        decisionInFlightAction = decision
+        Task {
+            let succeeded = await model.decide(item, decision: decision)
+            decisionInFlightID = nil
+            decisionInFlightAction = nil
+            if succeeded {
+                decisionSuccessFeedback += 1
+            } else {
+                decisionErrorFeedback += 1
+            }
+        }
     }
 
     @ViewBuilder
