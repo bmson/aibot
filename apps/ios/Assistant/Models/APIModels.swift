@@ -516,9 +516,18 @@ struct ActivityItem: Codable, Identifiable, Sendable {
     }
 
     var displayProgress: String {
-        Self.progressPrefixes.reduce(progress) { result, replacement in
+        let humanized = Self.progressPrefixes.reduce(progress) { result, replacement in
             result.replacingOccurrences(of: replacement.technical, with: replacement.human)
         }
+        // Pipeline diagnostics are useful in server logs but are not a user
+        // progress message. Hiding them here keeps Activity readable while
+        // preserving the raw value in the task record for diagnostics.
+        let lower = humanized.lowercased()
+        if lower.hasPrefix("pulse:") || lower.hasPrefix("document processor:") ||
+            lower.contains("no-candidates") || lower.contains("segmentation") {
+            return ""
+        }
+        return humanized
     }
 
     var budgetSummary: String {

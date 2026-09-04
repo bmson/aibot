@@ -110,6 +110,18 @@ describe('reminder tools', () => {
     expect(second.some((f) => f.schedule === row?.name)).toBe(false);
   });
 
+  it('resolves a relative one-time reminder on the server clock', async () => {
+    if (!dbUp) return;
+    const now = new Date('2026-09-03T18:00:00.000Z');
+    const result = (await tool('reminder.create')?.execute(
+      { text: 'relative reminder', inMinutes: 10 },
+      { ...ctx(), now: () => now },
+    )) as { reminderId: string; kind: string; nextFires: string; timezone: string };
+    expect(result.kind).toBe('once');
+    expect(result.nextFires).toBe('2026-09-03T18:10:00.000Z');
+    expect(result.timezone).toBe((await getAgent(db)).timezone);
+  });
+
   it('lists active reminders and cancels one by id', async () => {
     if (!dbUp) return;
     const created = (await tool('reminder.create')?.execute(

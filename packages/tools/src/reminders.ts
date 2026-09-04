@@ -74,18 +74,26 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
       weekdays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
       /** Exact instant for a reminder that fires once. */
       at: z.string().datetime({ offset: true }).optional(),
+      /** Relative one-time delay, resolved by the server clock. */
+      inMinutes: z
+        .number()
+        .int()
+        .min(1)
+        .max(7 * 24 * 60)
+        .optional(),
     })
     .superRefine((args, refinement) => {
+      const oneTimeInputs = Number(Boolean(args.at)) + Number(Boolean(args.inMinutes));
       const recurringInputs = Number(Boolean(args.cron)) + Number(Boolean(args.time));
-      if (args.at && recurringInputs > 0) {
+      if (oneTimeInputs + recurringInputs > 1) {
         refinement.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'provide at for a one-time reminder, or cron/time for a recurring reminder',
+          message: 'provide exactly one reminder schedule: at/inMinutes, cron, or time',
         });
-      } else if (!args.at && recurringInputs !== 1) {
+      } else if (oneTimeInputs + recurringInputs !== 1) {
         refinement.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'provide exactly one of at, cron, or time',
+          message: 'provide exactly one of at, inMinutes, cron, or time',
         });
       }
     });
@@ -95,14 +103,18 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
     {
       name: 'reminder.create',
       description:
-        'Create a reminder. Ordinary requests such as "remind me tomorrow at 9" fire ONCE: pass an ISO 8601 instant with offset in at. Only when the owner explicitly asks to repeat should you pass a 5-field cron, or time ("HH:MM", owner timezone) with optional weekdays (0=Sun..6=Sat; omit only for explicitly daily reminders). Open-ended work is a goal, not a reminder.',
+        'Create a reminder. Ordinary requests such as "remind me tomorrow at 9" fire ONCE: pass an ISO 8601 instant with offset in at, or inMinutes for "in 10 minutes" so the server resolves the delay against the owner clock. Only when the owner explicitly asks to repeat should you pass a 5-field cron, or time ("HH:MM", owner timezone) with optional weekdays (0=Sun..6=Sat; omit only for explicitly daily reminders). Open-ended work is a goal, not a reminder.',
       inputSchema: createSchema,
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (args, ctx) => {
         const agent = await getAgent(ctx.db);
-        if (args.at) {
-          const firesAt = new Date(args.at);
+        const relativeFiresAt = args.inMinutes
+          ? new Date(ctx.now().getTime() + args.inMinutes * 60 * 1000)
+          : undefined;
+        const oneTimeAt = args.at ? new Date(args.at) : relativeFiresAt;
+        if (oneTimeAt) {
+          const firesAt = oneTimeAt;
           if (firesAt.getTime() <= ctx.now().getTime()) {
             throw new Error('one-time reminder must be in the future');
           }
@@ -121,6 +133,7 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
                 budgetUsdLimit: '0.05',
                 reminderKind: 'once',
                 reminderText: args.text,
+                timezone: agent.timezone,
                 instruction: `Reminder for the owner: ${args.text}\n\nCall owner.notify once with exactly this reminder text, then finish. Do nothing else.`,
                 ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}),
               },
@@ -131,7 +144,7 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
             reminderId: row.id,
             kind: 'once' as const,
             nextFires: firesAt.toISOString(),
-            schedule: firesAt.toISOString(),
+            timezone: agent.timezone,
             text: args.text,
           };
         }
@@ -160,6 +173,7 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
           kind: 'recurring' as const,
           cron,
           nextFires: next.toISOString(),
+          timezone: agent.timezone,
           text: args.text,
         };
       },
@@ -176,6 +190,7 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (_args, ctx) => {
+        const agent = await getAgent(ctx.db);
         const rows = await ctx.db
           .select()
           .from(schedules)
@@ -189,6 +204,7 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
             text: reminderScheduleTemplate(r.taskTemplate).reminderText ?? '',
             kind: reminderScheduleTemplate(r.taskTemplate).reminderKind ?? 'recurring',
             cron: r.cron,
+            timezone: agent.timezone,
             enabled: r.enabled,
             nextFires: r.enabled ? (r.nextRunAt?.toISOString() ?? null) : null,
           })),

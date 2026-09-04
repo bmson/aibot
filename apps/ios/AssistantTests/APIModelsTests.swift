@@ -1636,6 +1636,16 @@ final class APIModelsTests: XCTestCase {
             PullMenuMotion.sheetCornerRadius(isActive: true, fullRadius: -10),
             0
         )
+        XCTAssertEqual(
+            PullMenuMotion.sheetCornerRadius(isActive: true, progress: 0.09, fullRadius: 34),
+            17,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            PullMenuMotion.sheetCornerRadius(isActive: true, progress: 0, fullRadius: 34),
+            0,
+            accuracy: 0.001
+        )
 
         // Normal layouts pair the destinations into rows. The bottom row
         // appears first, and every destination in a row shares a fade rank.
@@ -1662,6 +1672,19 @@ final class APIModelsTests: XCTestCase {
                 )
             },
             Array(repeating: 0, count: 9)
+        )
+
+        // Horizontal compact-height layouts use three equal columns so the
+        // complete directory fits without shrinking the labels.
+        XCTAssertEqual(
+            (0..<9).map {
+                PullMenuMotion.bottomUpFadeRank(
+                    itemIndex: $0,
+                    itemCount: 9,
+                    columns: 3
+                )
+            },
+            [2, 2, 2, 1, 1, 1, 0, 0, 0]
         )
     }
 
@@ -1958,5 +1981,29 @@ final class CardTextTests: XCTestCase {
     func testGmailURLRefusesASynthesisedID() {
         XCTAssertNil(CardText.gmailURL(id: "email-0-0", mailbox: "assistant@example.com"))
         XCTAssertNil(CardText.gmailURL(id: "", mailbox: "assistant@example.com"))
+    }
+
+    func testPresentationLabelsHideTransportFormatting() {
+        XCTAssertEqual(CardText.presentationLabel("SOURCE_MESSAGE"), "Source message")
+        XCTAssertEqual(CardText.presentationLabel("source-document"), "Source document")
+        XCTAssertEqual(CardText.presentationLabel("MCP"), "MCP")
+        XCTAssertEqual(CardText.presentationLabel("Cinema email"), "Cinema email")
+    }
+
+    func testActivityHidesInternalPipelineDiagnostics() {
+        let diagnostic = ActivityItem(
+            id: "activity-1",
+            type: "scheduled",
+            status: "done",
+            title: "Background work",
+            progress: "pulse: quiet (no-candidates)",
+            trust: "assistant",
+            spentUsd: "0",
+            budgetUsdLimit: "0.5",
+            updatedAt: "2026-09-03T18:00:00Z",
+            archivedAt: nil,
+            hasPendingApproval: false
+        )
+        XCTAssertEqual(diagnostic.displayProgress, "")
     }
 }

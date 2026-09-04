@@ -39,10 +39,17 @@ enum PullMenuMotion {
         !userIsDraggingTranscript && !isSending
     }
 
-    /// Corner rounding is binary once the conversation becomes a sheet. The
-    /// reveal progress still drives its shadow, but never its silhouette.
-    static func sheetCornerRadius(isActive: Bool, fullRadius: CGFloat) -> CGFloat {
-        isActive ? max(fullRadius, 0) : 0
+    /// The sheet silhouette eases in with the first part of the reveal. A
+    /// binary jump makes a slow finger pull look like the surface snaps into a
+    /// different component before the menu has actually opened.
+    static func sheetCornerRadius(
+        isActive: Bool,
+        progress: CGFloat = 1,
+        fullRadius: CGFloat
+    ) -> CGFloat {
+        guard isActive else { return 0 }
+        let eased = min(max(progress / 0.18, 0), 1)
+        return max(fullRadius, 0) * eased
     }
 
     /// Returns a bottom-up row rank for a row-major collection. Items in the
@@ -216,6 +223,9 @@ private final class TranscriptScrollTracker {
 
 struct ChatView: View {
     let safeAreaTopInset: CGFloat
+    let safeAreaBottomInset: CGFloat
+    let safeAreaLeadingInset: CGFloat
+    let safeAreaTrailingInset: CGFloat
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
@@ -223,6 +233,7 @@ struct ChatView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.scenePhase) private var scenePhase
     @ScaledMetric(relativeTo: .body) private var composerFontSize = 16.0
     // The directory labels need the same legibility as the content cards.
@@ -286,6 +297,9 @@ struct ChatView: View {
     }
 
     private var menuActionsHeight: CGFloat {
+        if isLandscape {
+            return (3 * menuButtonHeight) + 13 + menuAutonomyHeight
+        }
         if usesExtraLargeAccessibilityMenu {
             return menuButtonHeight + 10 + menuAutonomyHeight
         }
@@ -295,6 +309,7 @@ struct ChatView: View {
     }
 
     private var menuButtonHeight: CGFloat {
+        if isLandscape { return 58 }
         if usesExtraLargeAccessibilityMenu { return 92 }
         return dynamicTypeSize.isAccessibilitySize ? 76 : 64
     }
@@ -305,6 +320,16 @@ struct ChatView: View {
 
     private var usesExtraLargeAccessibilityMenu: Bool {
         dynamicTypeSize >= .accessibility4
+    }
+
+    private var isLandscape: Bool { verticalSizeClass == .compact }
+
+    private var crownOnLeadingEdge: Bool {
+        safeAreaLeadingInset > safeAreaTrailingInset
+    }
+
+    private var landscapeCrownClearance: CGFloat {
+        isLandscape ? 196 : 0
     }
 
     var body: some View {
@@ -326,6 +351,7 @@ struct ChatView: View {
                         RoundedRectangle(
                             cornerRadius: PullMenuMotion.sheetCornerRadius(
                                 isActive: menuSurfaceRounded,
+                                progress: menuSurfaceProgress,
                                 fullRadius: menuSheetCornerRadius
                             ),
                             style: .continuous
@@ -357,51 +383,51 @@ struct ChatView: View {
                     pullMenuOpenGestureTarget
                 }
             }
+            .background {
+                // This remains behind every app surface. When the keyboard is
+                // present, the stage above respects its safe area and pockets of
+                // this backing show around the keyboard's rounded corners — keep
+                // it the conversation's green so those pockets read as the stage
+                // continuing, not a gray seam.
+                AssistantTheme.stage(for: colorScheme)
+                    .ignoresSafeArea()
+            }
+            // The conversation surface is visually above the revealed submenu.
+            // Once open, observe its vertical dismissal drag across both surfaces
+            // without stealing the horizontal swipe used by the extra-large
+            // accessibility menu. The 10pt threshold leaves tile taps untouched;
+            // disabling it while closed avoids the transcript's opening pull.
+            .simultaneousGesture(
+                pullMenuCloseGesture,
+                including: menuOpen && !usesExtraLargeAccessibilityMenu ? .all : .none
+            )
+            .toolbar(.hidden, for: .navigationBar)
+            .sensoryFeedback(.selection, trigger: menuDetentFeedback)
+            .sensoryFeedback(.selection, trigger: menuAutonomyFeedback)
+            .sensoryFeedback(.impact(weight: .light), trigger: sendFeedback)
+            .sensoryFeedback(.selection, trigger: jumpFeedback)
+            .onChange(of: model.presentedRoute) { _, route in
+                // Menu tiles already close themselves before navigating. This
+                // catches routes presented from notifications, deep links, or the
+                // activity crown so Back never reveals a stale open sheet.
+                if route != nil, menuOpen || menuPullActive {
+                    closePullMenu()
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase != .active else { return }
+                settleInterruptedMenuGesture()
+            }
+            .onChange(of: model.restorableDraft) { _, restorable in
+                // A failed send hands its text back — the composer shows the words
+                // again instead of the owner retyping them.
+                guard restorable != nil, let failed = model.restoreFailedDraft() else { return }
+                draft = failed
+            }
         }
         // Resolve the full container before reading `viewport.size`; the
         // keyboard is a separate safe-area region and remains respected.
         .ignoresSafeArea(.container)
-        .background {
-            // This remains behind every app surface. When the keyboard is
-            // present, the stage above respects its safe area and pockets of
-            // this backing show around the keyboard's rounded corners — keep
-            // it the conversation's green so those pockets read as the stage
-            // continuing, not a gray seam.
-            AssistantTheme.stage(for: colorScheme)
-                .ignoresSafeArea()
-        }
-        // The conversation surface is visually above the revealed submenu.
-        // Once open, observe its vertical dismissal drag across both surfaces
-        // without stealing the horizontal swipe used by the extra-large
-        // accessibility menu. The 10pt threshold leaves tile taps untouched;
-        // disabling it while closed avoids the transcript's opening pull.
-        .simultaneousGesture(
-            pullMenuCloseGesture,
-            including: menuOpen && !usesExtraLargeAccessibilityMenu ? .all : .none
-        )
-        .toolbar(.hidden, for: .navigationBar)
-        .sensoryFeedback(.selection, trigger: menuDetentFeedback)
-        .sensoryFeedback(.selection, trigger: menuAutonomyFeedback)
-        .sensoryFeedback(.impact(weight: .light), trigger: sendFeedback)
-        .sensoryFeedback(.selection, trigger: jumpFeedback)
-        .onChange(of: model.presentedRoute) { _, route in
-            // Menu tiles already close themselves before navigating. This
-            // catches routes presented from notifications, deep links, or the
-            // activity crown so Back never reveals a stale open sheet.
-            if route != nil, menuOpen || menuPullActive {
-                closePullMenu()
-            }
-        }
-        .onChange(of: scenePhase) { _, phase in
-            guard phase != .active else { return }
-            settleInterruptedMenuGesture()
-        }
-        .onChange(of: model.restorableDraft) { _, restorable in
-            // A failed send hands its text back — the composer shows the words
-            // again instead of the owner retyping them.
-            guard restorable != nil, let failed = model.restoreFailedDraft() else { return }
-            draft = failed
-        }
     }
 
     /// The transcript and the root error banner clear the Island by exactly the
@@ -409,7 +435,8 @@ struct ChatView: View {
     /// that ignores the top safe area. One expression for both, because the two
     /// drifting apart is what previously left the banner behind the pill.
     private var crownContentTopInset: CGFloat {
-        ActivityCrown.overlayTopInset(
+        if isLandscape { return 0 }
+        return ActivityCrown.overlayTopInset(
             isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
             isExpanded: model.activityThought != nil,
             safeAreaTopInset: safeAreaTopInset
@@ -465,7 +492,8 @@ struct ChatView: View {
                             .frame(height: composerHeight + 18)
                             .id("bottom")
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.leading, AssistantTheme.compactGutter + (crownOnLeadingEdge ? landscapeCrownClearance : 0))
+                    .padding(.trailing, AssistantTheme.compactGutter + (crownOnLeadingEdge ? 0 : landscapeCrownClearance))
                     // Keyed to the identity list rather than the messages
                     // themselves: without an animation transaction the row
                     // transitions above never played at all, but animating on the
@@ -625,6 +653,8 @@ struct ChatView: View {
                 // transcript before the menu gesture took over.
                 composer
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: isLandscape ? 680 : .infinity)
+                    .frame(maxWidth: .infinity)
                     // A plain, explicit padding is deliberate. Safe-area
                     // padding is recomputed when this transformed surface
                     // crosses the device safe-area boundary, and an offset
@@ -988,7 +1018,55 @@ struct ChatView: View {
 
     @ViewBuilder
     private var pullMenuActions: some View {
-        if usesExtraLargeAccessibilityMenu {
+        if isLandscape {
+            VStack(spacing: 0) {
+                pullMenuRow {
+                    pullMenuButton("Chat", icon: "bubble.left", isSelected: true, index: 0) {
+                        closePullMenu()
+                    }
+                    pullMenuButton("Activity", icon: "waveform.path.ecg", index: 1) {
+                        openRoute(.activity)
+                    }
+                    pullMenuButton("Goals", icon: "scope", index: 2) {
+                        openRoute(.goals)
+                    }
+                }
+                pullMenuRow {
+                    pullMenuButton(
+                        "Approvals",
+                        icon: "checkmark.shield",
+                        badge: model.pendingApprovalCount,
+                        index: 3
+                    ) {
+                        openRoute(.approvals)
+                    }
+                    pullMenuButton("Chats", icon: "bubble.left.and.bubble.right", index: 4) {
+                        openRoute(.chats)
+                    }
+                    pullMenuButton(
+                        "Memory",
+                        icon: "brain.head.profile",
+                        badge: model.memoryReviewCount,
+                        index: 5
+                    ) {
+                        openRoute(.memory)
+                    }
+                }
+                pullMenuRow {
+                    pullMenuButton("Cards", icon: "rectangle.stack", index: 6) {
+                        openRoute(.cards)
+                    }
+                    pullMenuButton("People", icon: "person.2", index: 7) {
+                        openRoute(.people)
+                    }
+                    pullMenuButton("More", icon: "ellipsis", index: 8) {
+                        openRoute(.settings)
+                    }
+                }
+                pullMenuDivider
+                menuAutonomyToggle
+            }
+        } else if usesExtraLargeAccessibilityMenu {
             VStack(spacing: 10) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
@@ -1177,7 +1255,7 @@ struct ChatView: View {
         // items stretching. Reveal paired rows from the physical bottom edge,
         // matching the order in which the lifting surface exposes them. The
         // extra-large horizontal strip is one row and fades as a group.
-        let columns = usesExtraLargeAccessibilityMenu ? pullMenuItemCount : 2
+        let columns = isLandscape ? 3 : (usesExtraLargeAccessibilityMenu ? pullMenuItemCount : 2)
         let fadeRank = PullMenuMotion.bottomUpFadeRank(
             itemIndex: index,
             itemCount: pullMenuItemCount,
@@ -1231,7 +1309,7 @@ struct ChatView: View {
                 pressedScale: 0.975
             )
         )
-        .frame(width: usesExtraLargeAccessibilityMenu ? 220 : nil)
+        .frame(width: usesExtraLargeAccessibilityMenu && !isLandscape ? 220 : nil)
         .opacity(visibility)
         .accessibilityLabel(title)
         .accessibilityValue(

@@ -11,6 +11,7 @@ import {
   goalAutomationGate,
   goalScheduleName,
   maybeFireWakeBrief,
+  nextRun,
   runDueSchedules,
   upsertSchedule,
 } from './schedules.js';
@@ -292,6 +293,15 @@ describe('feature-gated schedules (integration)', () => {
     } finally {
       await restore();
     }
+  });
+});
+
+describe('nextRun', () => {
+  it('advances past an exact cron boundary instead of returning the same instant', () => {
+    const boundary = new Date('2026-09-04T07:00:00.000Z');
+    const next = nextRun('0 * * * *', 'UTC', boundary);
+    expect(next.getTime()).toBeGreaterThan(boundary.getTime());
+    expect(next.toISOString()).toBe('2026-09-04T08:00:00.000Z');
   });
 });
 

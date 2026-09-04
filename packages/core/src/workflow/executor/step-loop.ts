@@ -34,7 +34,7 @@ import {
   renewTaskLease,
   sleepTask,
 } from '../machine.js';
-import { PLANNER_VERSION } from '../planner.js';
+import { isConceptualNoToolRequest, PLANNER_VERSION } from '../planner.js';
 import {
   buildReadToolInput,
   detectPersonalReadRequest,
@@ -67,7 +67,7 @@ import {
 import type { RunContext } from './phases.js';
 import { roleForTask } from './role.js';
 import { type ExecuteResult, LOST_LEASE } from './types.js';
-import { compact, toolResultMessage } from './util.js';
+import { compact, latestUserText, toolResultMessage } from './util.js';
 
 /**
  * The model step loop: build the system prompt, let the model propose tool
@@ -218,6 +218,11 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
           timeZone: agent.timezone,
         })
       : null;
+  // A conceptual question was explicitly classified before the planner ran.
+  // Keep the same no-tool guarantee at execution time: a model may still emit
+  // a calendar or Gmail call when tools are present even for a `reply` plan.
+  const conceptualNoTool =
+    task.trust === 'owner' && isConceptualNoToolRequest(latestUserText(rc.window) ?? '');
   // Route action requests to the reasoning model (see roleForTask): a goal
   // session, a mission, an email to triage, or a chat/SMS turn the planner
   // routed to real work all drive tools on the strong model. The draft model
@@ -502,9 +507,11 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     // (isMissionSessionTask). Keying off that — rather than "any adhoc child" —
     // stops unrelated adhoc children (e.g. the D9 known-sender-reply child) from
     // being offered mission.update, which they can only ever call in error.
-    const availableToolDefs = dispatcher.toolDefs(task.trust as Trust, {
-      isMissionSession: isMissionSessionTask(task),
-    });
+    const availableToolDefs = conceptualNoTool
+      ? []
+      : dispatcher.toolDefs(task.trust as Trust, {
+          isMissionSession: isMissionSessionTask(task),
+        });
     // Automatic goal checkpoints are runtime capabilities, not model
     // capabilities. Hiding the tool prevents an eager model from persisting
     // unverified prose before the ledger-backed checkpoint runs.
@@ -624,11 +631,13 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         tools: toolSet as never,
         toolChoice: readAnswerTurn
           ? 'none'
-          : forcedArtifact
-            ? { type: 'tool', toolName: forcedArtifact.toolName }
-            : mustAct
-              ? 'required'
-              : undefined,
+          : conceptualNoTool
+            ? 'none'
+            : forcedArtifact
+              ? { type: 'tool', toolName: forcedArtifact.toolName }
+              : mustAct
+                ? 'required'
+                : undefined,
         // The primary chat model has intermittently timed out when a named
         // artifact tool is mandatory. Use the role's configured
         // tool-capable fallback where appropriate.

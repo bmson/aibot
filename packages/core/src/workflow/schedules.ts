@@ -71,7 +71,14 @@ export interface GoalAutomationCadence {
 
 /** Compute the next firing of a cron expression in the given timezone. */
 export function nextRun(cron: string, timezone: string, from: Date = new Date()): Date {
-  const next = new Cron(cron, { timezone }).nextRun(from);
+  const expression = new Cron(cron, { timezone });
+  let next = expression.nextRun(from);
+  // Some cron expressions resolve an exact minute boundary inclusively. A
+  // schedule that just fired must advance to the following occurrence or the
+  // sweeper can observe the same timestamp again on its next tick.
+  if (next && next.getTime() <= from.getTime()) {
+    next = expression.nextRun(new Date(from.getTime() + 1_000));
+  }
   if (!next) throw new Error(`cron never fires: ${cron}`);
   return next;
 }

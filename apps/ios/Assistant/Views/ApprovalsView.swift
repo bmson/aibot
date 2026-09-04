@@ -5,6 +5,7 @@ struct ApprovalsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var pendingDecision: (PendingApproval, String)?
     @State private var decisionInFlightID: String?
     @State private var decisionInFlightAction: String?
@@ -46,6 +47,7 @@ struct ApprovalsView: View {
             }
             .padding(16)
             .padding(.bottom, 28)
+            .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
         }
         .navigationTitle("Approvals")
         .assistantSubmenuChrome()
@@ -108,6 +110,38 @@ struct ApprovalsView: View {
     }
 
     private func approvalCard(_ item: PendingApproval) -> some View {
+        Group {
+            if isLandscape {
+                HStack(alignment: .top, spacing: 20) {
+                    approvalDetails(item)
+                    Divider()
+                        .overlay(AssistantTheme.warning(for: colorScheme).opacity(0.18))
+                    VStack(alignment: .leading, spacing: 9) {
+                        approvalActions(item)
+                    }
+                    .frame(width: 190)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    approvalDetails(item)
+                    Group {
+                        if usesAccessibilityLayout {
+                            VStack(spacing: 9) { approvalActions(item) }
+                        } else {
+                            AssistantFlowLayout(spacing: 9) { approvalActions(item) }
+                        }
+                    }
+                }
+            }
+        }
+        .assistantCard(
+            in: colorScheme,
+            surface: AssistantTheme.warningSurface(for: colorScheme),
+            strokeTint: AssistantTheme.warning(for: colorScheme)
+        )
+    }
+
+    private func approvalDetails(_ item: PendingApproval) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             approvalHeader(item)
             Text(item.approval.summary)
@@ -117,20 +151,8 @@ struct ApprovalsView: View {
             Divider()
                 .overlay(AssistantTheme.warning(for: colorScheme).opacity(0.18))
             approvalMetadata(item)
-
-            Group {
-                if usesAccessibilityLayout {
-                    VStack(spacing: 9) { approvalActions(item) }
-                } else {
-                    AssistantFlowLayout(spacing: 9) { approvalActions(item) }
-                }
-            }
         }
-        .assistantCard(
-            in: colorScheme,
-            surface: AssistantTheme.warningSurface(for: colorScheme),
-            strokeTint: AssistantTheme.warning(for: colorScheme)
-        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -365,6 +387,7 @@ struct ApprovalsView: View {
     }
 
     private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
+    private var isLandscape: Bool { verticalSizeClass == .compact }
 
     private func canRemember(_ item: PendingApproval) -> Bool {
         guard item.toolName == "gmail.send",

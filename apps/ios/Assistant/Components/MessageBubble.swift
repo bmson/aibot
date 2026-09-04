@@ -471,9 +471,7 @@ struct MessageBubble: View {
         return Button(action: openApprovals) {
             VStack(alignment: .leading, spacing: 10) {
                 Label("Approval needed to continue", systemImage: "checkmark.shield.fill")
-                    .font(.caption.weight(.bold))
-                    .textCase(.uppercase)
-                    .tracking(0.6)
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
 
                 Text(summary.purpose)
@@ -599,9 +597,7 @@ struct MessageBubble: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                     Text(presentation.title)
-                        .font(.caption.weight(.bold))
-                        .textCase(.uppercase)
-                        .tracking(0.55)
+                        .font(.caption.weight(.semibold))
                     Spacer(minLength: 4)
                     if let code = part.shortCode, !code.isEmpty {
                         Text(code)
@@ -678,9 +674,7 @@ struct MessageBubble: View {
         let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
         VStack(alignment: .leading, spacing: 10) {
             Label("Answered without checking", systemImage: "arrow.trianglehead.turn.up.right.circle.fill")
-                .font(.caption.weight(.bold))
-                .textCase(.uppercase)
-                .tracking(0.6)
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(tint)
             Text("That reply came from memory, not from your accounts — no lookup or action actually ran, so don’t take anything it claimed as checked or done.")
                 .font(.system(size: messageFontSize, weight: .regular))
@@ -2464,7 +2458,7 @@ struct RichResponseCards: View {
                 .padding(14)
                 .background(
                     AssistantTheme.raised(for: colorScheme),
-                    in: RoundedRectangle(cornerRadius: AssistantTheme.chatCardCornerRadius, style: .continuous)
+                    in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
                 )
             }
         }
@@ -2927,9 +2921,8 @@ struct RichResponseCards: View {
                 .frame(width: 44, height: 44)
                 .background(AssistantTheme.accent(for: colorScheme).opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             VStack(alignment: .leading, spacing: 4) {
-                Text(title.uppercased())
-                    .font(.caption2.weight(.bold))
-                    .tracking(0.7)
+                Text(title)
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 Text(duration)
                     .font(.title3.monospacedDigit().weight(.semibold))
@@ -2990,9 +2983,8 @@ struct RichResponseCards: View {
 
                         if !person.background.isEmpty {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("BACKGROUND")
-                                    .font(.caption2.weight(.bold))
-                                    .tracking(0.55)
+                                Text("Background")
+                                    .font(.caption.weight(.semibold))
                                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                                 ForEach(person.background.indices, id: \.self) { index in
                                     interviewBullet(person.background[index])
@@ -3006,9 +2998,8 @@ struct RichResponseCards: View {
                                 .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                                 .frame(width: 16)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("INTERVIEW FOCUS")
-                                    .font(.caption2.weight(.bold))
-                                    .tracking(0.55)
+                                Text("Interview focus")
+                                    .font(.caption.weight(.semibold))
                                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                                 Text(AssistantMarkdown.inlineAttributed(person.interviewFocus))
                                     .font(.caption)
@@ -3046,9 +3037,8 @@ struct RichResponseCards: View {
 
             if !nextSteps.isEmpty {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("NEXT STEPS")
-                        .font(.caption2.weight(.bold))
-                        .tracking(0.55)
+                    Text("Next steps")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                     ForEach(nextSteps.indices, id: \.self) { index in
                         HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -3089,9 +3079,8 @@ struct RichResponseCards: View {
                 .frame(width: 42, height: 42)
                 .background(AssistantTheme.accent(for: colorScheme).opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             VStack(alignment: .leading, spacing: 5) {
-                Text(enabled ? "REMINDER" : "REMINDER PAUSED")
-                    .font(.caption2.weight(.bold))
-                    .tracking(0.7)
+                Text(enabled ? "Reminder" : "Reminder paused")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 Text(AssistantMarkdown.inlineAttributed(title))
                     .font(.headline)
@@ -3102,9 +3091,12 @@ struct RichResponseCards: View {
                         .font(.caption)
                         .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 }
-                if !schedule.isEmpty {
+                // Legacy one-time cards used the ISO next-run instant as their
+                // schedule line. Keep transport timestamps out of the UI;
+                // `nextFires` is already localized above.
+                if !schedule.isEmpty && cardTimestamp(schedule) == nil {
                     Text(schedule)
-                        .font(.caption.monospaced())
+                        .font(.caption)
                         .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 }
             }
@@ -3652,9 +3644,8 @@ struct RichResponseCards: View {
                 .frame(width: 42, height: 42)
                 .background(AssistantTheme.accent(for: colorScheme).opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             VStack(alignment: .leading, spacing: 5) {
-                Text(subtitle.uppercased())
-                    .font(.caption2.weight(.bold))
-                    .tracking(0.7)
+                Text(CardText.presentationLabel(subtitle))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 Text(AssistantMarkdown.inlineAttributed(title))
                     .font(.headline)
@@ -3686,9 +3677,8 @@ struct RichResponseCards: View {
                 .frame(width: 42, height: 42)
                 .background(AssistantTheme.accent(for: colorScheme).opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             VStack(alignment: .leading, spacing: 5) {
-                Text("COMPLETE")
-                    .font(.caption2.weight(.bold))
-                    .tracking(0.7)
+                Text("Complete")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 Text(AssistantMarkdown.inlineAttributed(title))
                     .font(.headline)
@@ -3739,9 +3729,8 @@ struct RichResponseCards: View {
                     in: RoundedRectangle(cornerRadius: 14, style: .continuous)
                 )
             VStack(alignment: .leading, spacing: 6) {
-                Text(urgency.uppercased())
-                    .font(.caption2.monospacedDigit().weight(.bold))
-                    .tracking(0.7)
+                Text(urgency.replacingOccurrences(of: "_", with: " ").capitalized)
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                 Text(AssistantMarkdown.inlineAttributed(title))
                     .font(.headline)
@@ -3781,9 +3770,8 @@ struct RichResponseCards: View {
                         in: RoundedRectangle(cornerRadius: 11, style: .continuous)
                     )
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(card.sourceLabel.uppercased())
-                        .font(.caption2.monospaced().weight(.semibold))
-                        .tracking(1.1)
+                    Text(CardText.presentationLabel(card.sourceLabel))
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                     Text(card.title)
                         .font(.headline.weight(.semibold))
@@ -3847,9 +3835,8 @@ struct RichResponseCards: View {
                 ForEach(ids, id: \.self) { id in
                     if let fact = facts[id] {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(fact.label.uppercased())
-                                .font(.caption2.monospaced().weight(.medium))
-                                .tracking(0.7)
+                            Text(CardText.presentationLabel(fact.label))
+                                .font(.caption.weight(.semibold))
                                 .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                             generatedFactValue(fact, prominent: false)
                         }
@@ -3989,9 +3976,8 @@ struct RichResponseCards: View {
     ) -> some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(title.uppercased())
-                    .font(.caption2.weight(.bold))
-                    .tracking(0.8)
+                Text(CardText.presentationLabel(title))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                 if !subtitle.isEmpty {
                     switch subtitleStyle {
@@ -4272,12 +4258,16 @@ private extension View {
         inset: CGFloat
     ) -> some View {
         let shape = RoundedRectangle(
-            cornerRadius: AssistantTheme.chatCardCornerRadius,
+            cornerRadius: AssistantTheme.cardCornerRadius,
             style: .continuous
         )
         return padding(inset)
             .padding(.leading, 2)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: AssistantTheme.responseCardMinHeight,
+                alignment: .leading
+            )
             .background(
                 AssistantTheme.raised(for: colorScheme),
                 in: shape
@@ -4575,6 +4565,27 @@ enum CardText {
             }
         }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Transport/source identifiers occasionally arrive in generated cards
+    /// (for example `SOURCE_MESSAGE`). Keep those useful as provenance while
+    /// presenting them as product copy instead of leaking the wire format.
+    static func presentationLabel(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.contains("_") || trimmed.contains("-") || trimmed == trimmed.uppercased() else {
+            return raw
+        }
+        let words = trimmed
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .split(whereSeparator: \.isWhitespace)
+        return words.enumerated().map { index, word in
+            let value = String(word)
+            if value.count <= 4, value == value.uppercased() { return value }
+            let lower = value.lowercased()
+            guard let first = lower.first else { return lower }
+            return (index == 0 ? String(first).uppercased() : String(first)) + String(lower.dropFirst())
+        }.joined(separator: " ")
     }
 }
 
@@ -4993,6 +5004,7 @@ enum AssistantMarkdown {
             return compact.allSatisfy { $0 == "-" || $0 == ":" }
         }
     }
+
 }
 
 private struct AssistantMarkdownView: View {

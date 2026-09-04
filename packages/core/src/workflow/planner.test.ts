@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ModelRouter } from '../model-router/router.js';
 import { TruncatedObjectError } from '../model-router/router.js';
 import {
+  isConceptualNoToolRequest,
   normalizePersonalReadPlan,
   PLANNER_VERSION,
   plannerContext,
@@ -48,6 +49,43 @@ describe('planner context', () => {
     expect(context).toContain(answer);
     expect(context).toContain('…');
     expect(context.length).toBeLessThan(longQuestion.length + answer.length);
+  });
+});
+
+describe('conceptual intent gate', () => {
+  it.each([
+    'How long is a 45 minute meeting?',
+    'Prepare interview questions',
+    'Please give me some interview preparation questions',
+  ])('keeps self-contained prompts out of private-source tools: %s', (text) => {
+    expect(isConceptualNoToolRequest(text)).toBe(true);
+  });
+
+  it.each([
+    'When is my next meeting?',
+    'What is on my calendar tomorrow?',
+    'Search my inbox for the interview invite',
+    'How long is my 45 minute meeting?',
+  ])('does not block a request that explicitly needs private evidence: %s', (text) => {
+    expect(isConceptualNoToolRequest(text)).toBe(false);
+  });
+
+  it('recognizes SDK text-part content when forcing the planner branch', async () => {
+    const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) }));
+    const object = vi.fn(() => {
+      throw new Error('conceptual prompt must not call the planner model');
+    });
+    const result = await planTask(
+      { db: { update } as never, router: { object } as unknown as ModelRouter },
+      { id: 'task-conceptual-parts', type: 'chat_turn', trust: 'owner' } as TaskRow,
+      { name: 'AI Bot' } as AgentRow,
+      [
+        { role: 'user', content: [{ type: 'text', text: 'Prepare interview questions' }] },
+      ] as ModelMessage[],
+    );
+
+    expect(object).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ action: 'reply', steps: [], missingInfo: [] });
   });
 });
 

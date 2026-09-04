@@ -60,6 +60,7 @@ struct WorkspaceView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingDocumentImporter = false
     @State private var showingBackstoryImporter = false
@@ -87,6 +88,7 @@ struct WorkspaceView: View {
             }
             .padding(16)
             .padding(.bottom, 28)
+            .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
         }
         .navigationTitle(area.title)
         .assistantSubmenuChrome()
@@ -215,10 +217,10 @@ struct WorkspaceView: View {
         Image(systemName: area.icon)
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-            .frame(width: 46, height: 46)
+            .frame(width: isLandscape ? 40 : 46, height: isLandscape ? 40 : 46)
             .background(
                 AssistantTheme.accent(for: colorScheme).opacity(0.12),
-                in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+                in: RoundedRectangle(cornerRadius: AssistantTheme.panelCornerRadius - 3, style: .continuous)
             )
     }
 
@@ -228,6 +230,8 @@ struct WorkspaceView: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
+
+    private var isLandscape: Bool { verticalSizeClass == .compact }
 
     @ViewBuilder
     private func workspaceContent(_ workspace: WorkspaceResponse) -> some View {

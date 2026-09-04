@@ -9,9 +9,8 @@ struct MermaidDiagramView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("DIAGRAM")
-                .font(.caption2.weight(.bold))
-                .tracking(0.8)
+            Text("Diagram")
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 13)
                 .padding(.vertical, 9)

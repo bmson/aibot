@@ -27,6 +27,16 @@ enum AssistantRoute: String, Hashable, Identifiable, CaseIterable {
 /// capturing `AppModel` is safe because global-actor isolation makes it so.
 typealias RetryAction = @MainActor @Sendable () async -> Void
 
+/// View-scoped loads are routinely cancelled when a navigation destination is
+/// replaced. Cancellation is control flow, not a failed request, so it must
+/// never become the global error banner/toast.
+private func isRequestCancellation(_ error: Error) -> Bool {
+    if error is CancellationError { return true }
+    if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+    if case let APIError.transport(urlError) = error, urlError.code == .cancelled { return true }
+    return false
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var presentedRoute: AssistantRoute?
@@ -1102,6 +1112,8 @@ final class AppModel: ObservableObject {
         do {
             people = try await client.people().people
             peopleLoaded = true
+        } catch where isRequestCancellation(error) {
+            return
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1110,12 +1122,14 @@ final class AppModel: ObservableObject {
     func loadPersonCard(id: String) async {
         guard let client else { return }
         do { personCards[id] = try await client.personCard(id: id) }
+        catch where isRequestCancellation(error) { return }
         catch { errorMessage = error.localizedDescription }
     }
 
     func loadPersonProfile(id: String) async {
         guard let client else { return }
         do { personProfiles[id] = try await client.personProfile(id: id) }
+        catch where isRequestCancellation(error) { return }
         catch { errorMessage = error.localizedDescription }
     }
 
@@ -1294,7 +1308,11 @@ final class AppModel: ObservableObject {
         optimisticallySetDecisionStatus(id: id, status: status)
         do {
             try await operation()
-            reconcileAfterMutation()
+            // The server approval row is authoritative. Re-read the inbox
+            // before returning so Chat and Approvals converge in the same
+            // turn, rather than briefly showing an optimistic "all clear"
+            // that can be replaced by a stale pending card later.
+            await refreshOverview(reportFailure: false)
             return true
         } catch {
             if let previousOverview { overview = previousOverview }
@@ -1506,6 +1524,11 @@ final class AppModel: ObservableObject {
         isSending = false
         resumableTurn = nil
         await refreshOverview()
+        // A completed turn may have created or cancelled a reminder. Refresh
+        // the secondary workspace projection at the same authoritative
+        // boundary as the overview so More → Reminders cannot show a stale
+        // inventory after returning from Chat.
+        await refreshWorkspace()
 
         let reply = messages.reversed().first(where: { $0.role == .assistant && !$0.text.isEmpty })?.text
         if let finalStatus, attention.contains(finalStatus) {

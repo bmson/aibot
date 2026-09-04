@@ -10,14 +10,27 @@ struct RootView: View {
     // The launch screen belongs to the automatic connect at startup, not to a
     // connect the owner just triggered from the Connection form.
     @State private var hasPresentedConnection = false
+    @State private var navigationPath = NavigationPath()
 
     var body: some View {
         GeometryReader { geometry in
-            rootContent(safeAreaTopInset: geometry.safeAreaInsets.top)
+            rootContent(
+                safeAreaTopInset: geometry.safeAreaInsets.top,
+                safeAreaBottomInset: geometry.safeAreaInsets.bottom,
+                safeAreaLeadingInset: geometry.safeAreaInsets.leading,
+                safeAreaTrailingInset: geometry.safeAreaInsets.trailing,
+                isLandscape: geometry.size.width > geometry.size.height
+            )
         }
     }
 
-    private func rootContent(safeAreaTopInset: CGFloat) -> some View {
+    private func rootContent(
+        safeAreaTopInset: CGFloat,
+        safeAreaBottomInset: CGFloat,
+        safeAreaLeadingInset: CGFloat,
+        safeAreaTrailingInset: CGFloat,
+        isLandscape: Bool
+    ) -> some View {
         let islandTopInset = ActivityCrown.islandTopInset(
             safeAreaTopInset: safeAreaTopInset
         )
@@ -42,10 +55,21 @@ struct RootView: View {
                         .transition(.opacity)
                         .onAppear { hasPresentedConnection = true }
                 } else {
-                    NavigationStack {
-                        ChatView(safeAreaTopInset: safeAreaTopInset)
+                    NavigationStack(path: $navigationPath) {
+                        ChatView(
+                            safeAreaTopInset: safeAreaTopInset,
+                            safeAreaBottomInset: safeAreaBottomInset,
+                            safeAreaLeadingInset: safeAreaLeadingInset,
+                            safeAreaTrailingInset: safeAreaTrailingInset
+                        )
                             .navigationDestination(item: $model.presentedRoute) { route in
-                                destination(for: route, safeAreaTopInset: safeAreaTopInset)
+                                destination(
+                                    for: route,
+                                    safeAreaTopInset: safeAreaTopInset,
+                                    safeAreaBottomInset: safeAreaBottomInset,
+                                    safeAreaLeadingInset: safeAreaLeadingInset,
+                                    safeAreaTrailingInset: safeAreaTrailingInset
+                                )
                             }
                             // Registered on the same stack as the routes, so a
                             // relationship row can push from one person to the
@@ -58,7 +82,7 @@ struct RootView: View {
                 }
             }
 
-            if model.bootstrap != nil && model.presentedRoute == nil {
+            if model.bootstrap != nil && model.presentedRoute == nil && navigationPath.isEmpty {
                 ActivityCrown(
                     thought: model.activityThought,
                     detail: model.activityDetail,
@@ -69,9 +93,17 @@ struct RootView: View {
                         )
                     }
                 )
-                // Share the physical Island's top edge. The rounded active
-                // surface surrounds the camera; idle leaves the pill alone.
-                .padding(.top, islandTopInset)
+                // Portrait is the supported iPhone presentation. The compact
+                // size-class branch remains defensive for previews/iPad and
+                // attaches the crown to the hardware Island edge.
+                .modifier(
+                    ActivityCrownPlacement(
+                        isLandscape: isLandscape,
+                        islandTopInset: islandTopInset,
+                        safeAreaLeadingInset: safeAreaLeadingInset,
+                        safeAreaTrailingInset: safeAreaTrailingInset
+                    )
+                )
                 .zIndex(100)
             }
 
@@ -82,7 +114,10 @@ struct RootView: View {
             // Gated on bootstrap so the onboarding Connection form keeps its
             // own inline error instead of doubling it.
             if model.bootstrap != nil, let error = model.errorMessage {
-                let bannerTopInset = errorBannerTopInset(safeAreaTopInset: safeAreaTopInset)
+                let bannerTopInset = errorBannerTopInset(
+                    safeAreaTopInset: safeAreaTopInset,
+                    isLandscape: isLandscape
+                )
 
                 errorBanner(error)
                     .padding(.horizontal, 12)
@@ -174,11 +209,20 @@ struct RootView: View {
     @ViewBuilder
     private func destination(
         for route: AssistantRoute,
-        safeAreaTopInset: CGFloat
+        safeAreaTopInset: CGFloat,
+        safeAreaBottomInset: CGFloat,
+        safeAreaLeadingInset: CGFloat,
+        safeAreaTrailingInset: CGFloat
     ) -> some View {
         Group {
             switch route {
-            case .chat: ChatView(safeAreaTopInset: safeAreaTopInset)
+            case .chat:
+                ChatView(
+                    safeAreaTopInset: safeAreaTopInset,
+                    safeAreaBottomInset: safeAreaBottomInset,
+                    safeAreaLeadingInset: safeAreaLeadingInset,
+                    safeAreaTrailingInset: safeAreaTrailingInset
+                )
             case .chats: WorkspaceView(area: .chats)
             case .activity: ActivityView()
             case .goals: GoalsView()
@@ -199,10 +243,21 @@ struct RootView: View {
         .tint(AssistantTheme.accent(for: colorScheme))
     }
 
-    private func errorBannerTopInset(safeAreaTopInset: CGFloat) -> CGFloat {
+    private func errorBannerTopInset(
+        safeAreaTopInset: CGFloat,
+        isLandscape: Bool
+    ) -> CGFloat {
         if model.presentedRoute != nil {
-            // A pushed destination shows its navigation bar; clear it.
-            return safeAreaTopInset + 48
+            // The banner is a root overlay, so it must sit below the visible
+            // route title instead of covering it. Horizontal routes have a
+            // shorter navigation bar clearance than the portrait treatment.
+            return safeAreaTopInset + (isLandscape ? 68 : 48)
+        }
+        if isLandscape {
+            // The crown occupies a side rail in horizontal mode, so the
+            // chat error can live in the top margin without competing for the
+            // same vertical pixels.
+            return safeAreaTopInset + 12
         }
         // The banner hangs in the root stack, which ignores the top safe area,
         // so this is measured from the physical top edge — and both states have
@@ -302,9 +357,39 @@ struct RootView: View {
     }
 }
 
+private struct ActivityCrownPlacement: ViewModifier {
+    let isLandscape: Bool
+    let islandTopInset: CGFloat
+    let safeAreaLeadingInset: CGFloat
+    let safeAreaTrailingInset: CGFloat
+
+    func body(content: Content) -> some View {
+        if isLandscape {
+            let islandOnLeadingEdge = safeAreaLeadingInset > safeAreaTrailingInset
+            HStack(spacing: 0) {
+                if islandOnLeadingEdge {
+                    content
+                    Spacer(minLength: 0)
+                } else {
+                    Spacer(minLength: 0)
+                    content
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .padding(.leading, islandOnLeadingEdge ? max(12, safeAreaLeadingInset - 4) : 12)
+            .padding(.trailing, islandOnLeadingEdge ? 12 : max(12, safeAreaTrailingInset - 4))
+            .padding(.vertical, 12)
+        } else {
+            content
+                .padding(.top, islandTopInset)
+        }
+    }
+}
+
 struct CardsView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     var body: some View {
         ScrollView {
@@ -319,23 +404,41 @@ struct CardsView: View {
                 } else {
                     ForEach(model.savedCards) { card in
                         if let parsed = MessageResponseCard(part: card.messagePart) {
-                            VStack(alignment: .trailing, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 0) {
                                 RichResponseCards(cards: [parsed])
+                                Divider()
+                                    .padding(.horizontal, 16)
+                                    .overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.12))
                                 Button("Dismiss", systemImage: "archivebox") {
                                     Task { _ = await model.dismissCard(card) }
                                 }
-                                .font(.caption.weight(.semibold))
-                                .buttonStyle(.bordered)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .padding(.horizontal, 16)
+                                .frame(minHeight: 44)
+                                .buttonStyle(.plain)
+                            }
+                            .background(
+                                AssistantTheme.raised(for: colorScheme),
+                                in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
+                                    .strokeBorder(AssistantTheme.ink(for: colorScheme).opacity(0.09), lineWidth: 0.8)
                             }
                         }
                     }
                 }
             }
             .padding(16)
+            .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
         }
         .navigationTitle("Cards")
         .assistantSubmenuChrome()
         .refreshable { await model.refreshCards() }
         .task { await model.refreshCards() }
     }
+
+    private var isLandscape: Bool { verticalSizeClass == .compact }
 }

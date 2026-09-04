@@ -248,8 +248,18 @@ export function compact(window: ModelMessage[]): ModelMessage[] {
 export function latestUserText(window: ModelMessage[]): string | undefined {
   for (let i = window.length - 1; i >= 0; i -= 1) {
     const message = window[i];
-    if (message?.role === 'user' && typeof message.content === 'string') {
-      return message.content;
+    if (message?.role !== 'user') continue;
+    if (typeof message.content === 'string') return message.content;
+    if (Array.isArray(message.content)) {
+      const text = message.content
+        .map((part) => {
+          if (!part || typeof part !== 'object' || !('text' in part)) return '';
+          const value = (part as { text?: unknown }).text;
+          return typeof value === 'string' ? value : '';
+        })
+        .filter(Boolean)
+        .join('\n');
+      if (text) return text;
     }
   }
   return undefined;

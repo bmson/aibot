@@ -126,6 +126,22 @@ function isVideoMeetingLink(link: RecordValue | undefined): boolean {
   }
 }
 
+function isSpecificCalendarLink(link: RecordValue | undefined): boolean {
+  const url = string(link?.url);
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol)) return false;
+    return (
+      parsed.pathname.toLowerCase().includes('/event') ||
+      parsed.search.toLowerCase().includes('eid=') ||
+      parsed.search.toLowerCase().includes('eventid=')
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Build UI data solely from successful calendar tool results; model prose is not an input. */
 export function calendarResponseCards(
   evidence: ActionEvidence[],
@@ -150,8 +166,11 @@ export function calendarResponseCards(
       const event = group[0];
       const start = string(event.start);
       const end = string(event.end);
+      const allDay = event.allDay === true || /^\d{4}-\d{2}-\d{2}$/.test(start);
       const links = Array.isArray(event.links) ? event.links.map(record).filter(Boolean) : [];
-      const calendarLink = links.find((link) => string(link?.type) === 'calendar');
+      const calendarLink = links.find(
+        (link) => string(link?.type) === 'calendar' && isSpecificCalendarLink(link),
+      );
       const meetingLink = links.find(isVideoMeetingLink);
       const calendars = [...new Set(group.map((entry) => string(entry.calendar)).filter(Boolean))];
       return {
@@ -160,9 +179,12 @@ export function calendarResponseCards(
         title: string(event.summary) || 'Untitled event',
         start,
         end,
-        time: [formatTime(start, request?.timeZone), end ? formatTime(end, request?.timeZone) : '']
-          .filter(Boolean)
-          .join('–'),
+        time: allDay
+          ? 'All day'
+          : [formatTime(start, request?.timeZone), end ? formatTime(end, request?.timeZone) : '']
+              .filter(Boolean)
+              .join('–'),
+        allDay,
         location: string(event.location),
         attendees: Array.isArray(event.attendees)
           ? event.attendees
@@ -239,8 +261,12 @@ export function reminderResponseCards(evidence: ActionEvidence[]): ResponseCard[
       kind: 'reminder',
       id: `reminder-${reminderId}`,
       title,
-      schedule: string(value.schedule) || string(value.cron),
+      // A one-time reminder's `schedule` used to be the same raw ISO instant
+      // as `nextFires`, which leaked transport data into the card. Cron is a
+      // meaningful user-facing value only for recurring reminders.
+      schedule: string(value.kind) === 'once' ? '' : string(value.schedule) || string(value.cron),
       nextFires: string(value.nextFires),
+      timezone: string(value.timezone),
       enabled: value.enabled !== false,
     });
   };
@@ -779,10 +805,12 @@ export function calendarWriteResponseCards(evidence: ActionEvidence[]): Response
           ? strings(result.invited)
           : strings(args?.attendees),
         calendars: [],
-        calendarLink: string(result.link)
+        calendarLink: isSpecificCalendarLink({ url: string(result.link) })
           ? { label: 'Open event', url: string(result.link) }
           : undefined,
-        link: string(result.link) ? { label: 'Open event', url: string(result.link) } : undefined,
+        link: isSpecificCalendarLink({ url: string(result.link) })
+          ? { label: 'Open event', url: string(result.link) }
+          : undefined,
       },
     ];
   });

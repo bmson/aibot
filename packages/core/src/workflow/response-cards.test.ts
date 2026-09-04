@@ -128,6 +128,31 @@ describe('response cards', () => {
     ]);
   });
 
+  it('renders date-only calendar events as all-day and rejects generic links', () => {
+    const result = calendarResponseCards([
+      {
+        toolName: 'calendar.list_events',
+        status: 'succeeded',
+        result: {
+          events: [
+            {
+              eventId: 'holiday',
+              calendarId: 'family',
+              calendar: 'Family',
+              summary: 'School holiday',
+              start: '2026-09-04',
+              end: '2026-09-05',
+              allDay: true,
+              links: [{ type: 'calendar', url: 'https://calendar.google.com/calendar/u/0/r' }],
+            },
+          ],
+        },
+      },
+    ]);
+    expect(result[0]).toMatchObject({ time: 'All day', allDay: true });
+    expect(result[0]?.calendarLink).toBeUndefined();
+  });
+
   it('turns the fresh ambient weather block into a compact card', () => {
     expect(
       weatherResponseCards(
@@ -312,6 +337,35 @@ describe('response cards', () => {
       {
         kind: 'drive-results',
         files: [{ name: 'Launch deck', size: '2048' }],
+      },
+    ]);
+  });
+
+  it('keeps one-time reminder transport instants out of the card copy', () => {
+    const result = responseCardsForFinal({
+      evidence: [
+        {
+          toolName: 'reminder.create',
+          status: 'succeeded',
+          result: {
+            reminderId: 'reminder-once',
+            kind: 'once',
+            text: 'Call the dentist',
+            schedule: '2026-09-03T18:10:00.000Z',
+            nextFires: '2026-09-03T18:10:00.000Z',
+            timezone: 'America/Los_Angeles',
+          },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject([
+      {
+        kind: 'reminder',
+        title: 'Call the dentist',
+        schedule: '',
+        nextFires: '2026-09-03T18:10:00.000Z',
+        timezone: 'America/Los_Angeles',
       },
     ]);
   });

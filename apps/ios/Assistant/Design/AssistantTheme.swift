@@ -30,26 +30,31 @@ enum AssistantAppearance: String, CaseIterable, Identifiable {
 }
 
 enum AssistantTheme {
-    /// The composer, the message bubbles, and every card share this corner.
-    /// A card is an answer to what was typed in that field, so the two are cut
-    /// from one geometry rather than the card sitting a step tighter.
-    static let conversationCornerRadius: CGFloat = 27
-    /// Shared outer geometry for every content card in the app.
-    static let cardCornerRadius: CGFloat = Self.conversationCornerRadius
-    /// Chat records are cards too, and carry the same corner as the rest.
-    static let chatCardCornerRadius: CGFloat = Self.cardCornerRadius
+    /// Semantic geometry keeps the conversation's signature silhouette while
+    /// letting utility cards and nested panels recede behind it.
+    static let heroCornerRadius: CGFloat = 27
+    static let conversationCornerRadius: CGFloat = Self.heroCornerRadius
+    static let cardCornerRadius: CGFloat = 22
+    static let panelCornerRadius: CGFloat = 18
+    static let controlCornerRadius: CGFloat = 12
+    /// Chat bubbles remain part of the conversation surface, rather than a
+    /// utility list item.
+    static let chatCardCornerRadius: CGFloat = Self.heroCornerRadius
+    static let responseCardMinHeight: CGFloat = 56
+    static let compactGutter: CGFloat = 16
+    static let cardStackSpacing: CGFloat = 12
     static let canvas = Color(hex: 0xEEF5F0)
-    static let canvasDark = Color(hex: 0x121A15)
+    static let canvasDark = Color(hex: 0x101712)
     static let raised = Color.white
-    static let raisedDark = Color(hex: 0x19241D)
+    static let raisedDark = Color(hex: 0x1B2820)
     // The chat dashboard is intentionally a little warmer and lighter than
     // the utility cards used elsewhere. On the dark-green stage these read as
     // sheets of paper with room to scan, echoing the menu sheet without
     // turning every dashboard section into a floating tile.
     static let dashboardPaper = Color(hex: 0xFAFBF9)
-    static let dashboardPaperDark = Color(hex: 0x223128)
+    static let dashboardPaperDark = Color(hex: 0x23342A)
     static let sunken = Color(hex: 0xE3EDE6)
-    static let sunkenDark = Color(hex: 0x243129)
+    static let sunkenDark = Color(hex: 0x152019)
     static let ink = Color(hex: 0x15201A)
     static let inkDark = Color(hex: 0xEDF6F0)
     static let inkMuted = Color(hex: 0x5E7266)
@@ -198,10 +203,10 @@ extension View {
         modifier(AssistantSubmenuChrome())
     }
 
-    /// The one card spec: 16pt padding, the shared card radius, hairline
-    /// stroke. Warning cards (memory review, approvals) pass a surface and
-    /// stroke tint so they keep the same geometry instead of hand-rolling a
-    /// near-copy.
+    /// The normal content-card spec: 16pt padding, 22pt radius, deliberate
+    /// minimum optical height, and a hairline stroke. Warning cards (memory
+    /// review, approvals) pass a surface and stroke tint so they keep the same
+    /// geometry instead of hand-rolling a near-copy.
     func assistantCard(
         in scheme: ColorScheme,
         surface: Color? = nil,
@@ -210,26 +215,29 @@ extension View {
         let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
 
         return self
-            .padding(16)
+            .padding(.horizontal, AssistantTheme.compactGutter)
+            .padding(.vertical, 16)
+            .frame(minHeight: AssistantTheme.responseCardMinHeight)
             .background(surface ?? AssistantTheme.raised(for: scheme), in: shape)
             .overlay {
                 shape
                     .stroke(
-                        strokeTint?.opacity(0.28) ?? Color.primary.opacity(scheme == .dark ? 0.12 : 0.07),
+                        strokeTint?.opacity(0.28) ?? Color.primary.opacity(scheme == .dark ? 0.16 : 0.07),
                         lineWidth: 1
                     )
             }
     }
 
     /// The recessed companion to `assistantCard`, for summary and info
-    /// panels. One spec — these used to drift across four paddings, three
-    /// corner radii, and three opacities between pages.
+    /// panels. A recessed panel is intentionally quieter and tighter than a
+    /// content card so nested summaries do not compete with the page's main
+    /// action.
     func assistantPanel(in scheme: ColorScheme) -> some View {
         self
             .padding(14)
             .background(
                 AssistantTheme.sunken(for: scheme).opacity(0.72),
-                in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
+                in: RoundedRectangle(cornerRadius: AssistantTheme.panelCornerRadius, style: .continuous)
             )
     }
 }

@@ -311,6 +311,28 @@ describe('calendar.list_calendars', () => {
 });
 
 describe('calendar.search_events', () => {
+  it('drops a provider landing page that does not identify an event', async () => {
+    const api = apiFor({
+      'owner@example.com': [
+        {
+          id: 'evt-generic',
+          summary: 'Review',
+          htmlLink: 'https://calendar.google.com/calendar/u/0/r',
+          start: { dateTime: '2026-07-24T12:00:00-07:00' },
+          end: { dateTime: '2026-07-24T13:00:00-07:00' },
+        },
+      ],
+    });
+    const result = (await toolsWith(api)
+      .get('calendar.search_events')
+      ?.tool.execute({ query: 'Review', maxResults: 20 }, {} as never)) as {
+      events: Array<{ links: Array<{ type: string }> }>;
+    };
+    expect(result.events[0]?.links ?? []).not.toContainEqual(
+      expect.objectContaining({ type: 'calendar' }),
+    );
+  });
+
   it('searches every shared calendar and normalizes results', async () => {
     const api = apiFor({
       'owner@example.com': [

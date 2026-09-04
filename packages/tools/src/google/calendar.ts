@@ -63,6 +63,19 @@ function isVideoConferenceURL(url: string): boolean {
   }
 }
 
+/** Only expose provider links that identify the selected event. */
+function isSpecificCalendarURL(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol)) return false;
+    const path = parsed.pathname.toLowerCase();
+    const query = parsed.search.toLowerCase();
+    return path.includes('/event') || query.includes('eid=') || query.includes('eventid=');
+  } catch {
+    return false;
+  }
+}
+
 function register<S extends z.ZodType, Out>(
   registry: ToolRegistry,
   tool: AssistantTool<S, Out>,
@@ -110,7 +123,9 @@ function normalizeEvent(raw: RawEvent, calendar: CalendarEntry) {
     if (!url || !/^https?:\/\//i.test(url) || links.some((link) => link.url === url)) return;
     links.push({ type, label, url });
   };
-  addLink('calendar', 'Open in Google Calendar', raw.htmlLink);
+  if (raw.htmlLink && isSpecificCalendarURL(raw.htmlLink)) {
+    addLink('calendar', 'Open in Google Calendar', raw.htmlLink);
+  }
   addLink('video', 'Video meeting', raw.hangoutLink);
   for (const entry of raw.conferenceData?.entryPoints ?? []) {
     addLink(entry.entryPointType ?? 'conference', entry.label ?? 'Conference link', entry.uri);

@@ -6,6 +6,7 @@ import SwiftUI
 struct KnowledgeView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var overview: KnowledgeOverview?
     @State private var cleanup: KnowledgeCleanupResponse?
     @State private var search = ""
@@ -34,9 +35,19 @@ struct KnowledgeView: View {
             }
             .padding(16)
             .padding(.bottom, 28)
+            .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
         }
         .navigationTitle("Knowledge")
-        .searchable(text: $search, prompt: "Find a person, place, project…")
+        .assistantSubmenuChrome()
+        // Toolbar placement participates in the navigation/search layout; the
+        // default overlay placement could cover the lower cleanup cards while
+        // the user scrolled.
+        .searchable(
+            text: $search,
+            placement: .toolbar,
+            prompt: "Find a person, place, project…"
+        )
+        .contentMargins(.bottom, 72, for: .scrollContent)
         .onSubmit(of: .search) { Task { await loadSearch() } }
         .toolbar {
             if !showingCleanup, overview?.selected != nil {
@@ -102,6 +113,8 @@ struct KnowledgeView: View {
         }
     }
 
+    private var isLandscape: Bool { verticalSizeClass == .compact }
+
     private func forgetImpactMessage(_ impact: KnowledgeSourceImpact) -> String {
         let retired = impact.retiredProjections > 0
             ? " It also clears \(impact.retiredProjections) retired derived projections."
@@ -141,7 +154,7 @@ struct KnowledgeView: View {
 
     private func cleanupCard(_ finding: KnowledgeCleanupFinding) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(finding.kind.replacingOccurrences(of: "_", with: " ").uppercased())
+            Text(finding.kind.replacingOccurrences(of: "_", with: " ").sentenceCaseIdentifier)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(finding.title).font(.subheadline.weight(.semibold))
@@ -256,7 +269,7 @@ struct KnowledgeView: View {
 
     private func relationCard(_ relation: KnowledgeRelation, showCorrection: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(relation.presentation.label.uppercased())
+            Text(relation.presentation.label.sentenceCaseIdentifier)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(relation.presentation.sentence)

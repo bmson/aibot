@@ -11,10 +11,15 @@ struct ActivityCrown: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     var body: some View {
         Button(action: action) {
-            crownContent
+            if isLandscape {
+                landscapeCrownContent
+            } else {
+                crownContent
+            }
         }
         .buttonStyle(ActivityCrownButtonStyle(reduceMotion: reduceMotion))
         .disabled(thought == nil)
@@ -33,6 +38,42 @@ struct ActivityCrown: View {
             default: nil
             }
         }
+    }
+
+    /// Defensive compact-size-class fallback for previews and iPad. The iPhone
+    /// product is portrait-only, where the primary crown treatment remains
+    /// above the conversation stage.
+    private var landscapeCrownContent: some View {
+        HStack(spacing: 9) {
+            if let thought {
+                glyph(for: thought)
+                    .frame(width: 24, height: 24)
+                    .background(crownTone.opacity(0.13), in: Circle())
+                VStack(alignment: .leading, spacing: 1) {
+                    crownLabel(for: thought)
+                    crownDetail
+                }
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .frame(width: landscapeExpandedWidth, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.black)
+        }
+        .overlay {
+            if thought != nil {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(crownRim, lineWidth: 0.65)
+            }
+        }
+        .shadow(color: .black.opacity(thought == nil ? 0 : 0.18), radius: 10, y: 5)
+        .animation(
+            reduceMotion ? .easeOut(duration: 0.16) : .spring(response: 0.42, dampingFraction: 0.82),
+            value: thought
+        )
     }
 
     private var crownContent: some View {
@@ -163,6 +204,13 @@ struct ActivityCrown: View {
         )
     }
 
+    private var landscapeExpandedWidth: CGFloat {
+        guard thought != nil else { return Self.collapsedWidth }
+        let estimatedCharacterWidth: CGFloat = 6.1
+        let longestLine = max(thought?.label.count ?? 0, detail?.count ?? 0)
+        return min(196, max(154, CGFloat(longestLine) * estimatedCharacterWidth + 48))
+    }
+
     private var expandedMinimumHeight: CGFloat {
         usesAccessibilityLayout
             ? (detail == nil ? 104 : Self.accessibilityExpandedHeight)
@@ -247,6 +295,8 @@ struct ActivityCrown: View {
     private var usesAccessibilityLayout: Bool {
         dynamicTypeSize.isAccessibilitySize
     }
+
+    private var isLandscape: Bool { verticalSizeClass == .compact }
 
     private var accessibilityLabel: String {
         guard let thought else { return "" }

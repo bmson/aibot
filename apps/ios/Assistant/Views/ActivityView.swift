@@ -14,6 +14,7 @@ struct ActivityView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var filter: ActivityFilter = .all
     @State private var showingArchived = false
     @State private var activityActionInFlight: String?
@@ -34,8 +35,20 @@ struct ActivityView: View {
                             ? "Work you hand off in chat will appear here with its evidence and decisions."
                             : "Try another activity filter."
                     )
+                } else if isLandscape {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: AssistantTheme.cardStackSpacing),
+                            GridItem(.flexible(), spacing: AssistantTheme.cardStackSpacing),
+                        ],
+                        spacing: AssistantTheme.cardStackSpacing
+                    ) {
+                        ForEach(filteredItems) { item in
+                            activityCard(item)
+                        }
+                    }
                 } else {
-                    LazyVStack(spacing: 12) {
+                    LazyVStack(spacing: AssistantTheme.cardStackSpacing) {
                         ForEach(filteredItems) { item in
                             activityCard(item)
                         }
@@ -44,6 +57,7 @@ struct ActivityView: View {
             }
             .padding(16)
             .padding(.bottom, 28)
+            .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
         }
         .navigationTitle("Activity")
         .assistantSubmenuChrome()
@@ -127,15 +141,42 @@ struct ActivityView: View {
             .padding(14)
             .background(
                 AssistantTheme.sunken(for: colorScheme),
-                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                in: RoundedRectangle(cornerRadius: AssistantTheme.controlCornerRadius, style: .continuous)
             )
         } else {
-            Picker("Filter activity", selection: $filter) {
-                ForEach(ActivityFilter.allCases) { Text($0.rawValue).tag($0) }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(ActivityFilter.allCases) { option in
+                        Button {
+                            filter = option
+                        } label: {
+                            Text(option.rawValue)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(
+                                    filter == option
+                                        ? AssistantTheme.canvas(for: colorScheme)
+                                        : AssistantTheme.inkMuted(for: colorScheme)
+                                )
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 9)
+                                .background(
+                                    filter == option
+                                        ? AssistantTheme.accent(for: colorScheme)
+                                        : AssistantTheme.canvas(for: colorScheme),
+                                    in: RoundedRectangle(cornerRadius: AssistantTheme.controlCornerRadius, style: .continuous)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Activity filter: \(option.rawValue)")
+                        .accessibilityAddTraits(filter == option ? .isSelected : [])
+                    }
+                }
+                .padding(10)
             }
-            .pickerStyle(.segmented)
-            .padding(10)
-            .background(AssistantTheme.sunken(for: colorScheme), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(
+                AssistantTheme.sunken(for: colorScheme),
+                in: RoundedRectangle(cornerRadius: AssistantTheme.controlCornerRadius, style: .continuous)
+            )
         }
     }
 
@@ -372,6 +413,7 @@ struct ActivityView: View {
     }
 
     private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
+    private var isLandscape: Bool { verticalSizeClass == .compact }
 
     private func icon(for status: String) -> String {
         switch status {

@@ -11,6 +11,7 @@ import SwiftUI
 struct PeopleView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var query = ""
 
     /// Birthdays inside this window get their own section at the top.
@@ -64,10 +65,12 @@ struct PeopleView: View {
             }
             .padding(16)
             .padding(.bottom, 28)
+            .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
         }
         .navigationTitle("People")
         .assistantSubmenuChrome()
         .searchable(text: $query, prompt: "Name, relationship, or place")
+        .contentMargins(.bottom, 72, for: .scrollContent)
         .refreshable { await model.loadPeople() }
         .task { if !model.peopleLoaded { await model.loadPeople() } }
     }
@@ -139,6 +142,9 @@ struct PeopleView: View {
                 }
             }
             Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
         .assistantCard(
             in: colorScheme,
@@ -198,6 +204,8 @@ struct PeopleView: View {
             }
         }
     }
+
+    private var isLandscape: Bool { verticalSizeClass == .compact }
 }
 
 /// One heading in the directory. A named type rather than a tuple so `ForEach`

@@ -253,13 +253,13 @@ struct MoreView: View {
             Button {
                 notifications.openSystemSettings()
             } label: {
-                notificationStatusLabel(title: "Notifications", value: "On", icon: "bell.badge.fill")
+                notificationStatusLabel(title: "Assistant notifications", value: "On", icon: "bell.badge.fill")
             }
         case .denied:
             Button {
                 notifications.openSystemSettings()
             } label: {
-                notificationStatusLabel(title: "Notifications", value: "Off", icon: "bell.slash")
+                notificationStatusLabel(title: "Assistant notifications", value: "Off", icon: "bell.slash")
             }
         case .notDetermined:
             VStack(alignment: .leading, spacing: 7) {
@@ -296,7 +296,7 @@ struct MoreView: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title), \(value)")
-        .accessibilityHint("Opens notification settings")
+        .accessibilityHint("Opens iOS notification settings")
     }
 
     @ViewBuilder
@@ -423,9 +423,10 @@ private struct RemindersView: View {
         .navigationTitle("Reminders")
         .assistantSubmenuChrome()
         .refreshable { await model.refreshWorkspace() }
-        .task {
-            if model.workspace == nil { await model.refreshWorkspace() }
-        }
+        // Reminders are often created in Chat immediately before this route is
+        // opened. Always refresh on appearance so the projection reflects the
+        // server mutation rather than the last workspace snapshot.
+        .task { await model.refreshWorkspace() }
         .confirmationDialog(
             "Remove this reminder?",
             isPresented: Binding(
@@ -689,7 +690,7 @@ private struct MCPConnectionsView: View {
             if connection.status == "ready" {
                 HStack(spacing: 10) {
                     Label("\(connection.tools.count) \(connection.tools.count == 1 ? "tool" : "tools")", systemImage: "wrench.and.screwdriver")
-                    if let checked = connection.lastCheckedAt { Text("Checked \(relative(checked))") }
+                    if let checked = connection.lastCheckedAt { Text(checkedAtLabel(checked)) }
                 }
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
@@ -724,6 +725,13 @@ private struct MCPConnectionsView: View {
             connectionActions(connection)
         }
         .assistantCard(in: colorScheme)
+    }
+
+    private func checkedAtLabel(_ value: String) -> String {
+        guard let date = value.assistantDate else { return "Checked recently" }
+        let seconds = max(0, Date().timeIntervalSince(date))
+        if seconds < 60 { return "Checked just now" }
+        return "Checked \(relative(value))"
     }
 
     @ViewBuilder

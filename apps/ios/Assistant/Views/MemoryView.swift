@@ -9,6 +9,7 @@ struct MemoryView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showingCreateMemory = false
     @State private var editingFact: WorkspaceMemoryFact?
     @State private var forgettingFact: WorkspaceMemoryFact?
@@ -34,6 +35,7 @@ struct MemoryView: View {
             }
             .padding(16)
             .padding(.bottom, 28)
+            .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
         }
         .navigationTitle("Memory")
         .assistantSubmenuChrome()
@@ -144,6 +146,8 @@ struct MemoryView: View {
             Button("Cancel", role: .cancel) { deletingPerson = nil }
         }
     }
+
+    private var isLandscape: Bool { verticalSizeClass == .compact }
 
     private func memoryContent(_ memory: WorkspaceMemory) -> some View {
         VStack(alignment: .leading, spacing: 16) {

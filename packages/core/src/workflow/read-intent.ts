@@ -40,6 +40,8 @@ export interface PersonalReadRequest {
   mailQuery?: string;
   /** Used only to render returned timestamps for the owner. */
   timeZone?: string;
+  /** Bound for result sets whose wording asks for a single next item. */
+  maxResults?: number;
   /** The owner is challenging a prior claim; prior prose remains hypothesis-only. */
   verification?: boolean;
 }
@@ -772,11 +774,17 @@ export function detectPersonalReadRequest(
   const whyLookup =
     WHY_LOOKUP.test(latest) &&
     /\b(?:my|our|you said|said i|i had|i have|calendar|schedule)\b/i.test(latest);
+  const nextEventQuestion =
+    /\b(?:next|nearest|soonest)\s+(?:calendar\s+)?(?:event|meeting|appointment|call)\b/i.test(
+      latest,
+    );
+  if (nextEventQuestion) terms = [];
   const personalSchedule =
     /\b(?:my|our|the|this|that|do i|did i|is there|are there)\b/i.test(latest) ||
     terms.some((term) => !SCHEDULED_THING.test(term));
   const namedSchedule =
     !genericScheduleList &&
+    !nextEventQuestion &&
     (SCHEDULED_THING.test(latest) || (verification && SCHEDULED_THING.test(recentContext))) &&
     personalSchedule &&
     (READ_OR_QUESTION.test(latest) || verification || whyLookup);
@@ -830,6 +838,9 @@ export function detectPersonalReadRequest(
       (kind === 'email' &&
         (verification || /\b(?:when|where|what time|details?|what does|what did)\b/i.test(latest))),
   };
+  if (kind !== 'email' && nextEventQuestion) {
+    request.maxResults = 1;
+  }
   if (kind !== 'email') {
     request.timeWindow = resolveTimeWindow(
       contextualQuery ? `${latest}\n${recentContext}` : latest,
@@ -1013,7 +1024,7 @@ export function groundReadToolInput(
       ...(request.timeWindow
         ? { timeMin: request.timeWindow.timeMin, timeMax: request.timeWindow.timeMax }
         : {}),
-      maxResults: 50,
+      maxResults: request.maxResults ?? 50,
     };
   }
   if (toolName === 'calendar.search_events') {
@@ -1024,7 +1035,7 @@ export function groundReadToolInput(
         ? { timeMin: request.timeWindow.timeMin, timeMax: request.timeWindow.timeMax }
         : {}),
       ...(request.queryTerms.length > 0 ? { query: request.queryTerms.join(' ') } : {}),
-      maxResults: 50,
+      maxResults: request.maxResults ?? 50,
     };
   }
   if (toolName === 'calendar.availability') {

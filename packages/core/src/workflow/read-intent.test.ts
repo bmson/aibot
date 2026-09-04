@@ -57,6 +57,14 @@ describe('detectPersonalReadRequest', () => {
     });
   });
 
+  it('bounds a next-event lookup to one result', () => {
+    expect(detectPersonalReadRequest(turn('What is my next calendar event?'))).toMatchObject({
+      kind: 'calendar',
+      firstToolName: 'calendar.list_events',
+      maxResults: 1,
+    });
+  });
+
   it('reads text from AI SDK UI message parts', () => {
     expect(
       detectPersonalReadRequest(

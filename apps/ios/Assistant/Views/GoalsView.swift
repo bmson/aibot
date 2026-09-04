@@ -5,6 +5,7 @@ struct GoalsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showingGoalCreator = false
     @State private var editingGoal: GoalRecord?
     @State private var deletingGoal: GoalRecord?
@@ -30,6 +31,7 @@ struct GoalsView: View {
             }
             .padding(16)
             .padding(.bottom, 28)
+            .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
         }
         .navigationTitle("Goals")
         .assistantSubmenuChrome()
@@ -107,6 +109,8 @@ struct GoalsView: View {
     private var goals: [GoalDashboardItem] {
         showingArchived ? model.archivedGoals?.items ?? [] : model.overview?.goals.items ?? []
     }
+
+    private var isLandscape: Bool { verticalSizeClass == .compact }
 
     private var digest: some View {
         let waiting = goals.filter { !$0.blockedQuestion.isEmpty || $0.stalled }.count

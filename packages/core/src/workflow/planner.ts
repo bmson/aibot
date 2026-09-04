@@ -19,8 +19,49 @@ import { detectPersonalReadRequest, type PersonalReadRequest } from './read-inte
  * v7: missing facts trigger source discovery before clarification whenever an
  * available tool can resolve them.
  * v8: availability questions normalize to the all-calendar free/busy read.
+ * v9: self-contained duration/interview-preparation questions stay tool-free.
  */
-export const PLANNER_VERSION = 8;
+export const PLANNER_VERSION = 9;
+
+/**
+ * Prompts that are self-contained conceptual questions must stay inside the
+ * conversation.  Lexical overlap (for example, "meeting" or "interview")
+ * is not evidence that the owner asked for a calendar or mailbox lookup.  The
+ * executor uses this same predicate as a final tool gate so a permissive model
+ * cannot turn a direct answer into an unrelated production read.
+ */
+export function isConceptualNoToolRequest(text: string): boolean {
+  const normalized = text.trim().replace(/[“”]/g, '"');
+  if (
+    !normalized ||
+    /\b(?:my|our|the)\s+(?:calendar|schedule|inbox|mail)\b/i.test(normalized) ||
+    /\b(?:my|our)\s+\d+\s*(?:minute|minutes|min|hour|hours)\b/i.test(normalized)
+  ) {
+    return false;
+  }
+  const durationQuestion =
+    /^(?:please\s+)?(?:how\s+long\s+is|what(?:'s| is)\s+the\s+duration\s+of)\s+(?:(?:a|an|the)\s+)?\d+\s*(?:minute|minutes|min|hour|hours)\b/i.test(
+      normalized,
+    );
+  const interviewPreparation =
+    /^(?:please\s+)?(?:prepare|write|give|generate|suggest)\s+(?:me\s+)?(?:some\s+)?interview\s+(?:questions|question|prep|preparation)\b/i.test(
+      normalized,
+    );
+  return durationQuestion || interviewPreparation;
+}
+
+function plannerMessageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => {
+      if (!part || typeof part !== 'object' || !('text' in part)) return '';
+      const text = (part as { text?: unknown }).text;
+      return typeof text === 'string' ? text : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
 
 // Widened from 6000: the tighter window dropped the owner's earlier answers out
 // of planner context on longer threads, making it re-derive 'clarify'. This is
@@ -134,6 +175,20 @@ export async function planTask(
   opts: { tainted?: boolean } = {},
 ): Promise<Plan | null> {
   const contextText = plannerContext(window);
+  const latestOwnerText = [...window].reverse().find((message) => message.role === 'user');
+  const conceptual =
+    task.trust === 'owner' &&
+    isConceptualNoToolRequest(plannerMessageText(latestOwnerText?.content));
+  if (conceptual) {
+    const plan: Plan = {
+      action: 'reply',
+      reasoning: 'Answer the self-contained conceptual question without external sources',
+      steps: [],
+      missingInfo: [],
+    };
+    await deps.db.update(tasks).set({ plan }).where(eq(tasks.id, task.id));
+    return plan;
+  }
   // Forced private-account reads are an owner capability. Applying this route
   // to external or assistant-generated tasks could disclose private calendar
   // data or override an explicit internal action such as a drafted reply.
