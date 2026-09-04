@@ -308,50 +308,59 @@ struct ChatView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            pullMenu
+        GeometryReader { viewport in
+            ZStack(alignment: .bottom) {
+                pullMenu
 
-            conversationSurface
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // Keep the stage edge-to-edge inside the currently available
-                // chat region. Respecting the keyboard safe area lets the
-                // green window backing show through its rounded corners.
-                .background(stageBackdrop.ignoresSafeArea(.container))
-                .clipShape(
-                    RoundedRectangle(
-                        cornerRadius: PullMenuMotion.sheetCornerRadius(
-                            isActive: menuSurfaceRounded,
-                            fullRadius: menuSheetCornerRadius
-                        ),
-                        style: .continuous
+                conversationSurface
+                    // Resolve a stable viewport before the surface is
+                    // transformed. A flexible max-height frame was recomputed
+                    // as the lifted surface crossed the root safe area, shrinking
+                    // the transcript by 96pt while the composer kept moving.
+                    .frame(width: viewport.size.width, height: viewport.size.height)
+                    // Keep the stage edge-to-edge inside the currently available
+                    // chat region. Respecting the keyboard safe area lets the
+                    // green window backing show through its rounded corners.
+                    .background(stageBackdrop.ignoresSafeArea(.container))
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: PullMenuMotion.sheetCornerRadius(
+                                isActive: menuSurfaceRounded,
+                                fullRadius: menuSheetCornerRadius
+                            ),
+                            style: .continuous
+                        )
                     )
-                )
-                .shadow(
-                    color: .black.opacity(0.17 * menuSurfaceProgress),
-                    radius: 28 * menuSurfaceProgress,
-                    y: 14 * menuSurfaceProgress
-                )
-                // Resolve the complete green surface edge-to-edge before it is
-                // transformed. When `ignoresSafeArea` wrapped the offset view,
-                // SwiftUI recomputed the ScrollView's bottom content inset as
-                // the sheet crossed the device boundary; the transcript then
-                // slid by roughly one home-indicator inset while the composer
-                // stayed put. With offset outermost, this is one rigid layer.
-                .ignoresSafeArea(.container)
-                .offset(y: -conversationRevealDistance)
-                // At the largest accessibility sizes the destination row is
-                // horizontally scrollable, so the lifted conversation owns
-                // one of the dedicated vertical-close regions instead of a
-                // recognizer spanning that strip.
-                .simultaneousGesture(
-                    pullMenuCloseGesture,
-                    including: menuOpen && usesExtraLargeAccessibilityMenu ? .all : .none
-                )
+                    .shadow(
+                        color: .black.opacity(0.17 * menuSurfaceProgress),
+                        radius: 28 * menuSurfaceProgress,
+                        y: 14 * menuSurfaceProgress
+                    )
+                    // Resolve the complete green surface edge-to-edge before it is
+                    // transformed. When `ignoresSafeArea` wrapped the offset view,
+                    // SwiftUI recomputed the ScrollView's bottom content inset as
+                    // the sheet crossed the device boundary; the transcript then
+                    // slid by roughly one home-indicator inset while the composer
+                    // stayed put. With offset outermost, this is one rigid layer.
+                    .ignoresSafeArea(.container)
+                    .offset(y: -conversationRevealDistance)
+                    // At the largest accessibility sizes the destination row is
+                    // horizontally scrollable, so the lifted conversation owns
+                    // one of the dedicated vertical-close regions instead of a
+                    // recognizer spanning that strip.
+                    .simultaneousGesture(
+                        pullMenuCloseGesture,
+                        including: menuOpen && usesExtraLargeAccessibilityMenu ? .all : .none
+                    )
 
-            if !menuOpen {
-                pullMenuOpenGestureTarget
+                if !menuOpen {
+                    pullMenuOpenGestureTarget
+                }
             }
         }
+        // Resolve the full container before reading `viewport.size`; the
+        // keyboard is a separate safe-area region and remains respected.
+        .ignoresSafeArea(.container)
         .background {
             // This remains behind every app surface. When the keyboard is
             // present, the stage above respects its safe area and pockets of
@@ -907,7 +916,7 @@ struct ChatView: View {
             // gesture is attached before the padding so the composer remains
             // fully interactive below this fixed pull zone.
             .highPriorityGesture(pullMenuOpenGesture(requiresTranscriptBottom: true))
-            .padding(.bottom, composerHeight + 8)
+            .padding(.bottom, composerHeight)
             // When the reader is even slightly above the true bottom, touches
             // in this region belong to transcript scrolling. Keep the target
             // alive after a pull begins so geometry changes cannot cancel it.
