@@ -2116,12 +2116,10 @@ struct ChatView: View {
     /// earlier jump still playing out — the press takes all of them over rather
     /// than queueing behind them, then animates down to the newest message.
     ///
-    /// The takeover is two commands in two run loops on purpose. Landing on the
-    /// offset the transcript currently occupies, with animations off, resolves
-    /// whatever scroll is in flight on the spot; the animated command that
-    /// follows then starts from rest and owns the trip to the bottom. Issued in
-    /// one pass, SwiftUI would coalesce them and the older motion would keep
-    /// running — which is exactly what made the button feel dead mid-scroll.
+    /// The takeover first cancels any active motion, then schedules one
+    /// animated command to the transcript's bottom spacer. Keeping one
+    /// canonical destination prevents the bound scroll position and the proxy
+    /// from issuing competing inset calculations during the transition.
     private func jumpToLatest(using proxy: ScrollViewProxy) {
         latestJumpRequest &+= 1
         let request = latestJumpRequest
@@ -2131,13 +2129,7 @@ struct ChatView: View {
         DispatchQueue.main.async {
             // A subsequent press owns the destination, never a stale tap.
             guard request == latestJumpRequest else { return }
-            animateTranscriptToLatest(using: proxy) {
-                // Edge positions stay active as content changes. Release the
-                // override once the reader has landed, so later streaming text
-                // does not permanently pin the transcript to its bottom.
-                guard request == latestJumpRequest else { return }
-                transcriptScrollPosition = ScrollPosition()
-            }
+            animateTranscriptToLatest(using: proxy)
         }
     }
 
@@ -2153,15 +2145,13 @@ struct ChatView: View {
         }
     }
 
-    private func animateTranscriptToLatest(
-        using proxy: ScrollViewProxy,
-        completion: @escaping () -> Void
-    ) {
+    private func animateTranscriptToLatest(using proxy: ScrollViewProxy) {
         withAnimation(reduceMotion ? nil : .snappy(duration: 0.3, extraBounce: 0)) {
-            transcriptScrollPosition.scrollTo(edge: .bottom)
+            // The spacer is the transcript's canonical bottom destination.
+            // Do not issue a second ScrollPosition edge command here: the two
+            // targets have different inset semantics and make UIKit alternate
+            // between them while the animation is running.
             proxy.scrollTo("bottom", anchor: .bottom)
-        } completion: {
-            completion()
         }
     }
 
