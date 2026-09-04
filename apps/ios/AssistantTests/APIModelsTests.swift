@@ -383,6 +383,58 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(generated.title, "Movie ticket")
         XCTAssertEqual(generated.facts.first?.value, "Dune: Part Two")
         XCTAssertTrue(generated.facts.last?.sensitive == true)
+        XCTAssertTrue(generated.steps.isEmpty)
+    }
+
+    func testGeneratedCardCarriesTheStepsBehindIt() {
+        let card = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("generated-card"),
+                "id": .string("hotel-1"),
+                "steps": .array([
+                    .object([
+                        "tool": .string("gmail.search"),
+                        "count": .string("1 result"),
+                        "detail": .string("from:Katie hotels.com 73535835545212"),
+                    ]),
+                    .object([
+                        "tool": .string("calendar.search_events"),
+                        "failed": .bool(true),
+                        "error": .string("Calendar timed out"),
+                    ]),
+                    // A malformed step is dropped, never rendered as a blank row.
+                    .object(["count": .string("1 result")]),
+                ]),
+                "spec": .object([
+                    "version": .number(1),
+                    "title": .string("Hotel Kabuki"),
+                    "sourceLabel": .string("Hotel"),
+                    "accessibilityLabel": .string("Hotel Kabuki reservation"),
+                    "facts": .array([
+                        .object(["id": .string("room"), "label": .string("Room"), "value": .string("King, garden view")]),
+                    ]),
+                    "blocks": .array([.object(["type": .string("hero"), "titleFact": .string("room")])]),
+                ]),
+            ])
+        )
+        guard case let .generated(generated)? = MessageResponseCard(part: card) else {
+            return XCTFail("Expected a generated card")
+        }
+        XCTAssertEqual(generated.steps.count, 2)
+        XCTAssertEqual(generated.steps.first?.count, "1 result")
+        XCTAssertEqual(generated.steps.first?.detail, "from:Katie hotels.com 73535835545212")
+        XCTAssertFalse(generated.steps.first?.failed ?? true)
+        XCTAssertTrue(generated.steps.last?.failed ?? false)
+        XCTAssertEqual(generated.steps.last?.error, "Calendar timed out")
+    }
+
+    func testStepLabelsReadAsCompletedWorkNeverAsToolNames() {
+        XCTAssertEqual(ToolStepLabel.past(for: "gmail.search"), "Searched email")
+        XCTAssertEqual(ToolStepLabel.past(for: "web.fetch"), "Read a web page")
+        // A tool with no phrase of its own is named for what it touched.
+        XCTAssertEqual(ToolStepLabel.past(for: "memory.graph_snapshot"), "Checked memory")
+        XCTAssertEqual(ToolStepLabel.past(for: "custom_source.do_thing"), "Checked custom source")
     }
 
     func testNoticePresentationDecodesAdditively() throws {
