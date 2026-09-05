@@ -2,6 +2,13 @@ import XCTest
 @testable import Assistant
 
 final class APIModelsTests: XCTestCase {
+    func testLookupCardsDoNotReplaceTheirAnswer() throws {
+        let data = Data(#"{"id":"m1","role":"assistant","parts":[{"type":"text","text":"These interviews are historical, not current applications."},{"type":"data-card","data":{"kind":"calendar-event","id":"e1","title":"Interview"}}]}"#.utf8)
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        XCTAssertTrue(message.hasSupportingResultCards)
+        XCTAssertEqual(message.visibleTextBubbles, ["These interviews are historical, not current applications."])
+        XCTAssertFalse(ChatMessage.optimistic(role: .user, text: "Hello").hasSupportingResultCards)
+    }
     func testDecodesRetractedMessageWithoutRenderingItsOriginalAsMarkdown() throws {
         let data = #"{"id":"m1","role":"assistant","parts":[{"type":"text","text":"This response was retracted."},{"type":"notice","notice":"retracted","reason":"Unsupported source data.","originalText":"[Fake link](https://example.invalid)","repairId":"repair-v1"}]}"#.data(using: .utf8)!
         let message = try JSONDecoder().decode(ChatMessage.self, from: data)

@@ -24,9 +24,10 @@ import {
 export function guardDraft(
   text: string,
   evidence: ActionEvidence[],
-  opts?: { readRequest?: PersonalReadRequest | null; urlCorpus?: string },
+  opts?: { readRequest?: PersonalReadRequest | null; urlCorpus?: string; requestText?: string },
 ): { corrected: boolean; text: string } {
   const checked = enforceResponseContract(text, evidence, {
+    requestText: opts?.requestText,
     readRequest: opts?.readRequest,
     ...(opts?.urlCorpus === undefined ? {} : { urlCorpus: opts.urlCorpus }),
   });

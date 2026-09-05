@@ -347,6 +347,8 @@ export async function stageModelFinalResponse(
       .join('\n'),
   ].join('\n');
   const contractOptions = {
+    requestText:
+      task.trust === 'owner' && !isForwardedIngest(task) ? latestUserText(window) : undefined,
     urlCorpus: sourceCorpus,
     readRequest: readContext ? readContext.readRequest : detectPersonalReadRequest(window),
     groundingCorpus: readContext?.groundingCorpus,

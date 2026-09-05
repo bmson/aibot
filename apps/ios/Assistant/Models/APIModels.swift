@@ -168,6 +168,22 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         decisionParts.isEmpty && approvalSummary == nil ? textBubbles : []
     }
 
+    /// Raw lookup results are evidence for the prose answer. Locally inferred
+    /// cards and authored/generated answer cards still own their presentation.
+    var hasSupportingResultCards: Bool {
+        guard role == .assistant, !visibleTextBubbles.isEmpty, noticeKind == nil else { return false }
+        let resultKinds: Set<String> = [
+            "calendar-event", "email-results", "document-results", "drive-results",
+            "web-search-results", "availability", "email-thread", "sheet-rows",
+            "knowledge-graph", "calendar-conflicts"
+        ]
+        return parts.contains { part in
+            guard part.type == "data-card", case let .object(data) = part.data,
+                  let kind = data["kind"]?.string else { return false }
+            return resultKinds.contains(kind)
+        }
+    }
+
     var noticeKind: ChatNoticeKind? {
         parts.lazy
             .filter { $0.type == "notice" }

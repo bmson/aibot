@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { looksLikeActionRequest } from './chat-triage.js';
 
+it('routes memory saves and receipt questions through the executor', () => {
+  for (const text of [
+    'I want you to remember our order, next time I ask you',
+    'This is our order for you to remember. Two cheese pupusas.',
+    'Was it save to long term memory',
+  ])
+    expect(looksLikeActionRequest(text)).toBe(true);
+});
+
 describe('looksLikeActionRequest', () => {
   it('catches clear action requests the weak classifier drops', () => {
     for (const t of [

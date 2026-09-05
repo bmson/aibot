@@ -454,7 +454,7 @@ describe('response execution contract', () => {
 
   it('confirms a memory write backed by a memory.save result', () => {
     const result = enforceResponseContract('Saved that correction to memory.', [
-      { toolName: 'memory.save', status: 'succeeded', result: { ok: true } },
+      { toolName: 'memory.save', status: 'succeeded', result: { saved: true } },
     ]);
     expect(result.blocked).toBe(false);
     expect(result.text).toBe('Saved that correction to memory.');

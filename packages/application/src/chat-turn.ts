@@ -542,7 +542,11 @@ export async function handleChatTurn(
   const guardOnce = (draft: string) => {
     const cached = guardCache.get(draft);
     if (cached) return cached;
-    const result = guardDraft(draft, toolEvidence, { readRequest, urlCorpus });
+    const result = guardDraft(draft, toolEvidence, {
+      readRequest,
+      urlCorpus,
+      requestText: userText,
+    });
     guardCache.set(draft, result);
     return result;
   };

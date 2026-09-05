@@ -2,6 +2,23 @@ import { describe, expect, it } from 'vitest';
 import { compactChatMessageParts, compactNoticePresentation } from './chat-card.js';
 
 describe('compactNoticePresentation', () => {
+  it('does not label blocked or partially completed work as verified', () => {
+    expect(
+      compactNoticePresentation('response-contract', "I couldn't complete this.").headline,
+    ).toBe('Result not confirmed');
+    expect(
+      compactNoticePresentation('response-contract', 'Completed: one save. Still needed: the rest.')
+        .headline,
+    ).toBe('Partially completed');
+    const parts = compactChatMessageParts('No successful tool result was returned.', [
+      {
+        type: 'notice',
+        notice: 'response-contract',
+        presentation: { version: 1, headline: 'Verified result', summary: 'Old copy' },
+      },
+    ]);
+    expect(parts[0]).toMatchObject({ presentation: { headline: 'Result not confirmed' } });
+  });
   it('puts the owner question in the first-glance summary', () => {
     expect(
       compactNoticePresentation(

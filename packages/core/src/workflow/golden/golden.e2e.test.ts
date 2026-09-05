@@ -1,4 +1,12 @@
-import { createDb, type Db, messages, responseChecks, tasks, toolCalls } from '@assistant/db';
+import {
+  conversations,
+  createDb,
+  type Db,
+  messages,
+  responseChecks,
+  tasks,
+  toolCalls,
+} from '@assistant/db';
 import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -19,6 +27,7 @@ let db: Db;
 let dbUp = false;
 let agentId: string;
 const createdTaskIds: string[] = [];
+const createdConversationIds: string[] = [];
 
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
@@ -35,6 +44,8 @@ afterAll(async () => {
     await db.delete(messages).where(inArray(messages.taskId, createdTaskIds));
     await db.delete(toolCalls).where(inArray(toolCalls.taskId, createdTaskIds));
     await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
+    if (createdConversationIds.length)
+      await db.delete(conversations).where(inArray(conversations.id, createdConversationIds));
   }
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
 });
@@ -523,6 +534,94 @@ describe('golden tasks', () => {
     expect(check?.blocked).toBe(false);
   });
 
+  it('answers save-status checks without letting a planner or prose model invent a receipt', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner' })
+      .returning();
+    if (!conversation) throw new Error('missing test conversation');
+    createdConversationIds.push(conversation.id);
+    const [previous] = await db
+      .insert(tasks)
+      .values({
+        agentId,
+        conversationId: conversation.id,
+        type: 'chat_turn',
+        status: 'failed',
+        trust: 'owner',
+        trigger: { source: 'chat', payload: { text: 'Remember our family birthdays' } },
+        createdAt: new Date(Date.now() - 60_000),
+      })
+      .returning();
+    if (!previous) throw new Error('missing previous task');
+    createdTaskIds.push(previous.id);
+    await db.insert(toolCalls).values({
+      taskId: previous.id,
+      toolName: 'occasions.save',
+      step: 1,
+      risk: 'autonomous',
+      status: 'succeeded',
+      args: { kind: 'birthday' },
+      result: { saved: true, person: 'Ada', quarantined: false },
+    });
+    const result = await runGoldenTask(db, agentId, {
+      name: 'save-status-without-model',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        conversationId: conversation.id,
+        payload: { text: 'Was it save to long term memory' },
+      },
+      taskType: 'chat_turn',
+      tools: {},
+      script: [{ text: 'Everything has been saved!' }],
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.toolNames).toEqual([]);
+    expect(result.finalText).toContain('Partly.');
+    expect(result.finalText).toContain('1 birthday entry in People: Ada');
+    expect(result.finalText).not.toContain('Everything has been saved');
+  });
+
+  it('reports saved birthdays when a batch reaches the step cap', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const fixture: GoldenFixture = {
+      name: 'birthday-step-cap-receipt',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: { text: 'Remember our family birthdays, update their information.' },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      maxSteps: 1,
+      script: [
+        {
+          toolCalls: [
+            { toolName: 'occasions.save', input: { subject: 'Ada', kind: 'birthday' } },
+            { toolName: 'occasions.save', input: { subject: 'Grace', kind: 'birthday' } },
+          ],
+        },
+      ],
+      tools: {
+        'occasions.save': {
+          schema: z.object({ subject: z.string(), kind: z.string() }),
+          execute: async (args) => ({
+            saved: true,
+            person: z.object({ subject: z.string() }).parse(args).subject,
+            quarantined: false,
+          }),
+        },
+      },
+    };
+    const result = await runGoldenTask(db, agentId, fixture);
+    createdTaskIds.push(result.taskId);
+    expect(result.status).toBe('failed');
+    expect(result.finalText).toContain('2 birthday entries in People: Ada, Grace');
+    expect(result.finalText).toContain('remaining work has not been completed');
+  });
+
   it('reports verified progress instead of an opaque failure when proactive work reaches its step cap', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const fixture: GoldenFixture = {
@@ -554,7 +653,10 @@ describe('golden tasks', () => {
     expect(result.toolNames).toEqual(['facts.lookup']);
     expect(result.status).toBe('failed');
     expect(result.finalText).toContain('stopped after 1 steps without finishing');
-    expect(result.finalText).toContain('found the wifi password');
+    expect(result.finalText).toContain('1 tool call completed (facts.lookup)');
+    expect(result.finalText).toContain('remaining work has not been completed');
+    // The model's pre-tool narration is not a verified completion summary.
+    expect(result.finalText).not.toContain('found the wifi password');
     expect(result.finalText).not.toContain('See task log');
   });
 });

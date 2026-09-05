@@ -34,9 +34,7 @@ struct MessageBubble: View {
     @ScaledMetric(relativeTo: .body) private var bubbleVerticalInset: CGFloat = 15
     @ScaledMetric(relativeTo: .caption) private var answerContextLabelFontSize = 12.0
     @ScaledMetric(relativeTo: .caption) private var answerContextPromptFontSize = 12.0
-    // Orientation lines and lead-ins stay out of the transcript on purpose:
-    // once a reply has cards, the cards are the answer — no prose floats
-    // above or below them.
+    // Tool-result cards support the answer; they must not hide its caveats.
 
     var body: some View {
         // Bubbles are full-width cards like every other surface in the
@@ -91,7 +89,19 @@ struct MessageBubble: View {
             }
 
             if message.role == .assistant, !responseCards.isEmpty {
-                RichResponseCards(cards: responseCards, onSend: retry)
+                if message.hasSupportingResultCards {
+                    DisclosureGroup("Sources and details") {
+                        RichResponseCards(cards: responseCards, onSend: retry)
+                            .padding(.top, 8)
+                    }
+                    .font(.footnote.weight(.medium))
+                    .tint(AssistantTheme.stageStrong)
+                    .foregroundStyle(AssistantTheme.stageStrong)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                } else {
+                    RichResponseCards(cards: responseCards, onSend: retry)
+                }
             }
 
             if message.role == .assistant, message.isOffCourse, !isStreaming {
@@ -131,13 +141,14 @@ struct MessageBubble: View {
                 )
             }
         } else {
-            Text(message.text)
-                .font(.system(size: messageFontSize, weight: .regular))
-                .tracking(-0.08)
-                .foregroundStyle(
-                    AssistantTheme.stageStrong.opacity(colorSchemeContrast == .increased ? 1 : 0.9)
-                )
-                .lineSpacing(2.5)
+            AssistantMarkdownView(
+                source: message.text,
+                baseFontSize: messageFontSize,
+                ink: AssistantTheme.stageStrong,
+                mutedInk: AssistantTheme.stageStrong.opacity(0.85),
+                codeSurface: .black.opacity(0.16),
+                accent: AssistantTheme.stageStrong
+            )
                 .padding(.horizontal, resolvedBubbleHorizontalInset)
                 .padding(.vertical, resolvedBubbleVerticalInset)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -397,10 +408,9 @@ struct MessageBubble: View {
     }
 
     private var usesPrimaryCards: Bool {
-        // The local fallback intentionally has the same ownership as a server
-        // card. Once a reply has a card-shaped presentation, showing the
-        // source prose as a bubble as well creates a duplicate answer.
-        message.role == .assistant && !responseCards.isEmpty
+        // Authored answer cards and local prose-to-card fallbacks avoid a
+        // duplicate answer. Raw lookup results never replace the explanation.
+        message.role == .assistant && !responseCards.isEmpty && !message.hasSupportingResultCards
     }
 
     private func decisionCard(_ part: MessagePart) -> some View {
@@ -718,11 +728,11 @@ struct MessageBubble: View {
         let presentation: (label: String, headline: String, summary: String, symbol: String, tint: Color) = switch kind {
         case .responseContract:
             (
-                "Checked result",
-                "Verified result",
-                compact?.summary ?? CardText.compactSummary(text),
-                "checkmark.shield.fill",
-                AssistantTheme.accent(for: colorScheme)
+                "Needs review",
+                text.hasPrefix("Completed:") ? "Partially completed" : "Result not confirmed",
+                text,
+                "exclamationmark.circle",
+                AssistantTheme.warning(for: colorScheme)
             )
         case .parked:
             (
@@ -758,18 +768,18 @@ struct MessageBubble: View {
             )
         }
         let shape = RoundedRectangle(cornerRadius: AssistantTheme.chatCardCornerRadius, style: .continuous)
-        let diagnostics = compact?.diagnostics ?? (text == presentation.summary ? [] : [text])
+        let diagnostics = kind == .responseContract ? [] : (compact?.diagnostics ?? (text == presentation.summary ? [] : [text]))
         return VStack(alignment: .leading, spacing: 10) {
             Label(presentation.label, systemImage: presentation.symbol)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(presentation.tint)
-            Text(compact?.headline ?? presentation.headline)
+            Text(kind == .responseContract ? presentation.headline : (compact?.headline ?? presentation.headline))
                 .font(.body.weight(.semibold))
                 .foregroundStyle(AssistantTheme.ink(for: colorScheme))
             Text(presentation.summary)
                 .font(.subheadline)
                 .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                .lineLimit(2)
+                .lineLimit(kind == .responseContract ? nil : 2)
                 .fixedSize(horizontal: false, vertical: true)
             if let facts = compact?.facts?.prefix(3), !facts.isEmpty {
                 AssistantFlowLayout(spacing: 8) {
@@ -2544,30 +2554,32 @@ struct RichResponseCards: View {
     }
 
     private func eventDayCard(_ group: EventDayGroup) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 10) {
             if !group.date.isEmpty {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(group.date)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                     Spacer(minLength: 8)
-                    Text("\(group.events.count) \(group.events.count == 1 ? "event" : "events")")
-                        .font(.caption.monospacedDigit().weight(.medium))
-                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    if group.events.count > 1 {
+                        Text("\(group.events.count) events")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    }
                 }
             }
             ForEach(group.events) { event in
                 eventRow(event)
             }
         }
-        .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 24)
+        .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 16)
     }
 
     private func eventRow(_ event: EventRow) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(event.time)
-                    .font(.subheadline.monospacedDigit().weight(.semibold))
+                    .font(.caption.monospacedDigit().weight(.medium))
                     .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                 if let imminence = eventImminence(event) {
                     Text(imminence)
@@ -2578,7 +2590,6 @@ struct RichResponseCards: View {
                         .background(AssistantTheme.accent(for: colorScheme).opacity(0.12), in: Capsule())
                         .accessibilityLabel(imminence == "Now" ? "Happening now" : "Starts \(imminence.lowercased())")
                 }
-                calendarEventLabel(event)
                 Spacer(minLength: 4)
                 if let meetingLinkURL = event.meetingLinkURL, let url = URL(string: meetingLinkURL) {
                     Link(destination: url) {
@@ -2590,13 +2601,15 @@ struct RichResponseCards: View {
                 }
             }
             Text(AssistantMarkdown.inlineAttributed(event.title))
-                .font(.title3.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                 .fixedSize(horizontal: false, vertical: true)
 
+            calendarEventLabel(event)
+
             if !event.location.isEmpty {
                 Text(AssistantMarkdown.inlineAttributed(event.location))
-                    .font(.subheadline)
+                    .font(.caption)
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -2659,14 +2672,14 @@ struct RichResponseCards: View {
 
         let internetDate = ISO8601DateFormatter()
         if let date = internetDate.date(from: start) {
-            return date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+            return date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().year())
         }
 
         let dateOnly = DateFormatter()
         dateOnly.locale = Locale(identifier: "en_US_POSIX")
-        dateOnly.timeZone = TimeZone(secondsFromGMT: 0)
+        dateOnly.timeZone = .current
         dateOnly.dateFormat = "yyyy-MM-dd"
-        return dateOnly.date(from: start)?.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+        return dateOnly.date(from: start)?.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().year())
     }
 
     private func eventAttendee(_ value: String) -> EventAttendee {
@@ -4968,6 +4981,24 @@ enum AssistantMarkdown {
     }
 
     private static func table(at index: Int, in lines: [String]) -> (headers: [String], rows: [[String]], endIndex: Int)? {
+        // Spreadsheet pastes have tabs but usually no Markdown separator or
+        // header. Keep every column (including missing values); never guess
+        // that the first person's row is a header or invent semantic labels.
+        if lines[index].contains("\t"), !lines[index].hasPrefix("\t") {
+            let width = lines[index].components(separatedBy: "\t").count
+            var rows: [[String]] = []
+            var cursor = index
+            while cursor < lines.count, lines[cursor].contains("\t") {
+                let cells = lines[cursor].components(separatedBy: "\t")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                guard cells.count == width else { break }
+                rows.append(cells)
+                cursor += 1
+            }
+            if rows.filter({ $0.contains { !$0.isEmpty } }).count >= 2 {
+                return ([], rows, cursor)
+            }
+        }
         guard index + 1 < lines.count,
               let headers = tableCells(in: lines[index]),
               headers.count > 1,
@@ -5014,6 +5045,7 @@ private struct AssistantMarkdownView: View {
     let mutedInk: Color
     let codeSurface: Color
     let accent: Color
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var blocks: [AssistantMarkdown.Block] {
         AssistantMarkdown.blocks(in: source)
@@ -5143,28 +5175,33 @@ private struct AssistantMarkdownView: View {
                 .accessibilityHidden(true)
 
         case let .table(headers, rows):
-            // A horizontally scrolling grid collapses to zero height inside the
-            // transcript's LazyVStack (its width is indeterminate while the
-            // stack measures), so the table rendered blank. On a phone a table
-            // is far more readable as one card per row — header: value pairs —
-            // which wraps naturally and needs no sideways pan.
+            let columnCount = max(headers.count, rows.map(\.count).max() ?? 0)
+            let stacked = columnCount > 3 || dynamicTypeSize.isAccessibilitySize
+            // Equal-width cells keep columns aligned without an unmeasured
+            // nested horizontal ScrollView collapsing inside the transcript.
             VStack(alignment: .leading, spacing: 0) {
+                if !headers.isEmpty && !stacked {
+                    tableRow(headers, isHeader: true)
+                        .background(ink.opacity(0.06))
+                }
                 ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(zip(headers, row).enumerated()), id: \.offset) { _, pair in
-                            let (header, cell) = pair
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(AssistantMarkdown.inlineAttributed(header))
-                                    .font(.system(size: baseFontSize * 0.8, weight: .semibold))
-                                    .foregroundStyle(mutedInk)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .frame(width: 88, alignment: .trailing)
-                                markdownText(cell.isEmpty ? "—" : cell, inline: true, font: .system(size: baseFontSize * 0.92))
+                    if stacked {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(row.enumerated()), id: \.offset) { column, cell in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    if headers.indices.contains(column) {
+                                        Text(AssistantMarkdown.inlineAttributed(headers[column]))
+                                            .font(.system(size: baseFontSize * 0.85, weight: .semibold))
+                                            .foregroundStyle(mutedInk)
+                                    }
+                                    markdownText(cell.isEmpty ? "—" : cell, inline: true)
+                                }
                             }
                         }
+                        .padding(12)
+                    } else {
+                        tableRow(row, isHeader: false)
                     }
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 10)
                     if rowIndex < rows.count - 1 {
                         Rectangle()
                             .fill(ink.opacity(0.08))
@@ -5179,8 +5216,21 @@ private struct AssistantMarkdownView: View {
                     .strokeBorder(ink.opacity(0.09), lineWidth: 0.75)
             }
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("Table with \(headers.count) columns and \(rows.count) rows")
+            .accessibilityLabel("Table with \(columnCount) columns and \(rows.count) rows")
         }
+    }
+
+    private func tableRow(_ cells: [String], isHeader: Bool) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                markdownText(cell.isEmpty ? "—" : cell, inline: true,
+                             font: .system(size: baseFontSize * 0.92, weight: isHeader ? .semibold : .regular))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 9)
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private func markdownText(_ source: String, strikethrough: Bool = false, inline: Bool = false, font: Font? = nil) -> some View {

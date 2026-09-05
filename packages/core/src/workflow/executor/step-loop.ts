@@ -44,6 +44,7 @@ import {
   type ReadToolEvidence,
 } from '../read-intent.js';
 import { enforcePersonalReadResponse, isSimulatedApprovalNotice } from '../response-contract.js';
+import { isMemoryWriteRequest, stepLimitResponse } from '../saved-work.js';
 import {
   budgetResumeAt,
   channelContext,
@@ -204,6 +205,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // Relative dates belong to the owner's request, not the worker attempt. A
   // crash/retry tomorrow must not silently move "Monday" to a different week.
   const readReferenceAt = task.createdAt;
+  const ownerText = latestUserText(rc.window) ?? '';
+  const directOwner = task.trust === 'owner' && !isForwardedIngest(task) && !state.untrustedContext;
+  const memoryWrite = directOwner && isMemoryWriteRequest(ownerText);
   // Private calendar/mail forcing belongs only to direct owner requests. Never
   // let third-party text or an assistant-generated child task trigger a search
   // of the owner's accounts or override its explicit action plan.
@@ -228,7 +232,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // routed to real work all drive tools on the strong model. The draft model
   // answers these with plausible prose and no tool calls — how a request can
   // look handled while nothing happened.
-  const role = readRequest ? 'reason' : roleForTask(task, plan);
+  const role = readRequest || memoryWrite ? 'reason' : roleForTask(task, plan);
   // Forced artifact retries drop to the role's fallback because the DRAFT
   // primary (deepseek) intermittently times out when a tool is mandatory. The
   // reasoning primary (Claude) has no such issue, and its fallback is the
@@ -497,6 +501,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         ? `\nThis automatic session is bound to Goal ID ${task.goalId}. Work only on this goal; the runtime owns progress persistence.`
         : '',
       plan ? `\n${renderPlan(plan)}` : '',
+      memoryWrite
+        ? '\nThe owner wants information saved. Use memory.save for supplied facts/preferences or occasions.save for supplied dates. Save only owner-provided or verified details, never an earlier assistant guess. If the actual order or fact is missing, ask for it instead of inventing it. Multiple independent saves may share a tool turn; preserve blank dates and deceased markers instead of guessing. Report confirmed saves and unfinished work separately.'
+        : '',
       readRequest ? readLookupDirective(readRequest) : '',
       readAnswerTurn && readRequest ? readAnswerDirective(readRequest) : '',
       plan?.action === 'schedule' ? SCHEDULE_DIRECTIVE : '',
@@ -1204,16 +1211,16 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
 
   // max steps exhausted
   const stuck = `stopped after ${task.maxSteps} steps without finishing`;
-  // The scratchpad is only written by mission.update, so for every other task
-  // type the best available summary is the model's own last words. "See task
-  // log" is the worst possible message at the moment the owner most needs one.
-  const lastAssistantText = latestCurrentTaskAssistantText(rc.window);
-  const lastProgress =
-    state.scratchpad ||
-    (lastAssistantText
-      ? lastAssistantText.slice(0, 400)
-      : "I didn't get far enough to record a useful result.");
-  const stuckMessage = `I ${stuck}. Here's where I got:\n\n${lastProgress}`;
+  const completedEvidence = await db
+    .select({
+      toolName: toolCalls.toolName,
+      status: toolCalls.status,
+      args: toolCalls.args,
+      result: toolCalls.result,
+    })
+    .from(toolCalls)
+    .where(eq(toolCalls.taskId, task.id));
+  const stuckMessage = stepLimitResponse(task.maxSteps, completedEvidence);
   if (isUnattendedGoalSession(task)) {
     const goalToolEvidence = await db
       .select({

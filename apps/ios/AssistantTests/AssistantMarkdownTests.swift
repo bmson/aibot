@@ -7,6 +7,69 @@ import SwiftUI
 /// regression in the chat bubble's markdown is caught by a test instead of a
 /// blank screenshot.
 final class AssistantMarkdownTests: XCTestCase {
+    func testSpreadsheetPasteKeepsFirstRowAndMissingValues() {
+        let source = "Family birthdays\n\nAda\tApril 20, 1918\tMonkey\n\t\t\nBaby\t\tHorse"
+        let blocks = AssistantMarkdown.blocks(in: source)
+        XCTAssertEqual(blocks.first, .paragraph("Family birthdays"))
+        XCTAssertEqual(blocks.last, .table(headers: [], rows: [
+            ["Ada", "April 20, 1918", "Monkey"], ["", "", ""], ["Baby", "", "Horse"]
+        ]))
+    }
+
+    func testTabDetectionLeavesCodeAndSingleTabLineAlone() {
+        XCTAssertEqual(AssistantMarkdown.blocks(in: "Name\tValue"), [.paragraph("Name\tValue")])
+        XCTAssertEqual(AssistantMarkdown.blocks(in: "```\nA\tB\nC\tD\n```"), [.code(language: nil, text: "A\tB\nC\tD")])
+        let blocks = AssistantMarkdown.blocks(in: "A\tB\nC\tD\nNot\ta\tmatching row")
+        XCTAssertEqual(blocks.last, .paragraph("Not\ta\tmatching row"))
+    }
+
+    @MainActor
+    func testCompactCalendarSnapshots() throws {
+        let data = Data(#"{"id":"m1","role":"assistant","parts":[{"type":"data-card","data":{"kind":"calendar-event","id":"e1","title":"Google Phone Interview","time":"2:00 PM–2:30 PM","start":"2014-05-05T14:00:00-07:00","calendars":["Personal"]}},{"type":"data-card","data":{"kind":"calendar-event","id":"e2","title":"Twitter Phone Interview","time":"3:00 PM–4:00 PM","start":"2014-05-19T15:00:00-07:00","calendars":["Personal"]}}]}"#.utf8)
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        for scheme in [ColorScheme.light, .dark] {
+            let view = MessageBubble(message: message, userPrompt: nil, isCurrentAnswer: false,
+                isStreaming: false, openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil)
+                .padding(16).frame(width: 390).background(AssistantTheme.stage)
+                .environment(\.colorScheme, scheme)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            renderer.proposedSize = ProposedViewSize(width: 390, height: nil)
+            let image = try XCTUnwrap(renderer.uiImage)
+            XCTAssertGreaterThan(image.size.height, 150)
+            XCTAssertLessThan(image.size.height, 330)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "compact-calendar-\(scheme)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    @MainActor
+    func testUserFormattingSnapshots() throws {
+        let source = "Family birthdays\n\nAda\tApril 20, 1918\tMetal Monkey\nAlexandra\tNovember 21, 2020\tMetal Rat\nBaby\t\tFire Horse\n\nOur order\n- [ ] Bean & Cheese\n- [ ] Mushroom"
+        for (name, scheme, size) in [
+            ("light", ColorScheme.light, DynamicTypeSize.large),
+            ("dark", .dark, .large),
+            ("accessible", .light, .accessibility3)
+        ] {
+            let view = MessageBubble(message: .optimistic(role: .user, text: source), userPrompt: nil,
+                isCurrentAnswer: false, isStreaming: false, openApprovals: {},
+                runForReal: nil, retry: nil, decideApproval: nil)
+                .padding(16).frame(width: 390).background(AssistantTheme.stage)
+                .environment(\.colorScheme, scheme)
+                .environment(\.dynamicTypeSize, size)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            renderer.proposedSize = ProposedViewSize(width: 390, height: nil)
+            let image = try XCTUnwrap(renderer.uiImage)
+            XCTAssertGreaterThan(image.size.height, 200)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "user-table-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
     /// Reuses the two generated prompt runs without bundling private QA output
     /// into the app. XCTest keeps the native renders as reviewable attachments.
     @MainActor

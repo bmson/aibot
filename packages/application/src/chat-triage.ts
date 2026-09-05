@@ -16,6 +16,7 @@
  */
 
 import { detectPersonalReadRequest } from '@assistant/core/workflow/read-intent';
+import { isMemoryWriteRequest, isSaveStatusQuestion } from '@assistant/core/workflow/saved-work';
 
 // Leading imperative verbs that are unambiguous actions in an assistant chat.
 const LEADING_ACTION =
@@ -98,6 +99,7 @@ const PRIOR_ACTION_COMMITMENT =
 export function looksLikeActionRequest(text: string, priorAssistantText = ''): boolean {
   let t = text.trim().toLowerCase();
   if (!t) return false;
+  if (isMemoryWriteRequest(text) || isSaveStatusQuestion(text)) return true;
   let prev = '';
   while (t !== prev) {
     prev = t;

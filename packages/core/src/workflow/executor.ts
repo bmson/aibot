@@ -4,11 +4,12 @@ import type { ModelMessage } from 'ai';
 import { eq } from 'drizzle-orm';
 import { getAgent } from '../chat.js';
 import { BudgetReservationError } from '../cost.js';
+import { isForwardedIngest } from '../email-provenance.js';
 import type { TaskState } from '../events.js';
 import { withSpan } from '../otel.js';
 import { requestedArtifactIntent } from './artifact-intent.js';
 import { isKnownSenderReplyTask } from './executor/context-helpers.js';
-import { finalizePendingResponse } from './executor/finalize.js';
+import { finalizePendingResponse, stageFinalResponse } from './executor/finalize.js';
 import { unreadSharedDocumentIntent } from './executor/intent.js';
 import {
   noticeParts,
@@ -45,6 +46,7 @@ import {
   type TaskLease,
   taskState,
 } from './machine.js';
+import { isSaveStatusQuestion, previousSaveStatus } from './saved-work.js';
 
 /**
  * Why a goal says its queued work should no longer run: the owner stopped it, or
@@ -282,6 +284,25 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   // so a resumed task acts on the latest owner intent, not a stale checkpoint.
   // (First run just baselines the watermark; chat channel only.)
   await foldOwnerRepliesSincePark(db, task, state, rc.window);
+
+  // Save-status questions are read-only receipt checks, not new work for a
+  // planner to invent or clarify. Resolve them before any model call.
+  if (
+    task.trust === 'owner' &&
+    !isForwardedIngest(task) &&
+    !state.untrustedContext &&
+    (task.type === 'chat_turn' || task.type === 'sms_turn') &&
+    isSaveStatusQuestion(latestUserText(rc.window) ?? '')
+  ) {
+    const text = await previousSaveStatus(db, task);
+    rc.window.push({ role: 'assistant', content: text });
+    return stageFinalResponse(deps, lease, state, rc.window, {
+      text,
+      progress: text.slice(0, 200),
+      terminalStatus: 'done',
+      outcome: 'done',
+    });
+  }
 
   // Read an owner-supplied shared document (step 0) before the model continues.
   const documentReadResult = await runDirectDocumentRead(rc);

@@ -1,4 +1,5 @@
 import { gmailThreadIdsToRead, type PersonalReadRequest } from './read-intent.js';
+import { isDurableSave, isMemoryWriteRequest, savedWorkSummary } from './saved-work.js';
 
 /**
  * The model writes prose, but the task/tool ledger is the authority for what
@@ -57,6 +58,7 @@ export interface ResponseContractResult {
 }
 
 interface ResponseContractOptions {
+  requestText?: string;
   urlCorpus?: string;
   /** Deterministically detected from the latest owner turn. */
   readRequest?: PersonalReadRequest | null;
@@ -165,6 +167,8 @@ const passiveOutbound =
 // future-tense "I'll keep that in mind" does not trip it.
 const memoryClaim =
   /\b(?:saved|stored|recorded|noted|logged|updated|corrected|remembered|memoriz(?:e|ed)|committed|kept|added|confirmed)\b[^.\n]{0,40}\b(?:in|to|into)?\s*(?:your\s+)?(?:memory|profile|the\s+record)\b/i;
+const memoryPromise =
+  /\b(?:i|we)(?:['’]ll|\s+will)\s+remember\b|\bmemory\s+(?:(?:has been|was|is)\s+)?(?:saved|updated|stored)\b/i;
 // Negative-result narration of a read: "found no flights on your calendar",
 // "nothing in your inbox", "your calendar is clear". A model that never ran a
 // read tool asserting emptiness is the same fabrication as a fake "I checked".
@@ -372,11 +376,10 @@ function supports(kind: ActionKind, evidence: ActionEvidence[], currentTaskOnly 
           name === 'task.schedule' ||
           name === 'applications.watch_confirmation',
       );
-    // memory.save is the only tool that persists a fact. Claiming a fact was
-    // saved/remembered/corrected requires it — otherwise the model is narrating
-    // a memory write it never made.
+    // Both tools persist owner information. A successful function invocation
+    // can still return saved:false (e.g. a forgotten/tombstoned fact).
     case 'memory':
-      return names.some((name) => name === 'memory.save');
+      return usable.some(isDurableSave);
     case 'approval':
       // Genuine approval notices are posted by the executor when it parks the
       // task and do not pass through the model-final response contract.
@@ -563,7 +566,7 @@ function claimedKinds(text: string): ActionKind[] {
   ) {
     kinds.add('background');
   }
-  if (memoryClaim.test(text)) kinds.add('memory');
+  if (memoryClaim.test(text) || memoryPromise.test(text)) kinds.add('memory');
   if (isSimulatedApprovalNotice(text)) kinds.add('approval');
 
   return [...kinds];
@@ -623,7 +626,7 @@ function toolKind(name: string): ActionKind | undefined {
   }
   if (/^gmail\.(?:search|read_thread)$/.test(name)) return 'inbox_read';
   if (name === 'web.fetch' || name === 'browser.execute') return 'research';
-  if (name === 'memory.save') return 'memory';
+  if (name === 'memory.save' || name === 'occasions.save') return 'memory';
   if (
     name === 'mission.update' ||
     name === 'task.schedule' ||
@@ -655,6 +658,7 @@ function describeTool(name: string): string | undefined {
   if (/^gmail\.(?:search|read_thread)$/.test(name)) return 'the mailbox was actually read';
   if (name === 'web.fetch') return 'the web request completed';
   if (name === 'memory.save') return 'the fact was saved to memory';
+  if (name === 'occasions.save') return 'the occasion was saved in People';
   if (name === 'application.submit') return 'the application was submitted';
   if (name === 'applications.watch_confirmation') return 'the confirmation watch was created';
   if (name === 'mission.update' || name === 'task.schedule') {
@@ -1923,6 +1927,20 @@ export function enforceResponseContract(
   const readGrounding = enforcePersonalReadGrounding(text, evidence, opts);
   if (readGrounding) return readGrounding;
   const claimed = claimedKinds(text);
+  const memoryRequest = isMemoryWriteRequest(opts?.requestText ?? '');
+  if (
+    memoryRequest &&
+    (/^(?:done|all set|got it|noted|saved|remembered)\b/i.test(text.trim()) ||
+      firstPersonCompletedAction(text, 'saved|stored|recorded|noted|remembered') ||
+      completedActionClaim(
+        text,
+        'facts?|birthdays?|dates?|order|preferences?|details?|information|entries',
+        'saved|stored|recorded|remembered|updated',
+      )) &&
+    !claimed.includes('memory')
+  ) {
+    claimed.push('memory');
+  }
   const unsupported = claimed.filter(
     (kind) =>
       !supports(
@@ -1933,6 +1951,15 @@ export function enforceResponseContract(
       ),
   );
   if (unsupported.length === 0) {
+    if (memoryRequest && claimed.includes('memory')) {
+      const saved = savedWorkSummary(evidence);
+      if (saved)
+        return {
+          text: `${saved}\nOnly these confirmed saves are included in this receipt.`,
+          blocked: false,
+          unsupported: [],
+        };
+    }
     // The action-claim rules passed, but a fabricated link can still ride along
     // in an otherwise-honest answer. Only meaningful with a corpus (the finalize
     // call site provides one; existing unit callers omit it and skip the rule).
@@ -1950,6 +1977,23 @@ export function enforceResponseContract(
   if (unsupported.includes('approval')) {
     return {
       text: 'No approval request actually exists — I never created one, so nothing is waiting on the Approvals page. I stopped rather than hand you a code that goes nowhere. Tell me to go ahead and I will raise the real one.',
+      blocked: true,
+      unsupported,
+    };
+  }
+  if (unsupported.length === 1 && unsupported[0] === 'memory') {
+    const currentSaves = evidence.filter(
+      (item) =>
+        item.fromCurrentTask !== false && ['memory.save', 'occasions.save'].includes(item.toolName),
+    );
+    const forgotten = currentSaves.some((item) => record(item.result)?.tombstoned === true);
+    const quarantined = currentSaves.some((item) => record(item.result)?.quarantined === true);
+    return {
+      text: forgotten
+        ? 'This information was previously forgotten, so I did not restore it to memory.'
+        : quarantined
+          ? 'The information was recorded for review, but is not available as trusted memory yet.'
+          : "I haven't confirmed a save for this request. An earlier message saying I would remember it is not a save receipt. If the information wasn't included, send the exact details; otherwise ask me to retry saving the information you supplied.",
       blocked: true,
       unsupported,
     };

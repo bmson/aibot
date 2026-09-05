@@ -95,7 +95,7 @@ export function compactNoticePresentation(kind: string, text: string): ChatCardP
           );
     detailLabel = 'Technical details';
   } else if (kind === 'response-contract') {
-    headline = 'Verified result';
+    headline = full.startsWith('Completed:') ? 'Partially completed' : 'Result not confirmed';
     summary = firstUsefulSentence(full);
     detailLabel = 'Verification details';
   } else if (kind === 'turn-failed') {
@@ -168,7 +168,8 @@ export function compactChatMessageParts(
     const value = record(part);
     if (value?.type !== 'notice' || typeof value.notice !== 'string') return part;
     found = true;
-    if (record(value.presentation)?.version === 1) return part;
+    if (record(value.presentation)?.version === 1 && value.notice !== 'response-contract')
+      return part;
     return {
       ...value,
       type: 'notice',
