@@ -226,7 +226,13 @@ struct MessageBubble: View {
     /// One assistant bubble's worth of paper. The whole reply remains the
     /// copy unit no matter how many bubbles it was split into.
     private func assistantBubble(_ text: String, showsAnswerContext: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let shape = RoundedRectangle(
+            cornerRadius: AssistantTheme.conversationCornerRadius,
+            style: .continuous
+        )
+        let borderWidth: CGFloat = colorSchemeContrast == .increased ? 1.05 : 0.7
+
+        return VStack(alignment: .leading, spacing: 0) {
             if showsAnswerContext, let prompt = normalizedUserPrompt {
                 currentAnswerContext(prompt)
             }
@@ -244,31 +250,23 @@ struct MessageBubble: View {
             .padding(.vertical, resolvedBubbleVerticalInset)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+            // The header is a rectangular band inside the paper, not another
+            // rounded card. Clip all contents to the same inset outline so its
+            // tint cannot paint over or extend beyond the card's border.
+            .clipShape(shape.inset(by: borderWidth))
             .background(
                 AssistantTheme.bubblePaper(for: colorScheme),
-                in: RoundedRectangle(
-                    cornerRadius: AssistantTheme.conversationCornerRadius,
-                    style: .continuous
-                )
-            )
-            .clipShape(
-                RoundedRectangle(
-                    cornerRadius: AssistantTheme.conversationCornerRadius,
-                    style: .continuous
-                )
+                in: shape
             )
             .overlay {
-                RoundedRectangle(
-                    cornerRadius: AssistantTheme.conversationCornerRadius,
-                    style: .continuous
-                )
+                shape
                 .strokeBorder(
                     .white.opacity(
                         colorSchemeContrast == .increased
                             ? (colorScheme == .dark ? 0.34 : 0.86)
                             : (colorScheme == .dark ? 0.14 : 0.6)
                     ),
-                    lineWidth: colorSchemeContrast == .increased ? 1.05 : 0.7
+                    lineWidth: borderWidth
                 )
             }
             .shadow(
@@ -311,7 +309,9 @@ struct MessageBubble: View {
         .padding(.horizontal, resolvedBubbleHorizontalInset)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, minHeight: answerContextMinimumHeight, alignment: .leading)
-        .background(AssistantTheme.sunken(for: colorScheme))
+        .background {
+            Rectangle().fill(AssistantTheme.sunken(for: colorScheme))
+        }
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(AssistantTheme.bubblePaperInk(for: colorScheme).opacity(0.08))

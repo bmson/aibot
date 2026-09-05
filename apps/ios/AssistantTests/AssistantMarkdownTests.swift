@@ -7,6 +7,56 @@ import SwiftUI
 /// regression in the chat bubble's markdown is caught by a test instead of a
 /// blank screenshot.
 final class AssistantMarkdownTests: XCTestCase {
+    @MainActor
+    func testCurrentAnswerHeaderSnapshots() throws {
+        for (name, scheme, size, width) in [
+            ("light", ColorScheme.light, DynamicTypeSize.large, CGFloat(390)),
+            ("dark", .dark, .large, 390),
+            ("narrow", .light, .large, 320),
+            ("accessible", .light, .accessibility3, 390)
+        ] {
+            let view = MessageBubble(
+                message: .optimistic(role: .assistant, text: "Here are two places to stop along the way. Check the opening hours before leaving."),
+                userPrompt: "Can you find a place somewhere along the way?",
+                isCurrentAnswer: true, isStreaming: false, openApprovals: {},
+                runForReal: nil, retry: nil, decideApproval: nil
+            )
+            .padding(16).frame(width: width).background(AssistantTheme.stage)
+            .environment(\.colorScheme, scheme)
+            .environment(\.dynamicTypeSize, size)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 3
+            renderer.proposedSize = ProposedViewSize(width: width, height: nil)
+            let image = try XCTUnwrap(renderer.uiImage)
+            XCTAssertEqual(image.size.width, width)
+            XCTAssertGreaterThan(image.size.height, 100)
+            if !size.isAccessibilitySize {
+                // A rounded header background leaves paper-colored wedges
+                // above the divider. Both ends must instead match its center.
+                let cgImage = try XCTUnwrap(image.cgImage)
+                let data = try XCTUnwrap(cgImage.dataProvider?.data)
+                let bytes = try XCTUnwrap(CFDataGetBytePtr(data))
+                let pixelSize = cgImage.bitsPerPixel / 8
+                let y = Int((16 + AssistantTheme.conversationCornerRadius * 1.55 - 4) * renderer.scale)
+                func pixel(_ x: CGFloat) -> [UInt8] {
+                    let offset = y * cgImage.bytesPerRow + Int(x * renderer.scale) * pixelSize
+                    return Array(UnsafeBufferPointer(start: bytes + offset, count: pixelSize))
+                }
+                // Allow tiny rasterization/shadow differences, not the much
+                // lighter paper wedge produced by a separate rounded shape.
+                for x in [CGFloat(20), width - 20] {
+                    let difference = zip(pixel(x), pixel(width / 2))
+                        .map { abs(Int($0.0) - Int($0.1)) }.max() ?? 0
+                    XCTAssertLessThanOrEqual(difference, 2, "Header must have square bottom corners")
+                }
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "current-answer-header-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     func testSpreadsheetPasteKeepsFirstRowAndMissingValues() {
         let source = "Family birthdays\n\nAda\tApril 20, 1918\tMonkey\n\t\t\nBaby\t\tHorse"
         let blocks = AssistantMarkdown.blocks(in: source)
