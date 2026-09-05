@@ -22,6 +22,13 @@ enum AssistantRoute: String, Hashable, Identifiable, CaseIterable {
     var id: Self { self }
 }
 
+/// All pushed screens share one ordered path. Mixing an item-based submenu
+/// with value-based person links inserts the person beneath the submenu.
+enum AssistantDestination: Hashable {
+    case route(AssistantRoute)
+    case person(id: String)
+}
+
 /// An action the error banner can offer when a failure is worth another go.
 /// Sendable so it can be handed to the `Task` the banner's button starts;
 /// capturing `AppModel` is safe because global-actor isolation makes it so.
@@ -39,7 +46,16 @@ private func isRequestCancellation(_ error: Error) -> Bool {
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var presentedRoute: AssistantRoute?
+    @Published var navigationPath: [AssistantDestination] = []
+    var presentedRoute: AssistantRoute? {
+        get {
+            guard case let .route(route) = navigationPath.first else { return nil }
+            return route
+        }
+        set {
+            navigationPath = newValue.map { $0 == .chat ? [] : [.route($0)] } ?? []
+        }
+    }
     @Published private(set) var bootstrap: BootstrapResponse?
     @Published private(set) var overview: OverviewResponse?
     @Published private(set) var archivedActivity: ActivityList?

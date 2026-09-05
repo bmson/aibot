@@ -2,6 +2,51 @@ import XCTest
 @testable import Assistant
 
 final class APIModelsTests: XCTestCase {
+    @MainActor
+    func testPeopleAndRelationshipLinksPushAboveDirectoryAndPopInOrder() {
+        let model = AppModel()
+        model.present(.people)
+        model.navigationPath.append(.person(id: "ada"))
+        model.navigationPath.append(.person(id: "grace"))
+        XCTAssertEqual(model.navigationPath, [.route(.people), .person(id: "ada"), .person(id: "grace")])
+        XCTAssertEqual(model.presentedRoute, .people)
+
+        model.navigationPath.removeLast()
+        XCTAssertEqual(model.navigationPath.last, .person(id: "ada"))
+        model.navigationPath.removeLast()
+        XCTAssertEqual(model.navigationPath, [.route(.people)])
+        model.navigationPath.removeLast()
+        XCTAssertNil(model.presentedRoute)
+    }
+
+    @MainActor
+    func testChangingRouteAndReturningToChatClearPersonHistory() {
+        let model = AppModel()
+        model.present(.people)
+        model.navigationPath.append(.person(id: "ada"))
+        model.present(.approvals)
+        XCTAssertEqual(model.navigationPath, [.route(.approvals)])
+        model.returnToChat()
+        XCTAssertTrue(model.navigationPath.isEmpty)
+
+        model.present(.people)
+        model.navigationPath.append(.person(id: "grace"))
+        model.present(.chat)
+        XCTAssertTrue(model.navigationPath.isEmpty)
+        XCTAssertNil(model.presentedRoute)
+    }
+
+    @MainActor
+    func testMemoryDirectoryShortcutUsesSameNavigationPath() {
+        let model = AppModel()
+        model.present(.memory)
+        model.presentedRoute = .people
+        XCTAssertEqual(model.navigationPath, [.route(.people)])
+        model.navigationPath.append(.person(id: "ada"))
+        model.presentedRoute = nil
+        XCTAssertTrue(model.navigationPath.isEmpty)
+    }
+
     func testLookupCardsDoNotReplaceTheirAnswer() throws {
         let data = Data(#"{"id":"m1","role":"assistant","parts":[{"type":"text","text":"These interviews are historical, not current applications."},{"type":"data-card","data":{"kind":"calendar-event","id":"e1","title":"Interview"}}]}"#.utf8)
         let message = try JSONDecoder().decode(ChatMessage.self, from: data)

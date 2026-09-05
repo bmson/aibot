@@ -10,7 +10,6 @@ struct RootView: View {
     // The launch screen belongs to the automatic connect at startup, not to a
     // connect the owner just triggered from the Connection form.
     @State private var hasPresentedConnection = false
-    @State private var navigationPath = NavigationPath()
 
     var body: some View {
         GeometryReader { geometry in
@@ -55,34 +54,33 @@ struct RootView: View {
                         .transition(.opacity)
                         .onAppear { hasPresentedConnection = true }
                 } else {
-                    NavigationStack(path: $navigationPath) {
+                    NavigationStack(path: $model.navigationPath) {
                         ChatView(
                             safeAreaTopInset: safeAreaTopInset,
                             safeAreaBottomInset: safeAreaBottomInset,
                             safeAreaLeadingInset: safeAreaLeadingInset,
                             safeAreaTrailingInset: safeAreaTrailingInset
                         )
-                            .navigationDestination(item: $model.presentedRoute) { route in
-                                destination(
-                                    for: route,
-                                    safeAreaTopInset: safeAreaTopInset,
-                                    safeAreaBottomInset: safeAreaBottomInset,
-                                    safeAreaLeadingInset: safeAreaLeadingInset,
-                                    safeAreaTrailingInset: safeAreaTrailingInset
-                                )
-                            }
-                            // Registered on the same stack as the routes, so a
-                            // relationship row can push from one person to the
-                            // next without leaving People.
-                            .navigationDestination(for: AssistantPersonLink.self) { link in
-                                PersonCardScreen(personId: link.id)
+                            .navigationDestination(for: AssistantDestination.self) { screen in
+                                switch screen {
+                                case let .route(route):
+                                    destination(
+                                        for: route,
+                                        safeAreaTopInset: safeAreaTopInset,
+                                        safeAreaBottomInset: safeAreaBottomInset,
+                                        safeAreaLeadingInset: safeAreaLeadingInset,
+                                        safeAreaTrailingInset: safeAreaTrailingInset
+                                    )
+                                case let .person(id):
+                                    PersonCardScreen(personId: id)
+                                }
                             }
                     }
                         .transition(.opacity)
                 }
             }
 
-            if model.bootstrap != nil && model.presentedRoute == nil && navigationPath.isEmpty {
+            if model.bootstrap != nil && model.navigationPath.isEmpty {
                 ActivityCrown(
                     thought: model.activityThought,
                     detail: model.activityDetail,

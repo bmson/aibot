@@ -82,7 +82,7 @@ struct PeopleView: View {
             VStack(alignment: .leading, spacing: 10) {
                 sectionHeading("Coming up", count: comingUp.count)
                 ForEach(comingUp) { person in
-                    NavigationLink(value: AssistantPersonLink(id: person.id)) {
+                    NavigationLink(value: AssistantDestination.person(id: person.id)) {
                         comingUpRow(person)
                     }
                     .buttonStyle(.plain)
@@ -105,7 +105,7 @@ struct PeopleView: View {
             VStack(alignment: .leading, spacing: 10) {
                 sectionHeading(group.label, count: group.people.count)
                 ForEach(group.people) { person in
-                    NavigationLink(value: AssistantPersonLink(id: person.id)) {
+                    NavigationLink(value: AssistantDestination.person(id: person.id)) {
                         personRow(person)
                     }
                     .buttonStyle(.plain)
@@ -216,12 +216,6 @@ private struct PersonGroupSection: Identifiable {
     var id: String { label }
 }
 
-/// Navigation payload for a person, so a relationship row can push straight
-/// through to the person on the other end of it.
-struct AssistantPersonLink: Hashable {
-    let id: String
-}
-
 /// An initials disc. There is no photograph anywhere in the data model, so
 /// this is an identity marker rather than a placeholder for a missing image.
 struct PersonInitialsBadge: View {
@@ -303,7 +297,7 @@ struct PersonCardScreen: View {
             } else {
                 ForEach(card.relations) { relation in
                     if let otherId = relation.otherContactId {
-                        NavigationLink(value: AssistantPersonLink(id: otherId)) {
+                        NavigationLink(value: AssistantDestination.person(id: otherId)) {
                             relationRow(relation, linked: true)
                         }
                         .buttonStyle(.plain)
