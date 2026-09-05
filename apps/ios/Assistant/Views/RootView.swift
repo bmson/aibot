@@ -402,28 +402,8 @@ struct CardsView: View {
                 } else {
                     ForEach(model.savedCards) { card in
                         if let parsed = MessageResponseCard(part: card.messagePart) {
-                            VStack(alignment: .leading, spacing: 0) {
-                                RichResponseCards(cards: [parsed])
-                                Divider()
-                                    .padding(.horizontal, 16)
-                                    .overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.12))
-                                Button("Dismiss", systemImage: "archivebox") {
-                                    Task { _ = await model.dismissCard(card) }
-                                }
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                .frame(maxWidth: .infinity, alignment: .trailing)
-                                .padding(.horizontal, 16)
-                                .frame(minHeight: 44)
-                                .buttonStyle(.plain)
-                            }
-                            .background(
-                                AssistantTheme.raised(for: colorScheme),
-                                in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
-                            )
-                            .overlay {
-                                RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
-                                    .strokeBorder(AssistantTheme.ink(for: colorScheme).opacity(0.09), lineWidth: 0.8)
+                            SavedResponseCard(card: parsed) {
+                                _ = await model.dismissCard(card)
                             }
                         }
                     }
@@ -439,4 +419,53 @@ struct CardsView: View {
     }
 
     private var isLandscape: Bool { verticalSizeClass == .compact }
+}
+
+/// One paper surface, including its quiet trailing archive action. The rich
+/// card supplies content only here, avoiding a second rounded card and seam.
+struct SavedResponseCard: View {
+    let card: MessageResponseCard
+    let dismiss: () async -> Void
+    @State private var dismissing = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
+        VStack(alignment: .leading, spacing: 0) {
+            RichResponseCards(cards: [card])
+                .environment(\.responseCardIsEmbedded, true)
+            Divider().padding(.horizontal, 20)
+            HStack {
+                Spacer(minLength: 0)
+                Button {
+                    guard !dismissing else { return }
+                    dismissing = true
+                    Task {
+                        await dismiss()
+                        dismissing = false
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if dismissing { ProgressView().controlSize(.mini) }
+                        else { Image(systemName: "archivebox") }
+                        Text(dismissing ? "Dismissing…" : "Dismiss")
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .background(AssistantTheme.sunken(for: colorScheme).opacity(0.6), in: Capsule())
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(dismissing)
+                .accessibilityHint("Removes this card from saved cards")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+        .background(AssistantTheme.raised(for: colorScheme), in: shape)
+        .clipShape(shape)
+        .overlay { shape.strokeBorder(AssistantTheme.ink(for: colorScheme).opacity(0.09), lineWidth: 0.8) }
+    }
 }

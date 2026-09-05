@@ -2,6 +2,10 @@ import SwiftUI
 import UIKit
 
 enum PullMenuMotion {
+    static func menuRowCount(itemCount: Int, columns: Int) -> Int {
+        guard itemCount > 0, columns > 0 else { return 0 }
+        return (itemCount + columns - 1) / columns
+    }
     /// A projected flick still needs enough real travel to read as a swipe.
     /// This keeps a tiny, quick probe from inheriting an exaggerated UIKit
     /// prediction and crossing a detent the finger never approached.
@@ -303,9 +307,10 @@ struct ChatView: View {
         if usesExtraLargeAccessibilityMenu {
             return menuButtonHeight + 10 + menuAutonomyHeight
         }
-        // Four navigation rows, two quiet group dividers, then the autonomy
-        // setting at the bottom of the sheet.
-        return (4 * menuButtonHeight) + 26 + 10 + menuAutonomyHeight
+        // Count the partially filled final row too. Adding People created a
+        // fifth row; a four-row frame left Auto next below the visible sheet.
+        let rows = PullMenuMotion.menuRowCount(itemCount: pullMenuItemCount, columns: 2)
+        return (CGFloat(rows) * menuButtonHeight) + 26 + menuAutonomyHeight
     }
 
     private var menuButtonHeight: CGFloat {
@@ -1196,7 +1201,10 @@ struct ChatView: View {
         pullMenuButton("Cards", icon: "rectangle.stack", index: 6) {
             openRoute(.cards)
         }
-        pullMenuButton("More", icon: "ellipsis", index: 7) {
+        pullMenuButton("People", icon: "person.2", index: 7) {
+            openRoute(.people)
+        }
+        pullMenuButton("More", icon: "ellipsis", index: 8) {
             openRoute(.settings)
         }
     }

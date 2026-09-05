@@ -301,18 +301,19 @@ struct AssistantFlowLayout: Layout {
 
 private struct AssistantSubmenuChrome: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
-    private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
 
     func body(content: Content) -> some View {
         content
             .scrollBounceBehavior(.basedOnSize)
+            .scrollClipDisabled()
+            .scrollEdgeEffectStyle(.soft, for: .top)
             .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
             .tint(AssistantTheme.accent(for: colorScheme))
-            .navigationBarTitleDisplayMode(usesAccessibilityLayout ? .inline : .large)
-            .toolbarBackground(AssistantTheme.canvas(for: colorScheme), for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            // A stable title does not disappear between large/inline states.
+            // Native glass controls float above the softly receding content.
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
+            .toolbarBackground(.hidden, for: .navigationBar)
     }
 }
 

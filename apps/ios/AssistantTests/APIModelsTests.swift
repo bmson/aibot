@@ -2,6 +2,15 @@ import XCTest
 @testable import Assistant
 
 final class APIModelsTests: XCTestCase {
+    func testMenuHeightCountsThePartiallyFilledPeopleAndMoreRow() {
+        XCTAssertEqual(PullMenuMotion.menuRowCount(itemCount: 9, columns: 2), 5)
+        XCTAssertEqual(PullMenuMotion.menuRowCount(itemCount: 9, columns: 3), 3)
+        XCTAssertEqual(PullMenuMotion.menuRowCount(itemCount: 9, columns: 9), 1)
+        XCTAssertEqual(PullMenuMotion.menuRowCount(itemCount: 8, columns: 2), 4)
+        XCTAssertEqual(PullMenuMotion.menuRowCount(itemCount: 0, columns: 2), 0)
+        XCTAssertEqual(PullMenuMotion.menuRowCount(itemCount: 9, columns: 0), 0)
+    }
+
     @MainActor
     func testPeopleAndRelationshipLinksPushAboveDirectoryAndPopInOrder() {
         let model = AppModel()

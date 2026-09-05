@@ -8,6 +8,86 @@ import SwiftUI
 /// blank screenshot.
 final class AssistantMarkdownTests: XCTestCase {
     @MainActor
+    func testSubpageChromeKeepsTitleWhileContentScrollsUnderToolbar() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        let content = NavigationStack {
+            ScrollView {
+                VStack(spacing: 16) {
+                    ForEach(0..<20) { index in
+                        Text("Activity item \(index + 1)")
+                            .frame(maxWidth: .infinity, minHeight: 120)
+                            .background(.white, in: RoundedRectangle(cornerRadius: 22))
+                    }
+                }.padding(16)
+            }
+            .navigationTitle("Activity")
+            .assistantSubmenuChrome()
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Image(systemName: "archivebox") } }
+        }
+        .environment(\.colorScheme, .light)
+        .ignoresSafeArea(.container, edges: .top)
+        .statusBarHidden(true)
+        window.rootViewController = UIHostingController(rootView: content)
+        window.isHidden = false
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(200))
+        window.layoutIfNeeded()
+        func descendants(_ view: UIView) -> [UIView] {
+            [view] + view.subviews.flatMap(descendants)
+        }
+        let scroll = try XCTUnwrap(descendants(window).compactMap { $0 as? UIScrollView }
+            .first { $0.contentSize.height > $0.bounds.height })
+        let bar = try XCTUnwrap(descendants(window).compactMap { $0 as? UINavigationBar }.first)
+        for offset in [CGFloat(0), 160, 520] {
+            scroll.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
+            try await Task.sleep(for: .milliseconds(100))
+            window.layoutIfNeeded()
+            XCTAssertEqual(bar.topItem?.title, "Activity")
+            XCTAssertEqual(scroll.contentOffset.y, offset, accuracy: 1)
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "subpage-toolbar-scroll-\(Int(offset))"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    @MainActor
+    func testAttachedSourcesAndSavedCardSnapshots() throws {
+        let data = Data(#"{"id":"m1","role":"assistant","parts":[{"type":"text","text":"These two events overlap. Review the calendar details below."},{"type":"data-card","data":{"kind":"calendar-event","id":"e1","title":"Soccer game","time":"2:00 PM–3:00 PM","start":"2026-09-05T14:00:00-07:00","calendars":["Family"]}}]}"#.utf8)
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        let card = try XCTUnwrap(message.parts.compactMap(MessageResponseCard.init(part:)).first)
+        for (name, scheme, size) in [
+            ("light", ColorScheme.light, DynamicTypeSize.large),
+            ("dark", .dark, .large),
+            ("accessible", .light, .accessibility3)
+        ] {
+            let view = VStack(spacing: 24) {
+                MessageBubble(message: message, userPrompt: nil, isCurrentAnswer: false,
+                    isStreaming: false, openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil)
+                SavedResponseCard(card: card, dismiss: {})
+            }
+            .padding(16).frame(width: 390).background(AssistantTheme.stage)
+            .environment(\.colorScheme, scheme)
+            .environment(\.dynamicTypeSize, size)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 3
+            renderer.proposedSize = ProposedViewSize(width: 390, height: nil)
+            let image = try XCTUnwrap(renderer.uiImage)
+            XCTAssertEqual(image.size.width, 390)
+            XCTAssertGreaterThan(image.size.height, 250)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "attached-card-controls-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    @MainActor
     func testCurrentAnswerHeaderSnapshots() throws {
         for (name, scheme, size, width) in [
             ("light", ColorScheme.light, DynamicTypeSize.large, CGFloat(390)),

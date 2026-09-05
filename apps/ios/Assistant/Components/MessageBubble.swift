@@ -88,20 +88,8 @@ struct MessageBubble: View {
                 }
             }
 
-            if message.role == .assistant, !responseCards.isEmpty {
-                if message.hasSupportingResultCards {
-                    DisclosureGroup("Sources and details") {
-                        RichResponseCards(cards: responseCards, onSend: retry)
-                            .padding(.top, 8)
-                    }
-                    .font(.footnote.weight(.medium))
-                    .tint(AssistantTheme.stageStrong)
-                    .foregroundStyle(AssistantTheme.stageStrong)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                } else {
-                    RichResponseCards(cards: responseCards, onSend: retry)
-                }
+            if message.role == .assistant, !responseCards.isEmpty, !message.hasSupportingResultCards {
+                RichResponseCards(cards: responseCards, onSend: retry)
             }
 
             if message.role == .assistant, message.isOffCourse, !isStreaming {
@@ -137,7 +125,8 @@ struct MessageBubble: View {
             ForEach(Array(message.visibleTextBubbles.enumerated()), id: \.offset) { index, bubble in
                 assistantBubble(
                     bubble,
-                    showsAnswerContext: isCurrentAnswer && index == 0
+                    showsAnswerContext: isCurrentAnswer && index == 0,
+                    showsSources: message.hasSupportingResultCards && index == message.visibleTextBubbles.count - 1
                 )
             }
         } else {
@@ -225,7 +214,7 @@ struct MessageBubble: View {
 
     /// One assistant bubble's worth of paper. The whole reply remains the
     /// copy unit no matter how many bubbles it was split into.
-    private func assistantBubble(_ text: String, showsAnswerContext: Bool) -> some View {
+    private func assistantBubble(_ text: String, showsAnswerContext: Bool, showsSources: Bool) -> some View {
         let shape = RoundedRectangle(
             cornerRadius: AssistantTheme.conversationCornerRadius,
             style: .continuous
@@ -249,6 +238,10 @@ struct MessageBubble: View {
             .padding(.horizontal, resolvedBubbleHorizontalInset)
             .padding(.vertical, resolvedBubbleVerticalInset)
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            if showsSources {
+                AnswerSourcesFooter(cards: responseCards, onSend: retry)
+            }
         }
             // The header is a rectangular band inside the paper, not another
             // rounded card. Clip all contents to the same inset outline so its
@@ -4262,6 +4255,87 @@ private struct SensitiveCardValue: View {
     }
 }
 
+/// A supporting-results disclosure belongs to the answer's paper, not the
+/// conversation background. Own the chevron color instead of inheriting the
+/// system disclosure tint from the surrounding navigation stack.
+struct AnswerSourcesFooter: View {
+    let cards: [MessageResponseCard]
+    var onSend: ((String) -> Void)? = nil
+    @State private var expanded = false
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider().padding(.horizontal, 20)
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                    expanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                    Text("Sources and details")
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                .padding(.horizontal, 20)
+                .padding(.vertical, 6)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityHint("Shows the supporting results for this answer")
+            if expanded {
+                RichResponseCards(cards: cards, onSend: onSend)
+                    .environment(\.responseCardIsEmbedded, true)
+            }
+        }
+    }
+}
+
+private struct ResponseCardIsEmbeddedKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var responseCardIsEmbedded: Bool {
+        get { self[ResponseCardIsEmbeddedKey.self] }
+        set { self[ResponseCardIsEmbeddedKey.self] = newValue }
+    }
+}
+
+private struct ResponseCardSurface: ViewModifier {
+    let colorScheme: ColorScheme
+    let colorSchemeContrast: ColorSchemeContrast
+    let inset: CGFloat
+    @Environment(\.responseCardIsEmbedded) private var embedded
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
+        let padded = content.padding(inset).padding(.leading, 2)
+            .frame(maxWidth: .infinity, minHeight: AssistantTheme.responseCardMinHeight, alignment: .leading)
+        if embedded {
+            padded
+        } else {
+            padded
+                .background(AssistantTheme.raised(for: colorScheme), in: shape)
+                .overlay {
+                    shape.stroke(
+                        AssistantTheme.ink(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.22 : 0.09),
+                        lineWidth: 1
+                    )
+                }
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.10 : 0.045), radius: 12, y: 4)
+        }
+    }
+}
+
 private extension View {
     /// Cards always fill the row: a card sized to its content looks broken
     /// next to full-width siblings, in the transcript and on any other page.
@@ -4270,28 +4344,7 @@ private extension View {
         colorSchemeContrast: ColorSchemeContrast,
         inset: CGFloat
     ) -> some View {
-        let shape = RoundedRectangle(
-            cornerRadius: AssistantTheme.cardCornerRadius,
-            style: .continuous
-        )
-        return padding(inset)
-            .padding(.leading, 2)
-            .frame(
-                maxWidth: .infinity,
-                minHeight: AssistantTheme.responseCardMinHeight,
-                alignment: .leading
-            )
-            .background(
-                AssistantTheme.raised(for: colorScheme),
-                in: shape
-            )
-            .overlay {
-                shape.stroke(
-                    AssistantTheme.ink(for: colorScheme).opacity(colorSchemeContrast == .increased ? 0.22 : 0.09),
-                    lineWidth: 1
-                )
-            }
-            .shadow(color: .black.opacity(colorScheme == .dark ? 0.10 : 0.045), radius: 12, y: 4)
+        modifier(ResponseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: inset))
     }
 
     func resultCardSurface(colorScheme: ColorScheme, colorSchemeContrast: ColorSchemeContrast) -> some View {
