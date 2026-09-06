@@ -1989,6 +1989,23 @@ final class APIModelsTests: XCTestCase {
 /// shape Gmail actually sends, so the assertions are about real input, not
 /// invented input.
 final class CardTextTests: XCTestCase {
+    func testSnippetFormattingRemovesHighlightMarkupAndDecodesEntities() {
+        XCTAssertEqual(CardText.readableSnippet("A <strong>frontend</strong> engineer &amp; designer"),
+            "A frontend engineer & designer")
+        XCTAssertEqual(CardText.readableSnippet("&lt;strong&gt;Hello&lt;/strong&gt;<br/>Next&nbsp;line &#8212; &#x1F44B;"),
+            "Hello Next line — 👋")
+        XCTAssertEqual(CardText.readableSnippet("<p>First</p><p>Second</p><script>hidden()</script>"), "First Second")
+    }
+
+    func testSnippetCleanupPreservesMailboxesComparisonsAndUnknownEntities() {
+        XCTAssertEqual(CardText.readableSnippet("From &lt;a@example.com&gt; and <p@example.com>"),
+            "From <a@example.com> and <p@example.com>")
+        XCTAssertEqual(CardText.readableSnippet("2 < 3 and 5 > 4; &unknown; &#99999999;"),
+            "2 < 3 and 5 > 4; &unknown; &#99999999;")
+        XCTAssertEqual(CardText.readableSnippet("[title](https://example.com) **literal text**"),
+            "[title](https://example.com) **literal text**")
+    }
+
     private let reference = Date(timeIntervalSince1970: 1_788_401_284) // 2026-09-02T19:08:04-07:00
 
     // MARK: Timestamps

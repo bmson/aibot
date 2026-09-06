@@ -605,47 +605,8 @@ struct MessageBubble: View {
 
     private func settledDecisionReceipt(_ part: MessagePart) -> some View {
         let presentation = settledDecisionPresentation(part)
-        return HStack(alignment: .top, spacing: 11) {
-            Image(systemName: presentation.symbol)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(presentation.tint)
-                .frame(width: 34, height: 34)
-                .background(
-                    presentation.tint.opacity(0.11),
-                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-                )
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 8) {
-                    Text(presentation.title)
-                        .font(.caption.weight(.semibold))
-                    Spacer(minLength: 4)
-                    if let code = part.shortCode, !code.isEmpty {
-                        Text(code)
-                            .font(.caption2.monospaced().weight(.semibold))
-                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                    }
-                }
-                Text(part.summary ?? presentation.detail)
-                    .font(.subheadline)
-                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                    .lineLimit(2)
-                Text(presentation.detail)
-                    .font(.caption)
-                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-            }
-        }
-        .padding(13)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            AssistantTheme.bubblePaper(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
-                .strokeBorder(presentation.tint.opacity(0.22), lineWidth: 0.8)
-        }
-        .accessibilityElement(children: .combine)
+        return DecisionReceiptCard(title: presentation.title, summary: part.summary ?? presentation.detail,
+            detail: presentation.detail, code: part.shortCode, symbol: presentation.symbol, tint: presentation.tint)
     }
 
     private func settledDecisionPresentation(
@@ -3417,14 +3378,14 @@ struct RichResponseCards: View {
                     VStack(alignment: .leading, spacing: 4) {
                         if let url = URL(string: result.url) {
                             Link(destination: url) {
-                                Text(AssistantMarkdown.inlineAttributed(result.title))
+                                Text(CardText.readableSnippet(result.title))
                                     .font(.subheadline.weight(.semibold))
                                     .multilineTextAlignment(.leading)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         } else {
-                            Text(AssistantMarkdown.inlineAttributed(result.title))
+                            Text(CardText.readableSnippet(result.title))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                                 .multilineTextAlignment(.leading)
@@ -3436,10 +3397,10 @@ struct RichResponseCards: View {
                             .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                             .lineLimit(1)
                         if !result.snippet.isEmpty {
-                            Text(AssistantMarkdown.inlineAttributed(result.snippet))
+                            Text(CardText.readableSnippet(result.snippet))
                                 .font(.caption)
                                 .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                .lineLimit(2)
+                                .lineLimit(usesAccessibilityLayout ? nil : 3)
                         }
                     }
                 }
@@ -3743,35 +3704,45 @@ struct RichResponseCards: View {
         let visibleDetails = details.filter { !($0.label == "Due" && !dueAt.isEmpty) }
         let accessibilityDetails = visibleDetails.map { "\($0.label), \($0.value)" }
         let accessibilityTemporal = temporal.isEmpty ? [] : ["\(temporalLabel), \(cardDate(temporal))"]
-        return HStack(alignment: .top, spacing: 13) {
-            Image(systemName: symbol)
-                .font(.system(size: 18, weight: .semibold))
+        return VStack(alignment: .leading, spacing: 12) {
+            Label(urgency.replacingOccurrences(of: "_", with: " "), systemImage: symbol)
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                .frame(width: 42, height: 42)
-                .background(
-                    AssistantTheme.accent(for: colorScheme).opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-                )
-            VStack(alignment: .leading, spacing: 6) {
-                Text(urgency.replacingOccurrences(of: "_", with: " ").capitalized)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                Text(AssistantMarkdown.inlineAttributed(title))
-                    .font(.headline)
-                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+            Text(AssistantMarkdown.inlineAttributed(title))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                .fixedSize(horizontal: false, vertical: true)
+            if !summary.isEmpty {
+                Text(AssistantMarkdown.inlineAttributed(summary))
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                     .fixedSize(horizontal: false, vertical: true)
-                if !summary.isEmpty {
-                    Text(AssistantMarkdown.inlineAttributed(summary))
-                        .font(.subheadline)
-                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if !temporal.isEmpty {
-                    detailRows([.init(label: temporalLabel, value: cardDate(temporal))])
-                }
-                detailRows(visibleDetails)
             }
-            Spacer(minLength: 0)
+            if !temporal.isEmpty {
+                Label(startsAt.isEmpty ? "Due \(cardDate(temporal))" : cardDate(temporal), systemImage: "clock")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            }
+            if !visibleDetails.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 9) {
+                    ForEach(visibleDetails) { detail in
+                        if detail.label.lowercased() == "location" || detail.label.lowercased() == "calendar" {
+                            Label(detail.value, systemImage: detail.label.lowercased() == "location" ? "mappin.and.ellipse" : "calendar")
+                                .font(.caption)
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(detail.label).font(.caption.weight(.medium))
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                Text(detail.value).font(.subheadline)
+                                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                            }
+                        }
+                    }
+                }
+            }
         }
         .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
         .accessibilityElement(children: .ignore)
@@ -4002,34 +3973,32 @@ struct RichResponseCards: View {
         countLabel: String,
         subtitleStyle: ResultHeaderSubtitle = .prominent
     ) -> some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(CardText.presentationLabel(title))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                if !subtitle.isEmpty {
-                    switch subtitleStyle {
-                    case .prominent:
-                        Text(AssistantMarkdown.inlineAttributed(subtitle))
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                            .fixedSize(horizontal: false, vertical: true)
-                    case .query:
-                        Text(subtitle)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                            .lineLimit(usesAccessibilityLayout ? 3 : 2)
-                            .truncationMode(.tail)
-                    }
+                Spacer(minLength: 4)
+                Text(countLabel)
+                    .font(.caption2.monospacedDigit().weight(.medium))
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !subtitle.isEmpty {
+                switch subtitleStyle {
+                case .prominent:
+                    Text(AssistantMarkdown.inlineAttributed(subtitle))
+                        .font(.caption)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+                case .query:
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        .lineLimit(usesAccessibilityLayout ? 3 : 2)
+                        .truncationMode(.tail)
                 }
             }
-            Spacer(minLength: 8)
-            Text(countLabel)
-                .font(.caption.monospacedDigit().weight(.semibold))
-                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 7)
-                .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
         }
     }
 
@@ -4065,7 +4034,7 @@ struct RichResponseCards: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if !message.snippet.isEmpty {
-                Text(CardText.compactSummary(message.snippet))
+                Text(CardText.compactSummary(CardText.readableSnippet(message.snippet)))
                     .font(.caption)
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                     .lineLimit(usesAccessibilityLayout ? nil : 2)
@@ -4226,6 +4195,57 @@ private struct GeneratedCardSteps: View {
     }
 }
 
+/// A compact decision history entry with the full request available on tap.
+struct DecisionReceiptCard: View {
+    let title: String
+    let summary: String
+    let detail: String
+    let code: String?
+    let symbol: String
+    let tint: Color
+    @State private var expanded = false
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        Button {
+            withTransaction(TranscriptDisclosure.transaction()) { expanded.toggle() }
+        } label: {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 7) {
+                    Label(title, systemImage: symbol)
+                        .font(.caption.weight(.semibold)).foregroundStyle(tint)
+                    Spacer(minLength: 4)
+                    if let code, !code.isEmpty {
+                        Text(code).font(.caption2.monospaced())
+                    }
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                }
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                Text(summary).font(.subheadline)
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    .lineLimit(expanded || dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                    .fixedSize(horizontal: false, vertical: true)
+                if expanded, detail != summary {
+                    Text(detail).font(.caption)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                }
+            }
+            .multilineTextAlignment(.leading)
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .background(AssistantTheme.bubblePaper(for: colorScheme),
+                in: RoundedRectangle(cornerRadius: AssistantTheme.panelCornerRadius, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityHint("Shows the full request and decision details")
+    }
+}
+
 /// A value the card holds back: a booking reference, a ticket code.
 ///
 /// A fixed-width mask keeps long identifiers compact. The button is named for
@@ -4358,7 +4378,7 @@ private struct ResponseCardSurface: ViewModifier {
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
-        let padded = content.padding(inset).padding(.leading, 2)
+        let padded = content.padding(inset)
             .frame(maxWidth: .infinity, minHeight: AssistantTheme.responseCardMinHeight, alignment: .leading)
         if embedded {
             padded
@@ -4388,7 +4408,7 @@ private extension View {
     }
 
     func resultCardSurface(colorScheme: ColorScheme, colorSchemeContrast: ColorSchemeContrast) -> some View {
-        responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 24)
+        responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
     }
 }
 
@@ -4546,6 +4566,38 @@ enum CardText {
     private static let passthroughDateLimit = 12
 
     // MARK: Prose
+
+    /// Search and mail previews sometimes contain HTML highlight tags/entities.
+    /// Clean their text without invoking a web/HTML renderer, following links,
+    /// or interpreting third-party text as Markdown. Only known tags are
+    /// removed, so angle-bracket mailboxes and ordinary comparisons survive.
+    static func readableSnippet(_ value: String) -> String {
+        let entities = ["amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'",
+            "nbsp": " ", "ndash": "–", "mdash": "—", "hellip": "…", "rsquo": "’",
+            "lsquo": "‘", "ldquo": "“", "rdquo": "”", "bull": "•"]
+        var text = value
+        if let expression = try? NSRegularExpression(pattern: #"&(#x[0-9a-fA-F]+|#[0-9]+|[A-Za-z]+);"#) {
+            for match in expression.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+                guard let range = Range(match.range, in: text),
+                      let keyRange = Range(match.range(at: 1), in: text) else { continue }
+                let key = String(text[keyRange])
+                var replacement = entities[key]
+                if key.hasPrefix("#") {
+                    let hex = key.hasPrefix("#x")
+                    if let number = UInt32(key.dropFirst(hex ? 2 : 1), radix: hex ? 16 : 10),
+                       let scalar = UnicodeScalar(number), !CharacterSet.controlCharacters.contains(scalar) {
+                        replacement = String(scalar)
+                    }
+                }
+                if let replacement { text.replaceSubrange(range, with: replacement) }
+            }
+        }
+        text = text.replacingOccurrences(of: #"(?is)<(script|style)\b[^>]*>.*?</\1\s*>"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?i)</?(?:br|p|div|li|ul|ol|tr|td|th|table|blockquote)(?:\s+[^<>]*?)?\s*/?>"#, with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?i)</?(?:strong|b|em|i|span|a|mark|small|sup|sub)(?:\s+[^<>]*?)?\s*/?>"#, with: "", options: .regularExpression)
+        return text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     /// One line of someone else's writing, sized for a preview: newlines and
     /// runs of space collapse, and anything past a long sentence is cut.

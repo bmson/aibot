@@ -29,6 +29,37 @@ private struct SourcesScrollFixture: View {
 /// blank screenshot.
 final class AssistantMarkdownTests: XCTestCase {
     @MainActor
+    func testPolishedResultCardSnapshots() throws {
+        let data = Data(#"""
+        {"id":"polish","role":"assistant","parts":[
+          {"type":"data-card","data":{"kind":"proactive-alert","id":"event","category":"event","urgencyLabel":"Starts in 30 min","title":"26/27 U13B Azul @ Almaden FC U13B Mercury Black","summary":"","startsAt":"2026-09-05T18:00:00-07:00","details":[{"label":"Location","value":"Morgan Hill Outdoor Sports Center, 16500 Condit Road, Morgan Hill, CA"},{"label":"Calendar","value":"Family · Soccer season 2026–2027"}]}},
+          {"type":"data-card","data":{"kind":"web-search-results","id":"search","title":"Web results","query":"frontend engineer Next.js TypeScript San Francisco 2026 jobs","results":[{"id":"one","title":"Best <strong>Front End</strong> Developer Jobs &amp; Careers","url":"https://example.com/jobs","snippet":"Build <strong>accessible</strong> interfaces &amp; reusable components. Work with design &mdash; and ship thoughtful products."}]}},
+          {"type":"data-card","data":{"kind":"email-results","id":"mail","title":"Email results","query":"hotel reservation confirmation","messages":[{"id":"abc123","sender":"Travel Team <travel@example.com>","subject":"Your upcoming hotel reservation","date":"2026-09-04T12:00:00Z","snippet":"From: Travel &lt;travel@example.com&gt; <br> Your reservation is confirmed &amp; ready to view."}]}}
+        ]}
+        """#.utf8)
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        XCTAssertEqual(message.parts.compactMap(MessageResponseCard.init(part:)).count, 3)
+        for (name, scheme, size, width) in [
+            ("light", ColorScheme.light, DynamicTypeSize.large, CGFloat(390)),
+            ("dark", .dark, .large, 390),
+            ("narrow", .light, .large, 320),
+            ("accessible", .light, .accessibility3, 390)
+        ] {
+            let view = RichResponseCards(cards: message.parts.compactMap(MessageResponseCard.init(part:)))
+                .padding(16).frame(width: width).background(AssistantTheme.stage)
+                .environment(\.colorScheme, scheme).environment(\.dynamicTypeSize, size)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            let image = try XCTUnwrap(renderer.uiImage)
+            XCTAssertEqual(image.size.width, width)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "polished-result-cards-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    @MainActor
     func testApprovalSummaryDecisionTransitionSnapshots() throws {
         let pending = ChatMessage(id: "approval-summary", role: .assistant, parts: [
             .init(type: "approval-summary", purpose: "Find an open cafe nearby", approvalCount: 1,
