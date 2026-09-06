@@ -4237,18 +4237,38 @@ struct DecisionReceiptCard: View {
     let code: String?
     let symbol: String
     let tint: Color
-    @State private var expanded = false
+    @State private var expanded: Bool
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
+    init(title: String, summary: String, detail: String, code: String?, symbol: String,
+         tint: Color, initiallyExpanded: Bool = false) {
+        self.title = title
+        self.summary = summary
+        self.detail = detail
+        self.code = code
+        self.symbol = symbol
+        self.tint = tint
+        _expanded = State(initialValue: initiallyExpanded)
+    }
+
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: AssistantTheme.panelCornerRadius, style: .continuous)
+        let webRequest = CardText.decisionWebRequestURL(summary)
         Button {
             withTransaction(TranscriptDisclosure.transaction()) { expanded.toggle() }
         } label: {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 7) {
-                    Label(title, systemImage: symbol)
-                        .font(.caption.weight(.semibold)).foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 8) {
+                    Image(systemName: symbol)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tint)
+                        .frame(width: 24, height: 24)
+                        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tint)
                     Spacer(minLength: 4)
                     if let code, !code.isEmpty {
                         Text(code).font(.caption2.monospaced())
@@ -4258,26 +4278,48 @@ struct DecisionReceiptCard: View {
                         .rotationEffect(.degrees(expanded ? 180 : 0))
                 }
                 .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                Text(summary).font(.subheadline)
-                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                    .lineLimit(expanded || dynamicTypeSize.isAccessibilitySize ? nil : 2)
-                    .fixedSize(horizontal: false, vertical: true)
-                if expanded, detail != summary {
-                    Divider().padding(.vertical, 3)
-                    Text(detail).font(.caption)
-                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(tint.opacity(colorScheme == .dark ? 0.09 : 0.045))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(webRequest == nil ? summary : "Read web page")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                        .lineLimit(expanded || dynamicTypeSize.isAccessibilitySize ? nil : 3)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let webRequest {
+                        Label(webRequest.host ?? webRequest.absoluteString, systemImage: "globe")
+                            .font(.caption)
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
+                        if expanded {
+                            Text(webRequest.absoluteString)
+                                .font(.caption)
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    if expanded, detail != summary {
+                        Divider().padding(.vertical, 3)
+                        Text(detail).font(.caption)
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
+                .padding(14)
             }
             .multilineTextAlignment(.leading)
-            .padding(14)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .background(AssistantTheme.bubblePaper(for: colorScheme),
-                in: RoundedRectangle(cornerRadius: AssistantTheme.panelCornerRadius, style: .continuous))
+            .background(AssistantTheme.bubblePaper(for: colorScheme))
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(tint.opacity(colorSchemeContrast == .increased ? 0.45 : 0.13), lineWidth: 0.75))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityLabel(([title, summary, code ?? ""] + (expanded && detail != summary ? [detail] : []))
+            .filter { !$0.isEmpty }.joined(separator: ". "))
         .accessibilityHint(expanded ? "Hides decision details" : "Shows the full request and decision details")
     }
 }
@@ -4485,6 +4527,20 @@ private extension JSONValue {
 /// goes through the Markdown parser — it gets parsed for what it actually is, or
 /// shown as plain text.
 enum CardText {
+    /// Only the exact tool-authored fetch summary gets a compact site treatment.
+    /// Other requests retain their wording, including ambiguous or unsafe URLs.
+    static func decisionWebRequestURL(_ summary: String) -> URL? {
+        let prefix = "Fetch the public web page "
+        guard summary.hasPrefix(prefix) else { return nil }
+        let raw = String(summary.dropFirst(prefix.count))
+        guard !raw.contains(where: \.isWhitespace),
+              let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme),
+              let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil else { return nil }
+        return url
+    }
+
     // MARK: Timestamps
 
     /// Cards carry timestamps in two shapes: ISO 8601 from the Google APIs, and

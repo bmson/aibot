@@ -29,6 +29,39 @@ private struct SourcesScrollFixture: View {
 /// blank screenshot.
 final class AssistantMarkdownTests: XCTestCase {
     @MainActor
+    func testStyledDecisionReceiptSnapshots() throws {
+        for (name, scheme, size, width) in [
+            ("light", ColorScheme.light, DynamicTypeSize.large, CGFloat(390)),
+            ("dark", .dark, .large, 390),
+            ("narrow", .light, .large, 320),
+            ("accessible", .light, .accessibility3, 390)
+        ] {
+            let view = VStack(spacing: 12) {
+                ForEach([false, true], id: \.self) { expanded in
+                    DecisionReceiptCard(title: "Declined",
+                        summary: "Fetch the public web page https://www.yelp.com/search?find_desc=Restaurants&find_loc=San%20Francisco",
+                        detail: "No action was taken from this request.", code: "A123",
+                        symbol: "xmark.circle.fill", tint: AssistantTheme.errorInk(for: scheme),
+                        initiallyExpanded: expanded)
+                }
+                DecisionReceiptCard(title: "Approved", summary: "Send the updated soccer schedule to Katie",
+                    detail: "This request was approved.", code: nil, symbol: "checkmark.circle.fill",
+                    tint: AssistantTheme.success(for: scheme), initiallyExpanded: true)
+            }
+            .padding(16).frame(width: width).background(AssistantTheme.stage)
+            .environment(\.colorScheme, scheme).environment(\.dynamicTypeSize, size)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            let image = try XCTUnwrap(renderer.uiImage)
+            XCTAssertEqual(image.size.width, width)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "styled-decision-receipts-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    @MainActor
     func testExpandedCardDisclosureSnapshots() throws {
         let cards: [MessageResponseCard] = [
             .search(id: "search", title: "Web results", query: "Frontend engineering roles in San Francisco",

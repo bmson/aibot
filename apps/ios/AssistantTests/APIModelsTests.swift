@@ -1989,6 +1989,16 @@ final class APIModelsTests: XCTestCase {
 /// shape Gmail actually sends, so the assertions are about real input, not
 /// invented input.
 final class CardTextTests: XCTestCase {
+    func testDecisionWebRequestKeepsExactURLAndRejectsAmbiguousSummaries() {
+        let address = "https://www.yelp.com/search?find_desc=Food&find_loc=San%20Francisco"
+        XCTAssertEqual(CardText.decisionWebRequestURL("Fetch the public web page \(address)")?.absoluteString, address)
+        for summary in ["Visit \(address)", "Fetch the public web page \(address) then send an email",
+            "Fetch the public web page javascript:alert(1)", "Fetch the public web page https://user:secret@example.com",
+            "Fetch the public web page ", "Send an email to Katie"] {
+            XCTAssertNil(CardText.decisionWebRequestURL(summary), summary)
+        }
+    }
+
     func testSnippetFormattingRemovesHighlightMarkupAndDecodesEntities() {
         XCTAssertEqual(CardText.readableSnippet("A <strong>frontend</strong> engineer &amp; designer"),
             "A frontend engineer & designer")
