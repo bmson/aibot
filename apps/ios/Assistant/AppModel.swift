@@ -103,6 +103,9 @@ final class AppModel: ObservableObject {
     /// Sequence for the rendered log. A merge can only add or replace by id —
     /// where a message belongs is decided here, once per id.
     private var logOrder = ChatLogOrder()
+    /// An in-flight poll may predate a successful POST. Terminal decisions
+    /// cannot be undone by that older snapshot; reset on server/account change.
+    private var acceptedApprovalDecisions: [String: String] = [:]
     private var pollTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
     /// The turn in flight, kept so returning to the foreground can pick the
@@ -134,10 +137,13 @@ final class AppModel: ObservableObject {
     private var lastLocationPostAt: Date?
     private var lastForegroundReportAt: Date?
 
-    init() {
+    init(apiClient: APIClient? = nil, initialMessages: [ChatMessage] = []) {
+        messages = initialMessages
         serverURL = defaults.string(forKey: serverKey) ?? "http://localhost:3000"
         hasSavedConnection = defaults.bool(forKey: configuredKey)
-        if let configuration = try? Self.configuration(urlString: serverURL, token: KeychainStore.readToken()) {
+        if let apiClient {
+            client = apiClient
+        } else if let configuration = try? Self.configuration(urlString: serverURL, token: KeychainStore.readToken()) {
             client = APIClient(configuration: configuration)
         }
         // RootView's `.task` starts the automatic connect after the first
@@ -402,6 +408,7 @@ final class AppModel: ObservableObject {
             self.serverURL = normalized
             defaults.set(normalized, forKey: serverKey)
             client = APIClient(configuration: configuration)
+            acceptedApprovalDecisions.removeAll()
             await connect()
             if bootstrap != nil {
                 showingConnection = false
@@ -1305,10 +1312,11 @@ final class AppModel: ObservableObject {
         return current
     }
 
-    private func optimisticallySetDecisionStatus(id: String, status: String) {
+    private func setDecisionStatus(id: String, status: String) {
+        acceptedApprovalDecisions[id] = status
         for messageIndex in messages.indices {
-            for partIndex in messages[messageIndex].parts.indices where messages[messageIndex].parts[partIndex].approvalId == id {
-                messages[messageIndex].parts[partIndex].status = status
+            for partIndex in messages[messageIndex].parts.indices {
+                messages[messageIndex].parts[partIndex].applyApprovalDecision(id: id, status: status)
             }
         }
     }
@@ -1316,23 +1324,23 @@ final class AppModel: ObservableObject {
     private func performApprovalMutation(
         id: String,
         status: String,
-        operation: () async throws -> Void
+        operation: () async throws -> ApprovalResult
     ) async -> Bool {
         errorMessage = nil
         let previousOverview = optimisticallyResolveApproval(id: id)
-        let previousMessages = messages
-        optimisticallySetDecisionStatus(id: id, status: status)
         do {
-            try await operation()
+            let result = try await operation()
+            guard result.ok else { throw APIError.server(status: 409, message: "The approval decision was not accepted.") }
+            setDecisionStatus(id: id, status: status)
             // The server approval row is authoritative. Re-read the inbox
             // before returning so Chat and Approvals converge in the same
             // turn, rather than briefly showing an optimistic "all clear"
             // that can be replaced by a stale pending card later.
             await refreshOverview(reportFailure: false)
+            await refreshDecisionMessages()
             return true
         } catch {
             if let previousOverview { overview = previousOverview }
-            messages = previousMessages
             errorMessage = error.localizedDescription
             return false
         }
@@ -1343,22 +1351,34 @@ final class AppModel: ObservableObject {
     func decideApproval(id: String, decision: String) async -> Bool {
         guard let client else { return false }
         return await performApprovalMutation(id: id, status: decision) {
-            _ = try await client.decideApproval(id: id, decision: decision)
+            try await client.decideApproval(id: id, decision: decision)
         }
     }
 
     func approveAndRemember(_ item: PendingApproval) async -> Bool {
         guard let client else { return false }
         return await performApprovalMutation(id: item.id, status: "approved") {
-            _ = try await client.approveAndRemember(id: item.id)
+            try await client.approveAndRemember(id: item.id)
         }
     }
 
     func editAndApprove(_ item: PendingApproval, payload: JSONValue) async -> Bool {
         guard let client else { return false }
         return await performApprovalMutation(id: item.id, status: "approved") {
-            _ = try await client.editAndApprove(id: item.id, payload: payload)
+            try await client.editAndApprove(id: item.id, payload: payload)
         }
+    }
+
+    /// Legacy summaries may have only a task ID. Ask the server to hydrate
+    /// their outcomes after a decision, not just the independent inbox. Do
+    /// not replace the whole transcript or advance a concurrent poll's cursor.
+    private func refreshDecisionMessages() async {
+        guard let client, let conversationId else { return }
+        let ids = messages.reversed().filter { !$0.decisionParts.isEmpty || $0.approvalSummary != nil }.prefix(10).map(\.id)
+        guard !ids.isEmpty else { return }
+        guard let updates = try? await client.updates(conversationId: conversationId, taskId: nil,
+            cursor: cursor, refreshIds: ids), self.conversationId == conversationId else { return }
+        merge(updates.refreshed)
     }
 
     /// Stops the turn in flight, keeping whatever text has already streamed in.
@@ -1429,7 +1449,7 @@ final class AppModel: ObservableObject {
             if preservingLocalMessages {
                 merge(response.conversation.messages)
             } else {
-                messages = logOrder.ordered(response.conversation.messages)
+                messages = logOrder.ordered(response.conversation.messages.map { $0.applyingApprovalDecisions(acceptedApprovalDecisions) })
             }
         }
         if !isSending, activityThought == nil || activityThought == .backgroundWork || activityThought == .needsYou {
@@ -1450,7 +1470,7 @@ final class AppModel: ObservableObject {
         cursor = conversation.cursor
         // Another conversation's ids have no sequence to agree with this one's.
         logOrder.reset()
-        messages = logOrder.ordered(conversation.messages)
+        messages = logOrder.ordered(conversation.messages.map { $0.applyingApprovalDecisions(acceptedApprovalDecisions) })
         toolActivity = []
         activityThought = nil
     }
@@ -1596,7 +1616,8 @@ final class AppModel: ObservableObject {
     }
 
     private func merge(_ incoming: [ChatMessage]) {
-        for message in incoming {
+        for incomingMessage in incoming {
+            let message = incomingMessage.applyingApprovalDecisions(acceptedApprovalDecisions)
             if let index = messages.firstIndex(where: { $0.id == message.id }) {
                 messages[index] = message
                 continue

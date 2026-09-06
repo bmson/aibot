@@ -29,6 +29,39 @@ private struct SourcesScrollFixture: View {
 /// blank screenshot.
 final class AssistantMarkdownTests: XCTestCase {
     @MainActor
+    func testApprovalSummaryDecisionTransitionSnapshots() throws {
+        let pending = ChatMessage(id: "approval-summary", role: .assistant, parts: [
+            .init(type: "approval-summary", purpose: "Find an open cafe nearby", approvalCount: 1,
+                approvalIds: ["qa-approval"], pendingCount: 1,
+                outcomes: [.init(id: "qa-approval", summary: "Search for a cafe nearby", status: "pending")])
+        ])
+        for (name, scheme, size) in [
+            ("light", ColorScheme.light, DynamicTypeSize.large),
+            ("dark", .dark, .large),
+            ("accessible", .light, .accessibility3)
+        ] {
+            let messages = [pending,
+                pending.applyingApprovalDecisions(["qa-approval": "approved"]),
+                pending.applyingApprovalDecisions(["qa-approval": "denied"])]
+            let view = VStack(spacing: 16) {
+                ForEach(messages.indices, id: \.self) { index in
+                    MessageBubble(message: messages[index], userPrompt: nil, isCurrentAnswer: false,
+                        isStreaming: false, openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil)
+                }
+            }
+            .padding(16).frame(width: 390).background(AssistantTheme.stage)
+            .environment(\.colorScheme, scheme).environment(\.dynamicTypeSize, size)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 3
+            let image = try XCTUnwrap(renderer.uiImage)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "approval-summary-transitions-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    @MainActor
     func testHiddenReferenceLayoutDoesNotDependOnSecretLength() throws {
         for size in [DynamicTypeSize.large, .accessibility3] {
             var images: [UIImage] = []

@@ -58,6 +58,43 @@ final class StubURLProtocol: URLProtocol {
 }
 
 final class APIClientRetryTests: XCTestCase {
+    @MainActor
+    func testAcceptedApprovalAndDenialUpdateChatEvenWhenInboxRefreshFails() async {
+        for decision in ["approved", "denied"] {
+            StubURLProtocol.prime([
+                .success(status: 200, body: Data(#"{"ok":true,"taskId":"t1","toolCallId":"tc1","approvalId":"a1"}"#.utf8)),
+                .success(status: 401, body: Data())
+            ])
+            let model = AppModel(apiClient: makeClient(), initialMessages: [.init(id: "summary", role: .assistant,
+                parts: [.init(type: "approval-summary", purpose: "Test action", approvalCount: 1,
+                    approvalIds: ["a1"])])])
+            let accepted = await model.decideApproval(id: "a1", decision: decision)
+            XCTAssertTrue(accepted)
+            XCTAssertEqual(model.messages[0].approvalSummary?.pendingCount, 0)
+            XCTAssertEqual(model.messages[0].approvalSummary?.outcomes.first?.status, decision)
+            XCTAssertEqual(StubURLProtocol.attempts, ["POST", "GET"])
+        }
+    }
+
+    @MainActor
+    func testFailedApprovalRequestDoesNotSettleTheChatCard() async {
+        for response in [
+            StubURLProtocol.Outcome.failure(URLError(.timedOut)),
+            .success(status: 200, body: Data(#"{"ok":false,"taskId":"t1","toolCallId":"tc1","approvalId":"a1"}"#.utf8))
+        ] {
+            StubURLProtocol.prime([response])
+            let pending = ChatMessage(id: "summary", role: .assistant,
+                parts: [.init(type: "approval-summary", purpose: "Test action", approvalCount: 1,
+                    approvalIds: ["a1"])])
+            let model = AppModel(apiClient: makeClient(), initialMessages: [pending])
+            let accepted = await model.decideApproval(id: "a1", decision: "approved")
+            XCTAssertFalse(accepted)
+            XCTAssertEqual(model.messages, [pending])
+            XCTAssertNotNil(model.errorMessage)
+            XCTAssertEqual(StubURLProtocol.attempts, ["POST"])
+        }
+    }
+
     private func makeClient() -> APIClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]

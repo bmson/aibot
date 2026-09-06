@@ -2,6 +2,64 @@ import XCTest
 @testable import Assistant
 
 final class APIModelsTests: XCTestCase {
+    func testApprovalSummaryDecodesApprovedDeniedAndExpiredOutcomes() throws {
+        for status in ["approved", "denied", "expired"] {
+            let data = Data("""
+            {"id":"summary","role":"assistant","parts":[
+              {"type":"approval-summary","purpose":"Check a place","approvalCount":1,
+               "approvalIds":["a1"],"pendingCount":0,
+               "outcomes":[{"id":"a1","summary":"Search the web","status":"\(status)"}]}
+            ]}
+            """.utf8)
+            let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+            XCTAssertEqual(message.approvalSummary?.pendingCount, 0)
+            XCTAssertEqual(message.approvalSummary?.outcomes.first?.status, status)
+            XCTAssertFalse(message.hasPendingDecision)
+            XCTAssertTrue(message.visibleTextBubbles.isEmpty)
+        }
+    }
+
+    func testApprovalSummariesStayInPollingUntilEveryDecisionIsAnswered() throws {
+        let legacy = ChatMessage(id: "legacy", role: .assistant,
+            parts: [.init(type: "approval-summary", purpose: "Check a place", approvalCount: 2)])
+        XCTAssertTrue(legacy.hasPendingDecision)
+        XCTAssertEqual(legacy.approvalSummary?.pendingCount, 2)
+        let pending = ChatMessage(id: "linked", role: .assistant,
+            parts: [.init(type: "approval-summary", purpose: "Check a place", approvalCount: 2,
+                approvalIds: ["a1", "a2"], pendingCount: 2,
+                outcomes: [.init(id: "a1", summary: "First", status: "pending"),
+                    .init(id: "a2", summary: "Second", status: "pending")])])
+        let partial = pending.applyingApprovalDecisions(["a1": "approved"])
+        XCTAssertEqual(partial.approvalSummary?.pendingCount, 1)
+        XCTAssertTrue(partial.hasPendingDecision)
+        XCTAssertEqual(partial.applyingApprovalDecisions(["a1": "approved"]), partial,
+            "Repeated receipts must not decrement the count twice")
+        let settled = partial.applyingApprovalDecisions(["a2": "denied"])
+        XCTAssertEqual(settled.approvalSummary?.pendingCount, 0)
+        XCTAssertFalse(settled.hasPendingDecision)
+        XCTAssertEqual(settled.approvalSummary?.outcomes.map(\.status), ["approved", "denied"])
+    }
+
+    func testAcceptedDecisionOverlaysStalePollWithoutChangingOtherApprovalsOrText() {
+        let pending = ChatMessage(id: "linked", role: .assistant, parts: [
+            .init(type: "text", text: "Original context"),
+            .init(type: "approval", approvalId: "a1", status: "pending"),
+            .init(type: "approval-summary", purpose: "Check a place", approvalCount: 2,
+                approvalIds: ["a1", "a2"]),
+        ])
+        for status in ["approved", "denied"] {
+            let decisions = ["a1": status]
+            let settled = pending.applyingApprovalDecisions(decisions)
+            XCTAssertEqual(settled.parts[1].status, status)
+            XCTAssertEqual(settled.approvalSummary?.pendingCount, 1)
+            XCTAssertEqual(settled.text, "Original context")
+            XCTAssertEqual(pending.applyingApprovalDecisions(decisions), settled)
+        }
+        XCTAssertEqual(pending.applyingApprovalDecisions([:]), pending,
+            "No acknowledged decision means no change, including after a failed request")
+        XCTAssertEqual(pending.applyingApprovalDecisions(["unrelated": "approved"]), pending)
+    }
+
     func testPeopleGroupsInverseFamilyFactsAndKeepsEveryEvidenceRow() throws {
         func relation(_ id: String, _ sentence: String, _ name: String, contact: String? = nil,
             unreviewed: Bool = false, span: String = "") -> PersonRelationSummary {

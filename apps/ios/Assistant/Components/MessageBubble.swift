@@ -466,9 +466,27 @@ struct MessageBubble: View {
         }
     }
 
+    @ViewBuilder
     private func approvalSummaryCard(_ summary: ApprovalSummary) -> some View {
-        let actionLabel = summary.approvalCount == 1 ? "action is" : "actions are"
-        let countLabel = "\(summary.approvalCount) \(actionLabel) waiting for review."
+        if summary.pendingCount == 0 {
+            if summary.outcomes.isEmpty {
+                settledDecisionReceipt(.init(type: "approval", summary: summary.purpose, status: "resolved"))
+            } else {
+                ForEach(summary.outcomes) { outcome in
+                    settledDecisionReceipt(.init(type: "approval", approvalId: outcome.id,
+                        summary: outcome.summary.isEmpty ? summary.purpose : outcome.summary, status: outcome.status))
+                }
+            }
+        } else {
+            pendingApprovalSummaryCard(summary)
+        }
+    }
+
+    private func pendingApprovalSummaryCard(_ summary: ApprovalSummary) -> some View {
+        let actionLabel = summary.pendingCount == 1 ? "action is" : "actions are"
+        let answered = summary.outcomes.filter { $0.status != "pending" && $0.status != "snoozed" }.count
+        let countLabel = "\(summary.pendingCount) \(actionLabel) waiting for review."
+            + (answered > 0 ? " \(answered) already answered." : "")
         let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
 
         return Button(action: openApprovals) {

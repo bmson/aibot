@@ -53,6 +53,9 @@ struct MessagePart: Codable, Hashable, Sendable {
     var summary: String?
     var purpose: String?
     var approvalCount: Int?
+    var approvalIds: [String]? = nil
+    var pendingCount: Int? = nil
+    var outcomes: [ApprovalSummaryOutcome]? = nil
     var status: String?
     var originalText: String?
     var reason: String?
@@ -62,6 +65,32 @@ struct MessagePart: Codable, Hashable, Sendable {
     /// Auto-recall provenance. Optional keeps an older server and all prior
     /// message parts decodable while GraphRAG rolls out.
     var sources: [MessageRecallSource]? = nil
+
+    /// Apply only an acknowledged decision for an approval this part names.
+    /// Repeated delivery is idempotent; a partial decision never settles the
+    /// other approvals sharing the same summary.
+    mutating func applyApprovalDecision(id: String, status: String) {
+        if type == "approval", approvalId == id { self.status = status }
+        guard type == "approval-summary",
+              approvalIds?.contains(id) == true || outcomes?.contains(where: { $0.id == id }) == true
+        else { return }
+        var current = outcomes ?? []
+        let previous = current.first(where: { $0.id == id })
+        let wasPending = previous == nil || previous?.status == "pending" || previous?.status == "snoozed"
+        if let index = current.firstIndex(where: { $0.id == id }) {
+            current[index].status = status
+        } else {
+            current.append(.init(id: id, summary: purpose ?? "", status: status))
+        }
+        outcomes = current
+        if wasPending, let pendingCount { self.pendingCount = max(0, pendingCount - 1) }
+    }
+}
+
+struct ApprovalSummaryOutcome: Codable, Hashable, Sendable, Identifiable {
+    let id: String
+    let summary: String
+    var status: String
 }
 
 struct ChatCardFact: Codable, Hashable, Sendable {
@@ -92,6 +121,16 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     let role: ChatRole
     var parts: [MessagePart]
     var metadata: [String: JSONValue]?
+
+    func applyingApprovalDecisions(_ decisions: [String: String]) -> Self {
+        var message = self
+        for index in message.parts.indices {
+            for (id, status) in decisions {
+                message.parts[index].applyApprovalDecision(id: id, status: status)
+            }
+        }
+        return message
+    }
 
     var text: String {
         parts.compactMap { $0.type == "text" ? $0.text : nil }.joined()
@@ -156,7 +195,11 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         for part in parts where part.type == "approval-summary" {
             guard let purpose = part.purpose?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !purpose.isEmpty else { continue }
-            return ApprovalSummary(purpose: purpose, approvalCount: max(part.approvalCount ?? 1, 1))
+            let total = max(part.approvalCount ?? 1, part.approvalIds?.count ?? 0, 1)
+            let outcomes = part.outcomes ?? []
+            let answered = outcomes.filter { $0.status != "pending" && $0.status != "snoozed" }.count
+            return ApprovalSummary(purpose: purpose, approvalCount: total,
+                pendingCount: max(0, part.pendingCount ?? (total - answered)), outcomes: outcomes)
         }
         return nil
     }
@@ -215,7 +258,7 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     }
 
     var hasPendingDecision: Bool {
-        decisionParts.contains { part in
+        (approvalSummary?.pendingCount ?? 0) > 0 || decisionParts.contains { part in
             part.status == nil || part.status == "pending" || part.status == "snoozed"
         }
     }
@@ -239,6 +282,8 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
 struct ApprovalSummary: Hashable, Sendable {
     let purpose: String
     let approvalCount: Int
+    let pendingCount: Int
+    let outcomes: [ApprovalSummaryOutcome]
 }
 
 /// Transcript presentation deliberately stays separate from persisted
