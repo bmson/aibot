@@ -226,7 +226,7 @@ describe('unattended goal sessions never report silent success', () => {
     expect(goal?.nextAction).toContain('Remote only or specific locations?');
   });
 
-  it('leaves an owner chat turn completed — the owner is reading it live', async (ctx) => {
+  it('does not mark planned owner-chat work complete when no action ran', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const { goalId, conversationId } = await seedGoal('Job Exploration chat');
     const { task } = await enqueueTask(db, {
@@ -245,7 +245,9 @@ describe('unattended goal sessions never report silent success', () => {
       task.id,
     );
 
-    expect(outcome.outcome).toBe('done');
+    expect(outcome.outcome).toBe('needs_attention');
+    const [row] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(row?.status).toBe('needs_attention');
   });
 
   it('requires a new progress write after later verified work', async (ctx) => {

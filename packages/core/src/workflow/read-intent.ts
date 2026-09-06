@@ -44,6 +44,8 @@ export interface PersonalReadRequest {
   maxResults?: number;
   /** The owner is challenging a prior claim; prior prose remains hypothesis-only. */
   verification?: boolean;
+  /** Specific question to answer, rather than turning every lookup into an agenda. */
+  answerFocus?: 'lodging' | 'applications';
 }
 
 export interface PersonalReadDetectionOptions {
@@ -64,6 +66,38 @@ export interface ReadToolEvidence {
   args?: unknown;
   result?: unknown;
   error?: string | null;
+}
+
+const LODGING_QUESTION =
+  /^\s*(?:please\s+)?(?:where\s+(?:am i|are we)\s+staying\b|(?:which|what)\s+(?:hotel|accommodation)\s+(?:am i|are we|did i|did we|have i|have we)\b|(?:what|where|when)\b[^.!?\n]{0,60}\b(?:my|our)\s+(?:hotel|lodging|check[- ]?in|check[- ]?out)\b)/i;
+const LODGING_TOPIC = /\b(?:hotel|lodging|accommodation|airbnb|check[- ]?in|check[- ]?out)\b/i;
+const DETAIL_FOLLOW_UP =
+  /^\s*(?:(?:and|also)\s+)?(?:where\s+is\s+(?:it|that)|what(?:['’]s| is)\s+(?:its|the)\s+(?:address|name)|what\s+time\s+is\s+(?:check[- ]?in|check[- ]?out)|when\s+(?:can|do)\s+(?:i|we)\s+check\s+(?:in|out))\s*[?.!]*\s*$/i;
+const APPLICATION_HISTORY_QUESTION =
+  /^\s*(?:please\s+)?(?:(?:what|which)\s+(?:companies|employers|jobs|roles|positions)\s+(?:have|did)\s+(?:i|we)\s+(?:already\s+)?appl(?:y|ied)\b|where\s+(?:have|did)\s+(?:i|we)\s+(?:already\s+)?appl(?:y|ied)\b|(?:show|list|find|check|review)\s+(?:me\s+)?(?:my|our)\s+(?:job\s+)?applications\b)/i;
+const ACCEPT_LOOKUP = /^(?:yes(?:[, ]+(?:please|go ahead|check that))?|please do|go ahead)[.!]*$/i;
+const SAME_SUBJECT_LOOKUP_OFFER =
+  /\b(?:would you like me to|shall i|should i|i can)\s+(?:check|verify|look up|read|search for)\s+(?:that|it|the (?:details|confirmation)|(?:your|the|our) hotel(?: confirmation| reservation)?)\b/i;
+const MUTATING_OFFER =
+  /\b(?:add|archive|book|cancel|create|delete|edit|forward|invite|move|reply|reschedule|save|schedule|send|submit|update)\b/i;
+
+/**
+ * Use the nearest substantive OWNER turn to resolve a short detail question.
+ * Assistant guesses and background notices never select the subject. Stop at
+ * a topic change instead of reaching back to an older, more convenient hotel.
+ * Only select a fixed read scope; history is not an instruction or evidence.
+ */
+function contextualLodgingQuestion(latest: string, ownerTurns: string[]): boolean {
+  if (!DETAIL_FOLLOW_UP.test(latest)) return false;
+  for (const prior of [...ownerTurns].reverse()) {
+    if (/^\s*(?:thanks|thank you|ok|okay|great|got it)[.!]*\s*$/i.test(prior)) continue;
+    if (DETAIL_FOLLOW_UP.test(prior)) continue;
+    return (
+      LODGING_QUESTION.test(prior) ||
+      (LODGING_TOPIC.test(prior) && /\b(?:my|our|reservation|booking|staying)\b/i.test(prior))
+    );
+  }
+  return false;
 }
 
 const CALENDAR_SURFACE =
@@ -110,7 +144,7 @@ function receiptQuestion(text: string): boolean {
 const MUTATION_LEAD =
   /^\s*(?:(?:please|can you|could you|would you|i want you to)\s+)*(?:add|archive|block|book|cancel|create|delete|edit|forward|hold|invite|label|mark|move|reply|reschedule|schedule|send|update)\b/i;
 const READ_THEN_MUTATION =
-  /\b(?:and|then|also)\s+(?:add|archive|block|book|cancel|create|delete|edit|flag|forward|hold|invite|label|mark|move|reply|reschedule|schedule|send|update)\b/i;
+  /(?:\b(?:and|then|also)\s+|[.!?\n]\s*)(?:please\s+)?(?:add|archive|block|book|cancel|create|delete|edit|flag|forward|hold|invite|label|mark|move|reply|reschedule|schedule|send|update)\b/i;
 
 const WEEKDAYS = [
   'sunday',
@@ -529,7 +563,7 @@ function messageText(message: ReadIntentMessage | undefined): string {
  * Inspect only its owner-authored instruction: metadata such as
  * `"source":"chat"` must never be mistaken for a calendar "chat".
  */
-function readIntentText(message: ReadIntentMessage | undefined): string {
+export function readIntentText(message: ReadIntentMessage | undefined): string {
   const text = messageText(message).trim();
   if (!/^(?:External )?Task trigger \([^)]+\):/i.test(text)) return text;
 
@@ -698,6 +732,18 @@ export function detectPersonalReadRequest(
   }
   if (latestIndex === -1) return null;
   const latest = readIntentText(messages[latestIndex]);
+  if (ACCEPT_LOOKUP.test(latest)) {
+    const prior = messages.slice(Math.max(0, latestIndex - 8), latestIndex);
+    const offer = readIntentText(prior.findLast((message) => message.role === 'assistant'));
+    if (SAME_SUBJECT_LOOKUP_OFFER.test(offer) && !MUTATING_OFFER.test(offer)) {
+      // Only inherit a concrete prior read. Never turn acceptance of a send,
+      // booking, or mixed read/write offer into a read-only task that silently
+      // drops the requested action. Repeated assents stay bounded by history.
+      const request = detectPersonalReadRequest(prior, options);
+      if (LODGING_TOPIC.test(offer) && request?.answerFocus !== 'lodging') return null;
+      return request;
+    }
+  }
   if (
     !latest ||
     /^\s*i\s+(?:read|checked|reviewed|looked|searched|scanned|opened)\b/i.test(latest) ||
@@ -717,6 +763,31 @@ export function detectPersonalReadRequest(
     .filter((message) => message.role === 'user')
     .map(readIntentText)
     .filter(Boolean);
+  const lodging =
+    LODGING_QUESTION.test(latest) || contextualLodgingQuestion(latest, recentOwnerTurns);
+  const applications = APPLICATION_HISTORY_QUESTION.test(latest);
+  if (lodging || applications) {
+    // A booking can have been made months before travel. Do not translate
+    // "tomorrow" into a Gmail received-date filter and hide its confirmation.
+    // Likewise, application history must come from actual application mail,
+    // not calendar interviews or public job listings.
+    return {
+      kind: lodging ? 'calendar_email' : 'email',
+      queryTerms: [lodging ? 'hotel' : 'application'],
+      firstToolName: lodging ? 'calendar.search_events' : 'gmail.search',
+      requiresThreadRead: true,
+      mailQuery: lodging
+        ? '{hotel lodging airbnb "reservation confirmation" "booking confirmation"}'
+        : gmailQuery(latest, [
+            '{"application received" "application confirmation" "thank you for applying" "your application"}',
+          ]),
+      ...(lodging
+        ? { timeWindow: resolveTimeWindow(latest, 'calendar_email', true, options) }
+        : {}),
+      ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+      answerFocus: lodging ? 'lodging' : 'applications',
+    };
+  }
   const contextualPrivateTerms = () => {
     const own = privateQueryTerms(latest);
     if (own.length > 0) return own;

@@ -1355,6 +1355,13 @@ export function groundReadDraft(
 
   const reasons: string[] = [];
 
+  // No returned records means no basis for a personal booking/application
+  // answer, even when a fluent guess contains no capitalized names or dates.
+  // Render the explicit empty ledger instead of relying on lexical checks.
+  if (request.answerFocus && events.length === 0 && messages.length === 0) {
+    reasons.push('no source records establish the requested personal fact');
+  }
+
   // Partial coverage is the ledger's strongest case: it names the gap in a way
   // prose reliably smooths over. Hand those turns straight back to it.
   const incomplete = [...calendarRows, ...searches].some((row) => {

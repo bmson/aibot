@@ -15,7 +15,10 @@
  * only the genuinely ambiguous rest.
  */
 
-import { detectPersonalReadRequest } from '@assistant/core/workflow/read-intent';
+import {
+  detectPersonalReadRequest,
+  type ReadIntentMessage,
+} from '@assistant/core/workflow/read-intent';
 import { isMemoryWriteRequest, isSaveStatusQuestion } from '@assistant/core/workflow/saved-work';
 
 // Leading imperative verbs that are unambiguous actions in an assistant chat.
@@ -96,10 +99,23 @@ function looksLikeWeatherLookup(text: string, stripped: string): boolean {
 const PRIOR_ACTION_COMMITMENT =
   /\b(?:update|change|edit|replace|fix|format|add|send|create|save|schedule|book|apply|submit|upload|share|delete|cancel)(?:d|s|ing)?\b/;
 
-export function looksLikeActionRequest(text: string, priorAssistantText = ''): boolean {
+const ACCEPT_ACTION_OFFER =
+  /^(?:yes(?:[, ]+(?:please|go ahead|do it))?|please do|go ahead|do it|continue|keep going)[.!]*$/i;
+const ACTION_OFFER =
+  /\b(?:would you like me to|shall i|should i|i can|i will|i['’]ll|let me)\s+(?:(?:also|now|first)\s+)?(?:check|search|look up|read|find|verify|add|send|create|save|schedule|book|apply|submit|update|cancel|remind)\b/i;
+
+export function looksLikeActionRequest(
+  text: string,
+  priorAssistantText = '',
+  recentHistory: ReadonlyArray<ReadIntentMessage> = [],
+): boolean {
   let t = text.trim().toLowerCase();
   if (!t) return false;
   if (isMemoryWriteRequest(text) || isSaveStatusQuestion(text)) return true;
+  // Routing is not approval: the executor still enforces exact tool arguments
+  // and the normal policy gate. A bare yes with no concrete offer stays with
+  // the classifier rather than inheriting some old action in the thread.
+  if (ACCEPT_ACTION_OFFER.test(t) && ACTION_OFFER.test(priorAssistantText)) return true;
   let prev = '';
   while (t !== prev) {
     prev = t;
@@ -107,6 +123,7 @@ export function looksLikeActionRequest(text: string, priorAssistantText = ''): b
   }
   if (
     detectPersonalReadRequest([
+      ...recentHistory.slice(-8),
       ...(priorAssistantText ? [{ role: 'assistant', content: priorAssistantText }] : []),
       { role: 'user', content: text },
     ])

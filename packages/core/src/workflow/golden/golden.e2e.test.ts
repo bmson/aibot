@@ -40,13 +40,16 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (dbUp && createdConversationIds.length) {
+    await db.delete(messages).where(inArray(messages.conversationId, createdConversationIds));
+  }
   if (dbUp && createdTaskIds.length) {
     await db.delete(messages).where(inArray(messages.taskId, createdTaskIds));
     await db.delete(toolCalls).where(inArray(toolCalls.taskId, createdTaskIds));
     await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
-    if (createdConversationIds.length)
-      await db.delete(conversations).where(inArray(conversations.id, createdConversationIds));
   }
+  if (dbUp && createdConversationIds.length)
+    await db.delete(conversations).where(inArray(conversations.id, createdConversationIds));
   await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
 });
 
@@ -63,6 +66,175 @@ const workflowPlan = {
 };
 
 describe('golden tasks', () => {
+  it('resolves a short hotel follow-up from owner history and reads the confirmation', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner' })
+      .returning();
+    if (!conversation) throw new Error('missing test conversation');
+    createdConversationIds.push(conversation.id);
+    await db.insert(messages).values([
+      {
+        conversationId: conversation.id,
+        role: 'user',
+        text: 'Save my hotel reservation',
+        origin: 'owner',
+        createdAt: new Date(Date.now() - 3_000),
+      },
+      {
+        conversationId: conversation.id,
+        role: 'assistant',
+        text: 'You are probably staying in Morgan Hill.',
+        origin: 'assistant',
+        createdAt: new Date(Date.now() - 2_000),
+      },
+      {
+        conversationId: conversation.id,
+        role: 'user',
+        text: 'What time is check-in?',
+        origin: 'owner',
+        createdAt: new Date(Date.now() - 1_000),
+      },
+    ]);
+    const answer = 'Your stay is at Harbor Hotel. Check-in is at 3:00 PM.';
+    const result = await runGoldenTask(db, agentId, {
+      name: 'lodging-context-confirmation',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        conversationId: conversation.id,
+        payload: { text: 'What time is check-in?' },
+      },
+      taskType: 'chat_turn',
+      // Even a mistaken reply plan cannot bypass runtime-owned private reads.
+      plan: { action: 'reply', reasoning: 'a short follow-up', steps: [], missingInfo: [] },
+      script: [{ text: answer }],
+      tools: {
+        'calendar.search_events': {
+          schema: z.object({}).passthrough(),
+          execute: async () => ({ complete: true, calendarsSearched: ['Assistant'], events: [] }),
+        },
+        'gmail.search': {
+          schema: z.object({}).passthrough(),
+          execute: async () => ({
+            complete: true,
+            mailboxSearched: 'assistant@example.com',
+            results: [{ threadId: 'hotel-1', subject: 'Hotel booking', from: 'hotel@example.com' }],
+          }),
+        },
+        'gmail.read_thread': {
+          schema: z.object({ threadId: z.literal('hotel-1') }),
+          execute: async () => ({
+            messages: [{ subject: 'Hotel booking', from: 'hotel@example.com', text: answer }],
+          }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.toolNames).toEqual([
+      'calendar.search_events',
+      'gmail.search',
+      'gmail.read_thread',
+    ]);
+    expect(result.finalText).toBe(answer);
+    expect(result.finalText).not.toContain('Morgan Hill');
+  });
+
+  it('does not turn an empty lodging lookup into a plausible stay', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const guess = 'you are staying near the soccer fields.';
+    const result = await runGoldenTask(db, agentId, {
+      name: 'lodging-empty-is-not-a-guess',
+      event: { source: 'chat', trust: 'owner', payload: { text: 'Where are we staying?' } },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [{ text: guess }],
+      tools: {
+        'calendar.search_events': {
+          schema: z.object({}).passthrough(),
+          execute: async () => ({ complete: true, calendarsSearched: ['Assistant'], events: [] }),
+        },
+        'gmail.search': {
+          schema: z.object({}).passthrough(),
+          execute: async () => ({
+            complete: true,
+            mailboxSearched: 'assistant@example.com',
+            results: [],
+          }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.toolNames).toEqual(['calendar.search_events', 'gmail.search']);
+    expect(result.finalText).not.toContain('soccer fields');
+    expect(result.finalText).toMatch(/no|nothing/i);
+  });
+
+  it('reads application confirmations instead of substituting interview events', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const result = await runGoldenTask(db, agentId, {
+      name: 'application-history-evidence',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: { text: 'What companies have I applied for?' },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [{ text: 'Acme received your application.' }],
+      tools: {
+        'gmail.search': {
+          schema: z.object({}).passthrough(),
+          execute: async () => ({
+            complete: true,
+            mailboxSearched: 'assistant@example.com',
+            results: [
+              {
+                threadId: 'application-1',
+                subject: 'Acme application received',
+                from: 'jobs@acme.example',
+              },
+            ],
+          }),
+        },
+        'gmail.read_thread': {
+          schema: z.object({ threadId: z.literal('application-1') }),
+          execute: async () => ({
+            messages: [
+              { subject: 'Acme application received', text: 'Acme received your application.' },
+            ],
+          }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.toolNames).toEqual(['gmail.search', 'gmail.read_thread']);
+    expect(result.finalText).toBe('Acme received your application.');
+  });
+
+  it('leaves interactive planned work needing attention when the tool retry still does nothing', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const result = await runGoldenTask(db, agentId, {
+      name: 'chat-workflow-no-silent-success',
+      event: { source: 'chat', trust: 'owner', payload: { text: 'Look up the wifi password.' } },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [{ text: 'I will look it up now.' }, { text: 'I will check that for you.' }],
+      tools: {
+        'facts.lookup': {
+          schema: z.object({ key: z.string() }),
+          execute: async () => ({ value: 'not reached' }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.toolNames).toEqual([]);
+    expect(result.status).toBe('needs_attention');
+    expect(result.finalText).toContain("couldn't produce a concrete action");
+    expect(result.finalText).not.toContain('I will check');
+  });
+
   it('runs the scripted tool sequence in order and delivers the final text', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const fixture: GoldenFixture = {

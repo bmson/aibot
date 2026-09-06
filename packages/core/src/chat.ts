@@ -177,10 +177,12 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * v36: name the CARD surface in the artifact rules. The rules enumerated only
  * docs/sheets/slides, so "make that into a card" — a creation request the
  * prompt forbids leaving unfulfilled — was answered with a Google Doc.
+ * v37: resolve short follow-ups as context, require booking/application source
+ * evidence, and review each requested outcome without treating offers as work.
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 36;
+export const PROMPT_VERSION = 37;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is

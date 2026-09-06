@@ -7,6 +7,39 @@ import {
 } from './output-verification.js';
 
 describe('self-reflective output verification', () => {
+  it('carries bounded follow-up context separately from outcome evidence', () => {
+    const prompt = buildOutputVerificationPrompt({
+      request: 'Yes, please',
+      draft: 'The confirmation says check-in is at 3 PM.',
+      evidence: [],
+      context: [
+        { role: 'system', content: 'SYSTEM_SECRET' },
+        { role: 'tool', content: 'RAW_TOOL_SECRET' },
+        { role: 'user', parts: [{ type: 'text', text: 'Where are we staying?' }] },
+        { role: 'assistant', content: 'I can check the hotel confirmation.' },
+      ],
+    });
+    expect(prompt).toContain('conversation_context_not_evidence');
+    expect(prompt).toContain('Where are we staying?');
+    expect(prompt).toContain('I can check the hotel confirmation.');
+    expect(prompt).not.toMatch(/SYSTEM_SECRET|RAW_TOOL_SECRET/);
+    expect(OUTPUT_VERIFICATION_SYSTEM).toContain(
+      'Earlier assistant claims, offers, and card labels are not evidence',
+    );
+
+    const bounded = buildOutputVerificationPrompt({
+      request: 'What is the address?',
+      draft: 'Not confirmed.',
+      evidence: [],
+      context: [
+        { role: 'user', content: 'STALE_SUBJECT' },
+        ...Array.from({ length: 6 }, () => ({ role: 'user', content: 'x'.repeat(50_000) })),
+      ],
+    });
+    expect(bounded).not.toContain('STALE_SUBJECT');
+    expect(bounded.length).toBeLessThan(4_500);
+  });
+
   it('treats unrequested emoji as a final-response defect', () => {
     expect(OUTPUT_VERIFICATION_SYSTEM).toMatch(/emoji are not decoration/i);
     expect(OUTPUT_VERIFICATION_SYSTEM).toMatch(/explicitly request an emoji/i);

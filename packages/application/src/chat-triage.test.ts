@@ -11,6 +11,29 @@ it('routes memory saves and receipt questions through the executor', () => {
 });
 
 describe('looksLikeActionRequest', () => {
+  it('routes short follow-ups with owner context to the executor', () => {
+    expect(looksLikeActionRequest('Where are we staying')).toBe(true);
+    expect(looksLikeActionRequest('What companies have I applied for?')).toBe(true);
+    expect(
+      looksLikeActionRequest('What is the address?', 'The card is saved.', [
+        { role: 'user', parts: [{ type: 'text', text: 'Save my hotel reservation' }] },
+      ]),
+    ).toBe(true);
+    expect(looksLikeActionRequest('What is the address?', 'The hotel is in Boston.')).toBe(false);
+  });
+
+  it.each(['Yes', 'Yes, go ahead', 'Please do', 'Do it', 'Keep going'])(
+    'routes acceptance of a concrete action offer: %s',
+    (text) => {
+      expect(looksLikeActionRequest(text, 'I can search your email for the confirmation.')).toBe(
+        true,
+      );
+      expect(looksLikeActionRequest(text, 'Would you like me to send that email?')).toBe(true);
+      expect(looksLikeActionRequest(text, 'Do you like green?')).toBe(false);
+      expect(looksLikeActionRequest(text, 'I already sent the email.')).toBe(false);
+    },
+  );
+
   it('catches clear action requests the weak classifier drops', () => {
     for (const t of [
       'add lunch Friday noon', // the reported prod miss

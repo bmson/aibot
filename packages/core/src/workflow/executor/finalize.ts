@@ -362,6 +362,7 @@ export async function stageModelFinalResponse(
     !initialCheck.blocked &&
     initialCheck.text === pending.text &&
     initialCheck.groundingFallback === undefined;
+  const latestOwnerIndex = window.findLastIndex((message) => message.role === 'user');
   const reflection = canReflect
     ? await verifyFinalOutput(deps.router, {
         taskId: task.id,
@@ -369,6 +370,10 @@ export async function stageModelFinalResponse(
         draft: initialCheck.text,
         evidence,
         critical: task.trust === 'owner',
+        context:
+          task.trust === 'owner' && !isForwardedIngest(task)
+            ? window.slice(0, Math.max(0, latestOwnerIndex))
+            : undefined,
       })
     : { text: initialCheck.text, attempted: false, revised: false, unavailable: false };
   // A reviser is another generative surface: strip companion tags a second

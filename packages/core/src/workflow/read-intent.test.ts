@@ -13,6 +13,97 @@ const turn = (text: string, prior = '') => [
 ];
 
 describe('detectPersonalReadRequest', () => {
+  it('retains the original lookup on assent, but not when accepting a write or a different topic', () => {
+    const history = [
+      { role: 'user', content: 'Where are we staying?' },
+      { role: 'assistant', content: 'Should I check the hotel confirmation?' },
+      { role: 'user', content: 'Yes, please' },
+    ];
+    expect(detectPersonalReadRequest(history)).toMatchObject({ answerFocus: 'lodging' });
+    for (const offer of [
+      'Should I book the hotel?',
+      'I can check that and cancel it.',
+      'I can look up the weather.',
+    ]) {
+      expect(
+        detectPersonalReadRequest([
+          { role: 'user', content: 'Where are we staying?' },
+          { role: 'assistant', content: offer },
+          { role: 'user', content: 'Yes, please' },
+        ]),
+      ).toBeNull();
+    }
+  });
+
+  it.each(['Where are we staying', 'Which hotel did we book?', 'Where is our hotel?'])(
+    'requires booking evidence for %s',
+    (text) => {
+      const request = detectPersonalReadRequest(turn(text));
+      expect(request).toMatchObject({
+        kind: 'calendar_email',
+        firstToolName: 'calendar.search_events',
+        requiresThreadRead: true,
+        answerFocus: 'lodging',
+      });
+      expect(request?.mailQuery).not.toContain('newer_than:');
+    },
+  );
+
+  it.each(['What time is check-in?', 'What is the address?', 'Where is it?'])(
+    'resolves %s from the recent owner topic, not an assistant guess',
+    (text) => {
+      const request = detectPersonalReadRequest([
+        { role: 'user', parts: [{ type: 'text', text: 'Save my hotel reservation for tomorrow' }] },
+        { role: 'assistant', content: 'You are probably staying at Invented Hotel.' },
+        { role: 'user', content: text },
+      ]);
+      expect(request).toMatchObject({ answerFocus: 'lodging', requiresThreadRead: true });
+      expect(request?.mailQuery).not.toMatch(/invented|tomorrow|newer_than/i);
+    },
+  );
+
+  it('does not resurrect a stale topic or use assistant-only speculation as context', () => {
+    expect(
+      detectPersonalReadRequest(turn('What is the address?', 'Your hotel is in Boston.')),
+    ).toBeNull();
+    expect(
+      detectPersonalReadRequest([
+        { role: 'user', content: 'Recommend a hotel in Tokyo' },
+        { role: 'user', content: 'What is the address?' },
+      ]),
+    ).toBeNull();
+    expect(
+      detectPersonalReadRequest([
+        { role: 'user', content: 'Save my hotel reservation' },
+        { role: 'user', content: 'Tell me about the new library' },
+        { role: 'user', content: 'What is the address?' },
+      ]),
+    ).toBeNull();
+  });
+
+  it.each([
+    'Explain the sentence "Where are we staying?"',
+    'What companies should I apply for?',
+    'What time is check-in usually?',
+    'Where are we staying and then book another hotel',
+    'Where are we staying? Cancel the reservation.',
+    'Cancel our hotel reservation',
+  ])('does not replace a different intent with a forced lodging/application read: %s', (text) => {
+    expect(detectPersonalReadRequest(turn(text))?.answerFocus).toBeUndefined();
+  });
+
+  it.each(['What companies have I applied for?', 'Where did I apply?', 'Show my job applications'])(
+    'looks for application receipts instead of calendar interviews: %s',
+    (text) => {
+      expect(detectPersonalReadRequest(turn(text))).toMatchObject({
+        kind: 'email',
+        firstToolName: 'gmail.search',
+        requiresThreadRead: true,
+        answerFocus: 'applications',
+      });
+    },
+  );
+
   it('routes autobiographical memory, graph, and Drive reads through grounded tools', () => {
     expect(
       detectPersonalReadRequest(turn('When did I see the carnival parade in San Francisco?')),

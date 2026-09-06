@@ -332,7 +332,11 @@ export async function handleChatTurn(
   if (
     autonomousRequested ||
     forceRequested ||
-    looksLikeActionRequest(userText, priorAssistantText ? textOf(priorAssistantText) : '')
+    looksLikeActionRequest(
+      userText,
+      priorAssistantText ? textOf(priorAssistantText) : '',
+      modelHistory.slice(0, -1).filter((message) => !noticeRows.has(message.id)),
+    )
   ) {
     // A free-range request must run through the executor (which honors the grant
     // and its floor) — never the tool-less streaming path.

@@ -130,6 +130,16 @@ function readLookupDirective(request: PersonalReadRequest): string {
  * one than a model told only to be careful.
  */
 function readAnswerDirective(request: PersonalReadRequest): string {
+  if (request.answerFocus) {
+    return [
+      '\nThe required sources have been read. Answer the latest question directly, with no more tool calls.',
+      'Recent owner messages identify the topic only. Earlier assistant prose, saved-card titles, and the current location are not proof of the requested facts.',
+      request.answerFocus === 'lodging'
+        ? 'Identify the lodging, address, or check-in detail only if the returned booking/calendar evidence supports it for the requested stay. Distinguish booking date from travel dates. If several stays match, show their dates and ask which one; if the requested detail is missing, say exactly what could not be confirmed. Never infer a hotel or stay from a nearby event or typical travel plans.'
+        : 'List only companies whose returned mail establishes an application. Separate application confirmations, rejections, interviews, and job recommendations. An interview or a public job listing alone is not an application receipt. This is the history found in these sources, not necessarily every application ever submitted.',
+      'Lead with the answer, then concise source-backed details. Do not substitute an unrelated agenda or ask permission to perform a lookup that already ran. Do not claim any booking, application, save, or reminder was created by this read-only task.',
+    ].join('\n');
+  }
   if (request.kind === 'drive' || request.kind === 'memory' || request.kind === 'knowledge_graph') {
     return [
       '\nThe required private lookup has run. Write the answer now with no more tool calls.',
@@ -575,6 +585,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     const mustAct =
       !forcedArtifact &&
       !mustRecordGoalProgress &&
+      !readAnswerTurn &&
       state.step === 0 &&
       (isUnattendedGoalSession(task) || plan?.action === 'workflow');
 
@@ -1112,16 +1123,11 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     // On an unattended path, staging that prose as `done` is the "zero tool
     // calls, looks handled, wasn't" bug (A2): the forwarded/planned action
     // silently no-ops. Park needs_attention with an honest message the owner can
-    // retry instead. chat_turn/sms_turn deliberately keep prose-as-done — the
-    // owner is watching live and the honest message IS the reply. Unattended
+    // retry instead. This includes interactive chat: a promise to start is
+    // not completed work just because the owner is watching. Unattended
     // goal sessions are handled just below by stageModelFinalResponse, which
     // already converts a no-verified-evidence final to needs_attention.
-    if (
-      mustAct &&
-      !isUnattendedGoalSession(task) &&
-      task.type !== 'chat_turn' &&
-      task.type !== 'sms_turn'
-    ) {
+    if (mustAct && !isUnattendedGoalSession(task)) {
       const honest =
         "I planned to act on this but couldn't produce a concrete action, so I've stopped rather than pretend it's done. Retry it from Activity, or tell me exactly what to do.";
       rc.window.push({ role: 'assistant', content: honest } as ModelMessage);
