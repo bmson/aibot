@@ -246,6 +246,18 @@ struct APIClient: Sendable {
         try await get("api/mobile/v1/cards")
     }
 
+    func situationPacks() async throws -> SituationOverview {
+        try await get("api/mobile/v1/packs")
+    }
+
+    func changeSituationPack(_ command: SituationCommand) async throws -> SituationCommandResult {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/packs"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(command)
+        return try await perform(request, as: SituationCommandResult.self)
+    }
+
     func dismissCard(id: String) async throws {
         var request = makeRequest(
             url: configuration.baseURL.appending(path: "api/mobile/v1/cards/\(id)")

@@ -91,6 +91,7 @@ final class AppModel: ObservableObject {
     /// Text of a turn that failed to send, handed back to the composer so the
     /// words are never lost to a network or server failure. ChatView consumes it.
     @Published private(set) var restorableDraft: String?
+    @Published private(set) var packDiscussionDraft: String?
     @Published var showingConnection = false
     /// One-shot intent shared by every user-facing way to send a message,
     /// including quick replies and document shortcuts.
@@ -771,6 +772,26 @@ final class AppModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func loadSituationPacks() async throws -> SituationOverview {
+        guard let client else { throw APIError.invalidServerURL }
+        return try await client.situationPacks()
+    }
+
+    func discussSituationPack(id: String) {
+        packDiscussionDraft = "Review situation pack \(id). Read its latest state, respect recorded decisions, identify what I owe and what I am waiting on, and propose the next useful step. Do not perform external actions yet."
+        present(.chat)
+    }
+
+    func consumePackDiscussionDraft() -> String? {
+        defer { packDiscussionDraft = nil }
+        return packDiscussionDraft
+    }
+
+    func changeSituationPack(_ command: SituationCommand) async throws -> SituationCommandResult {
+        guard let client else { throw APIError.invalidServerURL }
+        return try await client.changeSituationPack(command)
     }
 
     func dismissCard(_ card: SavedCardRecord) async -> Bool {

@@ -2,6 +2,28 @@ import XCTest
 @testable import Assistant
 
 final class APIModelsTests: XCTestCase {
+    func testSituationPackDecodesResponsibilityAndReviewWithoutInventingCompletion() throws {
+        let data = Data("""
+        {"packs":[{"id":"pack","title":"Soccer weekend","version":3,"archived":false,"updatedAt":"2026-09-06T12:00:00Z",
+        "data":{"items":[{"id":"ride","title":"Confirm ride","details":"","lane":"i_owe","dependsOn":["reply"],"source":null,"snapshot":null,"needsReview":true}],"decisions":[{"id":"dinner","option":"Late dinner","outcome":"rejected","reason":"Too late","scope":"situation","confirmed":true}]},"changes":[],"affectedIds":["ride"]}],"sources":[]}
+        """.utf8)
+        let overview = try JSONDecoder().decode(SituationOverview.self, from: data)
+        XCTAssertEqual(overview.packs.first?.data.items.first?.lane, "i_owe")
+        XCTAssertEqual(overview.packs.first?.data.items.first?.needsReview, true)
+        XCTAssertEqual(overview.packs.first?.data.decisions.first?.scope, "situation")
+    }
+
+    func testSituationPreviewCommandPreservesVersionAndSourceIdentity() throws {
+        let item = SituationItem(title: "New hotel", source: .init(kind: "card", id: "card-id"))
+        let command = SituationCommand(action: "preview", packId: "pack-id", version: 7, item: item)
+        let data = try JSONEncoder().encode(command)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["action"] as? String, "preview")
+        XCTAssertEqual(json["version"] as? Int, 7)
+        XCTAssertNil(json["previewId"])
+        let encodedItem = try XCTUnwrap(json["item"] as? [String: Any])
+        XCTAssertEqual((encodedItem["source"] as? [String: String])?["id"], "card-id")
+    }
     func testApprovalSummaryDecodesApprovedDeniedAndExpiredOutcomes() throws {
         for status in ["approved", "denied", "expired"] {
             let data = Data("""

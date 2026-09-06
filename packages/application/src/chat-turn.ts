@@ -22,6 +22,7 @@ import { recallKnowledgeGraph, recallWithGraphFallback } from '@assistant/core/m
 import { type RecallSource, recallRelevantContext } from '@assistant/core/memory/recall';
 import { recordRecallMetric } from '@assistant/core/memory/recall-metrics';
 import type { ModelRouter, StreamOutcome } from '@assistant/core/model-router';
+import { isSituationRequest } from '@assistant/core/situations-schema';
 import { buildAutonomyGrant } from '@assistant/core/workflow/autonomy';
 import { enqueueTask } from '@assistant/core/workflow/machine';
 import { detectPersonalReadRequest } from '@assistant/core/workflow/read-intent';
@@ -336,6 +337,7 @@ export async function handleChatTurn(
   if (
     autonomousRequested ||
     forceRequested ||
+    isSituationRequest(userText) ||
     looksLikeActionRequest(
       userText,
       priorAssistantText ? textOf(priorAssistantText) : '',

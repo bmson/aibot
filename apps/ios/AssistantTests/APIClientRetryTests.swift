@@ -59,6 +59,19 @@ final class StubURLProtocol: URLProtocol {
 
 final class APIClientRetryTests: XCTestCase {
     @MainActor
+    func testPackDiscussionPreparesADraftWithoutSendingOrCallingTheServer() {
+        StubURLProtocol.prime([])
+        let model = AppModel(apiClient: makeClient())
+        model.discussSituationPack(id: "test-pack-id")
+        XCTAssertTrue(model.packDiscussionDraft?.contains("test-pack-id") == true)
+        XCTAssertFalse(model.isSending)
+        XCTAssertTrue(model.messages.isEmpty)
+        XCTAssertTrue(StubURLProtocol.attempts.isEmpty)
+        XCTAssertNotNil(model.consumePackDiscussionDraft())
+        XCTAssertNil(model.packDiscussionDraft)
+        XCTAssertNil(model.restorableDraft)
+    }
+    @MainActor
     func testAcceptedApprovalAndDenialUpdateChatEvenWhenInboxRefreshFails() async {
         for decision in ["approved", "denied"] {
             StubURLProtocol.prime([

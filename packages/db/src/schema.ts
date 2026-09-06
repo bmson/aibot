@@ -23,6 +23,45 @@ const timestamps = {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 };
 
+// Situation packs keep bounded planning state, not a second scheduler. Source
+// snapshots and dependencies are reviewed explicitly before a correction lands.
+export const situationPacks = pgTable(
+  'situation_packs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    creationKey: text('creation_key').notNull(),
+    title: text('title').notNull(),
+    version: integer('version').notNull().default(1),
+    archived: boolean('archived').notNull().default(false),
+    data: jsonb('data').notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('situation_packs_creation_idx').on(t.agentId, t.creationKey),
+    index('situation_packs_agent_idx').on(t.agentId, t.archived),
+  ],
+);
+
+export const situationPreviews = pgTable(
+  'situation_previews',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    packId: uuid('pack_id')
+      .notNull()
+      .references(() => situationPacks.id, { onDelete: 'cascade' }),
+    baseVersion: integer('base_version').notNull(),
+    sourceHash: text('source_hash').notNull(),
+    data: jsonb('data').notNull(),
+    status: text('status').notNull().default('pending'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [check('situation_preview_status', sql`${t.status} IN ('pending','applied','dismissed')`)],
+);
+
 // ── Identity ─────────────────────────────────────────────────────────────────
 
 /** The assistant itself. One row today; agent_id everywhere so multi-agent later is data, not migration. */

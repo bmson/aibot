@@ -15,6 +15,7 @@ import { recallRelevantContext, recentWindowStart } from '../../memory/recall.js
 import { recordRecallMetric } from '../../memory/recall-metrics.js';
 import { bumpSkillUse, recallSkills, renderSkillsBlock } from '../../memory/skills.js';
 import type { StepCallOutcome } from '../../model-router/router.js';
+import { isSituationRequest } from '../../situations-schema.js';
 import { deliveredChannels, markApprovalsNotified } from '../approvals.js';
 import {
   artifactRoutingFailure,
@@ -221,6 +222,8 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   const ownerText = latestUserText(rc.window) ?? '';
   const directOwner = task.trust === 'owner' && !isForwardedIngest(task) && !state.untrustedContext;
   const memoryWrite = directOwner && isMemoryWriteRequest(ownerText);
+  const situationRequest =
+    task.trust === 'owner' && !isForwardedIngest(task) && isSituationRequest(ownerText);
   // Private calendar/mail forcing belongs only to direct owner requests. Never
   // let third-party text or an assistant-generated child task trigger a search
   // of the owner's accounts or override its explicit action plan.
@@ -229,7 +232,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // guard, a crafted message reading like "what's on my calendar tomorrow?"
   // would force a search of the owner's own accounts and override the plan.
   const readRequest =
-    task.trust === 'owner' && !isForwardedIngest(task)
+    task.trust === 'owner' && !isForwardedIngest(task) && !situationRequest
       ? detectPersonalReadRequest(rc.window, {
           now: readReferenceAt,
           timeZone: agent.timezone,
@@ -239,7 +242,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // Keep the same no-tool guarantee at execution time: a model may still emit
   // a calendar or Gmail call when tools are present even for a `reply` plan.
   const conceptualNoTool =
-    task.trust === 'owner' && isConceptualNoToolRequest(latestUserText(rc.window) ?? '');
+    task.trust === 'owner' &&
+    !situationRequest &&
+    isConceptualNoToolRequest(latestUserText(rc.window) ?? '');
   // Route action requests to the reasoning model (see roleForTask): a goal
   // session, a mission, an email to triage, or a chat/SMS turn the planner
   // routed to real work all drive tools on the strong model. The draft model
@@ -449,18 +454,25 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
           .where(eq(toolCalls.taskId, task.id))
       : [];
     const mustRecordGoalProgress = needsGoalProgressUpdate(goalToolEvidence);
-    const readToolEvidence: ReadToolEvidence[] = readRequest
-      ? await db
-          .select({
-            toolName: toolCalls.toolName,
-            status: toolCalls.status,
-            args: toolCalls.args,
-            result: toolCalls.result,
-            error: toolCalls.error,
-          })
-          .from(toolCalls)
-          .where(eq(toolCalls.taskId, task.id))
-      : [];
+    const readToolEvidence: ReadToolEvidence[] =
+      readRequest || situationRequest
+        ? await db
+            .select({
+              toolName: toolCalls.toolName,
+              status: toolCalls.status,
+              args: toolCalls.args,
+              result: toolCalls.result,
+              error: toolCalls.error,
+            })
+            .from(toolCalls)
+            .where(eq(toolCalls.taskId, task.id))
+        : [];
+    const forceSituationRead =
+      situationRequest &&
+      !readToolEvidence.some(
+        (row) => row.toolName === 'situations.read' && row.status === 'succeeded',
+      ) &&
+      readToolEvidence.filter((row) => row.toolName === 'situations.read').length < 2;
     const forcedReadTool =
       !mustRecordGoalProgress && readRequest
         ? nextRequiredReadTool(readRequest, readToolEvidence)
@@ -661,9 +673,11 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
             ? 'none'
             : forcedArtifact
               ? { type: 'tool', toolName: forcedArtifact.toolName }
-              : mustAct
-                ? 'required'
-                : undefined,
+              : forceSituationRead && toolDefs.some((tool) => tool.name === 'situations.read')
+                ? { type: 'tool', toolName: 'situations.read' }
+                : mustAct
+                  ? 'required'
+                  : undefined,
         // The primary chat model has intermittently timed out when a named
         // artifact tool is mandatory. Use the role's configured
         // tool-capable fallback where appropriate.

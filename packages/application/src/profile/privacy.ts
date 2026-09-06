@@ -9,6 +9,8 @@ import {
   memories,
   memoryTombstones,
   ownerCard,
+  situationPacks,
+  situationPreviews,
   tasks,
   voiceProfile,
   writingSamples,
@@ -27,7 +29,7 @@ export interface PrivacyWorkspace {
  */
 export async function exportLongTermMemoryData(db: Db) {
   const agent = await getAgent(db);
-  const [memoryRows, entities, aliases, relations, people, samples, profile, card] =
+  const [memoryRows, entities, aliases, relations, people, samples, profile, card, packs] =
     await Promise.all([
       db
         .select({
@@ -120,6 +122,7 @@ export async function exportLongTermMemoryData(db: Db) {
         .where(eq(voiceProfile.id, 1))
         .limit(1),
       db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
+      db.select().from(situationPacks).where(eq(situationPacks.agentId, agent.id)),
     ]);
 
   return {
@@ -131,12 +134,14 @@ export async function exportLongTermMemoryData(db: Db) {
       'people profiles',
       'writing samples and voice profile',
       'compiled recall card',
+      'situation packs and decision reasons',
     ],
     memories: memoryRows,
     knowledgeGraph: { entities, aliases, relations },
     people,
     writingVoice: { samples, profile: profile[0] ?? null },
     compiledOwnerCard: card[0] ?? null,
+    situationPacks: packs,
   };
 }
 
@@ -173,6 +178,28 @@ export async function forgetLongTermMemory(
   ]);
 
   await db.transaction(async (tx) => {
+    // Preserve explicit plans, but erase their recall-bearing decisions and
+    // invalidate previews so an old preview cannot restore a forgotten reason.
+    const packs = await tx
+      .select({ id: situationPacks.id })
+      .from(situationPacks)
+      .where(eq(situationPacks.agentId, agent.id))
+      .for('update');
+    if (packs.length)
+      await tx.delete(situationPreviews).where(
+        inArray(
+          situationPreviews.packId,
+          packs.map((pack) => pack.id),
+        ),
+      );
+    await tx
+      .update(situationPacks)
+      .set({
+        data: sql`jsonb_set(${situationPacks.data}, '{decisions}', '[]'::jsonb)`,
+        version: sql`${situationPacks.version} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(eq(situationPacks.agentId, agent.id));
     if (memoryRows.length > 0) {
       await tx
         .insert(memoryTombstones)

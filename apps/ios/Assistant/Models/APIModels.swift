@@ -1,5 +1,91 @@
 import Foundation
 
+struct SituationSource: Codable, Hashable {
+    var kind: String
+    var id: String
+}
+struct SituationSnapshot: Codable, Hashable {
+    var revision: String
+    var state: String
+    var title: String
+    var details: String
+}
+struct SituationItem: Codable, Identifiable, Hashable {
+    var id: String = UUID().uuidString
+    var title: String = ""
+    var details: String = ""
+    var lane: String = "plan"
+    var dependsOn: [String] = []
+    var source: SituationSource? = nil
+    var snapshot: SituationSnapshot? = nil
+    var needsReview: Bool = false
+}
+struct SituationDecision: Codable, Identifiable {
+    var id: String = UUID().uuidString
+    var option: String = ""
+    var outcome: String = "chosen"
+    var reason: String = ""
+    var scope: String = "situation"
+    var confirmed: Bool = true
+}
+struct SituationData: Codable {
+    var items: [SituationItem]
+    var decisions: [SituationDecision]
+}
+struct SituationChange: Decodable {
+    var itemId: String
+    var before: SituationSnapshot?
+    var after: SituationSnapshot?
+}
+struct SituationPack: Decodable, Identifiable {
+    var id: String
+    var title: String
+    var version: Int
+    var archived: Bool
+    var updatedAt: String
+    var data: SituationData
+    var changes: [SituationChange]
+    var affectedIds: [String]
+}
+struct SituationSourceOption: Decodable, Identifiable {
+    var id: String
+    var kind: String
+    var title: String
+    var lane: String
+    var key: String { "\(kind):\(id)" }
+}
+struct SituationOverview: Decodable {
+    var packs: [SituationPack]
+    var sources: [SituationSourceOption]
+}
+struct SituationPreview: Decodable, Identifiable {
+    var id: String
+    var packId: String
+    var baseVersion: Int
+    var before: SituationItem
+    var after: SituationItem
+    var affectedIds: [String]
+    var unknowns: [String]
+    var expiresAt: String
+}
+struct SituationCommand: Encodable {
+    var action: String
+    var packId: String? = nil
+    var version: Int? = nil
+    var title: String? = nil
+    var creationKey: String? = nil
+    var item: SituationItem? = nil
+    var decision: SituationDecision? = nil
+    var itemId: String? = nil
+    var previewId: String? = nil
+}
+struct SituationCommandResult: Decodable {
+    var ok: Bool
+    var packId: String?
+    var error: String?
+    var preview: SituationPreview?
+}
+
 enum JSONValue: Codable, Hashable, Sendable {
     case string(String)
     case number(Double)

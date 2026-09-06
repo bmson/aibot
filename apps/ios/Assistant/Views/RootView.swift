@@ -392,6 +392,15 @@ struct CardsView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
+                NavigationLink {
+                    SituationPacksView()
+                } label: {
+                    Label("Situation packs", systemImage: "square.stack.3d.up")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                }
+                .buttonStyle(.bordered)
                 if model.savedCards.isEmpty {
                     ContentUnavailableView(
                         "No active cards",

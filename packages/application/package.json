@@ -8,6 +8,7 @@
     "./approvals": "./src/approvals.ts",
     "./chat": "./src/chat.ts",
     "./cards": "./src/cards.ts",
+    "./situations": "./src/situations.ts",
     "./costs": "./src/costs.ts",
     "./commitments": "./src/commitments.ts",
     "./dashboard": "./src/dashboard.ts",

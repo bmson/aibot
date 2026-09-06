@@ -40,6 +40,8 @@
     "./proactive/pipeline-health": "./src/proactive/pipeline-health.ts",
     "./push/devices": "./src/push/devices.ts",
     "./queue": "./src/queue.ts",
+    "./situations": "./src/situations.ts",
+    "./situations-schema": "./src/situations-schema.ts",
     "./workflow/anomaly": "./src/workflow/anomaly.ts",
     "./workflow/approvals": "./src/workflow/approvals.ts",
     "./workflow/autonomy": "./src/workflow/autonomy.ts",

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B00000000000000000000070 /* Views/SituationPacksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000070 /* Views/SituationPacksView.swift */; };
 		B00000000000000000000001 /* AssistantApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000001 /* AssistantApp.swift */; };
 		B00000000000000000000002 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000002 /* AppModel.swift */; };
 		B00000000000000000000003 /* Design/AssistantTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000003 /* Design/AssistantTheme.swift */; };
@@ -78,6 +79,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C00000000000000000000070 /* Views/SituationPacksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SituationPacksView.swift; sourceTree = "<group>"; };
 		C00000000000000000000001 /* AssistantApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantApp.swift; sourceTree = "<group>"; };
 		C00000000000000000000002 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		C00000000000000000000003 /* Design/AssistantTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Design/AssistantTheme.swift; sourceTree = "<group>"; };
@@ -187,6 +189,7 @@
 				C00000000000000000000053 /* Components/OnDeviceCardParser.swift */,
 				C00000000000000000000056 /* Components/MermaidDiagramView.swift */,
 				C0000000000000000000000A /* Views/RootView.swift */,
+				C00000000000000000000070 /* Views/SituationPacksView.swift */,
 				C0000000000000000000000B /* Views/ChatView.swift */,
 				C0000000000000000000000C /* Views/ActivityView.swift */,
 				C0000000000000000000000D /* Views/GoalsView.swift */,
@@ -374,6 +377,7 @@
 				B00000000000000000000009 /* Components/MessageBubble.swift in Sources */,
 				B00000000000000000000052 /* Components/OnDeviceCardParser.swift in Sources */,
 				B0000000000000000000000A /* Views/RootView.swift in Sources */,
+				B00000000000000000000070 /* Views/SituationPacksView.swift in Sources */,
 				B0000000000000000000000B /* Views/ChatView.swift in Sources */,
 				B0000000000000000000000C /* Views/ActivityView.swift in Sources */,
 				B0000000000000000000000D /* Views/GoalsView.swift in Sources */,

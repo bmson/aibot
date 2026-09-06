@@ -429,6 +429,14 @@ struct ChatView: View {
                 guard restorable != nil, let failed = model.restoreFailedDraft() else { return }
                 draft = failed
             }
+            .onChange(of: model.packDiscussionDraft) { _, requested in
+                guard requested != nil, let prompt = model.consumePackDiscussionDraft() else { return }
+                if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    draft = prompt
+                } else {
+                    model.errorMessage = "Your current draft is preserved. Send or clear it before discussing the pack."
+                }
+            }
         }
         // Resolve the full container before reading `viewport.size`; the
         // keyboard is a separate safe-area region and remains respected.

@@ -477,6 +477,13 @@
       "when": 1788118753989,
       "tag": "0067_solid_midnight",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1788710438827,
+      "tag": "0068_new_masque",
+      "breakpoints": true
     }
   ]
 }

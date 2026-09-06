@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { register } from '../register.js';
 import type { ToolRegistry } from '../registry.js';
 import type { WorkspaceStore } from '../workspace-store.js';
+import { registerSituationTools } from './situations.js';
 import { lookupWeather } from './weather.js';
 import { extractWebText, fetchPublicWebPage, looksLikeBotChallenge } from './web-fetch.js';
 
@@ -59,6 +60,7 @@ export interface BuiltinDeps {
 }
 
 export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps): ToolRegistry {
+  registerSituationTools(registry);
   // ── memory ─────────────────────────────────────────────────────────────────
   register(
     registry,

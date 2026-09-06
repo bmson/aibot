@@ -22,6 +22,9 @@ export default async function CardsPage() {
         title="Cards"
         intro="Tickets, travel, scores, and other useful things the assistant has shaped from your information."
       />
+      <Link href="/packs" className={`${btnSm.outline} mt-4`}>
+        Situation packs · plans & follow-through
+      </Link>
       {cards.length === 0 ? (
         <EmptyState
           icon={<Layers3 className="size-5" />}
