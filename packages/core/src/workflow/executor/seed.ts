@@ -3,6 +3,7 @@ import { conversations, messages } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { and, asc, desc, eq, gt } from 'drizzle-orm';
 import { BACKGROUND_NOTICE_MARKER, backgroundNoticeIds, listMessages } from '../../chat.js';
+import { conversationMessageTexts } from '../../conversation-context.js';
 import type { TaskState } from '../../events.js';
 import { isKnownSenderReplyTask, isUnattendedGoalSession } from './context-helpers.js';
 
@@ -67,8 +68,12 @@ export async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]
     // model asked a question with one sitting at the end of its window answers
     // the question and then repeats the notice back. Name them instead.
     const notices = await backgroundNoticeIds(db, recent);
+    const contextTexts =
+      task.trust === 'owner' && task.type === 'chat_turn'
+        ? conversationMessageTexts(recent, notices)
+        : new Map<string, string>();
     const conversationWindow = recent.map((m) => {
-      const text = m.text || '(empty)';
+      const text = contextTexts.get(m.id) || m.text || '(empty)';
       return {
         role: m.role as 'user' | 'assistant',
         content: notices.has(m.id) ? `${BACKGROUND_NOTICE_MARKER}\n${text}` : text,

@@ -1,5 +1,9 @@
 import { getAgent } from '@assistant/core/chat';
 import { type AutonomyGrant, activeAutonomyGrant } from '@assistant/core/workflow/autonomy';
+import {
+  type RequestChecklist,
+  RequestChecklistSchema,
+} from '@assistant/core/workflow/request-checklist-schema';
 import { approvals, type Db, files, messages, modelCalls, tasks, toolCalls } from '@assistant/db';
 import { and, asc, count, desc, eq, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
@@ -112,6 +116,7 @@ export interface TaskSnapshot {
   progress: string;
   progressPercent: number | null;
   plan: RecordedValue | null;
+  checklist?: Pick<RequestChecklist, 'items'>;
   archivedAt: Date | null;
 }
 
@@ -278,6 +283,7 @@ export async function getTaskDetail(
       progress: tasks.progress,
       progressPercent: tasks.progressPercent,
       plan: tasks.plan,
+      checklist: sql<unknown>`${tasks.state}->'requestChecklist'`,
       archivedAt: tasks.archivedAt,
       autonomyGrant: tasks.autonomyGrant,
     })
@@ -389,8 +395,13 @@ export async function getTaskDetail(
   const decisionOf = (value: unknown) =>
     (value ?? {}) as { riskTier?: unknown; policyId?: unknown };
 
-  const { autonomyGrant, plan, ...rest } = task;
-  const snapshot: TaskSnapshot = { ...rest, plan: record(plan, MAX_RECORDED_CHARS) };
+  const { autonomyGrant, plan, checklist, ...rest } = task;
+  const parsedChecklist = RequestChecklistSchema.safeParse(checklist);
+  const snapshot: TaskSnapshot = {
+    ...rest,
+    plan: record(plan, MAX_RECORDED_CHARS),
+    ...(parsedChecklist.success ? { checklist: { items: parsedChecklist.data.items } } : {}),
+  };
   const taskApprovals = rawApprovals.filter((row) => onPage(row.requestedAt)).reverse();
   // A parked task whose approval is gone is stuck. The page carries only one
   // page of approvals now, so ask the table rather than the page.

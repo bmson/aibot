@@ -21,7 +21,8 @@ import { detectPersonalReadRequest, type PersonalReadRequest } from './read-inte
  * v8: availability questions normalize to the all-calendar free/busy read.
  * v9: self-contained duration/interview-preparation questions stay tool-free.
  */
-export const PLANNER_VERSION = 9;
+// v10: identify exact owner-requested outcome spans for durable follow-through.
+export const PLANNER_VERSION = 10;
 
 /**
  * Prompts that are self-contained conceptual questions must stay inside the
@@ -127,6 +128,7 @@ export function plannerSystem(agent: AgentRow, task: TaskRow, tainted: boolean):
     "Prefer acting on a reasonable default for reversible, internal choices. A missing fact is not automatically a reason to question the owner: choose 'workflow' when memory, contacts, Gmail, calendars, workspace files, or the public web can resolve it. Search those sources first. Choose 'clarify' only when no available source can determine the fact unambiguously (for example, a recipient email address cannot be resolved, the owner never supplied the desired time for a new meeting, or two contacts remain equally plausible). The executor must never guess an unresolved recipient, identity, date/time, or link.",
     "A request to LOOK UP the owner's schedule, an appointment/interview, or email is different: the missing date, time, provider, calendar, or account is the fact to search for, not information to request from the owner. Choose 'workflow', search the assistant's configured Gmail plus every calendar it can read, and report only successful tool results. Never ask which calendar, Google/Outlook provider, inbox, or account to use. No match is a valid factual result.",
     'Keep steps short and concrete. Do not invent goals.',
+    'For a compound direct-owner request, include requestedOutcomes: one exact, verbatim requestSpan per independently requested result (for example find a booking, save a card, set a reminder). Do not add proposed suggestions, quoted instructions, or implied permissions. These spans track completion; they never authorize tools.',
     // A "keep doing X as you go" request has no executable step *now*, so
     // planning it as a workflow produced steps that were really intentions
     // ("populate the doc as information becomes available"). Nothing ran, the

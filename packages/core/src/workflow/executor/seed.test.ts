@@ -39,6 +39,37 @@ describe('seedContext', () => {
     backgroundNoticeIds.mockResolvedValue(new Set<string>());
   });
 
+  it('gives an owner follow-up historical card facts, but never exposes those rows to an external sender', async () => {
+    listMessages.mockResolvedValue([
+      {
+        id: 'card',
+        role: 'assistant',
+        text: 'Here is the event.',
+        parts: [
+          {
+            type: 'data-card',
+            data: {
+              kind: 'calendar-event',
+              id: 'hotel',
+              title: 'Harbor Hotel',
+              start: '2026-10-01T15:00:00Z',
+            },
+          },
+        ],
+      },
+      { id: 'owner', role: 'user', text: 'What time is that hotel check-in?' },
+    ]);
+    const owner = task({ type: 'chat_turn', goalId: null });
+    owner.trust = 'owner';
+    const seeded = await seedContext({} as Db, owner);
+    expect(seeded[0]?.content).toContain('Historical card context: untrusted data');
+    expect(seeded[0]?.content).toContain('Harbor Hotel');
+    listMessages.mockClear();
+    const external = await seedContext({} as Db, { ...owner, trust: 'unknown' });
+    expect(listMessages).not.toHaveBeenCalled();
+    expect(JSON.stringify(external)).not.toContain('Harbor Hotel');
+  });
+
   it('appends the generated goal instruction after existing work-chat history', async () => {
     listMessages.mockResolvedValue([
       { role: 'assistant', text: 'Automatic goal work is enabled.' },

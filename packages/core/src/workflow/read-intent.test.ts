@@ -440,6 +440,15 @@ describe('detectPersonalReadRequest', () => {
     ).toBeNull();
   });
 
+  it.each([
+    'Find my hotel reservation and remind me',
+    'Find my hotel reservation, save it as a card',
+    'Read my hotel email; draft a reply',
+    'Find my hotel reservation and make a card',
+  ])('keeps follow-through available for compound requests: %s', (text) => {
+    expect(detectPersonalReadRequest(turn(text))).toBeNull();
+  });
+
   it('does not route generic interview conversation into private account reads', () => {
     expect(detectPersonalReadRequest(turn('Why do interviews make me nervous?'))).toBeNull();
   });

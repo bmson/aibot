@@ -1,16 +1,24 @@
 import {
+  approvals,
   conversations,
   createDb,
   type Db,
+  generatedCardRevisions,
+  generatedCards,
   messages,
   responseChecks,
   tasks,
   toolCalls,
 } from '@assistant/db';
 import { eq, inArray } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { getAgent } from '../../chat.js';
+import { TaskStateSchema } from '../../events.js';
+import * as generatedCardModule from '../../generative-card.js';
+import { GenerativeCardSpecV1Schema } from '../../generative-card.js';
+import { refreshRequestChecklist } from '../executor/checklist.js';
+import { buildRequestChecklist } from '../request-checklist.js';
 import { type GoldenFixture, runGoldenTask } from './harness.js';
 
 /**
@@ -28,6 +36,7 @@ let dbUp = false;
 let agentId: string;
 const createdTaskIds: string[] = [];
 const createdConversationIds: string[] = [];
+const createdCardIds: string[] = [];
 
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
@@ -40,10 +49,17 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (dbUp && createdCardIds.length) {
+    await db
+      .delete(generatedCardRevisions)
+      .where(inArray(generatedCardRevisions.cardId, createdCardIds));
+    await db.delete(generatedCards).where(inArray(generatedCards.id, createdCardIds));
+  }
   if (dbUp && createdConversationIds.length) {
     await db.delete(messages).where(inArray(messages.conversationId, createdConversationIds));
   }
   if (dbUp && createdTaskIds.length) {
+    await db.delete(approvals).where(inArray(approvals.taskId, createdTaskIds));
     await db.delete(messages).where(inArray(messages.taskId, createdTaskIds));
     await db.delete(toolCalls).where(inArray(toolCalls.taskId, createdTaskIds));
     await db.delete(tasks).where(inArray(tasks.id, createdTaskIds));
@@ -66,6 +82,355 @@ const workflowPlan = {
 };
 
 describe('golden tasks', () => {
+  it('does not revive the original checklist when a newer owner message changes the request', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner' })
+      .returning();
+    if (!conversation) throw new Error('missing conversation');
+    createdConversationIds.push(conversation.id);
+    const request = 'Find my hotel reservation and remind me';
+    await db.insert(messages).values([
+      {
+        conversationId: conversation.id,
+        role: 'user',
+        text: request,
+        origin: 'owner',
+        createdAt: new Date(Date.now() - 2_000),
+      },
+      {
+        conversationId: conversation.id,
+        role: 'user',
+        text: 'Cancel the reminder portion; keep the hotel lookup.',
+        origin: 'owner',
+        createdAt: new Date(Date.now() - 1_000),
+      },
+    ]);
+    const result = await runGoldenTask(db, agentId, {
+      name: 'compound-owner-correction',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        conversationId: conversation.id,
+        payload: { text: request },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [
+        { toolCalls: [{ toolName: 'gmail.search', input: { query: 'hotel' } }] },
+        { text: 'I found the hotel reservation.' },
+        { toolCalls: [{ toolName: 'reminder.create', input: { text: 'Hotel' } }] },
+      ],
+      tools: {
+        'gmail.search': {
+          schema: z.object({ query: z.string() }),
+          execute: async () => ({ results: [{ subject: 'Hotel reservation' }] }),
+        },
+        'reminder.create': {
+          schema: z.object({ text: z.string() }),
+          execute: async () => ({ reminderId: 'must-not-run' }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.toolNames).toEqual(['gmail.search']);
+    const [row] = await db
+      .select({ state: tasks.state })
+      .from(tasks)
+      .where(eq(tasks.id, result.taskId));
+    expect(TaskStateSchema.parse(row?.state).checklistRecoveryAttempts).toBe(0);
+  });
+
+  it('does not display a saved card or claim completion when card persistence fails', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const persist = vi
+      .spyOn(generatedCardModule, 'persistGeneratedCard')
+      .mockRejectedValueOnce(new Error('fixture persistence unavailable'));
+    try {
+      const result = await runGoldenTask(db, agentId, {
+        name: 'compound-card-persistence-failure',
+        event: {
+          source: 'chat',
+          trust: 'owner',
+          payload: { text: 'Find my hotel reservation and save it as a card' },
+        },
+        taskType: 'chat_turn',
+        plan: workflowPlan,
+        script: [
+          { toolCalls: [{ toolName: 'gmail.search', input: { query: 'hotel' } }] },
+          { text: 'Harbor Hotel is the reservation I found.' },
+        ],
+        card: GenerativeCardSpecV1Schema.parse({
+          version: 1,
+          title: 'Harbor Hotel',
+          accessibilityLabel: 'Hotel reservation',
+          sourceLabel: 'gmail.search',
+          facts: [{ id: 'hotel', value: 'Harbor Hotel', source: 'gmail.search' }],
+          blocks: [{ type: 'hero', titleFact: 'hotel' }],
+        }),
+        tools: {
+          'gmail.search': {
+            schema: z.object({ query: z.string() }),
+            execute: async () => ({ results: [{ subject: 'Harbor Hotel' }] }),
+          },
+        },
+      });
+      createdTaskIds.push(result.taskId);
+      expect(persist).toHaveBeenCalledOnce();
+      expect(result.status).toBe('needs_attention');
+      expect(result.finalText).toContain('Not completed: save it as a card');
+      const [row] = await db
+        .select({ state: tasks.state })
+        .from(tasks)
+        .where(eq(tasks.id, result.taskId));
+      const state = TaskStateSchema.parse(row?.state);
+      expect(state.requestChecklist?.savedCards).toEqual([]);
+      expect(
+        state.pendingFinal?.responseCards?.some((card) => card.kind === 'generated-card'),
+      ).not.toBe(true);
+    } finally {
+      persist.mockRestore();
+    }
+  });
+
+  it('records card completion only after its revision is actually persisted', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const result = await runGoldenTask(db, agentId, {
+      name: 'compound-card-persistence',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: { text: 'Find my hotel reservation and save it as a card' },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [
+        { toolCalls: [{ toolName: 'gmail.search', input: { query: 'hotel' } }] },
+        { text: 'Harbor Hotel is the reservation I found.' },
+      ],
+      card: GenerativeCardSpecV1Schema.parse({
+        version: 1,
+        title: 'Harbor Hotel',
+        accessibilityLabel: 'Hotel reservation',
+        sourceLabel: 'gmail.search',
+        facts: [{ id: 'hotel', value: 'Harbor Hotel', source: 'gmail.search' }],
+        blocks: [{ type: 'hero', titleFact: 'hotel' }],
+      }),
+      tools: {
+        'gmail.search': {
+          schema: z.object({ query: z.string() }),
+          execute: async () => ({ results: [{ subject: 'Harbor Hotel' }] }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    const [row] = await db
+      .select({ state: tasks.state })
+      .from(tasks)
+      .where(eq(tasks.id, result.taskId));
+    const state = TaskStateSchema.parse(row?.state);
+    const receipt = state.requestChecklist?.savedCards[0];
+    if (receipt) createdCardIds.push(receipt.id);
+    expect(result.status).toBe('done');
+    expect(receipt).toBeDefined();
+    if (!receipt) throw new Error('card persistence receipt missing');
+    const [revision] = await db
+      .select({ id: generatedCardRevisions.id })
+      .from(generatedCardRevisions)
+      .where(eq(generatedCardRevisions.id, receipt.revisionId));
+    expect(revision?.id).toBe(receipt.revisionId);
+    expect(state.requestChecklist?.items.map((item) => item.status)).toEqual([
+      'completed',
+      'completed',
+    ]);
+  });
+
+  it('reconciles only the current task and requires execution after approval', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const inserted = await db
+      .insert(tasks)
+      .values([
+        { agentId, type: 'chat_turn', trust: 'owner' },
+        { agentId, type: 'chat_turn', trust: 'owner' },
+      ])
+      .returning();
+    createdTaskIds.push(...inserted.map((task) => task.id));
+    const [current, other] = inserted;
+    if (!current || !other) throw new Error('missing task fixtures');
+    await db.insert(toolCalls).values({
+      taskId: other.id,
+      toolName: 'gmail.search',
+      step: 0,
+      risk: 'autonomous',
+      status: 'succeeded',
+      args: { query: 'hotel' },
+      result: { results: [{ subject: 'Hotel' }] },
+    });
+    const [call] = await db
+      .insert(toolCalls)
+      .values({
+        taskId: current.id,
+        toolName: 'reminder.create',
+        step: 1,
+        risk: 'approval',
+        status: 'awaiting_approval',
+        args: { text: 'Hotel check-in' },
+      })
+      .returning();
+    if (!call) throw new Error('missing approval call');
+    const [approval] = await db
+      .insert(approvals)
+      .values({
+        taskId: current.id,
+        toolCallId: call.id,
+        shortCode: `checklist-${current.id}`,
+        summary: 'Remind about hotel',
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+      .returning();
+    if (!approval) throw new Error('missing approval');
+    const state = TaskStateSchema.parse({
+      requestChecklist: buildRequestChecklist('Find my hotel and remind me'),
+    });
+    await refreshRequestChecklist(db, current.id, state);
+    expect(state.requestChecklist?.items.map((item) => item.status)).toEqual([
+      'pending',
+      'awaiting_approval',
+    ]);
+    await db.update(approvals).set({ status: 'approved' }).where(eq(approvals.id, approval.id));
+    await refreshRequestChecklist(db, current.id, state);
+    expect(state.requestChecklist?.items[1]?.status).toBe('blocked');
+    await db
+      .update(toolCalls)
+      .set({ status: 'succeeded', result: { reminderId: 'r1' } })
+      .where(eq(toolCalls.id, call.id));
+    await refreshRequestChecklist(db, current.id, state);
+    expect(state.requestChecklist?.items[1]?.status).toBe('completed');
+    await db.update(approvals).set({ status: 'denied' }).where(eq(approvals.id, approval.id));
+    await refreshRequestChecklist(db, current.id, state);
+    expect(state.requestChecklist?.items[1]?.status).toBe('blocked');
+  });
+
+  it('finishes an omitted reminder after the lookup without repeating the lookup', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const result = await runGoldenTask(db, agentId, {
+      name: 'compound-outcome-recovery',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: { text: 'Find my hotel reservation and remind me tomorrow' },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [
+        { toolCalls: [{ toolName: 'gmail.search', input: { query: 'hotel' } }] },
+        { text: 'I found your hotel reservation.' },
+        {
+          toolCalls: [
+            {
+              toolName: 'reminder.create',
+              input: { text: 'Hotel check-in', when: '2026-10-01T15:00:00Z' },
+            },
+          ],
+        },
+        { text: 'The requested steps are complete.' },
+      ],
+      tools: {
+        'gmail.search': {
+          schema: z.object({ query: z.string() }),
+          execute: async () => ({ results: [{ subject: 'Harbor Hotel reservation' }] }),
+        },
+        'reminder.create': {
+          schema: z.object({ text: z.string(), when: z.string() }),
+          execute: async () => ({ reminderId: 'reminder1', kind: 'once' }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.toolNames).toEqual(['gmail.search', 'reminder.create']);
+    expect(result.status).toBe('done');
+    const [row] = await db
+      .select({ state: tasks.state })
+      .from(tasks)
+      .where(eq(tasks.id, result.taskId));
+    const state = TaskStateSchema.parse(row?.state);
+    expect(state.checklistRecoveryAttempts).toBe(1);
+    expect(state.requestChecklist?.items.map((item) => item.status)).toEqual([
+      'completed',
+      'completed',
+    ]);
+    expect(state.requestChecklist?.items.every((item) => item.evidence.length === 1)).toBe(true);
+  });
+
+  it('reports the missing outcome when the bounded recovery also produces only prose', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const result = await runGoldenTask(db, agentId, {
+      name: 'compound-incomplete-is-not-done',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: { text: 'Find my hotel reservation and remind me' },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [
+        { toolCalls: [{ toolName: 'gmail.search', input: { query: 'hotel' } }] },
+        { text: 'All done.' },
+        { text: 'All done.' },
+      ],
+      tools: {
+        'gmail.search': {
+          schema: z.object({ query: z.string() }),
+          execute: async () => ({ results: [{ subject: 'Hotel reservation' }] }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.toolNames).toEqual(['gmail.search']);
+    expect(result.status).toBe('needs_attention');
+    expect(result.finalText).toContain('Completed: Find my hotel reservation');
+    expect(result.finalText).toContain('Not completed: remind me');
+    expect(result.finalText).not.toContain('All done');
+    const [row] = await db
+      .select({ state: tasks.state })
+      .from(tasks)
+      .where(eq(tasks.id, result.taskId));
+    expect(TaskStateSchema.parse(row?.state).checklistRecoveryAttempts).toBe(1);
+  });
+
+  it('does not run automatic missing-step recovery after a definitive failure', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const result = await runGoldenTask(db, agentId, {
+      name: 'compound-failure-needs-attention',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: { text: 'Find my hotel reservation and remind me' },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [
+        { toolCalls: [{ toolName: 'gmail.search', input: { query: 'hotel' } }] },
+        { text: 'No hotel reservation was found.' },
+      ],
+      tools: {
+        'gmail.search': {
+          schema: z.object({ query: z.string() }),
+          execute: async () => ({ results: [], complete: true }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.status).toBe('needs_attention');
+    expect(result.finalText).toContain('Not completed: remind me');
+    const [row] = await db
+      .select({ state: tasks.state })
+      .from(tasks)
+      .where(eq(tasks.id, result.taskId));
+    expect(TaskStateSchema.parse(row?.state).checklistRecoveryAttempts).toBe(0);
+  });
+
   it('resolves a short hotel follow-up from owner history and reads the confirmation', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const [conversation] = await db

@@ -14,6 +14,7 @@ import {
   type TurnFailureReason,
 } from '@assistant/core/chat';
 import { createCueScanner, stripCueTags } from '@assistant/core/chat-cues';
+import { conversationMessageTexts } from '@assistant/core/conversation-context';
 import { getAmbientBlock } from '@assistant/core/memory/ambient';
 import { listOpenCommitments, renderOpenCommitments } from '@assistant/core/memory/commitments';
 import { getOwnerCard } from '@assistant/core/memory/consolidation';
@@ -151,6 +152,7 @@ function boundedModelHistory(
   rows: Awaited<ReturnType<typeof listMessages>>,
   notices: ReadonlySet<string>,
 ): UIMessage[] {
+  const contextTexts = conversationMessageTexts(rows, notices);
   const newestFirst = [...rows]
     .reverse()
     .filter((row) => row.role === 'user' || row.role === 'assistant');
@@ -160,7 +162,9 @@ function boundedModelHistory(
     // A delivered reminder or pulse alert sits in this thread like any reply.
     // Name it, or the model answers the owner's question and then reads the
     // notice back to them as part of the answer.
-    const text = notices.has(row.id) ? `${BACKGROUND_NOTICE_MARKER}\n${row.text}` : row.text;
+    const text = notices.has(row.id)
+      ? `${BACKGROUND_NOTICE_MARKER}\n${row.text}`
+      : (contextTexts.get(row.id) ?? row.text);
     const nextBytes = byteLength(text);
     // Keep a contiguous recent suffix; silently reaching far around one huge
     // message produces misleading context.

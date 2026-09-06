@@ -1,6 +1,6 @@
 import { getAgent } from '@assistant/core/chat';
 import { createDb, type Db, tasks, toolCalls } from '@assistant/db';
-import { inArray } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getTaskDetail } from './tasks/queries.js';
 
@@ -59,6 +59,43 @@ afterAll(async () => {
 });
 
 describe('getTaskDetail', () => {
+  it('projects only the validated checklist, never the task scratchpad or card receipts', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const taskId = await newTask();
+    const items = [
+      {
+        id: 'outcome1',
+        label: 'Find hotel',
+        kind: 'lookup',
+        targetTerms: ['hotel'],
+        status: 'completed',
+        evidence: [{ id: 'call1', toolName: 'gmail.search' }],
+      },
+    ];
+    await db
+      .update(tasks)
+      .set({
+        state: {
+          scratchpad: 'PRIVATE-SCRATCHPAD',
+          requestChecklist: {
+            version: 1,
+            request: 'PRIVATE-REQUEST',
+            items,
+            savedCards: [{ id: 'PRIVATE-CARD', revisionId: 'v1', title: 'Hotel' }],
+          },
+        },
+      })
+      .where(eq(tasks.id, taskId));
+    const detail = await getTaskDetail(db, taskId);
+    expect(detail?.task.checklist).toEqual({ items });
+    expect(JSON.stringify(detail)).not.toContain('PRIVATE-');
+    await db
+      .update(tasks)
+      .set({ state: { requestChecklist: { version: 99 } } })
+      .where(eq(tasks.id, taskId));
+    expect((await getTaskDetail(db, taskId))?.task.checklist).toBeUndefined();
+  });
+
   it('pages the timeline from the newest end and walks back with `before`', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const taskId = await newTask();

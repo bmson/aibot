@@ -3,6 +3,7 @@ import { goals, tasks } from '@assistant/db';
 import type { ModelMessage } from 'ai';
 import { eq } from 'drizzle-orm';
 import { getAgent } from '../chat.js';
+import { HISTORICAL_CARD_CONTEXT } from '../conversation-context.js';
 import { BudgetReservationError } from '../cost.js';
 import { isForwardedIngest } from '../email-provenance.js';
 import type { TaskState } from '../events.js';
@@ -37,6 +38,7 @@ import {
 } from './executor/types.js';
 import { compact, latestUserText } from './executor/util.js';
 import {
+  checkpointTask,
   claimTask,
   completeTask,
   markTaskNeedsAttention,
@@ -46,6 +48,7 @@ import {
   type TaskLease,
   taskState,
 } from './machine.js';
+import { buildRequestChecklist } from './request-checklist.js';
 import { isSaveStatusQuestion, previousSaveStatus } from './saved-work.js';
 
 /**
@@ -222,6 +225,16 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     // gating by run number.
     state.contextWindow = window as unknown as TaskState['contextWindow'];
   }
+  // Historical card facts may originate in email or the web. Labelling them
+  // is not enough: restore the same taint boundary as a fresh external read.
+  if (
+    window.some(
+      (message) =>
+        typeof message.content === 'string' && message.content.includes(HISTORICAL_CARD_CONTEXT),
+    )
+  ) {
+    state.untrustedContext = true;
+  }
   // A direct document/sheet/slides request skips the generic planner, then forces
   // the matching creation tool. The D9 known-sender reply child is exempt: its
   // instruction embeds the sender's own draft, whose free text could otherwise
@@ -284,6 +297,19 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   // so a resumed task acts on the latest owner intent, not a stale checkpoint.
   // (First run just baselines the watermark; chat channel only.)
   await foldOwnerRepliesSincePark(db, task, state, rc.window);
+  const payload = (task.trigger as { payload?: { text?: unknown } } | null)?.payload;
+  // Never promote an older conversation message into fresh authorization.
+  const originalRequest = typeof payload?.text === 'string' ? payload.text : '';
+  if (
+    !state.requestChecklist &&
+    task.trust === 'owner' &&
+    !shouldTaintContext(task) &&
+    !isForwardedIngest(task) &&
+    (task.type === 'chat_turn' || task.type === 'sms_turn')
+  ) {
+    state.requestChecklist = buildRequestChecklist(originalRequest);
+  }
+  if (state.requestChecklist && !(await checkpointTask(db, lease, state))) return LOST_LEASE;
 
   // Save-status questions are read-only receipt checks, not new work for a
   // planner to invent or clarify. Resolve them before any model call.
@@ -310,5 +336,18 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
 
   const planResult = await runPlanPhase(rc);
   if ('outcome' in planResult) return planResult;
+  if (
+    !state.requestChecklist &&
+    task.trust === 'owner' &&
+    !shouldTaintContext(task) &&
+    !isForwardedIngest(task) &&
+    (task.type === 'chat_turn' || task.type === 'sms_turn')
+  ) {
+    state.requestChecklist = buildRequestChecklist(
+      originalRequest,
+      planResult.plan?.requestedOutcomes,
+    );
+  }
+  if (state.requestChecklist && !(await checkpointTask(db, lease, state))) return LOST_LEASE;
   return runStepLoop(rc, planResult.plan);
 }

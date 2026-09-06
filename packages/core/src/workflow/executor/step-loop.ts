@@ -42,9 +42,12 @@ import {
   nextRequiredReadTool,
   type PersonalReadRequest,
   type ReadToolEvidence,
+  readIntentText,
 } from '../read-intent.js';
+import { requestChecklistDirective } from '../request-checklist.js';
 import { enforcePersonalReadResponse, isSimulatedApprovalNotice } from '../response-contract.js';
 import { isMemoryWriteRequest, stepLimitResponse } from '../saved-work.js';
+import { refreshRequestChecklist } from './checklist.js';
 import {
   budgetResumeAt,
   channelContext,
@@ -433,6 +436,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // could ping-pong until the step budget ran out.
   let readAnswerAttempted = false;
   while (state.step < bookkeepingStepCap) {
+    await refreshRequestChecklist(db, task.id, state);
     const goalToolEvidence = isUnattendedGoalSession(task)
       ? await db
           .select({
@@ -517,6 +521,10 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       readRequest ? readLookupDirective(readRequest) : '',
       readAnswerTurn && readRequest ? readAnswerDirective(readRequest) : '',
       plan?.action === 'schedule' ? SCHEDULE_DIRECTIVE : '',
+      requestChecklistDirective(state.requestChecklist),
+      state.checklistRecoveryAttempts > 0
+        ? 'The previous draft left requested outcomes unfinished. This is the one bounded recovery attempt: perform the still-authorized missing steps now, or state the specific blocker. Do not repeat completed actions or bypass approval.'
+        : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -1059,6 +1067,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
 
       rc.window = compact(rc.window);
       state.contextWindow = rc.window as unknown as TaskState['contextWindow'];
+      await refreshRequestChecklist(db, task.id, state);
 
       if (pendingApprovals.length > 0) {
         const parked = await parkForApproval(db, lease, state, pendingApprovals);
@@ -1140,6 +1149,33 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         terminalStatus: 'needs_attention',
         outcome: 'needs_attention',
       });
+    }
+
+    // A prose stop after one successful part must not silently abandon the
+    // rest. One persisted recovery turn, inside the ordinary step budget.
+    // Cards are finalized below, not through an invented model tool.
+    if (
+      !readAnswerTurn &&
+      state.requestChecklist &&
+      state.checklistRecoveryAttempts === 0 &&
+      state.step < task.maxSteps &&
+      // A later owner reply can cancel or change the original request. It
+      // must be interpreted normally, never overridden by automatic recovery.
+      readIntentText(rc.window.findLast((message) => message.role === 'user')) ===
+        state.requestChecklist.request.trim() &&
+      !state.requestChecklist.items.some(
+        (item) => item.status === 'blocked' || item.status === 'awaiting_approval',
+      ) &&
+      state.requestChecklist.items.some((item) => item.status === 'pending' && item.kind !== 'card')
+    ) {
+      state.checklistRecoveryAttempts = 1;
+      rc.window.push({
+        role: 'assistant',
+        content: stepResult.text || 'The request still has unfinished outcomes.',
+      });
+      state.contextWindow = compact(rc.window) as unknown as TaskState['contextWindow'];
+      if (!(await checkpointTask(db, lease, state))) return LOST_LEASE;
+      continue;
     }
 
     // no tool calls → final answer

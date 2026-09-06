@@ -182,7 +182,8 @@ export function decodeMessageCursor(value: string | null | undefined): MessageCu
  * Versioned so tool_calls.decision can record promptVersion; bump
  * PROMPT_VERSION whenever the wording changes behavior.
  */
-export const PROMPT_VERSION = 37;
+// v38: durable compound outcomes and explicitly tainted historical card context.
+export const PROMPT_VERSION = 38;
 // v18's change predates the changelog rule being followed — see git history.
 // v19: the current-time line moves to the END of the prompt and callers may
 // pin it per task run, so the large static prefix (identity, rules, voice) is

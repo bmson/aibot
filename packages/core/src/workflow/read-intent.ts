@@ -144,7 +144,7 @@ function receiptQuestion(text: string): boolean {
 const MUTATION_LEAD =
   /^\s*(?:(?:please|can you|could you|would you|i want you to)\s+)*(?:add|archive|block|book|cancel|create|delete|edit|forward|hold|invite|label|mark|move|reply|reschedule|schedule|send|update)\b/i;
 const READ_THEN_MUTATION =
-  /(?:\b(?:and|then|also)\s+|[.!?\n]\s*)(?:please\s+)?(?:add|archive|block|book|cancel|create|delete|edit|flag|forward|hold|invite|label|mark|move|reply|reschedule|schedule|send|update)\b/i;
+  /(?:\b(?:and|then|also)\s+|[,;.!?\n]\s*)(?:please\s+)?(?:add|archive|block|book|cancel|create|delete|draft|edit|email|flag|forward|hold|invite|label|make|mark|move|remember|remind|reply|reschedule|save|schedule|send|update)\b/i;
 
 const WEEKDAYS = [
   'sunday',

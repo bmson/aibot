@@ -36,8 +36,10 @@ import {
 import { verifyFinalOutput } from '../output-verification.js';
 import { PLANNER_VERSION } from '../planner.js';
 import { detectPersonalReadRequest, type PersonalReadRequest } from '../read-intent.js';
+import { requestChecklistSummary } from '../request-checklist.js';
 import { responseCardsForFinal } from '../response-cards.js';
 import { type ActionEvidence, enforceResponseContract } from '../response-contract.js';
+import { refreshRequestChecklist } from './checklist.js';
 import { isUnattendedGoalSession, KNOWN_SENDER_REPLY_KIND } from './context-helpers.js';
 import { notifyOwnerAndConversation, recordGoalBlocked } from './notices.js';
 import { type ExecuteResult, type ExecutorDeps, LOST_LEASE } from './types.js';
@@ -222,6 +224,21 @@ export async function stageFinalResponse(
   window: ModelMessage[],
   pending: PendingFinal,
 ): Promise<ExecuteResult> {
+  await refreshRequestChecklist(deps.db, task.id, state);
+  if (state.requestChecklist?.items.some((item) => item.status !== 'completed')) {
+    // A partial success is not the whole request. This is also applied to
+    // non-model terminal paths, and checkpointed before channel delivery.
+    const draft = pending.text;
+    const clarification = pending.outcome === 'clarify' ? `${draft.trimEnd()}\n\n` : '';
+    pending.text = `${clarification}This request is not fully completed.\n\n${requestChecklistSummary(state.requestChecklist)}`;
+    const last = window.at(-1);
+    if (last?.role === 'assistant' && last.content === draft) last.content = pending.text;
+    pending.progress = 'Some requested outcomes remain unverified.';
+    if (pending.terminalStatus === 'done') {
+      pending.terminalStatus = 'needs_attention';
+      pending.outcome = 'needs_attention';
+    }
+  }
   state.pendingFinal = pending;
   state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
   if (!(await checkpointTask(deps.db, task, state))) return LOST_LEASE;
@@ -433,8 +450,17 @@ export async function stageModelFinalResponse(
         payload: generated,
       }).catch((error) => {
         console.error('generated card persistence failed', error);
-        return generated;
+        return undefined;
       });
+      if (generatedCard && state.requestChecklist) {
+        state.requestChecklist.savedCards = [
+          {
+            id: generatedCard.id,
+            revisionId: generatedCard.revisionId,
+            title: generatedCard.spec.title,
+          },
+        ];
+      }
     }
   }
   /*

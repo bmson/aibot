@@ -1,5 +1,9 @@
 import { z } from 'zod';
 import { CueSchema } from './chat-cues.js';
+import {
+  RequestChecklistSchema,
+  RequestedOutcomeSchema,
+} from './workflow/request-checklist-schema.js';
 
 /** Where the assistant's trust in a piece of content or a trigger comes from. */
 export const TrustSchema = z.enum(['owner', 'known', 'unknown', 'assistant']);
@@ -37,6 +41,7 @@ export const PlanSchema = z.object({
   action: z.enum(['reply', 'workflow', 'mission', 'schedule', 'clarify']),
   reasoning: z.string().default(''),
   steps: z.array(z.string()).default([]),
+  requestedOutcomes: z.array(RequestedOutcomeSchema).max(12).optional(),
   missingInfo: z.array(z.string()).default([]),
   goalId: z.string().uuid().optional(),
   deadline: z.string().optional(),
@@ -139,6 +144,9 @@ export const TaskStateSchema = z.object({
   recall: z.array(RecallSourceSchema).nullish(),
   plannerState: z.record(z.string(), z.unknown()).default({}),
   scratchpad: z.string().default(''),
+  /** Owner-requested compound outcomes; status comes only from durable receipts. */
+  requestChecklist: RequestChecklistSchema.optional(),
+  checklistRecoveryAttempts: z.number().int().min(0).max(1).default(0),
   contextWindow: z.array(z.record(z.string(), z.unknown())).default([]),
   /**
    * High-water mark (ISO) for owner messages already folded into the window.

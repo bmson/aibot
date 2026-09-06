@@ -2,6 +2,7 @@ import { type Db, tasks, toolCalls } from '@assistant/db';
 import { eq } from 'drizzle-orm';
 import type { ZodType } from 'zod';
 import type { InboundEvent, Plan } from '../../events.js';
+import type { GenerativeCardSpecV1 } from '../../generative-card.js';
 import type { ModelRouter, StepCallOutcome } from '../../model-router/router.js';
 import type { DispatcherPort, ExecutorDeps } from '../executor.js';
 import { executeTask } from '../executor.js';
@@ -35,6 +36,8 @@ export interface GoldenFixture {
   }>;
   /** Optional self-review result after the final scripted model step. */
   verification?: GoldenVerification;
+  /** Optional grounded card composition; persistence still uses the real database. */
+  card?: GenerativeCardSpecV1;
   /** Tool implementations available to the scripted model. */
   tools: Record<string, { schema: ZodType; execute: (args: unknown) => Promise<unknown> }>;
 }
@@ -70,6 +73,7 @@ class ScriptedRouter {
   constructor(
     private script: GoldenFixture['script'],
     private verification: GoldenVerification = { decision: 'publish' },
+    private card?: GenerativeCardSpecV1,
   ) {}
 
   async step(): Promise<StepCallOutcome> {
@@ -89,8 +93,17 @@ class ScriptedRouter {
     };
   }
 
-  async object<T>(role: string): Promise<unknown> {
+  async object<T>(role: string, options?: { system?: string }): Promise<unknown> {
     if (role === 'rewrite') {
+      if (options?.system?.startsWith('You compose a native information card')) {
+        return {
+          ok: true,
+          modelId: 'golden/card',
+          degraded: false,
+          object: { cardable: Boolean(this.card), card: this.card },
+          finishReason: 'stop',
+        };
+      }
       if ('unavailable' in this.verification) {
         return {
           ok: false,
@@ -175,7 +188,11 @@ export async function runGoldenTask(
   agentId: string,
   fixture: GoldenFixture,
 ): Promise<GoldenResult> {
-  const router = new ScriptedRouter(fixture.script, fixture.verification) as unknown as ModelRouter;
+  const router = new ScriptedRouter(
+    fixture.script,
+    fixture.verification,
+    fixture.card,
+  ) as unknown as ModelRouter;
   const { task } = await enqueueTask(db, {
     event: { ...fixture.event, agentId } as InboundEvent,
     type: fixture.taskType,
