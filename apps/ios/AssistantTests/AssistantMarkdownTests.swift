@@ -29,6 +29,59 @@ private struct SourcesScrollFixture: View {
 /// blank screenshot.
 final class AssistantMarkdownTests: XCTestCase {
     @MainActor
+    func testExpandedCardDisclosureSnapshots() throws {
+        let cards: [MessageResponseCard] = [
+            .search(id: "search", title: "Web results", query: "Frontend engineering roles in San Francisco",
+                results: [.init(id: "one", title: "Frontend engineer — design systems and accessibility",
+                    url: "https://example.com/jobs", snippet: "Build reusable components with a small product team. Help make the interface work well for everyone.")]),
+            .proactiveAlert(id: "event", category: "event", urgency: "Tomorrow",
+                title: "Soccer match at Morgan Hill Outdoor Sports Center", summary: "",
+                startsAt: "2026-09-06T18:00:00-07:00", dueAt: "",
+                details: [.init(label: "Location", value: "16500 Condit Road, Morgan Hill, CA")])
+        ]
+        for (name, scheme, size, width) in [
+            ("light", ColorScheme.light, DynamicTypeSize.large, CGFloat(390)),
+            ("dark", .dark, .large, 390),
+            ("narrow", .light, .large, 320),
+            ("accessible", .light, .accessibility3, 390)
+        ] {
+            for expanded in [false, true] {
+                let view = CardDisclosure(collapsedLabel: "Show 2 more results",
+                    expandedLabel: "Showing all 5 results", standalone: true,
+                    showsBottomCollapse: true, initiallyExpanded: expanded) {
+                    RichResponseCards(cards: cards)
+                }
+                .padding(16).frame(width: width).background(AssistantTheme.stage)
+                .environment(\.colorScheme, scheme).environment(\.dynamicTypeSize, size)
+                let renderer = ImageRenderer(content: view)
+                renderer.scale = 2
+                let image = try XCTUnwrap(renderer.uiImage)
+                XCTAssertEqual(image.size.width, width)
+                if expanded { XCTAssertGreaterThan(image.size.height, 300) }
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "card-disclosure-\(name)-\(expanded ? "expanded" : "collapsed")"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
+    @MainActor
+    func testExpandedDisclosureKeepsCompactControlSpacing() throws {
+        for standalone in [false, true] {
+            let view = CardDisclosure(collapsedLabel: "More", expandedLabel: "Show fewer",
+                standalone: standalone, showsBottomCollapse: true, initiallyExpanded: true) {
+                Color.red.frame(height: 40)
+            }.frame(width: 320)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 1
+            let image = try XCTUnwrap(renderer.uiImage)
+            XCTAssertEqual(image.size, CGSize(width: 320, height: 148),
+                "Two 44pt controls, two 10pt gaps, and 40pt of full-width content")
+        }
+    }
+
+    @MainActor
     func testPolishedResultCardSnapshots() throws {
         let data = Data(#"""
         {"id":"polish","role":"assistant","parts":[

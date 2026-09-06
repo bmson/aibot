@@ -784,7 +784,7 @@ struct MessageBubble: View {
                 .accessibilityHint("Sends the same message again")
             }
             if kind == .retracted {
-                DisclosureGroup("View original response") {
+                CardDisclosure(collapsedLabel: "View original response", expandedLabel: "Hide original response") {
                     if let retractionReason {
                         Text(retractionReason)
                             .font(.caption)
@@ -803,7 +803,7 @@ struct MessageBubble: View {
             }
             if kind != .retracted,
                !diagnostics.isEmpty {
-                DisclosureGroup(compact?.detailLabel ?? "Details") {
+                CardDisclosure(collapsedLabel: compact?.detailLabel ?? "Details", expandedLabel: "Hide details") {
                     Text(diagnostics.joined(separator: "\n\n"))
                         .font(.caption)
                         .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
@@ -2428,20 +2428,14 @@ struct RichResponseCards: View {
                 displayItem(item)
             }
             if !overflow.isEmpty {
-                DisclosureGroup("\(overflow.count) more \(overflow.count == 1 ? "result" : "results")") {
+                CardDisclosure(collapsedLabel: "Show \(overflow.count) more \(overflow.count == 1 ? "result" : "results")",
+                    expandedLabel: "Showing all \(displayItems.count) results", standalone: true, showsBottomCollapse: true) {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(overflow) { item in
                             displayItem(item)
                         }
                     }
                 }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                .padding(14)
-                .background(
-                    AssistantTheme.raised(for: colorScheme),
-                    in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
-                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3100,12 +3094,11 @@ struct RichResponseCards: View {
         VStack(alignment: .leading, spacing: 10) {
             resultRows(preview, row: row)
             if !overflow.isEmpty {
-                DisclosureGroup("\(overflow.count) more") {
+                CardDisclosure(collapsedLabel: "Show \(overflow.count) more",
+                    expandedLabel: "Showing all \(items.count)", showsBottomCollapse: true) {
+                    Divider()
                     resultRows(overflow, row: row)
-                        .padding(.top, 8)
                 }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
             }
         }
     }
@@ -3117,11 +3110,11 @@ struct RichResponseCards: View {
     ) -> some View {
         VStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                row(item)
-                    .padding(.vertical, index == 0 ? 0 : 12)
-                if index < items.count - 1 {
-                    Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                if index > 0 {
+                    Divider().padding(.vertical, 12)
                 }
+                row(item)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -4105,7 +4098,6 @@ struct RichResponseCards: View {
 private struct GeneratedCardSteps: View {
     let steps: [MessageResponseCard.CardStep]
     @Environment(\.colorScheme) private var colorScheme
-    @State private var expanded = false
 
     private var failedCount: Int { steps.filter(\.failed).count }
 
@@ -4114,8 +4106,8 @@ private struct GeneratedCardSteps: View {
         return failedCount == 0 ? found : "\(found), \(failedCount) failed"
     }
 
-    /// Steps sit on an inset surface so they read as subordinate to the card's
-    /// own content.
+    /// Keep the trail in the conversation's scroll view, at the card's full
+    /// content width, including at accessibility text sizes.
     private var stepRows: some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(steps) { step in
@@ -4123,37 +4115,13 @@ private struct GeneratedCardSteps: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
-    }
-
-    /// A short trail grows the card; a long one scrolls in place instead. The
-    /// scroll view appears only in the second case — an unconstrained one is
-    /// greedy, and it would take height from the card that nothing needs.
-    @ViewBuilder
-    private var stepList: some View {
-        if steps.count > 4 {
-            ScrollView(.vertical) { stepRows }.frame(maxHeight: 200)
-        } else {
-            stepRows
-        }
     }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            stepList
-                .background(
-                    AssistantTheme.sunken(for: colorScheme),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                )
-                .padding(.top, 8)
-        } label: {
-            Text(expanded ? "Hide steps" : collapsedLabel)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                .frame(maxWidth: .infinity, alignment: .leading)
+        CardDisclosure(collapsedLabel: collapsedLabel, expandedLabel: "Hide steps",
+            showsBottomCollapse: steps.count > 4) {
+            stepRows
         }
-        .tint(AssistantTheme.accent(for: colorScheme))
-        .accessibilityHint(expanded ? "Hides the steps behind this card" : "Shows the steps behind this card")
     }
 
     private func stepRow(_ step: MessageResponseCard.CardStep) -> some View {
@@ -4181,7 +4149,7 @@ private struct GeneratedCardSteps: View {
                 Text(step.detail)
                     .font(.caption2)
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -4192,6 +4160,72 @@ private struct GeneratedCardSteps: View {
             in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Full-width disclosure content: no system indentation or nested paper shell.
+/// Long groups offer a second collapse control after the final item.
+struct CardDisclosure<Content: View>: View {
+    let collapsedLabel: String
+    let expandedLabel: String
+    var standalone = false
+    var showsBottomCollapse = false
+    @State private var expanded: Bool
+    private let content: Content
+    @Environment(\.colorScheme) private var colorScheme
+
+    init(collapsedLabel: String, expandedLabel: String, standalone: Bool = false,
+         showsBottomCollapse: Bool = false, initiallyExpanded: Bool = false,
+         @ViewBuilder content: () -> Content) {
+        self.collapsedLabel = collapsedLabel
+        self.expandedLabel = expandedLabel
+        self.standalone = standalone
+        self.showsBottomCollapse = showsBottomCollapse
+        _expanded = State(initialValue: initiallyExpanded)
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            control(bottom: false)
+            if expanded {
+                VStack(alignment: .leading, spacing: 12) { content }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 10)
+                if showsBottomCollapse {
+                    control(bottom: true).padding(.top, 10)
+                }
+            }
+        }
+    }
+
+    private func control(bottom: Bool) -> some View {
+        Button {
+            withTransaction(TranscriptDisclosure.transaction()) { expanded.toggle() }
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(bottom ? "Show fewer" : expanded ? expandedLabel : collapsedLabel)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    .font(.caption2.weight(.semibold))
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            .padding(.horizontal, standalone ? 16 : 0)
+            .padding(.vertical, 6)
+            .frame(minHeight: 44)
+            .background {
+                if standalone {
+                    RoundedRectangle(cornerRadius: AssistantTheme.panelCornerRadius, style: .continuous)
+                        .fill(AssistantTheme.bubblePaper(for: colorScheme))
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityHint(expanded ? "Shows fewer details" : "Shows all details")
     }
 }
 
@@ -4229,8 +4263,10 @@ struct DecisionReceiptCard: View {
                     .lineLimit(expanded || dynamicTypeSize.isAccessibilitySize ? nil : 2)
                     .fixedSize(horizontal: false, vertical: true)
                 if expanded, detail != summary {
+                    Divider().padding(.vertical, 3)
                     Text(detail).font(.caption)
                         .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .multilineTextAlignment(.leading)
@@ -4242,7 +4278,7 @@ struct DecisionReceiptCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-        .accessibilityHint("Shows the full request and decision details")
+        .accessibilityHint(expanded ? "Hides decision details" : "Shows the full request and decision details")
     }
 }
 
@@ -4314,34 +4350,39 @@ struct AnswerSourcesFooter: View {
     var body: some View {
         VStack(spacing: 0) {
             Divider().padding(.horizontal, 20)
-            Button {
-                withTransaction(TranscriptDisclosure.transaction()) {
-                    expanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "doc.text.magnifyingglass")
-                    Text("Sources and details")
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                }
-                .font(.caption.weight(.medium))
-                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                .padding(.horizontal, 20)
-                .padding(.vertical, 6)
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-            .accessibilityHint("Shows the supporting results for this answer")
+            sourceControl(bottom: false)
             if expanded {
                 RichResponseCards(cards: cards, onSend: onSend)
                     .environment(\.responseCardIsEmbedded, true)
+                sourceControl(bottom: true)
             }
         }
+    }
+
+    private func sourceControl(bottom: Bool) -> some View {
+        Button {
+            withTransaction(TranscriptDisclosure.transaction()) {
+                expanded.toggle()
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text.magnifyingglass")
+                Text(bottom ? "Hide sources and details" : "Sources and details")
+                Spacer(minLength: 8)
+                Image(systemName: bottom ? "chevron.up" : "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(.degrees(!bottom && expanded ? 90 : 0))
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            .padding(.horizontal, 20)
+            .padding(.vertical, 6)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityHint(expanded ? "Hides supporting results" : "Shows the supporting results for this answer")
     }
 }
 
