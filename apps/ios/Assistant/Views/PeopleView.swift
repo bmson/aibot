@@ -233,12 +233,180 @@ struct PersonInitialsBadge: View {
     }
 }
 
-/// One person, in full.
-///
-/// Section order matches the web card: who they are, birthday and how you met,
-/// their connections, what happened recently. Every section is omitted when
-/// its source is empty rather than rendering a "not recorded" row, so a person
-/// with nothing but a name shows a short honest card instead of a form.
+/// Presentation groups only: no graph facts are merged, discarded, or marked
+/// confirmed. Older servers send sentences without predicate metadata, so the
+/// compact role recognizes only the presenter's exact family grammar with both
+/// endpoint names. Unknown/custom wording stays under recorded details.
+struct PersonRelationGroup: Identifiable {
+    let id: String
+    let relations: [PersonRelationSummary]
+    let roles: [String]
+    let relationshipIDs: Set<String>
+
+    var representative: PersonRelationSummary { relations[0] }
+    var relationshipEvidence: [PersonRelationSummary] {
+        relations.filter { relationshipIDs.contains($0.id) }
+    }
+    var otherDetails: [PersonRelationSummary] {
+        relations.filter { !relationshipIDs.contains($0.id) }
+    }
+
+    static func group(_ relations: [PersonRelationSummary], personName: String) -> [Self] {
+        // Prefer identity over spelling. Name-only entries remain unlinked;
+        // grouping their display never invents a contact/navigation target.
+        let grouped = Dictionary(grouping: relations) {
+            $0.otherContactId.map { "contact:\($0)" } ?? "name:\($0.otherLabel)"
+        }
+        var seen = Set<String>()
+        return relations.compactMap { relation in
+            let key = relation.otherContactId.map { "contact:\($0)" } ?? "name:\(relation.otherLabel)"
+            guard seen.insert(key).inserted, let entries = grouped[key] else { return nil }
+            let labeled = entries.compactMap { entry -> (String, String)? in
+                role(entry, personName: personName).map { (entry.id, $0) }
+            }
+            var roles = Set(labeled.map(\.1))
+            for (generic, specific) in [
+                ("Parent", ["Father", "Mother"]), ("Child", ["Son", "Daughter"]),
+                ("Sibling", ["Brother", "Sister"]),
+                ("Grandparent", ["Grandfather", "Grandmother"]),
+                ("Grandchild", ["Grandson", "Granddaughter"])
+            ] where !roles.isDisjoint(with: specific) {
+                roles.remove(generic)
+            }
+            return Self(id: key, relations: entries, roles: roles.sorted(),
+                relationshipIDs: Set(labeled.map(\.0)))
+        }
+    }
+
+    static func role(_ relation: PersonRelationSummary, personName: String) -> String? {
+        let inverse = [
+            "father": "Child", "mother": "Child", "parent": "Child",
+            "son": "Parent", "daughter": "Parent", "child": "Parent",
+            "brother": "Sibling", "sister": "Sibling", "sibling": "Sibling",
+            "grandfather": "Grandchild", "grandmother": "Grandchild", "grandparent": "Grandchild",
+            "grandson": "Grandparent", "granddaughter": "Grandparent", "grandchild": "Grandparent",
+            "spouse": "Spouse", "partner": "Partner", "cousin": "Cousin"
+        ]
+        func possessive(_ name: String) -> String { name.hasSuffix("s") ? "\(name)'" : "\(name)'s" }
+        let sentence = relation.sentence
+        for (role, opposite) in inverse {
+            if sentence == "\(relation.otherLabel) is \(possessive(personName)) \(role)."
+                || sentence == "\(relation.otherLabel) is \(possessive(personName)) is \(role)." {
+                return role.capitalized
+            }
+            if sentence == "\(personName) is \(possessive(relation.otherLabel)) \(role)." {
+                return opposite
+            }
+        }
+        for (plural, role) in [("spouses", "Spouse"), ("partners", "Partner"),
+            ("siblings", "Sibling"), ("cousins", "Cousin")] {
+            if sentence == "\(personName) and \(relation.otherLabel) are \(plural)."
+                || sentence == "\(relation.otherLabel) and \(personName) are \(plural)." {
+                return role
+            }
+        }
+        return nil
+    }
+}
+
+struct PersonRelationGroupCard: View {
+    let group: PersonRelationGroup
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var showsRelationships = false
+    @State private var showsDetails = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let otherId = group.representative.otherContactId {
+                NavigationLink(value: AssistantDestination.person(id: otherId)) {
+                    identity(linked: true)
+                }.buttonStyle(.plain)
+            } else {
+                identity(linked: false)
+            }
+            evidence(group.relationshipEvidence, title: "Relationship evidence", expanded: $showsRelationships)
+            evidence(group.otherDetails, title: "Recorded details", expanded: $showsDetails)
+        }
+        .assistantCard(in: colorScheme)
+    }
+
+    private func identity(linked: Bool) -> some View {
+        HStack(spacing: 10) {
+            PersonInitialsBadge(initials: group.representative.otherInitials, size: 32)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(group.representative.otherLabel).font(.subheadline.weight(.semibold))
+                if !group.roles.isEmpty {
+                    Text(group.roles.joined(separator: ", "))
+                        .font(.caption).foregroundStyle(.secondary)
+                    let spans = Set(group.relationshipEvidence.map(\.span).filter { !$0.isEmpty }).sorted()
+                    if !spans.isEmpty {
+                        Text(spans.joined(separator: "; ")).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if group.relationshipEvidence.contains(where: \.unreviewed) {
+                        Text(group.relationshipEvidence.allSatisfy(\.unreviewed)
+                            ? "Not yet confirmed" : "Some details not yet confirmed")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Spacer(minLength: 8)
+            if linked {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            }
+        }
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func evidence(_ entries: [PersonRelationSummary], title: String, expanded: Binding<Bool>) -> some View {
+        if !entries.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    withTransaction(TranscriptDisclosure.transaction()) {
+                        expanded.wrappedValue.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text("\(title) (\(entries.count))")
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
+                    }
+                    .font(.caption)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(expanded.wrappedValue ? "Expanded" : "Collapsed")
+                if expanded.wrappedValue {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(entries) { relation in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(relation.sentence).font(.subheadline)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if !relation.span.isEmpty {
+                                    Text(relation.span).font(.caption).foregroundStyle(.secondary)
+                                }
+                                if relation.unreviewed {
+                                    Text("Not yet confirmed").font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }.padding(.top, 8)
+                }
+            }
+        }
+    }
+}
+
+/// One person, in full: identity, birthday and how you met, grouped connections,
+/// and recent happenings. Memory remains the home for editing the source facts.
 struct PersonCardScreen: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
@@ -287,24 +455,27 @@ struct PersonCardScreen: View {
             .assistantPanel(in: colorScheme)
         }
 
+        let groups = PersonRelationGroup.group(card.relations, personName: card.name)
+        let family = groups.filter { !$0.roles.isEmpty }
+        let other = groups.filter { $0.roles.isEmpty }
         VStack(alignment: .leading, spacing: 10) {
-            sectionHeading("Relationships", count: card.relations.count)
-            if card.relations.isEmpty {
+            sectionHeading("Relationships", count: family.count)
+            if family.isEmpty {
                 emptyNote(
-                    "No connections to other people are recorded yet. They are extracted "
-                        + "from what you tell the assistant."
+                    "No family relationships are identified here yet. Other recorded connections appear below."
                 )
             } else {
-                ForEach(card.relations) { relation in
-                    if let otherId = relation.otherContactId {
-                        NavigationLink(value: AssistantDestination.person(id: otherId)) {
-                            relationRow(relation, linked: true)
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        // Someone named only inside a fact has no page to open.
-                        relationRow(relation, linked: false)
-                    }
+                ForEach(family) { group in
+                    PersonRelationGroupCard(group: group)
+                }
+            }
+        }
+
+        if !other.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionHeading("Other people mentioned", count: other.count)
+                ForEach(other) { group in
+                    PersonRelationGroupCard(group: group)
                 }
             }
         }
@@ -417,30 +588,6 @@ struct PersonCardScreen: View {
             card.lastContact,
         ].compactMap { $0 }
         return parts.joined(separator: " · ")
-    }
-
-    private func relationRow(_ relation: PersonRelationSummary, linked: Bool) -> some View {
-        HStack(spacing: 10) {
-            PersonInitialsBadge(initials: relation.otherInitials, size: 32)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(relation.sentence)
-                    .font(.subheadline)
-                    .fixedSize(horizontal: false, vertical: true)
-                if relation.unreviewed {
-                    Text("Not yet confirmed").font(.caption2).foregroundStyle(.secondary)
-                }
-            }
-            Spacer(minLength: 8)
-            if !relation.span.isEmpty {
-                Text(relation.span).font(.caption).foregroundStyle(.secondary)
-            }
-            if linked {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .assistantCard(in: colorScheme)
     }
 
     private func detailRow(icon: String, label: String, value: String) -> some View {

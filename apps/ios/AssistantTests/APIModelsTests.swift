@@ -2,6 +2,49 @@ import XCTest
 @testable import Assistant
 
 final class APIModelsTests: XCTestCase {
+    func testPeopleGroupsInverseFamilyFactsAndKeepsEveryEvidenceRow() throws {
+        func relation(_ id: String, _ sentence: String, _ name: String, contact: String? = nil,
+            unreviewed: Bool = false, span: String = "") -> PersonRelationSummary {
+            .init(id: id, sentence: sentence, otherLabel: name, otherInitials: "AB",
+                otherContactId: contact, span: span, unreviewed: unreviewed)
+        }
+        let rows = [
+            relation("1", "Alex is Robin's father.", "Alex"),
+            relation("2", "Robin is Alex's daughter.", "Alex"),
+            relation("3", "Alex is Robin's is father.", "Alex"),
+            relation("4", "Alex visited with Robin.", "Alex", unreviewed: true, span: "Since 2024"),
+            relation("5", "Dr. Lee attended Robin.", "Dr. Lee"),
+            relation("6", "Robin and Sam are siblings.", "Sam", contact: "sam"),
+        ]
+        let groups = PersonRelationGroup.group(rows, personName: "Robin")
+        XCTAssertEqual(groups.count, 3)
+        XCTAssertEqual(groups[0].roles, ["Father"])
+        XCTAssertEqual(groups[0].relationshipEvidence.map(\.id), ["1", "2", "3"])
+        XCTAssertEqual(groups[0].otherDetails.map(\.id), ["4"])
+        XCTAssertTrue(groups[0].otherDetails[0].unreviewed)
+        XCTAssertEqual(groups[0].otherDetails[0].span, "Since 2024")
+        XCTAssertEqual(groups.flatMap(\.relations).count, rows.count)
+        XCTAssertEqual(groups[1].roles, [])
+        XCTAssertEqual(groups[2].roles, ["Sibling"])
+        XCTAssertEqual(groups[2].representative.otherContactId, "sam")
+    }
+
+    func testPeopleGroupingDoesNotGuessRolesOrMergeDistinctContactIDs() {
+        let rows = [
+            PersonRelationSummary(id: "1", sentence: "Alex is Robin's father.", otherLabel: "Alex",
+                otherInitials: "A", otherContactId: "alex1", span: "", unreviewed: true),
+            PersonRelationSummary(id: "2", sentence: "Alex is Robin's mother.", otherLabel: "Alex",
+                otherInitials: "A", otherContactId: "alex2", span: "", unreviewed: false),
+            PersonRelationSummary(id: "3", sentence: "Alex visited Robin's father.", otherLabel: "Alex",
+                otherInitials: "A", otherContactId: nil, span: "", unreviewed: false),
+        ]
+        let groups = PersonRelationGroup.group(rows, personName: "Robin")
+        XCTAssertEqual(groups.count, 3)
+        XCTAssertEqual(groups.map(\.roles), [["Father"], ["Mother"], []])
+        XCTAssertNil(PersonRelationGroup.role(rows[0], personName: "Someone else"))
+        XCTAssertTrue(PersonRelationGroup.group([], personName: "Robin").isEmpty)
+    }
+
     func testMenuHeightCountsThePartiallyFilledPeopleAndMoreRow() {
         XCTAssertEqual(PullMenuMotion.menuRowCount(itemCount: 9, columns: 2), 5)
         XCTAssertEqual(PullMenuMotion.menuRowCount(itemCount: 9, columns: 3), 3)

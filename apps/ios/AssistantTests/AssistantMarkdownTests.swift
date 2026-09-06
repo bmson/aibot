@@ -2,11 +2,114 @@ import XCTest
 import SwiftUI
 @testable import Assistant
 
+@MainActor
+private final class SourcesScrollFixtureState: ObservableObject {
+    @Published var expanded = false
+}
+
+private struct SourcesScrollFixture: View {
+    @ObservedObject var state: SourcesScrollFixtureState
+    var body: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                Color.clear.frame(height: 900)
+                Text("Sources and details").frame(height: 44)
+                if state.expanded { Text("Evidence").frame(height: 450) }
+                Text("Newest answer").frame(height: 360)
+                Color.clear.frame(height: 80)
+            }
+        }
+        .defaultScrollAnchor(.bottom)
+    }
+}
+
 /// Locks in the block parser's behavior on the shapes LLM replies actually
 /// take — nested bullets, mixed lists, fenced code, and tables — so a
 /// regression in the chat bubble's markdown is caught by a test instead of a
 /// blank screenshot.
 final class AssistantMarkdownTests: XCTestCase {
+    @MainActor
+    func testHiddenReferenceLayoutDoesNotDependOnSecretLength() throws {
+        for size in [DynamicTypeSize.large, .accessibility3] {
+            var images: [UIImage] = []
+            for value in ["A", "TEST-123456789012345678901234567890"] {
+                let view = SensitiveCardValue(fact: .init(id: "ref", label: "Booking reference",
+                    value: value, sensitive: true))
+                    .frame(width: 160).environment(\.dynamicTypeSize, size)
+                let renderer = ImageRenderer(content: view)
+                images.append(try XCTUnwrap(renderer.uiImage))
+            }
+            XCTAssertEqual(images[0].size, images[1].size)
+            XCTAssertEqual(images[0].pngData(), images[1].pngData(),
+                "A hidden value must neither wrap nor disclose its character count")
+        }
+    }
+
+    @MainActor
+    func testSourcesDisclosurePreservesNativeScrollOffset() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        let state = SourcesScrollFixtureState()
+        window.rootViewController = UIHostingController(rootView: SourcesScrollFixture(state: state))
+        window.isHidden = false
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(200))
+        func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
+        let scroll = try XCTUnwrap(descendants(window).compactMap { $0 as? UIScrollView }.first)
+        for _ in 0..<3 {
+            let before = scroll.contentOffset.y
+            let height = scroll.contentSize.height
+            withTransaction(TranscriptDisclosure.transaction()) {
+                state.expanded = true
+            }
+            try await Task.sleep(for: .milliseconds(350))
+            window.layoutIfNeeded()
+            XCTAssertGreaterThan(scroll.contentSize.height, height + 300)
+            XCTAssertEqual(scroll.contentOffset.y, before, accuracy: 1,
+                "Expanding an older answer must not bottom-anchor away from its footer")
+            withTransaction(TranscriptDisclosure.transaction()) {
+                state.expanded = false
+            }
+            try await Task.sleep(for: .milliseconds(350))
+            XCTAssertEqual(scroll.contentOffset.y, before, accuracy: 1)
+        }
+    }
+
+    @MainActor
+    func testCompactSensitiveValueAndPeopleGroupSnapshots() throws {
+        let data = Data(#"{"id":"m1","role":"assistant","parts":[{"type":"data-card","data":{"kind":"generated-card","id":"c1","spec":{"version":1,"title":"Hotel Reservation","subtitle":"Tomorrow","sourceLabel":"Source message","accessibilityLabel":"Hotel reservation","facts":[{"id":"reference","label":"Booking reference","value":"TEST-12345678901234567890","sensitive":true}],"blocks":[{"type":"facts","factIds":["reference"]}]}}}]}"#.utf8)
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        let card = try XCTUnwrap(message.parts.compactMap(MessageResponseCard.init(part:)).first)
+        let rows = [
+            PersonRelationSummary(id: "1", sentence: "Alex is Robin's father.", otherLabel: "Alex Morgan",
+                otherInitials: "AM", otherContactId: nil, span: "", unreviewed: false),
+            PersonRelationSummary(id: "2", sentence: "Alex visited with Robin.", otherLabel: "Alex Morgan",
+                otherInitials: "AM", otherContactId: nil, span: "", unreviewed: true),
+        ]
+        let group = PersonRelationGroup(id: "alex", relations: rows, roles: ["Father"], relationshipIDs: ["1"])
+        for (name, scheme, size, width) in [
+            ("light", ColorScheme.light, DynamicTypeSize.large, CGFloat(390)),
+            ("dark", .dark, .large, 390),
+            ("narrow", .light, .large, 320),
+            ("accessible", .light, .accessibility3, 390)
+        ] {
+            let view = VStack(spacing: 16) {
+                SavedResponseCard(card: card, dismiss: {})
+                PersonRelationGroupCard(group: group)
+            }
+            .padding(16).frame(width: width).background(AssistantTheme.canvas(for: scheme))
+            .environment(\.colorScheme, scheme).environment(\.dynamicTypeSize, size)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 3
+            let image = try XCTUnwrap(renderer.uiImage)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "compact-mask-and-people-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     @MainActor
     func testSubpageChromeKeepsTitleWhileContentScrollsUnderToolbar() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)

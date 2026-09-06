@@ -3837,7 +3837,11 @@ struct RichResponseCards: View {
             }
         case "facts", "timeline":
             let ids = block.values["factIds"]?.arrayStrings ?? []
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 14) {
+            // A lone fact owns the row. At large text sizes, keep each value
+            // readable instead of squeezing a reference into half a card.
+            LazyVGrid(columns: ids.count == 1 || dynamicTypeSize.isAccessibilitySize
+                ? [GridItem(.flexible())]
+                : [GridItem(.adaptive(minimum: 140))], alignment: .leading, spacing: 14) {
                 ForEach(ids, id: \.self) { id in
                     if let fact = facts[id] {
                         VStack(alignment: .leading, spacing: 3) {
@@ -4206,11 +4210,9 @@ private struct GeneratedCardSteps: View {
 
 /// A value the card holds back: a booking reference, a ticket code.
 ///
-/// Masked with one asterisk per character in the value's own monospace face,
-/// so revealing rewrites the line instead of resizing it, and named for what
-/// it shows — VoiceOver announces "Show booking reference", never a run of
-/// asterisks read out one at a time.
-private struct SensitiveCardValue: View {
+/// A fixed-width mask keeps long identifiers compact. The button is named for
+/// what it shows: VoiceOver announces "Show booking reference", not the mask.
+struct SensitiveCardValue: View {
     let fact: MessageResponseCard.GeneratedFact
     var prominent = false
     /// The caption a `code` block puts above the value ("qr", "text").
@@ -4235,22 +4237,29 @@ private struct SensitiveCardValue: View {
                         .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(revealed ? fact.value : String(repeating: "*", count: fact.value.count))
+                    // A fixed mask neither leaks the identifier's length nor
+                    // wraps a stray character into another line. Revealed
+                    // values may wrap so no part of the real value is lost.
+                    Text(revealed ? fact.value : "••••••")
                         .font(prominent ? .title3.monospaced().weight(.semibold) : .callout.monospaced())
                         .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                         .multilineTextAlignment(.leading)
+                        .lineLimit(revealed ? nil : 1)
                     // Touch has no hover to reveal that this is a control, so
                     // the control says so itself.
                     Image(systemName: revealed ? "eye.slash" : "eye")
                         .font(.caption2)
+                        .fixedSize()
                         .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                         .accessibilityHidden(true)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(minHeight: 44, alignment: .leading)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(revealed ? "Hide \(name)" : "Show \(name)")
+        .accessibilityValue(revealed ? fact.value : "Hidden")
         .accessibilityAddTraits(revealed ? [.isSelected] : [])
     }
 }
@@ -4263,13 +4272,12 @@ struct AnswerSourcesFooter: View {
     var onSend: ((String) -> Void)? = nil
     @State private var expanded = false
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
             Divider().padding(.horizontal, 20)
             Button {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                withTransaction(TranscriptDisclosure.transaction()) {
                     expanded.toggle()
                 }
             } label: {
@@ -4296,6 +4304,20 @@ struct AnswerSourcesFooter: View {
                     .environment(\.responseCardIsEmbedded, true)
             }
         }
+    }
+}
+
+/// Expanding evidence is a reading action, not new chat output. Preserve the
+/// content offset instead of applying the transcript's usual bottom anchoring.
+enum TranscriptDisclosure {
+    static func transaction() -> Transaction {
+        // Animated height reconciliation re-applies SwiftUI's bottom anchor
+        // on later frames, outside the original transaction. An atomic layout
+        // update keeps the tapped footer still, including with Reduce Motion.
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        transaction.scrollContentOffsetAdjustmentBehavior = .disabled
+        return transaction
     }
 }
 
