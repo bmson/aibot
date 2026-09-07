@@ -2,6 +2,14 @@ import XCTest
 @testable import Assistant
 
 final class APIModelsTests: XCTestCase {
+    func testSituationPackMissingRouteHasActionableCopy() {
+        XCTAssertEqual(
+            SituationPackLoadFailure.message(for: APIError.server(status: 404, message: "not found")),
+            "Situation packs aren’t available on this server yet. Update the server, then try again.")
+        XCTAssertEqual(
+            SituationPackLoadFailure.message(for: APIError.unauthorized),
+            APIError.unauthorized.localizedDescription)
+    }
     func testSituationPackDecodesResponsibilityAndReviewWithoutInventingCompletion() throws {
         let data = Data("""
         {"packs":[{"id":"pack","title":"Soccer weekend","version":3,"archived":false,"updatedAt":"2026-09-06T12:00:00Z",

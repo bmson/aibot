@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import Assistant
 
 /// Stands in for the network so a dead pooled connection can be reproduced
@@ -58,6 +59,56 @@ final class StubURLProtocol: URLProtocol {
 }
 
 final class APIClientRetryTests: XCTestCase {
+    @MainActor
+    func testSituationPackLightAndDarkSnapshots() async throws {
+        let data = Data("""
+        {"packs":[{"id":"pack","title":"Soccer weekend","version":3,"archived":false,"updatedAt":"2026-09-06T12:00:00Z",
+        "data":{"items":[{"id":"ride","title":"Confirm ride","details":"Share the arrival time once confirmed.","lane":"i_owe","dependsOn":[],"source":null,"snapshot":null,"needsReview":true}],"decisions":[]},"changes":[],"affectedIds":["ride"]}],"sources":[]}
+        """.utf8)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        for scheme in [ColorScheme.light, .dark] {
+            for screen in ["list", "detail", "form", "unavailable"] {
+                StubURLProtocol.prime([screen == "unavailable"
+                    ? .success(status: 404, body: Data(#"{"error":"not found"}"#.utf8))
+                    : .success(status: 200, body: data)])
+                let model = AppModel(apiClient: makeClient())
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+                window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
+                let content = NavigationStack {
+                    if screen == "detail" {
+                        SituationPackDetail(packId: "pack")
+                    } else if screen == "form" {
+                        SituationPackForm {
+                            Section("Item") {
+                                TextField("Title", text: .constant("Confirm ride"))
+                                TextField("Notes", text: .constant("Share the arrival time"))
+                            }
+                            Button("Save") {}
+                        }.navigationTitle("Linked item").navigationBarTitleDisplayMode(.inline)
+                    } else {
+                        SituationPacksView()
+                    }
+                }
+                .environmentObject(model)
+                .environment(\.colorScheme, scheme)
+                window.rootViewController = UIHostingController(rootView: content)
+                window.isHidden = false
+                try await Task.sleep(for: .milliseconds(350))
+                window.layoutIfNeeded()
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "situation-\(screen)-\(scheme == .light ? "light" : "dark")"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                window.isHidden = true
+                window.rootViewController = nil
+            }
+        }
+    }
+
     @MainActor
     func testEvidenceRefreshReloadsCurrentPersonAndInvalidatesOtherDossiers() async {
         func card(_ id: String, name: String) -> Data {

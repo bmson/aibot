@@ -1,48 +1,118 @@
 import SwiftUI
 
+/// Use the same content surfaces as the other submenu pages, not UIKit's
+/// grouped-list gray and oversized inset section treatment.
+private struct SituationPackSection<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let title: String?
+    @ViewBuilder let content: Content
+
+    init(_ title: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let title { Text(title).font(.headline) }
+            VStack(alignment: .leading, spacing: 12) { content }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .assistantCard(in: colorScheme)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Keep native form behavior while explicitly owning both the canvas and rows.
+struct SituationPackForm<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        Form { content.listRowBackground(AssistantTheme.raised(for: colorScheme)) }
+            .scrollContentBackground(.hidden)
+            .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
+            .tint(AssistantTheme.accent(for: colorScheme))
+            .toolbarBackground(AssistantTheme.canvas(for: colorScheme), for: .navigationBar)
+    }
+}
+
+enum SituationPackLoadFailure {
+    static func message(for error: Error) -> String {
+        if let apiError = error as? APIError, case .server(status: 404, _) = apiError {
+            return
+                "Situation packs aren’t available on this server yet. Update the server, then try again."
+        }
+        return error.localizedDescription
+    }
+}
+
 struct SituationPacksView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var overview: SituationOverview?
     @State private var title = ""
     @State private var error: String?
+    @State private var creationError: String?
     @State private var creating = false
     @State private var busy = false
     @State private var creationKey = UUID().uuidString
 
     var body: some View {
-        List {
-            Section {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
                 Text("Keep a plan, its linked cards, and the reasons behind your choices together.")
                     .font(.subheadline).foregroundStyle(.secondary)
-                if let error { Text(error).font(.footnote).foregroundStyle(.red) }
-            }
-            if let overview {
-                if overview.packs.isEmpty {
-                    ContentUnavailableView(
-                        "Start with one situation", systemImage: "square.stack.3d.up",
-                        description: Text(
-                            "A weekend, a job search, or a project. Attach real cards and commitments as you go."
-                        ))
-                }
-                ForEach(overview.packs) { pack in
-                    NavigationLink {
-                        SituationPackDetail(packId: pack.id)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(pack.title).font(.subheadline.weight(.semibold))
-                            Text(
-                                pack.affectedIds.isEmpty
-                                    ? "\(pack.data.items.count) linked items"
-                                    : "\(pack.affectedIds.count) items need review"
-                            )
-                            .font(.caption).foregroundStyle(.secondary)
-                        }.padding(.vertical, 4)
+                if let error {
+                    SituationPackSection {
+                        Label(
+                            "Couldn’t load situation packs", systemImage: "exclamationmark.circle"
+                        )
+                        .font(.subheadline.weight(.semibold))
+                        Text(error).font(.subheadline).foregroundStyle(.secondary)
+                        Button("Try again", systemImage: "arrow.clockwise") {
+                            Task { await load() }
+                        }
+                        .buttonStyle(.bordered).controlSize(.small)
                     }
                 }
-            } else if error == nil {
-                ProgressView("Loading packs…")
+                if let overview {
+                    if overview.packs.isEmpty {
+                        AssistantEmptyState(
+                            "Start with one situation", systemImage: "square.stack.3d.up",
+                            description:
+                                "A weekend, a job search, or a project. Attach real cards and commitments as you go."
+                        )
+                    }
+                    ForEach(overview.packs) { pack in
+                        NavigationLink {
+                            SituationPackDetail(packId: pack.id)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "square.stack.3d.up")
+                                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(pack.title).font(.subheadline.weight(.semibold))
+                                    Text(
+                                        pack.affectedIds.isEmpty
+                                            ? "\(pack.data.items.count) linked \(pack.data.items.count == 1 ? "item" : "items")"
+                                            : "\(pack.affectedIds.count) \(pack.affectedIds.count == 1 ? "item needs" : "items need") review"
+                                    )
+                                    .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 8)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .assistantCard(in: colorScheme)
+                        }.buttonStyle(.plain)
+                    }
+                } else if error == nil {
+                    ProgressView("Loading packs…").frame(maxWidth: .infinity, minHeight: 160)
+                }
             }
+            .padding(16).padding(.bottom, 28)
         }
         .navigationTitle("Situation packs")
         .scrollContentBackground(.hidden)
@@ -51,16 +121,21 @@ struct SituationPacksView: View {
         .assistantSubmenuChrome()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Create pack", systemImage: "plus") { creating = true }
+                Button("Create pack", systemImage: "plus") {
+                    creationError = nil
+                    creating = true
+                }
             }
         }
         .task { await load() }
         .refreshable { await load() }
         .sheet(isPresented: $creating) {
             NavigationStack {
-                Form {
+                SituationPackForm {
                     TextField("A weekend, a job search, a project…", text: $title)
-                    if let error { Text(error).font(.footnote).foregroundStyle(.red) }
+                    if let creationError {
+                        Text(creationError).font(.footnote).foregroundStyle(.red)
+                    }
                     Button(busy ? "Creating…" : "Create pack") { Task { await create() } }
                         .disabled(
                             busy || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -80,7 +155,7 @@ struct SituationPacksView: View {
         do {
             overview = try await model.loadSituationPacks()
             error = nil
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = SituationPackLoadFailure.message(for: error) }
     }
     private func create() async {
         guard !busy else { return }
@@ -90,14 +165,14 @@ struct SituationPacksView: View {
             let result = try await model.changeSituationPack(
                 .init(action: "create", title: title, creationKey: creationKey))
             guard result.ok else {
-                error = result.error
+                creationError = result.error ?? "The pack could not be created. Please try again."
                 return
             }
             creating = false
             title = ""
             creationKey = UUID().uuidString
             await load()
-        } catch { self.error = error.localizedDescription }
+        } catch { creationError = SituationPackLoadFailure.message(for: error) }
     }
 }
 
@@ -121,93 +196,107 @@ struct SituationPackDetail: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            List {
-                if let error { Section { Text(error).font(.footnote).foregroundStyle(.red) } }
-                if let notice {
-                    Section {
-                        Text(notice).font(.footnote).foregroundStyle(.secondary).id("status")
-                    }
-                }
-                if let pack {
-                    Section {
-                        Text(
-                            pack.affectedIds.isEmpty
-                                ? "No linked changes to review"
-                                : "\(pack.affectedIds.count) linked items need a look"
-                        )
-                        .font(.subheadline.weight(.medium))
-                        Text("Checked against stored sources, not live availability.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let preview { previewSection(preview, pack: pack).id("preview") }
-                    ForEach(lanes, id: \.0) { lane, name in
-                        Section(name) {
-                            let items = pack.data.items.filter { $0.lane == lane }
-                            if items.isEmpty {
-                                Text("Nothing here yet.").font(.subheadline).foregroundStyle(
-                                    .secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let error {
+                        SituationPackSection {
+                            Text(error).font(.subheadline).foregroundStyle(.secondary)
+                            Button("Try again", systemImage: "arrow.clockwise") {
+                                Task { await load() }
                             }
-                            ForEach(items) { item in itemRow(item, pack: pack) }
+                            .buttonStyle(.bordered).controlSize(.small)
                         }
                     }
-                    Section {
-                        Button("Add linked item", systemImage: "plus") {
-                            editVersion = pack.version
-                            newItem = true
-                            editing = SituationItem()
+                    if let notice {
+                        SituationPackSection {
+                            Text(notice).font(.footnote).foregroundStyle(.secondary).id("status")
                         }
                     }
-                    Section("Choices & reasons") {
-                        ForEach(pack.data.decisions) { choice in
-                            Button {
-                                decisionVersion = pack.version
-                                decision = choice
-                            } label: {
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text(
-                                        "\(choice.outcome == "chosen" ? "Chosen" : "Passed on") · \(choice.option)"
-                                    ).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
-                                    Text(choice.reason).font(.subheadline).foregroundStyle(
+                    if let pack {
+                        SituationPackSection {
+                            Text(
+                                pack.affectedIds.isEmpty
+                                    ? "No linked changes to review"
+                                    : "\(pack.affectedIds.count) linked \(pack.affectedIds.count == 1 ? "item needs" : "items need") review"
+                            )
+                            .font(.subheadline.weight(.medium))
+                            Text("Checked against stored sources, not live availability.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let preview { previewSection(preview, pack: pack).id("preview") }
+                        ForEach(lanes, id: \.0) { lane, name in
+                            SituationPackSection(name) {
+                                let items = pack.data.items.filter { $0.lane == lane }
+                                if items.isEmpty {
+                                    Text("Nothing here yet.").font(.subheadline).foregroundStyle(
                                         .secondary)
-                                    Text(
-                                        choice.scope == "preference"
-                                            ? "Confirmed preference"
-                                            : "For this situation only\(choice.confirmed ? "" : " · proposed")"
-                                    )
-                                    .font(.caption).foregroundStyle(.secondary)
+                                }
+                                ForEach(items) { item in itemRow(item, pack: pack) }
+                            }
+                        }
+                        SituationPackSection {
+                            Button("Add linked item", systemImage: "plus") {
+                                editVersion = pack.version
+                                newItem = true
+                                editing = SituationItem()
+                            }
+                        }
+                        SituationPackSection("Choices & reasons") {
+                            ForEach(pack.data.decisions) { choice in
+                                Button {
+                                    decisionVersion = pack.version
+                                    decision = choice
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(
+                                            "\(choice.outcome == "chosen" ? "Chosen" : "Passed on") · \(choice.option)"
+                                        ).font(.subheadline.weight(.medium)).foregroundStyle(
+                                            .primary)
+                                        Text(choice.reason).font(.subheadline).foregroundStyle(
+                                            .secondary)
+                                        Text(
+                                            choice.scope == "preference"
+                                                ? "Confirmed preference"
+                                                : "For this situation only\(choice.confirmed ? "" : " · proposed")"
+                                        )
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }.buttonStyle(.plain)
+                            }
+                            Button("Record a decision", systemImage: "pencil") {
+                                decisionVersion = pack.version
+                                decision = SituationDecision()
+                            }
+                        }
+                        SituationPackSection {
+                            Button("Discuss next steps", systemImage: "bubble.left") {
+                                model.discussSituationPack(id: pack.id)
+                            }
+                            Text(
+                                "Reviewing or applying a pack change does not send messages, change bookings, or complete commitments."
+                            )
+                            .font(.caption).foregroundStyle(.secondary)
+                            Button("Archive pack", systemImage: "archivebox") {
+                                Task {
+                                    if await run(
+                                        .init(
+                                            action: "archive", packId: pack.id,
+                                            version: pack.version)
+                                    ) {
+                                        dismiss()
+                                    }
                                 }
                             }
                         }
-                        Button("Record a decision", systemImage: "pencil") {
-                            decisionVersion = pack.version
-                            decision = SituationDecision()
-                        }
+                    } else if overview == nil && error == nil {
+                        ProgressView("Loading plan…")
+                    } else if error == nil {
+                        AssistantEmptyState(
+                            "Pack unavailable", systemImage: "archivebox",
+                            description: "It may have been archived on another device.")
                     }
-                    Section {
-                        Button("Discuss next steps", systemImage: "bubble.left") {
-                            model.discussSituationPack(id: pack.id)
-                        }
-                        Text(
-                            "Reviewing or applying a pack change does not send messages, change bookings, or complete commitments."
-                        )
-                        .font(.caption).foregroundStyle(.secondary)
-                        Button("Archive pack", systemImage: "archivebox") {
-                            Task {
-                                if await run(
-                                    .init(action: "archive", packId: pack.id, version: pack.version)
-                                ) {
-                                    dismiss()
-                                }
-                            }
-                        }
-                    }
-                } else if overview == nil && error == nil {
-                    ProgressView("Loading plan…")
-                } else if error == nil {
-                    ContentUnavailableView(
-                        "Pack unavailable", systemImage: "archivebox",
-                        description: Text("It may have been archived on another device."))
                 }
+                .padding(16).padding(.bottom, 28)
             }
             .font(.subheadline)
             .scrollContentBackground(.hidden)
@@ -301,7 +390,7 @@ struct SituationPackDetail: View {
         }.padding(.vertical, 6)
     }
     private func previewSection(_ preview: SituationPreview, pack: SituationPack) -> some View {
-        Section("Rehearsal · not applied") {
+        SituationPackSection("Rehearsal · not applied") {
             ForEach([("Before", preview.before), ("After", preview.after)], id: \.0) { name, item in
                 VStack(alignment: .leading, spacing: 5) {
                     Text(name).font(.caption).foregroundStyle(.secondary)
@@ -336,7 +425,7 @@ struct SituationPackDetail: View {
         do {
             overview = try await model.loadSituationPacks()
             error = nil
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = SituationPackLoadFailure.message(for: error) }
     }
     private func run(_ command: SituationCommand) async -> Bool {
         guard !busy else { return false }
@@ -376,7 +465,7 @@ private struct SituationItemEditor: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            SituationPackForm {
                 Section("Item") {
                     TextField("Title", text: $item.title)
                     TextField("Notes", text: $item.details, axis: .vertical).lineLimit(3...8)
@@ -456,7 +545,7 @@ private struct SituationDecisionEditor: View {
     @State private var failed = false
     var body: some View {
         NavigationStack {
-            Form {
+            SituationPackForm {
                 TextField("Option", text: $decision.option)
                 Picker("Decision", selection: $decision.outcome) {
                     Text("Chosen").tag("chosen")
