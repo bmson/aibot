@@ -279,13 +279,15 @@ final class APIClientRetryTests: XCTestCase {
         for (name, scheme, count, size) in [
             ("light", ColorScheme.light, 18, DynamicTypeSize.large),
             ("dark", ColorScheme.dark, 18, DynamicTypeSize.large),
+            ("selected", ColorScheme.light, 18, DynamicTypeSize.large),
+            ("islands", ColorScheme.light, 18, DynamicTypeSize.large),
             ("dense", ColorScheme.dark, 200, DynamicTypeSize.large),
             ("accessible", ColorScheme.light, 18, DynamicTypeSize.accessibility3),
             ("accessible-selected", ColorScheme.light, 18, DynamicTypeSize.accessibility3),
             ("empty", ColorScheme.light, 0, DynamicTypeSize.large)
         ] {
             let fixture = RelationshipGraphFixture.snapshot(count: count)
-            let snapshot = RelationshipGraphSnapshot(nodes: fixture.nodes, edges: fixture.edges, totalEdges: fixture.totalEdges, truncated: false, focusId: name == "accessible-selected" ? "node-0" : nil)
+            let snapshot = RelationshipGraphSnapshot(nodes: fixture.nodes, edges: name == "islands" ? Array(fixture.edges.prefix(4)) : fixture.edges, totalEdges: fixture.totalEdges, truncated: name == "islands", focusId: name.contains("selected") ? "node-0" : nil)
             StubURLProtocol.prime([.success(status: 200, body: try JSONEncoder().encode(snapshot))])
             let model = AppModel(apiClient: makeClient())
             let window = UIWindow(windowScene: scene)
@@ -304,6 +306,33 @@ final class APIClientRetryTests: XCTestCase {
             let attachment = XCTAttachment(image: image)
             attachment.name = "force-graph-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
             XCTAssertEqual(StubURLProtocol.attempts, ["GET"])
+        }
+    }
+
+    @MainActor
+    func testGraphManagementScreensInBothAppearances() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let fixture = RelationshipGraphFixture.snapshot()
+        let graph = RelationshipGraphSnapshot(nodes: fixture.nodes, edges: Array(fixture.edges.prefix(4)), totalEdges: 20, truncated: true, focusId: nil)
+        let source = try XCTUnwrap(graph.nodes.first)
+        for scheme in [ColorScheme.light, .dark] {
+            let model = AppModel(apiClient: makeClient())
+            for (name, content) in [
+                ("groups", AnyView(GraphGroupsSheet(graph: graph, focus: { _ in }, saved: { _ in }))),
+                ("connect", AnyView(GraphConnectSheet(source: source, graph: graph, saved: {}))),
+                ("editor", AnyView(KnowledgeConnectionEditor(selected: source.entity, initialObject: graph.nodes[1].entity, candidates: [], didSave: {})))
+            ] {
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+                window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
+                window.rootViewController = UIHostingController(rootView: NavigationStack { content }.environmentObject(model).environment(\.colorScheme, scheme))
+                window.isHidden = false
+                defer { window.isHidden = true; window.rootViewController = nil }
+                try await Task.sleep(for: .milliseconds(350))
+                window.layoutIfNeeded()
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+                let attachment = XCTAttachment(image: image); attachment.name = "graph-management-\(name)-\(scheme)"; attachment.lifetime = .keepAlways; add(attachment)
+            }
         }
     }
 

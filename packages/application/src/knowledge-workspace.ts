@@ -324,6 +324,7 @@ export async function getKnowledgeMapSnapshot(
     review?: 'all' | KnowledgeGraphReviewStatus;
     sourceMemoryId?: string;
     entityId?: string;
+    includeVisibleConnections?: boolean;
   } = {},
 ): Promise<KnowledgeMapSnapshot> {
   const agent = await getAgent(db);
@@ -352,7 +353,7 @@ export async function getKnowledgeMapSnapshot(
     review !== 'all' ? eq(knowledgeGraphRelations.reviewStatus, review) : undefined,
     sourceMemoryId ? eq(knowledgeGraphRelations.sourceMemoryId, sourceMemoryId) : undefined,
   );
-  const [rows, [totalRow]] = await Promise.all([
+  const mapRows = (where: ReturnType<typeof and>) =>
     db
       .select({
         id: knowledgeGraphRelations.id,
@@ -377,9 +378,9 @@ export async function getKnowledgeMapSnapshot(
       .innerJoin(object, eq(object.id, knowledgeGraphRelations.objectEntityId))
       .innerJoin(memories, eq(memories.id, knowledgeGraphRelations.sourceMemoryId))
       .innerJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
-      .where(filters)
-      .orderBy(desc(knowledgeGraphRelations.createdAt))
-      .limit(MAP_EDGE_FETCH_LIMIT),
+      .where(where);
+  const [rows, [totalRow]] = await Promise.all([
+    mapRows(filters).orderBy(desc(knowledgeGraphRelations.createdAt)).limit(MAP_EDGE_FETCH_LIMIT),
     db
       .select({ value: count() })
       .from(knowledgeGraphRelations)
@@ -394,9 +395,12 @@ export async function getKnowledgeMapSnapshot(
     { id: string; label: string; kind: string; degree: number; contactId: string | null }
   >();
   const edges: KnowledgeMapEdge[] = [];
-  for (const row of rows) {
+  const edgeIds = new Set<string>();
+  const appendRow = (row: (typeof rows)[number]) => {
+    if (edgeIds.has(row.id)) return;
     const newIds = [row.subjectId, row.objectId].filter((id) => !nodeData.has(id));
-    if (nodeData.size + newIds.length > MAP_NODE_LIMIT) continue;
+    if (nodeData.size + new Set(newIds).size > MAP_NODE_LIMIT) return;
+    edgeIds.add(row.id);
     nodeData.set(row.subjectId, {
       id: row.subjectId,
       label: row.subjectLabel,
@@ -424,6 +428,27 @@ export async function getKnowledgeMapSnapshot(
       validFrom: row.validFrom,
       validUntil: row.validUntil,
     });
+  };
+  rows.forEach(appendRow);
+  const overviewEdgeCount = edges.length;
+  let visibleConnectionsTruncated = false;
+  if (input.includeVisibleConnections && nodeData.size > 0) {
+    // Complete the visible topology: recent records can otherwise hide old bridges.
+    // This adds only existing eligible claims; it never infers relationships.
+    const ids = [...nodeData.keys()];
+    const interior = await mapRows(
+      and(activeKnowledgeGraphWhere(agent.id), inArray(subject.id, ids), inArray(object.id, ids)),
+    )
+      .orderBy(desc(knowledgeGraphRelations.createdAt))
+      .limit(1001);
+    for (const row of interior) {
+      if (edgeIds.has(row.id)) continue;
+      if (edges.length >= 1000) {
+        visibleConnectionsTruncated = true;
+        break;
+      }
+      appendRow(row);
+    }
   }
   const adjacency = new Map<string, Set<string>>();
   for (const edge of edges) {
@@ -469,7 +494,7 @@ export async function getKnowledgeMapSnapshot(
     edges,
     components,
     totalEdges,
-    truncated: totalEdges > edges.length,
+    truncated: totalEdges > overviewEdgeCount || visibleConnectionsTruncated,
     filters: { query, kind, predicates, review, sourceMemoryId },
   };
 }

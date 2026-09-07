@@ -20,7 +20,7 @@ struct RelationshipGraphCanvas: UIViewRepresentable {
 }
 
 struct GraphCanvasCommand: Equatable {
-    enum Action { case fit, zoomIn, zoomOut }
+    enum Action { case fit, zoomIn, zoomOut, tidy }
     var id = 0
     var action: Action = .fit
 }
@@ -36,6 +36,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     private(set) var viewport = GraphViewport()
     private var nodes: [RelationshipGraphNode] = []
     private var links: [GraphLink] = []
+    private var groups: [RelationshipGraphGroup] = []
     private var unreviewed = Set<GraphLink>()
     private var selectedID: String?
     private var neighbors = Set<String>()
@@ -81,10 +82,11 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         neighbors = selectedID.map { snapshot.neighborhood(of: $0) } ?? []
         unreviewed = Set(snapshot.edges.filter { $0.reviewStatus != "confirmed" }.map { GraphLink($0.subjectId, $0.objectId) })
         if changed {
-            nodes = snapshot.nodes; links = newLinks
+            nodes = snapshot.nodes; links = newLinks; groups = snapshot.groups
             layout.update(nodes: nodes, links: links)
             // A settled first frame makes the map immediately legible, even in Reduce Motion.
-            for _ in 0..<120 { layout.step() }
+            for _ in 0..<(needsInitialFit ? 120 : 35) { layout.step() }
+            if needsInitialFit { layout.arrangeGroups() }
             if needsInitialFit && !bounds.isEmpty { fit(); needsInitialFit = false }
             wake()
         } else if reduceMotion { stop() }
@@ -124,6 +126,10 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         guard lastCommand != command.id else { return }
         lastCommand = command.id
         switch command.action {
+        case .tidy:
+            stop()
+            for _ in 0..<120 { layout.step() }
+            layout.arrangeGroups(); fit()
         case .fit: fit()
         case .zoomIn: zoom(to: viewport.scale * 1.35, anchor: CGPoint(x: bounds.midX, y: bounds.midY))
         case .zoomOut: zoom(to: viewport.scale / 1.35, anchor: CGPoint(x: bounds.midX, y: bounds.midY))
@@ -215,12 +221,24 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         canvas.setFill(); context.fill(bounds)
         let positions = points()
         let degrees = links.reduce(into: [String: Int]()) { result, link in result[link.a, default: 0] += 1; result[link.b, default: 0] += 1 }
+        if groups.count > 1, !focusOnly {
+            for group in groups where group.nodes.count > 1 {
+                let points = group.nodes.compactMap { positions[$0.id] }.map { viewport.screen($0, size: bounds.size) }
+                guard let first = points.first else { continue }
+                var area = CGRect(origin: first, size: CGSize(width: 1, height: 1))
+                for point in points { area = area.union(CGRect(origin: point, size: CGSize(width: 1, height: 1))) }
+                area = area.insetBy(dx: -22, dy: -26)
+                let highlighted = selectedID.map { group.ids.contains($0) } ?? false
+                context.setFillColor(accent.withAlphaComponent(highlighted ? 0.07 : 0.035).cgColor)
+                context.addPath(UIBezierPath(roundedRect: area, cornerRadius: 28).cgPath); context.fillPath()
+            }
+        }
         for link in links {
             guard let a = positions[link.a], let b = positions[link.b] else { continue }
             let highlighted = selectedID == link.a || selectedID == link.b
             if focusOnly && selectedID != nil && !(neighbors.contains(link.a) && neighbors.contains(link.b)) { continue }
             let start = viewport.screen(a, size: bounds.size), end = viewport.screen(b, size: bounds.size)
-            context.setStrokeColor((highlighted ? accent.withAlphaComponent(0.65) : ink.withAlphaComponent(selectedID == nil ? 0.16 : 0.06)).cgColor)
+            context.setStrokeColor((highlighted ? accent.withAlphaComponent(0.65) : ink.withAlphaComponent(selectedID == nil ? 0.24 : 0.07)).cgColor)
             context.setLineWidth(highlighted ? 1.4 : 0.7)
             context.setLineDash(phase: 0, lengths: unreviewed.contains(link) ? [3, 4] : [])
             context.move(to: start); context.addLine(to: end); context.strokePath()
@@ -253,10 +271,11 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: selected ? 14 : 11, weight: selected ? .semibold : .regular), .foregroundColor: ink.withAlphaComponent(relevant ? 1 : 0.4)]
             let measured = text.size(withAttributes: attributes)
             let width = min(150, measured.width)
+            let labelRadius = max(10, radius)
             let candidates = [
-                CGRect(x: point.x - width / 2, y: point.y + radius + 7, width: width, height: measured.height),
-                CGRect(x: point.x - width / 2, y: point.y - radius - 7 - measured.height, width: width, height: measured.height),
-                CGRect(x: point.x + radius + 8, y: point.y - measured.height / 2, width: width, height: measured.height),
+                CGRect(x: point.x - width / 2, y: point.y + labelRadius + 7, width: width, height: measured.height),
+                CGRect(x: point.x - width / 2, y: point.y - labelRadius - 7 - measured.height, width: width, height: measured.height),
+                CGRect(x: point.x + labelRadius + 8, y: point.y - measured.height / 2, width: width, height: measured.height),
             ]
             let clearLabel = candidates.first { candidate in
                 !(nodeBounds + occupiedLabels).contains { $0.intersects(candidate.insetBy(dx: -3, dy: -2)) }

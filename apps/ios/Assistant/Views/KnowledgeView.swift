@@ -540,7 +540,7 @@ struct KnowledgeConnectionEditor: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    let selected: KnowledgeEntity
+    @State private var subject: KnowledgeEntity
     let relationToCorrect: KnowledgeRelation?
     let candidates: [KnowledgeEntity]
     let didSave: () async -> Void
@@ -558,19 +558,20 @@ struct KnowledgeConnectionEditor: View {
     init(
         selected: KnowledgeEntity,
         relationToCorrect: KnowledgeRelation? = nil,
+        initialObject: KnowledgeEntity? = nil,
         candidates: [KnowledgeEntity],
         didSave: @escaping () async -> Void
     ) {
-        self.selected = selected
+        _subject = State(initialValue: selected)
         self.relationToCorrect = relationToCorrect
         self.candidates = candidates
         self.didSave = didSave
-        _objectLabel = State(initialValue: relationToCorrect?.object.displayLabel ?? "")
-        _objectKind = State(initialValue: relationToCorrect?.object.kind ?? "person")
-        _objectId = State(initialValue: relationToCorrect?.object.id)
-        _objectIdLabel = State(initialValue: relationToCorrect?.object.displayLabel ?? "")
-        _objectIdKind = State(initialValue: relationToCorrect?.object.kind ?? "person")
-        let initialKind = relationToCorrect?.object.kind ?? "person"
+        _objectLabel = State(initialValue: (relationToCorrect?.object ?? initialObject)?.displayLabel ?? "")
+        _objectKind = State(initialValue: (relationToCorrect?.object ?? initialObject)?.kind ?? "person")
+        _objectId = State(initialValue: (relationToCorrect?.object ?? initialObject)?.id)
+        _objectIdLabel = State(initialValue: (relationToCorrect?.object ?? initialObject)?.displayLabel ?? "")
+        _objectIdKind = State(initialValue: (relationToCorrect?.object ?? initialObject)?.kind ?? "person")
+        let initialKind = (relationToCorrect?.object ?? initialObject)?.kind ?? "person"
         let options = Self.relationshipOptions(subjectKind: selected.kind, objectKind: initialKind)
         if let relationToCorrect, !options.contains(where: { $0.id == relationToCorrect.predicate })
         {
@@ -578,7 +579,7 @@ struct KnowledgeConnectionEditor: View {
             _customPredicate = State(initialValue: relationToCorrect.predicate)
         } else {
             _predicate = State(
-                initialValue: relationToCorrect?.predicate ?? options.first?.id ?? "__custom")
+                initialValue: relationToCorrect?.predicate ?? "__choose")
         }
     }
 
@@ -592,8 +593,8 @@ struct KnowledgeConnectionEditor: View {
                 .foregroundStyle(.secondary)
             }
             Section("First item") {
-                Text(selected.displayLabel)
-                Text(selected.kind.sentenceCaseIdentifier).font(.caption).foregroundStyle(
+                Text(subject.displayLabel)
+                Text(subject.kind.sentenceCaseIdentifier).font(.caption).foregroundStyle(
                     .secondary)
             }
             Section("Connected item") {
@@ -610,9 +611,9 @@ struct KnowledgeConnectionEditor: View {
                 .onChange(of: objectKind) { _, value in
                     if value != objectIdKind { objectId = nil }
                     let allowed = Self.relationshipOptions(
-                        subjectKind: selected.kind, objectKind: value)
+                        subjectKind: subject.kind, objectKind: value)
                     if predicate != "__custom" && !allowed.contains(where: { $0.id == predicate }) {
-                        predicate = allowed.first?.id ?? "__custom"
+                        predicate = "__choose"
                     }
                 }
                 if !candidates.isEmpty {
@@ -630,7 +631,17 @@ struct KnowledgeConnectionEditor: View {
                 }
             }
             Section("Relationship") {
+                if relationToCorrect == nil, let objectId {
+                    Button("Swap direction", systemImage: "arrow.up.arrow.down") {
+                        let previous = subject
+                        subject = .init(id: objectId, label: objectLabel, kind: objectKind, canonicalKey: objectId)
+                        objectLabel = previous.displayLabel; objectKind = previous.kind
+                        objectIdLabel = previous.displayLabel; objectIdKind = previous.kind
+                        self.objectId = previous.id; predicate = "__choose"
+                    }
+                }
                 Picker("Relationship", selection: $predicate) {
+                    Text("Choose a relationship…").tag("__choose")
                     ForEach(relationshipOptions, id: \.id) { option in
                         Text(option.label).tag(option.id)
                     }
@@ -661,7 +672,7 @@ struct KnowledgeConnectionEditor: View {
             ToolbarItem(placement: .confirmationAction) {
                 Button(saving ? "Saving…" : "Save") { save() }
                     .disabled(
-                        saving
+                        saving || predicate == "__choose" || objectId == subject.id
                             || objectLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             || (predicate == "__custom"
                                 && customPredicate.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -675,9 +686,9 @@ struct KnowledgeConnectionEditor: View {
         saving = true
         saveError = nil
         let mutation = KnowledgeConnectionMutation(
-            subjectLabel: selected.label,
-            subjectKind: selected.kind,
-            subjectId: selected.id,
+            subjectLabel: subject.label,
+            subjectKind: subject.kind,
+            subjectId: subject.id,
             predicate: storedPredicate,
             objectLabel: objectLabel,
             objectKind: objectKind,
@@ -708,7 +719,7 @@ struct KnowledgeConnectionEditor: View {
     }
 
     private var relationshipOptions: [(id: String, label: String)] {
-        Self.relationshipOptions(subjectKind: selected.kind, objectKind: objectKind)
+        Self.relationshipOptions(subjectKind: subject.kind, objectKind: objectKind)
     }
 
     private static func relationshipOptions(subjectKind: String, objectKind: String) -> [(
@@ -722,6 +733,8 @@ struct KnowledgeConnectionEditor: View {
                 ("son_of", "is the son of"),
                 ("spouse_of", "is the spouse of"),
                 ("sibling_of", "is the sibling of"),
+                ("friend_of", "is a friend of"),
+                ("colleague_of", "is a colleague of"),
                 ("met", "met"),
             ]
         case ("person", "organization"):
@@ -756,8 +769,9 @@ struct KnowledgeConnectionEditor: View {
     }
 
     private var previewSentence: String {
-        Self.previewSentence(
-            subject: selected.displayLabel, predicate: storedPredicate, objectLabel: objectLabel)
+        if predicate == "__choose" { return "Choose how these items are connected." }
+        return Self.previewSentence(
+            subject: subject.displayLabel, predicate: storedPredicate, objectLabel: objectLabel)
     }
 
     static func previewSentence(subject: String, predicate: String, objectLabel: String) -> String {

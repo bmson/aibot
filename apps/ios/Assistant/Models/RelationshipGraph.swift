@@ -6,6 +6,7 @@ struct RelationshipGraphNode: Codable, Identifiable, Hashable, Sendable {
     let label: String
     let kind: String
     var contactId: String? = nil
+    var entity: KnowledgeEntity { .init(id: id, label: label, kind: kind, canonicalKey: id) }
 }
 
 struct RelationshipGraphEdge: Codable, Identifiable, Hashable, Sendable {
@@ -62,6 +63,64 @@ struct RelationshipGraphSnapshot: Codable, Sendable {
     }
 }
 
+struct RelationshipGraphGroup: Identifiable {
+    let id: String
+    let nodes: [RelationshipGraphNode]
+    let connectionCount: Int
+    var label: String { nodes.first?.label ?? "Group" }
+    var ids: Set<String> { Set(nodes.map(\.id)) }
+}
+
+extension RelationshipGraphSnapshot {
+    /// Components describe this loaded view, not proof that no other relationships exist.
+    var groups: [RelationshipGraphGroup] {
+        let topology = links
+        var adjacent: [String: Set<String>] = [:]
+        for link in topology { adjacent[link.a, default: []].insert(link.b); adjacent[link.b, default: []].insert(link.a) }
+        let byID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        var visited = Set<String>(), result: [RelationshipGraphGroup] = []
+        for node in nodes.sorted(by: { $0.id < $1.id }) where !visited.contains(node.id) {
+            var queue = [node.id], members = Set([node.id]); visited.insert(node.id)
+            while let id = queue.popLast() {
+                for next in adjacent[id] ?? [] where visited.insert(next).inserted { queue.append(next); members.insert(next) }
+            }
+            let ordered = members.compactMap { byID[$0] }.sorted {
+                let a = adjacent[$0.id]?.count ?? 0, b = adjacent[$1.id]?.count ?? 0
+                return a == b ? ($0.label == $1.label ? $0.id < $1.id : $0.label.localizedStandardCompare($1.label) == .orderedAscending) : a > b
+            }
+            result.append(.init(id: members.sorted().first!, nodes: ordered, connectionCount: topology.filter { members.contains($0.a) }.count))
+        }
+        return result.sorted { $0.nodes.count == $1.nodes.count ? $0.id < $1.id : $0.nodes.count > $1.nodes.count }
+    }
+
+    func showing(_ ids: Set<String>) -> Self {
+        .init(nodes: nodes.filter { ids.contains($0.id) }, edges: edges.filter { ids.contains($0.subjectId) && ids.contains($0.objectId) }, totalEdges: totalEdges, truncated: truncated, focusId: focusId)
+    }
+
+    /// Suggestions are navigation prompts based on topology, never asserted new facts.
+    func connectionCandidates(for id: String) -> [(node: RelationshipGraphNode, reason: String)] {
+        let direct = neighborhood(of: id)
+        let group = groups.first { $0.ids.contains(id) }?.ids ?? [id]
+        let byID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0.label) })
+        var ranked: [(node: RelationshipGraphNode, reason: String, score: Int)] = []
+        for node in nodes where !direct.contains(node.id) {
+            let shared = direct.intersection(neighborhood(of: node.id)).subtracting([id, node.id])
+            let labels = shared.compactMap { byID[$0] }.sorted()
+            let separate = !group.contains(node.id)
+            let reason: String
+            if let label = labels.first { reason = "Both connect to \(label)" }
+            else { reason = separate ? "In a separate group in this view" : "No direct connection shown" }
+            let score = shared.isEmpty ? (separate ? 50 : 0) : 100 + shared.count
+            ranked.append((node, reason, score))
+        }
+        ranked.sort {
+            if $0.score != $1.score { return $0.score > $1.score }
+            return $0.node.label.localizedStandardCompare($1.node.label) == .orderedAscending
+        }
+        return ranked.map { (node: $0.node, reason: $0.reason) }
+    }
+}
+
 struct GraphLink: Hashable, Sendable {
     let a: String
     let b: String
@@ -97,6 +156,8 @@ struct RelationshipGraphLayout {
     private(set) var positions: [CGPoint] = []
     private var velocities: [CGPoint] = []
     private var springs: [(Int, Int)] = []
+    private var anchors: [CGPoint] = []
+    private var groupMembers: [[Int]] = []
 
     mutating func update(nodes: [RelationshipGraphNode], links: [GraphLink]) {
         let old = Dictionary(uniqueKeysWithValues: zip(ids, positions))
@@ -114,6 +175,46 @@ struct RelationshipGraphLayout {
         }
         velocities = Array(repeating: .zero, count: ids.count)
         springs = links.compactMap { link in guard let a = index[link.a], let b = index[link.b] else { return nil }; return (a, b) }
+        // Build components from layout springs without source or presentation dependencies.
+        var visited = Set<Int>(); groupMembers = []
+        for i in ids.indices where visited.insert(i).inserted {
+            var group = [i], queue = [i]
+            while let current = queue.popLast() {
+                for (a, b) in springs where a == current || b == current {
+                    let other = a == current ? b : a
+                    if visited.insert(other).inserted { group.append(other); queue.append(other) }
+                }
+            }
+            groupMembers.append(group)
+        }
+        updateAnchors()
+    }
+
+    private mutating func updateAnchors() {
+        anchors = Array(repeating: .zero, count: ids.count)
+        for group in groupMembers {
+            let center = CGPoint(x: group.reduce(0) { $0 + positions[$1].x } / CGFloat(group.count), y: group.reduce(0) { $0 + positions[$1].y } / CGFloat(group.count))
+            for i in group { anchors[i] = center }
+        }
+    }
+
+    /// Pack disconnected components into distinct, non-overlapping areas instead of one cloud.
+    mutating func arrangeGroups() {
+        let groups = groupMembers.sorted { $0.count == $1.count ? $0[0] < $1[0] : $0.count > $1.count }
+        let boxes = groups.map { group -> CGRect in
+            let xs = group.map { positions[$0].x }, ys = group.map { positions[$0].y }
+            return CGRect(x: xs.min() ?? 0, y: ys.min() ?? 0, width: (xs.max() ?? 0) - (xs.min() ?? 0), height: (ys.max() ?? 0) - (ys.min() ?? 0))
+        }
+        let area = boxes.reduce(CGFloat(0)) { $0 + max(150, $1.width + 110) * max(130, $1.height + 110) }
+        let rowWidth = max(boxes.map { $0.width + 110 }.max() ?? 150, sqrt(area) * 0.85)
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
+        for (group, box) in zip(groups, boxes) {
+            let width = max(150, box.width + 110), height = max(130, box.height + 110)
+            if x > 0, x + width > rowWidth { x = 0; y += rowHeight; rowHeight = 0 }
+            for i in group { positions[i].x += x + width / 2 - box.midX; positions[i].y += y + height / 2 - box.midY; velocities[i] = .zero }
+            x += width; rowHeight = max(rowHeight, height)
+        }
+        updateAnchors()
     }
 
     mutating func move(id: String, to point: CGPoint) {
@@ -144,8 +245,8 @@ struct RelationshipGraphLayout {
         }
         var energy: CGFloat = 0
         for i in 0..<n where ids[i] != pinned {
-            velocities[i].x = (velocities[i].x + force[i].x - positions[i].x * 0.0009) * 0.78
-            velocities[i].y = (velocities[i].y + force[i].y - positions[i].y * 0.0009) * 0.78
+            velocities[i].x = (velocities[i].x + force[i].x - (positions[i].x - anchors[i].x) * 0.002) * 0.78
+            velocities[i].y = (velocities[i].y + force[i].y - (positions[i].y - anchors[i].y) * 0.002) * 0.78
             positions[i].x += max(-8, min(8, velocities[i].x))
             positions[i].y += max(-8, min(8, velocities[i].y))
             energy += abs(velocities[i].x) + abs(velocities[i].y)

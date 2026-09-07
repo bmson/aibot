@@ -25,6 +25,7 @@ export async function GET(request: Request): Promise<Response> {
   const snapshot = await getKnowledgeMapSnapshot(getDb(), {
     entityId: entityId ?? undefined,
     query: params.get('q') ?? '',
+    includeVisibleConnections: true,
   });
   if (entityId && snapshot.nodes.length === 0) {
     const { entity } = await getKnowledgeGraphNeighborhood(getDb(), { entityId, limit: 1 });

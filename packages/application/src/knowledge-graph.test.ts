@@ -240,6 +240,84 @@ describe('knowledge graph overview (integration)', () => {
 });
 
 describe('knowledge workspace map (integration)', () => {
+  it('fills older bridges between visible items while excluding rejected claims', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const initial = await getKnowledgeMapSnapshot(db, { entityId: hubId });
+    const ends = initial.nodes.filter((node) => node.id !== hubId).slice(0, 2);
+    if (ends.length !== 2) throw new Error('Missing fixture endpoints');
+    const records = await db
+      .insert(knowledgeGraphRelations)
+      .values([
+        {
+          agentId,
+          subjectEntityId: ends[0]!.id,
+          objectEntityId: ends[1]!.id,
+          predicate: 'relates_to',
+          sourceMemoryId,
+          sourceFingerprint: `${MARKER}-old-bridge`,
+          evidenceQuote: `${MARKER} recorded bridge`,
+          ordinal: 9990,
+          confidence: '0.9',
+          reviewStatus: 'confirmed',
+          createdAt: new Date('2000-01-01'),
+        },
+        {
+          agentId,
+          subjectEntityId: ends[1]!.id,
+          objectEntityId: ends[0]!.id,
+          predicate: 'relates_to',
+          sourceMemoryId,
+          sourceFingerprint: `${MARKER}-rejected-bridge`,
+          evidenceQuote: `${MARKER} rejected bridge`,
+          ordinal: 9991,
+          confidence: '0.9',
+          reviewStatus: 'rejected',
+          createdAt: new Date('2000-01-01'),
+        },
+      ])
+      .returning({ id: knowledgeGraphRelations.id });
+    const recent = await db
+      .insert(knowledgeGraphRelations)
+      .values(
+        Array.from({ length: 500 }, (_, index) => ({
+          agentId,
+          subjectEntityId: hubId,
+          objectEntityId: ends[index % 2]!.id,
+          predicate: 'relates_to',
+          sourceMemoryId,
+          evidenceQuote: `${MARKER} hub relates to everything`,
+          sourceFingerprint: `${MARKER}-recent-${index}`,
+          ordinal: 10000 + index,
+          confidence: '0.9',
+          reviewStatus: 'confirmed' as const,
+        })),
+      )
+      .returning({ id: knowledgeGraphRelations.id });
+    try {
+      const basic = await getKnowledgeMapSnapshot(db, { entityId: hubId });
+      expect(basic.edges).toHaveLength(500);
+      expect(basic.truncated).toBe(true);
+      expect(basic.edges.some((edge) => edge.id === records[0]!.id)).toBe(false);
+      const complete = await getKnowledgeMapSnapshot(db, {
+        entityId: hubId,
+        includeVisibleConnections: true,
+      });
+      expect(new Set(complete.nodes.map((node) => node.id))).toEqual(
+        new Set(basic.nodes.map((node) => node.id)),
+      );
+      expect(complete.edges.some((edge) => edge.id === records[0]!.id)).toBe(true);
+      expect(complete.edges.some((edge) => edge.id === records[1]!.id)).toBe(false);
+      expect(new Set(complete.edges.map((edge) => edge.id)).size).toBe(complete.edges.length);
+    } finally {
+      await db.delete(knowledgeGraphRelations).where(
+        inArray(
+          knowledgeGraphRelations.id,
+          [...records, ...recent].map((row) => row.id),
+        ),
+      );
+    }
+  });
+
   it('uses owner display names for map search and directed presentation', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const name = `${MARKER} renamed hub`;

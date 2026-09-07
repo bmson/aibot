@@ -2450,6 +2450,45 @@ extension APIModelsTests {
         XCTAssertEqual(layout.positions[layout.ids.firstIndex(of: "node-0")!], CGPoint(x: 30, y: 40))
     }
 
+    func testGraphGroupsAndConnectionPromptsUseOnlyRecordedTopology() throws {
+        let nodes = (0..<6).map { RelationshipGraphNode(id: "n\($0)", label: $0 < 2 ? "Alex" : "Item \($0)", kind: "person") }
+        let edges = [RelationshipGraphFixture.edge("a", from: "n0", to: "n2"), RelationshipGraphFixture.edge("b", from: "n1", to: "n2"), RelationshipGraphFixture.edge("c", from: "n3", to: "n4")]
+        let graph = RelationshipGraphSnapshot(nodes: nodes, edges: edges, totalEdges: 3, truncated: true, focusId: nil)
+        XCTAssertEqual(graph.groups.map { $0.nodes.count }, [3, 2, 1])
+        XCTAssertEqual(graph.groups.last?.ids, ["n5"])
+        let candidates = graph.connectionCandidates(for: "n0")
+        XCTAssertEqual(candidates.first?.node.id, "n1", "Same names must remain distinct entities")
+        XCTAssertEqual(candidates.first?.reason, "Both connect to Item 2")
+        XCTAssertFalse(candidates.contains { ["n0", "n2"].contains($0.node.id) })
+        XCTAssertTrue(candidates.contains { $0.node.id == "n5" && $0.reason.contains("separate group") })
+        let bridged = graph.merging(.init(nodes: nodes, edges: edges + [RelationshipGraphFixture.edge("bridge", from: "n0", to: "n3")], totalEdges: 4, truncated: false, focusId: "n0"), around: "n0")
+        XCTAssertEqual(bridged.groups.map { $0.nodes.count }, [5, 1])
+        XCTAssertEqual(graph.showing(["n0", "n2"]).links.count, 1)
+    }
+
+    func testGraphPackingSeparatesGroupsAndRemainsStable() {
+        let nodes = (0..<12).map { RelationshipGraphNode(id: "n\($0)", label: "Item \($0)", kind: "person") }
+        let edges = [RelationshipGraphFixture.edge("a", from: "n0", to: "n1"), RelationshipGraphFixture.edge("b", from: "n2", to: "n3")]
+        let graph = RelationshipGraphSnapshot(nodes: nodes, edges: edges, totalEdges: 2, truncated: false, focusId: nil)
+        var layout = RelationshipGraphLayout(); layout.update(nodes: nodes, links: graph.links)
+        for _ in 0..<120 { layout.step() }
+        layout.arrangeGroups()
+        func boxes() -> [CGRect] {
+            let positions = Dictionary(uniqueKeysWithValues: zip(layout.ids, layout.positions))
+            return graph.groups.map { group in
+                let points = group.nodes.compactMap { positions[$0.id] }
+                let xs = points.map(\.x), ys = points.map(\.y)
+                return CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!).insetBy(dx: -20, dy: -20)
+            }
+        }
+        let initial = boxes()
+        for i in initial.indices { for j in initial.indices where j > i { XCTAssertFalse(initial[i].intersects(initial[j])) } }
+        for _ in 0..<100 { layout.step() }
+        let settled = boxes()
+        for i in settled.indices { for j in settled.indices where j > i { XCTAssertFalse(settled[i].intersects(settled[j])) } }
+        XCTAssertTrue(layout.positions.allSatisfy { $0.x.isFinite && $0.y.isFinite })
+    }
+
     func testGraphViewportZoomKeepsPinchAnchorAndClampsScale() {
         var viewport = GraphViewport(scale: 1.2, offset: CGPoint(x: 30, y: -22))
         let size = CGSize(width: 390, height: 640), anchor = CGPoint(x: 63, y: 97)

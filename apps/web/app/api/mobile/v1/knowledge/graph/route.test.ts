@@ -53,7 +53,10 @@ describe('native relationship graph', () => {
     const response = await GET(
       new Request(`https://example.com/api/mobile/v1/knowledge/graph?person=${person}`),
     );
-    expect(mocks.snapshot).toHaveBeenCalledWith({}, { entityId: entity, query: '' });
+    expect(mocks.snapshot).toHaveBeenCalledWith(
+      {},
+      { entityId: entity, query: '', includeVisibleConnections: true },
+    );
     expect(await response.json()).toMatchObject({
       focusId: entity,
       totalEdges: 520,
