@@ -17,6 +17,10 @@ import {
   type KnowledgeGraphReviewStatus,
 } from './knowledge-graph.js';
 import { correctMemory, type EmbeddingPort, forgetMemory } from './profile/commands.js';
+import {
+  presentKnowledgeGraphRelation,
+  type RelationshipPresentation,
+} from './relationship-presentation.js';
 
 export type KnowledgeCleanupKind =
   | 'quarantined'
@@ -67,6 +71,10 @@ export interface KnowledgeMapEdge {
   reviewStatus: KnowledgeGraphReviewStatus;
   sourceMemoryId: string;
   sourceContent: string;
+  evidenceQuote: string | null;
+  presentation: RelationshipPresentation;
+  validFrom: string | null;
+  validUntil: string | null;
 }
 
 export interface KnowledgeMapComponent {
@@ -314,6 +322,7 @@ export async function getKnowledgeMapSnapshot(
     predicates?: string[];
     review?: 'all' | KnowledgeGraphReviewStatus;
     sourceMemoryId?: string;
+    entityId?: string;
   } = {},
 ): Promise<KnowledgeMapSnapshot> {
   const agent = await getAgent(db);
@@ -324,9 +333,19 @@ export async function getKnowledgeMapSnapshot(
   const predicates = (input.predicates ?? []).filter(Boolean).slice(0, 20);
   const review = input.review ?? 'all';
   const sourceMemoryId = input.sourceMemoryId ?? '';
+  const subjectLabel = sql<string>`coalesce(nullif(${subject.preferredLabel}, ''), ${subject.label})`;
+  const objectLabel = sql<string>`coalesce(nullif(${object.preferredLabel}, ''), ${object.label})`;
   const filters = and(
     activeKnowledgeGraphWhere(agent.id),
-    query ? or(ilike(subject.label, `%${query}%`), ilike(object.label, `%${query}%`)) : undefined,
+    query
+      ? or(
+          ilike(subjectLabel, `%${query}%`),
+          ilike(objectLabel, `%${query}%`),
+          ilike(subject.label, `%${query}%`),
+          ilike(object.label, `%${query}%`),
+        )
+      : undefined,
+    input.entityId ? or(eq(subject.id, input.entityId), eq(object.id, input.entityId)) : undefined,
     kind ? or(eq(subject.kind, kind), eq(object.kind, kind)) : undefined,
     predicates.length > 0 ? inArray(knowledgeGraphRelations.predicate, predicates) : undefined,
     review !== 'all' ? eq(knowledgeGraphRelations.reviewStatus, review) : undefined,
@@ -339,13 +358,16 @@ export async function getKnowledgeMapSnapshot(
         predicate: knowledgeGraphRelations.predicate,
         reviewStatus: knowledgeGraphRelations.reviewStatus,
         subjectId: subject.id,
-        subjectLabel: subject.label,
+        subjectLabel,
         subjectKind: subject.kind,
         objectId: object.id,
-        objectLabel: object.label,
+        objectLabel,
         objectKind: object.kind,
         sourceMemoryId: memories.id,
         sourceContent: memories.content,
+        evidenceQuote: knowledgeGraphRelations.evidenceQuote,
+        validFrom: knowledgeGraphRelations.validFrom,
+        validUntil: knowledgeGraphRelations.validUntil,
       })
       .from(knowledgeGraphRelations)
       .innerJoin(subject, eq(subject.id, knowledgeGraphRelations.subjectEntityId))
@@ -389,6 +411,10 @@ export async function getKnowledgeMapSnapshot(
       reviewStatus: row.reviewStatus as KnowledgeGraphReviewStatus,
       sourceMemoryId: row.sourceMemoryId,
       sourceContent: row.sourceContent,
+      evidenceQuote: row.evidenceQuote,
+      presentation: presentKnowledgeGraphRelation(row),
+      validFrom: row.validFrom,
+      validUntil: row.validUntil,
     });
   }
   const adjacency = new Map<string, Set<string>>();

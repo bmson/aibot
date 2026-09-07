@@ -16,26 +16,36 @@ struct KnowledgeView: View {
     @State private var editingItem = false
     @State private var pendingRelationID: String?
     @State private var forgettingImpact: KnowledgeSourceImpact?
+    @State private var selectionHistory: [KnowledgeEntity] = []
+    @State private var selectedID: String?
+    @State private var loadID = UUID()
+    @State private var loading = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Picker("Knowledge view", selection: $showingCleanup) {
-                    Text("Connections").tag(false)
-                    Text("Cleanup").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .onChange(of: showingCleanup) { _, _ in Task { await refresh() } }
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Color.clear.frame(height: 0).id("knowledge-top")
+                    Picker("Knowledge view", selection: $showingCleanup) {
+                        Text("Connections").tag(false)
+                        Text("Cleanup").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: showingCleanup) { _, _ in Task { await refresh() } }
 
-                if showingCleanup {
-                    cleanupContent
-                } else {
-                    relationshipsContent
+                    if showingCleanup {
+                        cleanupContent
+                    } else {
+                        relationshipsContent
+                    }
                 }
+                .padding(16)
+                .padding(.bottom, 28)
+                .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
             }
-            .padding(16)
-            .padding(.bottom, 28)
-            .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
+            .onChange(of: overview?.selected?.id) { _, _ in
+                proxy.scrollTo("knowledge-top", anchor: .top)
+            }
         }
         .navigationTitle("Knowledge")
         .assistantSubmenuChrome()
@@ -53,7 +63,9 @@ struct KnowledgeView: View {
             if !showingCleanup, overview?.selected != nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button("Add connection", systemImage: "plus") { showingConnectionEditor = true }
+                        Button("Add connection", systemImage: "plus") {
+                            showingConnectionEditor = true
+                        }
                         Button("Edit item", systemImage: "pencil") { editingItem = true }
                     } label: {
                         Label("Knowledge actions", systemImage: "ellipsis.circle")
@@ -66,7 +78,9 @@ struct KnowledgeView: View {
         .sheet(isPresented: $showingConnectionEditor) {
             if let selected = overview?.selected {
                 NavigationStack {
-                    KnowledgeConnectionEditor(selected: selected, candidates: overview?.entities ?? []) {
+                    KnowledgeConnectionEditor(
+                        selected: selected, candidates: overview?.entities ?? []
+                    ) {
                         await refresh()
                     }
                 }
@@ -84,7 +98,12 @@ struct KnowledgeView: View {
         .sheet(isPresented: $editingItem) {
             if let selected = overview?.selected {
                 NavigationStack {
-                    KnowledgeItemEditor(item: selected, duplicates: overview?.duplicates ?? []) { await refresh() }
+                    KnowledgeItemEditor(item: selected, duplicates: overview?.duplicates ?? []) {
+                        survivingID in
+                        selectedID = survivingID
+                        selectionHistory.removeAll { $0.id == selected.id }
+                        await refresh()
+                    }
                 }
             }
         }
@@ -116,22 +135,37 @@ struct KnowledgeView: View {
     private var isLandscape: Bool { verticalSizeClass == .compact }
 
     private func forgetImpactMessage(_ impact: KnowledgeSourceImpact) -> String {
-        let retired = impact.retiredProjections > 0
+        let retired =
+            impact.retiredProjections > 0
             ? " It also clears \(impact.retiredProjections) retired derived projections."
             : ""
-        return "This removes \(impact.activeConnections) active connections and \(impact.orphanedItems.count) items that would no longer be connected.\(retired) The source is tombstoned so it is not learned again verbatim."
+        return
+            "This removes \(impact.activeConnections) active connections and \(impact.orphanedItems.count) items that would no longer be connected.\(retired) The source is tombstoned so it is not learned again verbatim."
     }
 
     @ViewBuilder
     private var relationshipsContent: some View {
         if let overview {
             knowledgeSummary(overview)
+            if let previous = selectionHistory.last {
+                Button("Back to \(previous.displayLabel)", systemImage: "chevron.left") {
+                    Task { await open(previous, goingBack: true) }
+                }
+                .disabled(loading)
+                .frame(minHeight: 44)
+            }
             if let selected = overview.selected {
                 selectedItem(selected, overview: overview)
             }
             itemBrowser(overview)
         } else {
-            ProgressView().frame(maxWidth: .infinity, minHeight: 220)
+            if loading {
+                ProgressView().frame(maxWidth: .infinity, minHeight: 220)
+            } else {
+                AssistantEmptyState(
+                    "Knowledge is unavailable", systemImage: "arrow.clockwise",
+                    description: "Pull down to try loading your connections again.")
+            }
         }
     }
 
@@ -139,9 +173,11 @@ struct KnowledgeView: View {
     private var cleanupContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Knowledge cleanup").font(.title3.weight(.semibold))
-            Text("Suggestions never remove saved knowledge until you confirm. Disconnected graph items are derived and safe to clear.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            Text(
+                "Suggestions never remove saved knowledge until you confirm. Disconnected graph items are derived and safe to clear."
+            )
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
             if let cleanup, cleanup.findings.isEmpty {
                 AssistantEmptyState("Nothing needs cleanup", systemImage: "checkmark.seal")
             } else if let cleanup {
@@ -168,7 +204,9 @@ struct KnowledgeView: View {
                     Button("Retry", systemImage: "arrow.clockwise") {
                         resolveCleanup(action: "retry", finding: finding)
                     }.buttonStyle(.bordered)
-                } else if finding.kind == "unreviewed_connection", let relationId = finding.relationId {
+                } else if finding.kind == "unreviewed_connection",
+                    let relationId = finding.relationId
+                {
                     Button("Confirm connection", systemImage: "checkmark") {
                         pendingRelationID = relationId
                         Task {
@@ -181,7 +219,8 @@ struct KnowledgeView: View {
                     Button("Approve", systemImage: "checkmark") {
                         resolveCleanup(action: "approve", finding: finding)
                     }.buttonStyle(.borderedProminent)
-                } else if ["expired", "superseded"].contains(finding.kind), finding.memoryId != nil {
+                } else if ["expired", "superseded"].contains(finding.kind), finding.memoryId != nil
+                {
                     Button("Keep as current", systemImage: "checkmark.shield") {
                         resolveCleanup(action: "keep", finding: finding)
                     }.buttonStyle(.bordered)
@@ -199,7 +238,9 @@ struct KnowledgeView: View {
     private func knowledgeSummary(_ overview: KnowledgeOverview) -> some View {
         HStack(spacing: 12) {
             summaryCount("Items", value: overview.totalEntities, icon: "circle.hexagongrid")
-            summaryCount("Connections", value: overview.totalRelations, icon: "point.3.connected.trianglepath.dotted")
+            summaryCount(
+                "Connections", value: overview.totalRelations,
+                icon: "point.3.connected.trianglepath.dotted")
             summaryCount("Review", value: overview.unreviewedRelations, icon: "checklist")
         }
     }
@@ -215,28 +256,44 @@ struct KnowledgeView: View {
     }
 
     private func selectedItem(_ item: KnowledgeEntity, overview: KnowledgeOverview) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let connections = KnowledgeConnection.group(overview.relations)
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(item.kind.sentenceCaseIdentifier).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    Text(item.displayLabel).font(.title3.weight(.semibold))
-                    Text("\(overview.selectedActiveRelationTotal) active connections")
-                        .font(.subheadline)
+                    Text(item.kind.sentenceCaseIdentifier).font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
+                    Text(item.displayLabel).font(.title3.weight(.semibold))
+                    Text(
+                        "\(connections.count) \(connections.count == 1 ? "connection" : "connections") shown"
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Add", systemImage: "plus") { showingConnectionEditor = true }
                     .buttonStyle(.borderedProminent)
             }
             if overview.relations.isEmpty {
-                AssistantEmptyState("No active connections", systemImage: "point.3.connected.trianglepath.dotted", description: "Add a connection with a short source note.")
+                AssistantEmptyState(
+                    "No active connections", systemImage: "point.3.connected.trianglepath.dotted",
+                    description: "Add a connection with a short source note.")
             } else {
-                ForEach(overview.relations.filter { $0.reviewStatus != "rejected" }) { relation in
-                    relationCard(relation, showCorrection: true)
+                ForEach(connections) { connection in
+                    connectionCard(connection)
+                }
+                if overview.selectedActiveRelationTotal
+                    > overview.relations.filter({
+                        $0.inRecall != false && $0.reviewStatus != "rejected"
+                    }).count
+                {
+                    Text(
+                        "Showing a limited set of connections. Use the web knowledge workspace to review the full set."
+                    )
+                    .font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
-        .assistantPanel(in: colorScheme)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func itemBrowser(_ overview: KnowledgeOverview) -> some View {
@@ -252,14 +309,18 @@ struct KnowledgeView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.displayLabel).foregroundStyle(.primary)
-                            Text(item.kind.sentenceCaseIdentifier).font(.caption).foregroundStyle(.secondary)
+                            Text(item.kind.sentenceCaseIdentifier).font(.caption).foregroundStyle(
+                                .secondary)
                         }
                         Spacer()
-                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(
+                            .secondary)
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .disabled(loading)
+                .frame(minHeight: 44)
                 .padding(.vertical, 6)
                 Divider()
             }
@@ -267,8 +328,9 @@ struct KnowledgeView: View {
         .assistantPanel(in: colorScheme)
     }
 
-    private func relationCard(_ relation: KnowledgeRelation, showCorrection: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private func connectionCard(_ connection: KnowledgeConnection) -> some View {
+        let relation = connection.relation
+        return VStack(alignment: .leading, spacing: 8) {
             Text(relation.presentation.label.sentenceCaseIdentifier)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
@@ -276,51 +338,112 @@ struct KnowledgeView: View {
                 .font(.subheadline.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                Text("\(Int((relation.confidence * 100).rounded()))% confidence")
-                if relation.needsReview { Text("Needs review").foregroundStyle(AssistantTheme.warningInk(for: colorScheme)) }
-                if relation.inRecall == false { Text("Not in recall").foregroundStyle(.secondary) }
+                if !connection.confirmed {
+                    Label("Needs your review", systemImage: "questionmark.circle")
+                        .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
+                } else {
+                    Label("Confirmed connection", systemImage: "checkmark.seal")
+                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                }
+                if connection.sources.allSatisfy({ $0.inRecall == false }) {
+                    Text("Not in recall").foregroundStyle(.secondary)
+                }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
-            DisclosureGroup("Source evidence") {
-                Text(relation.source.content)
-                    .font(.footnote)
-                    .padding(.top, 6)
+            if let selected = overview?.selected,
+                let other = relation.connectedEntity(to: selected.id)
+            {
+                Button(
+                    "Explore \(other.displayLabel)",
+                    systemImage: "point.3.connected.trianglepath.dotted"
+                ) {
+                    Task { await open(other) }
+                }
+                .font(.subheadline)
+                .frame(minHeight: 44)
+                .disabled(loading)
             }
-            AssistantFlowLayout(spacing: 8) {
-                if relation.needsReview {
-                    Button("Confirm", systemImage: "checkmark") { review(relation, approve: true) }
-                        .buttonStyle(.borderedProminent)
+            Divider()
+            DisclosureGroup("Supporting evidence (\(connection.sources.count))") {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(connection.sources) { source in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(
+                                source.needsReview
+                                    ? "Source connection not yet reviewed"
+                                    : "Reviewed source connection"
+                            )
+                            .font(.caption).foregroundStyle(.secondary)
+                            Text(source.source.content).font(.footnote)
+                            AssistantFlowLayout(spacing: 8) {
+                                if source.needsReview {
+                                    Button("Confirm", systemImage: "checkmark") {
+                                        review(source, approve: true)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
+                                Menu {
+                                    Button("Correct", systemImage: "pencil") { correcting = source }
+                                    Button(
+                                        "Mark inaccurate", systemImage: "xmark", role: .destructive
+                                    ) { review(source, approve: false) }
+                                } label: {
+                                    Label("Edit evidence", systemImage: "ellipsis")
+                                }.buttonStyle(.bordered)
+                            }
+                            .disabled(pendingRelationID != nil)
+                        }
+                    }
                 }
-                if relation.reviewStatus != "rejected" {
-                    Button("Mark inaccurate", systemImage: "xmark", role: .destructive) { review(relation, approve: false) }
-                        .buttonStyle(.bordered)
-                }
-                if showCorrection {
-                    Button("Correct", systemImage: "pencil") { correcting = relation }
-                        .buttonStyle(.bordered)
-                }
+                .padding(.top, 8)
             }
-            .disabled(pendingRelationID != nil)
+            .font(.subheadline)
         }
         .assistantCard(in: colorScheme)
     }
 
     private func refresh() async {
+        let request = UUID()
+        loadID = request
+        loading = true
+        defer { if loadID == request { loading = false } }
         if showingCleanup {
-            cleanup = await model.knowledgeCleanup()
+            let result = await model.knowledgeCleanup()
+            if loadID == request { cleanup = result }
         } else {
-            overview = await model.knowledge(query: search)
+            let result: KnowledgeOverview?
+            if let selectedID {
+                result = await model.knowledgeItem(id: selectedID)
+            } else {
+                result = await model.knowledge(query: search)
+            }
+            if loadID == request, let result { overview = result }
         }
     }
 
     private func loadSearch() async {
         showingCleanup = false
-        overview = await model.knowledge(query: search)
+        selectedID = nil
+        selectionHistory = []
+        await refresh()
     }
 
-    private func open(_ item: KnowledgeEntity) async {
-        overview = await model.knowledgeItem(id: item.id)
+    private func open(_ item: KnowledgeEntity, goingBack: Bool = false) async {
+        let request = UUID()
+        loadID = request
+        loading = true
+        defer { if loadID == request { loading = false } }
+        guard let result = await model.knowledgeItem(id: item.id), loadID == request,
+            result.selected?.id == item.id
+        else { return }
+        if goingBack {
+            _ = selectionHistory.popLast()
+        } else if let previous = overview?.selected, previous.id != item.id {
+            selectionHistory.append(previous)
+        }
+        selectedID = item.id
+        overview = result
     }
 
     private func review(_ relation: KnowledgeRelation, approve: Bool) {
@@ -373,7 +496,10 @@ private struct KnowledgeConnectionEditor: View {
         _objectIdLabel = State(initialValue: relationToCorrect?.object.displayLabel ?? "")
         _objectIdKind = State(initialValue: relationToCorrect?.object.kind ?? "person")
         let initialKind = relationToCorrect?.object.kind ?? "person"
-        _predicate = State(initialValue: relationToCorrect?.predicate ?? Self.relationshipOptions(subjectKind: selected.kind, objectKind: initialKind).first?.id ?? "__custom")
+        _predicate = State(
+            initialValue: relationToCorrect?.predicate ?? Self.relationshipOptions(
+                subjectKind: selected.kind, objectKind: initialKind
+            ).first?.id ?? "__custom")
     }
 
     var body: some View {
@@ -381,13 +507,16 @@ private struct KnowledgeConnectionEditor: View {
             Section {
                 Text(relationToCorrect == nil ? "Add connection" : "Correct connection")
                     .font(.headline)
-                Text("The note is saved as evidence, so this never becomes an unsupported graph-only fact.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "The note is saved as evidence, so this never becomes an unsupported graph-only fact."
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             }
             Section("First item") {
                 Text(selected.displayLabel)
-                Text(selected.kind.sentenceCaseIdentifier).font(.caption).foregroundStyle(.secondary)
+                Text(selected.kind.sentenceCaseIdentifier).font(.caption).foregroundStyle(
+                    .secondary)
             }
             Section("Connected item") {
                 TextField("Name", text: $objectLabel)
@@ -395,11 +524,15 @@ private struct KnowledgeConnectionEditor: View {
                         if value != objectIdLabel { objectId = nil }
                     }
                 Picker("Type", selection: $objectKind) {
-                    ForEach(["person", "organization", "project", "place", "event", "date", "topic"], id: \.self) { Text($0.sentenceCaseIdentifier).tag($0) }
+                    ForEach(
+                        ["person", "organization", "project", "place", "event", "date", "topic"],
+                        id: \.self
+                    ) { Text($0.sentenceCaseIdentifier).tag($0) }
                 }
                 .onChange(of: objectKind) { _, value in
                     if value != objectIdKind { objectId = nil }
-                    let allowed = Self.relationshipOptions(subjectKind: selected.kind, objectKind: value)
+                    let allowed = Self.relationshipOptions(
+                        subjectKind: selected.kind, objectKind: value)
                     if predicate != "__custom" && !allowed.contains(where: { $0.id == predicate }) {
                         predicate = allowed.first?.id ?? "__custom"
                     }
@@ -441,7 +574,13 @@ private struct KnowledgeConnectionEditor: View {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) {
                 Button(saving ? "Saving…" : "Save") { save() }
-                    .disabled(saving || objectLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (predicate == "__custom" && customPredicate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) || note.trimmingCharacters(in: .whitespacesAndNewlines).count < 3)
+                    .disabled(
+                        saving
+                            || objectLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || (predicate == "__custom"
+                                && customPredicate.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    .isEmpty)
+                            || note.trimmingCharacters(in: .whitespacesAndNewlines).count < 3)
             }
         }
     }
@@ -459,11 +598,13 @@ private struct KnowledgeConnectionEditor: View {
             note: note
         )
         Task {
-            let saved = if let relationToCorrect {
-                await model.correctKnowledgeRelation(id: relationToCorrect.id, mutation: mutation)
-            } else {
-                await model.createKnowledgeConnection(mutation)
-            }
+            let saved =
+                if let relationToCorrect {
+                    await model.correctKnowledgeRelation(
+                        id: relationToCorrect.id, mutation: mutation)
+                } else {
+                    await model.createKnowledgeConnection(mutation)
+                }
             saving = false
             if saved {
                 await didSave()
@@ -480,7 +621,9 @@ private struct KnowledgeConnectionEditor: View {
         Self.relationshipOptions(subjectKind: selected.kind, objectKind: objectKind)
     }
 
-    private static func relationshipOptions(subjectKind: String, objectKind: String) -> [(id: String, label: String)] {
+    private static func relationshipOptions(subjectKind: String, objectKind: String) -> [(
+        id: String, label: String
+    )] {
         switch (subjectKind, objectKind) {
         case ("person", "person"):
             return [
@@ -492,11 +635,17 @@ private struct KnowledgeConnectionEditor: View {
                 ("met", "met"),
             ]
         case ("person", "organization"):
-            return [("works_at", "works at"), ("worked_at", "worked at"), ("studies_at", "studies at"), ("studied_at", "studied at")]
+            return [
+                ("works_at", "works at"), ("worked_at", "worked at"), ("studies_at", "studies at"),
+                ("studied_at", "studied at"),
+            ]
         case ("organization", "person"):
             return [("employs", "employs")]
         case ("person", "place"):
-            return [("lives_in", "lives in"), ("born_in", "was born in"), ("grew_up_in", "grew up in"), ("met_at", "met at")]
+            return [
+                ("lives_in", "lives in"), ("born_in", "was born in"), ("grew_up_in", "grew up in"),
+                ("met_at", "met at"),
+            ]
         case ("person", "event"):
             return [("attended", "attended"), ("attends", "attends"), ("met_during", "met during")]
         case ("event", "person"):
@@ -504,9 +653,13 @@ private struct KnowledgeConnectionEditor: View {
         case ("event", "place"):
             return [("happens_at", "happens at")]
         case ("event", "date"), ("project", "date"):
-            return [("happens_on", "happens on"), ("starts_on", "starts on"), ("ends_on", "ends on")]
+            return [
+                ("happens_on", "happens on"), ("starts_on", "starts on"), ("ends_on", "ends on"),
+            ]
         case ("person", "date"):
-            return [("born_on", "was born on"), ("married_on", "married on"), ("died_on", "died on")]
+            return [
+                ("born_on", "was born on"), ("married_on", "married on"), ("died_on", "died on"),
+            ]
         default:
             return []
         }
@@ -523,7 +676,9 @@ private struct KnowledgeConnectionEditor: View {
         case "parent_of": return "\(selected.displayLabel) is \(object)’s parent."
         case "lives_in": return "\(selected.displayLabel) lives in \(object)."
         case "attended": return "\(selected.displayLabel) attended \(object)."
-        default: return "\(selected.displayLabel) \(storedPredicate.replacingOccurrences(of: "_", with: " ")) \(object)."
+        default:
+            return
+                "\(selected.displayLabel) \(storedPredicate.replacingOccurrences(of: "_", with: " ")) \(object)."
         }
     }
 }
@@ -533,13 +688,16 @@ private struct KnowledgeItemEditor: View {
     @Environment(\.dismiss) private var dismiss
     let item: KnowledgeEntity
     let duplicates: [KnowledgeDuplicate]
-    let didSave: () async -> Void
+    let didSave: (String) async -> Void
     @State private var label: String
     @State private var kind: String
     @State private var mergeTargetId = ""
     @State private var saving = false
 
-    init(item: KnowledgeEntity, duplicates: [KnowledgeDuplicate], didSave: @escaping () async -> Void) {
+    init(
+        item: KnowledgeEntity, duplicates: [KnowledgeDuplicate],
+        didSave: @escaping (String) async -> Void
+    ) {
         self.item = item
         self.duplicates = duplicates
         self.didSave = didSave
@@ -552,7 +710,10 @@ private struct KnowledgeItemEditor: View {
             Section("Display name") { TextField("Name", text: $label) }
             Section("Type") {
                 Picker("Type", selection: $kind) {
-                    ForEach(["person", "organization", "project", "place", "event", "date", "topic"], id: \.self) { Text($0.sentenceCaseIdentifier).tag($0) }
+                    ForEach(
+                        ["person", "organization", "project", "place", "event", "date", "topic"],
+                        id: \.self
+                    ) { Text($0.sentenceCaseIdentifier).tag($0) }
                 }
             }
             if !duplicates.isEmpty {
@@ -560,12 +721,15 @@ private struct KnowledgeItemEditor: View {
                     Picker("Keep this item separate", selection: $mergeTargetId) {
                         Text("Keep separate").tag("")
                         ForEach(duplicates) { duplicate in
-                            Text(duplicate.label.replacingOccurrences(of: "_", with: " ")).tag(duplicate.targetId)
+                            Text(duplicate.label.replacingOccurrences(of: "_", with: " ")).tag(
+                                duplicate.targetId)
                         }
                     }
-                    Text("Merging keeps its source-backed connections and uses the selected item as the surviving record.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    Text(
+                        "Merging keeps its source-backed connections and uses the selected item as the surviving record."
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 }
             }
         }
@@ -585,13 +749,15 @@ private struct KnowledgeItemEditor: View {
             if label == item.displayLabel {
                 renamed = true
             } else {
-                renamed = await model.updateKnowledgeItem(id: item.id, action: "rename", value: label)
+                renamed = await model.updateKnowledgeItem(
+                    id: item.id, action: "rename", value: label)
             }
             let retyped: Bool
             if kind == item.kind {
                 retyped = true
             } else {
-                retyped = await model.updateKnowledgeItem(id: item.id, action: "retype", value: kind)
+                retyped = await model.updateKnowledgeItem(
+                    id: item.id, action: "retype", value: kind)
             }
             let merged: Bool
             if mergeTargetId.isEmpty {
@@ -601,7 +767,7 @@ private struct KnowledgeItemEditor: View {
             }
             saving = false
             if renamed && retyped && merged {
-                await didSave()
+                await didSave(mergeTargetId.isEmpty ? item.id : mergeTargetId)
                 dismiss()
             }
         }

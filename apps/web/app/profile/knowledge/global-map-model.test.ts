@@ -1,6 +1,12 @@
 import type { KnowledgeMapSnapshot } from '@assistant/application';
 import { describe, expect, it } from 'vitest';
-import { GLOBAL_MAP_HEIGHT, GLOBAL_MAP_WIDTH, layoutKnowledgeMap } from './global-map-model';
+import {
+  GLOBAL_MAP_HEIGHT,
+  GLOBAL_MAP_WIDTH,
+  knowledgeConnections,
+  layoutKnowledgeMap,
+  mapPanDelta,
+} from './global-map-model';
 
 const snapshot: KnowledgeMapSnapshot = {
   nodes: [
@@ -16,6 +22,14 @@ const snapshot: KnowledgeMapSnapshot = {
       reviewStatus: 'confirmed',
       sourceMemoryId: 'memory',
       sourceContent: 'Ada works on the Analytical Engine.',
+      evidenceQuote: 'Ada works on the Analytical Engine.',
+      presentation: {
+        sentence: 'Ada works on the Analytical Engine.',
+        label: 'Works on',
+        accessibleLabel: 'Ada works on the Analytical Engine.',
+      },
+      validFrom: null,
+      validUntil: null,
     },
   ],
   components: [{ id: 0, nodes: 2, edges: 1, label: 'Ada' }],
@@ -55,5 +69,50 @@ describe('global knowledge map layout', () => {
     const laid = layoutKnowledgeMap(snapshot);
     const [a, b] = laid;
     expect(Math.hypot((a?.x ?? 0) - (b?.x ?? 0), (a?.y ?? 0) - (b?.y ?? 0))).toBeGreaterThan(20);
+  });
+});
+
+describe('knowledge connections', () => {
+  it('groups supporting sources without reversing incoming claims', () => {
+    const edge = snapshot.edges[0];
+    if (!edge) throw new Error('Missing fixture edge');
+    const graph = {
+      ...snapshot,
+      edges: [edge, { ...edge, id: 'e2', sourceMemoryId: 'another' }, { ...edge, id: 'e3' }],
+    };
+    const groups = knowledgeConnections(graph, 'b');
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.sources).toHaveLength(2);
+    expect(groups[0]?.edge.presentation.sentence).toBe('Ada works on the Analytical Engine.');
+  });
+
+  it('keeps different directions and time spans separate', () => {
+    const edge = snapshot.edges[0];
+    if (!edge) throw new Error('Missing fixture edge');
+    expect(
+      knowledgeConnections(
+        {
+          ...snapshot,
+          edges: [
+            edge,
+            { ...edge, id: 'reverse', subjectId: 'b', objectId: 'a' },
+            { ...edge, id: 'past', validUntil: '2020' },
+          ],
+        },
+        'a',
+      ),
+    ).toHaveLength(3);
+  });
+
+  it('does not upgrade an unreviewed connection to confirmed', () => {
+    const original = snapshot.edges[0];
+    if (!original) throw new Error('Missing fixture edge');
+    const edge = { ...original, reviewStatus: 'unreviewed' as const };
+    expect(knowledgeConnections({ ...snapshot, edges: [edge] }, 'a')[0]?.confirmed).toBe(false);
+  });
+
+  it('scales drag distances to SVG units at responsive widths', () => {
+    expect(mapPanDelta(100, 50, 500)).toEqual({ x: 200, y: 100 });
+    expect(mapPanDelta(100, 50, 1000)).toEqual({ x: 100, y: 50 });
   });
 });

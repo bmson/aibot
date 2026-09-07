@@ -4,6 +4,7 @@ import {
   type Db,
   knowledgeGraphEntities,
   knowledgeGraphRelations,
+  knowledgeGraphSources,
   memories,
   suggestions,
 } from '@assistant/db';
@@ -11,6 +12,7 @@ import { eq, inArray, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import { findGraphGaps, markGapAsked, nextUnaskedGap } from './graph-gaps.js';
+import { GRAPH_EXTRACTION_VERSION } from './knowledge-graph.js';
 
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://assistant@localhost:5432/assistant';
 const MARKER = `xtest-gaps-${Date.now()}`;
@@ -65,6 +67,7 @@ async function addEntity(
       ordinal: index,
       confidence: opts.confidence ?? '0.9',
       reviewStatus: opts.reviewStatus ?? 'unreviewed',
+      evidenceQuote: `${MARKER} source`,
     });
   }
   return id;
@@ -87,9 +90,16 @@ beforeAll(async () => {
       kind: 'fact',
       content: `${MARKER} source`,
       contentHash: MARKER,
+      embedding: Array.from({ length: 1536 }, (_, index) => (index === 0 ? 1 : 0)),
     })
     .returning({ id: memories.id });
   memoryId = (memory as NonNullable<typeof memory>).id;
+  await db.insert(knowledgeGraphSources).values({
+    memoryId,
+    contentHash: MARKER,
+    status: 'ready',
+    extractionVersion: GRAPH_EXTRACTION_VERSION,
+  });
 });
 
 afterAll(async () => {
@@ -149,6 +159,41 @@ describe('findGraphGaps', () => {
     });
     const gaps = await findGraphGaps(db, agentId);
     expect(gaps.some((gap) => gap.kind === 'unreviewed-relation')).toBe(true);
+    const question = gaps.find((gap) => gap.kind === 'unreviewed-relation')?.question;
+    expect(question).toContain('object');
+    expect(question).not.toContain('something');
+  });
+
+  it('does not build questions on rejected connections', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const id = await addEntity('Rejected', 'person', ['met', 'likes', 'works_at'], {
+      reviewStatus: 'rejected',
+    });
+    expect((await findGraphGaps(db, agentId)).some((gap) => gap.key.includes(id))).toBe(false);
+  });
+
+  it('does not build questions on quarantined or outdated sources', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    try {
+      await db.update(memories).set({ quarantined: true }).where(eq(memories.id, memoryId));
+      expect((await findGraphGaps(db, agentId)).some((gap) => gap.question.includes(MARKER))).toBe(
+        false,
+      );
+      await db.update(memories).set({ quarantined: false }).where(eq(memories.id, memoryId));
+      await db
+        .update(knowledgeGraphSources)
+        .set({ contentHash: 'outdated' })
+        .where(eq(knowledgeGraphSources.memoryId, memoryId));
+      expect((await findGraphGaps(db, agentId)).some((gap) => gap.question.includes(MARKER))).toBe(
+        false,
+      );
+    } finally {
+      await db.update(memories).set({ quarantined: false }).where(eq(memories.id, memoryId));
+      await db
+        .update(knowledgeGraphSources)
+        .set({ contentHash: MARKER })
+        .where(eq(knowledgeGraphSources.memoryId, memoryId));
+    }
   });
 
   it('ranks the best-connected gaps first', async (ctx) => {

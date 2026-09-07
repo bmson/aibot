@@ -307,6 +307,20 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(overview.selected?.displayLabel, "Baldvin")
         XCTAssertEqual(overview.relations.first?.object.displayLabel, "Freyja Ruth")
         XCTAssertEqual(overview.relations.first?.presentation.sentence, "Freyja Ruth is Baldvin's daughter.")
+        let relation = try XCTUnwrap(overview.relations.first)
+        XCTAssertEqual(relation.connectedEntity(to: "baldvin")?.id, "freyja")
+        XCTAssertEqual(relation.connectedEntity(to: "freyja")?.id, "baldvin")
+        XCTAssertNil(relation.connectedEntity(to: "unrelated"))
+        XCTAssertEqual(relation.predicate, "daughter_of", "Exploring must not reverse the underlying fact")
+        let duplicate = KnowledgeRelation(id: "edge-2", subject: relation.subject, predicate: relation.predicate,
+            object: relation.object, confidence: 0.9, reviewStatus: "confirmed", validFrom: nil, validUntil: nil,
+            inRecall: true, source: relation.source, presentation: relation.presentation)
+        let groups = KnowledgeConnection.group([relation, duplicate])
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups.first?.sources.count, 2)
+        XCTAssertEqual(groups.first?.confirmed, true)
+        XCTAssertEqual(KnowledgeConnection.group([relation]).first?.confirmed, false)
+        XCTAssertEqual(KnowledgeConnection.group([duplicate, relation]).first?.id, groups.first?.id)
     }
 
     func testMoodStaysDefaultRegardlessOfThemeCues() {

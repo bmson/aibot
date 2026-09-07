@@ -1,10 +1,19 @@
 import {
   type Db,
+  knowledgeGraphRelations as graphRelations,
   knowledgeGraphEntities,
-  knowledgeGraphRelations,
+  knowledgeGraphSources,
+  memories,
   suggestions,
 } from '@assistant/db';
 import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
+import { activeGraphWhere } from './graph-recall.js';
+
+const knowledgeGraphRelations = alias(graphRelations, 'relation');
+const memory = alias(memories, 'memory');
+const source = alias(knowledgeGraphSources, 'source');
+const object = alias(knowledgeGraphEntities, 'gap_object');
 
 /**
  * What the assistant does not know yet, and could just ask about.
@@ -97,11 +106,13 @@ export async function findGraphGaps(db: Db, agentId: string): Promise<GraphGap[]
       degree: count(knowledgeGraphRelations.id),
     })
     .from(knowledgeGraphEntities)
-    .leftJoin(
+    .innerJoin(
       knowledgeGraphRelations,
       eq(knowledgeGraphRelations.subjectEntityId, knowledgeGraphEntities.id),
     )
-    .where(eq(knowledgeGraphEntities.agentId, agentId))
+    .innerJoin(memory, eq(memory.id, knowledgeGraphRelations.sourceMemoryId))
+    .innerJoin(source, eq(source.memoryId, memory.id))
+    .where(and(eq(knowledgeGraphEntities.agentId, agentId), activeGraphWhere(agentId)))
     .groupBy(
       knowledgeGraphEntities.id,
       knowledgeGraphEntities.preferredLabel,
@@ -123,12 +134,17 @@ export async function findGraphGaps(db: Db, agentId: string): Promise<GraphGap[]
       reviewStatus: knowledgeGraphRelations.reviewStatus,
       id: knowledgeGraphRelations.id,
       confidence: knowledgeGraphRelations.confidence,
+      objectLabel: sql<string>`coalesce(nullif(${object.preferredLabel}, ''), ${object.label})`,
     })
     .from(knowledgeGraphRelations)
+    .innerJoin(memory, eq(memory.id, knowledgeGraphRelations.sourceMemoryId))
+    .innerJoin(source, eq(source.memoryId, memory.id))
+    .innerJoin(object, eq(object.id, knowledgeGraphRelations.objectEntityId))
     .where(
       and(
         eq(knowledgeGraphRelations.agentId, agentId),
         inArray(knowledgeGraphRelations.subjectEntityId, ids),
+        activeGraphWhere(agentId),
       ),
     );
 
@@ -149,7 +165,7 @@ export async function findGraphGaps(db: Db, agentId: string): Promise<GraphGap[]
       gaps.push({
         kind: 'missing-predicate',
         key: `gap:missing:${entity.id}:${expectation.predicate}`,
-        question: `I do not think you have ever told me ${expectation.ask.replace('{name}', entity.label)}. Would you like me to remember it?`,
+        question: `I do not have current knowledge of ${expectation.ask.replace('{name}', entity.label)}. Would you like me to remember it?`,
         // The better connected the entity, the more a gap in it costs.
         priority: 40 + Math.min(Number(entity.degree), 20),
       });
@@ -179,7 +195,7 @@ export async function findGraphGaps(db: Db, agentId: string): Promise<GraphGap[]
     gaps.push({
       kind: 'unreviewed-relation',
       key: `gap:unsure:${row.id}`,
-      question: `I recorded that ${label} ${row.predicate.replace(/_/g, ' ')} something, but I was not confident. Is that right?`,
+      question: `I recorded this connection: ${label} — ${row.predicate.replace(/_/g, ' ')} — ${row.objectLabel}. Is that right?`,
       priority: 20,
     });
   }

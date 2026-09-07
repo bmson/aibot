@@ -110,7 +110,8 @@ function asRows(value: unknown): RelationRow[] {
   return Array.isArray(value) ? (value as RelationRow[]) : [];
 }
 
-function activeGraphWhere(agentId: string) {
+/** Shared eligibility for queries using the memory, source, and relation SQL aliases. */
+export function activeGraphWhere(agentId: string) {
   return sql`
     memory.agent_id = ${agentId}
     AND memory.category = 'knowledge'

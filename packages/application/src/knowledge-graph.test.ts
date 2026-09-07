@@ -238,6 +238,47 @@ describe('knowledge graph overview (integration)', () => {
 });
 
 describe('knowledge workspace map (integration)', () => {
+  it('uses owner display names for map search and directed presentation', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const name = `${MARKER} renamed hub`;
+    await db
+      .update(knowledgeGraphEntities)
+      .set({ preferredLabel: name })
+      .where(eq(knowledgeGraphEntities.id, hubId));
+    try {
+      const snapshot = await getKnowledgeMapSnapshot(db, { query: name });
+      expect(snapshot.edges.length).toBeGreaterThan(0);
+      expect(snapshot.nodes.find((node) => node.id === hubId)?.label).toBe(name);
+      expect(snapshot.edges.every((edge) => edge.presentation.sentence.startsWith(name))).toBe(
+        true,
+      );
+      expect(
+        snapshot.edges.every(
+          (edge) => edge.evidenceQuote === `${MARKER} hub relates to everything`,
+        ),
+      ).toBe(true);
+      // Original names remain searchable after an owner override.
+      expect(
+        (await getKnowledgeMapSnapshot(db, { query: `${MARKER} hub` })).edges.length,
+      ).toBeGreaterThan(0);
+    } finally {
+      await db
+        .update(knowledgeGraphEntities)
+        .set({ preferredLabel: null })
+        .where(eq(knowledgeGraphEntities.id, hubId));
+    }
+  });
+
+  it('opens the requested neighborhood rather than the newest unrelated edges', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const snapshot = await getKnowledgeMapSnapshot(db, { sourceMemoryId });
+    const spokeId = snapshot.edges[0]?.objectId;
+    if (!spokeId) throw new Error('Missing fixture spoke');
+    const focused = await getKnowledgeMapSnapshot(db, { entityId: spokeId });
+    expect(focused.edges).toHaveLength(1);
+    expect(focused.edges[0]?.objectId).toBe(spokeId);
+  });
+
   it('focuses a map on exactly one source memory without exposing other edges', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const snapshot = await getKnowledgeMapSnapshot(db, { sourceMemoryId });

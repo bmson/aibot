@@ -316,6 +316,8 @@ export default async function KnowledgePage({
           review:
             params.review === 'confirmed' || params.review === 'unreviewed' ? params.review : 'all',
           sourceMemoryId,
+          entityId:
+            graph.selected && params.entity === graph.selected.id ? graph.selected.id : undefined,
         })
       : Promise.resolve(null),
   ]);
@@ -618,12 +620,6 @@ export default async function KnowledgePage({
                   : 'Only active, source-backed connections appear here.'}
               </p>
             </div>
-            {graph.selected ? (
-              <div className="flex gap-2">
-                <EditKnowledgeEntity entity={graph.selected} duplicates={graph.duplicates} />
-                <AddKnowledgeRelation selected={graph.selected} vocabulary={PREDICATE_VOCABULARY} />
-              </div>
-            ) : null}
           </div>
           <form
             action="/profile/knowledge"
@@ -707,25 +703,13 @@ export default async function KnowledgePage({
               </div>
             </div>
           ) : (
-            <>
-              <div className="mt-5 hidden md:block">
-                <GlobalKnowledgeMap snapshot={map} />
-              </div>
-              <div className="mt-5 grid gap-2 md:hidden">
-                {map.edges.map((edge) => {
-                  const subject = map.nodes.find((node) => node.id === edge.subjectId);
-                  const object = map.nodes.find((node) => node.id === edge.objectId);
-                  return (
-                    <article key={edge.id} className={`${cardShellClass} p-4`}>
-                      <p className="text-sm font-semibold text-strong">
-                        {subject?.label} {edge.predicate.replaceAll('_', ' ')} {object?.label}
-                      </p>
-                      <p className="mt-1 line-clamp-2 text-xs text-muted">{edge.sourceContent}</p>
-                    </article>
-                  );
-                })}
-              </div>
-            </>
+            <div className="mt-5">
+              <GlobalKnowledgeMap
+                key={JSON.stringify([map.filters, params.entity])}
+                snapshot={map}
+                initialSelectedId={params.entity}
+              />
+            </div>
           )}
           {map.truncated ? (
             <p className="mt-3 text-xs text-muted">
@@ -734,11 +718,18 @@ export default async function KnowledgePage({
               connections. Search or narrow the filters to inspect another area.
             </p>
           ) : null}
-          {graph.selected && graph.relations.length > 0 ? (
-            <div className="mt-7 max-w-3xl">
+          {params.entity && graph.selected?.id === params.entity ? (
+            <div id="knowledge-item" className="mt-7 max-w-3xl scroll-mt-24">
               <h3 className="text-lg font-semibold text-strong">
                 Connections around {graph.selected.label}
               </h3>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <EditKnowledgeEntity entity={graph.selected} duplicates={graph.duplicates} />
+                <AddKnowledgeRelation selected={graph.selected} vocabulary={PREDICATE_VOCABULARY} />
+                <Link href={hrefFor({ view: 'map' })} className={btn.outline}>
+                  All knowledge
+                </Link>
+              </div>
               <div className="mt-3 grid gap-3">
                 {graph.relations
                   .filter((relation) => relation.reviewStatus !== 'rejected')

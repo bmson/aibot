@@ -1187,6 +1187,13 @@ struct KnowledgeRelation: Codable, Identifiable, Hashable, Sendable {
     let presentation: KnowledgePresentation
 
     var needsReview: Bool { reviewStatus == "unreviewed" }
+
+    /// Traversal changes the focus, never the stored direction of the fact.
+    func connectedEntity(to entityID: String) -> KnowledgeEntity? {
+        if subject.id == entityID && object.id != entityID { return object }
+        if object.id == entityID && subject.id != entityID { return subject }
+        return nil
+    }
 }
 
 struct KnowledgeOverview: Codable, Sendable {
@@ -1201,6 +1208,29 @@ struct KnowledgeOverview: Codable, Sendable {
     let relations: [KnowledgeRelation]
     let selectedActiveRelationTotal: Int
     let duplicates: [KnowledgeDuplicate]
+}
+
+/// UI projection only: source-level review and correction remain independent.
+struct KnowledgeConnection: Identifiable {
+    let id: String
+    let relation: KnowledgeRelation
+    var sources: [KnowledgeRelation]
+    var confirmed: Bool { sources.contains { $0.reviewStatus == "confirmed" } }
+
+    static func group(_ relations: [KnowledgeRelation]) -> [KnowledgeConnection] {
+        var groups: [KnowledgeConnection] = []
+        for relation in relations where relation.reviewStatus != "rejected" {
+            let parts = [relation.subject.id, relation.predicate, relation.object.id,
+                         relation.validFrom ?? "", relation.validUntil ?? ""]
+            let key = parts.map { "\($0.utf8.count):\($0)" }.joined()
+            if let index = groups.firstIndex(where: { $0.id == key }) {
+                groups[index].sources.append(relation)
+            } else {
+                groups.append(.init(id: key, relation: relation, sources: [relation]))
+            }
+        }
+        return groups
+    }
 }
 
 struct KnowledgeDuplicate: Codable, Identifiable, Hashable, Sendable {
