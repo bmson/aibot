@@ -480,9 +480,10 @@ struct KnowledgeView: View {
     }
 }
 
-private struct KnowledgeConnectionEditor: View {
+struct KnowledgeConnectionEditor: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     let selected: KnowledgeEntity
     let relationToCorrect: KnowledgeRelation?
     let candidates: [KnowledgeEntity]
@@ -496,6 +497,7 @@ private struct KnowledgeConnectionEditor: View {
     @State private var customPredicate = ""
     @State private var note = ""
     @State private var saving = false
+    @State private var saveError: String?
 
     init(
         selected: KnowledgeEntity,
@@ -513,19 +515,22 @@ private struct KnowledgeConnectionEditor: View {
         _objectIdLabel = State(initialValue: relationToCorrect?.object.displayLabel ?? "")
         _objectIdKind = State(initialValue: relationToCorrect?.object.kind ?? "person")
         let initialKind = relationToCorrect?.object.kind ?? "person"
-        _predicate = State(
-            initialValue: relationToCorrect?.predicate ?? Self.relationshipOptions(
-                subjectKind: selected.kind, objectKind: initialKind
-            ).first?.id ?? "__custom")
+        let options = Self.relationshipOptions(subjectKind: selected.kind, objectKind: initialKind)
+        if let relationToCorrect, !options.contains(where: { $0.id == relationToCorrect.predicate })
+        {
+            _predicate = State(initialValue: "__custom")
+            _customPredicate = State(initialValue: relationToCorrect.predicate)
+        } else {
+            _predicate = State(
+                initialValue: relationToCorrect?.predicate ?? options.first?.id ?? "__custom")
+        }
     }
 
     var body: some View {
         Form {
             Section {
-                Text(relationToCorrect == nil ? "Add connection" : "Correct connection")
-                    .font(.headline)
                 Text(
-                    "The note is saved as evidence, so this never becomes an unsupported graph-only fact."
+                    "Describe the relationship and add a source note to support it. Corrections keep the original source for reference."
                 )
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -585,10 +590,18 @@ private struct KnowledgeConnectionEditor: View {
             Section("Source note") {
                 TextEditor(text: $note).frame(minHeight: 110)
             }
+            if let saveError {
+                Section { Text(saveError).foregroundStyle(.red) }
+            }
         }
         .navigationTitle(relationToCorrect == nil ? "Add connection" : "Correct connection")
+        .navigationBarTitleDisplayMode(.inline)
+        .tint(AssistantTheme.accent(for: colorScheme))
+        .interactiveDismissDisabled(saving)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }.disabled(saving)
+            }
             ToolbarItem(placement: .confirmationAction) {
                 Button(saving ? "Saving…" : "Save") { save() }
                     .disabled(
@@ -604,6 +617,7 @@ private struct KnowledgeConnectionEditor: View {
 
     private func save() {
         saving = true
+        saveError = nil
         let mutation = KnowledgeConnectionMutation(
             subjectLabel: selected.label,
             subjectKind: selected.kind,
@@ -622,11 +636,14 @@ private struct KnowledgeConnectionEditor: View {
                 } else {
                     await model.createKnowledgeConnection(mutation)
                 }
-            saving = false
             if saved {
                 await didSave()
                 dismiss()
+            } else {
+                saveError =
+                    "The relationship could not be saved. Your changes are still here; please try again."
             }
+            saving = false
         }
     }
 
@@ -683,19 +700,24 @@ private struct KnowledgeConnectionEditor: View {
     }
 
     private var previewSentence: String {
+        Self.previewSentence(
+            subject: selected.displayLabel, predicate: storedPredicate, objectLabel: objectLabel)
+    }
+
+    static func previewSentence(subject: String, predicate: String, objectLabel: String) -> String {
         let object = objectLabel.isEmpty ? "the connected item" : objectLabel
-        switch storedPredicate {
-        case "daughter_of": return "\(object) is \(selected.displayLabel)’s daughter."
-        case "son_of": return "\(object) is \(selected.displayLabel)’s son."
-        case "spouse_of": return "\(selected.displayLabel) and \(object) are spouses."
-        case "works_at": return "\(selected.displayLabel) works at \(object)."
-        case "worked_at": return "\(selected.displayLabel) worked at \(object)."
-        case "parent_of": return "\(selected.displayLabel) is \(object)’s parent."
-        case "lives_in": return "\(selected.displayLabel) lives in \(object)."
-        case "attended": return "\(selected.displayLabel) attended \(object)."
+        switch predicate {
+        case "daughter_of": return "\(subject) is \(object)’s daughter."
+        case "son_of": return "\(subject) is \(object)’s son."
+        case "spouse_of": return "\(subject) and \(object) are spouses."
+        case "works_at": return "\(subject) works at \(object)."
+        case "worked_at": return "\(subject) worked at \(object)."
+        case "parent_of": return "\(subject) is \(object)’s parent."
+        case "lives_in": return "\(subject) lives in \(object)."
+        case "attended": return "\(subject) attended \(object)."
         default:
             return
-                "\(selected.displayLabel) \(storedPredicate.replacingOccurrences(of: "_", with: " ")) \(object)."
+                "\(subject) \(predicate.replacingOccurrences(of: "_", with: " ")) \(object)."
         }
     }
 }

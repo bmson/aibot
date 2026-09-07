@@ -18,7 +18,9 @@ import {
   getKnowledgeGraphNeighborhood,
   getKnowledgeGraphOverview,
   getKnowledgeGraphPaths,
+  getKnowledgeGraphRelation,
   retypeKnowledgeGraphEntity,
+  reviewKnowledgeGraphRelation,
   searchKnowledgeGraphEntities,
 } from './knowledge-graph.js';
 import {
@@ -730,6 +732,45 @@ describe('knowledge graph neighborhood (integration)', () => {
         .set({ contentHash: `${MARKER}-source` })
         .where(eq(memories.contentHash, `${MARKER}-source-edited`));
     }
+  });
+
+  it('opens an exact evidence row beyond the browse cap and removes only that claim', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const all = await db
+      .select()
+      .from(knowledgeGraphRelations)
+      .where(eq(knowledgeGraphRelations.subjectEntityId, hubId));
+    const overview = await getKnowledgeGraphOverview(db, { entityId: hubId });
+    const outsidePage = all.find((edge) => !overview.relations.some((row) => row.id === edge.id));
+    if (!outsidePage) throw new Error('fixture must exceed the browse cap');
+    const sibling = all.find((edge) => edge.id !== outsidePage.id);
+    if (!sibling) throw new Error('shared-source fixture missing');
+    const detail = await getKnowledgeGraphRelation(db, outsidePage.id);
+    expect(detail?.source.memoryId).toBe(sourceMemoryId);
+    expect(detail?.subject.id).toBe(hubId);
+    expect(detail?.object.id).toBe(outsidePage.objectEntityId);
+    try {
+      expect(await reviewKnowledgeGraphRelation(db, outsidePage.id, 'rejected')).toBe(true);
+      expect((await getKnowledgeGraphRelation(db, outsidePage.id))?.inRecall).toBe(false);
+      expect((await getKnowledgeGraphRelation(db, sibling.id))?.reviewStatus).toBe(
+        sibling.reviewStatus,
+      );
+      expect((await getKnowledgeGraphRelation(db, sibling.id))?.source.memoryId).toBe(
+        sourceMemoryId,
+      );
+      const neighborhood = await getKnowledgeGraphNeighborhood(db, { entityId: hubId });
+      expect(neighborhood.edges.some((edge) => edge.id === outsidePage.id)).toBe(false);
+    } finally {
+      await db
+        .update(knowledgeGraphRelations)
+        .set({ reviewStatus: outsidePage.reviewStatus })
+        .where(eq(knowledgeGraphRelations.id, outsidePage.id));
+    }
+    expect(await getKnowledgeGraphRelation(db, 'not-an-id')).toBeNull();
+    expect(await getKnowledgeGraphRelation(db, '00000000-0000-4000-8000-000000000000')).toBeNull();
+    expect(
+      await reviewKnowledgeGraphRelation(db, '00000000-0000-4000-8000-000000000000', 'rejected'),
+    ).toBe(false);
   });
 
   it('creates a corrected source-backed edge before retiring the prior edge', async (ctx) => {

@@ -1,5 +1,6 @@
 import {
   correctKnowledgeGraphRelation,
+  getKnowledgeGraphRelation,
   reviewKnowledgeGraphRelation,
 } from '@assistant/application';
 import { getDb, getRouter } from '@/lib/server';
@@ -8,6 +9,33 @@ import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 export const dynamic = 'force-dynamic';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+): Promise<Response> {
+  if (!(await isMobileAuthed(request))) return mobileUnauthorized();
+  const { id } = await params;
+  if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid relationship id' }, { status: 400 });
+  const relation = await getKnowledgeGraphRelation(getDb(), id);
+  return relation
+    ? mobileJson(relation)
+    : mobileJson({ error: 'relationship not found' }, { status: 404 });
+}
+
+/** Retain the rejected record so removing a claim does not erase its shared source. */
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+): Promise<Response> {
+  if (!(await isMobileAuthed(request))) return mobileUnauthorized();
+  const { id } = await params;
+  if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid relationship id' }, { status: 400 });
+  const removed = await reviewKnowledgeGraphRelation(getDb(), id, 'rejected');
+  return removed
+    ? mobileJson({ ok: true })
+    : mobileJson({ error: 'relationship not found' }, { status: 404 });
+}
 
 export async function POST(
   request: Request,
@@ -18,12 +46,14 @@ export async function POST(
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid relationship id' }, { status: 400 });
   const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
   if (body?.action === 'confirm' || body?.action === 'reject') {
-    await reviewKnowledgeGraphRelation(
+    const reviewed = await reviewKnowledgeGraphRelation(
       getDb(),
       id,
       body.action === 'confirm' ? 'confirmed' : 'rejected',
     );
-    return mobileJson({ ok: true });
+    return reviewed
+      ? mobileJson({ ok: true })
+      : mobileJson({ error: 'relationship not found' }, { status: 404 });
   }
   if (body?.action === 'correct') {
     const result = await correctKnowledgeGraphRelation(getDb(), getRouter(), id, {

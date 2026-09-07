@@ -23,7 +23,7 @@ Keep PostgreSQL/pgvector, the existing offline extraction pipeline, owner-only r
 2. **Time-aware knowledge and disagreements.** Display current, historical, and conflicting claims separately. `validFrom`/`validUntil` already exist, but a past employer must not answer a current-employer question. The gap detector's legacy predicate equivalents also suppress present-day questions for historical predicates (`born_in` vs `lives_in`, `worked_at` vs `works_at`). Replace these with temporal rules and owner-relevant, paced questions; do not automatically resolve disagreements or erase history.
 3. **Useful connections to existing work.** Link graph entities to explicitly associated Situation Packs, commitments, and people. Keep those references inspectable; semantic guesses should be suggestions the owner accepts, not silently established facts. Decide source scope before adding ingestion or schema changes.
 4. **Explain a connection, with evidence at every step.** Existing bounded graph paths can support “How are these connected?” Show each hop, date span, and source separately; distinguish a path from proof of a new relationship. Evaluate with directed-family, former-employer, duplicate-name, rejected-source, and missing-evidence cases.
-5. **A native browse-first destination.** The phone still opens a selected-item workspace with a paged candidate list rather than a separate browse/detail navigation hierarchy. Add native paging and shared history/navigation semantics before expanding to a whole-graph canvas.
+5. **Native browsing at scale.** The phone now opens without an arbitrary selected item. Add native paging and shared history/navigation semantics before expanding to a whole-graph canvas.
 
 ## Validation
 
@@ -33,6 +33,14 @@ Keep PostgreSQL/pgvector, the existing offline extraction pipeline, owner-only r
 - `scripts/visual-qa/knowledge-graph.ts` seeds synthetic data only into a local `_test` database and checks desktop/mobile navigation, direction, grouping, responsive panning, overflow, and browser errors. Run against localhost:3107 with development authentication enabled. It must not run concurrently with database-resetting tests.
 
 Live account validation requires an authenticated bot.bmson.com session. Local verification does not imply deployment or a production migration.
+
+### Editing relationship evidence from People
+
+- Tap a specific entry inside Relationship evidence or Recorded details to inspect its complete source, correct the relationship with a new owner note, or remove the claim.
+- `GET /api/mobile/v1/knowledge/relations/:id` resolves an exact owner-scoped row, independent of browse/review limits. `DELETE` retires that row as rejected, preserving its original source and unrelated claims. Missing rows return 404, never a false success.
+- Corrections reuse the existing source-backed replacement operation. Native correction previews preserve subject/object direction, including son/daughter predicates; custom predicates remain editable. Saving refreshes the current person and invalidates other cached dossiers.
+- Requires both the updated mobile server routes and a new iOS build. No schema migration is needed.
+- `scripts/visual-qa/people-evidence.ts` creates a conflicting parent/son pair in a local `_test` database without invoking models. Tests cover exact-row access beyond browse limits, source/sibling preservation, preview direction, failed removals, and cache invalidation. Visual inspection covered disclosure, source detail, and correction form; removal was verified through the local API after simulator window switching prevented the final confirmation tap. No real relationship records were changed.
 
 ### Verified on September 6, 2026
 

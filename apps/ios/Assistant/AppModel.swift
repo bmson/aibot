@@ -231,6 +231,25 @@ final class AppModel: ObservableObject {
         catch { errorMessage = error.localizedDescription; return nil }
     }
 
+    func knowledgeRelation(id: String) async -> KnowledgeRelation? {
+        guard let client else { return nil }
+        do { return try await client.knowledgeRelation(id: id) }
+        catch { errorMessage = error.localizedDescription; return nil }
+    }
+
+    func removeKnowledgeRelation(id: String) async -> Bool {
+        guard let client else { return false }
+        do { try await client.removeKnowledgeRelation(id: id); return true }
+        catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    func refreshPersonEvidence(id: String) async {
+        // The same directed claim can appear on both people's cards. Keep the
+        // visible card while reloading, but do not reuse other cached dossiers.
+        personCards = personCards.filter { $0.key == id }
+        await loadPersonCard(id: id)
+    }
+
     func knowledgeReview() async -> KnowledgeReviewInbox? {
         guard let client else { return nil }
         do { return try await client.knowledgeReview() }

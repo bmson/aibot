@@ -286,6 +286,21 @@ struct APIClient: Sendable {
         try await get("api/mobile/v1/knowledge/\(id)")
     }
 
+    func knowledgeRelation(id: String) async throws -> KnowledgeRelation {
+        try await get("api/mobile/v1/knowledge/relations/\(id)")
+    }
+
+    func removeKnowledgeRelation(id: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge/relations/\(id)")
+        )
+        request.httpMethod = "DELETE"
+        let result = try await perform(request, as: OkPayload.self)
+        guard result.ok else {
+            throw APIError.server(status: 409, message: "The relationship could not be removed.")
+        }
+    }
+
     func knowledgeReview() async throws -> KnowledgeReviewInbox {
         var components = URLComponents(
             url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge"),

@@ -297,6 +297,14 @@ final class APIModelsTests: XCTestCase {
         XCTAssertNil(overview.entitySelected(by: "another-item"), "A stale response must not show a different item")
     }
 
+    func testRelationshipEditorPreviewPreservesDirection() {
+        for (predicate, role) in [("son_of", "son"), ("daughter_of", "daughter"), ("parent_of", "parent")] {
+            XCTAssertEqual(
+                KnowledgeConnectionEditor.previewSentence(subject: "Alex", predicate: predicate, objectLabel: "Robin"),
+                "Alex is Robin’s \(role).")
+        }
+    }
+
     func testDecodesKnowledgeRelationshipPresentation() throws {
         let data = """
         {

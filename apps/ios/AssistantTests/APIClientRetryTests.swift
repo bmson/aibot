@@ -59,6 +59,49 @@ final class StubURLProtocol: URLProtocol {
 
 final class APIClientRetryTests: XCTestCase {
     @MainActor
+    func testEvidenceRefreshReloadsCurrentPersonAndInvalidatesOtherDossiers() async {
+        func card(_ id: String, name: String) -> Data {
+            Data("""
+            {"id":"\(id)","name":"\(name)","initials":"AR","relationship":"Family",
+             "group":"family","groupLabel":"Family","trust":"known","howWeMet":[],
+             "relations":[],"connections":[],"events":[],"eventsAreRecent":true,"factCount":0}
+            """.utf8)
+        }
+        StubURLProtocol.prime([
+            .success(status: 200, body: card("alex", name: "Alex")),
+            .success(status: 200, body: card("robin", name: "Robin")),
+            .success(status: 200, body: card("robin", name: "Robin refreshed"))
+        ])
+        let model = AppModel(apiClient: makeClient())
+        await model.loadPersonCard(id: "alex")
+        await model.loadPersonCard(id: "robin")
+        XCTAssertEqual(model.personCards.count, 2)
+        await model.refreshPersonEvidence(id: "robin")
+        XCTAssertNil(model.personCards["alex"], "Back navigation must not reuse stale evidence")
+        XCTAssertEqual(model.personCards["robin"]?.name, "Robin refreshed")
+        XCTAssertEqual(StubURLProtocol.attempts, ["GET", "GET", "GET"])
+    }
+
+    @MainActor
+    func testRemovingRelationshipRequiresServerSuccess() async {
+        StubURLProtocol.prime([.success(status: 404, body: Data(#"{"error":"relationship not found"}"#.utf8))])
+        let model = AppModel(apiClient: makeClient())
+        let failed = await model.removeKnowledgeRelation(id: "missing")
+        XCTAssertFalse(failed)
+        XCTAssertEqual(StubURLProtocol.attempts, ["DELETE"])
+        XCTAssertNotNil(model.errorMessage)
+
+        StubURLProtocol.prime([.success(status: 200, body: Data(#"{"ok":false}"#.utf8))])
+        let refused = await model.removeKnowledgeRelation(id: "claim")
+        XCTAssertFalse(refused)
+
+        StubURLProtocol.prime([.success(status: 200, body: Data(#"{"ok":true}"#.utf8))])
+        let removed = await model.removeKnowledgeRelation(id: "claim")
+        XCTAssertTrue(removed)
+        XCTAssertEqual(StubURLProtocol.attempts, ["DELETE"])
+    }
+
+    @MainActor
     func testPackDiscussionPreparesADraftWithoutSendingOrCallingTheServer() {
         StubURLProtocol.prime([])
         let model = AppModel(apiClient: makeClient())

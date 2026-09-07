@@ -143,6 +143,23 @@ export async function getKnowledgeGraphReviewQueue(
   db: Db,
   input: { limit?: number } = {},
 ): Promise<KnowledgeGraphRelationView[]> {
+  return readKnowledgeGraphRelations(db, input);
+}
+
+/** Resolve a specific evidence row, independent of browse/review page limits. */
+export async function getKnowledgeGraphRelation(
+  db: Db,
+  relationId: string,
+): Promise<KnowledgeGraphRelationView | null> {
+  if (!UUID_RE.test(relationId)) return null;
+  const rows = await readKnowledgeGraphRelations(db, { relationId, limit: 1 });
+  return rows[0] ?? null;
+}
+
+async function readKnowledgeGraphRelations(
+  db: Db,
+  input: { limit?: number; relationId?: string },
+): Promise<KnowledgeGraphRelationView[]> {
   const agent = await getAgent(db);
   const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
   const subject = alias(knowledgeGraphEntities, 'review_subject');
@@ -186,7 +203,9 @@ export async function getKnowledgeGraphReviewQueue(
     .where(
       and(
         eq(knowledgeGraphRelations.agentId, agent.id),
-        eq(knowledgeGraphRelations.reviewStatus, 'unreviewed'),
+        input.relationId
+          ? eq(knowledgeGraphRelations.id, input.relationId)
+          : eq(knowledgeGraphRelations.reviewStatus, 'unreviewed'),
       ),
     )
     .orderBy(desc(knowledgeGraphRelations.createdAt))
@@ -1097,10 +1116,10 @@ export async function reviewKnowledgeGraphRelation(
   db: Db,
   relationId: string,
   reviewStatus: 'confirmed' | 'rejected',
-): Promise<void> {
-  if (!UUID_RE.test(relationId)) return;
+): Promise<boolean> {
+  if (!UUID_RE.test(relationId)) return false;
   const agent = await getAgent(db);
-  await db
+  const updated = await db
     .update(knowledgeGraphRelations)
     .set({ reviewStatus, reviewedAt: sql`now()` })
     .where(
@@ -1108,7 +1127,9 @@ export async function reviewKnowledgeGraphRelation(
         eq(knowledgeGraphRelations.id, relationId),
         eq(knowledgeGraphRelations.agentId, agent.id),
       ),
-    );
+    )
+    .returning({ id: knowledgeGraphRelations.id });
+  return updated.length > 0;
 }
 
 /**

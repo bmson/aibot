@@ -311,6 +311,7 @@ struct PersonRelationGroup: Identifiable {
 
 struct PersonRelationGroupCard: View {
     let group: PersonRelationGroup
+    var inspectEvidence: ((PersonRelationSummary) -> Void)?
     @Environment(\.colorScheme) private var colorScheme
     @State private var showsRelationships = false
     @State private var showsDetails = false
@@ -387,15 +388,22 @@ struct PersonRelationGroupCard: View {
                 if expanded.wrappedValue {
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(entries) { relation in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(relation.sentence).font(.subheadline)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                if !relation.span.isEmpty {
-                                    Text(relation.span).font(.caption).foregroundStyle(.secondary)
+                            if let inspectEvidence {
+                                Button { inspectEvidence(relation) } label: {
+                                    HStack(spacing: 12) {
+                                        evidenceLabel(relation)
+                                        Spacer(minLength: 0)
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                    }
+                                    .frame(minHeight: 44)
+                                    .contentShape(Rectangle())
                                 }
-                                if relation.unreviewed {
-                                    Text("Not yet confirmed").font(.caption2).foregroundStyle(.secondary)
-                                }
+                                .buttonStyle(.plain)
+                                .accessibilityHint("View the source, edit, or remove this relationship")
+                            } else {
+                                evidenceLabel(relation)
                             }
                         }
                     }.padding(.top, 8)
@@ -403,14 +411,143 @@ struct PersonRelationGroupCard: View {
             }
         }
     }
+
+    private func evidenceLabel(_ relation: PersonRelationSummary) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(relation.sentence).font(.subheadline)
+                .fixedSize(horizontal: false, vertical: true)
+            if !relation.span.isEmpty {
+                Text(relation.span).font(.caption).foregroundStyle(.secondary)
+            }
+            if relation.unreviewed {
+                Text("Not yet confirmed").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// Inspect one exact source-backed claim, not every claim about the same person.
+struct PersonRelationshipEvidenceScreen: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+    let evidence: PersonRelationSummary
+    let didChange: () async -> Void
+    @State private var relation: KnowledgeRelation?
+    @State private var loading = true
+    @State private var removing = false
+    @State private var editing = false
+    @State private var corrected = false
+    @State private var confirmingRemoval = false
+    @State private var failure: String?
+
+    var body: some View {
+        Form {
+            Section("Relationship") {
+                Text(relation?.presentation.sentence ?? evidence.sentence)
+                    .font(.body)
+                if !evidence.span.isEmpty {
+                    Text(evidence.span).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if loading {
+                ProgressView("Loading evidence…")
+            } else if let relation {
+                Section("Source evidence") {
+                    Text(relation.source.content).textSelection(.enabled)
+                    Text(relation.source.ownerConfirmed ? "Owner-confirmed source" : "Recorded source")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if relation.reviewStatus == "rejected" {
+                    Section {
+                        Text("This relationship has been removed. Its original source is retained.")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Section {
+                        Button("Edit relationship", systemImage: "pencil") { editing = true }
+                            .disabled(removing)
+                        Button(removing ? "Removing…" : "Remove relationship", systemImage: "trash", role: .destructive) {
+                            confirmingRemoval = true
+                        }
+                        .disabled(removing)
+                        .foregroundStyle(.red)
+                    } footer: {
+                        Text("Changes apply only to this claim. Other relationships and the original source are kept.")
+                    }
+                }
+            } else {
+                Section {
+                    Text("The evidence could not be loaded. It may have been removed, or your server may need updating.")
+                        .foregroundStyle(.secondary)
+                    Button("Try again") { Task { await load() } }
+                }
+            }
+            if let failure {
+                Section { Text(failure).foregroundStyle(.red) }
+            }
+        }
+        .navigationTitle("Relationship evidence")
+        .tint(AssistantTheme.accent(for: colorScheme))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Done") { dismiss() }.disabled(removing)
+            }
+        }
+        .interactiveDismissDisabled(removing)
+        .task { await load() }
+        .sheet(isPresented: $editing, onDismiss: {
+            if corrected { dismiss() }
+        }) {
+            if let relation {
+                NavigationStack {
+                    KnowledgeConnectionEditor(
+                        selected: relation.subject, relationToCorrect: relation,
+                        candidates: [relation.subject, relation.object]
+                    ) {
+                        await didChange()
+                        // Close the inspector after the editor finishes dismissing,
+                        // returning to the refreshed card rather than a retired claim.
+                        corrected = true
+                    }
+                }
+            }
+        }
+        .confirmationDialog("Remove this relationship?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
+            Button("Remove relationship", role: .destructive) {
+                Task {
+                    removing = true
+                    failure = nil
+                    if await model.removeKnowledgeRelation(id: evidence.id) {
+                        await didChange()
+                        dismiss()
+                    } else {
+                        failure = "The relationship could not be removed. Please try again."
+                    }
+                    removing = false
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This claim will no longer appear in People or be used for graph recall. The original source and other claims will not be deleted.")
+        }
+    }
+
+    private func load() async {
+        loading = true
+        relation = await model.knowledgeRelation(id: evidence.id)
+        loading = false
+    }
 }
 
 /// One person, in full: identity, birthday and how you met, grouped connections,
-/// and recent happenings. Memory remains the home for editing the source facts.
+/// and recent happenings, with direct access to relationship evidence.
 struct PersonCardScreen: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     let personId: String
+    @State private var inspectingEvidence: PersonRelationSummary?
 
     private var card: PersonCard? { model.personCards[personId] }
 
@@ -431,7 +568,14 @@ struct PersonCardScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .assistantSubmenuChrome()
         .refreshable { await model.loadPersonCard(id: personId) }
-        .task { if card == nil { await model.loadPersonCard(id: personId) } }
+        .task(id: card == nil) { if card == nil { await model.loadPersonCard(id: personId) } }
+        .sheet(item: $inspectingEvidence) { evidence in
+            NavigationStack {
+                PersonRelationshipEvidenceScreen(evidence: evidence) {
+                    await model.refreshPersonEvidence(id: personId)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -466,7 +610,7 @@ struct PersonCardScreen: View {
                 )
             } else {
                 ForEach(family) { group in
-                    PersonRelationGroupCard(group: group)
+                    PersonRelationGroupCard(group: group) { inspectingEvidence = $0 }
                 }
             }
         }
@@ -475,7 +619,7 @@ struct PersonCardScreen: View {
             VStack(alignment: .leading, spacing: 10) {
                 sectionHeading("Other people mentioned", count: other.count)
                 ForEach(other) { group in
-                    PersonRelationGroupCard(group: group)
+                    PersonRelationGroupCard(group: group) { inspectingEvidence = $0 }
                 }
             }
         }
