@@ -60,6 +60,61 @@ final class StubURLProtocol: URLProtocol {
 
 final class APIClientRetryTests: XCTestCase {
     @MainActor
+    func testGoalEditorUsesSharedCanvasInBothAppearances() async throws {
+        let goal = GoalRecord(
+            id: "preview", title: "Plan the weekend", description: "Keep the plan flexible.",
+            status: "active", priority: 3, progress: "Gathering options", nextAction: "Compare travel times",
+            targetDate: nil, createdAt: "2026-09-06", updatedAt: "2026-09-06", archivedAt: nil,
+            mirrorToPrimary: false, autonomy: false, taintedOrigin: false
+        )
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        for scheme in [ColorScheme.light, .dark] {
+            for editing in [false, true] {
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+                window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
+                let content = NavigationStack {
+                    GoalEditor(goal: editing ? goal : nil)
+                }
+                .environmentObject(AppModel(apiClient: makeClient()))
+                .environment(\.colorScheme, scheme)
+                window.rootViewController = UIHostingController(rootView: content)
+                window.isHidden = false
+                defer {
+                    window.isHidden = true
+                    window.rootViewController = nil
+                }
+                try await Task.sleep(for: .milliseconds(350))
+                window.layoutIfNeeded()
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "goal-\(editing ? "edit" : "new")-\(scheme == .light ? "light" : "dark")"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+
+                // The exposed gutter must be our canvas, not UIKit's gray
+                // grouped-form background. Sample away from glass controls.
+                let cgImage = try XCTUnwrap(image.cgImage)
+                var pixels = [UInt8](repeating: 0, count: cgImage.width * cgImage.height * 4)
+                let context = try XCTUnwrap(CGContext(
+                    data: &pixels, width: cgImage.width, height: cgImage.height,
+                    bitsPerComponent: 8, bytesPerRow: cgImage.width * 4,
+                    space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ))
+                context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
+                let offset = (cgImage.height / 2 * cgImage.width + Int(2 * image.scale)) * 4
+                let expected = scheme == .light ? [238, 245, 240] : [16, 23, 18]
+                for channel in 0..<3 {
+                    XCTAssertEqual(Double(pixels[offset + channel]), Double(expected[channel]), accuracy: 2)
+                }
+            }
+        }
+    }
+
+    @MainActor
     func testSituationPackLightAndDarkSnapshots() async throws {
         let data = Data("""
         {"packs":[{"id":"pack","title":"Soccer weekend","version":3,"archived":false,"updatedAt":"2026-09-06T12:00:00Z",

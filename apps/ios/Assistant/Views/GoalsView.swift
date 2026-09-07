@@ -449,11 +449,12 @@ struct GoalsView: View {
 
 /// The same small goal form handles creation and edits; a new goal starts its
 /// first work session on the server, while an edit only changes its settings.
-private struct GoalEditor: View {
+struct GoalEditor: View {
     let goal: GoalRecord?
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var title: String
     @State private var description: String
     @State private var priority: Int
@@ -484,6 +485,7 @@ private struct GoalEditor: View {
             } header: {
                 Text("Goal")
             }
+            .listRowBackground(AssistantTheme.raised(for: colorScheme))
 
             Section("Pace and target") {
                 Picker("Pace", selection: $priority) {
@@ -498,6 +500,7 @@ private struct GoalEditor: View {
                     .keyboardType(.numbersAndPunctuation)
                 Toggle("Show updates in my main chat", isOn: $mirrorToPrimary)
             }
+            .listRowBackground(AssistantTheme.raised(for: colorScheme))
 
             Section("Current direction") {
                 TextField("Latest progress", text: $progress, axis: .vertical)
@@ -505,9 +508,11 @@ private struct GoalEditor: View {
                 TextField("Next action", text: $nextAction, axis: .vertical)
                     .lineLimit(2...5)
             }
+            .listRowBackground(AssistantTheme.raised(for: colorScheme))
         }
+        .scrollContentBackground(.hidden)
+        .assistantSubmenuChrome()
         .navigationTitle(goal == nil ? "New goal" : "Edit goal")
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
