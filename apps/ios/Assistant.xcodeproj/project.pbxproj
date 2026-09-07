@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
         B00000000000000000000071 /* Views/KnowledgeGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000071 /* Views/KnowledgeGraphView.swift */; };
+        B00000000000000000000072 /* Views/PeopleConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000072 /* Views/PeopleConnectionsView.swift */; };
 		B00000000000000000000070 /* Views/SituationPacksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000070 /* Views/SituationPacksView.swift */; };
 		B00000000000000000000001 /* AssistantApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000001 /* AssistantApp.swift */; };
 		B00000000000000000000002 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000002 /* AppModel.swift */; };
@@ -81,6 +82,7 @@
 
 /* Begin PBXFileReference section */
         C00000000000000000000071 /* Views/KnowledgeGraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/KnowledgeGraphView.swift; sourceTree = "<group>"; };
+        C00000000000000000000072 /* Views/PeopleConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PeopleConnectionsView.swift; sourceTree = "<group>"; };
 		C00000000000000000000070 /* Views/SituationPacksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SituationPacksView.swift; sourceTree = "<group>"; };
 		C00000000000000000000001 /* AssistantApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantApp.swift; sourceTree = "<group>"; };
 		C00000000000000000000002 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
@@ -202,6 +204,7 @@
 				C00000000000000000000025 /* Views/MemoryView.swift */,
 				C00000000000000000000054 /* Views/KnowledgeView.swift */,
                 C00000000000000000000071 /* Views/KnowledgeGraphView.swift */,
+                C00000000000000000000072 /* Views/PeopleConnectionsView.swift */,
 				C00000000000000000000059 /* Views/PeopleView.swift */,
 				C00000000000000000000011 /* Assets.xcassets */,
 				C00000000000000000000057 /* mermaid.min.js */,
@@ -391,6 +394,7 @@
 				B0000000000000000000001C /* Views/MemoryView.swift in Sources */,
 				B00000000000000000000054 /* Views/KnowledgeView.swift in Sources */,
                 B00000000000000000000071 /* Views/KnowledgeGraphView.swift in Sources */,
+                B00000000000000000000072 /* Views/PeopleConnectionsView.swift in Sources */,
 				B00000000000000000000059 /* Views/PeopleView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

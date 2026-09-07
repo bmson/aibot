@@ -13,6 +13,8 @@ struct PeopleView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var query = ""
+    @State private var showsConnections = true
+    @State private var activeMapID: String?
 
     /// Birthdays inside this window get their own section at the top.
     private let comingUpWindowDays = 30
@@ -52,27 +54,45 @@ struct PeopleView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if !model.peopleLoaded {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, minHeight: 220)
-                } else if model.people.isEmpty {
-                    emptyDirectory
-                } else {
-                    content
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if !model.peopleLoaded {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, minHeight: 220)
+                    } else if model.people.isEmpty {
+                        emptyDirectory
+                    } else {
+                        Picker("People view", selection: $showsConnections) {
+                            Text("Connections").tag(true)
+                            Text("Directory").tag(false)
+                        }
+                        .pickerStyle(.segmented)
+                        .id("people-top")
+                        if showsConnections {
+                            PeopleConnectionsExplorer(people: matches, query: $query) { id in
+                                activeMapID = id
+                                proxy.scrollTo("people-top", anchor: .top)
+                            }
+                        } else {
+                            content
+                        }
+                    }
                 }
+                .padding(16)
+                .padding(.bottom, 28)
+                .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
             }
-            .padding(16)
-            .padding(.bottom, 28)
-            .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
+            .navigationTitle("People")
+            .assistantSubmenuChrome()
+            .searchable(text: $query, prompt: "Name, relationship, or place")
+            .contentMargins(.bottom, 72, for: .scrollContent)
+            .refreshable {
+                await model.loadPeople()
+                if showsConnections, let id = activeMapID { await model.loadPersonCard(id: id) }
+            }
+            .task { if !model.peopleLoaded { await model.loadPeople() } }
         }
-        .navigationTitle("People")
-        .assistantSubmenuChrome()
-        .searchable(text: $query, prompt: "Name, relationship, or place")
-        .contentMargins(.bottom, 72, for: .scrollContent)
-        .refreshable { await model.loadPeople() }
-        .task { if !model.peopleLoaded { await model.loadPeople() } }
     }
 
     @ViewBuilder

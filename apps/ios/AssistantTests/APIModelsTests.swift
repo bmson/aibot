@@ -28,7 +28,69 @@ enum KnowledgeGraphFixture {
     }
 }
 
+enum PeopleMapFixture {
+    static func relation(_ id: String, name: String, sentence: String, contact: String? = nil,
+                         unreviewed: Bool = false) -> PersonRelationSummary {
+        .init(id: id, sentence: sentence, otherLabel: name, otherInitials: String(name.prefix(1)),
+              otherContactId: contact, span: "", unreviewed: unreviewed)
+    }
+    static let relations: [PersonRelationSummary] = [
+        relation("father", name: "Alex Morgan", sentence: "Alex Morgan is Robin Morgan's father.", contact: "alex"),
+        relation("inverse", name: "Alex Morgan", sentence: "Robin Morgan is Alex Morgan's daughter.", contact: "alex"),
+        relation("conflict", name: "Alex Morgan", sentence: "Alex Morgan is Robin Morgan's child.", contact: "alex", unreviewed: true),
+        relation("mother", name: "Katharine Leigh Innes", sentence: "Katharine Leigh Innes is Robin Morgan's mother.", contact: "kat"),
+        relation("sibling", name: "Brynjar Smári Baldvinsson", sentence: "Robin Morgan and Brynjar Smári Baldvinsson are siblings.", contact: "brynjar"),
+        relation("custom", name: "Dr. Taylor Lee", sentence: "Dr. Taylor Lee attended a workshop with Robin Morgan.", unreviewed: true),
+        relation("sam", name: "Sam Morgan", sentence: "Robin Morgan and Sam Morgan are partners.", contact: "sam")
+    ]
+    static func card(relations: [PersonRelationSummary] = relations) -> PersonCard {
+        .init(id: "robin", name: "Robin Morgan", initials: "RM", relationship: "", group: "other",
+              groupLabel: "", trust: "owner", location: nil, birthday: nil, lastContact: nil,
+              howWeMet: [], relations: relations, connections: [], events: [], eventsAreRecent: false,
+              reminder: nil, factCount: relations.count)
+    }
+}
+
 final class APIModelsTests: XCTestCase {
+    func testPeopleMapKeepsContradictionsUnknownRolesAndExactEvidence() throws {
+        let branches = PeopleConnectionBranch.branches(for: PeopleMapFixture.card())
+        XCTAssertEqual(branches.count, 5)
+        let alex = try XCTUnwrap(branches.first { $0.contactID == "alex" })
+        XCTAssertEqual(alex.label, "Child · Father")
+        XCTAssertTrue(alex.needsReview)
+        XCTAssertEqual(alex.group.relations.map(\.id), ["father", "inverse", "conflict"])
+        let unknown = try XCTUnwrap(branches.first { $0.contactID == nil })
+        XCTAssertEqual(unknown.label, "Recorded connection")
+        XCTAssertEqual(unknown.detail, PeopleMapFixture.relations[5].sentence)
+        XCTAssertEqual(unknown.group.representative.sentence, PeopleMapFixture.relations[5].sentence)
+        XCTAssertEqual(branches.map(\.id), PeopleConnectionBranch.branches(
+            for: PeopleMapFixture.card(relations: PeopleMapFixture.relations.reversed())).map(\.id))
+        XCTAssertEqual(branches.flatMap { $0.group.relations }.count, PeopleMapFixture.relations.count)
+    }
+
+    func testPeopleMapDoesNotInventSelfLinksOrMergeDistinctPeopleWithSameName() {
+        let rows = [
+            PeopleMapFixture.relation("self", name: "Robin Morgan", sentence: "Self record", contact: "robin"),
+            PeopleMapFixture.relation("one", name: "Alex", sentence: "A recorded mention", contact: "one"),
+            PeopleMapFixture.relation("two", name: "Alex", sentence: "Another mention", contact: "two"),
+            PeopleMapFixture.relation("unknown", name: "Alex", sentence: "Unlinked mention")
+        ]
+        let branches = PeopleConnectionBranch.branches(for: PeopleMapFixture.card(relations: rows))
+        XCTAssertEqual(branches.count, 3)
+        XCTAssertEqual(Set(branches.compactMap(\.contactID)), ["one", "two"])
+        XCTAssertTrue(PeopleConnectionBranch.branches(for: PeopleMapFixture.card(relations: [])).isEmpty)
+        let historical = PersonRelationSummary(id: "old", sentence: "Alex is Robin Morgan's spouse.",
+            otherLabel: "Alex", otherInitials: "A", otherContactId: "alex", span: "2010–2015", unreviewed: false)
+        XCTAssertEqual(PeopleConnectionBranch.branches(for: PeopleMapFixture.card(relations: [historical])).first?.detail,
+            "2010–2015", "The map must retain the stated relationship period")
+    }
+
+    func testPeopleMapTraversalRetracesCyclesWithoutDuplicatingNavigation() {
+        XCTAssertEqual(PeopleConnectionBranch.exploring("robin", from: []), ["robin"])
+        XCTAssertEqual(PeopleConnectionBranch.exploring("alex", from: ["robin"]), ["robin", "alex"])
+        XCTAssertEqual(PeopleConnectionBranch.exploring("robin", from: ["robin", "alex"]), ["robin"])
+        XCTAssertEqual(PeopleConnectionBranch.exploring("alex", from: ["robin", "alex"]), ["robin", "alex"])
+    }
     func testKnowledgeMapKeepsRealDirectionsAndGroupsEvidenceWithoutInventingLinks() throws {
         let focus = KnowledgeGraphFixture.focus
         let relations = KnowledgeGraphFixture.relations

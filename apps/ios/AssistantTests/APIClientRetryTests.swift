@@ -60,6 +60,80 @@ final class StubURLProtocol: URLProtocol {
 
 final class APIClientRetryTests: XCTestCase {
     @MainActor
+    func testPeopleConnectionsStartsWithChoiceNotInventedDirectoryEdges() async throws {
+        let people = PeopleMapFixture.relations.compactMap { relation -> PersonSummary? in
+            guard let id = relation.otherContactId else { return nil }
+            return PersonSummary(id: id, name: relation.otherLabel, initials: relation.otherInitials,
+                relationship: "", group: "family", groupLabel: "Family", trust: "known",
+                location: nil, factCount: 1, birthday: nil, birthdayDaysUntil: nil, lastContact: nil)
+        }
+        var seen = Set<String>()
+        let response = PersonDirectoryResponse(generatedAt: "2026-09-06", people: people.filter { seen.insert($0.id).inserted })
+        StubURLProtocol.prime([.success(status: 200, body: try JSONEncoder().encode(response))])
+        let model = AppModel(apiClient: makeClient())
+        await model.loadPeople()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        for size in [DynamicTypeSize.large, .accessibility3] {
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+            window.overrideUserInterfaceStyle = .light
+            window.rootViewController = UIHostingController(rootView:
+                NavigationStack { PeopleView() }.environmentObject(model)
+                    .environment(\.colorScheme, .light).environment(\.dynamicTypeSize, size))
+            window.isHidden = false
+            defer { window.isHidden = true; window.rootViewController = nil }
+            try await Task.sleep(for: .milliseconds(350))
+            window.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "people-chooser-\(size)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertTrue(model.peopleLoaded)
+        XCTAssertTrue(model.personCards.isEmpty, "A directory category must not imply a connection or eagerly fetch every person")
+        XCTAssertEqual(StubURLProtocol.attempts, ["GET"])
+    }
+
+    @MainActor
+    func testPeopleConnectionMapLightDarkCompactAndLargeTextSnapshots() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        for (name, scheme, width, size, count) in [
+            ("light", ColorScheme.light, CGFloat(393), DynamicTypeSize.large, 7),
+            ("dark", ColorScheme.dark, CGFloat(393), DynamicTypeSize.large, 7),
+            ("compact", ColorScheme.light, CGFloat(320), DynamicTypeSize.large, 7),
+            ("accessible", ColorScheme.light, CGFloat(393), DynamicTypeSize.accessibility3, 7),
+            ("empty", ColorScheme.light, CGFloat(393), DynamicTypeSize.large, 0)
+        ] {
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 852)
+            window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
+            let content = NavigationStack {
+                ScrollView {
+                    PeopleConnectionMap(card: PeopleMapFixture.card(relations: Array(PeopleMapFixture.relations.prefix(count))),
+                        open: { _ in }, inspect: { _ in }).padding(16)
+                }
+                .navigationTitle("People")
+                .assistantSubmenuChrome()
+            }.environment(\.colorScheme, scheme).environment(\.dynamicTypeSize, size)
+            window.rootViewController = UIHostingController(rootView: content)
+            window.isHidden = false
+            defer { window.isHidden = true; window.rootViewController = nil }
+            try await Task.sleep(for: .milliseconds(350))
+            window.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "people-map-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    @MainActor
     func testKnowledgeMapLightDarkAndCompactSnapshots() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         for (name, scheme, width, count) in [
