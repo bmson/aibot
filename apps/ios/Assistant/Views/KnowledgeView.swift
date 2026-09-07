@@ -1,12 +1,14 @@
 import SwiftUI
 
 /// Native companion to the web knowledge manager. The phone keeps the same
-/// browse, cleanup, and evidence-backed editing model, but intentionally leaves
-/// the dense graph canvas to a larger screen.
+/// browse, cleanup, and evidence-backed editing model, with a focused native
+/// map that reveals one neighborhood at a time.
 struct KnowledgeView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var overview: KnowledgeOverview?
     @State private var cleanup: KnowledgeCleanupResponse?
     @State private var search = ""
@@ -20,6 +22,9 @@ struct KnowledgeView: View {
     @State private var selectedID: String?
     @State private var loadID = UUID()
     @State private var loading = false
+    @State private var showingMap = true
+    @State private var inspectedNeighborID: String?
+    @State private var evidenceRequest = 0
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -45,6 +50,13 @@ struct KnowledgeView: View {
             }
             .onChange(of: selectedID) { _, _ in
                 proxy.scrollTo("knowledge-top", anchor: .top)
+            }
+            .onChange(of: evidenceRequest) { _, _ in
+                if inspectedNeighborID != nil {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                        proxy.scrollTo("knowledge-evidence", anchor: .top)
+                    }
+                }
             }
         }
         .navigationTitle("Knowledge")
@@ -150,7 +162,6 @@ struct KnowledgeView: View {
     @ViewBuilder
     private var relationshipsContent: some View {
         if let overview {
-            knowledgeSummary(overview)
             if let selected = selectedEntity {
                 Button(
                     selectionHistory.last.map { "Back to \($0.displayLabel)" }
@@ -168,6 +179,8 @@ struct KnowledgeView: View {
                 .disabled(loading)
                 .frame(minHeight: 44)
                 selectedItem(selected, overview: overview)
+            } else {
+                knowledgeSummary(overview)
             }
             itemBrowser(overview)
         } else {
@@ -274,7 +287,8 @@ struct KnowledgeView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.kind.sentenceCaseIdentifier).font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    Text(item.displayLabel).font(.title3.weight(.semibold))
+                    Text(showingMap && !dynamicTypeSize.isAccessibilitySize ? "Connection map" : item.displayLabel)
+                        .font(.title3.weight(.semibold))
                     Text(
                         "\(connections.count) \(connections.count == 1 ? "connection" : "connections") shown"
                     )
@@ -285,13 +299,46 @@ struct KnowledgeView: View {
                 Button("Add", systemImage: "plus") { showingConnectionEditor = true }
                     .buttonStyle(.borderedProminent)
             }
+            Picker("Connection presentation", selection: $showingMap) {
+                Label("Map", systemImage: "point.3.connected.trianglepath.dotted").tag(true)
+                Label("Details", systemImage: "list.bullet").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("assistant.knowledge.presentation")
             if overview.relations.isEmpty {
                 AssistantEmptyState(
                     "No active connections", systemImage: "point.3.connected.trianglepath.dotted",
                     description: "Add a connection with a short source note.")
             } else {
-                ForEach(connections) { connection in
-                    connectionCard(connection)
+                if showingMap && !dynamicTypeSize.isAccessibilitySize {
+                    KnowledgeGraphView(focus: item, relations: overview.relations, loading: loading) { neighbor in
+                        Task { await open(neighbor) }
+                    } inspect: { neighbor in
+                        inspectedNeighborID = neighbor.id
+                        evidenceRequest += 1
+                    }
+                    if let neighbor = KnowledgeGraphNeighbor.neighbors(of: item, relations: overview.relations)
+                        .first(where: { $0.id == inspectedNeighborID }) {
+                        HStack {
+                            Text("Linked to \(neighbor.entity.displayLabel)").font(.headline)
+                            Spacer()
+                            Button("Close evidence", systemImage: "xmark") { inspectedNeighborID = nil }
+                                .labelStyle(.iconOnly)
+                                .frame(width: 44, height: 44)
+                        }
+                        .id("knowledge-evidence")
+                        ForEach(neighbor.connections) { connection in
+                            connectionCard(connection)
+                        }
+                    }
+                } else {
+                    if showingMap {
+                        Text("Connections are shown as a readable list at this text size.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    ForEach(connections) { connection in
+                        connectionCard(connection)
+                    }
                 }
                 if overview.selectedActiveRelationTotal
                     > overview.relations.filter({
@@ -299,7 +346,7 @@ struct KnowledgeView: View {
                     }).count
                 {
                     Text(
-                        "Showing a limited set of connections. Use the web knowledge workspace to review the full set."
+                        "This is a partial view of \(overview.selectedActiveRelationTotal) active source connections. Explore a linked item or use the web knowledge workspace for the full set."
                     )
                     .font(.caption).foregroundStyle(.secondary)
                 }
@@ -312,7 +359,7 @@ struct KnowledgeView: View {
         VStack(alignment: .leading, spacing: 9) {
             Text("Browse knowledge").font(.headline)
             if selectedEntity == nil {
-                Text("Find a person, place, or project to explore its connections and sources.")
+                Text("Choose a person, place, or project to open its connection map. Tap linked nodes to keep exploring.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -442,6 +489,7 @@ struct KnowledgeView: View {
     private func loadSearch() async {
         showingCleanup = false
         selectedID = nil
+        inspectedNeighborID = nil
         selectionHistory = []
         await refresh()
     }
@@ -460,6 +508,7 @@ struct KnowledgeView: View {
             selectionHistory.append(previous)
         }
         selectedID = item.id
+        inspectedNeighborID = nil
         overview = result
     }
 

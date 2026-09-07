@@ -60,6 +60,44 @@ final class StubURLProtocol: URLProtocol {
 
 final class APIClientRetryTests: XCTestCase {
     @MainActor
+    func testKnowledgeMapLightDarkAndCompactSnapshots() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        for (name, scheme, width, count) in [
+            ("light", ColorScheme.light, CGFloat(393), 6),
+            ("dark", ColorScheme.dark, CGFloat(393), 6),
+            ("compact", ColorScheme.light, CGFloat(320), 6),
+            ("single", ColorScheme.light, CGFloat(393), 1),
+            ("empty", ColorScheme.light, CGFloat(393), 0)
+        ] {
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 852)
+            window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
+            let content = NavigationStack {
+                ScrollView {
+                    KnowledgeGraphView(focus: KnowledgeGraphFixture.focus,
+                        relations: Array(KnowledgeGraphFixture.relations.prefix(count)), loading: false,
+                        open: { _ in }, inspect: { _ in })
+                        .padding(16)
+                }
+                .navigationTitle("Knowledge")
+                .assistantSubmenuChrome()
+            }.environment(\.colorScheme, scheme)
+            window.rootViewController = UIHostingController(rootView: content)
+            window.isHidden = false
+            defer { window.isHidden = true; window.rootViewController = nil }
+            try await Task.sleep(for: .milliseconds(350))
+            window.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "knowledge-map-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    @MainActor
     func testGoalEditorUsesSharedCanvasInBothAppearances() async throws {
         let goal = GoalRecord(
             id: "preview", title: "Plan the weekend", description: "Keep the plan flexible.",

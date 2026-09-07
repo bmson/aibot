@@ -2,7 +2,58 @@ import XCTest
 import CoreLocation
 @testable import Assistant
 
+enum KnowledgeGraphFixture {
+    static let focus = KnowledgeEntity(id: "alex", label: "Alex Morgan", kind: "person", canonicalKey: "alex")
+    static func relation(id: String, other: KnowledgeEntity, predicate: String = "knows",
+                         inbound: Bool = false, review: String = "confirmed", inRecall: Bool = true) -> KnowledgeRelation {
+        let subject = inbound ? other : focus
+        let object = inbound ? focus : other
+        let sentence = "\(subject.label) \(predicate.replacingOccurrences(of: "_", with: " ")) \(object.label)."
+        return KnowledgeRelation(id: id, subject: subject, predicate: predicate, object: object,
+            confidence: 1, reviewStatus: review, validFrom: nil, validUntil: nil, inRecall: inRecall,
+            source: KnowledgeSource(memoryId: id, content: sentence, createdAt: "2026-09-06",
+                ownerConfirmed: review == "confirmed", originTrust: "owner"),
+            presentation: KnowledgePresentation(sentence: sentence, label: predicate, accessibleLabel: sentence))
+    }
+    static var relations: [KnowledgeRelation] {
+        let robin = KnowledgeEntity(id: "robin", label: "Robin Morgan", kind: "person", canonicalKey: "robin")
+        return [
+            relation(id: "studio", other: .init(id: "studio", label: "Northstar Studio", kind: "organization", canonicalKey: "studio"), predicate: "works_at"),
+            relation(id: "sf", other: .init(id: "sf", label: "San Francisco", kind: "place", canonicalKey: "sf"), predicate: "lives_in"),
+            relation(id: "robin1", other: robin, predicate: "parent_of", inbound: true, review: "unreviewed"),
+            relation(id: "robin2", other: robin, predicate: "parent_of", inbound: true, review: "unreviewed"),
+            relation(id: "trip", other: .init(id: "trip", label: "Summer road trip", kind: "project", canonicalKey: "trip"), predicate: "planning"),
+            relation(id: "event", other: .init(id: "event", label: "Design meetup", kind: "event", canonicalKey: "event"), predicate: "attends", review: "unreviewed")
+        ]
+    }
+}
+
 final class APIModelsTests: XCTestCase {
+    func testKnowledgeMapKeepsRealDirectionsAndGroupsEvidenceWithoutInventingLinks() throws {
+        let focus = KnowledgeGraphFixture.focus
+        let relations = KnowledgeGraphFixture.relations
+        let neighbors = KnowledgeGraphNeighbor.neighbors(of: focus, relations: relations)
+        XCTAssertEqual(neighbors.count, 5)
+        XCTAssertEqual(Set(neighbors.map(\.id)).count, neighbors.count)
+        let family = try XCTUnwrap(neighbors.first { $0.id == "robin" })
+        XCTAssertTrue(family.hasIncoming(to: focus.id))
+        XCTAssertFalse(family.hasOutgoing(from: focus.id))
+        XCTAssertEqual(family.connections.count, 1, "Duplicate source evidence shares a single link")
+        XCTAssertEqual(family.connections[0].sources.count, 2)
+        XCTAssertEqual(family.linkLabel, "Parent of")
+        XCTAssertFalse(family.confirmed)
+        XCTAssertTrue(neighbors.first?.confirmed == true, "Reviewed links lead the map")
+        XCTAssertEqual(neighbors.map(\.id), KnowledgeGraphNeighbor.neighbors(of: focus, relations: relations.reversed()).map(\.id))
+
+        let other = KnowledgeEntity(id: "other", label: "Other", kind: "person", canonicalKey: "other")
+        XCTAssertTrue(KnowledgeGraphNeighbor.neighbors(of: other, relations: relations).isEmpty)
+        XCTAssertTrue(KnowledgeGraphNeighbor.neighbors(of: focus, relations: []).isEmpty)
+        let inactive = KnowledgeGraphFixture.relation(id: "old", other: other, inRecall: false)
+        let rejected = KnowledgeGraphFixture.relation(id: "rejected", other: other, review: "rejected")
+        let loop = KnowledgeGraphFixture.relation(id: "self", other: focus)
+        XCTAssertTrue(KnowledgeGraphNeighbor.neighbors(of: focus, relations: [inactive, rejected, loop]).isEmpty)
+    }
+
     func testLocationFixRejectsCachedInaccurateAndUnconfirmedSamples() {
         let now = Date()
         func fix(age: TimeInterval = 0, accuracy: Double = 30, latitude: Double = 37.77) -> CLLocation {
