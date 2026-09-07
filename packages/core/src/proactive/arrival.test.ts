@@ -2,7 +2,7 @@ import { createDb, type Db, locationPings, tasks } from '@assistant/db';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
-import { maybeEnqueueArrivalNudge } from './arrival.js';
+import { hasConfirmedArrival, maybeEnqueueArrivalNudge } from './arrival.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -16,6 +16,40 @@ const NOW = new Date('2020-06-15T12:00:00Z');
 // Downtown Reykjavík vs Kópavogur — ~7km apart, well past the 1.5km radius.
 const HOME = { lat: 64.1466, lng: -21.9426 };
 const AWAY = { lat: 64.1123, lng: -21.9 };
+
+describe('arrival dwell confirmation', () => {
+  const observation = (minutesAgo: number, place = AWAY, accuracyM: number | null = 50) => ({
+    ...place,
+    accuracyM,
+    capturedAt: new Date(NOW.getTime() - minutesAgo * 60_000),
+  });
+  const current = observation(0);
+  const home = observation(120, HOME);
+
+  it('requires a separated second fix, not a first arrival, replay, or rapid duplicate', () => {
+    expect(hasConfirmedArrival(current, [home], NOW)).toBe(false);
+    expect(hasConfirmedArrival(current, [home, current], NOW)).toBe(false);
+    expect(hasConfirmedArrival(current, [home, observation(1)], NOW)).toBe(false);
+    expect(hasConfirmedArrival(current, [home, observation(3)], NOW)).toBe(true);
+  });
+
+  it('rejects drift, interrupted stops, uncertain fixes, and stale confirmations', () => {
+    expect(hasConfirmedArrival(current, [home, observation(4), observation(1, HOME)], NOW)).toBe(
+      false,
+    );
+    expect(hasConfirmedArrival(current, [home, observation(4, AWAY, 5000)], NOW)).toBe(false);
+    expect(hasConfirmedArrival(current, [home, observation(4, AWAY, null)], NOW)).toBe(false);
+    expect(hasConfirmedArrival(current, [home, observation(31)], NOW)).toBe(false);
+    expect(hasConfirmedArrival(observation(10), [home, observation(14)], NOW)).toBe(false);
+    expect(hasConfirmedArrival(observation(-1), [home, observation(4)], NOW)).toBe(false);
+    expect(hasConfirmedArrival(observation(0, AWAY, -1), [home, observation(4)], NOW)).toBe(false);
+  });
+
+  it('does not treat a routine place or an unobserved baseline as a new arrival', () => {
+    expect(hasConfirmedArrival(current, [observation(4)], NOW)).toBe(false);
+    expect(hasConfirmedArrival(current, [home, observation(120), observation(4)], NOW)).toBe(false);
+  });
+});
 
 describe('maybeEnqueueArrivalNudge (integration)', () => {
   let db: Db;
@@ -63,6 +97,7 @@ describe('maybeEnqueueArrivalNudge (integration)', () => {
       lat: String(place.lat),
       lng: String(place.lng),
       source: 'xtest',
+      accuracyM: 50,
       capturedAt: at,
     });
   }
@@ -70,6 +105,9 @@ describe('maybeEnqueueArrivalNudge (integration)', () => {
   it('enqueues one considered nudge on a genuine arrival', async (ctx) => {
     if (!dbUp) return ctx.skip();
     await insertBaseline(new Date(NOW.getTime() - 2 * 3600e3));
+
+    expect(await maybeEnqueueArrivalNudge(db, agent, ping(), NOW)).toBe(false);
+    await insertBaseline(new Date(NOW.getTime() - 4 * 60e3), AWAY);
 
     expect(await maybeEnqueueArrivalNudge(db, agent, ping(), NOW)).toBe(true);
 
@@ -95,16 +133,19 @@ describe('maybeEnqueueArrivalNudge (integration)', () => {
   it('dedupes the same place on the same day, and respects the 12h cooldown', async (ctx) => {
     if (!dbUp) return ctx.skip();
     await insertBaseline(new Date(NOW.getTime() - 2 * 3600e3));
+    await insertBaseline(new Date(NOW.getTime() - 4 * 60e3), AWAY);
     expect(await maybeEnqueueArrivalNudge(db, agent, ping(), NOW)).toBe(true);
     // Replay (crash retry, duplicate ping): the idempotency key absorbs it.
     expect(await maybeEnqueueArrivalNudge(db, agent, ping(), NOW)).toBe(false);
     // Somewhere else entirely an hour later: the global cooldown holds.
+    const later = new Date(NOW.getTime() + 3600e3);
+    await insertBaseline(new Date(later.getTime() - 4 * 60e3), { lat: 64.8, lng: -23.5 });
     expect(
       await maybeEnqueueArrivalNudge(
         db,
         agent,
-        ping({ lat: 64.8, lng: -23.5, label: 'Snæfellsnes' }),
-        new Date(NOW.getTime() + 3600e3),
+        ping({ lat: 64.8, lng: -23.5, label: 'Snæfellsnes', capturedAt: later }),
+        later,
       ),
     ).toBe(false);
     const created = await db

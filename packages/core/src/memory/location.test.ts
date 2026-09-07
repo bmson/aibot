@@ -67,6 +67,8 @@ describe('location context — pure helpers', () => {
     expect(line).toContain('near Reykjavík');
     expect(line).toContain('64.1466, -21.9426');
     expect(line).toContain('12 min ago');
+    expect(line).toContain('Approximate accuracy: 20 metres');
+    expect(line).toContain('not proof the owner is still there');
   });
 
   it('names the device time zone when the ping carries one', () => {
@@ -85,6 +87,14 @@ describe('location context — pure helpers', () => {
     };
     expect(formatLocationLine(row, now)).toContain('device clock is in America/Denver');
     expect(formatLocationLine({ ...row, timeZone: null }, now)).not.toContain('device clock');
+    expect(formatLocationLine({ ...row, accuracyM: null }, now)).toContain('Accuracy is unknown');
+    expect(formatLocationLine({ ...row, accuracyM: 5000 }, now)).toBeUndefined();
+    expect(
+      formatLocationLine({ ...row, capturedAt: new Date(now.getTime() - 31 * 60_000) }, now),
+    ).toBeUndefined();
+    expect(
+      formatLocationLine({ ...row, capturedAt: new Date(now.getTime() + 60_000) }, now),
+    ).toBeUndefined();
   });
 });
 

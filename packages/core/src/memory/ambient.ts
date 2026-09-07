@@ -478,7 +478,7 @@ export async function refreshAmbientSnapshot(
   return withSpan('ambient.refresh', {}, async () => {
     await deps.heartbeat?.();
     const retentionDays = loadConfig().LOCATION_RETENTION_DAYS;
-    const ping = await latestLocation(db, opts.agentId, retentionDays);
+    const ping = await latestLocation(db, opts.agentId, retentionDays, undefined, now);
     if (!ping) {
       // No fresh location — clear any stale snapshot so nothing outdated is served.
       await db.delete(ambientSnapshots).where(eq(ambientSnapshots.agentId, opts.agentId));
@@ -580,11 +580,28 @@ export async function getAmbientBlock(
     .from(ambientSnapshots)
     .where(eq(ambientSnapshots.agentId, agentId))
     .limit(1);
-  if (snap?.block && now.getTime() - snap.computedAt.getTime() <= ttl) {
-    return snap.block;
+  const ping = await latestLocation(
+    db,
+    agentId,
+    loadConfig().LOCATION_RETENTION_DAYS,
+    undefined,
+    now,
+  );
+  if (!ping) return undefined;
+  const sources = snap?.sources as { location?: { capturedAt?: string } } | undefined;
+  if (
+    snap?.block &&
+    now.getTime() >= snap.computedAt.getTime() &&
+    now.getTime() - snap.computedAt.getTime() <= ttl &&
+    sources?.location?.capturedAt === ping.capturedAt.toISOString()
+  ) {
+    // Weather may remain cached, but the location's age must advance with time.
+    return snap.block.replace(
+      /^Owner's current location:.*$/m,
+      formatLocationLine(ping, now) ?? '',
+    );
   }
   // Stale/absent snapshot: fall back to the freshest location on its own.
-  const ping = await latestLocation(db, agentId, loadConfig().LOCATION_RETENTION_DAYS);
   return formatLocationLine(ping, now);
 }
 

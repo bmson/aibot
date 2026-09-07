@@ -1,5 +1,5 @@
 import { type Db, locationPings, tasks } from '@assistant/db';
-import { and, eq, gte, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
 import { InboundEventSchema } from '../events.js';
 import { enqueueTask } from '../workflow/machine.js';
 
@@ -17,8 +17,10 @@ import { enqueueTask } from '../workflow/machine.js';
 const ARRIVAL_DISTANCE_KM = 1.5;
 const ARRIVAL_WINDOW_HOURS = 36;
 const ARRIVAL_COOLDOWN_HOURS = 12;
-/** Worse accuracy than this is a drive-by fix, not a place. */
-const ARRIVAL_MAX_ACCURACY_M = 500;
+const ARRIVAL_MAX_ACCURACY_M = 200;
+const ARRIVAL_DWELL_MS = 3 * 60_000;
+const ARRIVAL_CONFIRMATION_WINDOW_MS = 30 * 60_000;
+const ARRIVAL_STATIONARY_RADIUS_KM = 0.2;
 
 export interface ArrivalPing {
   lat: number;
@@ -35,6 +37,49 @@ function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number): nu
   const h =
     Math.sin(dLat / 2) ** 2 + Math.cos(aLat * rad) * Math.cos(bLat * rad) * Math.sin(dLng / 2) ** 2;
   return 6371 * 2 * Math.asin(Math.sqrt(h));
+}
+
+function accurate(ping: ArrivalPing): boolean {
+  return (
+    Number.isFinite(ping.lat) &&
+    Math.abs(ping.lat) <= 90 &&
+    Number.isFinite(ping.lng) &&
+    Math.abs(ping.lng) <= 180 &&
+    ping.accuracyM != null &&
+    Number.isFinite(ping.accuracyM) &&
+    ping.accuracyM >= 0 &&
+    ping.accuracyM <= ARRIVAL_MAX_ACCURACY_M
+  );
+}
+
+/** Two separated observations suggest a stop; a single drive-by never does. */
+export function hasConfirmedArrival(ping: ArrivalPing, earlier: ArrivalPing[], now: Date): boolean {
+  const age = now.getTime() - ping.capturedAt.getTime();
+  if (!accurate(ping) || !Number.isFinite(age) || age < -5_000 || age > 5 * 60_000) return false;
+  const history = earlier
+    .filter((row) => row.capturedAt < ping.capturedAt)
+    .sort((a, b) => b.capturedAt.getTime() - a.capturedAt.getTime());
+  let dwellStart = ping.capturedAt.getTime();
+  let index = 0;
+  for (; index < history.length; index++) {
+    const row = history[index];
+    if (!row) break;
+    if (
+      !accurate(row) ||
+      ping.capturedAt.getTime() - row.capturedAt.getTime() > ARRIVAL_CONFIRMATION_WINDOW_MS ||
+      haversineKm(ping.lat, ping.lng, row.lat, row.lng) > ARRIVAL_STATIONARY_RADIUS_KM
+    )
+      break;
+    dwellStart = row.capturedAt.getTime();
+  }
+  if (ping.capturedAt.getTime() - dwellStart < ARRIVAL_DWELL_MS) return false;
+  // The confirming observations must not veto their own arrival. Older
+  // history still prevents routine places from generating another nudge.
+  const baseline = history.slice(index).filter(accurate);
+  return (
+    baseline.length > 0 &&
+    baseline.every((row) => haversineKm(ping.lat, ping.lng, row.lat, row.lng) > ARRIVAL_DISTANCE_KM)
+  );
 }
 
 /** Owner-local calendar date — the "same place, same day" dedupe granularity. */
@@ -58,11 +103,16 @@ export async function maybeEnqueueArrivalNudge(
   ping: ArrivalPing,
   now: Date = new Date(),
 ): Promise<boolean> {
-  if (ping.accuracyM != null && ping.accuracyM > ARRIVAL_MAX_ACCURACY_M) return false;
+  if (!accurate(ping)) return false;
 
   const windowStart = new Date(now.getTime() - ARRIVAL_WINDOW_HOURS * 3600e3);
   const recent = await db
-    .select({ lat: locationPings.lat, lng: locationPings.lng })
+    .select({
+      lat: locationPings.lat,
+      lng: locationPings.lng,
+      accuracyM: locationPings.accuracyM,
+      capturedAt: locationPings.capturedAt,
+    })
     .from(locationPings)
     .where(
       and(
@@ -71,15 +121,20 @@ export async function maybeEnqueueArrivalNudge(
         // Strictly before: the just-recorded ping must not veto itself.
         lt(locationPings.capturedAt, ping.capturedAt),
       ),
-    );
-  // No earlier ping in the window means no baseline (fresh install, or the
-  // retention purge) — there is nothing to be "new" against, so stand down.
-  if (recent.length === 0) return false;
-  const somewhereNew = recent.every(
-    (row) =>
-      haversineKm(ping.lat, ping.lng, Number(row.lat), Number(row.lng)) > ARRIVAL_DISTANCE_KM,
-  );
-  if (!somewhereNew) return false;
+    )
+    .orderBy(desc(locationPings.capturedAt));
+  if (
+    !hasConfirmedArrival(
+      ping,
+      recent.map((row) => ({
+        ...row,
+        lat: Number(row.lat),
+        lng: Number(row.lng),
+      })),
+      now,
+    )
+  )
+    return false;
 
   const cooldownStart = new Date(now.getTime() - ARRIVAL_COOLDOWN_HOURS * 3600e3);
   const [recentNudge] = await db
@@ -105,8 +160,9 @@ export async function maybeEnqueueArrivalNudge(
     trust: 'assistant',
     payload: {
       instruction:
-        `A background location ping says the owner just arrived somewhere they have not been in the last day or so: ${where} ` +
+        `Accurate location observations at least three minutes apart suggest the owner has stopped near a new area: ${where} ` +
         `(lat ${ping.lat.toFixed(4)}, lng ${ping.lng.toFixed(4)}). Decide whether one proactive note is worth a push right now. ` +
+        'These are approximate observations, not proof of being inside a particular venue. Check current ambient location; if it has changed or is unavailable, send nothing. ' +
         'Around a local mealtime, one or two well-rated, currently-open restaurant or café picks within a short walk are ' +
         'genuinely useful — run web.search at most once, and only recommend places the search actually returned. ' +
         'In an unfamiliar city or neighbourhood, one concrete orientation tip is welcome. ' +

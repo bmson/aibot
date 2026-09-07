@@ -85,11 +85,21 @@ The iOS app posts the same ping shape to `POST /api/mobile/v1/location` on the w
 authenticated with its existing mobile access key rather than the HMAC secret — no second credential
 is installed on the phone. Pings carry the device's IANA time zone (`timeZone`) alongside `lat`/`lng`,
 so the ambient prompt line can anchor the owner's clock while traveling. Sharing is off by default and
-owner-gated (More → Assistant context → Share iPhone location); the app sends a one-shot fix on connect
-and on foreground, throttled to 15 minutes. A separate toggle ("Background arrival nudges") opts into
-the significant-change service: coarse background pings on ~500m moves, which the server screens
-through an arrival gate (new place, one nudge per place per day, 12-hour global cooldown) before any
-proactive note is considered.
+owner-gated (More → Assistant context → Share iPhone location). On connect and foreground, the app
+collects two consistent fixes at least two seconds apart, stopping within 12 seconds; it rejects
+cached samples older than 30 seconds and accuracy worse than 200 metres. Uploads remain throttled
+to 15 minutes. A separate toggle ("Background arrival nudges") opts into significant-change and
+visit monitoring. Movement and arrival callbacks request the same bounded recheck, not continuous
+GPS tracking. A still-current visit may bypass the upload throttle so its confirmation is not lost.
+The server requires accurate observations within 200 metres of one another spanning at least three
+minutes (within a 30-minute confirmation window), with no intervening movement/uncertain samples,
+before considering an arrival nudge. Existing new-place, daily dedupe and 12-hour cooldown gates
+still apply. Sparse background delivery may delay or suppress a nudge; a single fix never proves a stop.
+
+Location retention is separate from freshness: observations expire as current context after 30
+minutes. A newer ping invalidates cached location/weather context, and uncertain fixes never cause
+a fallback to an older place. Prompts include accuracy and age and must not infer presence inside a
+venue; unknown accuracy or an observation over five minutes old requires confirmation for nearby picks.
 
 ## Release artifacts
 

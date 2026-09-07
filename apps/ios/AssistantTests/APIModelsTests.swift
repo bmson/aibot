@@ -1,7 +1,27 @@
 import XCTest
+import CoreLocation
 @testable import Assistant
 
 final class APIModelsTests: XCTestCase {
+    func testLocationFixRejectsCachedInaccurateAndUnconfirmedSamples() {
+        let now = Date()
+        func fix(age: TimeInterval = 0, accuracy: Double = 30, latitude: Double = 37.77) -> CLLocation {
+            CLLocation(coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: -122.42),
+                altitude: 0, horizontalAccuracy: accuracy, verticalAccuracy: -1,
+                timestamp: now.addingTimeInterval(-age))
+        }
+        XCTAssertTrue(LocationFixPolicy.isUsable(fix(), now: now))
+        for sample in [fix(age: 60), fix(age: -60), fix(accuracy: -1), fix(accuracy: 3000), fix(latitude: 100)] {
+            XCTAssertFalse(LocationFixPolicy.isUsable(sample, now: now))
+        }
+        XCTAssertTrue(LocationFixPolicy.confirms(fix(age: 3), with: fix(), now: now))
+        XCTAssertFalse(LocationFixPolicy.confirms(fix(), with: fix(), now: now))
+        XCTAssertFalse(LocationFixPolicy.confirms(fix(age: 1), with: fix(), now: now))
+        XCTAssertFalse(LocationFixPolicy.confirms(fix(age: 20), with: fix(), now: now))
+        XCTAssertFalse(LocationFixPolicy.confirms(fix(age: 3), with: fix(latitude: 37.8), now: now))
+        XCTAssertFalse(LocationFixPolicy.confirms(fix(age: 3), with: fix(accuracy: 3000), now: now))
+    }
+
     func testSituationPackMissingRouteHasActionableCopy() {
         XCTAssertEqual(
             SituationPackLoadFailure.message(for: APIError.server(status: 404, message: "not found")),

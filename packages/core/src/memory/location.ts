@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { type Db, type LocationPingRow, locationPings } from '@assistant/db';
-import { and, desc, eq, gte, inArray, lt } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt, lte } from 'drizzle-orm';
 import { z } from 'zod';
 
 /**
@@ -53,6 +53,8 @@ export function verifyLocationSignature(
  * docs/operations.md).
  */
 export const LOCATION_PING_MAX_SKEW_MS = 5 * 60 * 1000;
+/** Retention is for cleanup, not permission to claim yesterday's position. */
+export const LOCATION_CONTEXT_MAX_AGE_MS = 30 * 60_000;
 
 export function locationPingFresh(input: LocationPingInput, now = new Date()): boolean {
   if (!input.capturedAt) return false;
@@ -90,8 +92,11 @@ export async function latestLocation(
   withinDays: number,
   /** Narrow to one ingest source (tests scope to their own rows this way). */
   source?: string,
+  now = new Date(),
 ): Promise<LocationPingRow | null> {
-  const cutoff = new Date(Date.now() - withinDays * 24 * 3600 * 1000);
+  const cutoff = new Date(
+    now.getTime() - Math.min(withinDays * 24 * 3600 * 1000, LOCATION_CONTEXT_MAX_AGE_MS),
+  );
   const [row] = await db
     .select()
     .from(locationPings)
@@ -99,12 +104,25 @@ export async function latestLocation(
       and(
         eq(locationPings.agentId, agentId),
         gte(locationPings.capturedAt, cutoff),
+        lte(locationPings.capturedAt, now),
         source ? eq(locationPings.source, source) : undefined,
       ),
     )
     .orderBy(desc(locationPings.capturedAt))
     .limit(1);
-  return row ?? null;
+  // Do not fall back to an older, more precise fix when the newest observation
+  // is uncertain: that can silently put a traveling owner back in another city.
+  return row && locationContextUsable(row, now) ? row : null;
+}
+
+export function locationContextUsable(ping: LocationPingRow, now = new Date()): boolean {
+  const age = now.getTime() - ping.capturedAt.getTime();
+  return (
+    Number.isFinite(age) &&
+    age >= 0 &&
+    age <= LOCATION_CONTEXT_MAX_AGE_MS &&
+    (ping.accuracyM == null || (ping.accuracyM >= 0 && ping.accuracyM <= 500))
+  );
 }
 
 /** Delete pings older than the retention window (called from the sweep). */
@@ -146,9 +164,13 @@ export function formatLocationLine(
   ping: LocationPingRow | null,
   now = new Date(),
 ): string | undefined {
-  if (!ping) return undefined;
+  if (!ping || !locationContextUsable(ping, now)) return undefined;
   const place = ping.label ? `near ${ping.label} ` : '';
   const coords = `${Number(ping.lat).toFixed(4)}, ${Number(ping.lng).toFixed(4)}`;
   const zone = ping.timeZone ? ` The owner's device clock is in ${ping.timeZone}.` : '';
-  return `Owner's current location: ${place}(${coords}), as of ${ago(ping.capturedAt, now)}.${zone} Use it for "where am I", nearby suggestions, and travel/timezone awareness; it is transient context, not a stored fact.`;
+  const accuracy =
+    ping.accuracyM == null
+      ? 'Accuracy is unknown.'
+      : `Approximate accuracy: ${ping.accuracyM} metres.`;
+  return `Owner's current location: ${place}(${coords}), as of ${ago(ping.capturedAt, now)}. ${accuracy}${zone} This is the last observed position, not proof the owner is still there or inside a particular venue. For nearby suggestions, qualify the area and ask for confirmation if accuracy is unknown or the observation is over 5 minutes old. An explicit location in the user's request takes priority. It is transient context, not a stored fact.`;
 }

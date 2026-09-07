@@ -349,4 +349,46 @@ describe('ambient — snapshot refresh + block', () => {
     expect(block).toContain('Reykjavík');
     expect(block).not.toContain('chance of rain');
   });
+
+  it('never lets a fresh weather cache override a newer position or an expired fix', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const now = new Date();
+    await refreshAmbientSnapshot({ db, fetchImpl: fakeWeatherFetch() }, { agentId, now });
+    const movedAt = new Date(now.getTime() + 1000);
+    await recordLocationPing(db, agentId, {
+      lat: 64.1123,
+      lng: -21.9,
+      label: 'Kópavogur',
+      accuracyM: 30,
+      source: 'xtest-amb',
+      capturedAt: movedAt.toISOString(),
+    });
+    const moved = await getAmbientBlock(db, agentId, { now: movedAt });
+    expect(moved).toContain('Kópavogur');
+    expect(moved).not.toContain('Reykjavík');
+    expect(moved).not.toContain('Weather there');
+    await refreshAmbientSnapshot({ db, fetchImpl: fakeWeatherFetch() }, { agentId, now: movedAt });
+    const later = await getAmbientBlock(db, agentId, {
+      now: new Date(movedAt.getTime() + 10 * 60_000),
+    });
+    expect(later).toContain('10 min ago');
+    expect(later).toContain('Weather there');
+    expect(
+      await getAmbientBlock(db, agentId, { now: new Date(movedAt.getTime() + 31 * 60_000) }),
+    ).toBeUndefined();
+  });
+
+  it('does not fall back to an old precise place after a new uncertain observation', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const now = new Date(Date.now() + 2000);
+    await recordLocationPing(db, agentId, {
+      lat: 0,
+      lng: 0,
+      label: 'Uncertain',
+      accuracyM: 5000,
+      source: 'xtest-amb',
+      capturedAt: now.toISOString(),
+    });
+    expect(await getAmbientBlock(db, agentId, { now })).toBeUndefined();
+  });
 });
