@@ -43,7 +43,7 @@ struct KnowledgeView: View {
                 .padding(.bottom, 28)
                 .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
             }
-            .onChange(of: overview?.selected?.id) { _, _ in
+            .onChange(of: selectedID) { _, _ in
                 proxy.scrollTo("knowledge-top", anchor: .top)
             }
         }
@@ -60,7 +60,7 @@ struct KnowledgeView: View {
         .contentMargins(.bottom, 72, for: .scrollContent)
         .onSubmit(of: .search) { Task { await loadSearch() } }
         .toolbar {
-            if !showingCleanup, overview?.selected != nil {
+            if !showingCleanup, selectedEntity != nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("Add connection", systemImage: "plus") {
@@ -76,7 +76,7 @@ struct KnowledgeView: View {
         .task { await refresh() }
         .refreshable { await refresh() }
         .sheet(isPresented: $showingConnectionEditor) {
-            if let selected = overview?.selected {
+            if let selected = selectedEntity {
                 NavigationStack {
                     KnowledgeConnectionEditor(
                         selected: selected, candidates: overview?.entities ?? []
@@ -96,7 +96,7 @@ struct KnowledgeView: View {
             }
         }
         .sheet(isPresented: $editingItem) {
-            if let selected = overview?.selected {
+            if let selected = selectedEntity {
                 NavigationStack {
                     KnowledgeItemEditor(item: selected, duplicates: overview?.duplicates ?? []) {
                         survivingID in
@@ -134,6 +134,10 @@ struct KnowledgeView: View {
 
     private var isLandscape: Bool { verticalSizeClass == .compact }
 
+    private var selectedEntity: KnowledgeEntity? {
+        overview?.entitySelected(by: selectedID)
+    }
+
     private func forgetImpactMessage(_ impact: KnowledgeSourceImpact) -> String {
         let retired =
             impact.retiredProjections > 0
@@ -147,14 +151,22 @@ struct KnowledgeView: View {
     private var relationshipsContent: some View {
         if let overview {
             knowledgeSummary(overview)
-            if let previous = selectionHistory.last {
-                Button("Back to \(previous.displayLabel)", systemImage: "chevron.left") {
-                    Task { await open(previous, goingBack: true) }
+            if let selected = selectedEntity {
+                Button(
+                    selectionHistory.last.map { "Back to \($0.displayLabel)" }
+                        ?? "Back to knowledge",
+                    systemImage: "chevron.left"
+                ) {
+                    Task {
+                        if let previous = selectionHistory.last {
+                            await open(previous, goingBack: true)
+                        } else {
+                            await loadSearch()
+                        }
+                    }
                 }
                 .disabled(loading)
                 .frame(minHeight: 44)
-            }
-            if let selected = overview.selected {
                 selectedItem(selected, overview: overview)
             }
             itemBrowser(overview)
@@ -299,6 +311,11 @@ struct KnowledgeView: View {
     private func itemBrowser(_ overview: KnowledgeOverview) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             Text("Browse knowledge").font(.headline)
+            if selectedEntity == nil {
+                Text("Find a person, place, or project to explore its connections and sources.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
             Text("\(overview.matchingEntities) matching items")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -439,7 +456,7 @@ struct KnowledgeView: View {
         else { return }
         if goingBack {
             _ = selectionHistory.popLast()
-        } else if let previous = overview?.selected, previous.id != item.id {
+        } else if let previous = selectedEntity, previous.id != item.id {
             selectionHistory.append(previous)
         }
         selectedID = item.id

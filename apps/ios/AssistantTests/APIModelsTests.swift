@@ -283,6 +283,20 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(message.quickReplies, ["Show me", "Continue"])
     }
 
+    func testKnowledgeOverviewDoesNotPromoteAnAutomaticSelection() {
+        let address = KnowledgeEntity(
+            id: "address", label: "1 Daniel Burnham Court", kind: "place",
+            canonicalKey: "place:address")
+        let overview = KnowledgeOverview(
+            totalEntities: 1, totalRelations: 0, unreviewedRelations: 0,
+            entities: [address], matchingEntities: 1, entityPage: 1, entityPages: 1,
+            selected: address, relations: [], selectedActiveRelationTotal: 0, duplicates: [])
+
+        XCTAssertNil(overview.entitySelected(by: nil), "Opening or returning to browse must not feature the API default")
+        XCTAssertEqual(overview.entitySelected(by: address.id), address)
+        XCTAssertNil(overview.entitySelected(by: "another-item"), "A stale response must not show a different item")
+    }
+
     func testDecodesKnowledgeRelationshipPresentation() throws {
         let data = """
         {

@@ -1208,6 +1208,13 @@ struct KnowledgeOverview: Codable, Sendable {
     let relations: [KnowledgeRelation]
     let selectedActiveRelationTotal: Int
     let duplicates: [KnowledgeDuplicate]
+
+    /// The API may include an alphabetically first item for legacy clients.
+    /// Only an explicit, matching selection should be presented as a detail.
+    func entitySelected(by selectedID: String?) -> KnowledgeEntity? {
+        guard let selectedID, selected?.id == selectedID else { return nil }
+        return selected
+    }
 }
 
 /// UI projection only: source-level review and correction remain independent.
