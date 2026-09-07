@@ -3,6 +3,69 @@ import SwiftUI
 @testable import Assistant
 
 @MainActor
+private final class LiftedTranscriptFixtureState: ObservableObject {
+    @Published var reveal: CGFloat = 0
+    @Published var composerHeight: CGFloat = 60
+    @Published var availableHeight: CGFloat = 852
+    @Published var jumpRequest = 0
+    var composer: CGRect = .zero
+    var lastCard: CGRect = .zero
+}
+
+private struct LiftedTranscriptFixture: View {
+    @ObservedObject var state: LiftedTranscriptFixtureState
+    @State private var position = ScrollPosition()
+    var body: some View {
+        GeometryReader { viewport in
+            ZStack(alignment: .bottom) {
+                Color.gray.frame(height: 450)
+                ConversationColumn {
+                    Group {
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                ForEach(0..<20) { _ in Color.white.frame(height: 200) }
+                                Color.red.frame(height: 100)
+                                    .onGeometryChange(for: CGRect.self) {
+                                        $0.frame(in: .global)
+                                    } action: {
+                                        state.lastCard = $0
+                                    }
+                            }
+                        }
+                        .scrollClipDisabled()
+                        .scrollPosition($position)
+                        .transaction {
+                            if state.reveal > 0 {
+                                $0.scrollContentOffsetAdjustmentBehavior = .disabled
+                            }
+                        }
+                        .defaultScrollAnchor(.bottom)
+                        .onChange(of: state.jumpRequest) { _, _ in
+                            position.scrollTo(edge: .bottom)
+                        }
+                    }
+                } composer: {
+                    Color.blue.frame(height: state.composerHeight)
+                        .padding(.bottom, 12)
+                        .onGeometryChange(for: CGRect.self) {
+                            $0.frame(in: .global)
+                        } action: {
+                            state.composer = $0
+                        }
+                }
+                .frame(width: viewport.size.width, height: viewport.size.height)
+                .background(Color.green.ignoresSafeArea(.container))
+                .clipShape(RoundedRectangle(cornerRadius: 34))
+                .ignoresSafeArea(.container)
+                .offset(y: -state.reveal)
+            }
+        }
+        .frame(height: state.availableHeight, alignment: .top)
+        .ignoresSafeArea(.container)
+    }
+}
+
+@MainActor
 private final class SourcesScrollFixtureState: ObservableObject {
     @Published var expanded = false
 }
@@ -196,17 +259,165 @@ final class AssistantMarkdownTests: XCTestCase {
     }
 
     @MainActor
+    func testChatViewportKeepsLatestAboveFocusedComposer() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previousKeyWindow = scene.keyWindow
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        let messages = (0..<16).map { index in
+            ChatMessage(id: "layout-\(index)", role: .assistant,
+                parts: [.init(type: "text", text: "Message \(index + 1)\nKeep the newest answer comfortably above the input while opening the menu.")])
+        }
+        let model = AppModel(initialMessages: messages)
+        window.rootViewController = UIHostingController(rootView:
+            ChatView(safeAreaTopInset: 62, safeAreaBottomInset: 34,
+                safeAreaLeadingInset: 0, safeAreaTrailingInset: 0)
+                .environmentObject(model).environment(\.colorScheme, .light))
+        window.makeKeyAndVisible()
+        defer {
+            window.endEditing(true)
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
+        try await Task.sleep(for: .milliseconds(500))
+        func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
+        let views = descendants(window)
+        let transcript = try XCTUnwrap(views.compactMap { $0 as? UIScrollView }.first { !($0 is UITextView) })
+        let input = try XCTUnwrap(views.compactMap { $0 as? UITextView }.first)
+        for focused in [false, true, false] {
+            if focused { input.becomeFirstResponder() } else { input.resignFirstResponder() }
+            try await Task.sleep(for: .milliseconds(450))
+            window.layoutIfNeeded()
+            let inputFrame = input.convert(input.bounds, to: window)
+            // Verify the actual ChatView remains at its canonical bottom,
+            // not a stale offset from before the composer was measured.
+            XCTAssertEqual(transcript.contentOffset.y + transcript.bounds.height,
+                transcript.contentSize.height + transcript.adjustedContentInset.bottom, accuracy: 2,
+                "The newest message and its reserved input clearance must remain visible")
+            let end = transcript.convert(CGPoint(x: 0, y: transcript.contentSize.height), to: window)
+            XCTAssertGreaterThan(inputFrame.minY - end.y, 0)
+            XCTAssertLessThanOrEqual(inputFrame.maxY, window.bounds.maxY)
+            XCTAssertEqual(input.isFirstResponder, focused)
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = focused ? "chat-clearance-keyboard" : "chat-clearance-rest"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    @MainActor
+    func testLiftedTranscriptKeepsComposerGap() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previousKeyWindow = scene.keyWindow
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        let state = LiftedTranscriptFixtureState()
+        window.rootViewController = UIHostingController(
+            rootView: LiftedTranscriptFixture(state: state))
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
+        try await Task.sleep(for: .milliseconds(400))
+        let baseline = state.composer.minY - state.lastCard.maxY
+        let cardBottom = state.lastCard.maxY
+        func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
+        let scroll = try XCTUnwrap(descendants(window).compactMap { $0 as? UIScrollView }.first)
+        XCTAssertEqual(baseline, 18, accuracy: 1)
+        func renderedEdges() throws -> (card: CGFloat, input: CGFloat) {
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let cgImage = try XCTUnwrap(image.cgImage)
+            let width = cgImage.width, height = cgImage.height
+            var pixels = [UInt8](repeating: 0, count: width * height * 4)
+            let context = try XCTUnwrap(CGContext(data: &pixels, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+            var red: [Int] = [], blue: [Int] = []
+            for y in 0..<height {
+                let i = (y * width + width / 2) * 4
+                if pixels[i] > 180 && pixels[i + 1] < 120 && pixels[i + 2] < 120 { red.append(y) }
+                if pixels[i] < 100 && pixels[i + 2] > 180 { blue.append(y) }
+            }
+            return (CGFloat(try XCTUnwrap(red.last)) + 1, CGFloat(try XCTUnwrap(blue.first)))
+        }
+        let renderedBaseline = try renderedEdges()
+        for distance: CGFloat in [1, 5, 10, 20, 34, 80, 200, 450, 200, 34, 10, 0, 20, 0, 10, 0] {
+            state.reveal = distance
+            try await Task.sleep(for: .milliseconds(100))
+            window.layoutIfNeeded()
+            XCTAssertEqual(
+                state.composer.minY - state.lastCard.maxY, baseline, accuracy: 1,
+                "The gap must survive a \(distance)pt live lift")
+            XCTAssertEqual(state.lastCard.maxY, cardBottom - distance, accuracy: 1)
+            let edges = try renderedEdges()
+            XCTAssertEqual(edges.input - edges.card, 18, accuracy: 1)
+            XCTAssertEqual(edges.card, renderedBaseline.card - distance, accuracy: 1,
+                "Rendered content must track the finger immediately, without consuming the gap")
+        }
+        // The same viewport must adapt to a taller composer and keyboard-sized
+        // available regions; never bake a device inset into the clearance.
+        for (height, input): (CGFloat, CGFloat) in [(600, 60), (600, 120), (540, 160), (852, 60)] {
+            state.availableHeight = height
+            state.composerHeight = input
+            try await Task.sleep(for: .milliseconds(200))
+            state.jumpRequest += 1
+            try await Task.sleep(for: .milliseconds(150))
+            for distance: CGFloat in [10, 450, 0] {
+                state.reveal = distance
+                try await Task.sleep(for: .milliseconds(100))
+                XCTAssertEqual(state.composer.minY - state.lastCard.maxY, baseline, accuracy: 1)
+            }
+        }
+        // Reading an older message must not be turned into a jump to latest.
+        scroll.setContentOffset(CGPoint(x: 0, y: scroll.contentOffset.y - 160), animated: false)
+        try await Task.sleep(for: .milliseconds(100))
+        let readingOffset = scroll.contentOffset.y
+        for distance: CGFloat in [20, 80, 450, 80, 0] {
+            state.reveal = distance
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(scroll.contentOffset.y, readingOffset, accuracy: 1)
+        }
+        // Repeated requests share the same native bottom edge.
+        for _ in 0..<3 {
+            state.jumpRequest += 1
+            try await Task.sleep(for: .milliseconds(150))
+            XCTAssertEqual(state.composer.minY - state.lastCard.maxY, baseline, accuracy: 1)
+        }
+    }
+
+    @MainActor
     func testSourcesDisclosurePreservesNativeScrollOffset() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previousKeyWindow = scene.keyWindow
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
         let state = SourcesScrollFixtureState()
         window.rootViewController = UIHostingController(rootView: SourcesScrollFixture(state: state))
-        window.isHidden = false
-        defer { window.isHidden = true }
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
         try await Task.sleep(for: .milliseconds(200))
         func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
         let scroll = try XCTUnwrap(descendants(window).compactMap { $0 as? UIScrollView }.first)
+        // Read an older answer at a legal, explicit offset. The initial lazy
+        // bottom estimate can still be settling and is not the reading state
+        // this disclosure regression is intended to protect.
+        scroll.setContentOffset(CGPoint(x: 0, y: 200), animated: false)
+        try await Task.sleep(for: .milliseconds(100))
         for _ in 0..<3 {
             let before = scroll.contentOffset.y
             let height = scroll.contentSize.height

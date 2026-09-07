@@ -1,6 +1,20 @@
 import SwiftUI
 import UIKit
 
+/// Give the transcript and composer separate layout slots before lifting the
+/// stage. Clearance must not depend on a later input measurement or scroll inset.
+struct ConversationColumn<Transcript: View, Composer: View>: View {
+    @ViewBuilder var transcript: Transcript
+    @ViewBuilder var composer: Composer
+
+    var body: some View {
+        VStack(spacing: 18) {
+            transcript
+            composer
+        }
+    }
+}
+
 enum PullMenuMotion {
     static func menuRowCount(itemCount: Int, columns: Int) -> Int {
         guard itemCount > 0, columns > 0 else { return 0 }
@@ -486,8 +500,8 @@ struct ChatView: View {
         let motionIsReduced = reduceMotion
         let transcriptItems = model.messages.transcriptItems()
 
-        return ScrollViewReader { proxy in
-            ZStack(alignment: .bottom) {
+        return Group {
+            ConversationColumn {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         if model.messages.isEmpty {
@@ -497,13 +511,6 @@ struct ChatView: View {
                                 transcriptRow(item, motionIsReduced: motionIsReduced)
                             }
                         }
-                        // The composer is a sibling layer above the transcript, so
-                        // reserve its measured height only after the final message.
-                        // This preserves the underlay while scrolling but lets the
-                        // last card clear the input at the transcript's bottom edge.
-                        Color.clear
-                            .frame(height: composerHeight + 18)
-                            .id("bottom")
                     }
                     .padding(.leading, AssistantTheme.compactGutter + (crownOnLeadingEdge ? landscapeCrownClearance : 0))
                     .padding(.trailing, AssistantTheme.compactGutter + (crownOnLeadingEdge ? 0 : landscapeCrownClearance))
@@ -517,7 +524,8 @@ struct ChatView: View {
                         value: model.messages.map(\.id)
                     )
                 }
-                .ignoresSafeArea(.container, edges: [.top, .bottom])
+                // Older rows may continue beneath the floating input while
+                // scrolling. Clip at the outer stage, not this shorter viewport.
                 .scrollClipDisabled()
                 .scrollIndicators(.hidden)
                 .scrollPosition($transcriptScrollPosition)
@@ -586,37 +594,18 @@ struct ChatView: View {
                 .onScrollPhaseChange { _, newPhase, _ in
                     transcriptScrollPhase = newPhase
                 }
-                // The crown already covers its own footprint. A full-width clear
-                // band here cut straight through visible message bubbles, so keep
-                // the transcript opaque at the top and soften only its lower edge.
-                .mask {
-                    VStack(spacing: 0) {
-                        Color.black
-
-                        LinearGradient(
-                            stops: [
-                                .init(color: .black, location: 0),
-                                .init(color: .black.opacity(0.9), location: 0.72),
-                                .init(color: .black.opacity(0.72), location: 1),
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .frame(height: 52)
-                    }
-                }
                 .animation(
                     reduceMotion ? nil : .easeInOut(duration: 0.22),
                     value: model.activityThought != nil
                 )
                 .onAppear {
-                    positionInitialConversationIfNeeded(using: proxy)
+                    positionInitialConversationIfNeeded()
                 }
                 .onChange(of: model.messages) { oldMessages, newMessages in
                     if newMessages.isEmpty {
                         hasPositionedInitialConversation = false
                     } else if !hasPositionedInitialConversation {
-                        positionInitialConversationIfNeeded(using: proxy)
+                        positionInitialConversationIfNeeded()
                     } else if isAtBottom {
                         // While a finger is on the transcript the gesture owns the
                         // scroll position — re-anchoring here would fight the drag.
@@ -628,14 +617,14 @@ struct ChatView: View {
                         // below the fold and Jump to latest takes the reader down.
                         // Only brand-new messages get the animated reveal.
                         if !isStreamingUpdate {
-                            scrollToBottom(using: proxy)
+                            scrollToBottom()
                         }
                     } else {
                         hasUnseenMessages = true
                     }
                 }
                 .onChange(of: scrollRequest) { _, _ in
-                    scrollToBottom(using: proxy)
+                    scrollToBottom()
                 }
                 .onChange(of: model.latestQuickReplies) { _, replies in
                     // Suggestions only render while the composer is unfocused, and
@@ -656,11 +645,12 @@ struct ChatView: View {
                     var transaction = Transaction()
                     transaction.disablesAnimations = true
                     withTransaction(transaction) {
-                        proxy.scrollTo("bottom", anchor: .bottom)
+                        transcriptScrollPosition.scrollTo(edge: .bottom)
                     }
                 }
 
-                // Keep the transcript and composer as sibling layers. When the
+            } composer: {
+                // Keep the transcript and composer as siblings. When the
                 // composer was a ScrollView overlay, UIKit's pan recognizer
                 // still received pulls that began on the input and shifted the
                 // transcript before the menu gesture took over.
@@ -681,10 +671,12 @@ struct ChatView: View {
                         composerHeight = height
                     }
 
+            }
+            .overlay(alignment: .bottom) {
                 if showsJumpToLatest {
                     jumpToLatestButton {
                         jumpFeedback += 1
-                        jumpToLatest(using: proxy)
+                        jumpToLatest()
                     }
                     .padding(.bottom, composerHeight + 12)
                     .transition(.opacity)
@@ -2081,11 +2073,11 @@ struct ChatView: View {
         hasUnseenMessages = false
     }
 
-    private func positionInitialConversationIfNeeded(using proxy: ScrollViewProxy) {
+    private func positionInitialConversationIfNeeded() {
         guard !model.messages.isEmpty, !hasPositionedInitialConversation else { return }
         hasPositionedInitialConversation = true
         DispatchQueue.main.async {
-            proxy.scrollTo("bottom", anchor: .bottom)
+            transcriptScrollPosition.scrollTo(edge: .bottom)
         }
     }
 
@@ -2107,10 +2099,10 @@ struct ChatView: View {
         menuPullActive || menuOpen || menuCloseDragDistance > 0
     }
 
-    private func scrollToBottom(using proxy: ScrollViewProxy) {
+    private func scrollToBottom() {
         if transcriptScrollPhase == .idle {
             withAnimation(reduceMotion ? nil : .snappy(duration: 0.26, extraBounce: 0)) {
-                proxy.scrollTo("bottom", anchor: .bottom)
+                transcriptScrollPosition.scrollTo(edge: .bottom)
             }
         } else {
             // An animated scrollTo issued while the transcript still has
@@ -2122,7 +2114,7 @@ struct ChatView: View {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
-                proxy.scrollTo("bottom", anchor: .bottom)
+                transcriptScrollPosition.scrollTo(edge: .bottom)
             }
         }
     }
@@ -2133,10 +2125,10 @@ struct ChatView: View {
     /// than queueing behind them, then animates down to the newest message.
     ///
     /// The takeover first cancels any active motion, then schedules one
-    /// animated command to the transcript's bottom spacer. Keeping one
-    /// canonical destination prevents the bound scroll position and the proxy
-    /// from issuing competing inset calculations during the transition.
-    private func jumpToLatest(using proxy: ScrollViewProxy) {
+    /// animated command to the native bottom edge. The same ScrollPosition
+    /// owns initial positioning, automatic follow, and explicit jumps, so no
+    /// content marker competes with viewport/inset calculations.
+    private func jumpToLatest() {
         latestJumpRequest &+= 1
         let request = latestJumpRequest
         hasUnseenMessages = false
@@ -2145,7 +2137,7 @@ struct ChatView: View {
         DispatchQueue.main.async {
             // A subsequent press owns the destination, never a stale tap.
             guard request == latestJumpRequest else { return }
-            animateTranscriptToLatest(using: proxy)
+            animateTranscriptToLatest()
         }
     }
 
@@ -2161,13 +2153,12 @@ struct ChatView: View {
         }
     }
 
-    private func animateTranscriptToLatest(using proxy: ScrollViewProxy) {
+    private func animateTranscriptToLatest() {
         withAnimation(reduceMotion ? nil : .snappy(duration: 0.3, extraBounce: 0)) {
-            // The spacer is the transcript's canonical bottom destination.
-            // Do not issue a second ScrollPosition edge command here: the two
-            // targets have different inset semantics and make UIKit alternate
-            // between them while the animation is running.
-            proxy.scrollTo("bottom", anchor: .bottom)
+            // Use the native edge after the viewport has reserved the composer.
+            // A proxy targeting an in-content spacer used the old viewport
+            // during measurement and could leave the last card under input.
+            transcriptScrollPosition.scrollTo(edge: .bottom)
         }
     }
 
