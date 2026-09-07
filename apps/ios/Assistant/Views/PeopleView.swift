@@ -462,7 +462,7 @@ struct PersonRelationshipEvidenceScreen: View {
     @State private var failure: String?
 
     var body: some View {
-        Form {
+        AssistantForm {
             Section("Relationship") {
                 Text(relation?.presentation.sentence ?? evidence.sentence)
                     .font(.body)

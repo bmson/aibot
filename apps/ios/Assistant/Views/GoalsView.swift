@@ -15,14 +15,15 @@ struct GoalsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                if goals.isEmpty {
+                if showingArchived ? model.archivedGoals == nil : model.overview == nil {
+                    AssistantLoadingState(title: "Loading goals…")
+                } else if goals.isEmpty {
                     AssistantEmptyState(
                         "No goals yet",
                         systemImage: "scope",
                         description: "Give the assistant an outcome in chat and it can keep moving it forward on a schedule."
                     )
                 } else {
-                    goalOverviewLabel
                     digest
                     ForEach(goals) { item in
                         goalCard(item)
@@ -33,26 +34,23 @@ struct GoalsView: View {
             .padding(.bottom, 28)
             .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
         }
-        .navigationTitle("Goals")
+        .navigationTitle(showingArchived ? "Archived goals" : "Goals")
         .assistantSubmenuChrome()
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button {
-                    showingArchived.toggle()
-                    if showingArchived { Task { await model.refreshArchivedGoals() } }
-                } label: {
-                    Label(
-                        showingArchived ? "Current goals" : "Archived goals",
-                        systemImage: showingArchived ? "tray.and.arrow.up" : "archivebox"
-                    )
-                }
                 if !showingArchived {
                     Button {
                         showingGoalCreator = true
                     } label: {
                         Label("Add goal", systemImage: "plus")
                     }
-                    Menu {
+                }
+                Menu {
+                    Button(showingArchived ? "Current goals" : "Archived goals", systemImage: "archivebox") {
+                        showingArchived.toggle()
+                        if showingArchived { Task { await model.refreshArchivedGoals() } }
+                    }
+                    if !showingArchived {
                         Button("Archive inactive goals", systemImage: "archivebox") {
                             goalActionInFlight = "archive-inactive"
                             Task {
@@ -60,9 +58,9 @@ struct GoalsView: View {
                                 goalActionInFlight = nil
                             }
                         }
-                    } label: {
-                        Label("More goal actions", systemImage: "ellipsis.circle")
                     }
+                } label: {
+                    Label("More goal actions", systemImage: "ellipsis.circle")
                 }
             }
         }
@@ -120,13 +118,13 @@ struct GoalsView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     metric(
                         value: waiting,
-                        label: "waiting on you",
+                        label: "Needs you",
                         color: AssistantTheme.warning(for: colorScheme)
                     )
                     Divider()
                     metric(
                         value: moving,
-                        label: "moving on their own",
+                        label: "Active",
                         color: AssistantTheme.accent(for: colorScheme)
                     )
                 }
@@ -134,35 +132,18 @@ struct GoalsView: View {
                 HStack(spacing: 14) {
                     metric(
                         value: waiting,
-                        label: "waiting on you",
+                        label: "Needs you",
                         color: AssistantTheme.warning(for: colorScheme)
                     )
                     Divider().frame(height: 30)
                     metric(
                         value: moving,
-                        label: "moving on their own",
+                        label: "Active",
                         color: AssistantTheme.accent(for: colorScheme)
                     )
                     Spacer()
                 }
             }
-        }
-        .assistantPanel(in: colorScheme)
-    }
-
-    private var goalOverviewLabel: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(showingArchived ? "Archived goals" : "Your active outcomes")
-                    .font(.headline)
-                Text("Progress stays here between conversations.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-            Text("\(goals.count)")
-                .font(.title3.monospacedDigit().weight(.semibold))
-                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
         }
         .assistantPanel(in: colorScheme)
     }
@@ -187,13 +168,8 @@ struct GoalsView: View {
 
             if !item.blockedQuestion.isEmpty || item.stalled {
                 attentionCallout(item)
-            } else if !item.goal.progress.isEmpty {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Latest progress").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    Text(inlineMarkdown(item.goal.progress))
-                        .font(.subheadline)
-                        .lineLimit(usesAccessibilityLayout ? nil : 3)
-                }
+            } else if !item.goal.progress.isEmpty || !item.goal.nextAction.isEmpty {
+                AssistantDirectionView(progress: item.goal.progress, nextAction: item.goal.nextAction)
             }
 
             goalCadence(item)
@@ -215,7 +191,7 @@ struct GoalsView: View {
                         Label("Restore goal", systemImage: "tray.and.arrow.up")
                     }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                 .disabled(goalActionInFlight != nil)
             } else {
                 AssistantFlowLayout(spacing: 9) {
@@ -232,28 +208,8 @@ struct GoalsView: View {
                     } label: {
                         Label("Edit", systemImage: "pencil")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                     .disabled(goalActionInFlight != nil)
-
-                    Button(role: .destructive) {
-                        deletingGoal = item.goal
-                    } label: {
-                        if goalActionInFlight == item.goal.id {
-                            HStack(spacing: 7) {
-                                ProgressView().controlSize(.small)
-                                Text("Deleting…")
-                            }
-                        } else {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(item.workActive || goalActionInFlight != nil)
-                    .accessibilityHint(
-                        item.workActive
-                            ? "Finish or cancel active work before deleting this goal"
-                            : "Archives the goal and keeps its work history"
-                    )
 
                     Menu {
                         Button(item.goal.autonomy ? "Require approvals" : "Run autonomously") {
@@ -276,11 +232,18 @@ struct GoalsView: View {
                                 updateLifecycle(item, action: "status", status: "abandoned")
                             }
                         }
+                        Button("Delete goal", systemImage: "trash", role: .destructive) {
+                            deletingGoal = item.goal
+                        }
+                        .disabled(item.workActive || goalActionInFlight != nil)
+                        .accessibilityHint("Archives the goal and keeps its work history")
                     } label: {
                         Label("More", systemImage: "ellipsis.circle")
                     }
+                    .frame(minHeight: 44)
                     .disabled(goalActionInFlight != nil)
                 }
+                .font(.subheadline.weight(.semibold))
             }
 
             if let conversationId = item.conversationId {
@@ -293,6 +256,7 @@ struct GoalsView: View {
                 } label: {
                     Label("Continue in chat", systemImage: "bubble.left")
                         .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                         .contentShape(Rectangle())
                 }
@@ -422,7 +386,7 @@ struct GoalsView: View {
         status: String? = nil
     ) -> some View {
         Button(title) { updateLifecycle(item, action: action, status: status) }
-            .buttonStyle(.bordered)
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
             .disabled(goalActionInFlight != nil)
     }
 
@@ -476,7 +440,7 @@ struct GoalEditor: View {
     }
 
     var body: some View {
-        Form {
+        AssistantForm {
             Section {
                 TextField("What should the assistant work toward?", text: $title, axis: .vertical)
                     .lineLimit(1...3)

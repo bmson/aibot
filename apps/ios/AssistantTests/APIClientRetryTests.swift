@@ -59,6 +59,95 @@ final class StubURLProtocol: URLProtocol {
 }
 
 final class APIClientRetryTests: XCTestCase {
+    func testVisualSummaryKeepsEveryStatusAndRejectsInvalidChartValues() {
+        let summary = ActivityVisualSummary(statuses: ["waiting_approval", "waiting_budget", "needs_attention",
+            "pending", "running", "sleeping", "waiting_event", "done", "failed", "cancelled", "new_status"])
+        XCTAssertEqual(summary.counts, [3, 2, 2, 1, 2, 1])
+        XCTAssertEqual(AssistantChartScale.shares([0, -1, .nan, .infinity]), [0, 0, 0, 0])
+        XCTAssertEqual(AssistantChartScale.shares([]), [])
+        XCTAssertEqual(AssistantChartScale.shares([1, 3]), [0.25, 0.75])
+        XCTAssertEqual(AssistantChartScale.shares([.greatestFiniteMagnitude, .greatestFiniteMagnitude]), [0.5, 0.5])
+        XCTAssertNil(AssistantMotion.response(reduceMotion: true))
+        XCTAssertNotNil(AssistantMotion.response(reduceMotion: false))
+        XCTAssertNotEqual(relative("2026-09-06T20:00:00Z"), "2026-09-06T20:00:00Z")
+        XCTAssertEqual(relative("Unknown date"), "Unknown date")
+    }
+
+    @MainActor
+    func testVisualConsistencyActivityGoalsAndEditorSnapshots() async throws {
+        let goal = GoalRecord(id: "visual-goal", title: "Plan the weekend", description: "A relaxed family trip.",
+            status: "active", priority: 3, progress: "Found **three places** with space for everyone.",
+            nextAction: "Compare travel times and cancellation policies before choosing.", targetDate: nil,
+            createdAt: "2026-09-06", updatedAt: "2026-09-06", archivedAt: nil,
+            mirrorToPrimary: false, autonomy: false, taintedOrigin: false)
+        let overview = OverviewResponse(generatedAt: "2026-09-06",
+            activity: ActivityList(items: [
+                ActivityItem(id: "done", type: "chat_turn", status: "done", title: "Find places for lunch",
+                    progress: "Compared **three options** along your route, with opening hours and travel times.",
+                    trust: "owner", spentUsd: "0.008", budgetUsdLimit: "0.50", updatedAt: "2026-09-06T20:00:00Z",
+                    archivedAt: nil, hasPendingApproval: false),
+                ActivityItem(id: "running", type: "scheduled", status: "running", title: "Check the weekend forecast",
+                    progress: "Checking the forecast for your destination.", trust: "owner", spentUsd: "0.003",
+                    budgetUsdLimit: "0.02", updatedAt: "2026-09-06T20:00:00Z", archivedAt: nil, hasPendingApproval: false)
+            ], archivedCount: 0),
+            goals: GoalsDashboard(items: [GoalDashboardItem(goal: goal, conversationId: "visual-chat",
+                workActive: false, automation: nil, cadenceLabel: "On demand", blockedQuestion: "", stalled: false)], archivedCount: 0),
+            approvals: ApprovalInbox(pending: [], resolved: []),
+            documents: DocumentsOverview(documents: [], stats: DocumentStats(total: 0, ready: 0, pending: 0, chunks: 0),
+                primaryConversationId: "visual-chat"))
+        StubURLProtocol.prime([.success(status: 200, body: try JSONEncoder().encode(overview))])
+        let model = AppModel(apiClient: makeClient())
+        await model.refreshOverview()
+        XCTAssertEqual(model.overview?.activity.items.count, 2)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        for (name, scheme, width, size) in [
+            ("light", ColorScheme.light, CGFloat(393), DynamicTypeSize.large),
+            ("dark", ColorScheme.dark, CGFloat(393), DynamicTypeSize.large),
+            ("compact", ColorScheme.light, CGFloat(320), DynamicTypeSize.large),
+            ("accessible", ColorScheme.light, CGFloat(393), DynamicTypeSize.accessibility3)
+        ] {
+            for page in ["activity", "goals", "editor"] {
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: width, height: 852)
+                window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
+                let content = NavigationStack {
+                    if page == "activity" { ActivityView() }
+                    else if page == "goals" { GoalsView() }
+                    else {
+                        AssistantForm {
+                            Section("Details") {
+                                TextField("Name", text: .constant("Weekend plan"))
+                                Toggle("Keep updated", isOn: .constant(true))
+                            }
+                            Section("Evidence") {
+                                DisclosureGroup("Recorded details", isExpanded: .constant(true)) {
+                                    Text("Only confirmed information is shown here.")
+                                }
+                                DisclosureGroup("Source messages") { Text("Source preview") }
+                            }
+                        }
+                        .disclosureGroupStyle(AssistantEvidenceDisclosureStyle())
+                        .navigationTitle("Edit details")
+                    }
+                }
+                .environmentObject(model).environment(\.colorScheme, scheme)
+                .environment(\.dynamicTypeSize, size)
+                window.rootViewController = UIHostingController(rootView: content)
+                window.isHidden = false
+                defer { window.isHidden = true; window.rootViewController = nil }
+                try await Task.sleep(for: .milliseconds(350))
+                window.layoutIfNeeded()
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "visual-\(page)-\(name)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
     @MainActor
     func testPeopleConnectionsStartsWithChoiceNotInventedDirectoryEdges() async throws {
         let people = PeopleMapFixture.relations.compactMap { relation -> PersonSummary? in

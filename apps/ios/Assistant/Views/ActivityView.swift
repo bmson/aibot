@@ -25,9 +25,11 @@ struct ActivityView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 filterControl
-                activitySummary
+                if !items.isEmpty { activitySummary }
 
-                if filteredItems.isEmpty {
+                if showingArchived ? model.archivedActivity == nil : model.overview == nil {
+                    AssistantLoadingState(title: "Loading activity…")
+                } else if filteredItems.isEmpty {
                     AssistantEmptyState(
                         filter == .all ? "No activity yet" : "Nothing here",
                         systemImage: "waveform.path.ecg",
@@ -119,101 +121,49 @@ struct ActivityView: View {
             Text("The task resumes from its saved checkpoint; completed actions are not repeated.")
         }
         .sensoryFeedback(.selection, trigger: filter)
-        .animation(
-            reduceMotion ? nil : .snappy(duration: 0.26, extraBounce: 0),
-            value: filter
-        )
     }
 
-    @ViewBuilder
     private var filterControl: some View {
-        if usesAccessibilityLayout {
-            VStack(alignment: .leading, spacing: 10) {
-                Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
-                    .font(.headline)
-                Picker("Filter activity", selection: $filter) {
-                    ForEach(ActivityFilter.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(14)
-            .background(
-                AssistantTheme.sunken(for: colorScheme),
-                in: RoundedRectangle(cornerRadius: AssistantTheme.controlCornerRadius, style: .continuous)
-            )
-        } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(ActivityFilter.allCases) { option in
-                        Button {
-                            filter = option
-                        } label: {
-                            Text(option.rawValue)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(
-                                    filter == option
-                                        ? AssistantTheme.canvas(for: colorScheme)
-                                        : AssistantTheme.inkMuted(for: colorScheme)
-                                )
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 9)
-                                .background(
-                                    filter == option
-                                        ? AssistantTheme.accent(for: colorScheme)
-                                        : AssistantTheme.canvas(for: colorScheme),
-                                    in: RoundedRectangle(cornerRadius: AssistantTheme.controlCornerRadius, style: .continuous)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Activity filter: \(option.rawValue)")
-                        .accessibilityAddTraits(filter == option ? .isSelected : [])
-                    }
-                }
-                .padding(10)
-            }
-            .background(
-                AssistantTheme.sunken(for: colorScheme),
-                in: RoundedRectangle(cornerRadius: AssistantTheme.controlCornerRadius, style: .continuous)
-            )
-        }
+        AssistantFilterPicker(title: "Activity filter", options: ActivityFilter.allCases,
+            selection: $filter, label: { $0.rawValue })
     }
 
     private var activitySummary: some View {
-        let needsYou = (showingArchived ? model.archivedActivity?.items ?? [] : model.overview?.activity.items ?? [])
-            .filter { ["waiting_approval", "waiting_budget", "needs_attention"].contains($0.status) }
-            .count
-        let active = (showingArchived ? model.archivedActivity?.items ?? [] : model.overview?.activity.items ?? [])
-            .filter { ["pending", "running"].contains($0.status) }
-            .count
-
-        return HStack(spacing: 10) {
-            activitySummaryMetric("Needs you", value: needsYou, tint: needsYou > 0 ? AssistantTheme.warning(for: colorScheme) : .secondary)
-            Divider().frame(height: 30)
-            activitySummaryMetric("In progress", value: active, tint: AssistantTheme.accent(for: colorScheme))
-            Spacer(minLength: 0)
+        let summary = ActivityVisualSummary(statuses: items.map(\.status))
+        let colors: [Color] = [AssistantTheme.warning(for: colorScheme),
+            AssistantTheme.accent(for: colorScheme), AssistantTheme.inkMuted(for: colorScheme),
+            AssistantTheme.success(for: colorScheme).opacity(0.4), AssistantTheme.errorInk(for: colorScheme), .secondary]
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(showingArchived ? "Archived activity" : "Loaded activity")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("\(items.count) tasks").font(.caption).foregroundStyle(.secondary)
+            }
+            AssistantDistributionBar(values: summary.counts.map(Double.init), colors: colors)
+            AssistantFlowLayout(spacing: 12) {
+                ForEach(Array(summary.counts.enumerated()), id: \.offset) { index, count in
+                    if count > 0 {
+                        HStack(spacing: 5) {
+                            Circle().fill(colors[index]).frame(width: 6, height: 6).accessibilityHidden(true)
+                            Text("\(count) \(ActivityVisualSummary.labels[index])")
+                                .font(.caption).foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        }
+                    }
+                }
+            }
         }
         .assistantPanel(in: colorScheme)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(needsYou) activities need you, \(active) in progress")
     }
 
-    private func activitySummaryMetric(_ label: String, value: Int, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("\(value)")
-                .font(.title3.monospacedDigit().weight(.semibold))
-                .foregroundStyle(tint)
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
+    private var items: [ActivityItem] {
+        showingArchived
+            ? model.archivedActivity?.items ?? []
+            : model.overview?.activity.items ?? []
     }
 
     private var filteredItems: [ActivityItem] {
-        let items = showingArchived
-            ? model.archivedActivity?.items ?? []
-            : model.overview?.activity.items ?? []
         return items.filter { item in
             switch filter {
             case .all: true
@@ -230,15 +180,33 @@ struct ActivityView: View {
             activityHeader(item)
 
             if !item.displayProgress.isEmpty {
-                Text(item.displayProgress)
+                Text((try? AttributedString(markdown: item.displayProgress,
+                    options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(item.displayProgress))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(usesAccessibilityLayout ? nil : 3)
             }
 
-            activityMetadata(item)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+            HStack(alignment: .center, spacing: 8) {
+                activityMetadata(item)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                if !showingArchived && isTerminal(item) {
+                    Spacer(minLength: 0)
+                    Button { updateActivity(item, action: "archive") } label: {
+                        if activityActionInFlight == item.id {
+                            ProgressView().controlSize(.small).frame(width: 44, height: 44)
+                        } else {
+                            Label("Archive \(item.displayTitle)", systemImage: "archivebox")
+                                .labelStyle(.iconOnly).frame(width: 44, height: 44)
+                        }
+                    }
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion))
+                    .disabled(activityActionInFlight != nil)
+                    .accessibilityLabel("Archive \(item.displayTitle)")
+                }
+            }
 
             if showingArchived {
                 Button {
@@ -263,37 +231,37 @@ struct ActivityView: View {
                     .tint(AssistantTheme.warning(for: colorScheme))
                 }
 
-                AssistantFlowLayout(spacing: 9) {
-                    if isTerminal(item) {
-                        actionButton(item, title: "Archive", icon: "archivebox", action: "archive")
-                    } else {
-                        actionButton(item, title: "Cancel", icon: "xmark.circle", action: "cancel")
-                    }
+                if !isTerminal(item) || item.stuckWaiting == true || item.hasActiveAutonomy == true {
+                    AssistantFlowLayout(spacing: 9) {
+                        if !isTerminal(item) {
+                            actionButton(item, title: "Cancel", icon: "xmark.circle", action: "cancel")
+                        }
 
-                    if item.status == "needs_attention" {
-                        if item.progress.hasPrefix("budget: task budget") {
-                            Button {
-                                budgetItem = item
-                                budgetText = suggestedBudget(for: item)
-                            } label: {
-                                Label("Raise budget", systemImage: "dollarsign.arrow.circlepath")
+                        if item.status == "needs_attention" {
+                            if item.progress.hasPrefix("budget: task budget") {
+                                Button {
+                                    budgetItem = item
+                                    budgetText = suggestedBudget(for: item)
+                                } label: {
+                                    Label("Raise budget", systemImage: "dollarsign.arrow.circlepath")
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(activityActionInFlight != nil)
+                            } else {
+                                actionButton(item, title: "Retry", icon: "arrow.clockwise", action: "retry")
                             }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(activityActionInFlight != nil)
-                        } else {
+                        } else if item.stuckWaiting == true {
                             actionButton(item, title: "Retry", icon: "arrow.clockwise", action: "retry")
                         }
-                    } else if item.stuckWaiting == true {
-                        actionButton(item, title: "Retry", icon: "arrow.clockwise", action: "retry")
-                    }
 
-                    if item.hasActiveAutonomy == true {
-                        actionButton(
-                            item,
-                            title: "Revoke autonomy",
-                            icon: "hand.raised",
-                            action: "revoke-autonomy"
-                        )
+                        if item.hasActiveAutonomy == true {
+                            actionButton(
+                                item,
+                                title: "Revoke autonomy",
+                                icon: "hand.raised",
+                                action: "revoke-autonomy"
+                            )
+                        }
                     }
                 }
             }
@@ -399,7 +367,7 @@ struct ActivityView: View {
                 }
             }
         } else {
-            HStack(spacing: 7) {
+            AssistantFlowLayout(spacing: 7) {
                 Text(item.budgetSummary)
                 Text("·")
                 Text(relative(item.updatedAt))
@@ -440,6 +408,7 @@ struct ActivityView: View {
 }
 
 func relative(_ value: String) -> String {
-    guard let date = value.assistantDate else { return value }
+    // Both fractional and whole-second ISO timestamps are valid server dates.
+    guard let date = value.assistantDate ?? ISO8601DateFormatter().date(from: value) else { return value }
     return RelativeDateTimeFormatter().localizedString(for: date, relativeTo: .now)
 }

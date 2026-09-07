@@ -16,14 +16,16 @@ struct ApprovalsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                approvalSummary
-                if pending.isEmpty {
+                if model.overview == nil {
+                    AssistantLoadingState(title: "Loading approvals…")
+                } else if pending.isEmpty {
                     AssistantEmptyState(
-                        "Nothing is waiting",
+                        "All clear",
                         systemImage: "checkmark.shield",
                         description: "The assistant asks here before an action leaves its workspace."
                     )
                 } else {
+                    approvalSummary
                     Text("Review the real-world effect first. Approving resumes the parked task immediately.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -415,7 +417,7 @@ private struct ApprovalPayloadEditor: View {
     }
 
     var body: some View {
-        Form {
+        AssistantForm {
             Section {
                 TextEditor(text: $payload)
                     .font(.system(.caption, design: .monospaced))

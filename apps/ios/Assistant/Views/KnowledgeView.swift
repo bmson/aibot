@@ -576,7 +576,7 @@ struct KnowledgeConnectionEditor: View {
     }
 
     var body: some View {
-        Form {
+        AssistantForm {
             Section {
                 Text(
                     "Describe the relationship and add a source note to support it. Corrections keep the original source for reference."
@@ -794,7 +794,7 @@ private struct KnowledgeItemEditor: View {
     }
 
     var body: some View {
-        Form {
+        AssistantForm {
             Section("Display name") { TextField("Name", text: $label) }
             Section("Type") {
                 Picker("Type", selection: $kind) {

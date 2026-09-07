@@ -14,7 +14,7 @@ struct MoreView: View {
     @State private var deletingPolicy: WorkspacePolicy?
 
     var body: some View {
-        List {
+        AssistantSettingsList {
             Section {
                 assistantIdentity
                 .padding(.vertical, 6)
@@ -394,7 +394,7 @@ private struct RemindersView: View {
     }
 
     var body: some View {
-        List {
+        AssistantSettingsList {
             if reminders.isEmpty {
                 AssistantEmptyState(
                     "No active reminders",
@@ -501,7 +501,7 @@ private struct AgentSettingsEditor: View {
     }
 
     var body: some View {
-        Form {
+        AssistantForm {
             Section("Language and time") {
                 TextField("Timezone", text: $timezone)
                     .textInputAutocapitalization(.never)

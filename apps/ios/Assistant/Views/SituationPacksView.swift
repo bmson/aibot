@@ -24,18 +24,7 @@ private struct SituationPackSection<Content: View>: View {
 }
 
 /// Keep native form behavior while explicitly owning both the canvas and rows.
-struct SituationPackForm<Content: View>: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        Form { content.listRowBackground(AssistantTheme.raised(for: colorScheme)) }
-            .scrollContentBackground(.hidden)
-            .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
-            .tint(AssistantTheme.accent(for: colorScheme))
-            .toolbarBackground(AssistantTheme.canvas(for: colorScheme), for: .navigationBar)
-    }
-}
+typealias SituationPackForm<Content: View> = AssistantForm<Content>
 
 enum SituationPackLoadFailure {
     static func message(for error: Error) -> String {

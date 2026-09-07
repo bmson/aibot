@@ -200,7 +200,6 @@ struct WorkspaceView: View {
                 headerIcon
                 headerIntroduction
             }
-            .padding(14)
             .assistantPanel(in: colorScheme)
         } else {
             HStack(alignment: .top, spacing: 13) {
@@ -208,7 +207,6 @@ struct WorkspaceView: View {
                 headerIntroduction
                 Spacer(minLength: 0)
             }
-            .padding(14)
             .assistantPanel(in: colorScheme)
         }
     }
@@ -1707,7 +1705,7 @@ private struct SkillEditor: View {
     }
 
     var body: some View {
-        Form {
+        AssistantForm {
             Section {
                 TextField("e.g. Prepare a project brief", text: $name)
                     .textInputAutocapitalization(.words)
@@ -1830,7 +1828,7 @@ private struct CostLimitsEditor: View {
     }
 
     var body: some View {
-        Form {
+        AssistantForm {
             Section {
                 TextField("Default task limit", text: $taskDefault)
                     .keyboardType(.decimalPad)

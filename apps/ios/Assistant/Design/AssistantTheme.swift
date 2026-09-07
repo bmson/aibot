@@ -304,6 +304,7 @@ private struct AssistantSubmenuChrome: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .disclosureGroupStyle(AssistantEvidenceDisclosureStyle())
             .scrollBounceBehavior(.basedOnSize)
             .scrollClipDisabled()
             .scrollEdgeEffectStyle(.soft, for: .top)
@@ -314,6 +315,258 @@ private struct AssistantSubmenuChrome: ViewModifier {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.visible, for: .navigationBar)
             .toolbarBackground(.hidden, for: .navigationBar)
+    }
+}
+
+/// Native field behavior, with the same paper/canvas pair as the rest of the
+/// workspace. Apply row styling inside the builder so it reaches each Section.
+struct AssistantForm<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        Form { content.listRowBackground(AssistantTheme.raised(for: colorScheme)) }
+            .assistantEditorChrome()
+    }
+}
+
+struct AssistantSettingsList<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        List { content.listRowBackground(AssistantTheme.raised(for: colorScheme)) }
+            .listStyle(.insetGrouped)
+            .assistantEditorChrome()
+    }
+}
+
+extension View {
+    func assistantEditorChrome() -> some View { modifier(AssistantEditorChrome()) }
+}
+
+private struct AssistantEditorChrome: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    func body(content: Content) -> some View {
+        content
+            .disclosureGroupStyle(AssistantEvidenceDisclosureStyle())
+            .scrollContentBackground(.hidden)
+            .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
+            .tint(AssistantTheme.accent(for: colorScheme))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(AssistantTheme.canvas(for: colorScheme), for: .navigationBar)
+    }
+}
+
+enum AssistantMotion {
+    static func response(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .snappy(duration: 0.24, extraBounce: 0)
+    }
+}
+
+/// A single moving selection surface, rather than a separate pill animation
+/// on every option. List contents are deliberately outside this animation.
+struct AssistantFilterPicker<Option: Hashable & Identifiable>: View {
+    let title: String
+    let options: [Option]
+    @Binding var selection: Option
+    let label: (Option) -> String
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var selectionSpace
+
+    var body: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            Picker(title, selection: $selection) {
+                ForEach(options) { Text(label($0)).tag($0) }
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .assistantPanel(in: colorScheme)
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 2) {
+                        ForEach(options) { option in
+                            Button { selection = option } label: {
+                                Text(label(option))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(selection == option
+                                        ? AssistantTheme.canvas(for: colorScheme)
+                                        : AssistantTheme.inkMuted(for: colorScheme))
+                                    .padding(.horizontal, 12)
+                                    .frame(minHeight: 44)
+                                    .background {
+                                        if selection == option {
+                                            RoundedRectangle(cornerRadius: AssistantTheme.controlCornerRadius)
+                                                .fill(AssistantTheme.accent(for: colorScheme))
+                                                .matchedGeometryEffect(id: "selection", in: selectionSpace)
+                                        }
+                                    }
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(title): \(label(option))")
+                            .accessibilityAddTraits(selection == option ? .isSelected : [])
+                            .id(option.id)
+                        }
+                    }.padding(4)
+                    .animation(AssistantMotion.response(reduceMotion: reduceMotion), value: selection)
+                }
+                .background(AssistantTheme.sunken(for: colorScheme),
+                    in: RoundedRectangle(cornerRadius: 16))
+                .onChange(of: selection) { _, selected in
+                    withAnimation(AssistantMotion.response(reduceMotion: reduceMotion)) {
+                        proxy.scrollTo(selected.id, anchor: .center)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Subpage evidence expands in place with a coordinated chevron. The chat
+/// transcript retains its own non-animated disclosure/scroll arbitration.
+struct AssistantEvidenceDisclosureStyle: DisclosureGroupStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(AssistantMotion.response(reduceMotion: reduceMotion)) {
+                    configuration.isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    configuration.label
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                        .accessibilityHidden(true)
+                }
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+            if configuration.isExpanded {
+                configuration.content.padding(.top, 8)
+                    .transition(.opacity)
+            }
+        }
+    }
+}
+
+struct AssistantLoadingState: View {
+    let title: String
+    var body: some View {
+        ProgressView(title)
+            .font(.subheadline)
+            .frame(maxWidth: .infinity, minHeight: 190)
+    }
+}
+
+/// Real proportions only: these bars compare quantities, not invented task
+/// progress. Non-finite/negative values never enter layout geometry.
+enum AssistantChartScale {
+    static func shares(_ values: [Double]) -> [Double] {
+        let valid = values.map { $0.isFinite ? max(0, $0) : 0 }
+        guard let maximum = valid.max(), maximum > 0 else { return valid.map { _ in 0 } }
+        let scaled = valid.map { $0 / maximum }
+        let total = scaled.reduce(0, +)
+        return scaled.map { $0 / total }
+    }
+}
+
+struct ActivityVisualSummary {
+    static let labels = ["need you", "working", "scheduled", "done", "stopped", "other"]
+    let counts: [Int]
+
+    init(statuses: [String]) {
+        var counts = Array(repeating: 0, count: Self.labels.count)
+        for status in statuses {
+            let index: Int = switch status {
+            case "waiting_approval", "waiting_budget", "needs_attention": 0
+            case "pending", "running": 1
+            case "sleeping", "waiting_event": 2
+            case "done": 3
+            case "failed", "cancelled": 4
+            default: 5
+            }
+            counts[index] += 1
+        }
+        self.counts = counts
+    }
+}
+
+struct AssistantDistributionBar: View {
+    let values: [Double]
+    let colors: [Color]
+
+    var body: some View {
+        GeometryReader { geometry in
+            let shares = AssistantChartScale.shares(values)
+            HStack(spacing: 0) {
+                ForEach(Array(shares.enumerated()), id: \.offset) { index, share in
+                    if share > 0 {
+                        Rectangle().fill(index < colors.count ? colors[index] : .secondary)
+                            .frame(width: geometry.size.width * share)
+                    }
+                }
+            }
+            .clipShape(Capsule())
+        }
+        .frame(height: 6)
+        .accessibilityHidden(true)
+    }
+}
+
+struct AssistantDirectionView: View {
+    let progress: String
+    let nextAction: String
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !progress.isEmpty {
+                row("Latest", text: progress, symbol: "text.alignleft", next: false)
+                    .background(alignment: .topLeading) {
+                        if !nextAction.isEmpty {
+                            GeometryReader { geometry in
+                                // Join the two 24pt glyph centers, even when text wraps.
+                                Rectangle().fill(AssistantTheme.accent(for: colorScheme).opacity(0.16))
+                                    .frame(width: 1, height: geometry.size.height + 12)
+                                    .offset(x: 12, y: 12)
+                            }
+                            .allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                    }
+            }
+            if !nextAction.isEmpty { row("Next step", text: nextAction, symbol: "arrow.turn.down.right", next: true) }
+        }
+        .padding(.leading, 2)
+    }
+
+    private func row(_ title: String, text: String, symbol: String, next: Bool) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(next ? AssistantTheme.accent(for: colorScheme) : AssistantTheme.inkMuted(for: colorScheme))
+                .frame(width: 24, height: 24)
+                .background(AssistantTheme.sunken(for: colorScheme), in: Circle())
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.caption.weight(.semibold))
+                    .foregroundStyle(next ? AssistantTheme.accent(for: colorScheme) : AssistantTheme.inkMuted(for: colorScheme))
+                Text((try? AttributedString(markdown: text,
+                    options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text))
+                    .font(.subheadline).fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 

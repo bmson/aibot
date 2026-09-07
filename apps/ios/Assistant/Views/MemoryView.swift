@@ -571,7 +571,7 @@ private struct PersonDetailsView: View {
     private var profile: PersonProfileResponse? { model.personProfiles[person.id] }
 
     var body: some View {
-        Form {
+        AssistantForm {
             if let profile {
                 Section("Details") {
                     LabeledContent("Relationship", value: profile.contact.relationship.isEmpty
@@ -704,7 +704,7 @@ private struct OccasionEditor: View {
     @State private var isSaving = false
 
     var body: some View {
-        Form {
+        AssistantForm {
             Section("Occasion") {
                 Picker("Type", selection: $kind) {
                     Text("Birthday").tag("birthday")
@@ -771,7 +771,7 @@ private struct PersonEditor: View {
     }
 
     var body: some View {
-        Form {
+        AssistantForm {
             Section("Person") {
                 TextField("Name", text: $name)
                 TextField("Relationship", text: $relationship)
@@ -827,7 +827,7 @@ private struct MemoryEditor: View {
     }
 
     var body: some View {
-        Form {
+        AssistantForm {
             Section(fact == nil ? "New fact" : "Correction") {
                 TextField("Something durable the assistant should remember", text: $content, axis: .vertical)
                     .lineLimit(3...8)
