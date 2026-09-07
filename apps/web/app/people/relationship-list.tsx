@@ -2,6 +2,7 @@ import type { PersonConnection, PersonRelation } from '@assistant/application/pe
 import { relationSpanLabel } from '@assistant/application/people-presentation';
 import Link from 'next/link';
 import { PersonAvatar } from '@/app/people/person-avatar';
+import { RemoveConnection } from '@/app/profile/knowledge/remove-connection';
 import { Badge } from '@/lib/ui';
 
 const rowClass = 'flex min-w-0 items-center gap-3 rounded-xl bg-raised p-3.5 ring-1 ring-edge/60';
@@ -51,6 +52,9 @@ export function RelationshipList({ relations, now }: { relations: PersonRelation
               // A person named only inside a fact has no page to open.
               <div className={rowClass}>{body}</div>
             )}
+            <div className="flex justify-end pt-1">
+              <RemoveConnection relationId={relation.id} sentence={relation.sentence} />
+            </div>
           </li>
         );
       })}
@@ -76,6 +80,7 @@ export function ConnectionList({
               {connection.sentence}
             </span>
             {span ? <span className="shrink-0 text-xs text-muted">{span}</span> : null}
+            <RemoveConnection relationId={connection.id} sentence={connection.sentence} />
           </li>
         );
       })}

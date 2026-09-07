@@ -1,4 +1,8 @@
-import { forgetPersonOccasion, reviewPersonOccasion } from '@assistant/application/profile';
+import {
+  forgetPersonOccasion,
+  reviewPersonOccasion,
+  updatePersonOccasion,
+} from '@assistant/application/profile';
 import { getDb } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -30,4 +34,29 @@ export async function DELETE(
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid occasion id' }, { status: 400 });
   await forgetPersonOccasion(getDb(), id);
   return mobileJson({ ok: true });
+}
+
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+): Promise<Response> {
+  if (!(await isMobileAuthed(request))) return mobileUnauthorized();
+  const { id } = await params;
+  if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid occasion id' }, { status: 400 });
+  const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!body || typeof body !== 'object' || Array.isArray(body))
+    return mobileJson({ error: 'invalid occasion body' }, { status: 400 });
+  const text = (key: string) => (typeof body[key] === 'string' ? body[key] : '');
+  const result = await updatePersonOccasion(getDb(), id, {
+    kind: text('kind'),
+    label: text('label'),
+    month: text('month'),
+    day: text('day'),
+    year: text('year'),
+    leadDays: text('leadDays'),
+    notes: text('notes'),
+  });
+  return result.error
+    ? mobileJson({ error: result.error }, { status: 400 })
+    : mobileJson({ ok: true });
 }

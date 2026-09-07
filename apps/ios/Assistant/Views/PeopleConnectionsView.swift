@@ -44,6 +44,7 @@ struct PeopleConnectionsExplorer: View {
   @State private var trail: [String] = []
   @State private var failed = false
   @State private var inspecting: PeopleConnectionBranch?
+  @State private var outline = false
 
   private var focusID: String? { trail.last }
 
@@ -64,11 +65,19 @@ struct PeopleConnectionsExplorer: View {
         .font(.subheadline)
         .frame(minHeight: 44)
         if let card = model.personCards[id] {
+          Picker("Connection layout", selection: $outline) {
+            Text("Branches").tag(false)
+            Text("Tree").tag(true)
+          }.pickerStyle(.segmented)
+          if outline {
+            PersonConnectionOutline(personId: id, ancestors: [id])
+          } else {
           PeopleConnectionMap(
             card: card,
             open: { next in
               trail = PeopleConnectionBranch.exploring(next, from: trail)
             }, inspect: { inspecting = $0 }, pageChanged: { focusChanged(focusID) })
+          }
           NavigationLink(value: AssistantDestination.person(id: id)) {
             Label("Open full profile", systemImage: "person.text.rectangle")
               .frame(maxWidth: .infinity, minHeight: 44)
@@ -347,5 +356,121 @@ private struct PeopleNodeAnchors: PreferenceKey {
     value: inout [String: Anchor<CGRect>], nextValue: () -> [String: Anchor<CGRect>]
   ) {
     value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+  }
+}
+
+/// Open branches in place. Ancestor references stay visible without recursing forever.
+struct PersonConnectionOutline: View {
+  let personId: String
+  let ancestors: [String]
+  @EnvironmentObject private var model: AppModel
+  @Environment(\.colorScheme) private var colorScheme
+  @State private var expanded: Set<String> = []
+  @State private var inspecting: PersonRelationSummary?
+  @State private var removing: PersonRelationSummary?
+  @State private var working = false
+  @State private var failure: String?
+
+  private func refreshBranch() async {
+    await model.refreshPersonEvidence(id: personId)
+    for id in ancestors where id != personId { await model.loadPersonCard(id: id) }
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      if let card = model.personCards[personId] {
+        if ancestors.count == 1 {
+          Text(card.name).font(.title3.weight(.semibold))
+          Text("Open a branch to see how people connect. Repeated people link back to their profile.")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        let branches = PeopleConnectionBranch.branches(for: card)
+        if branches.isEmpty { Text("No further connections recorded.").font(.caption).foregroundStyle(.secondary) }
+        ForEach(branches) { branch in
+          VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 6) {
+              if let id = branch.contactID, !ancestors.contains(id), ancestors.count < 5 {
+                Button {
+                  withTransaction(TranscriptDisclosure.transaction()) {
+                    if expanded.contains(branch.id) { expanded.remove(branch.id) } else { expanded.insert(branch.id) }
+                  }
+                } label: {
+                  Image(systemName: "chevron.right")
+                    .rotationEffect(.degrees(expanded.contains(branch.id) ? 90 : 0))
+                    .frame(width: 36, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(expanded.contains(branch.id) ? "Collapse" : "Expand") \(branch.group.representative.otherLabel)")
+                .accessibilityValue(expanded.contains(branch.id) ? "Expanded" : "Collapsed")
+              } else {
+                Image(systemName: "arrow.turn.down.right")
+                  .foregroundStyle(.secondary).frame(width: 36, height: 44).accessibilityHidden(true)
+              }
+              VStack(alignment: .leading, spacing: 4) {
+                if let id = branch.contactID {
+                  NavigationLink { PersonCardScreen(personId: id) } label: {
+                    Text(branch.group.representative.otherLabel).font(.subheadline.weight(.semibold))
+                  }
+                } else {
+                  Text(branch.group.representative.otherLabel).font(.subheadline.weight(.semibold))
+                }
+                Text(branch.label).font(.caption).foregroundStyle(.secondary)
+                if let detail = branch.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+                if branch.needsReview { Text("Needs review").font(.caption2).foregroundStyle(.secondary) }
+                if ancestors.count >= 5, let id = branch.contactID, !ancestors.contains(id) {
+                  Text("Open this profile to continue exploring").font(.caption2).foregroundStyle(.secondary)
+                }
+                if let id = branch.contactID, ancestors.contains(id) {
+                  Text("Already on this branch").font(.caption2).foregroundStyle(.secondary)
+                }
+                DisclosureGroup("Manage connection (\(branch.group.relations.count))") {
+                  ForEach(branch.group.relations) { evidence in
+                    VStack(alignment: .leading, spacing: 4) {
+                      Text(evidence.sentence).font(.caption)
+                      HStack {
+                        Button("View source") { inspecting = evidence }
+                        Spacer(minLength: 4)
+                        Button("Remove", role: .destructive) { removing = evidence }
+                      }.font(.caption).frame(minHeight: 44).disabled(working)
+                    }
+                  }
+                }.font(.caption).padding(.top, 4)
+              }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if expanded.contains(branch.id), let id = branch.contactID, !ancestors.contains(id), ancestors.count < 5 {
+              PersonConnectionOutline(personId: id, ancestors: ancestors + [id])
+                .padding(.leading, 12)
+                .overlay(alignment: .leading) { Rectangle().fill(AssistantTheme.inkMuted(for: colorScheme).opacity(0.25)).frame(width: 1) }
+            }
+          }.padding(.vertical, 6)
+          Divider()
+        }
+      } else {
+        ProgressView("Loading connections…")
+        Button("Try again") { Task { await model.loadPersonCard(id: personId) } }
+      }
+      if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
+    }
+    .tint(AssistantTheme.accent(for: colorScheme))
+    .task(id: personId) { if model.personCards[personId] == nil { await model.loadPersonCard(id: personId) } }
+    .sheet(item: $inspecting) { evidence in
+      NavigationStack {
+        PersonRelationshipEvidenceScreen(evidence: evidence) { await refreshBranch() }
+      }
+    }
+    .confirmationDialog("Remove this connection?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
+      if let evidence = removing {
+        Button("Remove connection", role: .destructive) {
+          Task {
+            working = true
+            failure = nil
+            if await model.removeKnowledgeRelation(id: evidence.id) {
+              await refreshBranch()
+            } else { failure = "Couldn’t remove this connection. Try again." }
+            working = false
+          }
+        }
+      }
+    } message: { Text("This removes the selected claim. Its source note and other claims stay saved.") }
   }
 }

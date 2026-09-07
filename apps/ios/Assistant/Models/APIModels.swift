@@ -1019,6 +1019,7 @@ struct PersonOccasion: Codable, Identifiable, Sendable {
     let year: Int?
     let notes: String
     let quarantined: Bool
+    var leadDays: Int? = nil
 }
 
 struct PersonMergeOption: Codable, Identifiable, Sendable {

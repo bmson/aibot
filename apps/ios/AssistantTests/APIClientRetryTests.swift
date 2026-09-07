@@ -14,11 +14,13 @@ final class StubURLProtocol: URLProtocol {
     private static let lock = NSLock()
     private static var outcomes: [Outcome] = []
     private static var recordedMethods: [String] = []
+    private static var recordedURLs: [URL] = []
 
     static func prime(_ queued: [Outcome]) {
         lock.withLock {
             outcomes = queued
             recordedMethods = []
+            recordedURLs = []
         }
     }
 
@@ -28,9 +30,12 @@ final class StubURLProtocol: URLProtocol {
         lock.withLock { recordedMethods }
     }
 
-    private static func next(for method: String) -> Outcome {
+    static var urls: [URL] { lock.withLock { recordedURLs } }
+
+    private static func next(for method: String, url: URL?) -> Outcome {
         lock.withLock {
             recordedMethods.append(method)
+            if let url { recordedURLs.append(url) }
             return outcomes.isEmpty ? .success(status: 200, body: Data()) : outcomes.removeFirst()
         }
     }
@@ -41,7 +46,7 @@ final class StubURLProtocol: URLProtocol {
 
     override func startLoading() {
         let method = request.httpMethod ?? "GET"
-        switch Self.next(for: method) {
+        switch Self.next(for: method, url: request.url) {
         case let .failure(error):
             client?.urlProtocol(self, didFailWithError: error)
         case let .success(status, body):
@@ -59,6 +64,18 @@ final class StubURLProtocol: URLProtocol {
 }
 
 final class APIClientRetryTests: XCTestCase {
+    func testRelationshipGraphOmitsAbsentQueryIdentifiers() async throws {
+        let body = try JSONEncoder().encode(RelationshipGraphSnapshot.empty)
+        for (person, entity, expected) in [(nil, nil, Set<String>()), ("person-id", nil, ["person"]), (nil, "entity-id", ["entity"])] as [(String?, String?, Set<String>)] {
+            StubURLProtocol.prime([.success(status: 200, body: body)])
+            _ = try await makeClient().relationshipGraph(personID: person, entityID: entity)
+            let url = try XCTUnwrap(StubURLProtocol.urls.first)
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertEqual(Set(items.map(\.name)), expected)
+            XCTAssertTrue(items.allSatisfy { $0.value?.isEmpty == false })
+        }
+    }
+
     func testSpendingBreakdownPreservesEntriesAndSeparatesUnknownFromZero() {
         let breakdown = SpendingBreakdown(rows: [
             ("Small", "1", 1), ("Unknown", nil, 2), ("Largest", "4", 3),
@@ -229,6 +246,68 @@ final class APIClientRetryTests: XCTestCase {
     }
 
     @MainActor
+    func testForceGraphCanvasDragCancelAndSelectionPreserveViewport() throws {
+        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 390, height: 640))
+        let graph = RelationshipGraphFixture.snapshot()
+        view.configure(snapshot: graph, selectedID: nil, focusOnly: false, dark: false, reduceMotion: true)
+        let point = view.layout.positions[0]
+        let screen = view.viewport.screen(point, size: view.bounds.size)
+        let viewport = view.viewport
+        view.configure(snapshot: graph, selectedID: view.layout.ids[0], focusOnly: false, dark: false, reduceMotion: true)
+        XCTAssertEqual(view.viewport, viewport)
+        view.beginDrag(at: screen)
+        view.drag(to: CGPoint(x: screen.x + 60, y: screen.y + 30))
+        XCTAssertEqual(view.layout.positions[0].x, point.x + 60 / viewport.scale, accuracy: 0.001)
+        XCTAssertEqual(view.viewport, viewport, "Dragging a node must not pan the canvas")
+        view.endDrag(cancelled: true)
+        XCTAssertEqual(view.layout.positions[0], point)
+        view.beginDrag(at: CGPoint(x: -100, y: -100))
+        view.drag(to: CGPoint(x: -50, y: -60))
+        XCTAssertEqual(view.viewport.offset.x, viewport.offset.x + 50, accuracy: 0.001)
+        view.endDrag(cancelled: true)
+        XCTAssertEqual(view.viewport, viewport)
+        view.zoom(to: 1.8, anchor: CGPoint(x: 70, y: 90))
+        let zoomed = view.viewport
+        view.endDrag(cancelled: true)
+        XCTAssertEqual(view.viewport, zoomed, "Starting a pinch without a pan must preserve the current viewport")
+        view.stop()
+    }
+
+    @MainActor
+    func testForceGraphScreenLightDarkDenseAndAccessibleSnapshots() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        for (name, scheme, count, size) in [
+            ("light", ColorScheme.light, 18, DynamicTypeSize.large),
+            ("dark", ColorScheme.dark, 18, DynamicTypeSize.large),
+            ("dense", ColorScheme.dark, 200, DynamicTypeSize.large),
+            ("accessible", ColorScheme.light, 18, DynamicTypeSize.accessibility3),
+            ("accessible-selected", ColorScheme.light, 18, DynamicTypeSize.accessibility3),
+            ("empty", ColorScheme.light, 0, DynamicTypeSize.large)
+        ] {
+            let fixture = RelationshipGraphFixture.snapshot(count: count)
+            let snapshot = RelationshipGraphSnapshot(nodes: fixture.nodes, edges: fixture.edges, totalEdges: fixture.totalEdges, truncated: false, focusId: name == "accessible-selected" ? "node-0" : nil)
+            StubURLProtocol.prime([.success(status: 200, body: try JSONEncoder().encode(snapshot))])
+            let model = AppModel(apiClient: makeClient())
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+            window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
+            window.rootViewController = UIHostingController(rootView:
+                NavigationStack { RelationshipGraphScreen() }.environmentObject(model)
+                    .environment(\.colorScheme, scheme).environment(\.dynamicTypeSize, size))
+            window.isHidden = false
+            defer { window.isHidden = true; window.rootViewController = nil }
+            try await Task.sleep(for: .milliseconds(500))
+            window.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "force-graph-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
+            XCTAssertEqual(StubURLProtocol.attempts, ["GET"])
+        }
+    }
+
+    @MainActor
     func testPeopleConnectionsStartsWithChoiceNotInventedDirectoryEdges() async throws {
         let people = PeopleMapFixture.relations.compactMap { relation -> PersonSummary? in
             guard let id = relation.otherContactId else { return nil }
@@ -263,6 +342,42 @@ final class APIClientRetryTests: XCTestCase {
         }
         XCTAssertTrue(model.peopleLoaded)
         XCTAssertTrue(model.personCards.isEmpty, "A directory category must not imply a connection or eagerly fetch every person")
+        XCTAssertEqual(StubURLProtocol.attempts, ["GET"])
+    }
+
+    @MainActor
+    func testPersonTreeAndBirthdayEditorSnapshots() async throws {
+        let card = PeopleMapFixture.card(relations: PeopleMapFixture.relations)
+        StubURLProtocol.prime([.success(status: 200, body: try JSONEncoder().encode(card))])
+        let model = AppModel(apiClient: makeClient())
+        await model.loadPersonCard(id: card.id)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        for scheme in [ColorScheme.light, .dark] {
+            for editor in [false, true] {
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+                window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
+                window.rootViewController = UIHostingController(rootView:
+                    NavigationStack {
+                        if editor {
+                            OccasionEditor(personId: card.id, occasion: PersonOccasion(id: "date", kind: "birthday", label: "", month: 3, day: 18, year: 1985, notes: "Gift ideas", quarantined: false, leadDays: 14))
+                        } else {
+                            ScrollView { PersonConnectionOutline(personId: card.id, ancestors: [card.id]).padding(16) }.navigationTitle("Connections")
+                        }
+                    }.environmentObject(model).environment(\.colorScheme, scheme))
+                window.isHidden = false
+                defer { window.isHidden = true; window.rootViewController = nil }
+                try await Task.sleep(for: .milliseconds(350))
+                window.layoutIfNeeded()
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "person-\(editor ? "birthday" : "tree")-\(scheme)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
         XCTAssertEqual(StubURLProtocol.attempts, ["GET"])
     }
 
@@ -467,6 +582,18 @@ final class APIClientRetryTests: XCTestCase {
         XCTAssertNil(model.personCards["alex"], "Back navigation must not reuse stale evidence")
         XCTAssertEqual(model.personCards["robin"]?.name, "Robin refreshed")
         XCTAssertEqual(StubURLProtocol.attempts, ["GET", "GET", "GET"])
+    }
+
+    func testBirthdayEditUsesPatchAndRejectsFailedSave() async throws {
+        let mutation = OccasionMutation(kind: "birthday", label: "", month: "2", day: "29", year: "", leadDays: "3", notes: "")
+        StubURLProtocol.prime([.success(status: 200, body: Data(#"{"ok":true}"#.utf8))])
+        try await makeClient().updateOccasion(id: "birthday", occasion: mutation)
+        XCTAssertEqual(StubURLProtocol.attempts, ["PATCH"])
+        StubURLProtocol.prime([.success(status: 400, body: Data(#"{"error":"That date does not exist."}"#.utf8))])
+        do {
+            try await makeClient().updateOccasion(id: "birthday", occasion: mutation)
+            XCTFail("A rejected edit must not report success")
+        } catch { XCTAssertEqual(StubURLProtocol.attempts, ["PATCH"]) }
     }
 
     @MainActor

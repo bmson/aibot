@@ -2395,3 +2395,69 @@ final class CardTextTests: XCTestCase {
         XCTAssertEqual(diagnostic.displayProgress, "")
     }
 }
+
+enum RelationshipGraphFixture {
+    static func snapshot(count: Int = 18) -> RelationshipGraphSnapshot {
+        let names = ["Alex Rivera", "Robin Rivera", "Maya Chen", "Sam Okafor", "Elena Rossi", "Noah Martin", "Northstar Studio", "San Francisco", "Design meetup", "Summer trip", "Iris Park", "Leo Jensen", "Ava Santos", "Owen Lee", "Sofia Costa", "Theo Reed", "Family dinner", "Oakland"]
+        let nodes = (0..<count).map { i in RelationshipGraphNode(id: "node-\(i)", label: i < names.count ? names[i] : "Person \(i)", kind: i == 6 ? "organization" : [7, 17].contains(i) ? "place" : [8, 9, 16].contains(i) ? "project" : "person") }
+        let edges = (1..<max(1, count)).map { i in edge("edge-\(i)", from: "node-\(i < 6 ? 0 : i < 12 ? 2 : 4)", to: "node-\(i)") }
+            + (count > 8 ? [edge("cross", from: "node-1", to: "node-6"), edge("cross2", from: "node-4", to: "node-6"), edge("cross3", from: "node-2", to: "node-4")] : [])
+        return .init(nodes: nodes, edges: edges, totalEdges: edges.count, truncated: false, focusId: nil)
+    }
+    static func edge(_ id: String, from: String, to: String) -> RelationshipGraphEdge {
+        .init(id: id, subjectId: from, objectId: to, predicate: "knows", reviewStatus: "confirmed", sourceContent: "A synthetic source note.", presentation: .init(sentence: "Alex knows Robin.", label: "Knows", accessibleLabel: "Alex knows Robin."), validFrom: nil, validUntil: nil)
+    }
+}
+
+extension APIModelsTests {
+    func testForceGraphUsesTopologyRatherThanDuplicateSourceWeights() {
+        let a = RelationshipGraphFixture.edge("a", from: "node-0", to: "node-1")
+        let b = RelationshipGraphFixture.edge("b", from: "node-0", to: "node-1")
+        var graph = RelationshipGraphFixture.snapshot(count: 2)
+        graph.edges = [a, b]
+        XCTAssertEqual(graph.links, [GraphLink("node-0", "node-1")])
+        XCTAssertEqual(graph.neighborhood(of: "node-0"), Set(["node-0", "node-1"]))
+        graph.edges.removeFirst()
+        XCTAssertEqual(graph.links.count, 1, "Removing one source must retain the other claim")
+    }
+
+    func testForceGraphExpansionReplacesStaleNeighborhoodAndKeepsUnrelatedEdges() {
+        let graph = RelationshipGraphFixture.snapshot()
+        let replacement = RelationshipGraphSnapshot(nodes: graph.nodes, edges: [RelationshipGraphFixture.edge("new", from: "node-0", to: "node-17")], totalEdges: 1, truncated: false, focusId: "node-0")
+        let merged = graph.merging(replacement, around: "node-0")
+        XCTAssertEqual(merged.edges.filter { $0.subjectId == "node-0" }.map(\.id), ["new"])
+        XCTAssertTrue(merged.edges.contains { $0.id == "cross" })
+        XCTAssertEqual(merged.merging(replacement, around: "node-0").edges.count, merged.edges.count)
+    }
+
+    func testForceLayoutKeepsExistingPositionsDuringExpansionAndRemainsFiniteAtCapacity() {
+        let graph = RelationshipGraphFixture.snapshot(count: 200)
+        var layout = RelationshipGraphLayout()
+        layout.update(nodes: Array(graph.nodes.prefix(18)), links: graph.links)
+        for _ in 0..<120 { layout.step() }
+        let before = Dictionary(uniqueKeysWithValues: zip(layout.ids, layout.positions))
+        layout.update(nodes: graph.nodes, links: graph.links)
+        for (id, point) in zip(layout.ids, layout.positions) where before[id] != nil { XCTAssertEqual(before[id], point) }
+        let start = Date()
+        for _ in 0..<120 { layout.step() }
+        let elapsed = Date().timeIntervalSince(start)
+        let note = XCTAttachment(string: "200 nodes, 120 settling steps: \(elapsed) seconds in simulator test build")
+        note.lifetime = .keepAlways; add(note)
+        XCTAssertTrue(layout.positions.allSatisfy { $0.x.isFinite && $0.y.isFinite })
+        XCTAssertEqual(layout.positions.count, 200)
+        layout.move(id: "node-0", to: CGPoint(x: 30, y: 40))
+        layout.step(pinned: "node-0")
+        XCTAssertEqual(layout.positions[layout.ids.firstIndex(of: "node-0")!], CGPoint(x: 30, y: 40))
+    }
+
+    func testGraphViewportZoomKeepsPinchAnchorAndClampsScale() {
+        var viewport = GraphViewport(scale: 1.2, offset: CGPoint(x: 30, y: -22))
+        let size = CGSize(width: 390, height: 640), anchor = CGPoint(x: 63, y: 97)
+        let world = viewport.world(anchor, size: size)
+        viewport.zoom(to: 2.4, anchor: anchor, size: size)
+        XCTAssertEqual(viewport.screen(world, size: size).x, anchor.x, accuracy: 0.001)
+        XCTAssertEqual(viewport.screen(world, size: size).y, anchor.y, accuracy: 0.001)
+        viewport.zoom(to: 100, anchor: anchor, size: size); XCTAssertEqual(viewport.scale, 4)
+        viewport.zoom(to: 0.001, anchor: anchor, size: size); XCTAssertEqual(viewport.scale, 0.15)
+    }
+}

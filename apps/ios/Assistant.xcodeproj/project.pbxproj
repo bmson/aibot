@@ -47,6 +47,9 @@
 		B00000000000000000000056 /* Components/MermaidDiagramView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000056 /* Components/MermaidDiagramView.swift */; };
 		B00000000000000000000057 /* mermaid.min.js in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000057 /* mermaid.min.js */; };
 		B00000000000000000000058 /* mermaid-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000058 /* mermaid-LICENSE.txt */; };
+		B00000000000000000000073 /* Models/RelationshipGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000073 /* Models/RelationshipGraph.swift */; };
+		B00000000000000000000074 /* Views/RelationshipGraphCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000074 /* Views/RelationshipGraphCanvas.swift */; };
+		B00000000000000000000075 /* Views/RelationshipGraphScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000075 /* Views/RelationshipGraphScreen.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -125,6 +128,9 @@
 		C00000000000000000000056 /* Components/MermaidDiagramView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/MermaidDiagramView.swift; sourceTree = "<group>"; };
 		C00000000000000000000057 /* mermaid.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/mermaid.min.js; sourceTree = "<group>"; };
 		C00000000000000000000058 /* mermaid-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Resources/mermaid-LICENSE.txt; sourceTree = "<group>"; };
+		C00000000000000000000073 /* Models/RelationshipGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/RelationshipGraph.swift; sourceTree = "<group>"; };
+		C00000000000000000000074 /* Views/RelationshipGraphCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/RelationshipGraphCanvas.swift; sourceTree = "<group>"; };
+		C00000000000000000000075 /* Views/RelationshipGraphScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/RelationshipGraphScreen.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -205,6 +211,9 @@
 				C00000000000000000000054 /* Views/KnowledgeView.swift */,
                 C00000000000000000000071 /* Views/KnowledgeGraphView.swift */,
                 C00000000000000000000072 /* Views/PeopleConnectionsView.swift */,
+				C00000000000000000000075 /* Views/RelationshipGraphScreen.swift */,
+				C00000000000000000000074 /* Views/RelationshipGraphCanvas.swift */,
+				C00000000000000000000073 /* Models/RelationshipGraph.swift */,
 				C00000000000000000000059 /* Views/PeopleView.swift */,
 				C00000000000000000000011 /* Assets.xcassets */,
 				C00000000000000000000057 /* mermaid.min.js */,
@@ -395,6 +404,9 @@
 				B00000000000000000000054 /* Views/KnowledgeView.swift in Sources */,
                 B00000000000000000000071 /* Views/KnowledgeGraphView.swift in Sources */,
                 B00000000000000000000072 /* Views/PeopleConnectionsView.swift in Sources */,
+				B00000000000000000000075 /* Views/RelationshipGraphScreen.swift in Sources */,
+				B00000000000000000000074 /* Views/RelationshipGraphCanvas.swift in Sources */,
+				B00000000000000000000073 /* Models/RelationshipGraph.swift in Sources */,
 				B00000000000000000000059 /* Views/PeopleView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

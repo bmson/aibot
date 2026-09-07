@@ -444,18 +444,38 @@ export async function createMemory(
   return {};
 }
 
+export interface PersonOccasionInput {
+  kind: string;
+  label: string;
+  month: string;
+  day: string;
+  year: string;
+  leadDays: string;
+  notes: string;
+}
+
+/** Edit the exact date in place, including clearing a previously saved year. */
+export async function updatePersonOccasion(
+  db: Db,
+  occasionId: string,
+  input: PersonOccasionInput,
+): Promise<{ error?: string }> {
+  if (!UUID_RE.test(occasionId)) return { error: 'Invalid occasion identifier.' };
+  const agent = await getAgent(db);
+  const [existing] = await db
+    .select({ contactId: occasions.contactId })
+    .from(occasions)
+    .where(and(eq(occasions.id, occasionId), eq(occasions.agentId, agent.id)))
+    .limit(1);
+  if (!existing) return { error: 'That occasion no longer exists.' };
+  return addPersonOccasion(db, existing.contactId, input, occasionId);
+}
+
 export async function addPersonOccasion(
   db: Db,
   contactId: string,
-  input: {
-    kind: string;
-    label: string;
-    month: string;
-    day: string;
-    year: string;
-    leadDays: string;
-    notes: string;
-  },
+  input: PersonOccasionInput,
+  occasionId?: string,
 ): Promise<{ error?: string }> {
   if (!UUID_RE.test(contactId)) return { error: 'Invalid person identifier.' };
   if (!isOccasionKind(input.kind)) return { error: 'Choose an occasion type.' };
@@ -475,9 +495,41 @@ export async function addPersonOccasion(
   if (year !== null && (!Number.isInteger(year) || year < 1900 || year > 2200)) {
     return { error: 'Enter a valid year, or leave it blank.' };
   }
+  if (day > new Date(Date.UTC(year ?? 2000, month, 0)).getUTCDate()) {
+    return { error: 'That date does not exist. Check the month, day, and year.' };
+  }
   const leadDays = input.leadDays.trim() ? Number(input.leadDays) : 7;
+  if (!Number.isInteger(leadDays) || leadDays < 0 || leadDays > 60) {
+    return { error: 'Choose a reminder between 0 and 60 days before.' };
+  }
   const agent = await getAgent(db);
   try {
+    if (occasionId) {
+      const updated = await db
+        .update(occasions)
+        .set({
+          kind: input.kind,
+          label: input.label.trim().slice(0, 120),
+          month,
+          day,
+          year,
+          leadDays,
+          notes: input.notes.trim().slice(0, 2000),
+          originTrust: 'owner',
+          ownerConfirmed: true,
+          quarantined: false,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(occasions.id, occasionId),
+            eq(occasions.agentId, agent.id),
+            eq(occasions.contactId, contactId),
+          ),
+        )
+        .returning({ id: occasions.id });
+      return updated.length ? {} : { error: 'That occasion no longer exists.' };
+    }
     await saveOccasion(db, {
       agentId: agent.id,
       contactId,
@@ -493,8 +545,11 @@ export async function addPersonOccasion(
       ownerConfirmed: true,
       source: 'profile',
     });
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : 'Occasion could not be saved.' };
+  } catch {
+    return {
+      error:
+        'Occasion could not be saved. Check whether this date is already recorded and try again.',
+    };
   }
   return {};
 }

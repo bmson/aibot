@@ -57,6 +57,7 @@ export interface KnowledgeWorkspaceOverview {
 
 export interface KnowledgeMapNode {
   id: string;
+  contactId?: string | null;
   label: string;
   kind: string;
   component: number;
@@ -360,9 +361,11 @@ export async function getKnowledgeMapSnapshot(
         subjectId: subject.id,
         subjectLabel,
         subjectKind: subject.kind,
+        subjectContactId: subject.contactId,
         objectId: object.id,
         objectLabel,
         objectKind: object.kind,
+        objectContactId: object.contactId,
         sourceMemoryId: memories.id,
         sourceContent: memories.content,
         evidenceQuote: knowledgeGraphRelations.evidenceQuote,
@@ -386,7 +389,10 @@ export async function getKnowledgeMapSnapshot(
       .innerJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
       .where(filters),
   ]);
-  const nodeData = new Map<string, { id: string; label: string; kind: string; degree: number }>();
+  const nodeData = new Map<
+    string,
+    { id: string; label: string; kind: string; degree: number; contactId: string | null }
+  >();
   const edges: KnowledgeMapEdge[] = [];
   for (const row of rows) {
     const newIds = [row.subjectId, row.objectId].filter((id) => !nodeData.has(id));
@@ -395,12 +401,14 @@ export async function getKnowledgeMapSnapshot(
       id: row.subjectId,
       label: row.subjectLabel,
       kind: row.subjectKind,
+      contactId: row.subjectContactId,
       degree: (nodeData.get(row.subjectId)?.degree ?? 0) + 1,
     });
     nodeData.set(row.objectId, {
       id: row.objectId,
       label: row.objectLabel,
       kind: row.objectKind,
+      contactId: row.objectContactId,
       degree: (nodeData.get(row.objectId)?.degree ?? 0) + 1,
     });
     edges.push({

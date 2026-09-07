@@ -13,6 +13,7 @@ import {
   mergePeople,
   type OrganizeMemoryState,
   organizeMemoryNow,
+  type PersonOccasionInput,
   type ProminenceLevel,
   purgeProfileVoiceSamples,
   recompileProfileCard,
@@ -20,6 +21,7 @@ import {
   reviewPersonOccasion,
   setMemoryProminence,
   updatePersonIdentity,
+  updatePersonOccasion,
   updatePersonRelationship,
   updateVoiceProfile,
 } from '@assistant/application/profile';
@@ -247,4 +249,14 @@ export async function reviewOccasionAction(
   await requireOwner();
   await reviewPersonOccasion(getDb(), occasionId, verdict);
   revalidateProfile();
+}
+
+export async function updateOccasionAction(
+  occasionId: string,
+  input: PersonOccasionInput,
+): Promise<{ error?: string }> {
+  await requireOwner();
+  const result = await updatePersonOccasion(getDb(), occasionId, input);
+  revalidateProfile();
+  return result;
 }

@@ -15,6 +15,7 @@ struct PeopleView: View {
     @State private var query = ""
     @State private var showsConnections = true
     @State private var activeMapID: String?
+    @State private var showsVisualGraph = false
 
     /// Birthdays inside this window get their own section at the top.
     private let comingUpWindowDays = 30
@@ -63,6 +64,12 @@ struct PeopleView: View {
                     } else if model.people.isEmpty {
                         emptyDirectory
                     } else {
+                        Button { showsVisualGraph = true } label: {
+                            Label("Open relationship graph", systemImage: "circle.hexagongrid")
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("assistant.people.visual-graph")
                         Picker("People view", selection: $showsConnections) {
                             Text("Connections").tag(true)
                             Text("Directory").tag(false)
@@ -82,6 +89,9 @@ struct PeopleView: View {
                 .padding(16)
                 .padding(.bottom, 28)
                 .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
+            }
+            .fullScreenCover(isPresented: $showsVisualGraph) {
+                NavigationStack { RelationshipGraphScreen() }
             }
             .navigationTitle("People")
             .assistantSubmenuChrome()
@@ -568,6 +578,8 @@ struct PersonCardScreen: View {
     @Environment(\.colorScheme) private var colorScheme
     let personId: String
     @State private var inspectingEvidence: PersonRelationSummary?
+    @State private var showsDates = false
+    @State private var showsTree = false
 
     private var card: PersonCard? { model.personCards[personId] }
 
@@ -589,6 +601,12 @@ struct PersonCardScreen: View {
         .assistantSubmenuChrome()
         .refreshable { await model.loadPersonCard(id: personId) }
         .task(id: card == nil) { if card == nil { await model.loadPersonCard(id: personId) } }
+        .sheet(isPresented: $showsDates) {
+            NavigationStack { PersonDatesScreen(personId: personId) }
+        }
+        .fullScreenCover(isPresented: $showsTree) {
+            NavigationStack { RelationshipGraphScreen(personID: personId) }
+        }
         .sheet(item: $inspectingEvidence) { evidence in
             NavigationStack {
                 PersonRelationshipEvidenceScreen(evidence: evidence) {
@@ -601,6 +619,13 @@ struct PersonCardScreen: View {
     @ViewBuilder
     private func cardContent(_ card: PersonCard) -> some View {
         identity(card)
+        HStack {
+            Button(card.birthday == nil ? "Add birthday" : "Edit birthday", systemImage: "calendar") { showsDates = true }
+            Spacer(minLength: 4)
+            Button("Explore graph", systemImage: "point.3.connected.trianglepath.dotted") { showsTree = true }
+        }
+        .font(.subheadline)
+        .buttonStyle(.bordered)
 
         if card.birthday != nil || !card.howWeMet.isEmpty {
             VStack(alignment: .leading, spacing: 12) {

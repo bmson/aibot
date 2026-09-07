@@ -282,6 +282,13 @@ struct APIClient: Sendable {
         return try await perform(makeRequest(url: url), as: KnowledgeOverview.self)
     }
 
+    func relationshipGraph(personID: String? = nil, entityID: String? = nil, query: String = "") async throws -> RelationshipGraphSnapshot {
+        var components = URLComponents(url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge/graph"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "person", value: personID), URLQueryItem(name: "entity", value: entityID), URLQueryItem(name: "q", value: query.isEmpty ? nil : query)].filter { $0.value != nil }
+        guard let url = components?.url else { throw APIError.invalidServerURL }
+        return try await perform(makeRequest(url: url), as: RelationshipGraphSnapshot.self)
+    }
+
     func knowledgeItem(id: String) async throws -> KnowledgeOverview {
         try await get("api/mobile/v1/knowledge/\(id)")
     }
@@ -683,6 +690,14 @@ struct APIClient: Sendable {
             )
         )
         request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(occasion)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func updateOccasion(id: String, occasion: OccasionMutation) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/memory/occasions/\(id)"))
+        request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONEncoder().encode(occasion)
         _ = try await perform(request, as: OkPayload.self)

@@ -7,6 +7,7 @@ import {
   correctKnowledgeSource,
   forgetKnowledgeSource,
   getKnowledgeGraphNeighborhood,
+  getKnowledgeGraphRelation,
   getKnowledgeSourceImpact,
   type KnowledgeGraphEntityView,
   type KnowledgeGraphNeighborEdge,
@@ -26,6 +27,7 @@ import { getDb, getRouter } from '@/lib/server';
 function revalidateKnowledgeGraph(): void {
   revalidatePath('/profile');
   revalidatePath('/profile/knowledge');
+  revalidatePath('/people', 'layout');
 }
 
 /**
@@ -223,4 +225,22 @@ export async function removeDisconnectedKnowledgeItems(): Promise<void> {
   await requireOwner();
   await cleanKnowledgeProjectionOrphans(getDb());
   revalidateKnowledgeGraph();
+}
+
+export async function removeKnowledgeConnection(relationId: string): Promise<{ error?: string }> {
+  await requireOwner();
+  const removed = await reviewKnowledgeGraphRelation(getDb(), relationId, 'rejected');
+  if (!removed) return { error: 'That connection no longer exists. Refresh and try again.' };
+  revalidateKnowledgeGraph();
+  return {};
+}
+
+export async function loadConnectionSource(
+  relationId: string,
+): Promise<{ content: string; sentence: string } | null> {
+  await requireOwner();
+  const relation = await getKnowledgeGraphRelation(getDb(), relationId);
+  return relation
+    ? { content: relation.source.content, sentence: relation.presentation.sentence }
+    : null;
 }

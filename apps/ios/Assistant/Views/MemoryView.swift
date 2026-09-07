@@ -620,6 +620,7 @@ private struct PersonDetailsView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var showingOccasionEditor = false
+    @State private var editingOccasion: PersonOccasion?
     @State private var mergeTarget = ""
     @State private var isWorking = false
 
@@ -651,6 +652,7 @@ private struct PersonDetailsView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 HStack {
+                                    Button("Edit") { editingOccasion = occasion }
                                     if occasion.quarantined {
                                         Button("Approve") {
                                             review(occasion, verdict: "approve")
@@ -714,6 +716,9 @@ private struct PersonDetailsView: View {
         .sheet(isPresented: $showingOccasionEditor) {
             NavigationStack { OccasionEditor(personId: person.id) }
         }
+        .sheet(item: $editingOccasion) { occasion in
+            NavigationStack { OccasionEditor(personId: person.id, occasion: occasion) }
+        }
     }
 
     private func occasionDate(_ occasion: PersonOccasion) -> String {
@@ -744,8 +749,9 @@ private struct PersonDetailsView: View {
     }
 }
 
-private struct OccasionEditor: View {
+struct OccasionEditor: View {
     let personId: String
+    let occasion: PersonOccasion?
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -757,6 +763,19 @@ private struct OccasionEditor: View {
     @State private var leadDays = "7"
     @State private var notes = ""
     @State private var isSaving = false
+    @State private var failure: String?
+
+    init(personId: String, occasion: PersonOccasion? = nil) {
+        self.personId = personId
+        self.occasion = occasion
+        _kind = State(initialValue: occasion?.kind ?? "birthday")
+        _label = State(initialValue: occasion?.label ?? "")
+        _month = State(initialValue: occasion.map { String($0.month) } ?? "")
+        _day = State(initialValue: occasion.map { String($0.day) } ?? "")
+        _year = State(initialValue: occasion?.year.map { String($0) } ?? "")
+        _leadDays = State(initialValue: String(occasion?.leadDays ?? 7))
+        _notes = State(initialValue: occasion?.notes ?? "")
+    }
 
     var body: some View {
         AssistantForm {
@@ -766,15 +785,23 @@ private struct OccasionEditor: View {
                     Text("Anniversary").tag("anniversary")
                     Text("Other").tag("custom")
                 }
-                TextField("Label", text: $label)
-                TextField("Month", text: $month).keyboardType(.numberPad)
-                TextField("Day", text: $day).keyboardType(.numberPad)
-                TextField("Year (optional)", text: $year).keyboardType(.numberPad)
-                TextField("Remind days ahead", text: $leadDays).keyboardType(.numberPad)
-                TextField("Notes", text: $notes, axis: .vertical)
+                if kind == "custom" { LabeledContent("Label") { TextField("Occasion name", text: $label).multilineTextAlignment(.trailing) } }
+                Picker("Month", selection: $month) {
+                    Text("Choose month").tag("")
+                    ForEach(1...12, id: \.self) { number in
+                        Text(DateFormatter().monthSymbols[number - 1]).tag(String(number))
+                    }
+                }
+                LabeledContent("Day") { TextField("Day", text: $day).keyboardType(.numberPad).multilineTextAlignment(.trailing) }
+                LabeledContent("Year (optional)") { TextField("Unknown", text: $year).keyboardType(.numberPad).multilineTextAlignment(.trailing) }
+                LabeledContent("Remind days before") { TextField("7", text: $leadDays).keyboardType(.numberPad).multilineTextAlignment(.trailing) }
+                LabeledContent("Notes") { TextField("Gift ideas", text: $notes, axis: .vertical).multilineTextAlignment(.trailing) }
             }
+            .disabled(isSaving)
+            if let failure { Section { Text(failure).foregroundStyle(.red) } }
         }
-        .navigationTitle("Add occasion")
+        .interactiveDismissDisabled(isSaving)
+        .navigationTitle(occasion == nil ? "Add occasion" : "Edit occasion")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -789,6 +816,7 @@ private struct OccasionEditor: View {
 
     private func save() {
         isSaving = true
+        failure = nil
         Task {
             let saved = await model.addOccasion(
                 personId: personId,
@@ -800,10 +828,11 @@ private struct OccasionEditor: View {
                     year: year,
                     leadDays: leadDays,
                     notes: notes
-                )
+                ),
+                occasionId: occasion?.id
             )
             isSaving = false
-            if saved { dismiss() }
+            if saved { dismiss() } else { failure = model.errorMessage ?? "Couldn’t save this date. Try again." }
         }
     }
 }
@@ -936,5 +965,48 @@ private struct MemoryEditor: View {
             isSaving = false
             if succeeded { dismiss() }
         }
+    }
+}
+
+/// Dates are editable where people are read, without a detour through Memory.
+struct PersonDatesScreen: View {
+    let personId: String
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var editing: PersonOccasion?
+    @State private var adding = false
+
+    var body: some View {
+        AssistantForm {
+            if let profile = model.personProfiles[personId] {
+                Section("Important dates") {
+                    ForEach(profile.occasions) { occasion in
+                        Button { editing = occasion } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(occasion.label.isEmpty ? occasion.kind.sentenceCaseIdentifier : occasion.label)
+                                    Text("\(DateFormatter().monthSymbols[max(0, min(11, occasion.month - 1))]) \(occasion.day)" + (occasion.year.map { ", \($0)" } ?? ""))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "pencil").accessibilityLabel("Edit")
+                            }.frame(minHeight: 44)
+                        }.buttonStyle(.plain)
+                    }
+                    Button("Add birthday or occasion", systemImage: "calendar.badge.plus") { adding = true }
+                }
+            } else {
+                ProgressView("Loading dates…")
+                Button("Try again") { Task { await model.loadPersonProfile(id: personId) } }
+            }
+        }
+        .navigationTitle("Important dates")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        .task { await model.loadPersonProfile(id: personId) }
+        .sheet(item: $editing) { occasion in
+            NavigationStack { OccasionEditor(personId: personId, occasion: occasion) }
+        }
+        .sheet(isPresented: $adding) { NavigationStack { OccasionEditor(personId: personId) } }
     }
 }

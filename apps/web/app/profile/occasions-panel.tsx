@@ -5,6 +5,7 @@ import {
   addOccasionAction,
   forgetOccasionAction,
   reviewOccasionAction,
+  updateOccasionAction,
 } from '@/app/profile/actions';
 import {
   Badge,
@@ -25,6 +26,7 @@ export interface OccasionView {
   month: number;
   day: number;
   year: number | null;
+  leadDays?: number;
   notes: string;
   quarantined: boolean;
 }
@@ -75,6 +77,7 @@ export function OccasionsPanel({
 }) {
   const [pending, startTransition] = useTransition();
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<OccasionView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
@@ -99,8 +102,8 @@ export function OccasionsPanel({
   const visibleSuggestions = suggestions.filter((s) => !dismissed.has(`${s.month}-${s.day}`));
 
   return (
-    <section className="mt-8">
-      <SectionHeading title="Occasions" count={occasions.length} />
+    <section id="important-dates" className="mt-6 scroll-mt-24">
+      <SectionHeading title="Important dates" count={occasions.length} />
       <p className="mt-1 text-xs text-muted">
         Birthdays, anniversaries, and other recurring dates. The assistant reminds you at lead time
         in your morning brief.
@@ -126,6 +129,19 @@ export function OccasionsPanel({
                 </Badge>
               ) : null}
               <span className="ml-auto flex gap-2">
+                <button
+                  type="button"
+                  disabled={pending}
+                  className={btnSm.outline}
+                  aria-label={`Edit ${kindLabel(o)}`}
+                  onClick={() => {
+                    setEditing(o);
+                    setAdding(true);
+                    setError(null);
+                  }}
+                >
+                  Edit
+                </button>
                 {o.quarantined ? (
                   <>
                     <button
@@ -188,11 +204,15 @@ export function OccasionsPanel({
 
       {adding ? (
         <form
+          key={editing?.id ?? 'new'}
           className="mt-3 flex flex-col gap-3 rounded-2xl bg-sunken/55 p-4"
           action={(formData) =>
             startTransition(async () => {
               setError(null);
-              const result = await addOccasionAction(contactId, {
+              const save = editing
+                ? updateOccasionAction.bind(null, editing.id)
+                : addOccasionAction.bind(null, contactId);
+              const result = await save({
                 kind: String(formData.get('kind') ?? ''),
                 label: String(formData.get('label') ?? ''),
                 month: String(formData.get('month') ?? ''),
@@ -202,14 +222,21 @@ export function OccasionsPanel({
                 notes: String(formData.get('notes') ?? ''),
               });
               if (result.error) setError(result.error);
-              else setAdding(false);
+              else {
+                setAdding(false);
+                setEditing(null);
+              }
             })
           }
         >
           <div className="flex flex-wrap items-end gap-3">
             <label className={`flex flex-col gap-1 ${labelClass}`}>
               Type
-              <select name="kind" defaultValue="birthday" className={selectClass}>
+              <select
+                name="kind"
+                defaultValue={editing?.kind ?? 'birthday'}
+                className={selectClass}
+              >
                 <option value="birthday">Birthday</option>
                 <option value="anniversary">Anniversary</option>
                 <option value="custom">Custom</option>
@@ -221,6 +248,7 @@ export function OccasionsPanel({
                 name="label"
                 type="text"
                 placeholder="e.g. graduation"
+                defaultValue={editing?.label ?? ''}
                 className={`${inputClass} w-40`}
               />
             </label>
@@ -228,6 +256,7 @@ export function OccasionsPanel({
               Month
               <input
                 name="month"
+                defaultValue={editing?.month ?? ''}
                 type="number"
                 min={1}
                 max={12}
@@ -239,6 +268,7 @@ export function OccasionsPanel({
               Day
               <input
                 name="day"
+                defaultValue={editing?.day ?? ''}
                 type="number"
                 min={1}
                 max={31}
@@ -250,6 +280,7 @@ export function OccasionsPanel({
               Year (optional)
               <input
                 name="year"
+                defaultValue={editing?.year ?? ''}
                 type="number"
                 min={1900}
                 max={2200}
@@ -263,30 +294,54 @@ export function OccasionsPanel({
                 type="number"
                 min={0}
                 max={60}
-                defaultValue={7}
+                defaultValue={editing?.leadDays ?? 7}
                 className={`${inputClass} w-24`}
               />
             </label>
           </div>
           <label className={`flex flex-col gap-1 ${labelClass}`}>
             Notes / gift ideas (optional)
-            <input name="notes" type="text" className={inputClass} />
+            <input
+              name="notes"
+              defaultValue={editing?.notes ?? ''}
+              type="text"
+              className={inputClass}
+            />
           </label>
           <div className="flex items-center gap-2">
             <button type="submit" disabled={pending} className={btn.primary}>
-              Save occasion
+              {editing ? 'Save changes' : 'Save occasion'}
             </button>
-            <button type="button" onClick={() => setAdding(false)} className={btn.outline}>
+            <button
+              type="button"
+              onClick={() => {
+                setAdding(false);
+                setEditing(null);
+                setError(null);
+              }}
+              className={btn.outline}
+            >
               Cancel
             </button>
-            {error ? <span className="text-xs text-red-600 dark:text-red-400">{error}</span> : null}
           </div>
         </form>
       ) : (
-        <button type="button" onClick={() => setAdding(true)} className={`${btn.outline} mt-3`}>
+        <button
+          type="button"
+          onClick={() => {
+            setEditing(null);
+            setAdding(true);
+          }}
+          className={`${btn.outline} mt-3`}
+        >
           Add occasion
         </button>
       )}
+      {error ? (
+        <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+          {error}
+        </p>
+      ) : null}
     </section>
   );
 }

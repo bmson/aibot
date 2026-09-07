@@ -734,7 +734,11 @@ export default async function KnowledgePage({
                 {graph.relations
                   .filter((relation) => relation.reviewStatus !== 'rejected')
                   .map((relation) => (
-                    <article key={relation.id} className={`${cardShellClass} p-4`}>
+                    <article
+                      id={`relation-${relation.id}`}
+                      key={relation.id}
+                      className={`${cardShellClass} p-4`}
+                    >
                       <p className="text-sm font-semibold text-strong">
                         {relation.presentation.sentence}
                       </p>

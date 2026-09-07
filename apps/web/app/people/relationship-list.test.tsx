@@ -1,7 +1,9 @@
 import type { PersonConnection, PersonRelation } from '@assistant/application/people';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ConnectionList, RelationshipList } from '@/app/people/relationship-list';
+
+vi.mock('@/app/profile/knowledge/actions', () => ({ removeKnowledgeConnection: vi.fn() }));
 
 const NOW = new Date('2026-09-02T12:00:00.000Z');
 

@@ -601,6 +601,7 @@ export interface PersonProfile {
     month: number;
     day: number;
     year: number | null;
+    leadDays?: number;
     notes: string;
     quarantined: boolean;
   }>;
@@ -662,6 +663,7 @@ export async function getPersonProfile(
       month: occasion.month,
       day: occasion.day,
       year: occasion.year,
+      leadDays: occasion.leadDays,
       notes: occasion.notes,
       quarantined: occasion.quarantined,
     })),

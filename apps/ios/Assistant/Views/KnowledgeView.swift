@@ -23,6 +23,7 @@ struct KnowledgeView: View {
     @State private var loadID = UUID()
     @State private var loading = false
     @State private var showingMap = true
+    @State private var showsVisualGraph = false
     @State private var inspectedNeighborID: String?
     @State private var evidenceRequest = 0
 
@@ -71,7 +72,13 @@ struct KnowledgeView: View {
         )
         .contentMargins(.bottom, 72, for: .scrollContent)
         .onSubmit(of: .search) { Task { await loadSearch() } }
+        .fullScreenCover(isPresented: $showsVisualGraph) {
+            NavigationStack { RelationshipGraphScreen(entityID: selectedID) }
+        }
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Open visual graph", systemImage: "circle.hexagongrid") { showsVisualGraph = true }
+            }
             if !showingCleanup, selectedEntity != nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {

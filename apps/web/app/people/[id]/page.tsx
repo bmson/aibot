@@ -1,18 +1,18 @@
 import { getPersonDossier } from '@assistant/application/people';
 import {
-  birthdayLabel,
   eventDateLabel,
   lastContactLabel,
   PERSON_GROUP_LABELS,
 } from '@assistant/application/people-presentation';
 import type { MemorySnapshot } from '@assistant/application/profile';
-import { CalendarDays, Handshake, MapPin, Sparkles } from 'lucide-react';
+import { Handshake, MapPin, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { PersonAvatar } from '@/app/people/person-avatar';
 import { ConnectionList, RelationshipList } from '@/app/people/relationship-list';
 import { AddFact } from '@/app/profile/add-fact';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
+import { ConnectionTree } from '@/app/profile/knowledge/connection-tree';
 import { MergeControl } from '@/app/profile/merge-control';
 import { OccasionsPanel } from '@/app/profile/occasions-panel';
 import { DeletePerson, PersonControls } from '@/app/profile/person-controls';
@@ -77,7 +77,7 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
   const dossier = await getPersonDossier(db, id, { factLimit: FACT_LIMIT, now });
   if (!dossier) notFound();
 
-  const { profile, birthday, location, origins, relations, connections, events } = dossier;
+  const { profile, location, origins, relations, connections, events } = dossier;
   const { contact, facts, totalFacts, occasions, occasionSuggestions, mergeOptions, duplicate } =
     profile;
   const lastContact = lastContactLabel(dossier.lastContactAt, now);
@@ -129,63 +129,71 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
         </div>
       </div>
 
-      {/* Birthday and how you met. The panel disappears entirely rather than
-          showing two "not recorded" rows on a person you have just added. */}
-      {birthday || origins.length > 0 ? (
+      {origins.length > 0 ? (
         <Panel className="mt-6">
-          {/* One column when only one of the two is recorded, so the panel does
-              not reserve a visibly empty half. */}
-          <InfoGrid columns={birthday && origins.length > 0 ? 2 : 1}>
-            {birthday ? (
-              <InfoItem label="Birthday">
-                <span className="flex items-center gap-2">
-                  <CalendarDays className="size-4 shrink-0 text-muted" aria-hidden="true" />
-                  {birthdayLabel(birthday, now)}
+          <InfoGrid columns={1}>
+            <InfoItem label="How you met">
+              <span className="flex items-start gap-2">
+                <Handshake className="mt-0.5 size-4 shrink-0 text-muted" aria-hidden="true" />
+                <span>
+                  {origins.map((origin) => (
+                    <span key={origin.id} className="block">
+                      {origin.sentence}
+                    </span>
+                  ))}
                 </span>
-              </InfoItem>
-            ) : null}
-            {origins.length > 0 ? (
-              <InfoItem label="How you met">
-                <span className="flex items-start gap-2">
-                  <Handshake className="mt-0.5 size-4 shrink-0 text-muted" aria-hidden="true" />
-                  <span>
-                    {origins.map((origin) => (
-                      <span key={origin.id} className="block">
-                        {origin.sentence}
-                      </span>
-                    ))}
-                  </span>
-                </span>
-              </InfoItem>
-            ) : null}
+              </span>
+            </InfoItem>
           </InfoGrid>
         </Panel>
       ) : null}
 
-      {/* Relationships to other people — the section this page exists for. */}
-      <section className="mt-8">
-        <SectionHeading title="Relationships" count={relations.length} />
-        {relations.length === 0 ? (
-          <EmptyState>
-            No connections to other people are recorded yet. They are extracted from what you tell
-            the assistant, and you can add one by hand in the{' '}
-            <Link href="/profile/knowledge?view=map" className="text-accent underline">
-              knowledge graph
-            </Link>
-            .
-          </EmptyState>
-        ) : (
-          <RelationshipList relations={relations} now={now} />
-        )}
-      </section>
+      <OccasionsPanel
+        contactId={contact.id}
+        personName={contact.name}
+        occasions={occasions}
+        suggestions={occasionSuggestions}
+      />
 
-      {/* Everything else the graph knows: employers, places, events. */}
-      {connections.length > 0 ? (
+      {dossier.entityId ? (
         <section className="mt-8">
-          <SectionHeading title="Also connected" count={connections.length} />
-          <ConnectionList connections={connections} now={now} />
+          <SectionHeading title="Explore connections" />
+          <div className="mt-3">
+            <ConnectionTree
+              key={`${dossier.entityId}:${relations.map((row) => row.id).join(',')}:${connections.map((row) => row.id).join(',')}`}
+              root={{ id: dossier.entityId, label: contact.name, kind: 'person' }}
+            />
+          </div>
         </section>
       ) : null}
+
+      <details className="mt-6">
+        <summary className={summaryClass}>Recorded relationships and places</summary>
+        {/* Relationships to other people — the section this page exists for. */}
+        <section className="mt-8">
+          <SectionHeading title="Relationships" count={relations.length} />
+          {relations.length === 0 ? (
+            <EmptyState>
+              No connections to other people are recorded yet. They are extracted from what you tell
+              the assistant, and you can add one by hand in the{' '}
+              <Link href="/profile/knowledge?view=map" className="text-accent underline">
+                knowledge graph
+              </Link>
+              .
+            </EmptyState>
+          ) : (
+            <RelationshipList relations={relations} now={now} />
+          )}
+        </section>
+
+        {/* Everything else the graph knows: employers, places, events. */}
+        {connections.length > 0 ? (
+          <section className="mt-8">
+            <SectionHeading title="Also connected" count={connections.length} />
+            <ConnectionList connections={connections} now={now} />
+          </section>
+        ) : null}
+      </details>
 
       {/* What happened, most recent first. */}
       <section className="mt-8">
@@ -271,13 +279,6 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
           </div>
         )}
       </section>
-
-      <OccasionsPanel
-        contactId={contact.id}
-        personName={contact.name}
-        occasions={occasions}
-        suggestions={occasionSuggestions}
-      />
 
       {/* Editing lives below the reading material, not above it: this page is
           about the person first and a record to maintain second. */}

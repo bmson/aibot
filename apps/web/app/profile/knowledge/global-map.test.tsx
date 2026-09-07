@@ -2,6 +2,12 @@ import type { KnowledgeMapSnapshot } from '@assistant/application';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
+vi.mock('@/app/profile/knowledge/actions', () => ({
+  loadKnowledgeNeighborhood: vi.fn(),
+  loadConnectionSource: vi.fn(),
+  removeKnowledgeConnection: vi.fn(),
+}));
+
 vi.mock('@/app/profile/knowledge/source-impact-forget', () => ({
   SourceImpactForget: () => <button type="button">Forget source</button>,
 }));

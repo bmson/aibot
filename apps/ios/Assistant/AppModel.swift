@@ -225,6 +225,13 @@ final class AppModel: ObservableObject {
         catch { errorMessage = error.localizedDescription; return nil }
     }
 
+    func relationshipGraph(personID: String? = nil, entityID: String? = nil, query: String = "") async -> RelationshipGraphSnapshot? {
+        guard let client else { return nil }
+        do { return try await client.relationshipGraph(personID: personID, entityID: entityID, query: query) }
+        catch where isRequestCancellation(error) { return nil }
+        catch { errorMessage = error.localizedDescription; return nil }
+    }
+
     func knowledgeItem(id: String) async -> KnowledgeOverview? {
         guard let client else { return nil }
         do { return try await client.knowledgeItem(id: id) }
@@ -1196,11 +1203,17 @@ final class AppModel: ObservableObject {
         catch { errorMessage = error.localizedDescription }
     }
 
-    func addOccasion(personId: String, mutation: OccasionMutation) async -> Bool {
+    func addOccasion(personId: String, mutation: OccasionMutation, occasionId: String? = nil) async -> Bool {
         guard let client else { return false }
         do {
-            try await client.addOccasion(personId: personId, occasion: mutation)
+            if let occasionId {
+                try await client.updateOccasion(id: occasionId, occasion: mutation)
+            } else {
+                try await client.addOccasion(personId: personId, occasion: mutation)
+            }
             await loadPersonProfile(id: personId)
+            await loadPersonCard(id: personId)
+            await loadPeople()
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -1213,6 +1226,8 @@ final class AppModel: ObservableObject {
         do {
             try await client.reviewOccasion(id: occasion.id, verdict: verdict)
             await loadPersonProfile(id: personId)
+            await loadPersonCard(id: personId)
+            await loadPeople()
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -1225,6 +1240,8 @@ final class AppModel: ObservableObject {
         do {
             try await client.deleteOccasion(id: occasion.id)
             await loadPersonProfile(id: personId)
+            await loadPersonCard(id: personId)
+            await loadPeople()
             return true
         } catch {
             errorMessage = error.localizedDescription
