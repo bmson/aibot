@@ -59,6 +59,86 @@ final class StubURLProtocol: URLProtocol {
 }
 
 final class APIClientRetryTests: XCTestCase {
+    func testSpendingBreakdownPreservesEntriesAndSeparatesUnknownFromZero() {
+        let breakdown = SpendingBreakdown(rows: [
+            ("Small", "1", 1), ("Unknown", nil, 2), ("Largest", "4", 3),
+            ("Zero", "0", 4), ("Invalid", "nan", 5), ("Negative", "-2", 6),
+            ("Infinite", "inf", 7), ("Tie", "1", 8), ("Tiny", "0.0000001", 9)
+        ])
+        XCTAssertEqual(breakdown.entries.count, 9)
+        XCTAssertEqual(breakdown.entries.map(\.label), ["Largest", "Small", "Tie", "Tiny", "Zero",
+            "Unknown", "Invalid", "Negative", "Infinite"])
+        XCTAssertEqual(Set(breakdown.entries.map(\.id)).count, 9)
+        XCTAssertEqual(breakdown.fraction(for: breakdown.entries[0]), 1)
+        XCTAssertEqual(breakdown.fraction(for: breakdown.entries[1]), 0.25)
+        XCTAssertEqual(breakdown.entries[3].amountLabel, "< $0.000001")
+        XCTAssertNotNil(breakdown.entries[4].amount)
+        XCTAssertNil(breakdown.entries[5].amount)
+        XCTAssertEqual(breakdown.entries[5].amountLabel, "Unavailable")
+        let zeros = SpendingBreakdown(rows: [("Zero", "0", 0)])
+        XCTAssertEqual(zeros.fraction(for: zeros.entries[0]), 0)
+        let large = SpendingBreakdown(rows: [("Large", String(Double.greatestFiniteMagnitude), 1)])
+        XCTAssertEqual(large.fraction(for: large.entries[0]), 1)
+    }
+
+    func testOrganizerStatusDoesNotImplyCompletionFromUnknownOrActiveStatus() {
+        XCTAssertEqual(MemoryOrganizerPanel.statusLabel("done"), "Last run completed")
+        XCTAssertEqual(MemoryOrganizerPanel.statusLabel("running"), "Organizing memory")
+        XCTAssertEqual(MemoryOrganizerPanel.statusLabel("failed"), "Last run failed")
+        XCTAssertEqual(MemoryOrganizerPanel.statusLabel("new_status"), "Organizer update")
+        XCTAssertEqual(MemoryOrganizerPanel.statusLabel(nil), "Ready to organize")
+    }
+
+    @MainActor
+    func testMemoryOrganizerAndSpendingVisualStates() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let rows: [(String, String?, Int)] = [
+            ("Research", "3.6", 22), ("Calendar assistance", "1.2", 14),
+            ("Memory organization", "0.034", 9), ("Travel planning", "0.0025", 2),
+            ("Documents", "0", 4), ("Other provider", nil, 1), ("Small request", "0.0000001", 1)
+        ]
+        for (name, scheme, width, size, expanded, status) in [
+            ("light", ColorScheme.light, CGFloat(393), DynamicTypeSize.large, false, "done"),
+            ("dark", ColorScheme.dark, CGFloat(393), DynamicTypeSize.large, false, "running"),
+            ("compact", ColorScheme.light, CGFloat(320), DynamicTypeSize.large, false, "failed"),
+            ("accessible", ColorScheme.light, CGFloat(393), DynamicTypeSize.accessibility3, false, "done"),
+            ("expanded", ColorScheme.light, CGFloat(393), DynamicTypeSize.large, true, "done")
+        ] {
+            for page in ["memory", "costs"] {
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: width, height: 852)
+                window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
+                let content = NavigationStack {
+                    ScrollView {
+                        if page == "memory" {
+                            MemoryOrganizerPanel(pendingCount: 17,
+                                latest: WorkspaceMemoryOrganizer(id: "visual", status: status,
+                                    progress: "consolidation: 17 memories reviewed in 2 batch(es) across 3 people, 5 duplicates expired, 0 contradictions resolved, 4 facts unified, owner card recompiled",
+                                    updatedAt: "2026-09-06T20:00:00Z"), requestInFlight: false, organize: {}, showsDetails: expanded)
+                                .padding(16)
+                        } else {
+                            SpendingBreakdownCard(title: "By source", rows: rows, showingAll: expanded).padding(16)
+                        }
+                    }
+                    .navigationTitle(page == "memory" ? "Memory" : "Costs")
+                    .assistantSubmenuChrome()
+                }.environment(\.colorScheme, scheme).environment(\.dynamicTypeSize, size)
+                window.rootViewController = UIHostingController(rootView: content)
+                window.isHidden = false
+                defer { window.isHidden = true; window.rootViewController = nil }
+                try await Task.sleep(for: .milliseconds(350))
+                window.layoutIfNeeded()
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "detail-\(page)-\(name)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
     func testVisualSummaryKeepsEveryStatusAndRejectsInvalidChartValues() {
         let summary = ActivityVisualSummary(statuses: ["waiting_approval", "waiting_budget", "needs_attention",
             "pending", "running", "sleeping", "waiting_event", "done", "failed", "cancelled", "new_status"])

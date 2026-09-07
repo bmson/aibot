@@ -166,22 +166,13 @@ struct MemoryView: View {
             ])
 
             if memory.health.notYetOrganized > 0 || memory.latestOrganizer != nil {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Memory organizer").font(.headline)
-                    Text(
-                        memory.latestOrganizer.map {
-                            "\($0.progress) · \(relative($0.updatedAt))"
-                        } ?? "\(memory.health.notYetOrganized) facts are waiting to be organized."
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    Button("Organize now", systemImage: "sparkles") {
-                        updateProfile(action: "organize")
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(profileActionInFlight != nil)
+                MemoryOrganizerPanel(
+                    pendingCount: memory.health.notYetOrganized,
+                    latest: memory.latestOrganizer,
+                    requestInFlight: profileActionInFlight != nil
+                ) {
+                    updateProfile(action: "organize")
                 }
-                .assistantPanel(in: colorScheme)
             }
 
             if let card = memory.card {
@@ -556,6 +547,70 @@ struct MemoryView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .assistantCard(in: colorScheme)
+    }
+}
+
+/// A maintenance receipt, not a second dashboard. Keep raw run details
+/// available without making a completed maintenance log lead the memory page.
+struct MemoryOrganizerPanel: View {
+    let pendingCount: Int
+    let latest: WorkspaceMemoryOrganizer?
+    let requestInFlight: Bool
+    let organize: () -> Void
+    @State var showsDetails = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    static func statusLabel(_ status: String?) -> String {
+        switch status {
+        case "done": "Last run completed"
+        case "pending", "running": "Organizing memory"
+        case "failed": "Last run failed"
+        case "cancelled": "Last run stopped"
+        case nil: "Ready to organize"
+        default: "Organizer update"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                AssistantGlyph(systemName: "tray.2", tint: AssistantTheme.accent(for: colorScheme), variant: .inline)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Memory organizer").font(.subheadline.weight(.semibold))
+                    Text(Self.statusLabel(latest?.status)).font(.caption)
+                        .foregroundStyle(latest?.status == "failed"
+                            ? AssistantTheme.errorInk(for: colorScheme) : AssistantTheme.inkMuted(for: colorScheme))
+                }
+            }
+            if pendingCount > 0 {
+                Text("\(pendingCount) \(pendingCount == 1 ? "fact is" : "facts are") waiting to be organized.")
+                    .font(.subheadline).fixedSize(horizontal: false, vertical: true)
+            }
+            if let latest {
+                DisclosureGroup("Run details", isExpanded: $showsDetails) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !latest.progress.isEmpty {
+                            Text(latest.progress).font(.subheadline)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Text("Updated \(relative(latest.updatedAt))").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .font(.subheadline)
+                .disclosureGroupStyle(AssistantEvidenceDisclosureStyle())
+            }
+            Button(action: organize) {
+                HStack(spacing: 7) {
+                    if requestInFlight { ProgressView().controlSize(.small) }
+                    else { Image(systemName: "sparkles") }
+                    Text(requestInFlight ? "Updating…" : "Organize now")
+                }
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            .disabled(requestInFlight)
+        }
+        .assistantPanel(in: colorScheme)
     }
 }
 

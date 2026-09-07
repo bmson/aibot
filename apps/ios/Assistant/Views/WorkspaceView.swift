@@ -530,8 +530,8 @@ struct WorkspaceView: View {
             }
 
             sectionHeading("Usage this month")
-            breakdownCard(title: "By source", rows: costs.bySource.map { ($0.source, $0.usd ?? "0", $0.count) })
-            breakdownCard(title: "By model", rows: costs.byModel.map { ($0.model, $0.usd ?? "0", $0.count) })
+            SpendingBreakdownCard(title: "By source", rows: costs.bySource.map { ($0.source, $0.usd, $0.count) })
+            SpendingBreakdownCard(title: "By model", rows: costs.byModel.map { ($0.model, $0.usd, $0.count) })
             Button("Edit spending limits", systemImage: "slider.horizontal.3") {
                 showingCostEditor = true
             }
@@ -1049,42 +1049,6 @@ struct WorkspaceView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .assistantCard(in: colorScheme)
-    }
-
-    private func breakdownCard(title: String, rows: [(String, String, Int)]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.subheadline.weight(.semibold))
-            if rows.isEmpty {
-                Text("No spending yet this month").font(.caption).foregroundStyle(.secondary)
-            } else {
-                ForEach(Array(rows.prefix(8).enumerated()), id: \.offset) { _, row in
-                    if usesAccessibilityLayout {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(row.0)
-                                .fixedSize(horizontal: false, vertical: true)
-                            HStack(spacing: 9) {
-                                Text("\(row.2)×").foregroundStyle(.secondary)
-                                Text(currency(Double(row.1) ?? 0)).font(.caption.monospacedDigit())
-                            }
-                        }
-                        .font(.caption)
-                        .padding(.vertical, 5)
-                    } else {
-                        HStack(spacing: 9) {
-                            Text(row.0)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 8)
-                            Text("\(row.2)×").foregroundStyle(.secondary)
-                            Text(currency(Double(row.1) ?? 0)).font(.caption.monospacedDigit())
-                        }
-                        .font(.caption)
-                        .padding(.vertical, 5)
-                    }
-                }
-            }
-        }
         .assistantCard(in: colorScheme)
     }
 
@@ -1681,6 +1645,114 @@ struct WorkspaceView: View {
         } else {
             await model.refreshWorkspace()
         }
+    }
+}
+
+/// Preserve every entry and distinguish unavailable amounts from genuine zero
+/// spending. Sorting is stable for ties, and ratios never enter invalid geometry.
+struct SpendingBreakdown {
+    struct Entry: Identifiable {
+        let id: Int
+        let label: String
+        let amount: Double?
+        let count: Int
+
+        var amountLabel: String {
+            guard let amount else { return "Unavailable" }
+            if amount > 0 && amount < 0.000001 { return "< $0.000001" }
+            return amount.formatted(.currency(code: "USD").precision(.fractionLength(2...6)))
+        }
+    }
+    let entries: [Entry]
+    let maximum: Double
+
+    init(rows: [(String, String?, Int)]) {
+        entries = rows.enumerated().map { index, row in
+            let parsed = row.1.flatMap(Double.init)
+            let amount = parsed.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+            return Entry(id: index, label: row.0, amount: amount, count: max(0, row.2))
+        }.sorted {
+            let left = $0.amount ?? -1, right = $1.amount ?? -1
+            return left == right ? $0.id < $1.id : left > right
+        }
+        maximum = entries.compactMap(\.amount).max() ?? 0
+    }
+
+    func fraction(for entry: Entry) -> Double {
+        guard maximum > 0, let amount = entry.amount else { return 0 }
+        return min(1, max(0, amount / maximum))
+    }
+}
+
+struct SpendingBreakdownCard: View {
+    let title: String
+    let rows: [(String, String?, Int)]
+    @State var showingAll = false
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        let breakdown = SpendingBreakdown(rows: rows)
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline)
+                if !rows.isEmpty {
+                    Text("Largest reported spend first").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if rows.isEmpty {
+                Text("No spending recorded this month.").font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                ForEach(breakdown.entries.prefix(5)) { entry in
+                    spendingRow(entry, fraction: breakdown.fraction(for: entry))
+                }
+                if breakdown.entries.count > 5 {
+                    DisclosureGroup("\(breakdown.entries.count - 5) more entries", isExpanded: $showingAll) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            ForEach(breakdown.entries.dropFirst(5)) { entry in
+                                spendingRow(entry, fraction: breakdown.fraction(for: entry))
+                            }
+                        }
+                    }
+                    .font(.subheadline)
+                    .disclosureGroupStyle(AssistantEvidenceDisclosureStyle())
+                }
+            }
+        }
+        .assistantCard(in: colorScheme)
+    }
+
+    private func spendingRow(_ entry: SpendingBreakdown.Entry, fraction: Double) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entry.label).font(.subheadline.weight(.medium))
+                    Text(entry.amountLabel).font(.subheadline.monospacedDigit())
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(entry.label).font(.subheadline.weight(.medium))
+                    Spacer(minLength: 4)
+                    Text(entry.amountLabel).font(.subheadline.monospacedDigit())
+                        .layoutPriority(1)
+                }
+            }
+            Text("\(entry.count) usage \(entry.count == 1 ? "entry" : "entries")")
+                .font(.caption).foregroundStyle(.secondary)
+            if entry.amount != nil {
+                GeometryReader { geometry in
+                    Capsule().fill(AssistantTheme.sunken(for: colorScheme))
+                        .overlay(alignment: .leading) {
+                            Capsule().fill(AssistantTheme.accent(for: colorScheme))
+                                .frame(width: geometry.size.width * fraction)
+                        }
+                }
+                .frame(height: 5)
+                .accessibilityHidden(true)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .combine)
     }
 }
 

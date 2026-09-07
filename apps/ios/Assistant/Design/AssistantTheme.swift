@@ -592,7 +592,9 @@ struct AssistantGlyph: View {
 
     var body: some View {
         Image(systemName: systemName)
-            .font(variant == .card ? Font.system(size: 17, weight: .semibold) : Font.subheadline.weight(.semibold))
+            // The tile is fixed geometry; its adjacent semantic label scales
+            // with Dynamic Type, not this decorative symbol inside the tile.
+            .font(.system(size: 17, weight: .semibold))
             .foregroundStyle(tint)
             .frame(width: side, height: side)
             .background(

@@ -20,3 +20,11 @@
 ## Remaining manual coverage
 
 Simulator focus was repeatedly taken by another simulator window. Smoothness of the filter/evidence transitions and an exhaustive live walk through every editor remain unverified. The shared presentation code was audited across native pages; this is not a claim that every page, state, or gesture was manually exercised. Web UI and Dynamic Island status-lifecycle issues are outside this visual change.
+
+## Second pass: Memory and Costs
+
+- Memory organizer now separates the reported run status, facts awaiting organization, and expandable raw run details. A completed run does not imply all facts are organized. Unknown statuses never appear as successful completion.
+- Costs now ranks source/model entries by reported spending and draws proportional bars against the largest amount in that group. Amounts and usage-entry counts remain readable independently of color; these are comparisons, not budget utilization percentages.
+- Five entries are visible initially and the remaining entries can be expanded. The old eight-entry truncation is removed. Missing or invalid amounts are unavailable rather than zero, and tiny positive amounts are not rounded into apparent zero spending.
+- Full native suite: 158 passed, zero failures/skips. Ten additional component captures cover light/dark, 320-point width, accessibility text size, expanded details, and organizer failure/running states. Reviewed both components in every captured variant. Large-text review caught and fixed the shared inline glyph overflowing its fixed tile; accompanying text still scales with Dynamic Type.
+- Live Goals empty state and toolbar were visually inspected using the paired service. Editor taps could not be verified reliably as simulator focus continued moving between other active task windows; no production mutations were performed. New Memory/Costs coverage is rendered native component coverage, not a claim of full live-page interaction verification.
