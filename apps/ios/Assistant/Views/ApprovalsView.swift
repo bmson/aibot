@@ -279,7 +279,7 @@ struct ApprovalsView: View {
             } label: {
                 approvalActionLabel(title, isApplying: isApplyingThisDecision)
             }
-            .buttonStyle(AssistantActionButtonStyle(kind: .primary))
+            .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
             .controlSize(.small)
             .tint(AssistantTheme.accent(for: colorScheme))
             .disabled(decisionInFlightID != nil)
@@ -287,7 +287,8 @@ struct ApprovalsView: View {
             .accessibilityHint("Resumes this task immediately")
             .accessibilityIdentifier("assistant.approvals.\(item.id).\(decision)")
         } else {
-            AssistantConfirmationButton(title, systemImage: "hand.raised", hint: "Stops this action.") {
+            AssistantConfirmationButton(title, confirmationTitle: "Deny?", systemImage: "xmark",
+                kind: .neutral, hint: "Stops this action.", compact: true) {
                 applyDecision(item, decision: decision)
             }
             .disabled(decisionInFlightID != nil)
@@ -300,6 +301,8 @@ struct ApprovalsView: View {
             if isApplying {
                 ProgressView()
                     .controlSize(.small)
+            } else {
+                Image(systemName: "checkmark")
             }
             Text(isApplying ? "Applying…" : title)
         }

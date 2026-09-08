@@ -3,7 +3,7 @@
 import type { InlineApprovalDetail, InlineApprovalStatus } from '@assistant/application/chat';
 import { Check, CircleHelp, X } from 'lucide-react';
 import { ConfirmButton } from '@/lib/ui-client';
-import { DecisionActions, DecisionReceipt } from './decision-card';
+import { DecisionReceipt } from './decision-card';
 
 export interface InlineApprovalPart {
   type: 'approval';
@@ -105,27 +105,28 @@ export function ApprovalRow({
           </dl>
         </details>
       ) : null}
-      <DecisionActions>
+      <div className="mt-3 grid grid-cols-2 gap-2">
         <ConfirmButton
-          size="sm"
-          variant="success"
+          variant="primary"
+          className="min-w-0 w-full"
           disabled={disabled}
-          confirmLabel="Confirm approval"
+          confirmLabel="Approve?"
           onConfirm={() => onResolve(part.approvalId, 'approved')}
         >
           <Check className="size-3.5" aria-hidden="true" />
-          {busy && busyDecision === 'approved' ? 'Approving…' : 'Approve and continue'}
+          {busy && busyDecision === 'approved' ? 'Approving…' : 'Approve'}
         </ConfirmButton>
         <ConfirmButton
-          size="sm"
+          variant="outline"
+          className="min-w-0 w-full"
           disabled={disabled}
-          confirmLabel="Confirm deny"
+          confirmLabel="Deny?"
           onConfirm={() => onResolve(part.approvalId, 'denied')}
         >
           <X className="size-3.5" aria-hidden="true" />
           {busy && busyDecision === 'denied' ? 'Denying…' : 'Deny'}
         </ConfirmButton>
-      </DecisionActions>
+      </div>
     </div>
   );
 }

@@ -65,7 +65,7 @@ struct MessageBubble: View {
             ForEach(decisionParts.indices, id: \.self) { index in
                 let part = decisionParts[index]
                 if isPendingDecision(part) {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 0) {
                         Button(action: openApprovals) {
                             decisionCard(part)
                         }
@@ -77,7 +77,21 @@ struct MessageBubble: View {
                            let approvalId = part.approvalId,
                            !approvalId.isEmpty {
                             inlineDecisionRow(approvalId: approvalId, decide: decideApproval)
+                                .padding(.horizontal, 15)
+                                .padding(.bottom, 15)
                         }
+                    }
+                    .background(
+                        AssistantTheme.warningSurface(for: colorScheme),
+                        in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
+                            .stroke(
+                                AssistantTheme.warning(for: colorScheme)
+                                    .opacity(colorSchemeContrast == .increased ? 0.58 : 0.3),
+                                lineWidth: colorSchemeContrast == .increased ? 1.2 : 1
+                            )
                     }
                 } else {
                     settledDecisionReceipt(part)
@@ -404,8 +418,11 @@ struct MessageBubble: View {
 
     private func decisionCard(_ part: MessagePart) -> some View {
         let isApproval = part.type == "approval"
+        let headerLayout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 11))
         return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 11) {
+            headerLayout {
                 Image(systemName: isApproval ? "checkmark.shield.fill" : "creditcard.trianglebadge.exclamationmark")
                     .font(.system(size: 17, weight: .semibold))
                     .frame(width: 38, height: 38)
@@ -413,14 +430,13 @@ struct MessageBubble: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(isApproval ? "Approval needed" : "Budget decision")
-                        .font(.caption.weight(.bold))
-                        .textCase(.uppercase)
-                        .tracking(0.65)
-                    Text(isApproval ? "The assistant is parked until you decide." : "The assistant needs more room to continue.")
+                        .font(.subheadline.weight(.semibold))
+                    Text(isApproval ? "Review before continuing." : "The assistant needs more room to continue.")
                         .font(.caption)
                         .foregroundStyle(AssistantTheme.warningInk(for: colorScheme).opacity(0.76))
                 }
-                Spacer(minLength: 4)
+                .fixedSize(horizontal: false, vertical: true)
+                if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 4) }
                 if let code = part.shortCode, !code.isEmpty {
                     Text(code)
                         .font(.caption.monospaced().weight(.bold))
@@ -448,18 +464,6 @@ struct MessageBubble: View {
         .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
         .padding(15)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            AssistantTheme.warningSurface(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
-                .stroke(
-                    AssistantTheme.warning(for: colorScheme)
-                        .opacity(colorSchemeContrast == .increased ? 0.58 : 0.3),
-                    lineWidth: colorSchemeContrast == .increased ? 1.2 : 1
-                )
-        }
     }
 
     @ViewBuilder
@@ -534,13 +538,18 @@ struct MessageBubble: View {
         approvalId: String,
         decide: @escaping (String, String) async -> Bool
     ) -> some View {
-        AssistantFlowLayout(spacing: 10) {
-            AssistantConfirmationButton("Deny", systemImage: "hand.raised") {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 8))
+        return layout {
+            AssistantConfirmationButton("Deny", confirmationTitle: "Deny?", systemImage: "xmark",
+                kind: .neutral, hint: "Stops this action.", compact: true, fillsWidth: true) {
                 decidingApproval = true
                 _ = await decide(approvalId, "denied")
                 decidingApproval = false
             }
-            AssistantConfirmationButton("Approve", systemImage: "checkmark", kind: .primary) {
+            AssistantConfirmationButton("Approve", confirmationTitle: "Approve?", systemImage: "checkmark",
+                kind: .primary, hint: "Approves this request and resumes the task.", compact: true, fillsWidth: true) {
                 decidingApproval = true
                 _ = await decide(approvalId, "approved")
                 decidingApproval = false

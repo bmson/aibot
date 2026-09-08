@@ -168,7 +168,7 @@ export function ApprovalCard({
             <p className="mt-1 text-xs text-red-600 dark:text-red-400">{editState.error}</p>
           ) : null}
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button type="submit" disabled={editPending} className={btn.success}>
+            <button type="submit" disabled={editPending} className={btn.primary}>
               <Check className="size-4" aria-hidden="true" />
               {editPending ? 'Approving…' : 'Approve edited request'}
             </button>
@@ -181,20 +181,20 @@ export function ApprovalCard({
         <div className={`${cardFooterClass} max-sm:grid max-sm:grid-cols-2`}>
           <form action={approveApproval.bind(null, approval.id)} className="min-w-0">
             <ConfirmButton
-              variant="success"
+              variant="primary"
               pendingLabel="Approving…"
-              confirmLabel="Confirm approval"
+              confirmLabel="Approve?"
               className="w-full sm:w-auto"
             >
               <Check className="size-4" aria-hidden="true" />
-              Approve and continue
+              Approve
             </ConfirmButton>
           </form>
           <form action={denyApproval.bind(null, approval.id)} className="min-w-0">
             <ConfirmButton
-              variant="dangerOutline"
+              variant="outline"
               pendingLabel="Denying…"
-              confirmLabel="Confirm deny"
+              confirmLabel="Deny?"
               className="w-full sm:w-auto"
             >
               <X className="size-4" aria-hidden="true" />

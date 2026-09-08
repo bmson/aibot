@@ -656,6 +656,7 @@ struct AssistantTactileButtonStyle: ButtonStyle {
 enum AssistantActionButtonKind {
     case primary
     case secondary
+    case neutral
     case destructive
 }
 
@@ -665,6 +666,7 @@ enum AssistantActionButtonKind {
 struct AssistantActionButtonStyle: ButtonStyle {
     let kind: AssistantActionButtonKind
     var compact = false
+    var fillsWidth = false
     var confirming = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -672,13 +674,13 @@ struct AssistantActionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: compact ? AssistantTheme.controlCornerRadius : 14, style: .continuous)
 
         configuration.label
             .font(.subheadline.weight(.semibold))
             .padding(.horizontal, compact ? 12 : 20)
             .padding(.vertical, 10)
-            .frame(minWidth: compact ? 44 : nil, minHeight: 44)
+            .frame(minWidth: compact ? 44 : nil, maxWidth: fillsWidth ? .infinity : nil, minHeight: 44)
             .foregroundStyle(confirming ? Color.white : foregroundColor)
             .background(confirming ? AssistantTheme.notificationBadge : backgroundColor, in: shape)
             .overlay {
@@ -698,6 +700,8 @@ struct AssistantActionButtonStyle: ButtonStyle {
         switch kind {
         case .primary:
             colorScheme == .dark ? AssistantTheme.stageDepth : .white
+        case .neutral:
+            AssistantTheme.ink(for: colorScheme)
         case .secondary:
             AssistantTheme.accent(for: colorScheme)
         case .destructive:
@@ -709,7 +713,7 @@ struct AssistantActionButtonStyle: ButtonStyle {
         switch kind {
         case .primary:
             AssistantTheme.accent(for: colorScheme)
-        case .secondary:
+        case .secondary, .neutral:
             AssistantTheme.sunken(for: colorScheme)
         case .destructive:
             AssistantTheme.errorSurface(for: colorScheme)
@@ -720,6 +724,8 @@ struct AssistantActionButtonStyle: ButtonStyle {
         switch kind {
         case .primary:
             Color.primary.opacity(colorScheme == .dark ? 0.16 : 0.08)
+        case .neutral:
+            AssistantTheme.inkMuted(for: colorScheme).opacity(0.2)
         case .secondary:
             AssistantTheme.accent(for: colorScheme).opacity(0.22)
         case .destructive:
@@ -754,6 +760,8 @@ struct AssistantConfirmationButton: View {
     var systemImage: String = "trash"
     var kind: AssistantActionButtonKind = .destructive
     var hint: String = ""
+    var compact = false
+    var fillsWidth = false
     var prepare: (() async -> Bool)?
     let action: () async -> Void
 
@@ -765,6 +773,7 @@ struct AssistantConfirmationButton: View {
 
     init(_ title: String, confirmationTitle: String? = nil, systemImage: String = "trash",
          kind: AssistantActionButtonKind = .destructive, hint: String = "",
+         compact: Bool = false, fillsWidth: Bool = false,
          prepare: (() async -> Bool)? = nil,
          action: @escaping () async -> Void) {
         self.title = title
@@ -772,6 +781,8 @@ struct AssistantConfirmationButton: View {
         self.systemImage = systemImage
         self.kind = kind
         self.hint = hint
+        self.compact = compact
+        self.fillsWidth = fillsWidth
         self.prepare = prepare
         self.action = action
     }
@@ -813,7 +824,8 @@ struct AssistantConfirmationButton: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .buttonStyle(AssistantActionButtonStyle(kind: kind, confirming: armed && kind == .destructive))
+        .buttonStyle(AssistantActionButtonStyle(kind: kind, compact: compact, fillsWidth: fillsWidth,
+            confirming: armed && kind == .destructive))
         .disabled(working)
         .accessibilityLabel(working ? "Working" : armed ? confirmationTitle : title)
         .accessibilityHint(armed ? "Tap again to confirm. \(hint)" : "Requires two taps. \(hint)")
