@@ -1760,3 +1760,15 @@ describe('production home audit regressions', () => {
     ).toBe(true);
   });
 });
+
+it('acknowledges an owner-supplied completed event without inventing a status mutation', () => {
+  const result = enforceResponseContract('Got it—marking the interview as complete.', [], {
+    requestText: 'The interview happened already',
+  });
+  expect(result.text).toBe('Understood—the interview has already happened.');
+  expect(result.text).not.toMatch(/updated|cancelled|marked/);
+  const action = enforceResponseContract('Got it—marking the interview as complete.', [], {
+    requestText: 'Mark the interview complete and cancel its reminder.',
+  });
+  expect(action.blocked).toBe(true);
+});

@@ -18,7 +18,8 @@
     "./reminders": "./src/reminders.ts",
     "./search": "./src/search.ts",
     "./watches": "./src/watches.ts",
-    "./workspace": "./src/workspace-store.ts"
+    "./workspace": "./src/workspace-store.ts",
+    "./question-regression": "./src/question-regression/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

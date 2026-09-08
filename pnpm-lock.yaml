@@ -33,6 +33,9 @@ importers:
       '@assistant/setup':
         specifier: workspace:*
         version: link:packages/setup
+      '@assistant/tools':
+        specifier: workspace:*
+        version: link:packages/tools
       '@biomejs/biome':
         specifier: ^2.5.12
         version: 2.5.12

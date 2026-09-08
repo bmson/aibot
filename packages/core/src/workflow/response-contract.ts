@@ -1123,6 +1123,10 @@ function calendarFreeIntervals(
 function emailExcerpt(text: string, terms: string[]): string {
   const compacted = text.replace(/\s+/g, ' ').trim();
   if (!compacted) return '';
+  // Short confirmations fit the existing display bound. Preserve the whole
+  // receipt so a fourth sentence containing the price or booking reference
+  // is not silently dropped by the relevance/sentence filter below.
+  if (compacted.length <= 700) return compacted;
   const sentences = compacted.split(/(?<=[.!?])\s+/);
   const relevant = sentences.filter((sentence) => {
     const lower = sentence.toLowerCase();
@@ -1933,6 +1937,20 @@ export function enforceResponseContract(
   opts?: ResponseContractOptions,
 ): ResponseContractResult {
   text = stripBackgroundNoticeEcho(text);
+  const completedEvent =
+    /^(?:the|my)\s+(interview|meeting|appointment|event)\s+(?:(?:has\s+)?already\s+happened|happened\s+already|is\s+over)[.!]?$/i.exec(
+      opts?.requestText?.trim() ?? '',
+    );
+  if (completedEvent && !evidence.some((row) => row.fromCurrentTask !== false)) {
+    // This is an owner-supplied correction, not a request to mutate a task.
+    // Preserve the useful acknowledgement when the draft invents a status
+    // change; a generic action-failure notice would fail to answer the owner.
+    return {
+      text: `Understood—the ${completedEvent[1]?.toLowerCase()} has already happened.`,
+      blocked: false,
+      unsupported: [],
+    };
+  }
   if (
     /\b(?:i(?:['’]ve| have)?\s+marked|marking)\b[^.!?\n]{0,120}\b(?:complete|completed|resolved)\b/i.test(
       text,

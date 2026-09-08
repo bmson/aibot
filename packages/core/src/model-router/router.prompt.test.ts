@@ -155,3 +155,44 @@ describe('system prompt inside messages passes SDK prompt validation', () => {
     if (outcome.ok) expect(outcome.object).toEqual({ answer: 'ok' });
   });
 });
+
+it('uses one cache breakpoint for an eight-result tool batch', async () => {
+  const model = new MockLanguageModelV3({ doGenerate: generateResult('saved') });
+  const router = makeRouter(model);
+  await router.step('reason', {
+    system: 'Summarize the confirmed saves.',
+    messages: [
+      { role: 'user', content: 'Save these eight birthdays.' },
+      {
+        role: 'assistant',
+        content: Array.from({ length: 8 }, (_, i) => ({
+          type: 'tool-call' as const,
+          toolCallId: `save-${i}`,
+          toolName: 'memory.save',
+          input: { content: `Person ${i}` },
+        })),
+      },
+      {
+        role: 'tool',
+        content: Array.from({ length: 8 }, (_, i) => ({
+          type: 'tool-result' as const,
+          toolCallId: `save-${i}`,
+          toolName: 'memory.save',
+          output: { type: 'json' as const, value: { saved: true } },
+        })),
+      },
+    ],
+    tools: {},
+  });
+  const toolMessage = model.doGenerateCalls[0]?.prompt.findLast(
+    (message) => message.role === 'tool',
+  );
+  expect(toolMessage?.role).toBe('tool');
+  if (toolMessage?.role !== 'tool') throw new Error('missing tool message');
+  expect(
+    toolMessage.content.filter((part) => part.providerOptions?.openrouter?.cacheControl),
+  ).toHaveLength(1);
+  expect(toolMessage.content.at(-1)?.providerOptions?.openrouter?.cacheControl).toEqual({
+    type: 'ephemeral',
+  });
+});

@@ -43,7 +43,10 @@
     "auth:bot": "tsx scripts/auth-bot.ts",
     "voice:ingest": "tsx scripts/ingest-voice.ts",
     "smoke:mobile": "tsx scripts/mobile-smoke.ts",
-    "setup:wizard": "tsx scripts/wizard.ts"
+    "setup:wizard": "tsx scripts/wizard.ts",
+    "test:questions": "pnpm test packages/tools/src/question-regression packages/application/src/chat-budget-reply.test.ts",
+    "eval:questions": "tsx scripts/question-regression.ts",
+    "eval:questions:config": "tsx scripts/question-regression-config.ts"
   },
   "devDependencies": {
     "@assistant/config": "workspace:^",
@@ -51,6 +54,7 @@
     "@assistant/db": "workspace:^",
     "@assistant/modules": "workspace:*",
     "@assistant/setup": "workspace:*",
+    "@assistant/tools": "workspace:*",
     "@biomejs/biome": "^2.5.12",
     "@types/node": "^26.4.1",
     "drizzle-orm": "^0.45.2",

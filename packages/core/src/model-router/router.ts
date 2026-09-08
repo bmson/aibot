@@ -772,10 +772,25 @@ export class ModelRouter {
     const hinted = [...messages];
     const last = hinted[hinted.length - 1];
     if (last) {
-      hinted[hinted.length - 1] = {
-        ...last,
-        providerOptions: { ...last.providerOptions, ...hint },
-      } as ModelMessage;
+      // A tool message may hold an entire batch of results. Message-level
+      // cache options are copied onto every result by the provider, exceeding
+      // its cache-breakpoint limit. Mark only the final content block.
+      hinted[hinted.length - 1] = Array.isArray(last.content)
+        ? ({
+            ...last,
+            content: last.content.map((part, index) =>
+              index === last.content.length - 1
+                ? {
+                    ...part,
+                    providerOptions: {
+                      ...('providerOptions' in part ? part.providerOptions : {}),
+                      ...hint,
+                    },
+                  }
+                : part,
+            ),
+          } as ModelMessage)
+        : ({ ...last, providerOptions: { ...last.providerOptions, ...hint } } as ModelMessage);
     }
     return {
       messages: system

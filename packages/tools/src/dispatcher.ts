@@ -17,12 +17,13 @@ import {
   approvals,
   contacts,
   conversations,
+  messages,
   rateLimits,
   tasks,
   toolCache,
   toolCalls,
 } from '@assistant/db';
-import { and, eq, gte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
 import { approvalFallbackSummary } from './approval-summaries.js';
 import { isAmbiguousGoogleMutationError } from './google/client.js';
 import { matchPolicies } from './policies.js';
@@ -61,10 +62,36 @@ async function authorizedPublicSourceRead(
     input.ctx.trust !== 'owner' ||
     trigger?.source !== 'chat' ||
     typeof trigger.payload?.text !== 'string' ||
-    typeof args.url !== 'string' ||
-    detectLiveLookup([{ role: 'user', content: trigger.payload.text }])?.kind !== 'web'
+    typeof args.url !== 'string'
   )
     return false;
+  let lookup = detectLiveLookup([{ role: 'user', content: trigger.payload.text }]);
+  if (!lookup && input.task.conversationId) {
+    // A terse retry may refer to an earlier owner question. Resolve only
+    // persisted owner words from this chat before this task was created.
+    const owners = await db
+      .select({ text: messages.text })
+      .from(messages)
+      .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+      .where(
+        and(
+          eq(messages.conversationId, input.task.conversationId),
+          eq(conversations.agentId, input.task.agentId),
+          eq(conversations.channel, 'chat'),
+          eq(conversations.trust, 'owner'),
+          eq(messages.role, 'user'),
+          eq(messages.origin, 'owner'),
+          lte(messages.createdAt, input.task.createdAt),
+        ),
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(4);
+    const history = owners.reverse().map((row) => ({ role: 'user' as const, content: row.text }));
+    if (history.at(-1)?.content !== trigger.payload.text)
+      history.push({ role: 'user', content: trigger.payload.text });
+    lookup = detectLiveLookup(history);
+  }
+  if (lookup?.kind !== 'web') return false;
   const searches = await db
     .select({ result: toolCalls.result })
     .from(toolCalls)

@@ -28,7 +28,7 @@ import {
   isGoalWorkEvidence,
   needsGoalProgressUpdate,
 } from '../goal-evidence.js';
-import { detectLiveLookup, nextLiveLookup } from '../live-lookup.js';
+import { detectLiveLookup, liveLookupFailure, nextLiveLookup } from '../live-lookup.js';
 import {
   checkpointTask,
   markTaskNeedsAttention,
@@ -478,10 +478,40 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
             readToolEvidence.map((row) => ({ ...row, result: row.result })),
           )
         : undefined;
+    const failedLiveLookup =
+      liveLookup && !readRequest && !forcedLiveLookup
+        ? liveLookupFailure(
+            liveLookup,
+            readToolEvidence.map((row) => ({ ...row, result: row.result })),
+          )
+        : undefined;
+    if (failedLiveLookup) {
+      // The bounded lookup exhausted its available evidence. Report that gap
+      // before another model turn fabricates an answer or starts a new chain
+      // of tainted search approvals after a definitive provider failure.
+      return stageFinalResponse(deps, lease, state, rc.window, {
+        text: failedLiveLookup,
+        progress: failedLiveLookup,
+        terminalStatus: 'needs_attention',
+        outcome: 'needs_attention',
+        contractNotice: true,
+      });
+    }
     const pendingBirthdays = remainingBirthdaySaves(
       birthdaySaves,
       readToolEvidence.map((row) => ({ ...row, result: row.result })),
     );
+    if (birthdaySaves.length > 0 && pendingBirthdays.length === 0) {
+      // The bounded import is finished. Let its ledger-owned receipt close
+      // the task before a model repeats saves or invents an undated entry.
+      // The finalizer separately flags any unverified graph attachment.
+      return stageModelFinalResponse(deps, lease, state, rc.window, {
+        text: '',
+        progress: 'Birthday import processed.',
+        terminalStatus: 'done',
+        outcome: 'done',
+      });
+    }
     const forceSituationRead =
       situationRequest &&
       !readToolEvidence.some(

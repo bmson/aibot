@@ -176,7 +176,7 @@ function elideToolCallInputs(message: ModelMessage): ModelMessage {
  * tool(doc url)]` window collapsed to just the instruction and the model lost
  * the URL it had just created.
  *
- * The first user message (the original instruction) is PINNED: a long task must
+ * The first and latest user messages (source instruction and correction) are PINNED: a long task must
  * not lose "what am I doing and why" to drop-oldest. Goal sessions re-seed the
  * instruction each run, but an adhoc/mission/email task has only this copy in
  * the window, and without it later steps drift once it ages out. Prepending a
@@ -187,7 +187,9 @@ export function compact(window: ModelMessage[]): ModelMessage[] {
   if (window.length <= CONTEXT_WINDOW_LIMIT && totalChars <= CONTEXT_CHAR_BUDGET) return window;
 
   const firstUserIndex = window.findIndex((m) => m.role === 'user');
-  const pin = firstUserIndex >= 0 ? window[firstUserIndex] : undefined;
+  const lastUserIndex = window.findLastIndex((m) => m.role === 'user');
+  const pins = [...new Set([firstUserIndex, lastUserIndex])].filter((index) => index >= 0);
+  const pinChars = pins.reduce((sum, index) => sum + messageChars(window[index]), 0);
 
   // Partition into atomic groups over half-open [start, end) ranges.
   const groups: Array<{ start: number; end: number }> = [];
@@ -201,10 +203,15 @@ export function compact(window: ModelMessage[]): ModelMessage[] {
   }
 
   // Leave room for the pinned instruction so the totals still respect both bounds.
-  const tailMessageBudget = pin ? CONTEXT_WINDOW_LIMIT - 1 : CONTEXT_WINDOW_LIMIT;
-  const tailCharBudget = Math.max(0, CONTEXT_CHAR_BUDGET - messageChars(pin));
+  const tailMessageBudget = CONTEXT_WINDOW_LIMIT - pins.length;
+  const tailCharBudget = Math.max(0, CONTEXT_CHAR_BUDGET - pinChars);
   const groupChars = ({ start, end }: { start: number; end: number }) =>
-    window.slice(start, end).reduce((sum, message) => sum + messageChars(message), 0);
+    window
+      .slice(start, end)
+      .reduce(
+        (sum, message, offset) => sum + (pins.includes(start + offset) ? 0 : messageChars(message)),
+        0,
+      );
 
   // Walk groups newest-first; the newest is kept unconditionally, older ones
   // only while both bounds hold.
@@ -215,7 +222,10 @@ export function compact(window: ModelMessage[]): ModelMessage[] {
     const group = groups[g];
     if (!group) break;
     const thisChars = groupChars(group);
-    const thisCount = group.end - group.start;
+    const thisCount =
+      group.end -
+      group.start -
+      pins.filter((index) => index >= group.start && index < group.end).length;
     const isNewest = g === groups.length - 1;
     if (
       !isNewest &&
@@ -233,15 +243,18 @@ export function compact(window: ModelMessage[]): ModelMessage[] {
 
   // Elide oversized tool-call args only if the kept tail still busts the budget.
   if (
-    tail.reduce((sum, message) => sum + messageChars(message), 0) + messageChars(pin) >
+    tail.reduce((sum, message) => sum + messageChars(message), 0) + pinChars >
     CONTEXT_CHAR_BUDGET
   ) {
     tail = tail.map(elideToolCallInputs);
   }
 
-  // If the instruction already survived inside the tail, return it unchanged.
-  if (!pin || start <= firstUserIndex) return tail;
-  return [pin, ...tail];
+  // Preserve both the source instruction and the latest correction. A long
+  // batch must not silently revert to the original request after compaction.
+  return [
+    ...pins.filter((index) => index < start).map((index) => window[index] as ModelMessage),
+    ...tail,
+  ];
 }
 
 /** Latest direct owner wording, used only for deterministic artifact routing. */

@@ -148,3 +148,17 @@ describe('compact token budget', () => {
     expect(JSON.stringify(callMsg)).toContain('elided');
   });
 });
+
+it('pins the latest owner correction alongside source data through a long tool batch', () => {
+  const source: ModelMessage = { role: 'user', content: 'Save these 56 birthdays to memory.' };
+  const correction: ModelMessage = {
+    role: 'user',
+    content: 'Attach these birthdays to the people in my graph and memory.',
+  };
+  const history: ModelMessage[] = [source, correction];
+  for (let i = 0; i < 70; i++) history.push({ role: 'assistant', content: `Saved entry ${i}` });
+  const result = compact(history);
+  expect(result[0]).toEqual(source);
+  expect(result[1]).toEqual(correction);
+  expect(result.length).toBeLessThanOrEqual(CONTEXT_WINDOW_LIMIT);
+});
