@@ -24,6 +24,8 @@
     }
   },
   "scripts": {
+    "brand:generate": "tsx scripts/generate-brand-assets.ts",
+    "brand:check": "tsx scripts/generate-brand-assets.ts --check",
     "setup": "tsx scripts/setup.ts",
     "config:check": "tsx scripts/config-doctor.ts",
     "modules:plan": "tsx scripts/module-plan.ts",
@@ -53,6 +55,7 @@
     "@types/node": "^26.2.0",
     "drizzle-orm": "^0.45.2",
     "playwright": "^1.62.1",
+    "sharp": "^0.35.3",
     "tsx": "^4.23.12",
     "turbo": "^2.10.10",
     "typescript": "^7.0.2",

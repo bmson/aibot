@@ -1,11 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <title>Assistant</title>
-  <!-- Full-bleed, opaque artwork lets iOS apply its own icon mask cleanly and
-       also satisfies the PWA maskable-icon safe-area contract. -->
-  <rect width="1024" height="1024" fill="#21666e"/>
+  <!-- Canonical artwork. Run pnpm brand:generate after editing.
+       Keep the background square: iOS and maskable PWA icons own the mask. -->
+  <rect width="1024" height="1024" fill="#217A4B"/>
+  <!-- One continuous loop gathers context into a distinctive lowercase a. -->
   <path
-    fill="#ffffff"
-    d="M512 192c28.8 152 72 243.2 134.4 281.6C707.2 512 790.4 512 832 512c-41.6 0-124.8 0-185.6 38.4C584 588.8 540.8 680 512 832c-28.8-152-72-243.2-134.4-281.6C316.8 512 233.6 512 192 512c41.6 0 124.8 0 185.6-38.4C440 435.2 483.2 344 512 192z"
+    d="M628 304V484C628 584 568 652 480 652C384 652 316 580 316 484C316 388 384 316 480 316C568 316 628 384 628 484V606Q628 652 658 652"
+    fill="none"
+    stroke="#F4FAF5"
+    stroke-width="94"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    transform="translate(512 546) scale(1.24) translate(-486 -512)"
   />
-  <circle cx="752" cy="256" r="56" fill="#ffffff" opacity="0.85"/>
 </svg>

@@ -17,8 +17,8 @@ export default async function manifest(): Promise<MetadataRoute.Manifest> {
     scope: '/',
     display: 'standalone',
     display_override: ['standalone'],
-    background_color: '#f5f7f7',
-    theme_color: '#21666e',
+    background_color: '#eef5f0',
+    theme_color: '#217a4b',
     categories: ['productivity', 'utilities'],
     icons: [
       { src: '/icons/assistant-192.png', sizes: '192x192', type: 'image/png' },

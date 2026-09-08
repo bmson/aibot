@@ -1,10 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
   <title>Assistant</title>
-  <rect rx="224" width="1024" height="1024" fill="#217A4B"/>
   <path
     d="M628 304V484C628 584 568 652 480 652C384 652 316 580 316 484C316 388 384 316 480 316C568 316 628 384 628 484V606Q628 652 658 652"
     fill="none"
-    stroke="#F4FAF5"
+    stroke="currentColor"
     stroke-width="94"
     stroke-linecap="round"
     stroke-linejoin="round"
