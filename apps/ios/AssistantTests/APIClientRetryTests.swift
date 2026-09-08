@@ -9,18 +9,21 @@ final class StubURLProtocol: URLProtocol {
     enum Outcome {
         case failure(URLError)
         case success(status: Int, body: Data)
+        case stream(body: Data)
     }
 
     private static let lock = NSLock()
     private static var outcomes: [Outcome] = []
     private static var recordedMethods: [String] = []
     private static var recordedURLs: [URL] = []
+    private static weak var activeStream: StubURLProtocol?
 
     static func prime(_ queued: [Outcome]) {
         lock.withLock {
             outcomes = queued
             recordedMethods = []
             recordedURLs = []
+            activeStream = nil
         }
     }
 
@@ -31,6 +34,11 @@ final class StubURLProtocol: URLProtocol {
     }
 
     static var urls: [URL] { lock.withLock { recordedURLs } }
+
+    static func appendStream(_ body: Data) {
+        guard let stream = lock.withLock({ activeStream }) else { return }
+        stream.client?.urlProtocol(stream, didLoad: body)
+    }
 
     private static func next(for method: String, url: URL?) -> Outcome {
         lock.withLock {
@@ -49,6 +57,13 @@ final class StubURLProtocol: URLProtocol {
         switch Self.next(for: method, url: request.url) {
         case let .failure(error):
             client?.urlProtocol(self, didFailWithError: error)
+        case let .stream(body):
+            Self.lock.withLock { Self.activeStream = self }
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200,
+                httpVersion: "HTTP/1.1", headerFields: ["content-type": "text/event-stream"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: body)
+            // Remain open so the test can deliver later tokens while sending.
         case let .success(status, body):
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -886,6 +901,88 @@ final class APIClientRetryTests: XCTestCase {
             attachment.name = "error-banner-\(name)"
             attachment.lifetime = .keepAlways
             add(attachment)
+        }
+    }
+
+    @MainActor
+    func testChatFollowsNewMessagesAndGrowingStreamWhileAtBottom() async throws {
+        let model = AppModel(apiClient: makeClient())
+        var messages = (0..<16).map { index in
+            ChatMessage(id: "follow-\(index)", role: .assistant,
+                parts: [.init(type: "text", text: "Earlier message \(index).\nKeep the latest response above the input.")])
+        }
+        func loadMessages() async throws {
+            let conversation = ConversationView(
+                conversation: .init(id: "follow-chat", title: "Follow test", modelOverride: nil,
+                    archivedAt: nil, isPrimary: true),
+                agentName: "Assistant", agentTimezone: "UTC", messages: messages,
+                models: [], goalTitle: nil, canArchive: false, cursor: nil, asyncTurn: nil)
+            StubURLProtocol.prime([.success(status: 200, body: try JSONEncoder().encode(conversation))])
+            let opened = await model.openConversation(id: "follow-chat")
+            XCTAssertTrue(opened)
+        }
+        try await loadMessages()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previousKeyWindow = scene.keyWindow
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = UIHostingController(rootView:
+            ChatView(safeAreaTopInset: 62, safeAreaBottomInset: 34,
+                safeAreaLeadingInset: 0, safeAreaTrailingInset: 0)
+                .environmentObject(model))
+        window.makeKeyAndVisible()
+        defer {
+            model.cancelSend()
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
+        try await Task.sleep(for: .milliseconds(400))
+        func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
+        let scroll = try XCTUnwrap(descendants(window).compactMap { $0 as? UIScrollView }
+            .first { !($0 is UITextView) })
+        func assertAtBottom(file: StaticString = #filePath, line: UInt = #line) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            var settled = 0
+            repeat {
+                try await Task.sleep(for: .milliseconds(100))
+                window.layoutIfNeeded()
+                let error = abs(scroll.contentOffset.y + scroll.bounds.height
+                    - scroll.contentSize.height - scroll.adjustedContentInset.bottom)
+                settled = error <= 2 ? settled + 1 : 0
+            } while settled < 3 && ContinuousClock.now < deadline
+            XCTAssertEqual(scroll.contentOffset.y + scroll.bounds.height,
+                scroll.contentSize.height + scroll.adjustedContentInset.bottom, accuracy: 2,
+                "Incoming content must keep the newest edge visible", file: file, line: line)
+        }
+        try await assertAtBottom()
+        messages.append(ChatMessage(id: "incoming", role: .assistant,
+            parts: [.init(type: "text", text: String(repeating: "A newly arrived response.\n", count: 40))]))
+        try await loadMessages()
+        try await assertAtBottom()
+
+        func chunk(_ text: String) throws -> Data {
+            let json = try JSONSerialization.data(withJSONObject: ["type": "text-delta", "delta": text])
+            return Data("data: \(String(decoding: json, as: UTF8.self))\n\n".utf8)
+        }
+        StubURLProtocol.prime([.stream(body: try chunk("First words.\n"))])
+        model.send("Continue with a detailed response.")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while model.messages.last?.text != "First words.\n", ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(model.messages.last?.text, "First words.\n")
+        let streamID = model.messages.last?.id
+        try await assertAtBottom()
+        for index in 1...3 {
+            let delta = String(repeating: "Streaming section \(index).\n", count: 35)
+            let previousText = model.messages.last?.text ?? ""
+            StubURLProtocol.appendStream(try chunk(delta))
+            try await Task.sleep(for: .milliseconds(150))
+            XCTAssertEqual(model.messages.last?.text, previousText + delta)
+            XCTAssertEqual(model.messages.last?.id, streamID)
+            XCTAssertTrue(model.isSending)
+            try await assertAtBottom()
         }
     }
 

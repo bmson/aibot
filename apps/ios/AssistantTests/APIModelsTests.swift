@@ -1948,29 +1948,39 @@ final class APIModelsTests: XCTestCase {
         )
     }
 
+    func testTranscriptFollowsIncomingGrowthUntilTheReaderScrollsAway() {
+        var follow = TranscriptFollowState()
+        // A tall incoming message can move the measured bottom before the
+        // transcript has followed it. Layout and animation do not opt out.
+        follow.observe(atBottom: false, phase: .idle)
+        follow.observe(atBottom: false, phase: .animating)
+        XCTAssertTrue(follow.followsLatest)
+        XCTAssertTrue(follow.shouldPin(userIsDragging: false))
+        XCTAssertFalse(follow.shouldPin(userIsDragging: true))
+
+        follow.observe(atBottom: false, phase: .interacting)
+        follow.observe(atBottom: false, phase: .decelerating)
+        follow.observe(atBottom: false, phase: .idle)
+        XCTAssertFalse(follow.followsLatest)
+        XCTAssertFalse(follow.shouldPin(userIsDragging: false))
+
+        // Further messages do not pull the reader out of an older answer.
+        follow.observe(atBottom: false, phase: .idle)
+        XCTAssertFalse(follow.followsLatest)
+        follow.observe(atBottom: true, phase: .decelerating)
+        XCTAssertTrue(follow.followsLatest)
+
+        follow.observe(atBottom: false, phase: .interacting)
+        follow.resume() // Sending or pressing Jump to latest resumes following.
+        follow.observe(atBottom: false, phase: .animating)
+        XCTAssertTrue(follow.followsLatest)
+    }
+
     func testPullMenuPresentationKeepsClearanceAndRevealsRowsBottomUp() {
         XCTAssertEqual(
             PullMenuMotion.composerSurfaceBottomSpacing,
             12,
             accuracy: 0.001
-        )
-        XCTAssertTrue(
-            PullMenuMotion.shouldPinTranscriptToBottom(
-                userIsDraggingTranscript: false,
-                isSending: false
-            )
-        )
-        XCTAssertFalse(
-            PullMenuMotion.shouldPinTranscriptToBottom(
-                userIsDraggingTranscript: true,
-                isSending: false
-            )
-        )
-        XCTAssertFalse(
-            PullMenuMotion.shouldPinTranscriptToBottom(
-                userIsDraggingTranscript: false,
-                isSending: true
-            )
         )
         XCTAssertEqual(
             PullMenuMotion.menuRevealHeight(

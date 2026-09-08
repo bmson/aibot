@@ -8,7 +8,7 @@ struct ConversationColumn<Transcript: View, Composer: View>: View {
     @ViewBuilder var composer: Composer
 
     var body: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: PullMenuMotion.transcriptComposerSpacing) {
             transcript
             composer
         }
@@ -16,6 +16,10 @@ struct ConversationColumn<Transcript: View, Composer: View>: View {
 }
 
 enum PullMenuMotion {
+    /// The menu's touch target must fit entirely in the empty layout gap.
+    /// Extending it into the transcript blocks the newest message's controls.
+    static let transcriptComposerSpacing: CGFloat = 18
+
     static func menuRowCount(itemCount: Int, columns: Int) -> Int {
         guard itemCount > 0, columns > 0 else { return 0 }
         return (itemCount + columns - 1) / columns
@@ -46,16 +50,6 @@ enum PullMenuMotion {
     /// the device safe area; the green surface is the sole owner of vertical
     /// menu motion.
     static let composerSurfaceBottomSpacing: CGFloat = 12
-
-    /// Only transcript-owned activity may release its bottom anchor. Menu
-    /// reveal is a transform of the entire conversation surface and must never
-    /// participate in this decision.
-    static func shouldPinTranscriptToBottom(
-        userIsDraggingTranscript: Bool,
-        isSending: Bool
-    ) -> Bool {
-        !userIsDraggingTranscript && !isSending
-    }
 
     /// The sheet silhouette eases in with the first part of the reveal. A
     /// binary jump makes a slow finger pull look like the surface snaps into a
@@ -227,6 +221,25 @@ enum PullMenuMotion {
     }
 }
 
+struct TranscriptFollowState {
+    private(set) var followsLatest = true
+
+    /// Content growth can move the visible bottom before an incoming-message
+    /// callback runs. Only reader-driven scrolling changes the follow choice.
+    mutating func observe(atBottom: Bool, phase: ScrollPhase) {
+        guard phase == .interacting || phase == .decelerating else { return }
+        followsLatest = atBottom
+    }
+
+    mutating func resume() {
+        followsLatest = true
+    }
+
+    func shouldPin(userIsDragging: Bool) -> Bool {
+        followsLatest && !userIsDragging
+    }
+}
+
 /// The transcript's live scroll offset, deliberately held in a reference type
 /// rather than in `@State`. Jump to latest needs the offset the instant it is
 /// pressed, but storing a value that changes on every scrolled frame in view
@@ -261,6 +274,7 @@ struct ChatView: View {
     @ScaledMetric(relativeTo: .caption2) private var menuBadgeFontSize = 9.0
     @State private var draft = ""
     @State private var isAtBottom = true
+    @State private var transcriptFollow = TranscriptFollowState()
     // Opening requires the actual bottom edge. `isAtBottom` deliberately has
     // a wider 64pt tolerance for unread-state UI and is too permissive for
     // deciding whether an upward transcript drag means scroll or menu.
@@ -554,10 +568,9 @@ struct ChatView: View {
                 // UIScrollView's active pan by changing its environment and makes
                 // SwiftUI re-anchor the transcript inside the moving surface.
                 .scrollDismissesKeyboard(.interactively)
-                // Pin to the bottom only when the reader is at rest and nothing
-                // is streaming: the anchor fights a finger on the transcript, and
-                // while a reply streams in it force-scrolls the view down with
-                // every token instead of letting the text grow below the fold.
+                // Keep following while replies arrive, including streamed text.
+                // Only scrolling away releases the anchor; a growing message
+                // must not be mistaken for the reader moving up the transcript.
                 // A live transcript belongs at its newest edge. The briefing
                 // cards are a dashboard, though, so their first card should be
                 // the opening view rather than the prompt launcher at the end.
@@ -571,6 +584,9 @@ struct ChatView: View {
                         || geometry.visibleRect.maxY >= geometry.contentSize.height - 64
                 } action: { _, atBottom in
                     isAtBottom = atBottom
+                    if transcriptScrollPosition.isPositionedByUser {
+                        transcriptFollow.observe(atBottom: atBottom, phase: transcriptScrollPhase)
+                    }
                     if atBottom {
                         hasUnseenMessages = false
                     }
@@ -591,7 +607,18 @@ struct ChatView: View {
                 } action: { _, position in
                     transcriptScroll.contentPosition = position
                 }
-                .onScrollPhaseChange { _, newPhase, _ in
+                .onScrollPhaseChange { oldPhase, newPhase, context in
+                    let geometry = context.geometry
+                    let atBottom = geometry.contentSize.height <= geometry.containerSize.height + 1
+                        || geometry.visibleRect.maxY >= geometry.contentSize.height - 64
+                    // Include the final position after a drag or its momentum.
+                    // Programmatic scrolls and layout updates do not opt out.
+                    if newPhase != .idle || transcriptScrollPosition.isPositionedByUser {
+                        transcriptFollow.observe(
+                            atBottom: atBottom,
+                            phase: newPhase == .idle ? oldPhase : newPhase
+                        )
+                    }
                     transcriptScrollPhase = newPhase
                 }
                 .animation(
@@ -606,19 +633,16 @@ struct ChatView: View {
                         hasPositionedInitialConversation = false
                     } else if !hasPositionedInitialConversation {
                         positionInitialConversationIfNeeded()
-                    } else if isAtBottom {
+                    } else if transcriptFollow.followsLatest {
                         // While a finger is on the transcript the gesture owns the
                         // scroll position — re-anchoring here would fight the drag.
                         guard !userIsDraggingTranscript else { return }
                         let isStreamingUpdate =
                             newMessages.count == oldMessages.count
                             && newMessages.last?.id.hasPrefix("stream-") == true
-                        // Streaming text must not scroll the view: the bubble grows
-                        // below the fold and Jump to latest takes the reader down.
-                        // Only brand-new messages get the animated reveal.
-                        if !isStreamingUpdate {
-                            scrollToBottom()
-                        }
+                        // Follow token growth without restarting an animation
+                        // on every chunk. New messages retain their reveal.
+                        scrollToBottom(animated: !isStreamingUpdate)
                     } else {
                         hasUnseenMessages = true
                     }
@@ -823,9 +847,8 @@ struct ChatView: View {
         requiresTranscriptBottom: Bool,
         minimumDistance: CGFloat = 0
     ) -> some Gesture {
-        // Claim the pan at its first point so ScrollView cannot begin its own
-        // rubber-band before the pull becomes active. A zero translation is
-        // still ignored below, so ordinary taps remain ordinary taps.
+        // The empty gap can claim the pan immediately. The input supplies an
+        // 8pt threshold so its native tap and text-selection gestures still work.
         // Read the pull in the window coordinate space. The composer travels
         // with the conversation surface while this gesture is active; global
         // coordinates keep that movement from feeding back into the finger's
@@ -946,10 +969,10 @@ struct ChatView: View {
         Color.black.opacity(0.001)
             .contentShape(Rectangle())
             .frame(maxWidth: .infinity)
-            .frame(height: 96)
-            // Take precedence over the ScrollView's pan recognizer. The
-            // gesture is attached before the padding so the composer remains
-            // fully interactive below this fixed pull zone.
+            .frame(height: PullMenuMotion.transcriptComposerSpacing)
+            // Only the empty gap above the composer belongs to this target.
+            // A taller overlay intercepts action and disclosure taps in the
+            // last message. The input also handles menu pulls separately.
             .highPriorityGesture(pullMenuOpenGesture(requiresTranscriptBottom: true))
             .padding(.bottom, composerHeight)
             // When the reader is even slightly above the true bottom, touches
@@ -1719,7 +1742,7 @@ struct ChatView: View {
                             composerFocused = true
                         }
                     )
-                    .accessibilityHint("Pull past the latest message to open the menu.")
+                    .accessibilityHint("Pull up on the input to open the menu.")
                     .accessibilityAction(named: "Open menu") {
                         openPullMenu()
                     }
@@ -2070,12 +2093,14 @@ struct ChatView: View {
             closePullMenu()
         }
         scrollRequest += 1
+        transcriptFollow.resume()
         hasUnseenMessages = false
     }
 
     private func positionInitialConversationIfNeeded() {
         guard !model.messages.isEmpty, !hasPositionedInitialConversation else { return }
         hasPositionedInitialConversation = true
+        transcriptFollow.resume()
         DispatchQueue.main.async {
             transcriptScrollPosition.scrollTo(edge: .bottom)
         }
@@ -2089,18 +2114,15 @@ struct ChatView: View {
         // Menu reveal is a transform of the whole conversation surface, not a
         // transcript state. Keeping it out of this condition prevents the log
         // from dropping its bottom anchor on the first pull sample.
-        PullMenuMotion.shouldPinTranscriptToBottom(
-            userIsDraggingTranscript: userIsDraggingTranscript,
-            isSending: model.isSending
-        )
+        transcriptFollow.shouldPin(userIsDragging: userIsDraggingTranscript)
     }
 
     private var menuOwnsConversationSurface: Bool {
         menuPullActive || menuOpen || menuCloseDragDistance > 0
     }
 
-    private func scrollToBottom() {
-        if transcriptScrollPhase == .idle {
+    private func scrollToBottom(animated: Bool = true) {
+        if animated && transcriptScrollPhase == .idle {
             withAnimation(reduceMotion ? nil : .snappy(duration: 0.26, extraBounce: 0)) {
                 transcriptScrollPosition.scrollTo(edge: .bottom)
             }
@@ -2132,6 +2154,7 @@ struct ChatView: View {
         latestJumpRequest &+= 1
         let request = latestJumpRequest
         hasUnseenMessages = false
+        transcriptFollow.resume()
         stopTranscriptScroll()
 
         DispatchQueue.main.async {
