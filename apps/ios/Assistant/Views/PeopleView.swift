@@ -68,7 +68,7 @@ struct PeopleView: View {
                             Label("Open relationship graph", systemImage: "circle.hexagongrid")
                                 .frame(maxWidth: .infinity, minHeight: 44)
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                         .accessibilityIdentifier("assistant.people.visual-graph")
                         Picker("People view", selection: $showsConnections) {
                             Text("Connections").tag(true)
@@ -468,7 +468,6 @@ struct PersonRelationshipEvidenceScreen: View {
     @State private var removing = false
     @State private var editing = false
     @State private var corrected = false
-    @State private var confirmingRemoval = false
     @State private var failure: String?
 
     var body: some View {
@@ -497,11 +496,18 @@ struct PersonRelationshipEvidenceScreen: View {
                     Section {
                         Button("Edit relationship", systemImage: "pencil") { editing = true }
                             .disabled(removing)
-                        Button(removing ? "Removing…" : "Remove relationship", systemImage: "trash", role: .destructive) {
-                            confirmingRemoval = true
+                        AssistantConfirmationButton("Remove relationship", hint: "Other claims and the original source stay saved.") {
+                            removing = true
+                            failure = nil
+                            if await model.removeKnowledgeRelation(id: evidence.id) {
+                                await didChange()
+                                dismiss()
+                            } else {
+                                failure = "The relationship could not be removed. Please try again."
+                            }
+                            removing = false
                         }
                         .disabled(removing)
-                        .foregroundStyle(.red)
                     } footer: {
                         Text("Changes apply only to this claim. Other relationships and the original source are kept.")
                     }
@@ -543,24 +549,6 @@ struct PersonRelationshipEvidenceScreen: View {
                     }
                 }
             }
-        }
-        .confirmationDialog("Remove this relationship?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
-            Button("Remove relationship", role: .destructive) {
-                Task {
-                    removing = true
-                    failure = nil
-                    if await model.removeKnowledgeRelation(id: evidence.id) {
-                        await didChange()
-                        dismiss()
-                    } else {
-                        failure = "The relationship could not be removed. Please try again."
-                    }
-                    removing = false
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This claim will no longer appear in People or be used for graph recall. The original source and other claims will not be deleted.")
         }
     }
 
@@ -625,7 +613,7 @@ struct PersonCardScreen: View {
             Button("Explore graph", systemImage: "point.3.connected.trianglepath.dotted") { showsTree = true }
         }
         .font(.subheadline)
-        .buttonStyle(.bordered)
+        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
 
         if card.birthday != nil || !card.howWeMet.isEmpty {
             VStack(alignment: .leading, spacing: 12) {

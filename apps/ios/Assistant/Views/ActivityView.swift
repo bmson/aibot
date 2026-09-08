@@ -218,7 +218,7 @@ struct ActivityView: View {
                         icon: "tray.and.arrow.up"
                     )
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                 .disabled(activityActionInFlight != nil)
             } else {
                 if item.hasPendingApproval {
@@ -227,7 +227,7 @@ struct ActivityView: View {
                     } label: {
                         Label("Review approval", systemImage: "checkmark.shield")
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(AssistantActionButtonStyle(kind: .primary))
                     .tint(AssistantTheme.warning(for: colorScheme))
                 }
 
@@ -245,7 +245,7 @@ struct ActivityView: View {
                                 } label: {
                                     Label("Raise budget", systemImage: "dollarsign.arrow.circlepath")
                                 }
-                                .buttonStyle(.borderedProminent)
+                                .buttonStyle(AssistantActionButtonStyle(kind: .primary))
                                 .disabled(activityActionInFlight != nil)
                             } else {
                                 actionButton(item, title: "Retry", icon: "arrow.clockwise", action: "retry")
@@ -310,7 +310,7 @@ struct ActivityView: View {
         Button { updateActivity(item, action: action) } label: {
             activityActionLabel(item, title: title, icon: icon)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
         .disabled(activityActionInFlight != nil)
     }
 

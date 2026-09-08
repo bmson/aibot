@@ -37,11 +37,57 @@ typealias RetryAction = @MainActor @Sendable () async -> Void
 /// View-scoped loads are routinely cancelled when a navigation destination is
 /// replaced. Cancellation is control flow, not a failed request, so it must
 /// never become the global error banner/toast.
-private func isRequestCancellation(_ error: Error) -> Bool {
+func isRequestCancellation(_ error: Error) -> Bool {
     if error is CancellationError { return true }
-    if let urlError = error as? URLError, urlError.code == .cancelled { return true }
-    if case let APIError.transport(urlError) = error, urlError.code == .cancelled { return true }
+    if case let APIError.transport(urlError) = error { return isRequestCancellation(urlError) }
+    var current = error as NSError
+    // Foundation may wrap a cancelled URL request or a dismissed file picker.
+    for _ in 0..<4 {
+        if current.domain == NSURLErrorDomain, current.code == NSURLErrorCancelled { return true }
+        if current.domain == NSCocoaErrorDomain, current.code == NSUserCancelledError { return true }
+        guard let underlying = current.userInfo[NSUnderlyingErrorKey] as? NSError else { break }
+        current = underlying
+    }
     return false
+}
+
+enum AssistantErrorSource {
+    case bootstrap, overview, workspace
+}
+
+struct AssistantErrorNotice: Equatable {
+    let title: String
+    let message: String
+    let systemImage: String
+
+    init(message: String) {
+        title = "Couldn’t complete that"
+        self.message = message
+        systemImage = "exclamationmark.circle"
+    }
+
+    init(error: Error) {
+        switch error {
+        case let APIError.transport(error):
+            title = error.code == .notConnectedToInternet ? "You’re offline" : "Connection interrupted"
+            message = error.code == .notConnectedToInternet
+                ? "Reconnect to the internet, then try again."
+                : "Couldn’t reach your assistant. Please try again in a moment."
+            systemImage = error.code == .notConnectedToInternet ? "wifi.slash" : "arrow.trianglehead.2.clockwise"
+        case APIError.unauthorized:
+            title = "Check your connection settings"
+            message = error.localizedDescription
+            systemImage = "key"
+        case APIError.decoding, APIError.invalidResponse:
+            title = "Couldn’t load this update"
+            message = "The response couldn’t be read. Try refreshing, or check for an app update."
+            systemImage = "exclamationmark.circle"
+        default:
+            title = "Couldn’t complete that"
+            message = error.localizedDescription
+            systemImage = "exclamationmark.circle"
+        }
+    }
 }
 
 @MainActor
@@ -80,10 +126,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var activityDetail: String?
     /// Setting a message always retires the previous retry: an error that
     /// arrives from somewhere else must not inherit the last one's action.
-    /// `report(_:retry:)` sets the message first, then the retry.
+    /// `reportError(_:retry:)` sets the message first, then the retry.
     @Published var errorMessage: String? {
-        didSet { errorRetry = nil }
+        didSet {
+            errorRetry = nil
+            errorSource = nil
+            errorNotice = errorMessage.map { AssistantErrorNotice(message: $0) }
+        }
     }
+    @Published private(set) var errorNotice: AssistantErrorNotice?
+    private var errorSource: AssistantErrorSource?
     /// Offered by the banner when the failure was the network rather than the
     /// server's answer. Re-running a request the server rejected on its merits
     /// would only reproduce the rejection, so those get no retry.
@@ -222,32 +274,32 @@ final class AppModel: ObservableObject {
     func knowledge(query: String = "", kind: String = "", page: Int = 1) async -> KnowledgeOverview? {
         guard let client else { return nil }
         do { return try await client.knowledge(query: query, kind: kind, page: page) }
-        catch { errorMessage = error.localizedDescription; return nil }
+        catch { reportError(error); return nil }
     }
 
     func relationshipGraph(personID: String? = nil, entityID: String? = nil, query: String = "") async -> RelationshipGraphSnapshot? {
         guard let client else { return nil }
         do { return try await client.relationshipGraph(personID: personID, entityID: entityID, query: query) }
         catch where isRequestCancellation(error) { return nil }
-        catch { errorMessage = error.localizedDescription; return nil }
+        catch { reportError(error); return nil }
     }
 
     func knowledgeItem(id: String) async -> KnowledgeOverview? {
         guard let client else { return nil }
         do { return try await client.knowledgeItem(id: id) }
-        catch { errorMessage = error.localizedDescription; return nil }
+        catch { reportError(error); return nil }
     }
 
     func knowledgeRelation(id: String) async -> KnowledgeRelation? {
         guard let client else { return nil }
         do { return try await client.knowledgeRelation(id: id) }
-        catch { errorMessage = error.localizedDescription; return nil }
+        catch { reportError(error); return nil }
     }
 
     func removeKnowledgeRelation(id: String) async -> Bool {
         guard let client else { return false }
         do { try await client.removeKnowledgeRelation(id: id); return true }
-        catch { errorMessage = error.localizedDescription; return false }
+        catch { reportError(error); return false }
     }
 
     func refreshPersonEvidence(id: String) async {
@@ -260,61 +312,61 @@ final class AppModel: ObservableObject {
     func knowledgeReview() async -> KnowledgeReviewInbox? {
         guard let client else { return nil }
         do { return try await client.knowledgeReview() }
-        catch { errorMessage = error.localizedDescription; return nil }
+        catch { reportError(error); return nil }
     }
 
     func knowledgeCleanup() async -> KnowledgeCleanupResponse? {
         guard let client else { return nil }
         do { return try await client.knowledgeCleanup() }
-        catch { errorMessage = error.localizedDescription; return nil }
+        catch { reportError(error); return nil }
     }
 
     func resolveKnowledgeCleanup(action: String, memoryId: String? = nil) async -> Bool {
         guard let client else { return false }
         do { try await client.resolveKnowledgeCleanup(action: action, memoryId: memoryId); return true }
-        catch { errorMessage = error.localizedDescription; return false }
+        catch { reportError(error); return false }
     }
 
     func knowledgeSourceImpact(id: String) async -> KnowledgeSourceImpact? {
         guard let client else { return nil }
         do { return try await client.knowledgeSourceImpact(id: id) }
-        catch { errorMessage = error.localizedDescription; return nil }
+        catch { reportError(error); return nil }
     }
 
     func forgetKnowledgeSource(id: String) async -> Bool {
         guard let client else { return false }
         do { try await client.forgetKnowledgeSource(id: id); return true }
-        catch { errorMessage = error.localizedDescription; return false }
+        catch { reportError(error); return false }
     }
 
     func createKnowledgeConnection(_ mutation: KnowledgeConnectionMutation) async -> Bool {
         guard let client else { return false }
         do { try await client.createKnowledgeConnection(mutation); return true }
-        catch { errorMessage = error.localizedDescription; return false }
+        catch { reportError(error); return false }
     }
 
     func reviewKnowledgeRelation(id: String, approve: Bool) async -> Bool {
         guard let client else { return false }
         do { try await client.reviewKnowledgeRelation(id: id, approve: approve); return true }
-        catch { errorMessage = error.localizedDescription; return false }
+        catch { reportError(error); return false }
     }
 
     func correctKnowledgeRelation(id: String, mutation: KnowledgeConnectionMutation) async -> Bool {
         guard let client else { return false }
         do { try await client.correctKnowledgeRelation(id: id, mutation: mutation); return true }
-        catch { errorMessage = error.localizedDescription; return false }
+        catch { reportError(error); return false }
     }
 
     func updateKnowledgeItem(id: String, action: String, value: String) async -> Bool {
         guard let client else { return false }
         do { try await client.updateKnowledgeItem(id: id, action: action, value: value); return true }
-        catch { errorMessage = error.localizedDescription; return false }
+        catch { reportError(error); return false }
     }
 
     func mergeKnowledgeItem(id: String, targetId: String) async -> Bool {
         guard let client else { return false }
         do { try await client.mergeKnowledgeItem(id: id, targetId: targetId); return true }
-        catch { errorMessage = error.localizedDescription; return false }
+        catch { reportError(error); return false }
     }
 
     func connect() async {
@@ -332,16 +384,18 @@ final class AppModel: ObservableObject {
             // `try await` meant a single failing dashboard query rejected an
             // otherwise valid connection outright.
             apply(try await client.bootstrap())
+            clearRecoveredError(from: .bootstrap)
             hasSavedConnection = true
             defaults.set(true, forKey: configuredKey)
 
             do {
                 overview = try await client.overview()
+                clearRecoveredError(from: .overview)
             } catch {
                 // Non-fatal: the app is connected and usable, the dashboard
                 // sections are just empty. Surfacing it keeps the failure
                 // visible instead of presenting stale counts as current.
-                report(error, retry: { [weak self] in
+                reportError(error, source: .overview, retry: { [weak self] in
                     guard let self else { return }
                     await self.refreshOverview()
                 })
@@ -364,7 +418,7 @@ final class AppModel: ObservableObject {
             await notifications.registerForRemoteNotificationsIfAuthorized()
             await reportForegroundActivity()
         } catch {
-            report(error, retry: { [weak self] in
+            reportError(error, source: .bootstrap, retry: { [weak self] in
                 guard let self else { return }
                 await self.connect()
             })
@@ -372,7 +426,8 @@ final class AppModel: ObservableObject {
             // owner to the connection form for one of those reads as "the app
             // is broken" and invites them to re-enter a key that was fine —
             // so only an answer from the server sends them there.
-            if bootstrap == nil, (error as? APIError)?.isTransport != true {
+            if !Task.isCancelled, !isRequestCancellation(error),
+               bootstrap == nil, (error as? APIError)?.isTransport != true {
                 showingConnection = true
             }
         }
@@ -443,39 +498,56 @@ final class AppModel: ObservableObject {
                 return true
             }
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
         }
         return false
     }
 
     /// Surface a failure, offering a retry only when the cause was the network.
     /// The message is set first so its `didSet` cannot clear the retry after.
-    private func report(_ error: Error, retry: RetryAction? = nil) {
+    func reportError(_ error: Error, source: AssistantErrorSource? = nil, retry: RetryAction? = nil) {
+        // Filter before touching either field: a cancelled background load must
+        // not erase an unrelated actionable error or inherit its retry.
+        guard !Task.isCancelled, !isRequestCancellation(error) else { return }
         errorMessage = error.localizedDescription
+        errorNotice = AssistantErrorNotice(error: error)
+        errorSource = source
         errorRetry = (error as? APIError)?.isTransport == true ? retry : nil
     }
 
-    func refreshAll() async {
+    private func clearRecoveredError(from source: AssistantErrorSource) {
+        // A recovered read can retire its own warning, never an unrelated
+        // failed save or action that still needs the owner's attention.
+        if errorSource == source { dismissError() }
+    }
+
+    func refreshAll(reportFailure: Bool = true) async {
         guard let client else { return }
         // Kept separate for the same reason `connect()` separates them: these
         // fetch different things, and a failing dashboard query should not
         // throw away a bootstrap that arrived perfectly well.
         do {
             apply(try await client.bootstrap(), preservingLocalMessages: isSending)
+            clearRecoveredError(from: .bootstrap)
         } catch {
-            report(error, retry: { [weak self] in
-                guard let self else { return }
-                await self.refreshAll()
-            })
+            if reportFailure {
+                reportError(error, source: .bootstrap, retry: { [weak self] in
+                    guard let self else { return }
+                    await self.refreshAll()
+                })
+            }
             return
         }
         do {
             overview = try await client.overview()
+            clearRecoveredError(from: .overview)
         } catch {
-            report(error, retry: { [weak self] in
-                guard let self else { return }
-                await self.refreshOverview()
-            })
+            if reportFailure {
+                reportError(error, source: .overview, retry: { [weak self] in
+                    guard let self else { return }
+                    await self.refreshOverview()
+                })
+            }
         }
         await reconcileBaselineActivity()
         await syncNotificationBadge()
@@ -536,11 +608,12 @@ final class AppModel: ObservableObject {
         guard let client else { return }
         do {
             overview = try await client.overview()
+            clearRecoveredError(from: .overview)
             await reconcileBaselineActivity()
             await syncNotificationBadge()
         }
         catch where reportFailure {
-            report(error, retry: { [weak self] in
+            reportError(error, source: .overview, retry: { [weak self] in
                 guard let self else { return }
                 await self.refreshOverview()
             })
@@ -551,14 +624,14 @@ final class AppModel: ObservableObject {
     func refreshArchivedActivity(reportFailure: Bool = true) async {
         guard let client else { return }
         do { archivedActivity = try await client.activity(archived: true) }
-        catch where reportFailure { errorMessage = error.localizedDescription }
+        catch where reportFailure { reportError(error) }
         catch { }
     }
 
     func refreshArchivedGoals(reportFailure: Bool = true) async {
         guard let client else { return }
         do { archivedGoals = try await client.goals(archived: true) }
-        catch where reportFailure { errorMessage = error.localizedDescription }
+        catch where reportFailure { reportError(error) }
         catch { }
     }
 
@@ -590,7 +663,7 @@ final class AppModel: ObservableObject {
             reconcileAfterMutation(archivedActivity: true)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -607,7 +680,7 @@ final class AppModel: ObservableObject {
             reconcileAfterMutation()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -619,7 +692,7 @@ final class AppModel: ObservableObject {
             reconcileAfterMutation(archivedActivity: true)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -632,7 +705,7 @@ final class AppModel: ObservableObject {
             reconcileAfterMutation()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -645,7 +718,7 @@ final class AppModel: ObservableObject {
             reconcileAfterMutation()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -660,7 +733,7 @@ final class AppModel: ObservableObject {
             reconcileAfterMutation(archivedGoals: true)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -673,7 +746,7 @@ final class AppModel: ObservableObject {
             reconcileAfterMutation(archivedGoals: true)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -696,7 +769,7 @@ final class AppModel: ObservableObject {
             reconcileAfterMutation()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -708,7 +781,7 @@ final class AppModel: ObservableObject {
             reconcileAfterMutation(archivedGoals: true)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -721,7 +794,7 @@ final class AppModel: ObservableObject {
             returnToChat()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -733,7 +806,7 @@ final class AppModel: ObservableObject {
             let created = try await client.createChat()
             return await openConversation(id: created.conversationId)
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -742,10 +815,10 @@ final class AppModel: ObservableObject {
         guard let client else { return false }
         do {
             try await client.archiveInactiveChats()
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -759,10 +832,10 @@ final class AppModel: ObservableObject {
                 activeConversation = nil
                 await refreshAll()
             }
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -775,19 +848,20 @@ final class AppModel: ObservableObject {
             setActiveConversation(try await client.conversation(id: conversationId))
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
 
-    func refreshWorkspace() async {
+    func refreshWorkspace(reportFailure: Bool = true) async {
         guard let client else { return }
         do {
             let loaded = try await client.workspace()
             workspace = loaded
+            clearRecoveredError(from: .workspace)
             applyMemoryHealth(loaded.memory.health)
         } catch {
-            errorMessage = error.localizedDescription
+            if reportFailure { reportError(error, source: .workspace) }
         }
     }
 
@@ -796,7 +870,7 @@ final class AppModel: ObservableObject {
         do {
             savedCards = try await client.cards().cards
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
         }
     }
 
@@ -827,7 +901,7 @@ final class AppModel: ObservableObject {
             savedCards.removeAll { $0.id == card.id }
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -837,10 +911,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.uploadDocument(data: data, name: name, title: title, mime: mime)
-            await refreshOverview()
+            await refreshOverview(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -850,10 +924,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.deleteDocument(id: document.id)
-            await refreshOverview()
+            await refreshOverview(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -875,10 +949,10 @@ final class AppModel: ObservableObject {
                 voice: voice,
                 register: register
             )
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -898,10 +972,10 @@ final class AppModel: ObservableObject {
                 verdict: verdict,
                 workspacePath: workspacePath
             )
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -912,10 +986,10 @@ final class AppModel: ObservableObject {
         do {
             if let id { try await client.updateSkill(id: id, skill: mutation) }
             else { try await client.createSkill(mutation) }
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -925,10 +999,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.setSkillDeprecated(id: skill.id, deprecated: deprecated)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -938,10 +1012,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.deleteSkill(id: skill.id)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -951,10 +1025,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.updateCostLimits(limits)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -964,10 +1038,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.updateAnomaly(id: anomaly.id, action: action)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -977,10 +1051,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.updateImprovement(id: improvement.id, action: action)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -990,10 +1064,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.updateSettings(mutation)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1003,10 +1077,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.setScheduleEnabled(id: schedule.id, enabled: enabled)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1016,10 +1090,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.deleteReminder(id: reminder.id)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1029,10 +1103,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.setPolicyEnabled(id: policy.id, enabled: enabled)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1042,10 +1116,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.deletePolicy(id: policy.id)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1055,7 +1129,7 @@ final class AppModel: ObservableObject {
         do {
             mcpConnections = try await client.mcpConnections().connections
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
         }
     }
 
@@ -1067,7 +1141,7 @@ final class AppModel: ObservableObject {
             await refreshMcpConnections()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1080,7 +1154,7 @@ final class AppModel: ObservableObject {
             await refreshMcpConnections()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1093,7 +1167,7 @@ final class AppModel: ObservableObject {
             await refreshMcpConnections()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1103,10 +1177,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.createMemory(memory)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1116,10 +1190,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.updateMemory(id: id, content: content)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1129,10 +1203,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.updateMemory(id: id, action: action, prominence: prominence)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1142,10 +1216,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.updateMemoryProfile(action: action)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1156,10 +1230,10 @@ final class AppModel: ObservableObject {
         do {
             if let id { try await client.updatePerson(id: id, person: mutation) }
             else { try await client.createPerson(mutation) }
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1169,10 +1243,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.deletePerson(id: person.id)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1185,7 +1259,7 @@ final class AppModel: ObservableObject {
         } catch where isRequestCancellation(error) {
             return
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
         }
     }
 
@@ -1193,14 +1267,14 @@ final class AppModel: ObservableObject {
         guard let client else { return }
         do { personCards[id] = try await client.personCard(id: id) }
         catch where isRequestCancellation(error) { return }
-        catch { errorMessage = error.localizedDescription }
+        catch { reportError(error) }
     }
 
     func loadPersonProfile(id: String) async {
         guard let client else { return }
         do { personProfiles[id] = try await client.personProfile(id: id) }
         catch where isRequestCancellation(error) { return }
-        catch { errorMessage = error.localizedDescription }
+        catch { reportError(error) }
     }
 
     func addOccasion(personId: String, mutation: OccasionMutation, occasionId: String? = nil) async -> Bool {
@@ -1216,7 +1290,7 @@ final class AppModel: ObservableObject {
             await loadPeople()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1230,7 +1304,7 @@ final class AppModel: ObservableObject {
             await loadPeople()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1244,7 +1318,7 @@ final class AppModel: ObservableObject {
             await loadPeople()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1254,10 +1328,10 @@ final class AppModel: ObservableObject {
         do {
             try await client.mergePerson(id: person.id, targetId: targetId)
             personProfiles.removeValue(forKey: person.id)
-            await refreshWorkspace()
+            await refreshWorkspace(reportFailure: false)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1320,8 +1394,11 @@ final class AppModel: ObservableObject {
                 if let receiptCursor = receipt.cursor { self.cursor = receiptCursor }
                 self.resumableTurn = (taskId: receipt.taskId, streamID: streamID)
                 await self.pollForReply(taskId: receipt.taskId, streamID: streamID)
-            } catch is CancellationError {
-                return
+            } catch where isRequestCancellation(error) {
+                guard !Task.isCancelled else { return }
+                // A cancelled socket is not evidence the send failed. Recover
+                // via the saved cursor; never replay the message POST.
+                await self.pollForReply(taskId: self.resumableTurn?.taskId, streamID: streamID)
             } catch {
                 // URLSession's byte stream reports a cancelled task as
                 // URLError.cancelled rather than CancellationError, so a turn
@@ -1332,7 +1409,7 @@ final class AppModel: ObservableObject {
                 // The composer cleared the draft when it sent; a failed turn
                 // gives the words back rather than losing them to the failure.
                 self.restorableDraft = text
-                self.errorMessage = error.localizedDescription
+                self.reportError(error)
                 self.isSending = false
                 self.resumableTurn = nil
                 self.setActivityThought(.stopped, proposedDetail: error.localizedDescription)
@@ -1398,7 +1475,7 @@ final class AppModel: ObservableObject {
             return true
         } catch {
             if let previousOverview { overview = previousOverview }
-            errorMessage = error.localizedDescription
+            reportError(error)
             return false
         }
     }
@@ -1572,6 +1649,7 @@ final class AppModel: ObservableObject {
                     hasTaskID: taskId != nil
                 )))
             }
+            if Task.isCancelled { return }
             do {
                 let updates = try await client.updates(
                     conversationId: conversationId,
@@ -1607,8 +1685,9 @@ final class AppModel: ObservableObject {
                 // Same as above: a poll interrupted by cancelSend must not
                 // report itself as a failure.
                 if Task.isCancelled { return }
+                if isRequestCancellation(error) { continue }
                 if attempt > 3 {
-                    errorMessage = error.localizedDescription
+                    reportError(error)
                     break
                 }
             }
@@ -1616,12 +1695,12 @@ final class AppModel: ObservableObject {
         toolActivity = []
         isSending = false
         resumableTurn = nil
-        await refreshOverview()
+        await refreshOverview(reportFailure: false)
         // A completed turn may have created or cancelled a reminder. Refresh
         // the secondary workspace projection at the same authoritative
         // boundary as the overview so More → Reminders cannot show a stale
         // inventory after returning from Chat.
-        await refreshWorkspace()
+        await refreshWorkspace(reportFailure: false)
 
         let reply = messages.reversed().first(where: { $0.role == .assistant && !$0.text.isEmpty })?.text
         if let finalStatus, attention.contains(finalStatus) {
@@ -1702,7 +1781,7 @@ final class AppModel: ObservableObject {
                 try? await Task.sleep(for: .seconds(PollingPolicy.idleIntervalSeconds(
                     unchangedPolls: unchangedPolls
                 )))
-                guard let self, self.isSceneActive else { return }
+                guard !Task.isCancelled, let self, self.isSceneActive else { return }
                 guard !self.isSending,
                       let client = self.client,
                       let conversationId = self.conversationId else {

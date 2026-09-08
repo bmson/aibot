@@ -12,11 +12,9 @@ struct MemoryView: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showingCreateMemory = false
     @State private var editingFact: WorkspaceMemoryFact?
-    @State private var forgettingFact: WorkspaceMemoryFact?
     @State private var pendingFactID: String?
     @State private var showingPersonCreator = false
     @State private var editingPerson: WorkspacePerson?
-    @State private var deletingPerson: WorkspacePerson?
     @State private var addingFactForPerson: WorkspacePerson?
     @State private var managingPerson: WorkspacePerson?
     @State private var profileActionInFlight: String?
@@ -57,12 +55,6 @@ struct MemoryView: View {
                     Button("Refresh profile summary", systemImage: "arrow.clockwise") {
                         updateProfile(action: "recompile")
                     }
-                    if let voice = model.workspace?.memory.voiceStats,
-                       voice.auto + voice.uploaded > 0 {
-                        Button("Clear writing samples", systemImage: "trash", role: .destructive) {
-                            updateProfile(action: "purge-voice")
-                        }
-                    }
                 } label: {
                     Label("Memory actions", systemImage: "ellipsis.circle")
                 }
@@ -77,7 +69,7 @@ struct MemoryView: View {
             allowsMultipleSelection: false
         ) { result in
             guard case let .success(urls) = result, let url = urls.first else {
-                if case let .failure(error) = result { model.errorMessage = error.localizedDescription }
+                if case let .failure(error) = result { model.reportError(error) }
                 return
             }
             uploadVoiceSamples(from: url)
@@ -107,44 +99,6 @@ struct MemoryView: View {
         .sheet(item: $managingPerson) { person in
             NavigationStack { PersonDetailsView(person: person) }
         }
-        .confirmationDialog(
-            "Forget this memory?",
-            isPresented: Binding(
-                get: { forgettingFact != nil },
-                set: { if !$0 { forgettingFact = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let fact = forgettingFact {
-                Button("Forget permanently", role: .destructive) {
-                    perform(fact, action: "forget")
-                    forgettingFact = nil
-                }
-                Button("Cancel", role: .cancel) { forgettingFact = nil }
-            }
-        } message: {
-            Text("This removes the fact and prevents it from being saved again from the same source text.")
-        }
-        .confirmationDialog(
-            "Delete this person?",
-            isPresented: Binding(
-                get: { deletingPerson != nil },
-                set: { if !$0 { deletingPerson = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let person = deletingPerson {
-                Button("Delete person and facts", role: .destructive) {
-                    profileActionInFlight = person.id
-                    Task {
-                        _ = await model.deletePerson(person)
-                        profileActionInFlight = nil
-                    }
-                    deletingPerson = nil
-                }
-            }
-            Button("Cancel", role: .cancel) { deletingPerson = nil }
-        }
     }
 
     private var isLandscape: Bool { verticalSizeClass == .compact }
@@ -158,7 +112,7 @@ struct MemoryView: View {
                 Label("Connections and cleanup", systemImage: "point.3.connected.trianglepath.dotted")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
             metricGrid([
                 ("In use", memory.health.totalUsable, "brain.head.profile", AssistantTheme.accent(for: colorScheme)),
                 ("Review", memory.health.awaitingReview, "checklist", AssistantTheme.warning(for: colorScheme)),
@@ -183,7 +137,7 @@ struct MemoryView: View {
                     Button("Refresh summary", systemImage: "arrow.clockwise") {
                         updateProfile(action: "recompile")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                     .padding(.top, 8)
                 }
                 .assistantPanel(in: colorScheme)
@@ -234,14 +188,14 @@ struct MemoryView: View {
                         Button("Add", systemImage: "person.badge.plus") {
                             showingPersonCreator = true
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         peopleHeading(count: people.count)
                         Button("Add", systemImage: "person.badge.plus") {
                             showingPersonCreator = true
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                     }
                 }
                 if people.isEmpty {
@@ -271,12 +225,12 @@ struct MemoryView: View {
                         Button("Upload sent messages", systemImage: "square.and.arrow.up") {
                             showingVoiceImporter = true
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(AssistantActionButtonStyle(kind: .primary))
                         if voice.auto + voice.uploaded > 0 {
-                            Button("Clear", role: .destructive) {
+                            AssistantConfirmationButton("Clear") {
                                 updateProfile(action: "purge-voice")
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                         }
                     }
                     .disabled(profileActionInFlight != nil)
@@ -333,15 +287,17 @@ struct MemoryView: View {
             }
             AssistantFlowLayout(spacing: 9) {
                 Button("Manage", systemImage: "person.crop.circle") { managingPerson = person }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(AssistantActionButtonStyle(kind: .primary))
                 Button("Add fact", systemImage: "plus") { addingFactForPerson = person }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                 Button("Edit", systemImage: "pencil") { editingPerson = person }
-                    .buttonStyle(.bordered)
-                Button("Delete", systemImage: "trash", role: .destructive) {
-                    deletingPerson = person
+                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+                AssistantConfirmationButton("Delete", hint: "Deletes this person and their saved facts.") {
+                    profileActionInFlight = person.id
+                    _ = await model.deletePerson(person)
+                    profileActionInFlight = nil
                 }
-                .buttonStyle(.bordered)
+                .disabled(profileActionInFlight != nil)
             }
         }
         .assistantCard(in: colorScheme)
@@ -356,15 +312,12 @@ struct MemoryView: View {
                 } label: {
                     actionLabel(fact, action: "approve", title: "Approve", icon: "checkmark")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(AssistantActionButtonStyle(kind: .primary))
                 .tint(AssistantTheme.accent(for: colorScheme))
 
-                Button(role: .destructive) {
+                AssistantConfirmationButton("Reject", systemImage: "xmark") {
                     perform(fact, action: "reject")
-                } label: {
-                    actionLabel(fact, action: "reject", title: "Reject", icon: "xmark")
                 }
-                .buttonStyle(.bordered)
             }
             .disabled(pendingFactID != nil)
         }
@@ -385,7 +338,7 @@ struct MemoryView: View {
                     } label: {
                         actionLabel(fact, action: "confirm", title: "Confirm", icon: "checkmark.seal")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                 }
 
                 Menu {
@@ -397,13 +350,13 @@ struct MemoryView: View {
                     Button("Correct", systemImage: "pencil") {
                         editingFact = fact
                     }
-                    Button("Forget", systemImage: "trash", role: .destructive) {
-                        forgettingFact = fact
-                    }
                 } label: {
                     Label("Manage · \(prominenceLabel(fact))", systemImage: "ellipsis.circle")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+                AssistantConfirmationButton("Forget", hint: "Removes this fact and prevents relearning it from the same source text.") {
+                    perform(fact, action: "forget")
+                }
             }
             .font(.subheadline)
             .disabled(pendingFactID != nil)
@@ -499,7 +452,7 @@ struct MemoryView: View {
                     register: voiceRegister
                 )
             } catch {
-                model.errorMessage = error.localizedDescription
+                model.reportError(error)
             }
             profileActionInFlight = nil
         }
@@ -651,17 +604,17 @@ private struct PersonDetailsView: View {
                                 Text(occasionDate(occasion))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                HStack {
+                                AssistantFlowLayout(spacing: 8) {
                                     Button("Edit") { editingOccasion = occasion }
                                     if occasion.quarantined {
                                         Button("Approve") {
                                             review(occasion, verdict: "approve")
                                         }
-                                        Button("Reject", role: .destructive) {
+                                        AssistantConfirmationButton("Reject", systemImage: "xmark") {
                                             review(occasion, verdict: "reject")
                                         }
                                     }
-                                    Button("Delete", role: .destructive) {
+                                    AssistantConfirmationButton("Delete") {
                                         delete(occasion)
                                     }
                                 }
@@ -685,7 +638,7 @@ private struct PersonDetailsView: View {
                                 Text(option.label).tag(option.id)
                             }
                         }
-                        Button("Merge person", role: .destructive) {
+                        AssistantConfirmationButton("Merge person", systemImage: "person.2", hint: "Moves all saved facts to the selected person and removes this duplicate.") {
                             guard !mergeTarget.isEmpty else { return }
                             isWorking = true
                             Task {
@@ -694,6 +647,7 @@ private struct PersonDetailsView: View {
                                 if merged { dismiss() }
                             }
                         }
+                        .id(mergeTarget)
                         .disabled(isWorking || mergeTarget.isEmpty)
                     } header: {
                         Text("Merge")

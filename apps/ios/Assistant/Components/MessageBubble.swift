@@ -19,10 +19,6 @@ struct MessageBubble: View {
     let decideApproval: ((String, String) async -> Bool)?
 
     @State private var onDeviceCardAnalysis: OnDeviceCardAnalysis?
-    /// Armed-confirm for inline decisions, mirroring the web's two-tap rule:
-    /// a button left mid-arm lapses on its own rather than staying one click
-    /// from acting.
-    @State private var armedDecision: String?
     @State private var decidingApproval = false
 
     @Environment(\.colorScheme) private var colorScheme
@@ -534,73 +530,24 @@ struct MessageBubble: View {
         part.status == nil || part.status == "pending" || part.status == "snoozed"
     }
 
-    /// One tap arms, the second confirms — the same armed-confirm rule the web
-    /// approval rows use, so a stray touch can never decide. An armed button
-    /// lapses after three seconds.
     private func inlineDecisionRow(
         approvalId: String,
         decide: @escaping (String, String) async -> Bool
     ) -> some View {
-        HStack(spacing: 8) {
-            inlineDecisionButton(
-                title: armedDecision == "\(approvalId)-denied" ? "Sure?" : "Decline",
-                tint: AssistantTheme.inkMuted(for: colorScheme)
-            ) {
-                handleDecisionTap(approvalId, "denied", decide: decide)
+        AssistantFlowLayout(spacing: 10) {
+            AssistantConfirmationButton("Deny", systemImage: "hand.raised") {
+                decidingApproval = true
+                _ = await decide(approvalId, "denied")
+                decidingApproval = false
             }
-            inlineDecisionButton(
-                title: armedDecision == "\(approvalId)-approved" ? "Sure?" : "Approve",
-                tint: AssistantTheme.accent(for: colorScheme)
-            ) {
-                handleDecisionTap(approvalId, "approved", decide: decide)
+            AssistantConfirmationButton("Approve", systemImage: "checkmark", kind: .primary) {
+                decidingApproval = true
+                _ = await decide(approvalId, "approved")
+                decidingApproval = false
             }
-            Spacer(minLength: 0)
         }
+        .id(approvalId)
         .disabled(decidingApproval)
-        .opacity(decidingApproval ? 0.6 : 1)
-    }
-
-    private func inlineDecisionButton(
-        title: String,
-        tint: Color,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(tint)
-                .padding(.horizontal, 14)
-                .frame(height: 36)
-                .background(
-                    Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 1)
-                )
-                .contentShape(Capsule())
-        }
-        .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.97))
-        .accessibilityHint("First tap arms, second tap confirms")
-    }
-
-    private func handleDecisionTap(
-        _ approvalId: String,
-        _ decision: String,
-        decide: @escaping (String, String) async -> Bool
-    ) {
-        let key = "\(approvalId)-\(decision)"
-        guard armedDecision == key else {
-            armedDecision = key
-            Task {
-                try? await Task.sleep(for: .seconds(3))
-                if armedDecision == key { armedDecision = nil }
-            }
-            return
-        }
-        armedDecision = nil
-        guard !decidingApproval else { return }
-        decidingApproval = true
-        Task {
-            _ = await decide(approvalId, decision)
-            decidingApproval = false
-        }
     }
 
     private func settledDecisionReceipt(_ part: MessagePart) -> some View {
@@ -3912,7 +3859,7 @@ struct RichResponseCards: View {
            ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
             Link(action.label, destination: url)
                 .font(.caption.weight(.semibold))
-                .buttonStyle(.bordered)
+                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
         } else {
             Button(action.label) {
                 switch action.type {
@@ -3927,7 +3874,7 @@ struct RichResponseCards: View {
                 }
             }
             .font(.caption.weight(.semibold))
-            .buttonStyle(.bordered)
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
             .disabled(
                 (action.type == "ask_assistant" || action.type == "refresh") && onSend == nil
             )

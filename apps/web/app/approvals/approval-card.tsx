@@ -32,7 +32,7 @@ import {
   InfoItem,
   MetaLine,
 } from '@/lib/ui';
-import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
+import { ConfirmButton } from '@/lib/ui-client';
 import type { PendingApprovalView } from '@/lib/views';
 
 const actionIcons = {
@@ -191,14 +191,15 @@ export function ApprovalCard({
             </ConfirmButton>
           </form>
           <form action={denyApproval.bind(null, approval.id)} className="min-w-0">
-            <SubmitButton
+            <ConfirmButton
               variant="dangerOutline"
-              pendingLabel="Declining…"
+              pendingLabel="Denying…"
+              confirmLabel="Confirm deny"
               className="w-full sm:w-auto"
             >
               <X className="size-4" aria-hidden="true" />
-              Decline
-            </SubmitButton>
+              Deny
+            </ConfirmButton>
           </form>
           <button
             type="button"

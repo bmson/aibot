@@ -208,7 +208,7 @@ struct RelationshipGraphScreen: View {
                         HStack(spacing: 8) { selectedActions(selected) }
                     }
                 }
-                .font(.subheadline).buttonStyle(.bordered).fixedSize(horizontal: false, vertical: true)
+                .font(.subheadline).buttonStyle(AssistantActionButtonStyle(kind: .secondary)).fixedSize(horizontal: false, vertical: true)
             }
             if !listView {
                 HStack(spacing: 8) {
@@ -314,7 +314,6 @@ private struct GraphConnectionsSheet: View {
     let refresh: () async -> Void
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var removing: RelationshipGraphEdge?
     @State private var working = false
     @State private var failure: String?
     @State private var correcting: KnowledgeRelation?
@@ -331,10 +330,16 @@ private struct GraphConnectionsSheet: View {
                     if edge.reviewStatus != "confirmed" { Text("Needs review").font(.caption).foregroundStyle(.secondary) }
                     DisclosureGroup("Source note") { Text(edge.sourceContent).font(.subheadline).textSelection(.enabled) }
                     Button("Explore connected item") { explore(edge.subjectId == node.id ? edge.objectId : edge.subjectId) }
-                    HStack {
+                    AssistantFlowLayout(spacing: 8) {
                         Button("Edit") { Task { correcting = await model.knowledgeRelation(id: edge.id); if correcting == nil { failure = "Couldn’t load this connection." } } }
-                        Spacer()
-                        Button("Remove", role: .destructive) { removing = edge }
+                            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+                        AssistantConfirmationButton("Remove", hint: "The original note and other claims stay saved.") {
+                            working = true
+                            failure = nil
+                            if await model.removeKnowledgeRelation(id: edge.id) { removed(edge.id) }
+                            else { failure = "Couldn’t remove this connection. Try again." }
+                            working = false
+                        }
                     }.disabled(working)
                 }
             }
@@ -348,17 +353,6 @@ private struct GraphConnectionsSheet: View {
                 KnowledgeConnectionEditor(selected: relation.subject, relationToCorrect: relation, candidates: [relation.subject, relation.object]) { await refresh() }
             }
         }
-        .confirmationDialog("Remove this relationship claim?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
-            if let edge = removing {
-                Button("Remove connection", role: .destructive) {
-                    Task { working = true; failure = nil
-                        if await model.removeKnowledgeRelation(id: edge.id) { removed(edge.id) }
-                        else { failure = "Couldn’t remove this connection. Try again." }
-                        working = false
-                    }
-                }
-            }
-        } message: { Text("The original note and other supporting claims stay saved.") }
     }
 }
 

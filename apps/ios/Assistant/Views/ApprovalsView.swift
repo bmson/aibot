@@ -6,7 +6,6 @@ struct ApprovalsView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.verticalSizeClass) private var verticalSizeClass
-    @State private var pendingDecision: (PendingApproval, String)?
     @State private var decisionInFlightID: String?
     @State private var decisionInFlightAction: String?
     @State private var decisionSuccessFeedback = 0
@@ -55,27 +54,6 @@ struct ApprovalsView: View {
         .assistantSubmenuChrome()
         .refreshable { await model.refreshAll() }
         .task { if model.overview == nil { await model.refreshOverview() } }
-        .confirmationDialog(
-            confirmationTitle,
-            isPresented: Binding(
-                get: { pendingDecision != nil },
-                set: { if !$0 { pendingDecision = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let (item, decision) = pendingDecision {
-                Button(
-                    decision == "approved" ? "Approve and continue" : "Deny action",
-                    role: decision == "denied" ? .destructive : nil
-                ) {
-                    applyDecision(item, decision: decision)
-                    pendingDecision = nil
-                }
-                Button("Cancel", role: .cancel) { pendingDecision = nil }
-            }
-        } message: {
-            Text(pendingDecision?.0.approval.summary ?? "")
-        }
         .sensoryFeedback(.success, trigger: decisionSuccessFeedback)
         .sensoryFeedback(.error, trigger: decisionErrorFeedback)
         .sheet(item: $editingApproval) { item in
@@ -85,10 +63,6 @@ struct ApprovalsView: View {
 
     private var pending: [PendingApproval] { model.overview?.approvals.pending ?? [] }
     private var resolved: [ResolvedApproval] { model.overview?.approvals.resolved ?? [] }
-    private var confirmationTitle: String {
-        pendingDecision?.1 == "approved" ? "Approve this action?" : "Deny this action?"
-    }
-
     private var approvalSummary: some View {
         HStack(alignment: .top, spacing: 12) {
             AssistantGlyph(
@@ -253,7 +227,6 @@ struct ApprovalsView: View {
             "Deny",
             decision: "denied",
             item: item,
-            role: .destructive,
             prominent: false
         )
 
@@ -284,10 +257,8 @@ struct ApprovalsView: View {
         } label: {
             Label("More", systemImage: "ellipsis.circle")
                 .font(.subheadline.weight(.medium))
-                .frame(minHeight: 32)
         }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.capsule)
+        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
         .controlSize(.small)
         .disabled(decisionInFlightID != nil)
     }
@@ -297,7 +268,6 @@ struct ApprovalsView: View {
         _ title: String,
         decision: String,
         item: PendingApproval,
-        role: ButtonRole? = nil,
         prominent: Bool
     ) -> some View {
         let isApplyingThisDecision = decisionInFlightID == item.id
@@ -309,8 +279,7 @@ struct ApprovalsView: View {
             } label: {
                 approvalActionLabel(title, isApplying: isApplyingThisDecision)
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
+            .buttonStyle(AssistantActionButtonStyle(kind: .primary))
             .controlSize(.small)
             .tint(AssistantTheme.accent(for: colorScheme))
             .disabled(decisionInFlightID != nil)
@@ -318,18 +287,10 @@ struct ApprovalsView: View {
             .accessibilityHint("Resumes this task immediately")
             .accessibilityIdentifier("assistant.approvals.\(item.id).\(decision)")
         } else {
-            Button(role: role) {
-                pendingDecision = (item, decision)
-            } label: {
-                approvalActionLabel(title, isApplying: isApplyingThisDecision)
+            AssistantConfirmationButton(title, systemImage: "hand.raised", hint: "Stops this action.") {
+                applyDecision(item, decision: decision)
             }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-            .controlSize(.small)
-            .tint(.red)
             .disabled(decisionInFlightID != nil)
-            .accessibilityLabel(isApplyingThisDecision ? "Applying \(title.lowercased())" : title)
-            .accessibilityHint("Stops this action")
             .accessibilityIdentifier("assistant.approvals.\(item.id).\(decision)")
         }
     }
@@ -343,7 +304,6 @@ struct ApprovalsView: View {
             Text(isApplying ? "Applying…" : title)
         }
         .font(.subheadline.weight(.semibold))
-        .frame(minHeight: 32)
         .contentTransition(.opacity)
     }
 

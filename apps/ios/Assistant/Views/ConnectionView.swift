@@ -80,7 +80,7 @@ struct ConnectionView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(AssistantActionButtonStyle(kind: .primary))
                 .tint(AssistantTheme.accent(for: colorScheme))
                 .disabled(connecting || serverURL.trimmingCharacters(in: .whitespaces).isEmpty)
 

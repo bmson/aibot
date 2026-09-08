@@ -11,7 +11,6 @@ struct MoreView: View {
     @ObservedObject private var locations = LocationManager.shared
     @State private var showingAgentSettings = false
     @State private var settingsActionInFlight: String?
-    @State private var deletingPolicy: WorkspacePolicy?
 
     var body: some View {
         AssistantSettingsList {
@@ -224,26 +223,6 @@ struct MoreView: View {
                 NavigationStack { AgentSettingsEditor(settings: settings) }
             }
         }
-        .confirmationDialog(
-            "Delete this standing approval?",
-            isPresented: Binding(
-                get: { deletingPolicy != nil },
-                set: { if !$0 { deletingPolicy = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let policy = deletingPolicy {
-                Button("Delete rule", role: .destructive) {
-                    settingsActionInFlight = policy.id
-                    Task {
-                        _ = await model.deletePolicy(policy)
-                        settingsActionInFlight = nil
-                    }
-                    deletingPolicy = nil
-                }
-            }
-            Button("Cancel", role: .cancel) { deletingPolicy = nil }
-        }
     }
 
     @ViewBuilder
@@ -357,7 +336,7 @@ struct MoreView: View {
                 .foregroundStyle(.secondary)
         }
 
-        HStack {
+        VStack(alignment: .leading, spacing: 10) {
             Toggle(
                 isOn: Binding(
                     get: { policy.enabled },
@@ -371,12 +350,11 @@ struct MoreView: View {
                 )
             ) { detail }
             .disabled(settingsActionInFlight != nil)
-            Button("Delete", systemImage: "trash", role: .destructive) {
-                deletingPolicy = policy
+            AssistantConfirmationButton("Delete", hint: "Deletes this standing approval rule.") {
+                settingsActionInFlight = policy.id
+                _ = await model.deletePolicy(policy)
+                settingsActionInFlight = nil
             }
-            .labelStyle(.iconOnly)
-            .frame(minWidth: 44, minHeight: 44)
-            .contentShape(Rectangle())
             .disabled(settingsActionInFlight != nil)
         }
     }
@@ -386,7 +364,6 @@ struct MoreView: View {
 private struct RemindersView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
-    @State private var reminderToRemove: WorkspaceReminder?
     @State private var removalInFlight: String?
 
     private var reminders: [WorkspaceReminder] {
@@ -407,11 +384,7 @@ private struct RemindersView: View {
                 Section {
                     ForEach(reminders) { reminder in
                         reminderRow(reminder)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button("Remove", systemImage: "trash", role: .destructive) {
-                                    reminderToRemove = reminder
-                                }
-                            }
+
                     }
                 } footer: {
                     Text("Removing a reminder stops queued and future alerts. Earlier chat messages stay in the conversation.")
@@ -427,34 +400,11 @@ private struct RemindersView: View {
         // opened. Always refresh on appearance so the projection reflects the
         // server mutation rather than the last workspace snapshot.
         .task { await model.refreshWorkspace() }
-        .confirmationDialog(
-            "Remove this reminder?",
-            isPresented: Binding(
-                get: { reminderToRemove != nil },
-                set: { if !$0 { reminderToRemove = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let reminder = reminderToRemove {
-                Button("Remove reminder", role: .destructive) {
-                    removalInFlight = reminder.id
-                    Task {
-                        _ = await model.deleteReminder(reminder)
-                        removalInFlight = nil
-                    }
-                    reminderToRemove = nil
-                }
-                Button("Cancel", role: .cancel) { reminderToRemove = nil }
-            }
-        } message: {
-            if let reminder = reminderToRemove {
-                Text(reminder.text)
-            }
-        }
+
     }
 
     private func reminderRow(_ reminder: WorkspaceReminder) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        VStack(alignment: .leading, spacing: 12) {
             AssistantGlyph(
                 systemName: reminder.repeats ? "repeat" : "bell",
                 tint: AssistantTheme.accent(for: colorScheme)
@@ -467,12 +417,11 @@ private struct RemindersView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 8)
-            Button("Remove", systemImage: "trash", role: .destructive) {
-                reminderToRemove = reminder
+            AssistantConfirmationButton("Remove", hint: "Stops queued and future reminder alerts.") {
+                removalInFlight = reminder.id
+                _ = await model.deleteReminder(reminder)
+                removalInFlight = nil
             }
-            .labelStyle(.iconOnly)
-            .frame(minWidth: 44, minHeight: 44)
             .disabled(removalInFlight != nil)
         }
         .padding(.vertical, 4)
@@ -553,7 +502,6 @@ private struct MCPConnectionsView: View {
     @State private var bearerToken = ""
     @State private var isAdding = false
     @State private var workingConnectionID: String?
-    @State private var pendingDeletionID: String?
     @FocusState private var focusedField: MCPField?
 
     private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
@@ -629,7 +577,7 @@ private struct MCPConnectionsView: View {
                 }
                 .frame(minHeight: 40)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(AssistantActionButtonStyle(kind: .primary))
             .tint(AssistantTheme.accent(for: colorScheme))
             .disabled(isAdding || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion, pressedScale: 0.99))
@@ -765,14 +713,14 @@ private struct MCPConnectionsView: View {
             Button { perform(connection, action: action) } label: {
                 actionButtonLabel(title, icon: icon, working: working)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(AssistantActionButtonStyle(kind: .primary))
             .tint(AssistantTheme.accent(for: colorScheme))
             .disabled(workingConnectionID != nil)
         } else {
             Button { perform(connection, action: action) } label: {
                 actionButtonLabel(title, icon: icon, working: working)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
             .tint(AssistantTheme.inkMuted(for: colorScheme))
             .disabled(workingConnectionID != nil)
         }
@@ -788,35 +736,12 @@ private struct MCPConnectionsView: View {
     }
 
     private func deleteButton(_ connection: McpConnection, working: Bool) -> some View {
-        Button(role: .destructive) {
-            pendingDeletionID = connection.id
-        } label: {
-            Image(systemName: "trash")
-                .frame(minWidth: 44, minHeight: 44)
+        AssistantConfirmationButton("Remove", hint: "Deletes \(connection.name), its tools, and saved credential.") {
+            workingConnectionID = connection.id
+            _ = await model.deleteMcpConnection(id: connection.id)
+            workingConnectionID = nil
         }
-        .buttonStyle(.bordered)
         .disabled(workingConnectionID != nil || working)
-        .accessibilityLabel("Remove \(connection.name)")
-        .confirmationDialog(
-            "Remove \(connection.name)?",
-            isPresented: Binding(
-                get: { pendingDeletionID == connection.id },
-                set: { if !$0 { pendingDeletionID = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Remove connection", role: .destructive) {
-                workingConnectionID = connection.id
-                pendingDeletionID = nil
-                Task {
-                    _ = await model.deleteMcpConnection(id: connection.id)
-                    workingConnectionID = nil
-                }
-            }
-            Button("Cancel", role: .cancel) { pendingDeletionID = nil }
-        } message: {
-            Text("The endpoint, discovered tools, and saved bearer credential will be deleted.")
-        }
     }
 
     private func statusTag(_ connection: McpConnection) -> some View {

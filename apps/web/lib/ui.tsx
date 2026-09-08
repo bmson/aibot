@@ -18,9 +18,9 @@ import type { ReactNode } from 'react';
 export const focusRing =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
 
-const btnBase = `mobile-touch-target inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap font-medium motion-safe:transition-[background-color,border-color,color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
-const btnMd = 'h-9 rounded-lg px-3.5 text-sm';
-const btnXs = 'h-8 rounded-lg px-3 text-xs';
+const btnBase = `mobile-touch-target inline-flex shrink-0 items-center justify-center gap-2 whitespace-normal text-center font-medium motion-safe:transition-[background-color,border-color,color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
+const btnMd = 'min-h-11 rounded-lg px-5 py-2.5 text-sm';
+const btnXs = 'min-h-9 rounded-lg px-4 py-2 text-xs';
 
 const btnVariants = {
   outline:

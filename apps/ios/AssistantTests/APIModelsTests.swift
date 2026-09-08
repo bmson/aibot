@@ -2500,3 +2500,40 @@ extension APIModelsTests {
         viewport.zoom(to: 0.001, anchor: anchor, size: size); XCTAssertEqual(viewport.scale, 0.15)
     }
 }
+
+final class AssistantConfirmationStateTests: XCTestCase {
+    func testFirstTapNeverExecutesAndSecondTapConsumesConfirmation() {
+        var state = AssistantConfirmationState()
+        let now = Date(timeIntervalSince1970: 1_000)
+        XCTAssertFalse(state.tap(now: now))
+        XCTAssertTrue(state.tap(now: now.addingTimeInterval(1)))
+        XCTAssertNil(state.expiresAt)
+        // A third tap starts a fresh confirmation, including after an API failure.
+        XCTAssertFalse(state.tap(now: now.addingTimeInterval(2)))
+    }
+
+    func testExpiredConfirmationCannotExecuteBeforeTimerResumes() {
+        var state = AssistantConfirmationState()
+        let now = Date(timeIntervalSince1970: 1_000)
+        XCTAssertFalse(state.tap(now: now))
+        XCTAssertFalse(state.tap(now: now.addingTimeInterval(AssistantConfirmationState.lifetime)))
+        XCTAssertTrue(state.tap(now: now.addingTimeInterval(AssistantConfirmationState.lifetime + 1)))
+    }
+
+    func testLeavingOrDisablingControlResetsConfirmation() {
+        var state = AssistantConfirmationState()
+        XCTAssertFalse(state.tap())
+        state.reset()
+        XCTAssertNil(state.expiresAt)
+        XCTAssertFalse(state.tap())
+    }
+
+    func testConfirmationDoesNotAuthorizeAnotherItem() {
+        var first = AssistantConfirmationState()
+        var second = AssistantConfirmationState()
+        XCTAssertFalse(first.tap())
+        XCTAssertFalse(second.tap())
+        XCTAssertTrue(first.tap())
+        XCTAssertNotNil(second.expiresAt)
+    }
+}

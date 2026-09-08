@@ -247,7 +247,7 @@ struct AssistantFlowLayout: Layout {
     var spacing: CGFloat = 8
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let sizes = measuredSizes(subviews, width: proposal.width)
         let metrics = Self.metrics(
             sizes: sizes,
             availableWidth: proposal.width ?? .greatestFiniteMagnitude,
@@ -257,7 +257,7 @@ struct AssistantFlowLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let sizes = measuredSizes(subviews, width: bounds.width)
         let metrics = Self.metrics(sizes: sizes, availableWidth: bounds.width, spacing: spacing)
         for (index, subview) in subviews.enumerated() {
             let origin = metrics.origins[index]
@@ -266,6 +266,14 @@ struct AssistantFlowLayout: Layout {
                 anchor: .topLeading,
                 proposal: ProposedViewSize(sizes[index])
             )
+        }
+    }
+
+    private func measuredSizes(_ subviews: Subviews, width: CGFloat?) -> [CGSize] {
+        subviews.map { subview in
+            let ideal = subview.sizeThatFits(.unspecified)
+            guard let width, ideal.width > width else { return ideal }
+            return subview.sizeThatFits(ProposedViewSize(width: max(0, width), height: nil))
         }
     }
 
@@ -657,6 +665,7 @@ enum AssistantActionButtonKind {
 struct AssistantActionButtonStyle: ButtonStyle {
     let kind: AssistantActionButtonKind
     var compact = false
+    var confirming = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -667,10 +676,11 @@ struct AssistantActionButtonStyle: ButtonStyle {
 
         configuration.label
             .font(.subheadline.weight(.semibold))
-            .padding(.horizontal, compact ? 0 : 14)
+            .padding(.horizontal, compact ? 12 : 20)
+            .padding(.vertical, 10)
             .frame(minWidth: compact ? 44 : nil, minHeight: 44)
-            .foregroundStyle(foregroundColor)
-            .background(backgroundColor, in: shape)
+            .foregroundStyle(confirming ? Color.white : foregroundColor)
+            .background(confirming ? AssistantTheme.notificationBadge : backgroundColor, in: shape)
             .overlay {
                 shape.stroke(strokeColor, lineWidth: 1)
             }
@@ -714,6 +724,116 @@ struct AssistantActionButtonStyle: ButtonStyle {
             AssistantTheme.accent(for: colorScheme).opacity(0.22)
         case .destructive:
             AssistantTheme.errorInk(for: colorScheme).opacity(0.22)
+        }
+    }
+}
+
+
+/// An expired confirmation can never execute, even if its reset task was suspended.
+struct AssistantConfirmationState {
+    static let lifetime: TimeInterval = 8
+    private(set) var expiresAt: Date?
+
+    mutating func tap(now: Date = .now) -> Bool {
+        if let expiresAt, now < expiresAt {
+            reset()
+            return true
+        }
+        expiresAt = now.addingTimeInterval(Self.lifetime)
+        return false
+    }
+
+    mutating func reset() { expiresAt = nil }
+}
+
+/// Keep confirmation at the original touch target. Both labels reserve the same
+/// space, so arming never moves this button or its neighbours under the finger.
+struct AssistantConfirmationButton: View {
+    let title: String
+    var confirmationTitle: String
+    var systemImage: String = "trash"
+    var kind: AssistantActionButtonKind = .destructive
+    var hint: String = ""
+    var prepare: (() async -> Bool)?
+    let action: () async -> Void
+
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var confirmation = AssistantConfirmationState()
+    @State private var working = false
+    @State private var visible = false
+
+    init(_ title: String, confirmationTitle: String? = nil, systemImage: String = "trash",
+         kind: AssistantActionButtonKind = .destructive, hint: String = "",
+         prepare: (() async -> Bool)? = nil,
+         action: @escaping () async -> Void) {
+        self.title = title
+        self.confirmationTitle = confirmationTitle ?? "Confirm \(title.lowercased())"
+        self.systemImage = systemImage
+        self.kind = kind
+        self.hint = hint
+        self.prepare = prepare
+        self.action = action
+    }
+
+    private var armed: Bool { confirmation.expiresAt != nil }
+
+    var body: some View {
+        Button {
+            guard !working, isEnabled else { return }
+            if !armed, let prepare {
+                working = true
+                Task {
+                    let ready = await prepare()
+                    working = false
+                    if ready, visible, isEnabled, scenePhase == .active { _ = confirmation.tap() }
+                }
+                return
+            }
+            if confirmation.tap() {
+                working = true
+                Task {
+                    await action()
+                    working = false
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                ZStack {
+                    Image(systemName: armed ? "checkmark" : systemImage)
+                        .opacity(working ? 0 : 1)
+                    if working { ProgressView().controlSize(.small) }
+                }
+                .frame(width: 16)
+                ZStack {
+                    Text(title).hidden()
+                    Text(confirmationTitle).hidden()
+                    Text(working ? "Working…" : armed ? confirmationTitle : title)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .buttonStyle(AssistantActionButtonStyle(kind: kind, confirming: armed && kind == .destructive))
+        .disabled(working)
+        .accessibilityLabel(working ? "Working" : armed ? confirmationTitle : title)
+        .accessibilityHint(armed ? "Tap again to confirm. \(hint)" : "Requires two taps. \(hint)")
+        .accessibilityAction(.escape) { confirmation.reset() }
+        .task(id: confirmation.expiresAt) {
+            guard confirmation.expiresAt != nil else { return }
+            do { try await Task.sleep(for: .seconds(AssistantConfirmationState.lifetime)) }
+            catch { return }
+            confirmation.reset()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { confirmation.reset() }
+        }
+        .onChange(of: isEnabled) { _, enabled in
+            if !enabled { confirmation.reset() }
+        }
+        .onAppear { visible = true }
+        .onDisappear {
+            visible = false
+            confirmation.reset()
         }
     }
 }

@@ -64,10 +64,8 @@ struct WorkspaceView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingDocumentImporter = false
     @State private var showingBackstoryImporter = false
-    @State private var deletingDocument: DocumentRecord?
     @State private var showingSkillCreator = false
     @State private var editingSkill: WorkspaceSkill?
-    @State private var deletingSkill: WorkspaceSkill?
     @State private var showingCostEditor = false
     @State private var workspaceActionInFlight: String?
 
@@ -122,7 +120,7 @@ struct WorkspaceView: View {
             allowsMultipleSelection: false
         ) { result in
             guard case let .success(urls) = result, let url = urls.first else {
-                if case let .failure(error) = result { model.errorMessage = error.localizedDescription }
+                if case let .failure(error) = result { model.reportError(error) }
                 return
             }
             uploadDocument(from: url)
@@ -133,7 +131,7 @@ struct WorkspaceView: View {
             allowsMultipleSelection: false
         ) { result in
             guard case let .success(urls) = result, let url = urls.first else {
-                if case let .failure(error) = result { model.errorMessage = error.localizedDescription }
+                if case let .failure(error) = result { model.reportError(error) }
                 return
             }
             uploadBackstory(from: url)
@@ -148,48 +146,6 @@ struct WorkspaceView: View {
             if let costs = model.workspace?.costs {
                 NavigationStack { CostLimitsEditor(costs: costs) }
             }
-        }
-        .confirmationDialog(
-            "Delete this document?",
-            isPresented: Binding(
-                get: { deletingDocument != nil },
-                set: { if !$0 { deletingDocument = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let document = deletingDocument {
-                Button("Delete document", role: .destructive) {
-                    workspaceActionInFlight = document.id
-                    Task {
-                        _ = await model.deleteDocument(document)
-                        workspaceActionInFlight = nil
-                    }
-                    deletingDocument = nil
-                }
-            }
-            Button("Cancel", role: .cancel) { deletingDocument = nil }
-        } message: {
-            Text("This removes the file and its searchable passages.")
-        }
-        .confirmationDialog(
-            "Delete this skill?",
-            isPresented: Binding(
-                get: { deletingSkill != nil },
-                set: { if !$0 { deletingSkill = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let skill = deletingSkill {
-                Button("Delete skill", role: .destructive) {
-                    workspaceActionInFlight = skill.id
-                    Task {
-                        _ = await model.deleteSkill(skill)
-                        workspaceActionInFlight = nil
-                    }
-                    deletingSkill = nil
-                }
-            }
-            Button("Cancel", role: .cancel) { deletingSkill = nil }
         }
     }
 
@@ -873,10 +829,12 @@ struct WorkspaceView: View {
                     }
                     .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                     .disabled(model.isSending)
-                    Button("Delete", systemImage: "trash", role: .destructive) {
-                        deletingDocument = document
+                    AssistantConfirmationButton("Delete", hint: "Removes the file and its searchable passages.") {
+                        workspaceActionInFlight = document.id
+                        _ = await model.deleteDocument(document)
+                        workspaceActionInFlight = nil
                     }
-                    .buttonStyle(AssistantActionButtonStyle(kind: .destructive))
+                    .disabled(workspaceActionInFlight != nil)
                 }
                 .accessibilityHint(
                     model.isSending
@@ -890,10 +848,12 @@ struct WorkspaceView: View {
                     .foregroundStyle(AssistantTheme.errorInk(for: colorScheme))
             }
             if document.status != "ready" {
-                Button("Delete", systemImage: "trash", role: .destructive) {
-                    deletingDocument = document
+                AssistantConfirmationButton("Delete", hint: "Removes the file and its searchable passages.") {
+                    workspaceActionInFlight = document.id
+                    _ = await model.deleteDocument(document)
+                    workspaceActionInFlight = nil
                 }
-                .buttonStyle(AssistantActionButtonStyle(kind: .destructive))
+                .disabled(workspaceActionInFlight != nil)
             }
         }
         .assistantCard(in: colorScheme)
@@ -970,22 +930,32 @@ struct WorkspaceView: View {
                                     workspacePath: source.workspacePath
                                 )
                             }
-                            Button("Purge learned memories", role: .destructive) {
-                                updateImport(action: "purge", source: source.source)
-                            }
-                            Button("Delete source", role: .destructive) {
-                                updateImport(action: "delete", source: source.source)
-                            }
                         } label: {
                             Label("More", systemImage: "ellipsis.circle")
                         }
                         .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+                        AssistantConfirmationButton("Purge memories") {
+                            updateImport(action: "purge", source: source.source)
+                        }
+                        AssistantConfirmationButton("Delete source") {
+                            updateImport(action: "delete", source: source.source)
+                        }
                     }
                     .disabled(workspaceActionInFlight != nil)
                 }
                 .assistantCard(in: colorScheme)
             }
         }
+    }
+
+    @ViewBuilder
+    private func deleteSkillButton(_ skill: WorkspaceSkill) -> some View {
+        AssistantConfirmationButton("Delete skill") {
+            workspaceActionInFlight = skill.id
+            _ = await model.deleteSkill(skill)
+            workspaceActionInFlight = nil
+        }
+        .disabled(workspaceActionInFlight != nil)
     }
 
     @ViewBuilder
@@ -1389,14 +1359,11 @@ struct WorkspaceView: View {
                 Button("Retire skill", systemImage: "archivebox") {
                     setSkill(skill, deprecated: true)
                 }
-                Divider()
-                Button("Delete skill", systemImage: "trash", role: .destructive) {
-                    deletingSkill = skill
-                }
             } label: {
                 Label("More", systemImage: "ellipsis.circle")
             }
             .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            deleteSkillButton(skill)
         }
         .disabled(workspaceActionInFlight != nil)
     }
@@ -1461,14 +1428,12 @@ struct WorkspaceView: View {
 
             Menu {
                 Button("Edit skill", systemImage: "pencil") { editingSkill = skill }
-                Button("Delete skill", systemImage: "trash", role: .destructive) {
-                    deletingSkill = skill
-                }
             } label: {
                 Label("More", systemImage: "ellipsis.circle")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
+            deleteSkillButton(skill)
         }
         .disabled(workspaceActionInFlight != nil)
     }
@@ -1584,7 +1549,7 @@ struct WorkspaceView: View {
                     mime: type?.preferredMIMEType ?? "application/octet-stream"
                 )
             } catch {
-                model.errorMessage = error.localizedDescription
+                model.reportError(error)
             }
             workspaceActionInFlight = nil
         }
@@ -1604,7 +1569,7 @@ struct WorkspaceView: View {
                 }
                 _ = await model.uploadImport(data: data, name: url.lastPathComponent)
             } catch {
-                model.errorMessage = error.localizedDescription
+                model.reportError(error)
             }
             workspaceActionInFlight = nil
         }

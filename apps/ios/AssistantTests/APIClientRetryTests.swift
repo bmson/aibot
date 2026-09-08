@@ -694,6 +694,171 @@ final class APIClientRetryTests: XCTestCase {
         }
     }
 
+    func testCancellationIsControlFlowIncludingFoundationWrappers() {
+        let cancellations: [Error] = [
+            CancellationError(), URLError(.cancelled), APIError.transport(URLError(.cancelled)),
+            NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError),
+            NSError(domain: "wrapper", code: 1, userInfo: [NSUnderlyingErrorKey: URLError(.cancelled)])
+        ]
+        for error in cancellations {
+            XCTAssertTrue(isRequestCancellation(error))
+        }
+        XCTAssertFalse(isRequestCancellation(URLError(.timedOut)))
+        XCTAssertFalse(isRequestCancellation(APIError.server(status: 409, message: "Action cancelled by server policy")))
+    }
+
+    @MainActor
+    func testCancelledRefreshesNeverCreateOrReplaceAnError() async {
+        let model = AppModel(apiClient: makeClient())
+        for hasExistingError in [false, true] {
+            if hasExistingError {
+                model.reportError(APIError.transport(URLError(.notConnectedToInternet)), retry: {})
+            }
+            let original = model.errorMessage
+            let notice = model.errorNotice
+            for read in 0..<4 {
+                StubURLProtocol.prime([.failure(URLError(.cancelled))])
+                switch read {
+                case 0: await model.refreshAll()
+                case 1: await model.refreshOverview()
+                case 2: await model.refreshWorkspace()
+                default: _ = await model.knowledge()
+                }
+                XCTAssertEqual(StubURLProtocol.attempts, ["GET"], "Cancellation must not trigger a transport retry")
+                XCTAssertEqual(model.errorMessage, original)
+                XCTAssertEqual(model.errorNotice, notice)
+                XCTAssertEqual(model.errorRetry != nil, hasExistingError)
+            }
+        }
+    }
+
+    @MainActor
+    func testCancelledConnectionDoesNotOpenPairingOrOfferRetry() async {
+        StubURLProtocol.prime([.failure(URLError(.cancelled))])
+        let model = AppModel(apiClient: makeClient())
+        await model.connect()
+        XCTAssertFalse(model.showingConnection)
+        XCTAssertFalse(model.isLoading)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertNil(model.errorNotice)
+        XCTAssertNil(model.errorRetry)
+    }
+
+    @MainActor
+    func testCancelledTaskCannotPublishAnUnrelatedTransportError() async {
+        let model = AppModel(apiClient: makeClient())
+        let request = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            model.reportError(APIError.transport(URLError(.networkConnectionLost)), retry: {})
+        }
+        await request.value
+        XCTAssertNil(model.errorMessage)
+        XCTAssertNil(model.errorRetry)
+    }
+
+    @MainActor
+    func testAutomaticRefreshFailuresAreQuietButExplicitRefreshRemainsActionable() async {
+        let model = AppModel(apiClient: makeClient())
+        for read in 0..<3 {
+            StubURLProtocol.prime([.failure(URLError(.notConnectedToInternet))])
+            switch read {
+            case 0: await model.refreshAll(reportFailure: false)
+            case 1: await model.refreshOverview(reportFailure: false)
+            default: await model.refreshWorkspace(reportFailure: false)
+            }
+            XCTAssertNil(model.errorNotice)
+            XCTAssertNil(model.errorRetry)
+        }
+        StubURLProtocol.prime([.failure(URLError(.notConnectedToInternet))])
+        await model.refreshOverview()
+        XCTAssertEqual(model.errorNotice?.title, "You’re offline")
+        XCTAssertNotNil(model.errorRetry)
+        model.dismissError()
+        XCTAssertNil(model.errorMessage)
+        XCTAssertNil(model.errorNotice)
+        XCTAssertNil(model.errorRetry)
+    }
+
+    @MainActor
+    func testRecoveredReadClearsOnlyItsOwnNotice() async throws {
+        let model = AppModel(apiClient: makeClient())
+        let overview = OverviewResponse(generatedAt: "2026-09-07",
+            activity: ActivityList(items: [], archivedCount: 0),
+            goals: GoalsDashboard(items: [], archivedCount: 0),
+            approvals: ApprovalInbox(pending: [], resolved: []),
+            documents: DocumentsOverview(documents: [], stats: DocumentStats(total: 0, ready: 0, pending: 0, chunks: 0),
+                primaryConversationId: "test"))
+        let body = try JSONEncoder().encode(overview)
+        StubURLProtocol.prime([.failure(URLError(.notConnectedToInternet))])
+        await model.refreshOverview()
+        XCTAssertNotNil(model.errorNotice)
+        StubURLProtocol.prime([.success(status: 200, body: body)])
+        await model.refreshOverview(reportFailure: false)
+        XCTAssertNil(model.errorNotice)
+        model.reportError(APIError.server(status: 400, message: "Your edit could not be saved."))
+        StubURLProtocol.prime([.success(status: 200, body: body)])
+        await model.refreshOverview(reportFailure: false)
+        XCTAssertEqual(model.errorMessage, "Your edit could not be saved.")
+    }
+
+    @MainActor
+    func testActualFailuresKeepUsefulCopyAndNeverInheritAnUnsafeRetry() {
+        let model = AppModel(apiClient: makeClient())
+        model.reportError(APIError.transport(URLError(.timedOut)), retry: {})
+        XCTAssertNotNil(model.errorRetry)
+        XCTAssertEqual(model.errorNotice?.title, "Connection interrupted")
+        model.reportError(APIError.server(status: 400, message: "Choose a valid date."), retry: {})
+        XCTAssertNil(model.errorRetry)
+        XCTAssertEqual(model.errorNotice?.message, "Choose a valid date.")
+        model.reportError(APIError.decoding(model: "InternalModel", detail: "raw implementation detail"))
+        XCTAssertFalse(model.errorNotice?.message.contains("InternalModel") ?? true)
+        XCTAssertTrue(model.errorNotice?.message.contains("app update") ?? false)
+        model.errorMessage = "Your draft is preserved."
+        XCTAssertEqual(model.errorNotice?.message, "Your draft is preserved.")
+    }
+
+    @MainActor
+    func testErrorBannerVisualStates() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        for (name, scheme, width, size, retryable) in [
+            ("light", ColorScheme.light, CGFloat(393), DynamicTypeSize.large, true),
+            ("dark", ColorScheme.dark, CGFloat(393), DynamicTypeSize.large, true),
+            ("compact", ColorScheme.light, CGFloat(320), DynamicTypeSize.large, true),
+            ("accessible", ColorScheme.light, CGFloat(393), DynamicTypeSize.accessibility3, true),
+            ("validation", ColorScheme.light, CGFloat(393), DynamicTypeSize.large, false)
+        ] {
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 600)
+            window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
+            let content = VStack {
+                AssistantErrorBanner(
+                    notice: retryable
+                        ? AssistantErrorNotice(error: APIError.transport(URLError(.notConnectedToInternet)))
+                        : AssistantErrorNotice(message: "Choose a valid date before saving this occasion."),
+                    retry: retryable ? {} : nil,
+                    dismiss: {}
+                )
+                .padding(12)
+                Spacer()
+            }
+            .background(AssistantTheme.canvas(for: scheme))
+            .environment(\.colorScheme, scheme)
+            .environment(\.dynamicTypeSize, size)
+            window.rootViewController = UIHostingController(rootView: content)
+            window.isHidden = false
+            defer { window.isHidden = true; window.rootViewController = nil }
+            try await Task.sleep(for: .milliseconds(250))
+            window.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "error-banner-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     private func makeClient() -> APIClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]

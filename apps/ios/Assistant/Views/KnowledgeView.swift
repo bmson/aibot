@@ -17,7 +17,6 @@ struct KnowledgeView: View {
     @State private var correcting: KnowledgeRelation?
     @State private var editingItem = false
     @State private var pendingRelationID: String?
-    @State private var forgettingImpact: KnowledgeSourceImpact?
     @State private var selectionHistory: [KnowledgeEntity] = []
     @State private var selectedID: String?
     @State private var loadID = UUID()
@@ -126,44 +125,12 @@ struct KnowledgeView: View {
                 }
             }
         }
-        .confirmationDialog(
-            "Forget this source knowledge?",
-            isPresented: Binding(
-                get: { forgettingImpact != nil },
-                set: { if !$0 { forgettingImpact = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let impact = forgettingImpact {
-                Button("Forget knowledge", role: .destructive) {
-                    Task {
-                        _ = await model.forgetKnowledgeSource(id: impact.memoryId)
-                        forgettingImpact = nil
-                        await refresh()
-                    }
-                }
-            }
-            Button("Cancel", role: .cancel) { forgettingImpact = nil }
-        } message: {
-            if let impact = forgettingImpact {
-                Text(forgetImpactMessage(impact))
-            }
-        }
     }
 
     private var isLandscape: Bool { verticalSizeClass == .compact }
 
     private var selectedEntity: KnowledgeEntity? {
         overview?.entitySelected(by: selectedID)
-    }
-
-    private func forgetImpactMessage(_ impact: KnowledgeSourceImpact) -> String {
-        let retired =
-            impact.retiredProjections > 0
-            ? " It also clears \(impact.retiredProjections) retired derived projections."
-            : ""
-        return
-            "This removes \(impact.activeConnections) active connections and \(impact.orphanedItems.count) items that would no longer be connected.\(retired) The source is tombstoned so it is not learned again verbatim."
     }
 
     @ViewBuilder
@@ -229,13 +196,13 @@ struct KnowledgeView: View {
             Text(finding.detail).font(.footnote).foregroundStyle(.secondary)
             AssistantFlowLayout(spacing: 8) {
                 if finding.kind == "projection_orphan" {
-                    Button("Remove derived items", systemImage: "trash") {
+                    AssistantConfirmationButton("Remove derived items") {
                         resolveCleanup(action: "remove-orphans", finding: finding)
-                    }.buttonStyle(.bordered)
+                    }.buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                 } else if finding.kind == "projection_failed" {
                     Button("Retry", systemImage: "arrow.clockwise") {
                         resolveCleanup(action: "retry", finding: finding)
-                    }.buttonStyle(.bordered)
+                    }.buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                 } else if finding.kind == "unreviewed_connection",
                     let relationId = finding.relationId
                 {
@@ -246,22 +213,21 @@ struct KnowledgeView: View {
                             pendingRelationID = nil
                             await refresh()
                         }
-                    }.buttonStyle(.borderedProminent)
+                    }.buttonStyle(AssistantActionButtonStyle(kind: .primary))
                 } else if finding.kind == "quarantined" {
                     Button("Approve", systemImage: "checkmark") {
                         resolveCleanup(action: "approve", finding: finding)
-                    }.buttonStyle(.borderedProminent)
+                    }.buttonStyle(AssistantActionButtonStyle(kind: .primary))
                 } else if ["expired", "superseded"].contains(finding.kind), finding.memoryId != nil
                 {
                     Button("Keep as current", systemImage: "checkmark.shield") {
                         resolveCleanup(action: "keep", finding: finding)
-                    }.buttonStyle(.bordered)
+                    }.buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                 }
-                if let memoryId = finding.memoryId {
-                    Button("Forget", systemImage: "trash", role: .destructive) {
-                        Task { forgettingImpact = await model.knowledgeSourceImpact(id: memoryId) }
-                    }.buttonStyle(.bordered)
-                }
+            }
+            if let memoryId = finding.memoryId {
+                KnowledgeForgetButton(memoryId: memoryId) { await refresh() }
+                    .id(memoryId)
             }
         }
         .assistantCard(in: colorScheme)
@@ -304,7 +270,7 @@ struct KnowledgeView: View {
                 }
                 Spacer()
                 Button("Add", systemImage: "plus") { showingConnectionEditor = true }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(AssistantActionButtonStyle(kind: .primary))
             }
             Picker("Connection presentation", selection: $showingMap) {
                 Label("Map", systemImage: "point.3.connected.trianglepath.dotted").tag(true)
@@ -452,16 +418,16 @@ struct KnowledgeView: View {
                                     Button("Confirm", systemImage: "checkmark") {
                                         review(source, approve: true)
                                     }
-                                    .buttonStyle(.borderedProminent)
+                                    .buttonStyle(AssistantActionButtonStyle(kind: .primary))
                                 }
                                 Menu {
                                     Button("Correct", systemImage: "pencil") { correcting = source }
-                                    Button(
-                                        "Mark inaccurate", systemImage: "xmark", role: .destructive
-                                    ) { review(source, approve: false) }
                                 } label: {
                                     Label("Edit evidence", systemImage: "ellipsis")
-                                }.buttonStyle(.bordered)
+                                }.buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+                                AssistantConfirmationButton("Mark inaccurate", systemImage: "xmark") {
+                                    review(source, approve: false)
+                                }
                             }
                             .disabled(pendingRelationID != nil)
                         }
@@ -881,4 +847,47 @@ private struct KnowledgeItemEditor: View {
             }
         }
     }
+}
+
+/// Show the affected knowledge inline before the second tap can forget a source.
+private struct KnowledgeForgetButton: View {
+    let memoryId: String
+    let refresh: () async -> Void
+    @EnvironmentObject private var model: AppModel
+    @State private var impact: KnowledgeSourceImpact?
+    @State private var failure: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AssistantConfirmationButton("Forget", prepare: {
+                failure = nil
+                impact = await model.knowledgeSourceImpact(id: memoryId)
+                if impact == nil { failure = "Couldn’t check the affected knowledge. Try again." }
+                return impact != nil
+            }) {
+                guard let impact else { return }
+                if await model.forgetKnowledgeSource(id: impact.memoryId) {
+                    self.impact = nil
+                    await refresh()
+                }
+            }
+            if let impact {
+                Text(forgetImpactMessage(impact))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
+        }
+    }
+
+    private func forgetImpactMessage(_ impact: KnowledgeSourceImpact) -> String {
+        let retired =
+            impact.retiredProjections > 0
+            ? " It also clears \(impact.retiredProjections) retired derived projections."
+            : ""
+        return
+            "This removes \(impact.activeConnections) active connections and \(impact.orphanedItems.count) items that would no longer be connected.\(retired) The source is tombstoned so it is not learned again verbatim."
+    }
+
 }

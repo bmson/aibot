@@ -1,6 +1,6 @@
 'use client';
 
-import { LoaderCircle } from 'lucide-react';
+import { Check, LoaderCircle } from 'lucide-react';
 import type { ReactNode, ToggleEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFormStatus } from 'react-dom';
@@ -168,11 +168,7 @@ export function ActionMenu({
   );
 }
 
-/**
- * A two-step confirm for a consequential server action: the first click arms
- * ("Confirm?") and a second within 3s submits; otherwise it reverts. No modal,
- * no new deps — enough friction to stop an accidental approval, grant, or delete.
- */
+/** Two activations of the same control, with a visible, expiring confirmation. */
 export function ConfirmButton({
   children,
   confirmLabel = 'Confirm?',
@@ -181,6 +177,8 @@ export function ConfirmButton({
   size = 'md',
   className = '',
   title,
+  disabled = false,
+  onConfirm,
 }: {
   children: ReactNode;
   confirmLabel?: string;
@@ -189,37 +187,88 @@ export function ConfirmButton({
   size?: 'md' | 'sm';
   className?: string;
   title?: string;
+  disabled?: boolean;
+  onConfirm?: () => void;
 }) {
   const { pending } = useFormStatus();
-  const [armed, setArmed] = useState(false);
-  const base = `${btnScale[size][variant]} ${className}`;
+  const [expiresAt, setExpiresAt] = useState<number | null>(null);
+  const armed = expiresAt !== null;
+  const unavailable = pending || disabled;
+  const danger = variant === 'dangerOutline' || variant === 'danger';
+  const base = `${btnScale[size][armed && danger ? 'danger' : variant]} ${className}`;
 
-  if (pending) {
-    return (
-      <button type="submit" disabled aria-busy="true" title={title} className={base}>
-        <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-        {pendingLabel}
-      </button>
-    );
-  }
-  if (!armed) {
-    return (
-      <button
-        type="button"
-        title={title}
-        onClick={() => {
-          setArmed(true);
-          setTimeout(() => setArmed(false), 3000);
-        }}
-        className={base}
-      >
-        {children}
-      </button>
-    );
-  }
+  useEffect(() => {
+    if (!expiresAt) return;
+    const reset = () => setExpiresAt(null);
+    const timer = window.setTimeout(reset, Math.max(0, expiresAt - Date.now()));
+    window.addEventListener('blur', reset);
+    document.addEventListener('visibilitychange', reset);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('blur', reset);
+      document.removeEventListener('visibilitychange', reset);
+    };
+  }, [expiresAt]);
+  useEffect(() => {
+    if (unavailable) setExpiresAt(null);
+  }, [unavailable]);
+
   return (
-    <button type="submit" title={title} className={base}>
-      {confirmLabel}
+    <button
+      type="button"
+      disabled={unavailable}
+      aria-busy={pending}
+      title={title}
+      onBlur={() => setExpiresAt(null)}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') setExpiresAt(null);
+      }}
+      onClick={(event) => {
+        if (!expiresAt || Date.now() >= expiresAt) {
+          event.preventDefault();
+          setExpiresAt(Date.now() + 8000);
+          return;
+        }
+        setExpiresAt(null);
+        if (onConfirm) onConfirm();
+        else event.currentTarget.form?.requestSubmit();
+      }}
+      className={base}
+    >
+      {/* Reserve both labels so the confirmation stays under the pointer. */}
+      <span className="grid items-center justify-items-center">
+        <span
+          className="invisible col-start-1 row-start-1 inline-flex items-center gap-1.5"
+          aria-hidden="true"
+        >
+          {children}
+        </span>
+        <span
+          className="invisible col-start-1 row-start-1 inline-flex items-center gap-1.5"
+          aria-hidden="true"
+        >
+          <Check className="size-4" />
+          {confirmLabel}
+        </span>
+        <span
+          className="col-start-1 row-start-1 inline-flex items-center gap-1.5"
+          aria-live="polite"
+        >
+          {pending ? (
+            <>
+              <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+              {pendingLabel}
+            </>
+          ) : armed ? (
+            <>
+              <Check className="size-4" aria-hidden="true" />
+              {confirmLabel}
+            </>
+          ) : (
+            children
+          )}
+        </span>
+      </span>
     </button>
   );
 }

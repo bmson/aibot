@@ -1,9 +1,9 @@
 'use client';
 
 import type { InlineApprovalDetail, InlineApprovalStatus } from '@assistant/application/chat';
-import { Check, CircleHelp, LoaderCircle, X } from 'lucide-react';
-import { btnSm } from '@/lib/ui';
-import { DecisionActions, DecisionReceipt, useArmedConfirm } from './decision-card';
+import { Check, CircleHelp, X } from 'lucide-react';
+import { ConfirmButton } from '@/lib/ui-client';
+import { DecisionActions, DecisionReceipt } from './decision-card';
 
 export interface InlineApprovalPart {
   type: 'approval';
@@ -40,7 +40,6 @@ export function ApprovalRow({
   onResolve: (approvalId: string, decision: 'approved' | 'denied') => void;
 }) {
   const status: InlineApprovalStatus = resolution ?? part.status ?? 'pending';
-  const [approvalArmed, setApprovalArmed] = useArmedConfirm();
 
   if (status !== 'pending') {
     // Answered here a moment ago, rather than read back from the row: say so,
@@ -107,43 +106,25 @@ export function ApprovalRow({
         </details>
       ) : null}
       <DecisionActions>
-        <button
-          type="button"
+        <ConfirmButton
+          size="sm"
+          variant="success"
           disabled={disabled}
-          onClick={() => {
-            if (approvalArmed) {
-              setApprovalArmed(false);
-              onResolve(part.approvalId, 'approved');
-            } else {
-              setApprovalArmed(true);
-            }
-          }}
-          className={btnSm.success}
+          confirmLabel="Confirm approval"
+          onConfirm={() => onResolve(part.approvalId, 'approved')}
         >
-          {busy && busyDecision === 'approved' ? (
-            <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
-          ) : (
-            <Check className="size-3.5" aria-hidden="true" />
-          )}
-          {busy && busyDecision === 'approved'
-            ? 'Approving…'
-            : approvalArmed
-              ? 'Confirm approval'
-              : 'Approve and continue'}
-        </button>
-        <button
-          type="button"
+          <Check className="size-3.5" aria-hidden="true" />
+          {busy && busyDecision === 'approved' ? 'Approving…' : 'Approve and continue'}
+        </ConfirmButton>
+        <ConfirmButton
+          size="sm"
           disabled={disabled}
-          onClick={() => onResolve(part.approvalId, 'denied')}
-          className={btnSm.dangerOutline}
+          confirmLabel="Confirm deny"
+          onConfirm={() => onResolve(part.approvalId, 'denied')}
         >
-          {busy && busyDecision === 'denied' ? (
-            <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
-          ) : (
-            <X className="size-3.5" aria-hidden="true" />
-          )}
-          {busy && busyDecision === 'denied' ? 'Declining…' : 'Decline'}
-        </button>
+          <X className="size-3.5" aria-hidden="true" />
+          {busy && busyDecision === 'denied' ? 'Denying…' : 'Deny'}
+        </ConfirmButton>
       </DecisionActions>
     </div>
   );

@@ -62,7 +62,7 @@ struct SituationPacksView: View {
                         Button("Try again", systemImage: "arrow.clockwise") {
                             Task { await load() }
                         }
-                        .buttonStyle(.bordered).controlSize(.small)
+                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary)).controlSize(.small)
                     }
                 }
                 if let overview {
@@ -193,7 +193,7 @@ struct SituationPackDetail: View {
                             Button("Try again", systemImage: "arrow.clockwise") {
                                 Task { await load() }
                             }
-                            .buttonStyle(.bordered).controlSize(.small)
+                            .buttonStyle(AssistantActionButtonStyle(kind: .secondary)).controlSize(.small)
                         }
                     }
                     if let notice {
@@ -364,7 +364,7 @@ struct SituationPackDetail: View {
                     newItem = false
                     preview = nil
                     editing = item
-                }.buttonStyle(.bordered)
+                }.buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                 if item.needsReview {
                     Button("Reviewed") {
                         Task {
@@ -401,7 +401,7 @@ struct SituationPackDetail: View {
                 Task {
                     _ = await run(.init(action: "apply", packId: pack.id, previewId: preview.id))
                 }
-            }.buttonStyle(.borderedProminent)
+            }.buttonStyle(AssistantActionButtonStyle(kind: .primary))
             Button("Discard preview") {
                 Task {
                     _ = await run(

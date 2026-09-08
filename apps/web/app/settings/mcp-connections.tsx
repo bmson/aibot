@@ -9,6 +9,7 @@ import {
   setMcpConnectionEnabledAction,
 } from '@/app/settings/actions';
 import { Badge, btn, btnSm, inputClass, labelClass } from '@/lib/ui';
+import { ConfirmButton } from '@/lib/ui-client';
 
 type McpConnection = {
   id: string;
@@ -212,23 +213,18 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
                       ) : null}
                       {connection.enabled ? 'Disable' : 'Enable'}
                     </button>
-                    <button
-                      type="button"
+                    <ConfirmButton
+                      size="sm"
                       disabled={pending}
-                      onClick={() => {
-                        if (window.confirm(`Remove ${connection.name}?`)) {
-                          run(actionKey('delete'), () => deleteMcpConnectionAction(connection.id));
-                        }
-                      }}
-                      className={btnSm.dangerOutline}
+                      confirmLabel="Confirm remove"
+                      title={`Remove ${connection.name}, its tools, and saved credential`}
+                      onConfirm={() =>
+                        run(actionKey('delete'), () => deleteMcpConnectionAction(connection.id))
+                      }
                     >
-                      {pendingAction === actionKey('delete') ? (
-                        <LoaderCircle className="size-3 motion-safe:animate-spin" />
-                      ) : (
-                        <Trash2 className="size-3" />
-                      )}
-                      Remove
-                    </button>
+                      <Trash2 className="size-3" />
+                      {pendingAction === actionKey('delete') ? 'Removing…' : 'Remove'}
+                    </ConfirmButton>
                   </div>
                 </div>
                 {connection.tools.length > 0 ? (

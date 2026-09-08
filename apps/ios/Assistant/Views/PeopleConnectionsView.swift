@@ -82,11 +82,11 @@ struct PeopleConnectionsExplorer: View {
             Label("Open full profile", systemImage: "person.text.rectangle")
               .frame(maxWidth: .infinity, minHeight: 44)
           }
-          .buttonStyle(.bordered)
+          .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
         } else if failed {
           Text("Couldn’t load these connections.").font(.headline)
           Button("Try again") { Task { await load(id) } }
-            .buttonStyle(.bordered)
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
         } else {
           ProgressView("Loading connections…")
             .frame(maxWidth: .infinity, minHeight: 180)
@@ -367,7 +367,6 @@ struct PersonConnectionOutline: View {
   @Environment(\.colorScheme) private var colorScheme
   @State private var expanded: Set<String> = []
   @State private var inspecting: PersonRelationSummary?
-  @State private var removing: PersonRelationSummary?
   @State private var working = false
   @State private var failure: String?
 
@@ -427,10 +426,16 @@ struct PersonConnectionOutline: View {
                   ForEach(branch.group.relations) { evidence in
                     VStack(alignment: .leading, spacing: 4) {
                       Text(evidence.sentence).font(.caption)
-                      HStack {
+                      AssistantFlowLayout(spacing: 8) {
                         Button("View source") { inspecting = evidence }
-                        Spacer(minLength: 4)
-                        Button("Remove", role: .destructive) { removing = evidence }
+                          .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+                        AssistantConfirmationButton("Remove", hint: "The source note and other claims stay saved.") {
+                          working = true
+                          failure = nil
+                          if await model.removeKnowledgeRelation(id: evidence.id) { await refreshBranch() }
+                          else { failure = "Couldn’t remove this connection. Try again." }
+                          working = false
+                        }
                       }.font(.caption).frame(minHeight: 44).disabled(working)
                     }
                   }
@@ -458,19 +463,6 @@ struct PersonConnectionOutline: View {
         PersonRelationshipEvidenceScreen(evidence: evidence) { await refreshBranch() }
       }
     }
-    .confirmationDialog("Remove this connection?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
-      if let evidence = removing {
-        Button("Remove connection", role: .destructive) {
-          Task {
-            working = true
-            failure = nil
-            if await model.removeKnowledgeRelation(id: evidence.id) {
-              await refreshBranch()
-            } else { failure = "Couldn’t remove this connection. Try again." }
-            working = false
-          }
-        }
-      }
-    } message: { Text("This removes the selected claim. Its source note and other claims stay saved.") }
+
   }
 }

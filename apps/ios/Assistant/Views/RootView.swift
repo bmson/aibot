@@ -4,7 +4,6 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     // The launch screen belongs to the automatic connect at startup, not to a
@@ -111,13 +110,13 @@ struct RootView: View {
             // banner belongs to the root, above whatever route is showing.
             // Gated on bootstrap so the onboarding Connection form keeps its
             // own inline error instead of doubling it.
-            if model.bootstrap != nil, let error = model.errorMessage {
+            if model.bootstrap != nil, let notice = model.errorNotice {
                 let bannerTopInset = errorBannerTopInset(
                     safeAreaTopInset: safeAreaTopInset,
                     isLandscape: isLandscape
                 )
 
-                errorBanner(error)
+                errorBanner(notice)
                     .padding(.horizontal, 12)
                     .padding(.top, bannerTopInset)
                     // A standing banner has to move when the crown opens or
@@ -166,7 +165,7 @@ struct RootView: View {
                 Task {
                     await NotificationManager.shared.refreshAuthorizationStatus()
                     await NotificationManager.shared.registerForRemoteNotificationsIfAuthorized()
-                    await model.refreshAll()
+                    await model.refreshAll(reportFailure: false)
                     await model.reportForegroundActivity()
                     await model.shareLocationIfEnabled()
                 }
@@ -270,63 +269,19 @@ struct RootView: View {
         )
     }
 
-    private func errorBanner(_ text: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .accessibilityHidden(true)
-            Text(text)
-                .font(.footnote)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 4)
-            // Only transport failures carry a retry. A server that answered on
-            // the merits would just answer the same way again.
-            if let retry = model.errorRetry {
-                Button {
-                    // Dismiss first: a second failure then animates in as a new
-                    // banner rather than silently replacing identical text.
+    private func errorBanner(_ notice: AssistantErrorNotice) -> some View {
+        AssistantErrorBanner(
+            notice: notice,
+            retry: model.errorRetry.map { retry in
+                {
                     model.dismissError()
                     Task { @MainActor in await retry() }
-                } label: {
-                    Text("Retry")
-                        .font(.footnote.weight(.semibold))
-                        .padding(.horizontal, 10)
-                        .frame(height: 44)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion))
-                .accessibilityLabel("Retry")
-            }
-            Button {
-                model.dismissError()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion))
-            .accessibilityLabel("Dismiss error")
-        }
-        .foregroundStyle(AssistantTheme.errorInk(for: colorScheme))
-        .padding(.leading, 14)
-        .padding(.trailing, 4)
-        .padding(.vertical, 4)
-        .background(
-            AssistantTheme.errorSurface(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            },
+            dismiss: model.dismissError
         )
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(
-                    Color.red.opacity(colorSchemeContrast == .increased ? 0.48 : 0.18),
-                    lineWidth: colorSchemeContrast == .increased ? 1.1 : 0.7
-                )
-        }
-        .shadow(
-            color: .black.opacity(colorScheme == .dark ? 0.22 : 0.1),
-            radius: 12,
-            y: 4
-        )
+        .frame(maxWidth: 560)
+        .frame(maxWidth: .infinity)
     }
 
     private var launchView: some View {
@@ -400,7 +355,7 @@ struct CardsView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(16)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                 if model.savedCards.isEmpty {
                     ContentUnavailableView(
                         "No active cards",
@@ -476,5 +431,69 @@ struct SavedResponseCard: View {
         .background(AssistantTheme.raised(for: colorScheme), in: shape)
         .clipShape(shape)
         .overlay { shape.strokeBorder(AssistantTheme.ink(for: colorScheme).opacity(0.09), lineWidth: 0.8) }
+    }
+}
+
+/// A quiet, readable status card shared by every screen's actionable failures.
+struct AssistantErrorBanner: View {
+    let notice: AssistantErrorNotice
+    var retry: (() -> Void)?
+    let dismiss: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: notice.systemImage)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .frame(width: 28, height: 28)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(notice.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    Text(notice.message)
+                        .font(.footnote)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if !dynamicTypeSize.isAccessibilitySize {
+                    dismissButton
+                }
+            }
+            if retry != nil || dynamicTypeSize.isAccessibilitySize {
+                AssistantFlowLayout(spacing: 10) {
+                    if let retry {
+                        Button("Try again", systemImage: "arrow.clockwise", action: retry)
+                            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+                    }
+                    if dynamicTypeSize.isAccessibilitySize { dismissButton }
+                }
+            }
+        }
+        .padding(14)
+        .background(AssistantTheme.raised(for: colorScheme),
+                    in: RoundedRectangle(cornerRadius: AssistantTheme.panelCornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: AssistantTheme.panelCornerRadius)
+                .strokeBorder(AssistantTheme.inkMuted(for: colorScheme).opacity(contrast == .increased ? 0.6 : 0.2),
+                              lineWidth: contrast == .increased ? 1.5 : 1)
+        }
+        .shadow(color: .black.opacity(colorScheme == .dark ? 0.18 : 0.06), radius: 8, y: 3)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("assistant.error-banner")
+    }
+
+    private var dismissButton: some View {
+        Button(action: dismiss) {
+            Image(systemName: "xmark")
+                .font(.system(size: 12, weight: .semibold))
+        }
+        .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
+        .accessibilityLabel("Dismiss message")
     }
 }

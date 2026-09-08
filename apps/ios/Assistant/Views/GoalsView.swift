@@ -8,7 +8,6 @@ struct GoalsView: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showingGoalCreator = false
     @State private var editingGoal: GoalRecord?
-    @State private var deletingGoal: GoalRecord?
     @State private var goalActionInFlight: String?
     @State private var showingArchived = false
 
@@ -79,28 +78,6 @@ struct GoalsView: View {
         }
         .sheet(item: $editingGoal) { goal in
             NavigationStack { GoalEditor(goal: goal) }
-        }
-        .confirmationDialog(
-            "Delete this goal?",
-            isPresented: Binding(
-                get: { deletingGoal != nil },
-                set: { if !$0 { deletingGoal = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let goal = deletingGoal {
-                Button("Delete goal", role: .destructive) {
-                    goalActionInFlight = goal.id
-                    Task {
-                        _ = await model.deleteGoal(goal)
-                        goalActionInFlight = nil
-                    }
-                    deletingGoal = nil
-                }
-                Button("Cancel", role: .cancel) { deletingGoal = nil }
-            }
-        } message: {
-            Text("This archives the goal from the active list. Its work chat and activity remain available as a record.")
         }
     }
 
@@ -227,21 +204,23 @@ struct GoalsView: View {
                             }
                         }
 
-                        if item.goal.status != "abandoned" {
-                            Button("Stop goal", role: .destructive) {
-                                updateLifecycle(item, action: "status", status: "abandoned")
-                            }
-                        }
-                        Button("Delete goal", systemImage: "trash", role: .destructive) {
-                            deletingGoal = item.goal
-                        }
-                        .disabled(item.workActive || goalActionInFlight != nil)
-                        .accessibilityHint("Archives the goal and keeps its work history")
                     } label: {
                         Label("More", systemImage: "ellipsis.circle")
                     }
-                    .frame(minHeight: 44)
+                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                     .disabled(goalActionInFlight != nil)
+                    if item.goal.status != "abandoned" {
+                        AssistantConfirmationButton("Stop goal", systemImage: "stop") {
+                            updateLifecycle(item, action: "status", status: "abandoned")
+                        }
+                        .disabled(goalActionInFlight != nil)
+                    }
+                    AssistantConfirmationButton("Delete", hint: "Archives the goal and keeps its work chat and history.") {
+                        goalActionInFlight = item.goal.id
+                        _ = await model.deleteGoal(item.goal)
+                        goalActionInFlight = nil
+                    }
+                    .disabled(item.workActive || goalActionInFlight != nil)
                 }
                 .font(.subheadline.weight(.semibold))
             }
