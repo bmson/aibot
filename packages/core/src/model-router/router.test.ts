@@ -1,4 +1,13 @@
-import { costReservations, createDb, type Db, tasks } from '@assistant/db';
+import {
+  conversations,
+  costReservations,
+  createDb,
+  type Db,
+  modelRoles,
+  models,
+  reconcileModelConfig,
+  tasks,
+} from '@assistant/db';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createChatTask, ensureChatConversation, getAgent } from '../chat.js';
@@ -47,13 +56,99 @@ describe('isUnparseableObjectError', () => {
 });
 
 describe('ModelRouter.route (integration)', () => {
+  it('uses the conversation choice for agent work without changing background routes or budget fallback', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const rollback = new Error('rollback model selection fixture');
+    await expect(
+      db.transaction(async (tx) => {
+        const scoped = tx as unknown as Db;
+        const agent = await getAgent(scoped);
+        const conversation = await ensureChatConversation(scoped, agent.id);
+        await tx
+          .update(conversations)
+          .set({ modelOverride: 'moonshotai/kimi-k3' })
+          .where(eq(conversations.id, conversation.id));
+        const task = await createChatTask(scoped, {
+          agentId: agent.id,
+          conversationId: conversation.id,
+        });
+        const router = new ModelRouter(scoped, 'unused');
+        const selected = await router.route('reason', { taskId: task.id });
+        expect(selected.ok && selected.modelId).toBe('moonshotai/kimi-k3');
+        const planned = await router.route('plan', { taskId: task.id });
+        expect(planned.ok && planned.modelId).toBe('deepseek/deepseek-v4-pro-0813');
+        const fallback = await router.route('reason', { taskId: task.id, forceFallback: true });
+        expect(fallback.ok && fallback.modelId).toBe('openai/gpt-oss-120b');
+        throw rollback;
+      }),
+    ).rejects.toBe(rollback);
+  });
+
+  it('upgrades retired routes, clears Anthropic overrides, and preserves subsequent owner choices', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const rollback = new Error('rollback retired model fixture');
+    await expect(
+      db.transaction(async (tx) => {
+        const scoped = tx as unknown as Db;
+        const retired = 'anthropic/claude-sonnet-4.5';
+        await tx
+          .insert(models)
+          .values({ id: retired, label: 'Retired Claude', enabled: true })
+          .onConflictDoUpdate({ target: models.id, set: { enabled: true } });
+        await tx
+          .update(modelRoles)
+          .set({ primaryModel: retired, fallbackModel: retired })
+          .where(eq(modelRoles.role, 'reason'));
+        const agent = await getAgent(scoped);
+        const conversation = await ensureChatConversation(scoped, agent.id);
+        await tx
+          .update(conversations)
+          .set({ modelOverride: retired })
+          .where(eq(conversations.id, conversation.id));
+        await reconcileModelConfig(scoped);
+        const router = new ModelRouter(scoped, 'unused');
+        const route = await router.route('reason', { modelOverride: retired });
+        expect(route.ok && route.modelId).toBe('minimax/minimax-m2.7');
+        const [cleared] = await tx
+          .select()
+          .from(conversations)
+          .where(eq(conversations.id, conversation.id));
+        expect(cleared?.modelOverride).toBeNull();
+        const [disabled] = await tx.select().from(models).where(eq(models.id, retired));
+        expect(disabled?.enabled).toBe(false);
+        await tx
+          .update(modelRoles)
+          .set({ primaryModel: 'moonshotai/kimi-k2.6' })
+          .where(eq(modelRoles.role, 'reason'));
+        await reconcileModelConfig(scoped);
+        const preserved = await router.route('reason');
+        expect(preserved.ok && preserved.modelId).toBe('moonshotai/kimi-k2.6');
+        // A stale role reference must fail closed instead of billing a disabled provider.
+        await tx
+          .update(modelRoles)
+          .set({ primaryModel: retired })
+          .where(eq(modelRoles.role, 'reason'));
+        await expect(router.route('reason')).rejects.toThrow('routed model is disabled');
+        throw rollback;
+      }),
+    ).rejects.toBe(rollback);
+  });
+
+  it('does not accept an embedding model as a chat override', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const route = await new ModelRouter(db, 'unused').route('reason', {
+      modelOverride: 'openai/text-embedding-3-small',
+    });
+    expect(route.ok && route.modelId).toBe('minimax/minimax-m2.7');
+  });
+
   it('resolves a role to its seeded primary model', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const router = new ModelRouter(db, 'test-key-unused');
     const route = await router.route('classify');
     expect(route.ok).toBe(true);
     if (route.ok) {
-      expect(route.modelId).toBe('deepseek/deepseek-chat');
+      expect(route.modelId).toBe('deepseek/deepseek-v4-flash-0731');
       expect(route.degraded).toBe(false);
       // OpenRouter must not route feature-dependent requests (json_schema,
       // tools) to providers that cannot honor them.
@@ -83,7 +178,7 @@ describe('ModelRouter.route (integration)', () => {
     if (!dbUp) return ctx.skip();
     const router = new ModelRouter(db, 'test-key-unused');
     const route = await router.route('draft', { modelOverride: 'nope/not-a-model' });
-    expect(route.ok && route.modelId).toBe('deepseek/deepseek-chat');
+    expect(route.ok && route.modelId).toBe('google/gemini-3.8-flash');
   });
 
   it('parks a task whose budget is exhausted', async (ctx) => {
@@ -132,7 +227,7 @@ describe('ModelRouter.route (integration)', () => {
     const task = await createChatTask(db, { agentId: agent.id, conversationId: conversation.id });
     await db
       .update(tasks)
-      .set({ budgetUsdLimit: '0.0200', spentUsd: '0' })
+      .set({ budgetUsdLimit: '0.0080', spentUsd: '0' })
       .where(eq(tasks.id, task.id));
 
     const router = new ModelRouter(db, 'test-key-unused');

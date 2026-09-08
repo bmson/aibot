@@ -1,13 +1,12 @@
 import { loadConfig } from '@assistant/config';
 import { and, eq, sql } from 'drizzle-orm';
 import { createDb } from './client.js';
+import { modelDefaults, modelRoleDefaults, reconcileModelConfig } from './model-config.js';
 import {
   agents,
   approvalPolicies,
   budgets,
   contacts,
-  modelRoles,
-  models,
   rateLimits,
   rateTable,
   schedules,
@@ -46,134 +45,13 @@ const [agent] = await db
 
 if (!agent) throw new Error('agent seed failed');
 
-// ── Model capability matrix ──────────────────────────────────────────────────
-// OpenRouter model ids. Cost columns are routing hints; usage.cost is authoritative.
-
-const modelSeed = [
-  {
-    id: 'qwen/qwen3-30b-a3b-instruct-2507',
-    label: 'Qwen3 30B A3B Instruct',
-    capabilities: { tools: true, vision: false, json: true, streaming: true, thinking: false },
-    promptCostPerMTok: '0.10',
-    completionCostPerMTok: '0.30',
-    latencyClass: 'fast',
-  },
-  {
-    id: 'deepseek/deepseek-chat',
-    label: 'DeepSeek Chat',
-    capabilities: { tools: true, vision: false, json: true, streaming: true, thinking: false },
-    promptCostPerMTok: '0.30',
-    completionCostPerMTok: '1.00',
-    latencyClass: 'medium',
-  },
-  {
-    id: 'openai/gpt-oss-120b',
-    label: 'GPT-OSS 120B',
-    capabilities: { tools: true, vision: false, json: true, streaming: true, thinking: true },
-    promptCostPerMTok: '0.15',
-    completionCostPerMTok: '0.60',
-    latencyClass: 'fast',
-  },
-  {
-    id: 'anthropic/claude-sonnet-4.5',
-    label: 'Claude Sonnet 4.5',
-    capabilities: { tools: true, vision: true, json: true, streaming: true, thinking: true },
-    promptCostPerMTok: '3.00',
-    completionCostPerMTok: '15.00',
-    latencyClass: 'medium',
-  },
-  {
-    id: 'openai/text-embedding-3-small',
-    label: 'OpenAI Text Embedding 3 Small',
-    capabilities: { embedding: true },
-    promptCostPerMTok: '0.02',
-    completionCostPerMTok: '0',
-    latencyClass: 'fast',
-  },
-] as const;
-
-for (const m of modelSeed) {
-  await db
-    .insert(models)
-    .values({ ...m, capabilities: { ...m.capabilities } })
-    .onConflictDoNothing();
-}
-
-// ── Role routing ─────────────────────────────────────────────────────────────
-
-// Structured-output roles run at temperature 0: plan/classify/extract must
-// produce schema-valid JSON deterministically. A non-zero (provider-default)
-// temperature is a plausible root cause of the AI_NoObjectGeneratedError parse
-// failures. Migration 0023 applies the same params to existing rows still at {}.
-const DETERMINISTIC = { temperature: 0 };
-
-const roleSeed = [
-  {
-    role: 'plan',
-    primaryModel: 'deepseek/deepseek-chat',
-    fallbackModel: 'openai/gpt-oss-120b',
-    params: DETERMINISTIC,
-  },
-  {
-    // Same upgrade extract got in migration 0019: qwen3-30b intermittently
-    // fails structured output, and a classify miss routes a real action
-    // request into a tool-less conversational path. Migration 0041 applies
-    // this to existing rows.
-    role: 'classify',
-    primaryModel: 'deepseek/deepseek-chat',
-    fallbackModel: 'openai/gpt-oss-120b',
-    params: DETERMINISTIC,
-  },
-  {
-    // Structured extraction (memory extraction/consolidation/import). qwen3-30b
-    // too often returns JSON that fails schema parsing, so the stronger
-    // deepseek-chat is primary with a distinct capable fallback. Migration 0019
-    // applies the same change to existing databases (seed is onConflictDoNothing).
-    role: 'extract',
-    primaryModel: 'deepseek/deepseek-chat',
-    fallbackModel: 'openai/gpt-oss-120b',
-    params: DETERMINISTIC,
-  },
-  { role: 'draft', primaryModel: 'deepseek/deepseek-chat', fallbackModel: 'openai/gpt-oss-120b' },
-  {
-    // The fallback must still drive the tool-calling loop: deepseek-chat is
-    // documented (role.ts) as answering with prose instead of tool calls,
-    // which made the budget soft-threshold a silent capability cliff.
-    // gpt-oss-120b has thinking and tools. Migration 0041 updates existing rows.
-    role: 'reason',
-    primaryModel: 'anthropic/claude-sonnet-4.5',
-    fallbackModel: 'openai/gpt-oss-120b',
-  },
-  {
-    // Nightly synthesis (skill reflection, dreams, self-improvement) needs a
-    // capable model but not the most expensive one; these jobs run daily
-    // regardless of owner activity.
-    role: 'batch',
-    primaryModel: 'openai/gpt-oss-120b',
-    fallbackModel: 'deepseek/deepseek-chat',
-  },
-  {
-    role: 'rewrite',
-    primaryModel: 'deepseek/deepseek-chat',
-    fallbackModel: 'qwen/qwen3-30b-a3b-instruct-2507',
-  },
-  {
-    role: 'embed',
-    primaryModel: 'openai/text-embedding-3-small',
-    fallbackModel: 'openai/text-embedding-3-small',
-  },
-] as const;
-
-for (const r of roleSeed) {
-  await db.insert(modelRoles).values(r).onConflictDoNothing();
-}
+// Shared by fresh installs, deployment reconciliation, and explicit live updates.
+await reconcileModelConfig(db);
 
 // ── Budgets & rate limits ────────────────────────────────────────────────────
 
-// Raised for the reason-model routing (Phase 3): interactive owner actions now
-// run on Claude (~$0.10-0.15/action), so the ceilings give real headroom while
-// staying bounded. Migration 0023 lifts existing rows still at the old values,
-// leaving any the owner has since edited untouched.
+// Preserve existing owner budgets when models change. Kimi K3 remains subject
+// to the same reservation and fallback limits as the less expensive defaults.
 const budgetSeed = [
   { scope: 'task_default', limitUsd: '0.50' },
   { scope: 'daily', limitUsd: '4.00' },
@@ -530,6 +408,6 @@ for (const s of scheduleSeed) {
 
 console.log(`seeded: agent ${agent.name} <${agent.email}> (${agent.id})`);
 console.log(
-  `seeded: ${modelSeed.length} models, ${roleSeed.length} roles, ${budgetSeed.length} budgets, ${rateLimitSeed.length} rate limits, ${policySeed.length} policies`,
+  `seeded: ${modelDefaults.length} models, ${modelRoleDefaults.length} roles, ${budgetSeed.length} budgets, ${rateLimitSeed.length} rate limits, ${policySeed.length} policies`,
 );
 process.exit(0);

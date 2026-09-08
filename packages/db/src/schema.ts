@@ -1190,7 +1190,7 @@ export const importSources = pgTable(
 export const models = pgTable(
   'models',
   {
-    /** OpenRouter model id, e.g. 'anthropic/claude-sonnet-4.5'. */
+    /** OpenRouter model id, e.g. 'minimax/minimax-m2.7'. */
     id: text('id').primaryKey(),
     label: text('label').notNull(),
     /** { tools, vision, json, streaming, thinking } */

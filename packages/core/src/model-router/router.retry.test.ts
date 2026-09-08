@@ -99,6 +99,24 @@ describe('ModelRouter timeout retry', () => {
     stubs.reserveCost.mockResolvedValue({ ok: true, reservationId: 'reservation-1' });
   });
 
+  it('reserves reasoning headroom when a reasoning model must call a tool', async () => {
+    const { router, route } = makeRouter();
+    const configured = await route.getMockImplementation()?.('reason', {});
+    if (!configured?.ok) throw new Error('missing mock route');
+    route.mockResolvedValue({ ...configured, thinking: true });
+    stubs.generateText.mockResolvedValue(stepResult());
+    await router.step('reason', {
+      prompt: 'Call the tool.',
+      tools: {},
+      toolChoice: 'required',
+      maxOutputTokens: 256,
+    });
+    expect(stubs.generateText.mock.calls[0]?.[0]).toMatchObject({
+      maxOutputTokens: 4352,
+      providerOptions: { openrouter: { reasoning: { max_tokens: 4096 } } },
+    });
+  });
+
   it('step() retries once when the per-call deadline fires, with a fresh reservation', async () => {
     const { router } = makeRouter();
     stubs.generateText.mockRejectedValueOnce(deadlineTimeout()).mockResolvedValueOnce(stepResult());
