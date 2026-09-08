@@ -205,6 +205,11 @@ jobs:
             args+=(--build-arg "GIT_SHA=${RELEASE_SHA}")
           fi
           docker build "${args[@]}" .
+      - name: Verify web assets in the shipping image
+        if: matrix.entry.name == 'web'
+        run: |
+          IMAGE_ROOT="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${ARTIFACT_REPOSITORY}"
+          bash scripts/smoke-web-image.sh "${IMAGE_ROOT}/${IMAGE_NAME}:${RELEASE_SHA}"
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

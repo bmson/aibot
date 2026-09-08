@@ -30,6 +30,7 @@ WORKDIR /app
 
 COPY --from=build --chown=node:node /src/apps/web/.next/standalone ./
 COPY --from=build --chown=node:node /src/apps/web/.next/static ./apps/web/.next/static
+COPY --from=build --chown=node:node /src/apps/web/public ./apps/web/public
 
 # The standalone server runs on node directly; npm is never invoked at runtime.
 # Strip the base image's bundled npm so its vendored deps (tar/sigstore/
