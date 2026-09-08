@@ -193,6 +193,68 @@ export async function generateEvidenceCard(input: {
 }): Promise<GeneratedCardPayload | null> {
   const explicitRequest = input.explicitRequest ?? false;
   if (!worthTrying(input.sourceText, input.evidence, explicitRequest)) return null;
+  // A single short hotel confirmation already has a coherent, bounded layout.
+  // Copy its literal details into a native card without asking a model to
+  // rewrite dates, amounts or booking identifiers.
+  if (explicitRequest && /\bhotel\b/i.test(input.sourceText.split('\n')[0] ?? '')) {
+    const threadMessages = input.evidence
+      .filter(
+        (row) =>
+          row.fromCurrentTask !== false &&
+          row.status === 'succeeded' &&
+          row.toolName === 'gmail.read_thread',
+      )
+      .flatMap((row) => {
+        const result = row.result as {
+          error?: unknown;
+          messages?: Array<{ text?: unknown }>;
+        } | null;
+        return !result?.error && Array.isArray(result?.messages) ? result.messages : [];
+      });
+    const searchedMail = input.evidence.some(
+      (row) => row.fromCurrentTask !== false && row.toolName === 'gmail.search',
+    );
+    if (
+      searchedMail &&
+      !threadMessages.some((message) => typeof message.text === 'string' && message.text.trim())
+    )
+      return null;
+    const confirmations = threadMessages.flatMap((message) =>
+      typeof message.text === 'string' &&
+      message.text.trim().length <= 500 &&
+      /\bcheck[ -]?in\b/i.test(message.text)
+        ? [message.text.trim()]
+        : [],
+    );
+    if (confirmations.length === 1 && confirmations[0]) {
+      const details = confirmations[0];
+      const spec = GenerativeCardSpecV1Schema.parse({
+        version: 1,
+        title: 'Hotel reservation',
+        icon: 'calendar',
+        accessibilityLabel: 'Hotel reservation from the email confirmation',
+        sourceLabel: 'Email confirmation',
+        facts: [
+          {
+            id: 'details',
+            label: 'Reservation details',
+            value: details,
+            source: 'gmail.read_thread',
+          },
+        ],
+        blocks: [{ type: 'facts', factIds: ['details'] }],
+      });
+      return {
+        kind: 'generated-card',
+        id: randomUUID(),
+        revisionId: randomUUID(),
+        spec,
+        sourceFingerprint: createHash('sha256')
+          .update(input.sourceKey ?? `gmail.read_thread\n${details}`)
+          .digest('hex'),
+      };
+    }
+  }
   const corpus = evidenceText(input.evidence, input.sourceText, explicitRequest);
   try {
     const result = await input.router.object('rewrite', {

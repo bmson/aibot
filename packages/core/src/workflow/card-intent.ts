@@ -44,4 +44,4 @@ export function requestedCardIntent(text: string): boolean {
  * build one. Silence here is what let a Google Doc stand in for the card.
  */
 export const CARD_NOT_BUILT =
-  "I couldn't turn this into a card — there wasn't enough verified detail to ground one, so nothing was saved to your Cards page.";
+  "I couldn't create and save this card. The request is still incomplete.";

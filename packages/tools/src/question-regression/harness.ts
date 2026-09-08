@@ -86,14 +86,30 @@ export function evaluateQuestion(
     failures.push('formatting: leaked internal marker or HTML');
   if ((answer.match(/^\s*```/gm)?.length ?? 0) % 2)
     failures.push('formatting: unclosed code fence');
-  if (
-    fixture.expect.card &&
-    !result.parts.some(
-      (part) =>
-        typeof part === 'object' && part !== null && 'type' in part && part.type === 'data-card',
+  const cards = result.parts.flatMap((part) => {
+    if (
+      typeof part !== 'object' ||
+      part === null ||
+      !('type' in part) ||
+      part.type !== 'data-card' ||
+      !('data' in part)
     )
-  )
-    failures.push('formatting: missing structured card');
+      return [];
+    const data = part.data as {
+      kind?: string;
+      id?: string;
+      revisionId?: string;
+      spec?: { facts?: Array<{ value?: string }> };
+    } | null;
+    return data?.kind === 'generated-card' && data.id && data.revisionId ? [data] : [];
+  });
+  if (fixture.expect.card && !cards.length)
+    failures.push('formatting: missing persisted generated card');
+  const cardFacts = cards
+    .flatMap((card) => card.spec?.facts?.map((fact) => fact.value ?? '') ?? [])
+    .join(' ');
+  for (const value of fixture.expect.cardValues ?? [])
+    if (!cardFacts.includes(value)) failures.push(`formatting: card missing ${value}`);
   if (result.elapsedMs > 120_000) failures.push('performance: exceeded 120s');
   if (result.costUsd > 1.1) failures.push('performance: exceeded $1.10 per case');
   return failures;
@@ -217,15 +233,19 @@ function replayRegistry(
       'gmail.read_thread',
       'Read all messages in a returned mailbox thread.',
       z.object({ threadId: z.literal('hotel-1') }),
-      () => ({
-        messages: [
-          {
-            subject: 'Harbor Hotel booking QA-BOOKING-123',
-            from: 'hotel@example.org',
-            text: 'Harbor Hotel, Sunnyvale. Check-in September 5, 2026 at 4:00 PM. Check-out September 6 at 11:00 AM. Total $105.85.',
-          },
-        ],
-      }),
+      () => {
+        if (fixture.mailbox !== 'hotel')
+          throw new Error('No captured thread exists for this mailbox snapshot');
+        return {
+          messages: [
+            {
+              subject: 'Harbor Hotel booking QA-BOOKING-123',
+              from: 'hotel@example.org',
+              text: 'Harbor Hotel, Sunnyvale. Check-in September 5, 2026 at 4:00 PM. Check-out September 6 at 11:00 AM. Total $105.85.',
+            },
+          ],
+        };
+      },
       { confidentialRead: true, returnsUntrustedContent: true },
     );
   }

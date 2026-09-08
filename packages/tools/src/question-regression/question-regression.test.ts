@@ -150,3 +150,32 @@ it('rolls back conversation, task and tool state after capturing a result', asyn
   expect(result.toolCalls).toHaveLength(2);
   expect(await counts()).toEqual(before);
 });
+
+it('distinguishes an unsaved-order disclosure from a false save claim', () => {
+  const fixture = QUESTION_CASES.find((item) => item.id === 'order-missing-details');
+  if (!fixture) throw new Error('missing fixture');
+  const result: QuestionResult = {
+    id: fixture.id,
+    records: fixture.records,
+    mode: 'live',
+    status: 'done',
+    answer:
+      "I don't have your regular order from Neighborhood Pupuseria saved. Please tell me what you'd like me to remember for next time.",
+    parts: [],
+    toolCalls: [],
+    approvals: 0,
+    saved: [],
+    elapsedMs: 10,
+    costUsd: 0,
+    modelCalls: [],
+    verification: [],
+    failures: [],
+  };
+  expect(evaluateQuestion(fixture, result)).toEqual([]);
+  expect(
+    evaluateQuestion(fixture, {
+      ...result,
+      answer: 'I have saved your regular order. What else should I remember?',
+    }),
+  ).not.toEqual([]);
+});
