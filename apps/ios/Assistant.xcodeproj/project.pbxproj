@@ -7,9 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-        B00000000000000000000071 /* Views/KnowledgeGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000071 /* Views/KnowledgeGraphView.swift */; };
-        B00000000000000000000072 /* Views/PeopleConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000072 /* Views/PeopleConnectionsView.swift */; };
-		B00000000000000000000070 /* Views/SituationPacksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000070 /* Views/SituationPacksView.swift */; };
 		B00000000000000000000001 /* AssistantApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000001 /* AssistantApp.swift */; };
 		B00000000000000000000002 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000002 /* AppModel.swift */; };
 		B00000000000000000000003 /* Design/AssistantTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000003 /* Design/AssistantTheme.swift */; };
@@ -18,7 +15,6 @@
 		B00000000000000000000006 /* Networking/APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000006 /* Networking/APIClient.swift */; };
 		B00000000000000000000008 /* Components/StatusPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000008 /* Components/StatusPill.swift */; };
 		B00000000000000000000009 /* Components/MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000009 /* Components/MessageBubble.swift */; };
-		B00000000000000000000052 /* Components/OnDeviceCardParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000053 /* Components/OnDeviceCardParser.swift */; };
 		B0000000000000000000000A /* Views/RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000A /* Views/RootView.swift */; };
 		B0000000000000000000000B /* Views/ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000B /* Views/ChatView.swift */; };
 		B0000000000000000000000C /* Views/ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000C /* Views/ActivityView.swift */; };
@@ -28,25 +24,29 @@
 		B00000000000000000000010 /* Views/ConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000010 /* Views/ConnectionView.swift */; };
 		B00000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000011 /* Assets.xcassets */; };
 		B00000000000000000000012 /* APIModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000020 /* APIModelsTests.swift */; };
-		B00000000000000000000050 /* AssistantMarkdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000050 /* AssistantMarkdownTests.swift */; };
-		B00000000000000000000060 /* APIClientRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000060 /* APIClientRetryTests.swift */; };
 		B00000000000000000000013 /* System/AssistantActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000014 /* System/AssistantActivityAttributes.swift */; };
 		B00000000000000000000014 /* System/LiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000015 /* System/LiveActivityManager.swift */; };
 		B00000000000000000000015 /* System/NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000016 /* System/NotificationManager.swift */; };
-		B00000000000000000000051 /* System/LocationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000051 /* System/LocationManager.swift */; };
 		B00000000000000000000016 /* AssistantActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000017 /* AssistantActivityWidget.swift */; };
 		B00000000000000000000017 /* System/AssistantActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000014 /* System/AssistantActivityAttributes.swift */; };
 		B00000000000000000000018 /* AssistantActivityExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = C00000000000000000000019 /* AssistantActivityExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B00000000000000000000019 /* Components/ActivityCrown.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000022 /* Components/ActivityCrown.swift */; };
-		B0000000000000000000001B /* Components/ChatDashboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000024 /* Components/ChatDashboard.swift */; };
 		B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000023 /* Views/WorkspaceView.swift */; };
+		B0000000000000000000001B /* Components/ChatDashboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000024 /* Components/ChatDashboard.swift */; };
 		B0000000000000000000001C /* Views/MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000025 /* Views/MemoryView.swift */; };
+		B00000000000000000000050 /* AssistantMarkdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000050 /* AssistantMarkdownTests.swift */; };
+		B00000000000000000000051 /* System/LocationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000051 /* System/LocationManager.swift */; };
+		B00000000000000000000052 /* Components/OnDeviceCardParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000053 /* Components/OnDeviceCardParser.swift */; };
 		B00000000000000000000054 /* Views/KnowledgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000054 /* Views/KnowledgeView.swift */; };
-		B00000000000000000000059 /* Views/PeopleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000059 /* Views/PeopleView.swift */; };
 		B00000000000000000000055 /* Models/PollingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000055 /* Models/PollingPolicy.swift */; };
 		B00000000000000000000056 /* Components/MermaidDiagramView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000056 /* Components/MermaidDiagramView.swift */; };
-		B00000000000000000000057 /* mermaid.min.js in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000057 /* mermaid.min.js */; };
-		B00000000000000000000058 /* mermaid-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000058 /* mermaid-LICENSE.txt */; };
+		B00000000000000000000057 /* Resources/mermaid.min.js in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000057 /* Resources/mermaid.min.js */; };
+		B00000000000000000000058 /* Resources/mermaid-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000058 /* Resources/mermaid-LICENSE.txt */; };
+		B00000000000000000000059 /* Views/PeopleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000059 /* Views/PeopleView.swift */; };
+		B00000000000000000000060 /* APIClientRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000060 /* APIClientRetryTests.swift */; };
+		B00000000000000000000070 /* Views/SituationPacksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000070 /* Views/SituationPacksView.swift */; };
+		B00000000000000000000071 /* Views/KnowledgeGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000071 /* Views/KnowledgeGraphView.swift */; };
+		B00000000000000000000072 /* Views/PeopleConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000072 /* Views/PeopleConnectionsView.swift */; };
 		B00000000000000000000073 /* Models/RelationshipGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000073 /* Models/RelationshipGraph.swift */; };
 		B00000000000000000000074 /* Views/RelationshipGraphCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000074 /* Views/RelationshipGraphCanvas.swift */; };
 		B00000000000000000000075 /* Views/RelationshipGraphScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000075 /* Views/RelationshipGraphScreen.swift */; };
@@ -84,9 +84,6 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-        C00000000000000000000071 /* Views/KnowledgeGraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/KnowledgeGraphView.swift; sourceTree = "<group>"; };
-        C00000000000000000000072 /* Views/PeopleConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PeopleConnectionsView.swift; sourceTree = "<group>"; };
-		C00000000000000000000070 /* Views/SituationPacksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SituationPacksView.swift; sourceTree = "<group>"; };
 		C00000000000000000000001 /* AssistantApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantApp.swift; sourceTree = "<group>"; };
 		C00000000000000000000002 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		C00000000000000000000003 /* Design/AssistantTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Design/AssistantTheme.swift; sourceTree = "<group>"; };
@@ -95,7 +92,6 @@
 		C00000000000000000000006 /* Networking/APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Networking/APIClient.swift; sourceTree = "<group>"; };
 		C00000000000000000000008 /* Components/StatusPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/StatusPill.swift; sourceTree = "<group>"; };
 		C00000000000000000000009 /* Components/MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/MessageBubble.swift; sourceTree = "<group>"; };
-		C00000000000000000000053 /* Components/OnDeviceCardParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/OnDeviceCardParser.swift; sourceTree = "<group>"; };
 		C0000000000000000000000A /* Views/RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/RootView.swift; sourceTree = "<group>"; };
 		C0000000000000000000000B /* Views/ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ChatView.swift; sourceTree = "<group>"; };
 		C0000000000000000000000C /* Views/ActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ActivityView.swift; sourceTree = "<group>"; };
@@ -105,29 +101,33 @@
 		C00000000000000000000010 /* Views/ConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ConnectionView.swift; sourceTree = "<group>"; };
 		C00000000000000000000011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C00000000000000000000012 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		C00000000000000000000052 /* Assistant.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Assistant.entitlements; sourceTree = "<group>"; };
 		C00000000000000000000013 /* Assistant.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Assistant.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C00000000000000000000014 /* System/AssistantActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/AssistantActivityAttributes.swift; sourceTree = "<group>"; };
 		C00000000000000000000015 /* System/LiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/LiveActivityManager.swift; sourceTree = "<group>"; };
 		C00000000000000000000016 /* System/NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/NotificationManager.swift; sourceTree = "<group>"; };
-		C00000000000000000000051 /* System/LocationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/LocationManager.swift; sourceTree = "<group>"; };
 		C00000000000000000000017 /* AssistantActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantActivityWidget.swift; sourceTree = "<group>"; };
 		C00000000000000000000018 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		C00000000000000000000019 /* AssistantActivityExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AssistantActivityExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C00000000000000000000020 /* APIModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModelsTests.swift; sourceTree = "<group>"; };
-		C00000000000000000000050 /* AssistantMarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantMarkdownTests.swift; sourceTree = "<group>"; };
-		C00000000000000000000060 /* APIClientRetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClientRetryTests.swift; sourceTree = "<group>"; };
 		C00000000000000000000021 /* AssistantTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AssistantTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C00000000000000000000022 /* Components/ActivityCrown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/ActivityCrown.swift; sourceTree = "<group>"; };
 		C00000000000000000000023 /* Views/WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WorkspaceView.swift; sourceTree = "<group>"; };
 		C00000000000000000000024 /* Components/ChatDashboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/ChatDashboard.swift; sourceTree = "<group>"; };
 		C00000000000000000000025 /* Views/MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MemoryView.swift; sourceTree = "<group>"; };
+		C00000000000000000000050 /* AssistantMarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantMarkdownTests.swift; sourceTree = "<group>"; };
+		C00000000000000000000051 /* System/LocationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/LocationManager.swift; sourceTree = "<group>"; };
+		C00000000000000000000052 /* Assistant.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Assistant.entitlements; sourceTree = "<group>"; };
+		C00000000000000000000053 /* Components/OnDeviceCardParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/OnDeviceCardParser.swift; sourceTree = "<group>"; };
 		C00000000000000000000054 /* Views/KnowledgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/KnowledgeView.swift; sourceTree = "<group>"; };
-		C00000000000000000000059 /* Views/PeopleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PeopleView.swift; sourceTree = "<group>"; };
 		C00000000000000000000055 /* Models/PollingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/PollingPolicy.swift; sourceTree = "<group>"; };
 		C00000000000000000000056 /* Components/MermaidDiagramView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/MermaidDiagramView.swift; sourceTree = "<group>"; };
-		C00000000000000000000057 /* mermaid.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/mermaid.min.js; sourceTree = "<group>"; };
-		C00000000000000000000058 /* mermaid-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Resources/mermaid-LICENSE.txt; sourceTree = "<group>"; };
+		C00000000000000000000057 /* Resources/mermaid.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/mermaid.min.js; sourceTree = "<group>"; };
+		C00000000000000000000058 /* Resources/mermaid-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/mermaid-LICENSE.txt"; sourceTree = "<group>"; };
+		C00000000000000000000059 /* Views/PeopleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PeopleView.swift; sourceTree = "<group>"; };
+		C00000000000000000000060 /* APIClientRetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClientRetryTests.swift; sourceTree = "<group>"; };
+		C00000000000000000000070 /* Views/SituationPacksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SituationPacksView.swift; sourceTree = "<group>"; };
+		C00000000000000000000071 /* Views/KnowledgeGraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/KnowledgeGraphView.swift; sourceTree = "<group>"; };
+		C00000000000000000000072 /* Views/PeopleConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PeopleConnectionsView.swift; sourceTree = "<group>"; };
 		C00000000000000000000073 /* Models/RelationshipGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/RelationshipGraph.swift; sourceTree = "<group>"; };
 		C00000000000000000000074 /* Views/RelationshipGraphCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/RelationshipGraphCanvas.swift; sourceTree = "<group>"; };
 		C00000000000000000000075 /* Views/RelationshipGraphScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/RelationshipGraphScreen.swift; sourceTree = "<group>"; };
@@ -209,15 +209,15 @@
 				C00000000000000000000023 /* Views/WorkspaceView.swift */,
 				C00000000000000000000025 /* Views/MemoryView.swift */,
 				C00000000000000000000054 /* Views/KnowledgeView.swift */,
-                C00000000000000000000071 /* Views/KnowledgeGraphView.swift */,
-                C00000000000000000000072 /* Views/PeopleConnectionsView.swift */,
+				C00000000000000000000071 /* Views/KnowledgeGraphView.swift */,
+				C00000000000000000000072 /* Views/PeopleConnectionsView.swift */,
 				C00000000000000000000075 /* Views/RelationshipGraphScreen.swift */,
 				C00000000000000000000074 /* Views/RelationshipGraphCanvas.swift */,
 				C00000000000000000000073 /* Models/RelationshipGraph.swift */,
 				C00000000000000000000059 /* Views/PeopleView.swift */,
 				C00000000000000000000011 /* Assets.xcassets */,
-				C00000000000000000000057 /* mermaid.min.js */,
-				C00000000000000000000058 /* mermaid-LICENSE.txt */,
+				C00000000000000000000057 /* Resources/mermaid.min.js */,
+				C00000000000000000000058 /* Resources/mermaid-LICENSE.txt */,
 				C00000000000000000000012 /* Info.plist */,
 				C00000000000000000000052 /* Assistant.entitlements */,
 			);
@@ -348,8 +348,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				B00000000000000000000011 /* Assets.xcassets in Resources */,
-				B00000000000000000000057 /* mermaid.min.js in Resources */,
-				B00000000000000000000058 /* mermaid-LICENSE.txt in Resources */,
+				B00000000000000000000057 /* Resources/mermaid.min.js in Resources */,
+				B00000000000000000000058 /* Resources/mermaid-LICENSE.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -402,8 +402,8 @@
 				B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */,
 				B0000000000000000000001C /* Views/MemoryView.swift in Sources */,
 				B00000000000000000000054 /* Views/KnowledgeView.swift in Sources */,
-                B00000000000000000000071 /* Views/KnowledgeGraphView.swift in Sources */,
-                B00000000000000000000072 /* Views/PeopleConnectionsView.swift in Sources */,
+				B00000000000000000000071 /* Views/KnowledgeGraphView.swift in Sources */,
+				B00000000000000000000072 /* Views/PeopleConnectionsView.swift in Sources */,
 				B00000000000000000000075 /* Views/RelationshipGraphScreen.swift in Sources */,
 				B00000000000000000000074 /* Views/RelationshipGraphCanvas.swift in Sources */,
 				B00000000000000000000073 /* Models/RelationshipGraph.swift in Sources */,
@@ -568,8 +568,8 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = LY7X52447Z;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LY7X52447Z;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AssistantActivityExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
@@ -593,8 +593,8 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = LY7X52447Z;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LY7X52447Z;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AssistantActivityExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
