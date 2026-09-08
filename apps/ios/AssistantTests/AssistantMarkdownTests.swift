@@ -287,7 +287,22 @@ final class AssistantMarkdownTests: XCTestCase {
         let input = try XCTUnwrap(views.compactMap { $0 as? UITextView }.first)
         for focused in [false, true, false] {
             if focused { input.becomeFirstResponder() } else { input.resignFirstResponder() }
-            try await Task.sleep(for: .milliseconds(450))
+            // Keyboard presentation and LazyVStack measurement can outlast a
+            // fixed animation delay on a cold CI simulator. Wait for the actual
+            // viewport contract, without changing the geometry or forcing a scroll.
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            var settledSamples = 0
+            repeat {
+                try await Task.sleep(for: .milliseconds(100))
+                window.layoutIfNeeded()
+                let inputFrame = input.convert(input.bounds, to: window)
+                let end = transcript.convert(CGPoint(x: 0, y: transcript.contentSize.height), to: window)
+                let bottomError = abs(transcript.contentOffset.y + transcript.bounds.height
+                    - transcript.contentSize.height - transcript.adjustedContentInset.bottom)
+                let settled = bottomError <= 2 && inputFrame.minY > end.y
+                    && inputFrame.maxY <= window.bounds.maxY && input.isFirstResponder == focused
+                settledSamples = settled ? settledSamples + 1 : 0
+            } while settledSamples < 3 && ContinuousClock.now < deadline
             window.layoutIfNeeded()
             let inputFrame = input.convert(input.bounds, to: window)
             // Verify the actual ChatView remains at its canonical bottom,
